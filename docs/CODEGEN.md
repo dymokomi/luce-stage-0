@@ -420,10 +420,11 @@ instruction level is a call into `libluce_rt`.
 
 ## Inline access
 
-An `array` element and the string primitives are **generated, not
-called**.  `a[i]`, `grid[r, c]`, `len(a)`, `a.dim(k)`, `s.byte_at(i)`,
-`s[a:b]` and `len(s)` all lower to the bounds check and the load they
-are, with no boxed subscript and no call.
+A `list` element, an `array` element and the string primitives are
+**generated, not called**.  `xs[i]`, `grid[r, c]`, `len(xs)`,
+`a.dim(k)`, `xs.append(v)`, `s.byte_at(i)`, `s[a:b]` and `len(s)` all
+lower to the bounds check and the load they are, with no boxed
+subscript and no call.
 
 The box, not the call, is the barrier: a value crosses into
 `libluce_rt` through a 24-byte `alloca` that has to be refilled at
@@ -443,21 +444,32 @@ Three things make it pay, and all three are needed together:
 
 - **The row is walked directly.**  `runtime.layout` (in
   `runtime/heap.zig`) gives the byte offsets of the object table's
-  base, a row's `generation`, and an array's `dims`, `elements` and
-  `count`.  Every one is measured from the Zig types with `@offsetOf`
-  and checked against a real `Runtime` by a test beside them, so the
-  two cannot drift.  An array's storage is a field of the row rather
-  than a payload inside the `data` union for exactly this reason: Zig
-  promises a layout for a struct field and none for a tagged union's
-  payload.
+  base, a row's `generation`, an array's `dims`, and the shared
+  element run's `pointer`, `capacity` and `count`.  Every one is
+  measured from the Zig types with `@offsetOf` and checked against a
+  real `Runtime` by a test beside them, so the two cannot drift.  A
+  container's storage is a field of the row rather than a payload
+  inside the `data` union for exactly this reason: Zig promises a
+  layout for a struct field and none for a tagged union's payload.
 - **Elements are stored as themselves.**  An `array(double)` is `f64`s,
-  an `array(long)` is `i64`s, an `array(bool)` is bytes; only Strings,
+  a `list(byte)` is bytes, an `array(bool)` is bytes; only Strings,
   structs and objects keep the 24-byte slot.  `Value` is the
   *boundary* type — how an element crosses into a caller — never the
   storage type.  Reading a double element becomes one `ldr d0`, the
   memory traffic is a third of a boxed array's, and an array of
   untagged doubles is the only kind that can ever reach a SIMD unit or
   a GPU.
+- **Which kind is a fact of the type, not of the builder.**  A
+  `list(long)` is `i64` cells whether `new list(long)` made it or
+  `m.keys()` did (`runtime/containers.zig`'s `emptyList`), so a cell's
+  width is a compile-time constant here and there is no kind to branch
+  on.  The two operations that could once produce either — `m.keys()`
+  and `m.values()` — take the element zero the way `newList` and
+  `newArray` already did, for the reason those two take one: the
+  element *type* lives in the program's table and the runtime does not
+  know it, and a zero's tag is that type.  A per-access branch on the
+  object's kind would have been the alternative, and it would have hid
+  the problem rather than fixed it.
 - **The resolution leaves the loop** (`08_llvm/loops.zig`).  Resolving
   at every access leaves four loads in front of every element read,
   and LICM cannot lift them: the loop also *stores* an element through
@@ -466,8 +478,8 @@ Three things make it pay, and all three are needed together:
   `std.zig.llvm.Builder` attaches metadata to branches and to nothing
   else.  So the compiler does it: the row is read once in the
   preheader of the outermost loop that cannot disturb it — nothing
-  that attaches an object, frees one, or replaces an array's storage
-  (`optimize.effects.viewStable`).
+  that attaches an object, frees one, or replaces a container's
+  storage (`optimize.effects.viewStable`).
 
   **The metadata exists now, and the honest number is: it moved
   nothing this suite measures** (task #45, ruled and executed
@@ -518,10 +530,52 @@ figure**, `strings` least of all: copy-on-store and small-string
 optimisation both landed afterwards and moved that row twice.  The
 snapshot below is the live table.
 
+### The container whose buffer moves
+
+The path above was written for the container whose storage never
+moves, and said so.  A `list`'s does move, under `append` — and it is
+on the inline path all the same, because **the invalidation rule was
+already written down and already enforced**.
+
+It is one sentence: *a resolved view dies at every instruction that
+could move a buffer* — every call, every `append`, every `insert`.
+That is exactly `optimize.effects.viewStable`, which has answered
+`false` for `append_value` and `insert_value` since it was written and
+gives that as its reason ("a list's elements are read through the same
+row, so this stays conservative"), and it is what ends the basic block
+a view lives in.  Nothing is carried across one, so a list needed no
+new analysis: `len`, `xs[i]` and `xs[i] = v` are the row walk, the
+bounds check and the load, and a read, a strided read or an in-place
+transform lifts out of a loop under the same gate the array path
+stands on.  A loop that could grow a list never reaches the lifting in
+the first place, which is why "cache the pointer and hope" was never
+the question.
+
+**`append` is the other half, and it is the half that paid.**  Load
+the count and the capacity; when the element fits, store it and bump
+the count; call `luce_rt_append` only to grow.  Three things about it
+are worth writing down:
+
+- **The room is compared in bytes, not in elements.**
+  `Elements.ensureCapacity` grows a byte length geometrically and does
+  not leave it a whole multiple of the width, so `count < capacity` is
+  a division — the very division the bytes run measured on `strings`
+  and removed.  `(count + 1) * width <= bytes.len` is the same
+  question with a constant multiply.
+- **The gate is `ownsNothing`, for a different reason than
+  `index_set`'s.**  A store into a container frees the element it
+  replaced; an append replaces nothing and only *adopts* what arrives.
+  So what the inline path needs is that there is nothing to adopt,
+  which a scalar satisfies.  A `string`, a struct and an object go on
+  calling the runtime, which is the one place that walk is written.
+- **The checks do not move.**  `null_object` then `use_after_free`, in
+  that order, at the instruction that owes them, exactly as the call
+  made them; the growing arm resolves a second time, which costs one
+  row walk on the path that was about to allocate anyway.
+
 `map` is deliberately not on the inline path: a hash probe is genuinely
-call-worthy.  Neither is `list`, whose buffer moves under `append`, nor
-`find_byte`, which is a vectorized `memchr` in the runtime and would be
-slower unrolled here.
+call-worthy.  Neither is `find_byte`, which is a vectorized `memchr` in
+the runtime and would be slower unrolled here.
 
 ## The extrema, and why a `min` reduction vectorizes
 
@@ -1002,29 +1056,51 @@ change moves.  Absolute times mean nothing off this host — for a
 before/after, use `bench/compare.sh GIT-REF`, which interleaves the
 two on the machine in front of you.
 
-**Taken 2026-08-07, when `lists` joined the suite.**  One run, all
-nine rows: a table is one measurement or it is not a table.  This is
-the one number — where a document quotes a benchmark row it quotes the
-`compute` column here, and says which column it is.
+**Taken 2026-08-07, after `list` joined the inline path.**  One run,
+all nine rows: a table is one measurement or it is not a table.  This
+is the one number — where a document quotes a benchmark row it quotes
+the `compute` column here, and says which column it is.
 
 | benchmark | C        | luce     | luce/C | compute |
 |-----------|----------|----------|--------|---------|
-| loops     |  82.4 ms |  86.2 ms |  1.05x |   1.04x |
-| math      | 141.2 ms | 110.6 ms |  0.78x |   0.77x |
-| strings   |  20.7 ms |  55.0 ms |  2.66x |   2.90x |
-| arrays    |  44.4 ms |  48.8 ms |  1.10x |   1.09x |
-| arrays32  |   8.1 ms |  43.3 ms |  5.34x |   7.70x |
-| matmul    |  10.9 ms |  11.9 ms |  1.09x |   1.05x |
-| matmul32  |   7.0 ms |   8.0 ms |  1.13x |   1.08x |
-| stats     |  33.3 ms |  35.2 ms |  1.06x |   1.04x |
-| lists     |   8.9 ms | 178.3 ms | 19.93x |  29.10x |
-| floor     |   2.9 ms |   3.5 ms |      - |       - |
+| loops     |  82.2 ms |  87.2 ms |  1.06x |   1.06x |
+| math      | 139.1 ms | 110.2 ms |  0.79x |   0.78x |
+| strings   |  21.7 ms |  52.6 ms |  2.43x |   2.67x |
+| arrays    |  44.3 ms |  47.6 ms |  1.07x |   1.06x |
+| arrays32  |   8.1 ms |  43.4 ms |  5.38x |   8.66x |
+| matmul    |  10.9 ms |  12.0 ms |  1.10x |   1.05x |
+| matmul32  |   7.0 ms |   7.8 ms |  1.12x |   1.05x |
+| stats     |  32.8 ms |  35.0 ms |  1.07x |   1.05x |
+| lists     |   8.7 ms |  17.5 ms |  2.03x |   2.60x |
+| floor     |   3.5 ms |   4.2 ms |      - |       - |
 
-Every row that existed at the previous snapshot (the `byte`/`short`/
-`half` step, docs/TYPES.md step 5-6) is unchanged within noise from
-it; nothing between the two touched a `.luc` source or a C twin.
-`lists` is new, and its number is the largest in the table by a
-factor of three.  It is read below.
+Every row but `lists` is unchanged within noise from the snapshot
+before it, and the A/B below says so with the machine held still.
+`lists` is the row that moved: **29.10x to 2.60x**, which is the
+inline path reaching the container whose buffer moves.  It is read
+below.
+
+**The interleaved A/B, twice, against `822382a`** — the authoritative
+form, because absolute times move with the host.  `compute`:
+
+| benchmark | run 1  | run 2  |
+|-----------|--------|--------|
+| loops     |  -2.1% |  -0.1% |
+| math      |  +6.7% |  +0.5% |
+| strings   |  -2.5% |  -6.7% |
+| arrays    |  +3.7% |  -1.4% |
+| arrays32  |  -0.3% |  -1.9% |
+| matmul    |  +4.0% |  -5.0% |
+| matmul32  |  +3.4% |  -2.3% |
+| stats     |  -4.7% |  -0.4% |
+| **lists** | **-92.2%** | **-92.1%** |
+
+**One row moved and the rest is the machine.**  `math` holds no list
+and cannot be touched by any of this; it read +6.7% and then +0.5%,
+which is the size of this host's floor and the reason a single run of
+a single row proves nothing.  Every other row changes sign between the
+two.  `lists` reads the same number twice, to a tenth of a point, and
+it is a factor of thirteen.
 
 **The bytes run (docs/BYTES.md) left every row where it found it**, and
 that is worth recording rather than assuming.  `list(T)` gave up the
@@ -1174,27 +1250,60 @@ this machine.  22% twice, in the same direction, is not that.  The
 `strings` row's +0.7% to +5.4% is still unresolved and still does not
 matter; **this** is the row the work was for, and it answered.
 
-**What the row does not say is that a `list` is now fast.**  It is
+**What that row did not say is that a `list` was fast.**  It was
 29.10x its C twin, the worst number in the table by a factor of three,
-and the reason is structural rather than storage.  `lower.zig` says
-why above `arrayShape`: an `array` index is an inline address
-computation and a load *because an array's buffer never moves while it
-lives*, and a `list`'s does move, under `append` — so a `list` is
-still a call.  `index_get`, `index_set` and `append_value` on one are
-each an out-of-line `luce_rt_*` call over boxed `Value`s.
-Packed storage made each cell one byte instead of twenty-four; it did
-not remove the call.  Timing the phases inside the program puts the
-cost at 6-20 ns per element operation — build 22 ms, sequential read
-25 ms, strided read 18 ms, transform 33 ms, histogram 62 ms (three
-list operations an element), the `list(long)` leg 16 ms — where C's
-indexed load is one inlined instruction.  That is why `arrays` is
-1.09x and this is 29x over the same element widths.  Closing it means
-extending the inline path to the container whose buffer *does* move,
-which is a real code-generation problem and not a missing arm: the
-pointer has to be reloaded at each access rather than assumed, and
-what that costs against the call it replaces is unmeasured.  It is not
-in this step.  The row that would measure it now exists, which it did
-not before.
+and the reason was structural rather than storage: `index_get`,
+`index_set` and `append_value` were each an out-of-line `luce_rt_*`
+call over boxed `Value`s.  Packed storage made each cell one byte
+instead of twenty-four; it did not remove the call.
+
+### What removing the call bought
+
+**2.60x, from 29.10x** — the interleaved A/B above, twice, at -92%.
+The three changes are read in "Inline access": a `list(T)`'s storage
+kind became a fact of `T` rather than of whoever built the object,
+element access joined the inline path under the invalidation rule the
+tree already enforced, and `append` became a store and a count bump
+with the runtime called only to grow.
+
+Timing the phases inside the program, against the same phases of the C
+twin on the same host:
+
+| phase                                | luce  | C     |
+|--------------------------------------|-------|-------|
+| 1. three million `append`s           |  6 ms |  1 ms |
+| 2. sequential read                   |  1 ms |  1 ms |
+| 3. strided read at a prime stride    |  3 ms |  2 ms |
+| 4. in-place transform                |  0 ms |  0 ms |
+| 5. 256-counter histogram             |  1 ms |  1 ms |
+| 6. the same shapes at eight bytes    |  3 ms |  1 ms |
+| total (compute)                      | 14 ms |  6 ms |
+
+**Every reading phase is at C's speed and the whole of the remaining
+gap is `append`.**  Phases 2 through 5 — a sequential read, a walk no
+prefetcher follows, a rewrite in place, and three list operations an
+element — are the numbers `arrays` has always had, which is what the
+same row walk over the same storage should give.  Phases 1 and 6 are
+the ones with appends in them.
+
+**Why an append is still four times C's.**  C's `push` keeps `n` and
+`cap` in registers; Luce's has to keep them in the row, because the
+row is what every other name for the list reads.  So each append loads
+the count, loads the capacity, stores the count — and the store feeds
+the next iteration's load, a forwarding dependency C does not have.
+Promoting the count to a register across the loop is exactly what LLVM
+would do, and it is blocked by the growth arm: `luce_rt_append` may
+write anything, and it is inside the loop.  That is not a missing
+optimization so much as the price of a list whose length one name
+cannot cache from another, and closing it means something like
+unswitching the loop on "there is room for the rest", which is a real
+piece of work and not this one.
+
+**What is deliberately not inline.**  An `append` of a `string`, a
+struct or an object still calls the runtime, because such an element
+has to be *adopted* and the ownership walk lives in one place.  No row
+in the suite measures that (`strings` builds text in a `builder`, not a
+list), so there is no number here to quote and none is invented.
 
 ## Building
 

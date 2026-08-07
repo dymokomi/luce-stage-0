@@ -1,6 +1,6 @@
 # Performance
 
-Luce compiles through LLVM to native code, and on five of six
+Luce compiles through LLVM to native code, and on six of nine
 benchmarks it lands within a few percent of C doing the same thing.
 This page is the table, what it measures, and what it does not.
 
@@ -14,13 +14,16 @@ code-generation change moves.
 
 | benchmark | C | Luce | Luce/C | compute |
 |---|---|---|---|---|
-| loops | 83.1 ms | 87.3 ms | 1.05× | 1.04× |
-| math | 142.5 ms | 111.6 ms | 0.78× | **0.77×** |
-| strings | 21.3 ms | 53.7 ms | 2.52× | **2.73×** |
-| arrays | 44.3 ms | 47.4 ms | 1.07× | 1.06× |
-| matmul | 11.1 ms | 12.0 ms | 1.08× | 1.02× |
-| stats | 33.9 ms | 35.9 ms | 1.06× | 1.04× |
-| *(do-nothing floor)* | 2.9 ms | 3.6 ms | — | — |
+| loops | 82.2 ms | 87.2 ms | 1.06× | 1.06× |
+| math | 139.1 ms | 110.2 ms | 0.79× | **0.78×** |
+| strings | 21.7 ms | 52.6 ms | 2.43× | **2.67×** |
+| arrays | 44.3 ms | 47.6 ms | 1.07× | 1.06× |
+| arrays32 | 8.1 ms | 43.4 ms | 5.38× | **8.66×** |
+| matmul | 10.9 ms | 12.0 ms | 1.10× | 1.05× |
+| matmul32 | 7.0 ms | 7.8 ms | 1.12× | 1.05× |
+| stats | 32.8 ms | 35.0 ms | 1.07× | 1.05× |
+| lists | 8.7 ms | 17.5 ms | 2.03× | **2.60×** |
+| *(do-nothing floor)* | 3.5 ms | 4.2 ms | — | — |
 
 **`compute` is the column to quote.** Where anything else in the
 repository names a benchmark ratio it names that column and says so,
@@ -31,12 +34,26 @@ numbers.
 `math` is ahead of C because Luce's transcendental calls land in the
 same libm C's do while the surrounding loop vectorizes.
 
-`strings` is the one row genuinely behind, and it is
-**allocation-bound rather than code-generation-bound**: the cost is
-copying `string` bytes into list elements, which is the price of
-giving strings an owner so memory comes back.
-[Strings and copies](../strings/) is that whole story, with the phase
-timings that locate the remaining cost.
+Three rows are behind, and they are behind for three different
+reasons.
+
+`strings` is **allocation-bound rather than code-generation-bound**:
+the cost is copying `string` bytes so that text has an owner and
+memory comes back. [Strings and copies](../strings/) is that whole
+story, with the phase timings that locate the remaining cost.
+
+`arrays32` is the price of **checked integer arithmetic in a
+reduction**. Every `+` carries an overflow test, so the sum cannot be
+reassociated and the loop stays one element per iteration; C's
+`int32_t` addition is free to wrap, so it fills four lanes. The ratio
+is worse than the `double` twin's precisely because C got faster, not
+because Luce got slower — 41.8 ms against 41.1 ms at the two widths.
+
+`lists` is `append`, and only `append`. Reading a list is the bounds
+check and the load it is, so a sequential read, a strided walk and an
+in-place transform all measure at C's speed; appending has to keep the
+list's length in the object's row, because the row is what every other
+name for that list reads, where C keeps its count in a register.
 
 ## What the numbers are not
 
@@ -45,9 +62,9 @@ For a before-and-after, the repository has `bench/compare.sh GIT-REF`,
 which interleaves two builds on the machine in front of you — that is
 the authoritative regression check, not this table.
 
-**They are not a benchmark suite in the marketing sense.** Six paired
+**They are not a benchmark suite in the marketing sense.** Nine paired
 programs, each written twice with the same algorithm and cross-checked
-for identical output before either is timed. A different six programs
+for identical output before either is timed. A different nine programs
 would give different ratios.
 
 **They are not the interpreter.** There is one engine that runs your

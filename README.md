@@ -81,13 +81,14 @@ so a runtime trap prints `file:line:column` and a call trace.
 `--release` strips them for a smaller artifact — the program itself
 behaves identically (docs/MODES.md).
 
-All three compile through LLVM, which measures at 0.77-1.07x of C on
-six of the nine benchmarks; `strings` (2.74x), `arrays32` (8.14x) and
-`lists` (29.10x compute) are the three rows still behind — `arrays32`
+All three compile through LLVM, which measures at 0.78-1.06x of C on
+six of the nine benchmarks; `strings` (2.67x), `lists` (2.60x) and
+`arrays32` (8.66x compute) are the three rows still behind — `arrays32`
 is the price of checked integer arithmetic in a reduction, which is
-what [docs/VECTOR.md](docs/VECTOR.md) is about, and `lists` is
-element access as an out-of-line runtime call, priced and scoped in
-[docs/CODEGEN.md](docs/CODEGEN.md).  Those are
+what [docs/VECTOR.md](docs/VECTOR.md) is about, and what is left of
+`lists` is `append` alone, which has to keep a list's length in its
+row where C keeps it in a register
+([docs/CODEGEN.md](docs/CODEGEN.md)).  Those are
 `bench/run.sh`'s floor-subtracted `compute` column,
 the one a code-generation change moves; the table and the host it was
 taken on are in [docs/CODEGEN.md](docs/CODEGEN.md).  They are stamped with the
