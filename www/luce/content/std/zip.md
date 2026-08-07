@@ -214,3 +214,12 @@ func main():
 ```output
 zip: not an archive (only 3 bytes)
 ```
+
+## A program that uses it
+
+`programs/zipper.luc` is this module at a command line — list, extract
+and build archives on disk — and it is
+[shown running, with its source](/examples/programs/#zipper-a-real-zip-archive-in-and-out).
+Read it before writing an extractor of your own: an entry's name is
+whatever the person who wrote the archive put there, and joining one
+to a target directory without checking it is the bug called zip-slip.

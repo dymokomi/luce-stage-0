@@ -713,6 +713,18 @@ that were one movement:
 What is left of the item is smaller and named in `docs/BYTES.md`: no
 seek on a handle, no file metadata, and no directory creation.
 
+**The directory is the one that bites, and there is now a program that
+proves it.**  `programs/zipper.luc` extracts a ZIP archive, and an
+archive names its entries with directories in them; with no way to make
+one, zipper can extract an entry under `papers/` only where `papers/`
+already exists, and the honest thing it can do is check every name
+before it writes anything and say which directory is missing.  It does.
+That is a real ceiling on a real program rather than a gap in a list:
+the next `LuceHost` slot this tree wants is a directory-making one
+beside `dir_list`, with `files.make_directory` over it, and the shape
+is already settled by the five handle slots (`docs/BYTES.md` B7) — one
+optional service, fail-closed, answering `yes`/`no`.
+
 ## Tier 6 — the OS beyond the language
 
 Fabric, persistence, braids and sync, capabilities, the agent,

@@ -89,6 +89,15 @@ pub const Install = struct {
         try self.scratch.dir.writeFile(io, .{ .sub_path = name, .data = text });
     }
 
+    /// Make a directory in the tree, and whatever leads to it.  A
+    /// program that extracts an archive is handed somewhere to put the
+    /// files, and no Luce program can make that somewhere itself —
+    /// there is no directory-creating builtin (docs/MISSING.md), which
+    /// is exactly why the test has to.
+    pub fn makeDirectory(self: *const Install, name: []const u8) !void {
+        try self.scratch.dir.createDirPath(io, name);
+    }
+
     /// A file's whole contents; the caller owns them.
     pub fn read(self: *const Install, gpa: Allocator, name: []const u8) ![]u8 {
         return self.scratch.dir.readFileAlloc(io, name, gpa, .unlimited);
@@ -147,6 +156,7 @@ pub const Install = struct {
 
         var child = try std.process.spawn(io, .{
             .argv = argv,
+            .cwd = if (options.in_tree) .{ .path = self.root } else .inherit,
             .environ_map = options.environment,
             .stdin = input,
             .stdout = .{ .file = out_file },
@@ -166,9 +176,18 @@ pub const Install = struct {
 /// inherits this process's, which is what leaves a `cc` on the `PATH`
 /// for a compile that has to link; `input` null gives the child nothing
 /// to read, which is what makes an interactive program non-interactive.
+///
+/// `in_tree` starts the child *inside* the tree rather than wherever
+/// the test binary happens to stand — which is the repository root
+/// under `zig build test`, and therefore the wrong place for any
+/// program whose arguments are relative paths.  A person types
+/// `zipper zip out.zip a.txt` from the directory the files are in, and
+/// a test that cannot stand where they stand is testing something
+/// else.
 pub const Spawn = struct {
     environment: ?*const std.process.Environ.Map = null,
     input: ?[]const u8 = null,
+    in_tree: bool = false,
 };
 
 /// What one run of a real binary did.

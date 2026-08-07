@@ -218,6 +218,31 @@ system `unzip` would have added a test-time dependency on a tool
 already prove — and it would have proven it on one machine's `unzip`
 rather than on the format.
 
+**And then a person had to be able to do it, which is `programs/zipper.luc`.**
+A library nobody can run is a claim rather than a capability, so the
+byte path came with a userland program over it — `zipper list`,
+`zipper unzip`, `zipper zip` — and a product suite that drives the
+*installed* pair the way a person does
+(`src/apps/loom/zipping.zig`): an Info-ZIP archive is written to a real
+directory, listed, extracted to files whose contents are checked byte
+for byte, zipped again from those files, and extracted a second time to
+the same bytes.  Read, write, read, every step a process.  Three things
+that run found nothing in `std.zip` and one thing in the language, and
+the one thing is an absence already written down: there is **no
+directory-creating builtin** (docs/MISSING.md), so an entry under a
+directory is extracted only where that directory already exists, and
+zipper says exactly that instead of flattening a name or writing half
+an archive.
+
+The paragraph above still holds and is the reason the floor is where it
+is: the unconditional rows are the embedded bytes.  What was added
+beside them is a *cross-check*, gated on the machine having Info-ZIP's
+own `zip` and `unzip` and saying out loud when it does not — `unzip -t`
+accepts what zipper writes, deflate and all, and an archive `zip` wrote
+reads back through zipper byte for byte.  It is allowed to be there
+because it can never be the thing that proves the format; it is the
+thing that catches the format being right and the *world* disagreeing.
+
 ## Sequencing
 
 After run four (enums + match) merges: both runs move

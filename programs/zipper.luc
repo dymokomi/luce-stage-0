@@ -1,0 +1,194 @@
+# zipper — ZIP archives from the command line.
+#
+#   loom run zipper.lc list ARCHIVE.zip
+#   loom run zipper.lc unzip ARCHIVE.zip [DIRECTORY]
+#   loom run zipper.lc zip ARCHIVE.zip FILE [FILE ...]
+#
+# `std.zip` is the format and `std.files` is the disk; this program is
+# the two hundred lines between them, and it exists because a library
+# nobody can run is a claim rather than a capability.  Everything here
+# is ordinary Luce: `main(args)`, `try`, scope ownership, and the byte
+# path `std.files` grew (docs/BYTES.md).
+#
+# **Names out of an archive are not trusted.**  An entry's name is
+# whatever the person who wrote the archive put there, and "../../..
+# /etc/passwd" is a name.  `safe_name` is the one gate every extracted
+# path goes through, and it refuses by name rather than by silence —
+# the attack has been called zip-slip since 2018 and every extractor
+# that skipped this check was where it was found.  `zip` puts names
+# through the same gate: zipper will not author an archive it would
+# refuse to extract.
+#
+# **A bad name stops the run before anything is written; a bad byte
+# stops it where it is.**  Every name is checked before the first file
+# is created, so a hostile archive leaves the disk as it found it.  A
+# checksum that fails is a different thing — it is found on the entry
+# it belongs to, halfway through — and the entries already written stay
+# where they are, exactly as `unzip` leaves them.
+#
+# **One thing zipper cannot do, and says so rather than half-doing.**
+# There is no directory-creating builtin (docs/MISSING.md, tier 5), so
+# an entry inside a directory can be extracted only where that
+# directory already exists.  zipper checks before it writes anything
+# and names the directory that is missing; it never writes half an
+# archive and never invents a flattened name for a file whose place in
+# the tree it could not make.
+
+import std.zip
+import std.files
+import std.paths
+import std.strings
+
+let usage = "usage: zipper list ARCHIVE.zip | zipper unzip ARCHIVE.zip [DIRECTORY] | zipper zip ARCHIVE.zip FILE [FILE ...]"
+
+# How many, said the way a person says it.  "1 entries" is the kind of
+# small dishonesty that makes a tool feel machine-written.
+func counted(amount: long, one: string, many: string) -> string:
+    if amount == 1:
+        return "1 " + one
+    return string(amount) + " " + many
+
+# --- the name gate ---------------------------------------------------
+
+# The name an entry may be written under, or an error saying why it
+# may not be written at all.
+#
+# APPNOTE 4.4.17.1 says an entry's name is a relative path with "/"
+# between its parts and no drive letter — so every shape refused here
+# is a name that does not conform *and* a name that reaches outside
+# the directory it was asked to go into.  The two facts are the same
+# fact, which is why one gate can be both the format check and the
+# security check.
+func safe_name(name: string) -> string!:
+    if len(name) == 0:
+        error("zipper: an entry with no name")
+    if paths.is_absolute(name):
+        error("zipper: " + name + " is an absolute path, and an entry may not name where it lands")
+    if strings.contains(name, "\\"):
+        error("zipper: " + name + " separates its parts with a backslash, which an archive's names may not (APPNOTE 4.4.17.1)")
+    if len(name) >= 2 and name.byte_at(1) == 58 and is_letter(name.byte_at(0)):
+        error("zipper: " + name + " names a drive, and an entry may not name where it lands")
+    let parts = strings.split(name, "/")
+    for part in parts:
+        if part == "..":
+            error("zipper: " + name + " climbs out of the directory it would be extracted into")
+    return name
+
+func is_letter(value: byte) -> bool:
+    if value >= 97 and value <= 122:
+        return true
+    return value >= 65 and value <= 90
+
+# --- list ------------------------------------------------------------
+
+func list_archive(path: string) -> !:
+    let archive = try zip.read(path)
+    let entries = try zip.entries(archive)
+    print(counted(len(entries), "entry", "entries") + " in " + path + ", " + counted(len(archive), "byte", "bytes"))
+    for entry in entries:
+        var line = new builder()
+        line.append("  ")
+        line.append(strings.pad_right(method_of(entry), 9))
+        line.append(strings.pad_left(string(entry.size()), 10))
+        line.append(strings.pad_left(string(entry.packed()), 10))
+        line.append("  ")
+        line.append(entry.name())
+        print(line.build())
+
+func method_of(entry: zip.Entry) -> string:
+    if entry.deflated():
+        return "deflated"
+    return "stored"
+
+# --- unzip -----------------------------------------------------------
+
+# Extract every entry into `into`, which must already be there.
+#
+# Two passes on purpose: nothing is written until every name in the
+# archive has passed the gate and every directory it needs has been
+# found.  A hostile archive is refused whole, and a merely awkward one
+# — an entry under a directory that does not exist — leaves the disk
+# exactly as it found it instead of half an extraction.
+func unzip_archive(path: string, into: string) -> !:
+    let archive = try zip.read(path)
+    let entries = try zip.entries(archive)
+    if not files.exists(into):
+        error("zipper: " + into + " is not there to extract into")
+
+    for entry in entries:
+        let name = try safe_name(entry.name())
+        let target = paths.join(into, name)
+        if strings.ends_with(name, "/"):
+            # A name ending in "/" is a directory and has no contents
+            # (APPNOTE 4.4.17.1).  zipper cannot make one.
+            if not files.exists(target):
+                error("zipper: " + name + " is a directory, and zipper cannot make one — make " + target + " and run again")
+        else:
+            let holder = paths.dir(target)
+            if not files.exists(holder):
+                error("zipper: " + holder + " is not there, and zipper cannot make a directory — make it and run again")
+
+    var written: long = 0
+    for entry in entries:
+        let name = entry.name()
+        if not strings.ends_with(name, "/"):
+            let data = try zip.extract(archive, entry)
+            let target = paths.join(into, name)
+            try files.write_bytes(target, data)
+            print("  " + strings.pad_left(string(len(data)), 10) + "  " + target)
+            written += 1
+    print(counted(written, "file", "files") + " extracted into " + into)
+
+# --- zip -------------------------------------------------------------
+
+# Build an archive out of files on disk, storing each under the path it
+# was named by — the way `zip` itself does, so an archive zipper writes
+# and an archive zipper reads are the same kind of thing.
+#
+# Every entry is offered to DEFLATE and keeps whichever of the two is
+# smaller (`Writer.add`), so an entry never grows by being compressed.
+func zip_files(path: string, sources: list(string)) -> !:
+    var maker = zip.writer()
+    var total: long = 0
+    for source in sources:
+        let name = try safe_name(source)
+        let data = try files.read_bytes(source)
+        try maker.add(name, data, true)
+        total += len(data)
+        print("  " + strings.pad_left(string(len(data)), 10) + "  " + name)
+    let archive = maker.finish()
+    try zip.write(path, archive)
+    print(counted(len(sources), "file", "files") + " (" + counted(total, "byte", "bytes") + ") into " + path + ", " + counted(len(archive), "byte", "bytes"))
+
+# --- the command line ------------------------------------------------
+
+func main(args: list(string)) -> !:
+    if len(args) == 0:
+        print_error(usage)
+        exit(2)
+    let command = args[0]
+    if command == "list":
+        if len(args) != 2:
+            print_error("usage: zipper list ARCHIVE.zip")
+            exit(2)
+        try list_archive(args[1])
+    elif command == "unzip":
+        if len(args) < 2 or len(args) > 3:
+            print_error("usage: zipper unzip ARCHIVE.zip [DIRECTORY]")
+            exit(2)
+        var into = "."
+        if len(args) == 3:
+            into = args[2]
+        try unzip_archive(args[1], into)
+    elif command == "zip":
+        if len(args) < 3:
+            print_error("usage: zipper zip ARCHIVE.zip FILE [FILE ...]")
+            exit(2)
+        var sources: list(string) = []
+        for index in range(2, len(args)):
+            sources.append(args[index])
+        try zip_files(args[1], sources)
+    else:
+        print_error("zipper: no command called " + command)
+        print_error(usage)
+        exit(2)
