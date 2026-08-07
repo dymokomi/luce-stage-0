@@ -5995,7 +5995,7 @@ test "luce.sema.own: a name given to a worker cannot be touched again" {
         \\func main():
         \\    var mine: list(long) = [1, 2]
         \\    let t = spawn total(give mine)
-        \\    print(string(len(mine)))
+        \\    assert(len(mine) == 2)
         \\
     , "luce.sema.own");
 }
@@ -6019,8 +6019,8 @@ test "luce.sema.own: a task is consumed by its wait" {
         \\
         \\func main():
         \\    let t = spawn work()
-        \\    print(string(t.wait()))
-        \\    print(string(t.wait()))
+        \\    assert(t.wait() == 1)
+        \\    assert(t.wait() == 1)
         \\
     , "luce.sema.own");
 }
@@ -6038,8 +6038,8 @@ test "luce.sema.self: a method cannot be spawned" {
         \\struct Point:
         \\    x: long
         \\
-        \\func Point.doubled(self) -> long:
-        \\    return self.x * 2
+        \\    func doubled(self) -> long:
+        \\        return self.x * 2
         \\
         \\func main():
         \\    let p = Point(x = 3)
