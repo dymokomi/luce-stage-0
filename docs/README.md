@@ -71,6 +71,7 @@ and each says so in its own preamble.
 | [LINKING_RESEARCH.md](LINKING_RESEARCH.md) | **Not a decision.** What it would take for the toolchain to need no `cc`: fourteen measurements from this tree, vendored LLD and a shipped `libSystem.tbd` proven end-to-end, our own container and loader priced honestly against macOS's hardened runtime. |
 | [UNION.md](UNION.md) | **Drafted, not scheduled.** The tagged-union design distilled from the research — eighteen decisions, three questions held — written so union's own moment finds the thinking done. `std.json` proceeds without it (a closed six-kind domain is a struct with an enum tag). |
 | [THREADS.md](THREADS.md) | Workers own their world: `spawn f(give x)` onto a second runtime, `task(T)` as a scope-owned resource whose scope-end joins, races unrepresentable because the ownership model is the concurrency model. Ratified; being built. |
+| [FUNCTIONS.md](FUNCTIONS.md) | Functions as values, divided at the capture line: named functions and one-expression lambdas whose types come from where they land — and no closures, because state that travels with behavior is a struct with a method. Drafted for ratification. |
 
 ## History
 
