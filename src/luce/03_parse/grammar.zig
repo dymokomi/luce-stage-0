@@ -495,6 +495,8 @@ pub const Parser = struct {
         defer constants.deinit(self.arena);
         var structs: std.ArrayList(ast.StructDecl) = .empty;
         defer structs.deinit(self.arena);
+        var enums: std.ArrayList(ast.EnumDecl) = .empty;
+        defer enums.deinit(self.arena);
         var functions: std.ArrayList(ast.FuncDecl) = .empty;
         defer functions.deinit(self.arena);
 
@@ -518,6 +520,13 @@ pub const Parser = struct {
                 .keyword_struct => {
                     if (try self.structDecl()) |declaration| {
                         try structs.append(self.arena, declaration);
+                    } else {
+                        self.recover();
+                    }
+                },
+                .keyword_enum => {
+                    if (try self.enumDecl()) |declaration| {
+                        try enums.append(self.arena, declaration);
                     } else {
                         self.recover();
                     }
@@ -546,7 +555,7 @@ pub const Parser = struct {
                     self.recover();
                 },
                 .keyword_public, .keyword_private => {
-                    try self.markedDeclaration(&constants, &structs, &functions);
+                    try self.markedDeclaration(&constants, &structs, &enums, &functions);
                 },
                 else => {
                     // A file-scope name is never valid, so a word that
@@ -574,7 +583,7 @@ pub const Parser = struct {
                     try self.report(
                         "luce.parse.top",
                         self.peek().span,
-                        "expected import, let, struct, or func at file scope, found {s}",
+                        "expected import, let, struct, enum, or func at file scope, found {s}",
                         .{try self.found()},
                     );
                     self.recover();
@@ -585,6 +594,7 @@ pub const Parser = struct {
             .imports = try imports.toOwnedSlice(self.arena),
             .constants = try constants.toOwnedSlice(self.arena),
             .structs = try structs.toOwnedSlice(self.arena),
+            .enums = try enums.toOwnedSlice(self.arena),
             .functions = try functions.toOwnedSlice(self.arena),
         };
     }
@@ -598,6 +608,7 @@ pub const Parser = struct {
         self: *Parser,
         constants: *std.ArrayList(ast.ConstDecl),
         structs: *std.ArrayList(ast.StructDecl),
+        enums: *std.ArrayList(ast.EnumDecl),
         functions: *std.ArrayList(ast.FuncDecl),
     ) Error!void {
         const marker = self.advance();
@@ -650,11 +661,20 @@ pub const Parser = struct {
                     self.recover();
                 }
             },
+            .keyword_enum => {
+                if (try self.enumDecl()) |declaration| {
+                    var marked = declaration;
+                    marked.visibility = visibility;
+                    try enums.append(self.arena, marked);
+                } else {
+                    self.recover();
+                }
+            },
             else => {
                 try self.report(
                     "luce.parse.top",
                     marker.span,
-                    "'{s}' marks a declaration: expected func, let, or struct after it, found {s}",
+                    "'{s}' marks a declaration: expected func, let, struct, or enum after it, found {s}",
                     .{ keywordWord(marker.kind).?, try self.found() },
                 );
                 self.recover();
@@ -1039,6 +1059,136 @@ pub const Parser = struct {
         }
     }
 
+    /// `enum Method:` / `enum Method(byte):` — the declaration form
+    /// that mirrors struct's (docs/ENUMS.md D1): a name, an optional
+    /// backing width in parentheses, then one indented member per
+    /// line, with the methods and namespace functions a struct body
+    /// takes (D7).
+    ///
+    /// A member's `= value` is parsed as an ordinary expression and
+    /// folded by stage 4, exactly as a field default is: what the
+    /// expression may *be* is the folder's question, so `= 1 << 3` is
+    /// a constant and `= f()` is a constant diagnostic.
+    pub fn enumDecl(self: *Parser) Error!?ast.EnumDecl {
+        const start = self.advance(); // enum
+        const name = (try self.expect(.identifier, "an enum name")) orelse return null;
+        try self.refuseWildcardName(name);
+        var backing: ?ast.TypeName = null;
+        if (self.peekKind() == .left_paren) {
+            const opener = self.advance();
+            backing = (try self.typeName()) orelse return null;
+            if ((try self.expectClose(.right_paren, opener)) == null) return null;
+        }
+        if (!try self.colonOrLayout("':' after the enum name")) return null;
+        if ((try self.expect(.newline, "end of line after ':'")) == null) return null;
+        if ((try self.blockBody("enum")) == null) return null;
+
+        var members: std.ArrayList(ast.EnumMember) = .empty;
+        defer members.deinit(self.arena);
+        var functions: std.ArrayList(ast.FuncDecl) = .empty;
+        defer functions.deinit(self.arena);
+        while (self.peekKind() != .dedent and self.peekKind() != .end_of_file) {
+            if (self.accept(.newline) != null) continue;
+            if (self.peekKind() == .indent) {
+                try self.unexpectedIndent();
+                continue;
+            }
+            if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
+                if (!try self.enumMarker()) continue;
+            }
+            if (self.peekKind() == .keyword_func) {
+                if (try self.funcDecl()) |declaration| {
+                    try functions.append(self.arena, declaration);
+                } else {
+                    self.recover();
+                }
+                continue;
+            }
+            if (try self.enumMember()) |member| {
+                try members.append(self.arena, member);
+            } else {
+                self.recover();
+            }
+        }
+        _ = self.accept(.dedent);
+        return .{
+            .name = self.text(name),
+            .name_span = name.span,
+            .backing = backing,
+            .members = try members.toOwnedSlice(self.arena),
+            .functions = try functions.toOwnedSlice(self.arena),
+            .span = .{ .start = start.span.start, .end = name.span.end },
+        };
+    }
+
+    /// A visibility word inside an enum body.  A function may carry one
+    /// — it is a declaration like any other (docs/VISIBILITY.md §5) —
+    /// but a *member* may not: an enum's members are what the type is,
+    /// and a match arm cannot name one the file it stands in cannot
+    /// see.  A region label is the same refusal wearing a colon.
+    ///
+    /// True when the marker was consumed and the declaration behind it
+    /// still parses under it; false when the line was reported and
+    /// recovered.  The marker itself is dropped either way — a private
+    /// function of an enum is one stage 4 never sees marked, and
+    /// carrying it would need a visibility field the enum's functions
+    /// do not have yet.
+    fn enumMarker(self: *Parser) Error!bool {
+        const marker = self.advance();
+        const word = keywordWord(marker.kind).?;
+        if (self.peekKind() == .colon) {
+            try self.report(
+                "luce.parse.expected",
+                .{ .start = marker.span.start, .end = self.peek().span.end },
+                "'{s}:' opens a region inside a struct; an enum's members are the type and are always visible",
+                .{word},
+            );
+            _ = self.advance(); // the colon
+            self.recover();
+            return false;
+        }
+        if (self.peekKind() == .keyword_func) return true;
+        try self.report(
+            "luce.parse.expected",
+            marker.span,
+            "an enum member is part of the type and is always visible; write '{s} enum' to withhold the whole set",
+            .{word},
+        );
+        return true;
+    }
+
+    /// One member line: `stored`, or `stored = 8`.
+    fn enumMember(self: *Parser) Error!?ast.EnumMember {
+        const name = (try self.expect(.identifier, "an enum member name")) orelse return null;
+        try self.refuseWildcardName(name);
+        // `stored: 8` — the struct field's colon, in the one body that
+        // does not take one.  A member is a name and a value, not a
+        // name and a type.
+        if (self.peekKind() == .colon) {
+            try self.report(
+                "luce.parse.expected",
+                self.peek().span,
+                "an enum member takes a value, not a type: write '{s} = 8', or leave it to follow the member above",
+                .{self.text(name)},
+            );
+            return null;
+        }
+        var value: ?*ast.Expression = null;
+        var written_end = name.span.end;
+        if (self.accept(.assign) != null) {
+            const written = (try self.expression()) orelse return null;
+            value = written;
+            written_end = written.span().end;
+        }
+        try self.endOfStatement("end of line after the member");
+        return .{
+            .name = self.text(name),
+            .name_span = name.span,
+            .value = value,
+            .span = .{ .start = name.span.start, .end = written_end },
+        };
+    }
+
     /// `self` or `var self` in a parameter list.  `already` is how many
     /// parameters stand in front of it, which is the one thing about a
     /// receiver this stage can decide: a receiver is parameter zero or
@@ -1306,6 +1456,7 @@ pub const Parser = struct {
             .keyword_if => return self.conditional(),
             .keyword_while => return self.whileLoop(),
             .keyword_for => return self.forLoop(),
+            .keyword_match => return self.matchStatement(),
             .keyword_return => return self.returnStatement(),
             .keyword_break => {
                 const item = self.advance();
@@ -1329,7 +1480,7 @@ pub const Parser = struct {
                 );
                 return null;
             },
-            .keyword_func, .keyword_struct, .keyword_import => {
+            .keyword_func, .keyword_struct, .keyword_enum, .keyword_import => {
                 const word = keywordWord(self.peekKind()).?;
                 try self.report(
                     "luce.parse.expected",
@@ -1658,6 +1809,122 @@ pub const Parser = struct {
         } };
     }
 
+    /// `match m:` — an indented arm per member, each a bare name and
+    /// the block it opens, with an optional `else:` last
+    /// (docs/ENUMS.md R1, R3).
+    ///
+    /// Which names are *legal* arms is stage 4's question: the parser
+    /// does not know the scrutinee's type, and a name that spells no
+    /// member is a diagnostic about an enum rather than about syntax.
+    /// What it does know is the two shapes a reader arrives with from
+    /// another language — `case stored:` and `Method.stored:` — and
+    /// both get the one sentence that says how Luce writes it.
+    pub fn matchStatement(self: *Parser) Error!?ast.Statement {
+        if (!try self.enter("block")) return null;
+        defer self.leave();
+
+        const start = self.advance(); // match
+        const scrutinee = (try self.expression()) orelse return null;
+        if (!try self.colonOrLayout("':' after what is matched")) return null;
+        if ((try self.expect(.newline, "end of line after ':'")) == null) return null;
+        if ((try self.blockBody("match")) == null) return null;
+
+        var arms: std.ArrayList(ast.MatchArm) = .empty;
+        defer arms.deinit(self.arena);
+        var else_block: ?ast.Block = null;
+        var else_span: ?Span = null;
+        while (self.peekKind() != .dedent and self.peekKind() != .end_of_file) {
+            if (self.accept(.newline) != null) continue;
+            if (self.peekKind() == .indent) {
+                try self.unexpectedIndent();
+                continue;
+            }
+            if (self.peekKind() == .keyword_else) {
+                const keyword = self.advance();
+                if (else_span != null) {
+                    try self.report(
+                        "luce.parse.expected",
+                        keyword.span,
+                        "one else per match: it is the arm for everything the others did not name",
+                        .{},
+                    );
+                    self.recover();
+                    continue;
+                }
+                else_span = keyword.span;
+                else_block = (try self.block("else")) orelse {
+                    self.recover();
+                    continue;
+                };
+                continue;
+            }
+            if (else_span != null) {
+                try self.report(
+                    "luce.parse.expected",
+                    self.peek().span,
+                    "else catches everything the arms above it did not, so it comes last",
+                    .{},
+                );
+                self.recover();
+                continue;
+            }
+            if (try self.matchArm()) |arm| {
+                try arms.append(self.arena, arm);
+            } else {
+                self.recover();
+            }
+        }
+        _ = self.accept(.dedent);
+        return .{ .match = .{
+            .scrutinee = scrutinee,
+            .arms = try arms.toOwnedSlice(self.arena),
+            .else_block = else_block,
+            .else_span = else_span,
+            .span = .{ .start = start.span.start, .end = scrutinee.span().end },
+        } };
+    }
+
+    /// One arm: a bare member name, then the block its colon opens.
+    fn matchArm(self: *Parser) Error!?ast.MatchArm {
+        // `case stored:` — Python's second keyword, carrying nothing
+        // the colon does not (docs/ENUMS.md Q3).
+        if (self.peekKind() == .identifier and
+            std.mem.eql(u8, self.text(self.peek()), "case") and
+            self.peekAhead(1) == .identifier)
+        {
+            const keyword = self.advance();
+            try self.report(
+                "luce.parse.expected",
+                .{ .start = keyword.span.start, .end = self.peek().span.end },
+                "a match arm is a bare member name: write '{s}:'",
+                .{self.text(self.peek())},
+            );
+            return null;
+        }
+        const name = (try self.expect(.identifier, "a member name opening an arm")) orelse return null;
+        try self.refuseWildcardName(name);
+        // `Method.stored:` — qualified, which says every line what the
+        // scrutinee already said once (R3).
+        if (self.peekKind() == .dot and self.peekAhead(1) == .identifier) {
+            _ = self.advance();
+            const member = self.advance();
+            try self.report(
+                "luce.parse.expected",
+                .{ .start = name.span.start, .end = member.span.end },
+                "a match arm is a bare member name: write '{s}:', not '{s}.{s}:'",
+                .{ self.text(member), self.text(name), self.text(member) },
+            );
+            return null;
+        }
+        const body = (try self.block(self.text(name))) orelse return null;
+        return .{
+            .name = self.text(name),
+            .name_span = name.span,
+            .body = body,
+            .span = .{ .start = name.span.start, .end = name.span.end },
+        };
+    }
+
     pub fn returnStatement(self: *Parser) Error!?ast.Statement {
         const start = self.advance();
         if (self.accept(.newline) != null) {
@@ -1915,15 +2182,14 @@ fn foreignWord(word: []const u8) ?[]const u8 {
         .{ .word = "elseif", .advice = "write 'elif': Luce chains conditions with one keyword" },
         .{ .word = "elsif", .advice = "write 'elif': Luce chains conditions with one keyword" },
         .{ .word = "foreach", .advice = "loops are written 'for x in xs:'" },
-        .{ .word = "switch", .advice = "there is no switch; chain 'if' and 'elif'" },
-        .{ .word = "case", .advice = "there is no switch; chain 'if' and 'elif'" },
+        .{ .word = "switch", .advice = "there is no switch; write 'match' over an enum, or chain 'if' and 'elif'" },
+        .{ .word = "case", .advice = "a match arm is a bare member name: write 'stored:', not 'case stored:'" },
         .{ .word = "def", .advice = "functions are declared with 'func'" },
         .{ .word = "fn", .advice = "functions are declared with 'func'" },
         .{ .word = "fun", .advice = "functions are declared with 'func'" },
         .{ .word = "function", .advice = "functions are declared with 'func'" },
         .{ .word = "class", .advice = "there are no classes; 'struct' declares a value type" },
         .{ .word = "type", .advice = "there are no type aliases; 'struct' declares a value type" },
-        .{ .word = "enum", .advice = "there are no enums; 'struct' declares a value type" },
         .{ .word = "const", .advice = "file-scope constants are declared with 'let'" },
         .{ .word = "final", .advice = "file-scope constants are declared with 'let'" },
         .{ .word = "from", .advice = import_advice },
@@ -1972,6 +2238,8 @@ pub fn describe(kind: Kind) []const u8 {
         .identifier => "a name",
         .keyword_func => "the keyword 'func'",
         .keyword_struct => "the keyword 'struct'",
+        .keyword_enum => "the keyword 'enum'",
+        .keyword_match => "the keyword 'match'",
         .keyword_let => "the keyword 'let'",
         .keyword_var => "the keyword 'var'",
         .keyword_if => "the keyword 'if'",

@@ -394,7 +394,7 @@ test "the visibility refusals land where the memo puts them" {
     );
     // A marker fronting something unmarkable names what it expected.
     try expectDiagnostics("private import math\n\nfunc main():\n    return\n", &.{
-        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "expected func, let, or struct" },
+        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "expected func, let, struct, or enum" },
     });
 }
 

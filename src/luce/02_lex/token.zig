@@ -26,6 +26,14 @@ pub const Kind = enum {
     identifier,
     keyword_func,
     keyword_struct,
+    /// `enum Name:` — a set of named constants at one integer width
+    /// (docs/ENUMS.md D1).  A declaration keyword beside `struct`,
+    /// because an enum declares a type the same way one does.
+    keyword_enum,
+    /// `match expr:` — dispatch over an enum, one arm per member
+    /// (docs/ENUMS.md R1).  The restricted statement union will extend
+    /// with payload bindings rather than a second keyword.
+    keyword_match,
     keyword_let,
     keyword_var,
     keyword_if,
@@ -153,6 +161,8 @@ pub const Token = struct {
 pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "func", .kind = .keyword_func },
     .{ .word = "struct", .kind = .keyword_struct },
+    .{ .word = "enum", .kind = .keyword_enum },
+    .{ .word = "match", .kind = .keyword_match },
     .{ .word = "let", .kind = .keyword_let },
     .{ .word = "var", .kind = .keyword_var },
     .{ .word = "if", .kind = .keyword_if },

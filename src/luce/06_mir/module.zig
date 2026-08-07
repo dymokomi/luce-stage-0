@@ -57,7 +57,14 @@ pub const magic = "LUCE";
 /// 27 — the bit set arrives (docs/BITWISE.md): five `BinaryOp` tags
 /// and one `UnaryOp`, appended, plus `shift_out_of_range` in the trap
 /// codes, appended likewise.
-pub const format_version: u32 = 27;
+///
+/// 28 — enums arrive (docs/ENUMS.md).  A table of them joins the
+/// program between the heap types and the functions, and
+/// `types.Type` grows a tag for one — placed beside `strukt` and
+/// `heap`, which are the other two types that index a table, so
+/// `optional` renumbers.  Safe for the reason 22's note gives and no
+/// other: the version moved with it.
+pub const format_version: u32 = 28;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -100,6 +107,17 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
     try writer.int(u32, @intCast(program.heap_types.len));
     for (program.heap_types) |descriptor| try writer.heapType(descriptor);
 
+    try writer.int(u32, @intCast(program.enums.len));
+    for (program.enums) |declared| {
+        try writer.blob(declared.name);
+        try writer.int(u8, @intFromEnum(declared.backing));
+        try writer.int(u32, @intCast(declared.members.len));
+        for (declared.members) |member| {
+            try writer.blob(member.name);
+            try writer.int(i64, member.value);
+        }
+    }
+
     try writer.int(u32, @intCast(program.functions.len));
     for (program.functions) |*function| try writer.function(function);
     try writer.int(u32, program.entry_function);
@@ -130,6 +148,13 @@ const Writer = struct {
         try self.int(u8, @intFromEnum(std.meta.activeTag(of)));
         if (of == .strukt) try self.int(u32, of.strukt);
         if (of == .heap) try self.int(u32, of.heap);
+        // The width travels with the index, as it does in memory: the
+        // decoder rebuilds the whole reference without reaching into
+        // the enum table, which is read later in the stream.
+        if (of == .enumeration) {
+            try self.int(u32, of.enumeration.index);
+            try self.int(u8, @intFromEnum(of.enumeration.backing));
+        }
         // A `T?` writes its payload as a type of its own, which cannot
         // be optional in turn: one tag byte, then the payload's.
         if (of == .optional) try self.valueType(of.optional.asType());
@@ -304,6 +329,21 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
     for (heap_types) |*descriptor| descriptor.* = try reader.heapType();
     program.heap_types = heap_types;
 
+    const enum_count = try reader.count();
+    const enums = try arena.alloc(types.EnumType, enum_count);
+    for (enums) |*declared| {
+        declared.name = try arena.dupe(u8, try reader.blob());
+        declared.backing = try reader.enumTag(types.Type.EnumRef.Backing);
+        const member_count = try reader.count();
+        const members = try arena.alloc(types.EnumMember, member_count);
+        for (members) |*member| {
+            member.name = try arena.dupe(u8, try reader.blob());
+            member.value = try reader.int(i64);
+        }
+        declared.members = members;
+    }
+    program.enums = enums;
+
     const function_count = try reader.count();
     const functions = try arena.alloc(mir.Function, function_count);
     for (functions) |*function| try reader.function(arena, function);
@@ -374,6 +414,10 @@ const Reader = struct {
             .string => .string,
             .strukt => .{ .strukt = try self.int(u32) },
             .heap => .{ .heap = try self.int(u32) },
+            .enumeration => .{ .enumeration = .{
+                .index = try self.int(u32),
+                .backing = try self.enumTag(types.Type.EnumRef.Backing),
+            } },
             // `T??` has no representation, so a payload that decodes
             // as optional is a damaged module, not a nested one.
             .optional => types.Type.optionalOf(try self.valueType()) orelse
@@ -947,6 +991,14 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     inline for (comptime std.meta.fieldNames(mir.Intrinsic)) |name| hasher.update(name);
     inline for (comptime std.meta.fieldNames(mir.TrapCode)) |name| hasher.update(name);
     inline for (comptime std.meta.fieldNames(mir.ErrorCode)) |name| hasher.update(name);
+    // **The type tags are wire surface too**: a type travels as the
+    // ordinal of its tag (`Writer.valueType`), so adding, removing or
+    // reordering one renumbers every tag after it — which is exactly
+    // the silent misreading a version bump exists to prevent.  Enums
+    // arriving is what showed this was missing: the instruction set did
+    // not move an inch and the wire did.
+    inline for (comptime std.meta.fieldNames(types.Type)) |name| hasher.update(name);
+    inline for (comptime std.meta.fieldNames(types.HeapType)) |name| hasher.update(name);
     // If this fails you changed the instruction set, the intrinsics,
     // or the trap or error codes: bump format_version and update BOTH
     // numbers.
@@ -957,6 +1009,6 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // moved this number and left the hash alone.  A version bump is
     // still required for that, and this test is not what will remind
     // you.
-    try testing.expectEqual(@as(u32, 27), format_version);
-    try testing.expectEqual(@as(u64, 15558557180154979482), hasher.final());
+    try testing.expectEqual(@as(u32, 28), format_version);
+    try testing.expectEqual(@as(u64, 13566901066460038847), hasher.final());
 }

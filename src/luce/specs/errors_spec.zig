@@ -955,7 +955,7 @@ test "luce.sema.self: self is only a parameter of a function inside a struct" {
         \\
     ,
         "luce.sema.self",
-        "self is only a parameter of a function declared inside a struct",
+        "self is only a parameter of a function declared inside a struct or an enum",
         1,
         12,
     );
@@ -1469,7 +1469,7 @@ test "luce.sema.duplicate: a duplicate struct points at the first" {
         \\func main():
         \\    return
         \\
-    , "luce.sema.duplicate", "duplicate struct P; the first is on line 1", 4, 8);
+    , "luce.sema.duplicate", "duplicate name P; the first is on line 1", 4, 8);
 }
 
 test "luce.sema.duplicate: a duplicate field points at the first" {

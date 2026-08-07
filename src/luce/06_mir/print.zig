@@ -24,6 +24,18 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
         }
     }
 
+    // An enum prints its members with their numbers: the values are
+    // what the compare-and-branch trees below are written against, so a
+    // reader of the IR can check an arm against the name it came from.
+    for (program.enums) |declared| {
+        const backing_name = try typeName(allocator, program, declared.backing.asType());
+        defer allocator.free(backing_name);
+        try appendPrint(&text, allocator, "enum {s}({s}):\n", .{ declared.name, backing_name });
+        for (declared.members) |member| {
+            try appendPrint(&text, allocator, "    {s} = {d}\n", .{ member.name, member.value });
+        }
+    }
+
     for (program.functions) |*function| {
         try appendPrint(&text, allocator, "func {s}(", .{function.name});
         for (function.locals[0..function.parameter_count], 0..) |local, index| {
@@ -58,7 +70,7 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
 }
 
 fn typeName(allocator: Allocator, program: *const Program, of: Type) error{OutOfMemory}![]u8 {
-    return types.typeName(allocator, program.structs, program.heap_types, of);
+    return types.typeName(allocator, program.structs, program.heap_types, program.enums, of);
 }
 
 fn appendPrint(

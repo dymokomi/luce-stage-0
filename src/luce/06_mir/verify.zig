@@ -93,6 +93,17 @@ fn verifyType(program: *const Program, of: Type) VerifyError!void {
     switch (of) {
         .strukt => |index| if (index >= program.structs.len) return error.BadStruct,
         .heap => |index| if (index >= program.heap_types.len) return error.BadStruct,
+        // An enum names a row of the enum table, and the width it
+        // carries must be the one that row declares: the two are one
+        // fact in memory (`types.Type.EnumRef`), and a module that says
+        // otherwise would have every engine reading a member at a width
+        // the table denies.
+        .enumeration => |reference| {
+            if (reference.index >= program.enums.len) return error.BadStruct;
+            const declared = program.enums[reference.index];
+            if (declared.backing != reference.backing) return error.BadStruct;
+            if (declared.members.len == 0) return error.BadStruct;
+        },
         // A payload is a type in its own right and is bounded the same
         // way; it can never be optional itself, so this is one step.
         .optional => |payload| try verifyType(program, payload.asType()),
@@ -269,8 +280,20 @@ fn fitsFloat(held: f64, at: Type) bool {
         .double => true,
         .float => std.math.isNan(held) or @as(f64, @as(f32, @floatCast(held))) == held,
         .half => std.math.isNan(held) or @as(f64, @as(f16, @floatCast(held))) == held,
-        .none, .boolean, .byte, .short, .int, .long, .string, .strukt, .heap, .optional => false,
+        .none, .boolean, .byte, .short, .int, .long, .string, .strukt, .heap, .enumeration, .optional => false,
     };
+}
+
+/// Whether an integer constant is a **member** of the enum it lands in.
+///
+/// The one promise an enum makes is that every value of it is a member
+/// (docs/ENUMS.md), and `match` leans on it: with every member named,
+/// the last arm is the fallthrough and nothing traps.  So a module that
+/// puts a number no member holds in an enum register is refused here,
+/// where a hand-made one arrives.
+fn isMember(program: *const Program, held: i64, of: Type) bool {
+    if (of.enumeration.index >= program.enums.len) return false;
+    return program.enums[of.enumeration.index].memberOfValue(held) != null;
 }
 
 fn expectType(actual: Type, expected: Type) VerifyError!void {
@@ -297,6 +320,11 @@ fn verifyInstruction(
         // representable where it lands, or the constant and its type
         // would disagree about which number this is.
         .const_long => |held| {
+            if (result == .enumeration) {
+                if (!fitsInteger(held, result.storage())) return error.BadConstant;
+                if (!isMember(program, held, result)) return error.BadConstant;
+                return;
+            }
             if (!result.isInteger()) return error.TypeMismatch;
             if (!fitsInteger(held, result)) return error.BadConstant;
         },
@@ -391,8 +419,17 @@ fn verifyInstruction(
         // legal instruction (docs/TYPES.md §3).
         .convert => |operand_register| {
             const operand = try operandType(function, defined, operand_register);
-            if (!operand.isNumeric() or !result.isNumeric()) return error.TypeMismatch;
-            if (operand.eql(result)) return error.TypeMismatch;
+            // **An enum converts to a number and nothing converts to an
+            // enum** (docs/ENUMS.md D4, R2): `int(m)` is this
+            // instruction reading the member's width, and `Method(n)`
+            // is a compare-and-branch tree that answers `Method?`.
+            // Same-to-same is refused above except from an enum, where
+            // `int(m)` at an `int` backing changes what the value *is*
+            // rather than what it holds — the one conversion whose
+            // whole content is the type it lands in.
+            const from = operand.storage();
+            if (!from.isNumeric() or !result.isNumeric()) return error.TypeMismatch;
+            if (operand != .enumeration and from.eql(result)) return error.TypeMismatch;
         },
         .struct_make => |make| {
             if (make.layout >= program.structs.len) return error.BadStruct;

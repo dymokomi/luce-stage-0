@@ -35,6 +35,10 @@ pub fn boxTag(of: Type) ?value.Tag {
         .string => .string,
         .strukt => .strukt,
         .heap => .object,
+        // An enum boxes as the integer it is (docs/ENUMS.md D10): the
+        // runtime is handed a value and never a program's type table,
+        // and what it has to know about one is its width.
+        .enumeration => |reference| boxTag(reference.backing.asType()),
         .optional => null,
     };
 }
@@ -658,6 +662,11 @@ pub const Program = struct {
     arena: std.heap.ArenaAllocator,
     structs: []StructLayout = &.{},
     heap_types: []types.HeapType = &.{},
+    /// One row per declared enum: its name, its width, and its members
+    /// (docs/ENUMS.md D10).  Read where a name is needed — the zero of
+    /// an enum-typed slot, `luce ir`, a diagnostic — and never on the
+    /// execution path, where an enum is the integer it is stored as.
+    enums: []types.EnumType = &.{},
     functions: []Function = &.{},
     constants: []const []const u8 = &.{},
     entry_function: u32 = 0,

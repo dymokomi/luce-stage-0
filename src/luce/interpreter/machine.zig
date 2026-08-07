@@ -407,7 +407,10 @@ pub const Machine = struct {
                     // A numeric constant travels at the widest member
                     // of its family and lands at the register's own
                     // width (docs/TYPES.md §1).
-                    .const_long => |value| registers[item] = switch (function.result_types[item]) {
+                    // An enum member is a constant at its backing width
+                    // (docs/ENUMS.md D10), so `storage()` answers for
+                    // it here exactly as it does on the compiled path.
+                    .const_long => |value| registers[item] = switch (function.result_types[item].storage()) {
                         .byte => .ofByte(@intCast(value)),
                         .short => .ofShort(@intCast(value)),
                         .int => .ofInt(@intCast(value)),
@@ -613,7 +616,21 @@ pub const Machine = struct {
     }
 
     /// The zero value a fresh local or array element carries, per type.
-    pub fn zeroValue(self: *Machine, of: types.Type) error{OutOfMemory}!RuntimeValue {
+    pub fn zeroValue(self: *Machine, written: types.Type) error{OutOfMemory}!RuntimeValue {
+        // An enum-typed slot starts at the enum's **first declared
+        // member** (docs/ENUMS.md): zero is a value no member need
+        // hold, and every value of an enum is a member.
+        if (written == .enumeration) {
+            const declared = self.program.enums[written.enumeration.index];
+            const first = declared.members[0].value;
+            return switch (declared.backing) {
+                .byte => .ofByte(@intCast(first)),
+                .short => .ofShort(@intCast(first)),
+                .int => .ofInt(@intCast(first)),
+                .long => .ofLong(first),
+            };
+        }
+        const of = written;
         return switch (of) {
             .none => .none,
             .boolean => .ofBoolean(false),
@@ -628,6 +645,7 @@ pub const Machine = struct {
             .heap => .null_object,
             // The zero of a `T?` is absence, which owns nothing (S43).
             .optional => .none,
+            .enumeration => unreachable, // answered above
             .strukt => |layout_index| blk: {
                 // One shared zero template per layout, built on first
                 // use.  Sharing the fields slice across every

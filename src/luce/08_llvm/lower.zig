@@ -325,7 +325,13 @@ const Module = struct {
 
     /// The LLVM type a Luce value of type `of` travels in.  `.none`
     /// maps to `void`, which is only ever a return type.
-    fn valueType(self: *Module, of: types.Type) Error!Builder.Type {
+    fn valueType(self: *Module, written: types.Type) Error!Builder.Type {
+        // **An enum is the integer it is stored at**, here and at every
+        // other place this file asks a type a machine question
+        // (docs/ENUMS.md D10).  Answering it once, at the top, is what
+        // keeps that sentence in one place — and what lets the arm
+        // below say `unreachable` honestly rather than "not yet".
+        const of = written.storage();
         return switch (of) {
             .none => .void,
             .boolean => .i1,
@@ -370,6 +376,7 @@ const Module = struct {
                 .normal,
                 &.{ try self.valueType(payload.asType()), .i1 },
             ),
+            .enumeration => unreachable, // answered by storage() above
         };
     }
 
@@ -503,7 +510,8 @@ const Module = struct {
     /// Frame alignment for a value of `of`.  Only types `valueType`
     /// accepts ever reach a frame slot; the rest are named anyway so
     /// this file stays free of `else` arms.
-    fn valueAlignment(of: types.Type) Builder.Alignment {
+    fn valueAlignment(written: types.Type) Builder.Alignment {
+        const of = written.storage();
         return switch (of) {
             .boolean, .byte => Builder.Alignment.fromByteUnits(1),
             .short, .half => Builder.Alignment.fromByteUnits(2),
@@ -516,6 +524,7 @@ const Module = struct {
             .heap,
             .optional,
             => Builder.Alignment.fromByteUnits(8),
+            .enumeration => unreachable, // answered by storage() above
         };
     }
 
@@ -734,18 +743,45 @@ const Module = struct {
         return made;
     }
 
+    /// An integer's bits at the width it is stored at, zero-extended
+    /// into the word a `runtime.Value` carries — what boxing a narrow
+    /// number does, said for a constant one.
+    fn narrowBits(held: i64, at: types.Type) u64 {
+        const bits: u64 = @bitCast(held);
+        return switch (at.numericBits()) {
+            8 => bits & 0xff,
+            16 => bits & 0xffff,
+            32 => bits & 0xffff_ffff,
+            else => bits,
+        };
+    }
+
     /// One field of a zero struct, as a constant `runtime.Value`.  The
     /// zeroes here are the interpreter's (`Machine.zeroValue`): an empty
     /// String is length zero, and an object-typed field is the null
     /// handle, which traps rather than touching anything.
-    fn zeroField(self: *Module, of: types.Type) Error!Builder.Constant {
+    fn zeroField(self: *Module, written: types.Type) Error!Builder.Constant {
+        // A struct's enum field zeroes at its **first member**, which
+        // is a number the enum table holds, not zero (docs/ENUMS.md).
+        // Everything after that is the backing width's own zero.
+        const of = written.storage();
+        const first_member: u64 = switch (written) {
+            // Boxed the way `boxBits` boxes one: only the backing
+            // width's own bits, so a negative member at a `short` is
+            // 0xffff and not a sign-extended word (`runtime.Value`).
+            .enumeration => |reference| narrowBits(
+                self.program.enums[reference.index].members[0].value,
+                reference.backing.asType(),
+            ),
+            else => 0,
+        };
         const tag: runtime.Tag, const bits: Builder.Constant = switch (of) {
             .none => .{ .none, try self.builder.intConst(.i64, 0) },
             .boolean => .{ .boolean, try self.builder.intConst(.i64, 0) },
-            .byte => .{ .byte, try self.builder.intConst(.i64, 0) },
-            .short => .{ .short, try self.builder.intConst(.i64, 0) },
-            .int => .{ .int, try self.builder.intConst(.i64, 0) },
-            .long => .{ .long, try self.builder.intConst(.i64, 0) },
+            .byte => .{ .byte, try self.builder.intConst(.i64, @as(i64, @bitCast(first_member))) },
+            .short => .{ .short, try self.builder.intConst(.i64, @as(i64, @bitCast(first_member))) },
+            .int => .{ .int, try self.builder.intConst(.i64, @as(i64, @bitCast(first_member))) },
+            .long => .{ .long, try self.builder.intConst(.i64, @as(i64, @bitCast(first_member))) },
             .half => .{ .half, try self.builder.intConst(.i64, 0) },
             .float => .{ .float, try self.builder.intConst(.i64, 0) },
             .double => .{ .double, try self.builder.intConst(.i64, 0) },
@@ -760,6 +796,7 @@ const Module = struct {
             // tag with no payload — the very `Value` the interpreter
             // parks in the same field (S43).
             .optional => .{ .none, try self.builder.intConst(.i64, 0) },
+            .enumeration => unreachable, // answered by storage() above
         };
         const length: u64 = switch (of) {
             .strukt => |nested| self.program.structs[nested].fields.len,
@@ -961,7 +998,8 @@ const Module = struct {
     /// How many bytes a returned value occupies in its `%out` slot —
     /// the size of `valueType(of)`, which is what makes the slot
     /// `dereferenceable`.
-    fn resultSize(of: types.Type) u32 {
+    fn resultSize(written: types.Type) u32 {
+        const of = written.storage();
         return switch (of) {
             .boolean, .byte => 1,
             .short, .half => 2,
@@ -974,7 +1012,7 @@ const Module = struct {
             // payload aligns to 1, so `{i1, i1}` really is two bytes —
             // and `dereferenceable` must not claim more than the
             // caller's `alloca` provides.
-            .optional => |payload| switch (payload) {
+            .optional => |payload| switch (payload.asType().storage()) {
                 .boolean, .byte => 2,
                 // {i16, i1} and {half, i1} align to 2, so four.
                 .short, .half => 4,
@@ -983,9 +1021,11 @@ const Module = struct {
                 .int, .float => 8,
                 .long, .double, .strukt, .heap => 16,
                 .string => 24,
+                .none, .enumeration, .optional => unreachable, // a payload is a value of a width
             },
             // Never reached: a function returning nothing has no slot.
             .none => 0,
+            .enumeration => unreachable, // answered by storage() above
         };
     }
 
@@ -1784,7 +1824,18 @@ const Body = struct {
         self.wip.cursor = resume_at;
     }
 
-    fn zeroValue(self: *Body, of: types.Type) Error!Builder.Value {
+    fn zeroValue(self: *Body, written: types.Type) Error!Builder.Value {
+        // An enum-typed slot starts at the enum's **first member**
+        // (docs/ENUMS.md), which is a number its declaration chose.
+        if (written == .enumeration) {
+            const reference = written.enumeration;
+            const declared = self.module.program.enums[reference.index];
+            return self.module.builder.intValue(
+                try self.module.valueType(written),
+                declared.members[0].value,
+            );
+        }
+        const of = written;
         return switch (of) {
             .boolean => .false,
             .byte => try self.module.builder.intValue(.i8, 0),
@@ -1810,6 +1861,7 @@ const Body = struct {
                 &.{ try self.zeroValue(payload.asType()), .false },
                 "none",
             ),
+            .enumeration => unreachable, // answered above
         };
     }
 
@@ -1958,7 +2010,8 @@ const Body = struct {
     }
 
     /// The `bits` word a value of `of` puts in a box.
-    fn boxBits(self: *Body, of: types.Type, held: Builder.Value) Error!Builder.Value {
+    fn boxBits(self: *Body, written: types.Type, held: Builder.Value) Error!Builder.Value {
+        const of = written.storage();
         return switch (of) {
             .none => try self.module.builder.intValue(.i64, 0),
             .boolean => try self.wip.cast(.zext, held, .i64, "box.bits"),
@@ -1989,14 +2042,16 @@ const Body = struct {
                 "box.bits",
             ),
             .optional => self.fail("the bits of a T? read from its type"),
+            .enumeration => unreachable, // answered by storage() above
         };
     }
 
     /// The `length` word a value of `of` puts in a box.  Every type but
     /// String has one the type alone decides, which is what lets
     /// `fillBoxShape` write it once in the entry block.
-    fn boxLength(self: *Body, of: types.Type, held: Builder.Value) Error!Builder.Value {
+    fn boxLength(self: *Body, written: types.Type, held: Builder.Value) Error!Builder.Value {
         const builder = self.module.builder;
+        const of = written.storage();
         return switch (of) {
             .none,
             .boolean,
@@ -2015,6 +2070,7 @@ const Body = struct {
             ),
             .string => try self.wip.extractValue(held, &.{1}, "box.length"),
             .optional => self.fail("the length of a T? read from its type"),
+            .enumeration => unreachable, // answered by storage() above
         };
     }
 
@@ -2136,9 +2192,10 @@ const Body = struct {
 
     /// Read a Luce value of type `of` back out of the `runtime.Value`
     /// at `slot`.
-    fn unboxed(self: *Body, of: types.Type, slot: Builder.Value, name: []const u8) Error!Builder.Value {
-        if (of == .none) return .none;
-        if (of == .optional) return self.unboxedOptional(of.optional, slot, name);
+    fn unboxed(self: *Body, written: types.Type, slot: Builder.Value, name: []const u8) Error!Builder.Value {
+        if (written == .none) return .none;
+        if (written == .optional) return self.unboxedOptional(written.optional, slot, name);
+        const of = written.storage();
         const bits = try self.loadBoxField(slot, box_bits, "unbox.bits");
         return switch (of) {
             .long, .heap => bits,
@@ -2169,6 +2226,7 @@ const Body = struct {
             // address of the run travels back.
             .strukt => try self.wip.cast(.inttoptr, bits, .ptr, name),
             .none, .optional => unreachable, // answered above
+            .enumeration => unreachable, // answered by storage() above
         };
     }
 
@@ -2413,10 +2471,13 @@ const Body = struct {
     ///
     /// A *read* stays inline whatever the element type: reading an
     /// element is a borrow of it, and borrows own nothing.
-    fn ownsNothing(of: types.Type) bool {
-        return switch (of) {
+    fn ownsNothing(written: types.Type) bool {
+        // An enum is a number in a cell, so it writes in place like one
+        // (docs/ENUMS.md D9).
+        return switch (written.storage()) {
             .boolean, .byte, .short, .int, .long, .half, .float, .double => true,
             .none, .string, .strukt, .heap, .optional => false,
+            .enumeration => unreachable, // answered by storage() above
         };
     }
 
@@ -2620,7 +2681,11 @@ const Body = struct {
     /// reading one is a `load double` and nothing else.  The two are
     /// held together by the byte-offset test in `runtime/test.zig`,
     /// which reads a double array's element as an `f64`.
-    fn cellType(self: *Body, element: types.Type) Builder.Type {
+    fn cellType(self: *Body, written: types.Type) Builder.Type {
+        // An `array(Method, n)` is an array of the backing width, which
+        // is what D9 means by "at the backing width, unboxed where
+        // scalars are unboxed".
+        const element = written.storage();
         return switch (element) {
             .double => .double,
             .long => .i64,
@@ -2634,11 +2699,12 @@ const Body = struct {
             // Everything whose tag or length is not settled by the
             // type keeps the 24-byte slot.
             .none, .string, .strukt, .heap, .optional => self.module.value_type,
+            .enumeration => unreachable, // answered by storage() above
         };
     }
 
-    fn cellAlignment(element: types.Type) Builder.Alignment {
-        return switch (element) {
+    fn cellAlignment(written: types.Type) Builder.Alignment {
+        return switch (written.storage()) {
             .boolean, .byte => Builder.Alignment.fromByteUnits(1),
             .short, .half => Builder.Alignment.fromByteUnits(2),
             .int, .float => Builder.Alignment.fromByteUnits(4),
@@ -2650,6 +2716,7 @@ const Body = struct {
             .heap,
             .optional,
             => Builder.Alignment.fromByteUnits(8),
+            .enumeration => unreachable, // answered by storage() above
         };
     }
 
@@ -2896,7 +2963,8 @@ const Body = struct {
     }
 
     /// Read one cell as the Luce value it holds.
-    fn loadCell(self: *Body, element: types.Type, address: Builder.Value) Error!Builder.Value {
+    fn loadCell(self: *Body, written: types.Type, address: Builder.Value) Error!Builder.Value {
+        const element = written.storage();
         return switch (element) {
             .double, .long, .float, .int, .half, .short, .byte => try self.cellLoad(
                 self.cellType(element),
@@ -2917,6 +2985,7 @@ const Body = struct {
                 address,
                 "element",
             ),
+            .enumeration => unreachable, // answered by storage() above
         };
     }
 
@@ -2925,10 +2994,11 @@ const Body = struct {
     /// keeps the tag and length `new` wrote.
     fn storeCell(
         self: *Body,
-        element: types.Type,
+        written: types.Type,
         address: Builder.Value,
         held: Builder.Value,
     ) Error!void {
+        const element = written.storage();
         switch (element) {
             .double, .long, .float, .int, .half, .short, .byte => try self.cellStore(
                 held,
@@ -2945,6 +3015,7 @@ const Body = struct {
                 element,
                 held,
             ),
+            .enumeration => unreachable, // answered by storage() above
         }
     }
 
@@ -3761,10 +3832,24 @@ const Body = struct {
         register: mir.Register,
         operand: mir.Register,
     ) Error!void {
-        const from = self.function.result_types[operand];
+        // **An enum converts as the integer it is stored at**
+        // (docs/ENUMS.md D4): `int(m)` reads the member's number, and
+        // from here on there is nothing enum-shaped left to know — a
+        // conversion out of one is the conversion out of its width,
+        // range check and all.  It is the only direction: nothing
+        // converts *to* an enum, because `Method(n)` answers `Method?`
+        // and is a compare-and-branch tree in stage 4.
+        const from = self.function.result_types[operand].storage();
         const to = self.function.result_types[register];
         const held = self.produced[operand].value;
         const target = try self.module.valueType(to);
+
+        // `int(m)` at an `int` backing is the identity on the bits: the
+        // whole content of the conversion is the type it lands in.
+        if (from.eql(to)) {
+            self.produced[register].value = held;
+            return;
+        }
 
         if (to.isFloating()) {
             self.produced[register].value = if (from.isInteger())
@@ -3982,6 +4067,10 @@ const Body = struct {
             .boolean,
             .strukt,
             .heap,
+            // An enum is a set of names (docs/ENUMS.md D6): the
+            // analyzer refuses `m + 1` and the verifier refuses the IR
+            // that would say it.
+            .enumeration,
             .optional,
             => return self.fail("arithmetic on a type that has none"),
         }
@@ -4260,6 +4349,38 @@ const Body = struct {
             );
         }
 
+        // An enum compares as the integer it is stored at, at whichever
+        // of the four widths that is — and equality is the whole of it
+        // (docs/ENUMS.md D6), so this is one `icmp` and no promotion.
+        // It stands in front of the switch below rather than inside it
+        // because that switch's narrow arms are about *numbers*, where
+        // promotion has already run and a storage width is a lowering
+        // bug; here a `byte` backing is the ordinary case.
+        if (operation.operand_type == .enumeration) {
+            const same: Builder.IntegerCondition = switch (operation.op) {
+                .equal => .eq,
+                .not_equal => .ne,
+                .less,
+                .less_equal,
+                .greater,
+                .greater_equal,
+                => return self.fail("an ordering comparison on an enum"),
+                .bit_and,
+                .bit_or,
+                .bit_xor,
+                .shift_left,
+                .shift_right,
+                .add,
+                .subtract,
+                .multiply,
+                .divide,
+                .floor_divide,
+                .modulo,
+                => return self.fail("arithmetic on the comparison path"),
+            };
+            return self.wip.icmp(same, left, right, "compare");
+        }
+
         const condition: Builder.IntegerCondition = switch (operation.operand_type) {
             .int, .long => switch (operation.op) {
                 .equal => .eq,
@@ -4325,7 +4446,7 @@ const Body = struct {
                 .modulo,
                 => return self.fail("arithmetic on the comparison path"),
             },
-            .float, .double, .string, .strukt => unreachable, // answered above
+            .float, .double, .string, .strukt, .enumeration => unreachable, // answered above
             // As in `emitBinary`: a comparison unifies its operands
             // first, and no storage width survives that (D5).
             .byte,
@@ -4386,6 +4507,7 @@ const Body = struct {
                 .string,
                 .strukt,
                 .heap,
+                .enumeration,
                 .optional,
                 => return self.fail("negation of a type that has none"),
             },
@@ -4549,6 +4671,7 @@ const Body = struct {
             .double,
             .strukt,
             .heap,
+            .enumeration,
             => false,
         };
     }
@@ -5181,6 +5304,7 @@ const Body = struct {
             .string,
             .strukt,
             .heap,
+            .enumeration,
             .optional,
             => self.fail("a math builtin on a type that has none"),
         };

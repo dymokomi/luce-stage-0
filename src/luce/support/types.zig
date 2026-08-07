@@ -57,9 +57,67 @@ pub const Type = union(enum) {
     string,
     strukt: u32,
     heap: u32,
+    /// A set of named constants at one integer width (docs/ENUMS.md).
+    /// The index reaches the program's enum table — the type's name and
+    /// its members — and the width travels beside it, for the reason
+    /// `EnumRef` gives.
+    enumeration: EnumRef,
     /// `T?` — a `T` that may be absent (docs/FAILURE.md).  `?` means
     /// nullable and only nullable; it never carries a reason.
     optional: Payload,
+
+    /// Which enum, and how wide its members are stored (docs/ENUMS.md
+    /// D2, D10).
+    ///
+    /// **The width travels in the type on purpose.**  Every other
+    /// question a machine asks of an enum — what a register holds, what
+    /// tag it boxes with, how wide an array cell is, whether a constant
+    /// fits — is a question about the backing integer and nothing else,
+    /// and a `Type` that could not answer it would make each of those
+    /// sites take the enum table to learn one of four words.  It is the
+    /// same choice `optional` makes with its payload.  The *name* still
+    /// lives in the table, because a name is not a machine fact.
+    ///
+    /// Two `EnumRef`s with one index always carry one width: `index` is
+    /// the identity and the width follows it, which is why `eql` reads
+    /// only the index and why stage 4 builds these in exactly one
+    /// place.
+    pub const EnumRef = struct {
+        index: u32,
+        backing: Backing,
+
+        /// The four rungs of the integer ladder a member may be stored
+        /// at.  A narrower type than `Type` because these are the only
+        /// four an enum can name, and a set that cannot spell `double`
+        /// needs no diagnostic saying so.
+        pub const Backing = enum {
+            byte,
+            short,
+            int,
+            long,
+
+            pub fn asType(self: Backing) Type {
+                return switch (self) {
+                    .byte => .byte,
+                    .short => .short,
+                    .int => .int,
+                    .long => .long,
+                };
+            }
+
+            /// The rung a written width names, or null when the name is
+            /// not one of the four.
+            pub fn of(written: Type) ?Backing {
+                return switch (written) {
+                    .byte => .byte,
+                    .short => .short,
+                    .int => .int,
+                    .long => .long,
+                    else => null,
+                };
+            }
+        };
+    };
 
     /// What a `T?` may hold.  A union of its own rather than a
     /// `*Type`, so `T??` and `None?` are *unrepresentable* rather than
@@ -77,6 +135,7 @@ pub const Type = union(enum) {
         string,
         strukt: u32,
         heap: u32,
+        enumeration: EnumRef,
 
         pub fn asType(self: Payload) Type {
             return switch (self) {
@@ -91,6 +150,7 @@ pub const Type = union(enum) {
                 .string => .string,
                 .strukt => |index| .{ .strukt = index },
                 .heap => |index| .{ .heap = index },
+                .enumeration => |reference| .{ .enumeration = reference },
             };
         }
 
@@ -98,6 +158,8 @@ pub const Type = union(enum) {
             return switch (self) {
                 .strukt => |index| other == .strukt and other.strukt == index,
                 .heap => |index| other == .heap and other.heap == index,
+                .enumeration => |reference| other == .enumeration and
+                    other.enumeration.index == reference.index,
                 else => std.meta.activeTag(self) == std.meta.activeTag(other),
             };
         }
@@ -107,8 +169,28 @@ pub const Type = union(enum) {
         return switch (self) {
             .strukt => |index| other == .strukt and other.strukt == index,
             .heap => |index| other == .heap and other.heap == index,
+            .enumeration => |reference| other == .enumeration and
+                other.enumeration.index == reference.index,
             .optional => |payload| other == .optional and payload.eql(other.optional),
             else => std.meta.activeTag(self) == std.meta.activeTag(other),
+        };
+    }
+
+    /// The type a value of this one is **stored and computed as** by a
+    /// machine: an enum is its backing integer, and everything else is
+    /// itself (docs/ENUMS.md D10).
+    ///
+    /// Every engine-side switch over a type starts here, which is what
+    /// keeps "an enum is its number underneath" one sentence rather
+    /// than an arm in thirty switches — and what lets those switches
+    /// answer `.enumeration` with `unreachable, // answered above`
+    /// honestly.  Nothing in stage 4 may use it to *type* an
+    /// expression: an enum is not an integer to a program, and the two
+    /// convert only where somebody wrote `int(m)`.
+    pub fn storage(self: Type) Type {
+        return switch (self) {
+            .enumeration => |reference| reference.backing.asType(),
+            else => self,
         };
     }
 
@@ -145,7 +227,9 @@ pub const Type = union(enum) {
             .short, .half => 16,
             .int, .float => 32,
             .long, .double => 64,
-            .none, .boolean, .string, .strukt, .heap, .optional => 0,
+            // An enum is not a number (D6): asking how wide one is is
+            // asking about `int(m)`, which is a different type.
+            .none, .boolean, .string, .strukt, .heap, .enumeration, .optional => 0,
         };
     }
 
@@ -164,7 +248,7 @@ pub const Type = union(enum) {
                 .low = std.math.minInt(i64),
                 .high = std.math.maxInt(i64),
             },
-            .none, .boolean, .half, .float, .double, .string, .strukt, .heap, .optional => unreachable,
+            .none, .boolean, .half, .float, .double, .string, .strukt, .heap, .enumeration, .optional => unreachable,
         };
     }
 
@@ -184,7 +268,7 @@ pub const Type = union(enum) {
             .long => .long,
             .half, .float => .float,
             .double => .double,
-            .none, .boolean, .string, .strukt, .heap, .optional => null,
+            .none, .boolean, .string, .strukt, .heap, .enumeration, .optional => null,
         };
     }
 
@@ -214,7 +298,10 @@ pub const Type = union(enum) {
             .long => to == .double,
             .half => to == .float or to == .double,
             .float => to == .double,
-            .double, .none, .boolean, .string, .strukt, .heap, .optional => false,
+            // An enum reaches no number with nothing written down (D4):
+            // it is a set of names, and `int(m)` is how a program says
+            // it means the number.
+            .double, .none, .boolean, .string, .strukt, .heap, .enumeration, .optional => false,
         };
     }
 
@@ -291,6 +378,10 @@ pub const Type = union(enum) {
             .string => .{ .optional = .string },
             .strukt => |index| .{ .optional = .{ .strukt = index } },
             .heap => |index| .{ .optional = .{ .heap = index } },
+            // `Method?` is what `Method(n)` answers, so this is the one
+            // optional the language makes without anybody writing `?`
+            // (docs/ENUMS.md R2).
+            .enumeration => |reference| .{ .optional = .{ .enumeration = reference } },
         };
     }
 
@@ -320,6 +411,44 @@ pub const HeapType = union(enum) {
                 shape.element.eql(other.array.element) and shape.rank == other.array.rank,
             .builder => other == .builder,
         };
+    }
+};
+
+/// One member of an enum, as the program carries it: the name
+/// `string(m)` answers and the number `int(m)` answers (docs/ENUMS.md
+/// D1, D5).
+pub const EnumMember = struct {
+    name: []const u8, // arena-owned by the program
+    value: i64,
+};
+
+/// One declared enum: its name, the width its members are stored at,
+/// and the members in declaration order.
+///
+/// **The order is the declaration's**, and two things read it: the
+/// first member is the type's zero — what `var m: Method` starts at and
+/// what an `array(Method, n)` is filled with — and `match`'s
+/// exhaustiveness names a missing member by walking it, so a reader is
+/// told about members in the order they wrote them.
+pub const EnumType = struct {
+    name: []const u8, // arena-owned by the program
+    backing: Type.EnumRef.Backing,
+    members: []EnumMember,
+
+    pub fn findMember(self: EnumType, name: []const u8) ?u32 {
+        for (self.members, 0..) |member, index| {
+            if (std.mem.eql(u8, member.name, name)) return @intCast(index);
+        }
+        return null;
+    }
+
+    /// The member holding `value`, or null when no member does — which
+    /// is exactly the question `Method(n)` asks (R2).
+    pub fn memberOfValue(self: EnumType, value: i64) ?u32 {
+        for (self.members, 0..) |member, index| {
+            if (member.value == value) return @intCast(index);
+        }
+        return null;
     }
 };
 
@@ -466,11 +595,12 @@ pub fn typeName(
     allocator: std.mem.Allocator,
     layouts: []const StructLayout,
     heap_types: []const HeapType,
+    enums: []const EnumType,
     of: Type,
 ) error{OutOfMemory}![]u8 {
     var written: std.ArrayList(u8) = .empty;
     errdefer written.deinit(allocator);
-    try writeTypeName(&written, allocator, layouts, heap_types, of);
+    try writeTypeName(&written, allocator, layouts, heap_types, enums, of);
     return written.toOwnedSlice(allocator);
 }
 
@@ -479,6 +609,7 @@ fn writeTypeName(
     allocator: std.mem.Allocator,
     layouts: []const StructLayout,
     heap_types: []const HeapType,
+    enums: []const EnumType,
     of: Type,
 ) error{OutOfMemory}!void {
     switch (of) {
@@ -493,29 +624,30 @@ fn writeTypeName(
         .double => try written.appendSlice(allocator, "double"),
         .string => try written.appendSlice(allocator, "string"),
         .strukt => |index| try written.appendSlice(allocator, layouts[index].name),
+        .enumeration => |reference| try written.appendSlice(allocator, enums[reference.index].name),
         .heap => |index| switch (heap_types[index]) {
             .list => |element| {
                 try written.appendSlice(allocator, "list(");
-                try writeTypeName(written, allocator, layouts, heap_types, element);
+                try writeTypeName(written, allocator, layouts, heap_types, enums, element);
                 try written.appendSlice(allocator, ")");
             },
             .map => |pair| {
                 try written.appendSlice(allocator, "map(");
-                try writeTypeName(written, allocator, layouts, heap_types, pair.key);
+                try writeTypeName(written, allocator, layouts, heap_types, enums, pair.key);
                 try written.appendSlice(allocator, ", ");
-                try writeTypeName(written, allocator, layouts, heap_types, pair.value);
+                try writeTypeName(written, allocator, layouts, heap_types, enums, pair.value);
                 try written.appendSlice(allocator, ")");
             },
             .array => |shape| {
                 try written.appendSlice(allocator, "array(");
-                try writeTypeName(written, allocator, layouts, heap_types, shape.element);
+                try writeTypeName(written, allocator, layouts, heap_types, enums, shape.element);
                 for (0..shape.rank) |_| try written.appendSlice(allocator, ", _");
                 try written.appendSlice(allocator, ")");
             },
             .builder => try written.appendSlice(allocator, "builder"),
         },
         .optional => |payload| {
-            try writeTypeName(written, allocator, layouts, heap_types, payload.asType());
+            try writeTypeName(written, allocator, layouts, heap_types, enums, payload.asType());
             try written.appendSlice(allocator, "?");
         },
     }
@@ -550,7 +682,44 @@ test "an optional is its payload plus one level, and never two" {
 }
 
 test "an optional type writes the ? it was written with" {
-    const written = try typeName(std.testing.allocator, &.{}, &.{.{ .list = .long }}, .{ .optional = .{ .heap = 0 } });
+    const written = try typeName(std.testing.allocator, &.{}, &.{.{ .list = .long }}, &.{}, .{ .optional = .{ .heap = 0 } });
     defer std.testing.allocator.free(written);
     try std.testing.expectEqualStrings("list(long)?", written);
+}
+
+test "an enum is its own type, its own name, and its backing width underneath" {
+    const method: Type = .{ .enumeration = .{ .index = 0, .backing = .byte } };
+    const kind: Type = .{ .enumeration = .{ .index = 1, .backing = .byte } };
+
+    // Identity is the index: two enums of one width are two types.
+    try std.testing.expect(method.eql(.{ .enumeration = .{ .index = 0, .backing = .byte } }));
+    try std.testing.expect(!method.eql(kind));
+    try std.testing.expect(!method.eql(.byte));
+
+    // Not a number to a program: no arithmetic, no ordering, no
+    // implicit reach into a width that would hold it (D4, D6).
+    try std.testing.expect(!method.isNumeric());
+    try std.testing.expect(!method.isInteger());
+    try std.testing.expectEqual(@as(?Type, null), method.arithmeticType());
+    try std.testing.expect(!method.widensTo(.int));
+    try std.testing.expect(!method.widensTo(.long));
+    try std.testing.expect(!(Type{ .byte = {} }).widensTo(method));
+
+    // A number underneath, everywhere a machine asks (D10).
+    try std.testing.expect(method.storage().eql(.byte));
+    try std.testing.expect((Type{ .long = {} }).storage().eql(.long));
+
+    // `Method?` exists, holds a `Method`, and is not a `byte?`.
+    const maybe = Type.optionalOf(method).?;
+    try std.testing.expect(maybe.held().?.eql(method));
+    try std.testing.expect(!maybe.eql(Type.optionalOf(.byte).?));
+    try std.testing.expect(!maybe.eql(Type.optionalOf(kind).?));
+
+    const enums = [_]EnumType{
+        .{ .name = "Method", .backing = .byte, .members = &.{} },
+        .{ .name = "Kind", .backing = .byte, .members = &.{} },
+    };
+    const written = try typeName(std.testing.allocator, &.{}, &.{.{ .list = method }}, &enums, .{ .heap = 0 });
+    defer std.testing.allocator.free(written);
+    try std.testing.expectEqualStrings("list(Method)", written);
 }
