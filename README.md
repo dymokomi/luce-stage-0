@@ -171,7 +171,9 @@ src/apps/loom/            the loom terminal: shell, program runner,
 programs/                 userland, written in Luce: the editor,
                           hello, sort, wordcount, a calculator,
                           Conway's Life, stats (a two-file module
-                          demo), dice, a Brainfuck interpreter, and
+                          demo), dice, a Brainfuck interpreter,
+                          zipper (list, extract and build real ZIP
+                          archives over std.zip and std.files), and
                           adventure (five files, the largest program
                           here, and the one that found a real bug in
                           the oracle)

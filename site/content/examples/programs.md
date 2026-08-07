@@ -108,6 +108,70 @@ the fox and the dog and the fox
   2  and
 ```
 
+## zipper — a real ZIP archive, in and out
+
+The standard library's [`zip`](/std/zip/) module is the format —
+the central directory, DEFLATE both ways, the CRC-32 — and it takes
+bytes and answers bytes, deliberately. `zipper.luc` is the two hundred
+lines between that and a disk: `main(args)`, `std.files`'s byte path,
+and `std.paths` for the joining.
+
+Names out of an archive are not trusted. An entry may be called
+`../../etc/passwd`, and an extractor that joins that to the target
+directory and writes what comes out is the bug called zip-slip.
+`safe_name` is the one gate every extracted path goes through, and the
+`zip` half goes through it too: zipper will not author an archive it
+would refuse to extract.
+
+```luce module file=zipper.luc include=programs/zipper.luc
+```
+
+Two files to put in one:
+
+```luce module file=notes.txt
+the archive is a container, not a compressor
+the compressor is a stream, not a container
+```
+
+```luce module file=poem.txt
+so much depends
+upon a red wheel barrow
+glazed with rain water
+```
+
+```console
+$ luce build zipper.luc -o zipper.lc
+zipper.luc -> zipper.lc
+$ loom run zipper.lc zip papers.zip notes.txt poem.txt
+          89  notes.txt
+          63  poem.txt
+2 files (152 bytes) into papers.zip, 331 bytes
+$ loom run zipper.lc list papers.zip
+2 entries in papers.zip, 331 bytes
+  deflated         89        60  notes.txt
+  stored           63        63  poem.txt
+$ mkdir opened
+$ loom run zipper.lc unzip papers.zip opened
+          89  opened/notes.txt
+          63  opened/poem.txt
+2 files extracted into opened
+$ cat opened/poem.txt
+so much depends
+upon a red wheel barrow
+glazed with rain water
+```
+
+The notes deflate and the poem does not — `Writer.add` offers every
+entry to DEFLATE and keeps whichever of the two is smaller, so an
+entry never grows by being compressed.
+
+That archive is an ordinary ZIP file: `unzip -t` accepts it, and an
+archive Info-ZIP wrote reads back through zipper byte for byte. The
+repository proves both — the unconditional half against archives
+Info-ZIP wrote that are embedded in the test suite, and the other half
+against the system's own `zip` and `unzip` wherever the machine
+running the tests has them.
+
 ## adventure — a game in five files
 
 The largest program in the tree, and the one written to be read as a

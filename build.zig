@@ -448,6 +448,30 @@ pub fn build(b: *std.Build) void {
     product_module.addOptions("build_options", binaries);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = product_module })).step);
 
+    // The userland program the pair exists to run, proved end to end:
+    // a real ZIP archive on a real disk, listed, extracted and built
+    // again by `programs/zipper.luc` through both installed binaries.
+    //
+    // A module of its own beside `product.zig` for the same reason
+    // that file is one — it names the binaries — and apart from it
+    // because it proves a different thing: `product.zig` is the
+    // loom→luce hand-off, this is userland over `std.zip` and
+    // `std.files`.  The program comes in by build-system import so the
+    // test pins the file that ships.
+    const zipping_module = b.createModule(.{
+        .root_source_file = b.path("src/apps/loom/zipping.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "harness", .module = app_harness },
+        },
+    });
+    zipping_module.addAnonymousImport("zipper.luc", .{
+        .root_source_file = b.path("programs/zipper.luc"),
+    });
+    zipping_module.addOptions("build_options", binaries);
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = zipping_module })).step);
+
     // Compile the bundled Luce programs with the freshly built luce.
     // `deps` lists imported sibling modules so edits to them re-run
     // the compile even though only the root file is an argument.
@@ -469,6 +493,7 @@ pub fn build(b: *std.Build) void {
         .{ .name = "calc" },
         .{ .name = "stats", .deps = &.{"mathx"} },
         .{ .name = "dice" },
+        .{ .name = "zipper" },
         .{ .name = "adventure", .deps = &.{ "world", "story", "command", "journal" } },
     };
     for (bundled) |program| {
