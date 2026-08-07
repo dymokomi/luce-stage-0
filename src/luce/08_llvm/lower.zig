@@ -1614,7 +1614,7 @@ const Body = struct {
     /// Arrays already resolved in the block being filled, and the axis
     /// lengths they carry.  Both are cleared at every block boundary
     /// and by any instruction `effects.viewStable` refuses.
-    views: std.ArrayList(ArrayView) = .empty,
+    views: std.ArrayList(ElementView) = .empty,
     view_bounds: std.ArrayList(Builder.Value) = .empty,
 
     /// The resolutions this function lifts out of its loops, and the
@@ -2468,37 +2468,61 @@ const Body = struct {
         return .{ run, try self.module.builder.intValue(.i64, of.len) };
     }
 
-    // -- Arrays, without the runtime call ---------------------------------
+    // -- Lists and Arrays, without the runtime call ------------------------
     //
-    // `a[i]`, `grid[r, c]`, and `len(a)` on an `Array` are generated
-    // here rather than called: the object table row, the bounds check,
-    // and the element load, inline.  A call cannot be: a boxed
-    // subscript is a store the loop cannot hoist, so the call stays
-    // pinned inside the loop however precisely it is described
-    // (docs/CODEGEN.md).
+    // `xs[i]`, `grid[r, c]`, `len(xs)` and `xs.append(v)` on a List or
+    // an Array are generated here rather than called: the object table
+    // row, the bounds check, and the element load, inline.  A call
+    // cannot be: a boxed subscript is a store the loop cannot hoist, so
+    // the call stays pinned inside the loop however precisely it is
+    // described (docs/CODEGEN.md).
     //
-    // Two facts make it sound.  The program already knows the target is
-    // an Array and what it holds — `heap_types` says so, statically —
-    // so the runtime's four-way switch on the object's kind has one
-    // arm left at compile time.  And an Array's `dims` and `elements`
-    // never move while it lives: only the row's generation changes,
-    // which is why this is the container the inline path starts with
-    // and a List, whose buffer moves under `append`, is still a call.
+    // Two facts make it sound.  The program already knows which
+    // container the target is and what it holds — `heap_types` says so,
+    // statically — so the runtime's four-way switch on the object's
+    // kind has one arm left at compile time; and the *kind* the
+    // elements are stored at is settled by the element type alone,
+    // whoever built the object (`runtime/containers.zig`'s `emptyList`),
+    // so a cell's width is a constant here.
+    //
+    // **A List's storage moves and an Array's does not**, and that is
+    // the whole difference between them.  An Array's `dims` and
+    // `elements` never move while it lives; a List's `elements` move
+    // under `append`, and its `count` moves with them.  So a resolved
+    // view is only ever reused across instructions that cannot move a
+    // buffer — `optimize.effects.viewStable`, which already answers
+    // `false` for `append_value`, `insert_value` and every call for
+    // exactly this reason, and which is what ends the block a view
+    // lives in.  Nothing here caches anything past that line.
     //
     // The offsets come from `runtime.layout`, measured from the Zig
     // types with `@offsetOf` and checked against a real `Runtime` by a
     // test beside them.
 
-    /// The shape of the Array a register holds, or null when it holds
-    /// anything else — a List, a Map, a Builder, or no object at all.
-    const ArrayShape = struct { element: types.Type, rank: u8 };
+    /// The shape of the List or Array a register holds, or null when it
+    /// holds anything else — a Map, a Builder, or no object at all.
+    const ElementShape = struct {
+        element: types.Type,
+        /// One for a List, which has a length and no other shape.
+        rank: u8,
+        /// Whether the storage can move under the program's feet.  A
+        /// List's does, under `append` and `insert`; an Array's never
+        /// does.  What reads it: `dim_size`, which is an Array's
+        /// question, and the append path, which is a List's.
+        growable: bool,
+    };
 
-    fn arrayShape(self: *Body, register: mir.Register) ?ArrayShape {
+    fn elementShape(self: *Body, register: mir.Register) ?ElementShape {
         const of = self.function.result_types[register];
         if (of != .heap) return null;
         return switch (self.module.program.heap_types[of.heap]) {
-            .array => |shape| .{ .element = shape.element, .rank = shape.rank },
-            .list, .map, .builder, .file => null,
+            .array => |shape| .{
+                .element = shape.element,
+                .rank = shape.rank,
+                .growable = false,
+            },
+            .list => |element| .{ .element = element, .rank = 1, .growable = true },
+            .map, .builder, .file => null,
         };
     }
 
@@ -2676,8 +2700,8 @@ const Body = struct {
         return row;
     }
 
-    /// One Array, resolved: the element base and one axis length per
-    /// rank, all as SSA values.
+    /// One List or Array, resolved: the element base and one axis
+    /// length per rank, all as SSA values.
     ///
     /// **Where the resolve happens is the whole point.**  Resolving at
     /// every access leaves four loads — the table base, the row's
@@ -2694,24 +2718,31 @@ const Body = struct {
     /// instruction it fires at today, because the block a view lives
     /// in ends at every instruction that could free anything
     /// (`effects.viewStable`).
-    const ArrayView = struct {
+    ///
+    /// That same line is what makes a view of a *List* sound, and it
+    /// is one sentence: a view dies at every instruction that could
+    /// move a buffer — every call, every append, every insert — which
+    /// is precisely the set `viewStable` already refuses.  Nothing is
+    /// carried across one.
+    const ElementView = struct {
         /// The MIR register whose handle this resolves.
         register: mir.Register,
-        /// `Object.array.dims.ptr`, or `.none` for a rank-1 array,
-        /// which never reads it: its one bound is `Object.array.count`,
-        /// a word in the row rather than a word behind a pointer in
-        /// the row.  That saved load is not a micro-optimization — the
-        /// dependent load is what stops LLVM's loop unswitching, and
-        /// with it the vectorizer, on the loop around the access.
+        /// `Object.dims.ptr`, or `.none` for a List and for a rank-1
+        /// array, neither of which reads it: their one bound is
+        /// `Object.elements.count`, a word in the row rather than a
+        /// word behind a pointer in the row.  That saved load is not a
+        /// micro-optimization — the dependent load is what stops LLVM's
+        /// loop unswitching, and with it the vectorizer, on the loop
+        /// around the access.
         dims: Builder.Value,
-        /// `Object.array.elements.ptr`, indexed as the element kind's
+        /// `Object.elements.bytes.ptr`, indexed as the element kind's
         /// own cell type.
         elements: Builder.Value,
         /// Where this view's axis lengths start in `view_bounds`.
         bounds_at: u32,
         rank: u8,
 
-        fn bounds(self: ArrayView, body: *const Body) []const Builder.Value {
+        fn bounds(self: ElementView, body: *const Body) []const Builder.Value {
             return body.view_bounds.items[self.bounds_at..][0..self.rank];
         }
     };
@@ -2835,7 +2866,7 @@ const Body = struct {
                 .elements = try self.rowLoad(
                     .normal,
                     .ptr,
-                    try self.byteOffset(row, runtime.layout.array_elements, "elements.at"),
+                    try self.byteOffset(row, runtime.layout.elements_pointer, "elements.at"),
                     pointer_alignment,
                     "elements",
                 ),
@@ -2844,7 +2875,7 @@ const Body = struct {
                 try self.hoist_bounds.append(gpa, try self.rowLoad(
                     .normal,
                     .i64,
-                    try self.byteOffset(row, runtime.layout.array_count, "count.at"),
+                    try self.byteOffset(row, runtime.layout.elements_count, "count.at"),
                     value_alignment,
                     "count",
                 ));
@@ -2889,9 +2920,9 @@ const Body = struct {
         return index;
     }
 
-    /// The Array in `register`, resolved — reusing the resolution
-    /// already made in this block if there is one.
-    fn arrayView(self: *Body, register: mir.Register, shape: ArrayShape) Error!ArrayView {
+    /// The List or Array in `register`, resolved — reusing the
+    /// resolution already made in this block if there is one.
+    fn elementView(self: *Body, register: mir.Register, shape: ElementShape) Error!ElementView {
         for (self.views.items) |found| {
             if (found.register == register) return found;
         }
@@ -2902,7 +2933,7 @@ const Body = struct {
             const parts = try self.handleParts(self.produced[register].value);
             try self.checkHandle(parts.index);
             try self.checkOccupant(self.hoisted[index].generation, parts.generation);
-            const made: ArrayView = .{
+            const made: ElementView = .{
                 .register = register,
                 .dims = self.hoisted[index].dims,
                 .elements = self.hoisted[index].elements,
@@ -2921,11 +2952,12 @@ const Body = struct {
         var dims: Builder.Value = .none;
         if (shape.rank == 1) {
             // `count` is the product of the axes, so for one axis it
-            // *is* that axis — one load nearer than `dims[0]`.
+            // *is* that axis — one load nearer than `dims[0]`.  A
+            // List has no `dims` at all and this is its length.
             try self.view_bounds.append(gpa, try self.rowLoad(
                 .normal,
                 .i64,
-                try self.byteOffset(row, runtime.layout.array_count, "count.at"),
+                try self.byteOffset(row, runtime.layout.elements_count, "count.at"),
                 value_alignment,
                 "count",
             ));
@@ -2953,13 +2985,13 @@ const Body = struct {
                 ));
             }
         }
-        const made: ArrayView = .{
+        const made: ElementView = .{
             .register = register,
             .dims = dims,
             .elements = try self.rowLoad(
                 .normal,
                 .ptr,
-                try self.byteOffset(row, runtime.layout.array_elements, "elements.at"),
+                try self.byteOffset(row, runtime.layout.elements_pointer, "elements.at"),
                 pointer_alignment,
                 "elements",
             ),
@@ -2972,9 +3004,9 @@ const Body = struct {
 
     /// The address of the element `indices` names, bound-checked axis
     /// by axis and flattened exactly as `heap.flattenIndex` does it.
-    fn arrayElement(
+    fn elementAddress(
         self: *Body,
-        view: ArrayView,
+        view: ElementView,
         element: types.Type,
         indices: []const mir.Register,
     ) Error!Builder.Value {
@@ -3061,18 +3093,18 @@ const Body = struct {
         }
     }
 
-    /// `len(a)` on an Array: the first axis.
-    fn emitArrayLength(
+    /// `len(xs)`: a List's element count, an Array's first axis.
+    fn emitInlineLength(
         self: *Body,
         register: mir.Register,
         target: mir.Register,
-        shape: ArrayShape,
+        shape: ElementShape,
     ) Error!void {
         if (shape.rank == 0) {
             self.produced[register].value = try self.module.builder.intValue(.i64, 0);
             return;
         }
-        const view = try self.arrayView(target, shape);
+        const view = try self.elementView(target, shape);
         self.produced[register].value = view.bounds(self)[0];
     }
 
@@ -3083,10 +3115,10 @@ const Body = struct {
         register: mir.Register,
         target: mir.Register,
         axis: mir.Register,
-        shape: ArrayShape,
+        shape: ElementShape,
     ) Error!void {
         const builder = self.module.builder;
-        const view = try self.arrayView(target, shape);
+        const view = try self.elementView(target, shape);
         const wanted = self.produced[axis].value;
         const below = try self.wip.icmp(.slt, wanted, try builder.intValue(.i64, 0), "below");
         const above = try self.wip.icmp(
@@ -4986,8 +5018,8 @@ const Body = struct {
                     );
                     return;
                 }
-                if (self.arrayShape(of[0])) |shape| {
-                    return self.emitArrayLength(register, of[0], shape);
+                if (self.elementShape(of[0])) |shape| {
+                    return self.emitInlineLength(register, of[0], shape);
                 }
                 try self.callAnswering(register, .luce_rt_len, &.{
                     rt,
@@ -4995,9 +5027,9 @@ const Body = struct {
                 });
             },
             .index_get => {
-                if (self.arrayShape(of[0])) |shape| {
-                    const view = try self.arrayView(of[0], shape);
-                    const address = try self.arrayElement(view, shape.element, of[1..]);
+                if (self.elementShape(of[0])) |shape| {
+                    const view = try self.elementView(of[0], shape);
+                    const address = try self.elementAddress(view, shape.element, of[1..]);
                     self.produced[register].value = try self.loadCell(shape.element, address);
                     if (!ownsNothing(shape.element)) self.produced[register].box = address;
                     return;
@@ -5011,10 +5043,10 @@ const Body = struct {
                 });
             },
             .index_set => {
-                if (self.arrayShape(of[0])) |shape| {
+                if (self.elementShape(of[0])) |shape| {
                     if (ownsNothing(shape.element)) {
-                        const view = try self.arrayView(of[0], shape);
-                        const address = try self.arrayElement(
+                        const view = try self.elementView(of[0], shape);
+                        const address = try self.elementAddress(
                             view,
                             shape.element,
                             of[1 .. of.len - 1],
@@ -5084,8 +5116,15 @@ const Body = struct {
                 self.produced[of[1]].value,
             }),
             .dim_size => {
-                if (self.arrayShape(of[0])) |shape| {
-                    return self.emitArrayDimSize(register, of[0], of[1], shape);
+                // An Array's question and only an Array's: `dim` is
+                // not a List method, and a List has no `dims` to read.
+                // A hand-built module that asks one anyway goes to the
+                // runtime, which answers `index_bounds` — the same
+                // sentence the oracle answers.
+                if (self.elementShape(of[0])) |shape| {
+                    if (!shape.growable) {
+                        return self.emitArrayDimSize(register, of[0], of[1], shape);
+                    }
                 }
                 try self.callAnswering(register, .luce_rt_dim_size, &.{
                     rt,

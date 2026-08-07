@@ -771,12 +771,12 @@ test "compiled code's byte offsets find the fields they name" {
     try testing.expectEqual(@as(i64, 2), dims[0]);
     try testing.expectEqual(@as(i64, 3), dims[1]);
     try testing.expectEqual(@as(usize, 6), @as(*const usize, @ptrCast(@alignCast(
-        row + heap.layout.array_count,
+        row + heap.layout.elements_count,
     ))).*);
     // An `Array(double)` stores `f64`s, so the element is one load and
     // no unboxing — which is the whole reason the storage is typed.
     const elements: [*]const f64 = @ptrCast(@alignCast(@as(*const [*]const u8, @ptrCast(@alignCast(
-        row + heap.layout.array_elements,
+        row + heap.layout.elements_pointer,
     ))).*));
     try testing.expectEqual(@as(f64, 7.5), elements[1 * 3 + 2]);
 
