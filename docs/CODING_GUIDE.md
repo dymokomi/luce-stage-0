@@ -8,7 +8,7 @@ style: one clear job, explicit ownership, tests beside the code.
 North star for architecture: [V2.md](V2.md) (Luce the language, loom
 the terminal); [LANGUAGE.md](LANGUAGE.md) is the language itself,
 [OWNERSHIP.md](OWNERSHIP.md) its memory model, and
-[docs/CODEGEN.md](docs/CODEGEN.md) why there is one code generator.  The v1
+[CODEGEN.md](CODEGEN.md) why there is one code generator.  The v1
 guide this revises is preserved at `v1/CODING_GUIDE.md`.
 
 ## Goals
@@ -24,7 +24,8 @@ If a change makes the architecture harder to see, do not merge it.
 ## Language
 
 - Zig 0.16, pinned in `build.zig.zon`
-- `zig fmt src/ build.zig` before every commit; nothing to argue about
+- `zig fmt src/ build.zig site/src/ tools/` before every commit; nothing
+  to argue about
 - Errors are values: small explicit error sets, `try` at call sites,
   no panics for ordinary failure
 - Allocation is explicit: functions that allocate take an `Allocator`
@@ -50,7 +51,7 @@ owns what:
 
 A type that must not move after setup (because something captured a
 pointer into it) uses the documented in-place `setup` pattern
-(`src/apps/loom/host.zig`'s `Host`).
+(`src/apps/host.zig`'s `Host`).
 
 ## Naming
 
@@ -113,10 +114,13 @@ src/luce/                     the language, one numbered folder per stage:
   support/                    types and diagnostics, used by every stage
   specs/                      the executable specification — its own module
 src/apps/luce/                the compiler CLI (build, check, ir)
-src/apps/loom/                the terminal: shell, runner, host, keys, palette
-src/apps/files.zig            file access shared by both executables
+src/apps/loom/                only what is loom's: main, shell, runner, palette, product
+src/apps/*.zig                shared by both binaries, because a program's behaviour
+                              must not depend on who started it: host (the real host),
+                              key, machine, native, report, sanitize, start, streams,
+                              files — plus harness, the install tree both product suites drive
 programs/                     userland, written in Luce; editor.luc is embedded in loom
-docs/                         V2.md LANGUAGE.md OWNERSHIP.md docs/CODEGEN.md CODEGEN.md; v1/ is history
+docs/                         V2.md LANGUAGE.md OWNERSHIP.md CODEGEN.md; v1/ is history
 ```
 
 A stage that outgrows one file becomes a directory beside a

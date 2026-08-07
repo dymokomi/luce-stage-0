@@ -81,9 +81,12 @@ so a runtime trap prints `file:line:column` and a call trace.
 `--release` strips them for a smaller artifact — the program itself
 behaves identically (docs/MODES.md).
 
-All three compile through LLVM, which measures at 0.77-1.06x of C on
-five of the six benchmarks — `strings` is the one row still behind, at
-2.73x.  Those are `bench/run.sh`'s floor-subtracted `compute` column,
+All three compile through LLVM, which measures at 0.77-1.07x of C on
+six of the eight benchmarks; `strings` (2.74x) and `arrays32` (8.14x)
+are the two rows still behind — `arrays32` is the price of checked
+integer arithmetic in a reduction, which is what
+[docs/VECTOR.md](docs/VECTOR.md) is about.  Those are
+`bench/run.sh`'s floor-subtracted `compute` column,
 the one a code-generation change moves; the table and the host it was
 taken on are in [docs/CODEGEN.md](docs/CODEGEN.md).  They are stamped with the
 machine, the host ABI and the code generator they were built for, so a
@@ -160,19 +163,27 @@ src/luce/                 the Luce language, one numbered folder per
                           oracle over it, which ships in nothing
 src/apps/luce/            the luce compiler CLI
 src/apps/loom/            the loom terminal: shell, program runner,
-                          and the trusted host behind the Luce host
-                          builtins
+                          palette — the trusted host behind the Luce
+                          host builtins is one level up in src/apps/,
+                          shared with the compiler
 programs/                 userland, written in Luce: the editor,
                           hello, sort, wordcount, a calculator,
                           Conway's Life, stats (a two-file module
-                          demo), dice, and a Brainfuck interpreter
+                          demo), dice, a Brainfuck interpreter, and
+                          adventure (five files, the largest program
+                          here, and the one that found a real bug in
+                          the oracle)
 bench/                    paired C/Luce benchmarks, same algorithm
                           and same output, cross-checked before timed
 site/                     luce.luciaos.com: the documentation, and the
                           generator that compiles and runs every
                           sample on it (site/README.md)
-tools/vscode-luce/        VS Code syntax highlighting for .luc —
-                          stale, and it still lists v1 builtins
+loomsite/                 loom.luciaos.com: the tool's own pages, one
+                          HTML fragment each, links and anchors checked
+www/                      the luciaos.com landing page, hand-written
+tools/vscode-luce/        VS Code syntax highlighting for .luc,
+                          generated from the compiler's own tables by
+                          `zig build grammar` and pinned by a test
 docs/                     the decision records and references, indexed
                           by docs/README.md; v1/ preserves the Fabric
                           era, audit/ holds point-in-time reviews
