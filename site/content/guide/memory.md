@@ -21,7 +21,7 @@ says `give` — takes a word from you, `give` (transfer) or `copy`
 a word at all.
 
 That is the whole thing. It is ratified as
-[43 numbered situations](/ref/ownership/), the compiler quotes their
+[45 numbered situations](/ref/ownership/), the compiler quotes their
 numbers in its diagnostics, and an executable specification in the
 repository runs every one of them.
 

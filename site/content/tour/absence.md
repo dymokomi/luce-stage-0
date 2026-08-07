@@ -1,6 +1,6 @@
 # Absence
 
-A trailing `?` makes a type nullable. `long?` is an `long` that may not
+A trailing `?` makes a type nullable. `long?` is a `long` that may not
 be there, and `none` is the value that is not there.
 
 `?` means nullable and **only** nullable. Failure is `!` and is never

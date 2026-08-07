@@ -11,7 +11,7 @@ prediction was too optimistic, this page says so too.
 ## The short version
 
 **The language surface is done as designed.** Ten conceptual pipeline
-stages, eight executable specifications, and a front end whose
+stages, eleven executable specifications, and a front end whose
 diagnostics name the fix rather than the parser's predicament.
 Optionals closed the absence half of the last semantic hole and errors
 closed the failure half; nothing that was designed is now unbuilt.
@@ -32,13 +32,14 @@ language question, and one benchmark row.**
 |---|---|
 | Static typing with inference; `long` widens to `double`, nothing narrows | shipped |
 | Checked arithmetic, bounds checks, UTF-8 boundary checks, in every mode | shipped |
-| Scope ownership: `give`, `copy`, `free`, 43 ratified situations | shipped |
+| Scope ownership: `give`, `copy`, `free`, 45 ratified situations | shipped |
 | `T?`, `none`, narrowing, `else` | shipped |
 | `T!`, `try`, `catch`, `error` | shipped |
 | f-strings, compound assignment, nested place assignment | shipped |
 | File-scope constants, folded and inlined | shipped |
 | Modules, and a reserved `std.` namespace | shipped |
-| Four standard modules: `math`, `strings`, `files`, `paths` | shipped |
+| Six standard modules: `math`, `strings`, `files`, `paths`, `os`, `zip` | shipped |
+| The bit set: `&` `\|` `^` `~` `<<` `>>` at Go's precedence, hex and binary literals, `_` digit separators | shipped |
 | Visibility: public until a declaration says `private` | shipped |
 | LLVM backend: a `.lc` **is** machine code, `--emit=exe` standalone binaries | shipped |
 | Trap locations and call traces in debug builds | shipped |
@@ -119,7 +120,7 @@ The corpus pays for it constantly, and the counts are real:
   `elif` chain and no final `else`**. A misspelled `"page_dwon"`
   compiles and silently does nothing.
 - `editor.luc` writes `# 1 keyword, 2 type name, 3 builtin, 0 plain` —
-  an enum written as an `long` with a comment.
+  an enum written as a `long` with a comment.
 - `editor.luc` implements `is_keyword` and `is_builtin` as **46
   `word == "…"` comparisons**: a hash set written as a truth table.
 
@@ -154,8 +155,11 @@ workaround-dense and the proof that the language moved.
    first-class functions draws blood.
 6. **Host surface gaps.** Mostly closed: the clock, `sleep`,
    environment access, stderr, reading a line, directory listing,
-   delete/rename and append mode all shipped with host ABI version 8.
-   What is still absent is `exit` and path manipulation.
+   delete/rename and append mode all shipped with host ABI version 8,
+   and `exit` and path manipulation have since shipped too — the
+   latter as [`std.paths`](/std/paths/), which is where it always
+   belonged. What is still absent is a wall clock and a calendar,
+   setting an environment variable, and reading the whole environment.
 7. ~~**No default or named arguments.**~~ Closed: every parameter has
    a name a call site may write, defaults are trailing compile-time
    constants, struct fields take the same clause, and the builtin
@@ -207,13 +211,17 @@ debugger. A `luce test` that discovered `func test_*():` would be
 cheap and very Zig; a formatter and a language server both want a
 faithful syntax tree that is not written yet.
 
-There **is** a VS Code syntax definition in the repository, and it is
-stale — it still lists builtins from a removed era.
+There **is** a VS Code syntax definition in the repository, and it
+cannot go stale: it is *generated* from the compiler's own keyword,
+symbol, builtin and method tables and pinned byte-for-byte by a test,
+so a language change that forgot the grammar fails the build rather
+than shipping a highlighter that disagrees with the compiler.
 
 ## The order the work goes in
 
-1. The cheap slice: character classes, a frozen container or a `Set`,
-   `exit`, and path manipulation.
+1. The cheap slice: character classes, and a frozen container or a
+   `Set`. `exit` and path manipulation were on this list and have
+   shipped.
 2. `m.get(k) -> V?`, and a corpus sweep.
 3. ~~Decide receivers and multiple returns~~ — shipped; the
    integer-division spelling is decided too.

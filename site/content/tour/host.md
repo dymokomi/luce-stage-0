@@ -176,22 +176,25 @@ language rather than about good behaviour.
 
 ## What is missing
 
-Two things, and both were left out on purpose rather than not reached.
+Three things, and each was left out on purpose rather than not
+reached.
 
-**`exit`.** It is not one builtin: it is a fourth way for a run to
-end, and every party needs an answer for it — the status the entry
-point returns, the leak census, and what "scope ownership" means for a
-scope that never closes. `main() -> !` already ends a program early
-with a reason and a status a shell can read, which is what the corpus
-actually wanted.
+**A wall clock and a calendar.** `clock_ms` is monotonic: it says only
+that differences mean something, which is what a frame timer and a
+benchmark need. Dates are a library rather than a builtin, and the
+library does not exist yet.
 
-**Path manipulation.** Not a host gap at all — joining and splitting a
-path is pure text, so it belongs in a std module over
-[`std.strings`](/std/strings/), designed against a program that needs
-one.
+**Setting an environment variable.** `env(name)` reads; nothing
+writes. Process-global mutation is a large promise for a service no
+program here has asked for.
 
-Also absent, smaller: a wall clock and a calendar (`clock_ms` is
-monotonic and says only that differences mean something — dates are a
-library, and the library does not exist), setting an environment
-variable, and reading the environment whole. The
-[status page](/status/) keeps that list.
+**Reading the environment whole.** `env` answers one name at a time.
+Enumerating every variable is a different shape — an owned
+`list(string)` of pairs — and it waits for a program that wants it.
+
+Two names that used to head this list have since shipped: `exit` is a
+gated builtin like any other, and path manipulation turned out never
+to be a host gap at all — joining and splitting a path is pure text,
+so it is [`std.paths`](/std/paths/) over
+[`std.strings`](/std/strings/). The [status page](/status/) keeps the
+current list.

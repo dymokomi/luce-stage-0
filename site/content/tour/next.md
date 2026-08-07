@@ -37,7 +37,7 @@ rule that decides trap-or-error, what strings cost, what the benchmark
 table does and does not say, and how the toolchain fits together.
 
 **Look something up.** [The reference](/ref/) is normative and terse:
-the exact grammar, every operator's precedence, all 43 ownership
+the exact grammar, every operator's precedence, all 45 ownership
 situations with individual anchors, every trap code, every builtin
 signature. It is the document to cite.
 

@@ -10,13 +10,18 @@ Loosest to tightest:
 | 2 | `and` | left |
 | 3 | `==` `!=` `<` `<=` `>` `>=` | **non-associative** |
 | 4 | `else`, `catch` | **right** |
-| 5 | `+` `-` | left |
-| 6 | `*` `/` `%` | left |
-| 7 | prefix `not` `-` `give` `copy` | right |
+| 5 | `+` `-` `\|` `^` | left |
+| 6 | `*` `/` `//` `%` `&` `<<` `>>` | left |
+| 7 | prefix `not` `-` `~` `give` `copy` `try` | right |
 | 8 | postfix `.field` `[index]` `(call)` | left |
 
 So `x else 0 > 5` compares the fallback, `x else n + 1` falls back to
 the sum, and `a else b else c` is a real chain.
+
+The bit set sits at Go's precedence rather than C's: `|` and `^` are
+additive, `&` and the shifts are multiplicative. That is why `a & b ==
+c` is `a & (b == c)` in C and a type error here, and why `x & mask ==
+0` needs no parentheses in Luce.
 
 ## The two shapes the parser refuses
 
@@ -69,7 +74,7 @@ legal, because the parentheses start a new chain.
 ## Arithmetic
 
 `+ - * / // %` on `long` and on `double`. `+` also concatenates
-`string`s. Mixing an `long` and a `double` widens the `long`.
+`string`s. Mixing a `long` and a `double` widens the `long`.
 
 `//` is **floor division** and `%` is the modulus that pairs with it:
 they floor together, so `%` takes the sign of the divisor and
@@ -110,7 +115,6 @@ than a complaint about the second character:
 | `===`, `!==` | `==`, `!=` — which already compare by value |
 | `<>` | `!=` |
 | `**` | `math.pow(x, y)`, or `math.ipow(x, y)` for `long` |
-| `<<`, `>>`, `&`, `\|`, `^`, `~` | nothing: there are no bitwise operators |
 
 ```luce fail
 func main():
