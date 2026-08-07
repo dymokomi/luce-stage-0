@@ -37,7 +37,7 @@ Two kinds of data, with a deliberate line between them:
 ## Ownership
 
 The memory model, in one paragraph (the full ratified specification —
-43 numbered situations — is `docs/OWNERSHIP.md`; the compiler quotes
+45 numbered situations — is `docs/OWNERSHIP.md`; the compiler quotes
 its numbers in diagnostics and `src/luce/specs/ownership_spec.zig` executes
 it):
 
@@ -175,8 +175,10 @@ if x == none:                     an early-exit guard narrows
                                     (break and continue too)
 if x != none and x > 3: …         the rest of the condition
 while x != none: …                the loop body
-x = 3                             an assignment of a plain value
 ```
+
+An assignment of a plain value narrows too: after `x = 3` the name is
+its payload until something widens it again.
 
 Narrowing applies to **locals and parameters only** — not to fields or
 elements, which can change between the test and the use.  Bind one to
@@ -743,7 +745,7 @@ An f-string hole is a `string(...)` the reader did not write, so the
 same rule decides what may stand in one.
 
 ```luce fragment
-string(42)          # "42"        (long, double, bool, builder, string)
+string(42)          # "42"        (long, double, bool, string)
 parse_int("42")  # 42          long?   — none when the text is not a number
 parse_float("2.5")               # double?
 chr(955)         # "λ"         codepoint -> string; traps on invalid
@@ -767,11 +769,11 @@ func main(args: list(string)):
 ```
 
 The free builtins are the generic, cross-type set — Python's own
-split of capability: `len print range assert trap free abs
+split of capability: `len print range assert trap error free abs
 min max clamp sqrt floor ceil trunc chr ord parse_int parse_float`,
-the
-conversions `long(x)`/`double(x)`, and the host-gated file, argument,
-terminal, and key builtins (see docs/V2.md).  Everything that belongs
+the eight conversion constructors (docs/NUMERICS.md §7), and the
+host-gated file, argument, terminal, and key builtins (see
+docs/V2.md).  Everything that belongs
 to one type is a method on it.
 
 ## The host
@@ -1032,12 +1034,14 @@ the addition really did widen.)
 
 ### Precedence, and the two places Luce refuses to guess
 
-Loosest to tightest: `or`, `and`, the comparisons, `else`, `+ -`,
-`* / %`, then the prefix operators `not` `-` `give` `copy`, then
-postfix `.field` `[index]` `(call)`.  Same-precedence binary operators
-associate to the left — except `else`, which associates to the right
-so `a else b else c` is a real chain — and the prefix operators to the
-right.
+Loosest to tightest: `or`, `and`, the comparisons, `else` and `catch`,
+`+ - | ^`, `* / // % & << >>`, then the prefix operators `not` `-` `~`
+`give` `copy` `try`, then postfix `.field` `[index]` `(call)`.  The bit
+set sits at Go's precedence, which is why `|` and `^` are additive and
+`&` and the shifts are multiplicative (docs/BITWISE.md R1).
+Same-precedence binary operators associate to the left — except `else`
+and `catch`, which associate to the right so `a else b else c` is a
+real chain — and the prefix operators to the right.
 
 Two shapes are legal in a language Luce reads like and mean something
 different here, so rather than pick a winner the parser refuses them
@@ -1152,9 +1156,9 @@ per **struct** (its namespaced functions: `Text.width(...)`), and per
 **function** (parameters and every indented block; `if`/`while`/`for`
 bodies open nested scopes).  No shadowing anywhere; `let` is
 immutable; `var` is mutable; loop variables are immutable inside the
-body.  Structs contain plain functions — there are no methods, no
-receivers, no inheritance; `Struct.func(...)` is a name, not a
-dispatch.
+body.  Structs contain namespace functions and methods
+(docs/METHODS.md); there is no inheritance and no dispatch —
+`Struct.func(...)` is a name.
 
 ### Unreachable code is refused
 

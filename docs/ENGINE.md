@@ -23,9 +23,10 @@ test` is green: **849/849 in 71.1 s**.
 > serialized MIR keeps the format, loses the deliverable, and answers
 > to `.lcm` when it has to reach a disk. There is no fallback, no
 > `LOOM_ENGINE`, no `backend.zig`, and stage 7 is three passes. The
-> module's `format_version` is 17 and `abi.version` is unchanged at 8
-> — nothing about the *contract* moved, only what is on either side of
-> it. `zig build test` was **832/832 in ~4 min** at the commit that
+> module's `format_version` moved and `abi.version` did not — nothing
+> about the *contract* moved, only what is on either side of it; the
+> current values are pinned in `06_mir/module.zig` and `08_llvm/abi.zig`
+> and are the only place either number is written down. `zig build test` was **832/832 in ~4 min** at the commit that
 > closed step 9, of which 536 were the executable specification, every
 > one of them run on both engines and compared; the suite has grown
 > since and the number in the build summary is the only current one.

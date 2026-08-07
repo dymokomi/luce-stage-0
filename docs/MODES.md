@@ -88,8 +88,8 @@ So the honest statement is: **debug and release run at identical
 speed**; release gives up trap locations and buys very little back.
 It takes roughly a third off the serialized module, and an artifact is
 mostly the runtime library it carries, so on the `.lc` itself it is
-**2.3%** (`editor.lc`, 716 KB → 699 KB) and nothing measurable on a
-small program.  Ship `--release` when source lines would mean nothing
+**about 2%** (`editor.lc`, the largest bundled program: 805 KB → 789 KB)
+and nothing measurable on a small program.  Ship `--release` when source lines would mean nothing
 to the recipient; ship debug everywhere else.  When a release artifact
 misbehaves, recompile from source and reproduce — the language is
 deterministic, so that is reliable.
@@ -102,8 +102,8 @@ std modules resolve like any other, so a trap inside
 `line:column` pair per instruction.  Granularity is the statement,
 the way Python tracebacks work: every instruction a statement lowers
 to reports the statement's own position.  The tables live in the
-serialized module beside the code they describe (`format_version` 17)
-and, in the artifact, in a private constant array beside the machine
+serialized module beside the code they describe and, in the artifact,
+in a private constant array beside the machine
 code; the
 decoder rejects a table whose length disagrees with its function's
 instruction count, and the verifier enforces the same invariant on
@@ -135,8 +135,10 @@ byte spans and stable codes in both modes, and render as
   carries the whole trap.
 - `src/luce/08_llvm/lower.zig` — emits those tables as constant data
   and calls `luce_rt_unwound` on every unwinding edge.
-- `src/apps/loom/runner.zig` — renders the trace, capped at 12
-  printed frames.
+- `src/apps/report.zig` — renders the trace, capped at 12 printed
+  frames (`max_printed_frames`), for loom and for a standalone binary
+  alike: one rendering, so a program's behaviour does not depend on
+  who started it.
 - `src/apps/luce/main.zig` — the `--release` flag: it strips the
   module, and everything downstream follows from that.
 - `src/luce/interpreter/machine.zig` — `traceback()`: where the oracle
