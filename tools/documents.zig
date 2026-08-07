@@ -56,6 +56,7 @@ pub const records = [_][]const u8{
     "docs/CONCURRENCY_RESEARCH.md",
     "docs/UNION_RESEARCH.md",
     "docs/UNION.md",
+    "docs/THREADS.md",
 };
 
 /// Both, living first — so "the living documents carry no exemptions"
