@@ -110,13 +110,23 @@ not bricked up.
 | **D5** | A `give`-taking function is spawnable and passable like any other; the *call through the value* checks argument verbs exactly as a direct call does.  Nothing about ownership moves. |
 | **D6** | The std customers land in the same run: `xs.sort_by(f)`, `xs.keep(f)`, `xs.map_to(f)`-shaped helpers where the design review says they earn their keep — each a `luce.sema.import`-routed std function per the strings precedent, not new builtins. |
 
-## Questions for ratification
+## Ratified (owner, 2026-08-07)
+
+*"Ok then just lambdas then. Lambdas are good."*  The proposal as
+drafted: the arrow form, one expression, types from the landing site,
+no capture, method references refused with the teaching diagnostic.
+"Just lambdas" is read as the minimal std surface — `sort_by` ships
+as the proving customer; `keep`/`find_by` join only if the build
+finds them trivially clean, and otherwise wait for the corpus to ask.
+
+## The questions, as they were held
 
 **Q1 — the arrow form as proposed** (`(a, b) -> expr`, one expression,
-types inferred from the landing site)?
+types inferred from the landing site)?  **Ratified.**
 
 **Q2 — method references refused** (D1), with the diagnostic teaching
-the capture line?
+the capture line?  **Ratified.**
 
 **Q3 — which std customers ship with it** — `sort_by` alone, or the
-small family (`sort_by`, `keep`, first-class `find_by`)?
+small family (`sort_by`, `keep`, first-class `find_by`)?  **Minimal:
+`sort_by`, with the family at the build's honest discretion.**
