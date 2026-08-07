@@ -159,8 +159,11 @@ on it is always safe and costs one recompile.</p>
 
 <h2 id="failure">When a program stops</h2>
 
-<p>A run ends in one of five ways, and loom says which in words and in the number
-a shell reads afterwards. <strong>The screen is restored before anything is
+<p>A run ends in one of five ways — it finishes, it traps, it ends on an uncaught
+error, it calls <code>exit</code>, or the machine runs out of memory under it — and
+loom says which in words and in the number a shell reads afterwards. The fifth is
+not the program's doing at all, which is why it gets a number well clear of
+anything a program means: <code>70</code>. <strong>The screen is restored before anything is
 reported</strong>, so a full-screen program that trapped leaves its message on
 the ordinary terminal rather than inside a frame that is being torn down.</p>
 
@@ -207,8 +210,8 @@ news is what the world said.</p>
 
 <h3 id="exit">A program may choose its own number</h3>
 
-<p><code>exit(status)</code> is the fourth way a run can end, beside finishing,
-trapping and raising: nothing is wrong and nothing failed, the program chose to
+<p><code>exit(status)</code> is the fourth of those five, beside finishing,
+trapping and raising and ahead of the machine running out: nothing is wrong and nothing failed, the program chose to
 stop and chose the number. loom carries it out — on POSIX, as the low eight bits
 of its own exit code.</p>
 
