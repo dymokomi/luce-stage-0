@@ -73,8 +73,8 @@ reviewable pieces of work, and the second is the one that proves the
 first.
 
 The site, meanwhile, already teaches the shape the programs never use
-— `site/content/tour/functions.md:72` and
-`site/content/examples/structs.md:7` both show `struct Rect` with
+— `www/luce/content/tour/functions.md:72` and
+`www/luce/content/examples/structs.md:7` both show `struct Rect` with
 `func area(r: Rect)` — and both pages promise in prose that `self`
 does not exist. Those two sentences are the smallest true measure of
 what this memo changes.
@@ -201,10 +201,10 @@ The migration surface, enumerated:
 | `programs/calc.luc:116-120` | `arg_count() == 0` as a mode switch |
 | `bench/*.luc`, `src/luce/std/*.luc` | **none** |
 | `docs/FAILURE.md:107`, `docs/LANGUAGE.md:169,196,460,490`, `docs/V2.md:93` | 6 |
-| `site/content/` | `tour/host.md:13-33`, `tour/hello.md:46`, `examples/hello.md:14-38`, `examples/files.md:84`, `examples/optionals.md:49`, `tour/absence.md:91`, `index.md:8`, `ref/builtins.md:83-84`, `ref/failure.md:42` |
+| `www/luce/content/` | `tour/host.md:13-33`, `tour/hello.md:46`, `examples/hello.md:14-38`, `examples/files.md:84`, `examples/optionals.md:49`, `tour/absence.md:91`, `index.md:8`, `ref/builtins.md:83-84`, `ref/failure.md:42` |
 
 Site samples declare their arguments in the fence (`luce run args=3
-fig`) and are executed by `site/src/verify.zig`, so the site build is
+fig`) and are executed by `www/luce/src/verify.zig`, so the site build is
 the test for that column.
 
 **One retirement diagnostic ships with it**, and only one release of
@@ -640,7 +640,7 @@ it retires machinery Decision 2 would otherwise have to keep working.
 3. **`arg`/`arg_count` retire.** The intrinsics, the `argument_bounds`
    trap code, the two `reserved_names` rows, the retirement
    diagnostic, `format_version`. *Tests:* errors_spec for the
-   retirement message; the trap-code coverage test in `site/src`.
+   retirement message; the trap-code coverage test in `www/luce/src`.
    **~half a day.**
 4. **The corpus and the documentation follow.** Six programs, six
    `docs/` sites, nine site pages, `ref/builtins.md` and
@@ -648,7 +648,7 @@ it retires machinery Decision 2 would otherwise have to keep working.
    sections, `docs/V2.md:93`, CLAUDE.md's entry paragraph.
    *Tests:* the site build, which runs every sample. **~1 day.**
 5. **`self` parses.** The keyword into `02_lex/token.zig` and into
-   `site/src/highlight.zig`'s `keywords` **and** its `lexed`
+   `www/luce/src/highlight.zig`'s `keywords` **and** its `lexed`
    agreement test — those move in the same commit or the site test
    fails. Bare `self`, `var self`, first-position and
    no-annotation rules. *Tests:* `03_parse/test.zig`,

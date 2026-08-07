@@ -380,7 +380,7 @@ reason the boundary can now go.
 
 ## Hat 5 — the site
 
-`site/src/verify.zig` runs every sample twice — `LOOM_ENGINE=native`
+`www/luce/src/verify.zig` runs every sample twice — `LOOM_ENGINE=native`
 so a silent fallback is a failure, then `LOOM_ENGINE=interpreter` —
 and fails the build if the two disagree. Measured: **48 pages, 173
 samples (121 run, 22 trap, 5 raise, 23 refused, 2 shell), 25.0 s.**
@@ -533,13 +533,13 @@ reverses that decision, and it should be reversed knowingly.
   defect found in passing, and fixed since: MODES.md now says 17,
   which is what `06_mir/module.zig` says.
 - **The prose is the largest single body of work.** A full sweep of
-  README, CLAUDE.md, AGENTS.md, `docs/*.md`, `site/content/**/*.md` and
+  README, CLAUDE.md, AGENTS.md, `docs/*.md`, `www/luce/content/**/*.md` and
   the `//!` headers finds **232 sites across 44 files** that state
   there are two engines, name the interpreter as the reference,
   describe the fallback, or call a `.lc` portable IR (209 counting per
   line rather than per clause). Densest: `docs/CODEGEN.md` (33),
   `docs/MISSING.md` (16), `CLAUDE.md` (15),
-  `site/content/guide/toolchain.md` (14). Four whole sections become
+  `www/luce/content/guide/toolchain.md` (14). Four whole sections become
   obsolete rather than edited: CODEGEN.md's "Which engine runs a
   `.lc`", PIPELINE.md's "Where the compiled path diverges",
   toolchain.md's "The two engines", performance.md's L47–49. Two `//!`
@@ -718,7 +718,7 @@ engine-selection tests, and `verify.zig`'s second arm.
 — the case the fallback existed for stops existing. `loom luce` and
 `loom edit` fail with `native.findCompiler`'s existing sentence.
 *Forecloses:* the site's differential check over 148 samples (Hat 5).
-Say so in `site/src/verify.zig`'s header rather than letting it vanish.
+Say so in `www/luce/src/verify.zig`'s header rather than letting it vanish.
 
 *What it took, in contact with the code:*
 
@@ -969,7 +969,7 @@ was what stopped anyone reading the sentence around it.** Six factual
 defects had nothing to do with the retirement and had been true-adjacent
 long enough to survive every earlier pass: `docs/CODEGEN.md` opened by
 citing *itself* as its own decision record; `build.sh` pointed at a
-`docs/BENCHMARKS.md` that does not exist; `site/src/site.zig`'s
+`docs/BENCHMARKS.md` that does not exist; `www/luce/src/site.zig`'s
 toolchain blurb promised "the four artifacts" against a page whose own
 heading says three; the status page and `docs/MISSING.md` both listed
 the clock, `sleep`, `env`, stderr and directory listing as host gaps

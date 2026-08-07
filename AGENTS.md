@@ -30,7 +30,7 @@ because each one silently costs you something if you miss it:
    it proves.  A new language package must be added to
    `src/luce/luce.zig`'s re-exports *and* its test block, and a new
    spec file to `src/luce/specs.zig`'s, or the tests do not run.
-2. **`zig fmt src/ build.zig site/src/`** before committing.  The
+2. **`zig fmt src/ build.zig www/luce/src/`** before committing.  The
    documentation site's generator is Zig in this repository too.
 3. **Semantics live in `src/luce/runtime/` and nowhere else.**  The
    compiled path and the oracle both call it, so a rule implemented on

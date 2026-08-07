@@ -6,7 +6,7 @@
 //! tables to know what it is looking at.  The boundary is honest
 //! because the tables were already published: the compiler is not their
 //! only reader.  `tools/grammar.zig` generates the editor's TextMate
-//! grammar from them rather than from a copy, and `site/src/coverage.zig`
+//! grammar from them rather than from a copy, and `www/luce/src/coverage.zig`
 //! reads the rows *textually* out of this file and holds
 //! `ref/builtins.md` to both the names and the parameter names.  A copy
 //! is exactly how the old grammar came to highlight builtins the

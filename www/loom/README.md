@@ -1,4 +1,4 @@
-# loomsite — loom.luciaos.com
+# www/loom — loom.luciaos.com
 
 The documentation for **loom**, the environment that runs compiled
 Luce: what it is, how it starts a program, the shell, the editor, the
@@ -6,9 +6,9 @@ host boundary — and one page about where the tool is going.
 
 It lives in this repository so that it changes with the tool.
 
-## Why this is not `site/`
+## Why this is not `www/luce/`
 
-`site/` is luce.luciaos.com, and its generator is wired to the
+`www/luce/` is luce.luciaos.com, and its generator is wired to the
 language: every fenced Luce block on every page is compiled and run by
 the freshly built toolchain, and the printed output is compared byte
 for byte against what the program actually produced.  That machinery
@@ -16,7 +16,7 @@ is the right machinery for a language reference and the wrong
 machinery for a page of shell transcripts about a binary.
 
 So this is a separate tree with a separate build.  The two sites share
-a visual identity — `assets/style.css` here is `site/assets/style.css`
+a visual identity — `assets/style.css` here is `www/luce/assets/style.css`
 with the same custom properties, value for value — and cross-link in
 both bars, but neither build can break the other.
 
@@ -35,18 +35,18 @@ built, it says so in its first paragraph, and every unbuilt thing on
 it carries an `ahead` label.
 
 **Nothing on this site is verified by the build.**  That is the
-honest difference from `site/`, and the line to watch: the moment
+honest difference from `www/luce/`, and the line to watch: the moment
 there are enough samples that a hand is the wrong instrument for
 keeping them true, the checking belongs in `build.sh`, and
-`site/src/verify.zig` is how it is done.
+`www/luce/src/verify.zig` is how it is done.
 
 ## Build
 
 ```sh
-./loomsite/build.sh
+./www/loom/build.sh
 ```
 
-It writes `loomsite/out`, then walks every generated page and checks
+It writes `www/loom/out`, then walks every generated page and checks
 that each internal `href` resolves to a file in the output tree **with
 the anchor it names**.  A broken link fails the build.
 
@@ -74,7 +74,7 @@ as from a domain root, so neither an absolute `/` nor a hand-counted
 ## Layout
 
 ```text
-loomsite/
+www/loom/
   build.sh      manifest + fragments -> out/, then check the links
   deploy.sh     publish out/
   pages         the manifest: slug, nav label, title, description
@@ -91,20 +91,21 @@ reader of `build.sh` can see the whole page from one place.
 ## Deploy
 
 ```sh
-./loomsite/deploy.sh          # build, then publish
-./loomsite/deploy.sh --fast   # publish what is already in out/
+./www/loom/deploy.sh          # build, then publish
+./www/loom/deploy.sh --fast   # publish what is already in out/
 ```
 
-It builds (which is what checks the links), mirrors `loomsite/out` to
-the static root, and curls the live URL afterwards.
-`LOOM_SITE_HOST`, `LOOM_SITE_KEY` and `LOOM_SITE_ROOT` override the
-target.
+It builds (which is what checks the links), then hands `www/loom/out`
+to `www/deploy/publish.sh`, which mirrors it to the static root and
+curls the live URL afterwards.  `LOOM_SITE_ROOT` overrides the static
+root; the host and the key are shared with the other two sites and are
+`LUCIAOS_EDGE_HOST` and `LUCIAOS_EDGE_KEY`.
 
-**The default target is a single host** — the same EC2 instance
+**The default target is a single host** — the same instance
 luciaos.com and luce.luciaos.com are served from, with Caddy serving
 `/opt/apps/loom_docs` for `loom.luciaos.com` and taking the
-certificate itself.  There is no infrastructure-as-code for it and no
-record of the Caddy configuration in this repository; moving the site
-means editing that one line and knowing where the certificate comes
-from.  Written down here because it is the one thing about this site
-that is not reproducible from the tree.
+certificate itself.  It is named in `www/deploy/publish.sh` and
+nowhere else; see `www/README.md`.  There is no infrastructure-as-code
+for it and no record of the Caddy configuration in this repository;
+moving the site means editing that one line and knowing where the
+certificate comes from.

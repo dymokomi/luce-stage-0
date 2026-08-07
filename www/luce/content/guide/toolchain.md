@@ -231,9 +231,9 @@ main.luc:4:17: a container keeps its object elements; write give item to hand it
 
 ## How this site is built
 
-The same discipline, applied to documentation. `site/build.sh` builds
-the toolchain, then a small generator in `site/src/` walks the
-Markdown in `site/content/`. Every fenced Luce block on the site must
+The same discipline, applied to documentation. `www/luce/build.sh` builds
+the toolchain, then a small generator in `www/luce/src/` walks the
+Markdown in `www/luce/content/`. Every fenced Luce block on the site must
 say what is to become of it — `run`, `trap`, `raise`, `fail` or
 `module` — and a bare one is a build error naming the page and the
 line. There is no unverified Luce here by construction.

@@ -3,7 +3,7 @@
 Read against `docs/CODING_GUIDE.md`'s "Naming" and "Comments and docs"
 sections.  Base: `0a22b81` (merge of `refusal-tests`), `zig build test`
 = 944/944 passed.  Scope: all 88 `.zig` files under `src/` and
-`site/src/`, 59,040 lines.
+`www/luce/src/`, 59,040 lines.
 
 ## The answer
 
@@ -132,7 +132,7 @@ would read as the pair they are.
 `expectFails` (compile/test), `expectDiagnostics` (03_parse/test and
 compile/test), `expectOwnError` (ownership_spec), `expectError`
 (errors_spec), `expectProblem` (01_source/encoding), `expectComplaint`
-(site/verify), `expectRefused` (loom/shell).  Each is file-private, so
+(www/luce/src/verify), `expectRefused` (loom/shell).  Each is file-private, so
 nothing is ambiguous at a call site — but a contributor writing the
 eighth test helper has no precedent to copy.
 

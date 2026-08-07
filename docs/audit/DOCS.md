@@ -9,11 +9,11 @@
 > of Part 1 for the summary and the four things the audit missed.
 >
 > The structural fix the audit asks for at the end is built:
-> `site/src/coverage.zig` reads the compiler's lists out of `src/` at
+> `www/luce/src/coverage.zig` reads the compiler's lists out of `src/` at
 > test time and fails the build when the reference stops naming one.
 
 Audited at `0a22b81` (merge of `refusal-tests`).  What was checked: every
-prose claim in `site/content/**` (48 pages), `docs/*.md` (13 files),
+prose claim in `www/luce/content/**` (48 pages), `docs/*.md` (13 files),
 `README.md`, `CLAUDE.md` and `AGENTS.md`, against the code and against a
 freshly built toolchain — and the reverse, every feature in the code
 checked for a place a reader could find it.
@@ -27,7 +27,7 @@ were.
 ./build.sh                       ok
 zig build test                   Build Summary: 48/48 steps succeeded;
                                  944/944 tests passed
-./site/build.sh --fast           48 pages, 173 samples verified
+./www/luce/build.sh --fast           48 pages, 173 samples verified
                                  (121 run, 22 trap, 5 raise, 23 refused, 2 shell)
                                  "every sample matches its page, every link resolves"
 ```
@@ -35,7 +35,7 @@ zig build test                   Build Summary: 48/48 steps succeeded;
 **944** is therefore the true count, and it is the number three
 documents get wrong.
 
-URL checks used the local `site/out`, not the live host.  Behavioural
+URL checks used the local `www/luce/out`, not the live host.  Behavioural
 claims were checked by running `build/luce` and `build/loom` over scratch
 programs, not by reading alone.
 
@@ -84,7 +84,7 @@ disagree, or a number drifted; **3** organization and reachability.
 > documents all ten wrappers plus the three semantics a caller cannot
 > guess.  `/tour/host/` loses the denial and keeps `exit` and paths, each
 > with the reason it was left out, and its raw-builtin list names all
-> seven file builtins.  Guarded by `site/src/coverage.zig` (`2c40b24`),
+> seven file builtins.  Guarded by `www/luce/src/coverage.zig` (`2c40b24`),
 > which reproduced this finding exactly on its first run.
 
 This is one event with three faces, and it is the worst finding in the
@@ -98,7 +98,7 @@ of shipped behaviour.  A reader is not left uninformed; they are told
 > and no path manipulation.  There is also no standard input, no clock
 > and no `sleep`.  Each of those is one host builtin plus one wrapper
 > here, and **none of them is built**."
-> — `site/content/std/files.md:121-124`
+> — `www/luce/content/std/files.md:121-124`
 
 `src/luce/std/files.luc` defines `append_text`, `append_lines`,
 `delete`, `rename` and `list`.  I compiled and ran all five:
@@ -124,7 +124,7 @@ succeeding quietly.
 > environment access, no stderr, no directory listing, no delete or
 > rename, and no path manipulation.  Each is one builtin plus one
 > wrapper, and **none of them is built yet**."
-> — `site/content/tour/host.md:112-114`
+> — `www/luce/content/tour/host.md:112-114`
 
 Nine of the eleven shipped at ABI 8.  Only `exit` and path manipulation
 remain.  The repository's own bundled programs contradict the page:
@@ -136,7 +136,7 @@ there are seven.
 
 **(c) `/ref/builtins/` omits nine host builtins.**
 
-The **Host builtins** table (`site/content/ref/builtins.md:62-76`) has 15
+The **Host builtins** table (`www/luce/content/ref/builtins.md:62-76`) has 15
 rows; the analyzer has **24** host-gated builtins
 (`src/luce/04_semantics/builder.zig:4234-4257`).  Missing:
 
@@ -301,15 +301,15 @@ Pick one column, say which, and quote it everywhere.
 > `step_budget_exhausted` went later in `16ed137` for reasons of its
 > own.  `FAILURE.md`'s "21 codes" and its second mover (`parse_failed`,
 > which was never a `TrapCode` at all) were both wrong.  Guarded by
-> `site/src/coverage.zig`.
+> `www/luce/src/coverage.zig`.
 
 - `docs/FAILURE.md:25` — "Applied to the **21 codes** in
   `06_mir/defs.zig` … Eighteen stay traps."
 - `docs/LANGUAGE.md:193` — "leaves **eighteen of the twenty** trap codes
   exactly where they were."
-- `site/content/tour/failure.md:24` — "leaves eighteen of Luce's
+- `www/luce/content/tour/failure.md:24` — "leaves eighteen of Luce's
   **twenty** trap codes exactly where they were."
-- `site/content/guide/failure.md:34` — "Applying that rule to Luce's
+- `www/luce/content/guide/failure.md:34` — "Applying that rule to Luce's
   **twenty** trap codes left eighteen exactly where they were."
 
 `mir.TrapCode` has **18** members (`src/luce/06_mir/defs.zig:220-238`)
@@ -329,7 +329,7 @@ nineteen of twenty where they were, and Luce now has eighteen.
 > the correction is machine-checked from here on.
 
 > "| `fill(value)` | rank-1, **value elements only** |"
-> — `site/content/ref/builtins.md:128`
+> — `www/luce/content/ref/builtins.md:128`
 
 `dim` and `fill` are dispatched *before* the rank gate
 (`src/luce/04_semantics/builder.zig:3908-3930`), so `fill` works at any
@@ -356,7 +356,7 @@ page that will send a reader to write a loop they do not need.
 > model rests on.
 
 > "Both hand back fresh objects the receiver owns." — of `split` and
-> `join`, `site/content/std/strings.md:91`
+> `join`, `www/luce/content/std/strings.md:91`
 
 `join` returns a `String`, which the rest of the site correctly and
 repeatedly insists is a **value, not an object**
@@ -377,7 +377,7 @@ std page is worse than an ordinary slip.
 > "| `math.sin(x)`, `math.cos(x)`, `math.tan(x)` | radians, **any
 > magnitude** |" … "the trigonometric functions to about **1e-12
 > absolute**"
-> — `site/content/std/math.md:26,29`
+> — `www/luce/content/std/math.md:26,29`
 
 Range reduction is `r = x - floor(x / tau) * tau` in double precision
 (`src/luce/std/math.luc:109`), so absolute error grows with `|x|`.
@@ -434,7 +434,7 @@ edit "loom's host" looks in the wrong directory.
 > the point the sentence was making.
 
 > "The corpus pays for it constantly, and **the counts are real**"
-> — `site/content/status/index.md:107`
+> — `www/luce/content/status/index.md:107`
 
 Re-derived against `programs/`:
 
@@ -446,7 +446,7 @@ Re-derived against `programs/`:
 | "`term_style(fg, bg, bold)` is called **16 times** and **13** of them end in … `false`" | `status/index.md:145` | **12** and **11** in `editor.luc`; **15** and **14** across `programs/` |
 
 Two of four are right, which is better than it sounds and worse than the
-page promises.  `site/content/examples/programs.md:124-126` carries the
+page promises.  `www/luce/content/examples/programs.md:124-126` carries the
 same "seventeen string comparisons" figure, so that one is a single edit
 in two places — and it adds a second error, "with no `else`", where
 `editor.luc:402` has one.  The same four numbers appear in
@@ -547,17 +547,17 @@ directory listing.
 ### F18. Nothing in the repository mentions the documentation site
 
 > **FIXED** (`dbfa587`).  The site is the README's third paragraph, and
-> `site/` is in the Packages block with `vendor-llvm.sh` beside it.
+> `www/luce/` is in the Packages block with `vendor-llvm.sh` beside it.
 
-`luce.luciaos.com` appears exactly once outside `site/` — in
+`luce.luciaos.com` appears exactly once outside `www/luce/` — in
 `CLAUDE.md:65`.  Not in `README.md`, not in any `docs/*.md`, not in
 `AGENTS.md`.  The README's **Packages** block (`:136-165`) lists
 `src/luce`, `src/apps/*`, `programs/`, `bench/`, `tools/vscode-luce/`,
-`docs/`, `build.sh` — and omits `site/` entirely, though it is a
+`docs/`, `build.sh` — and omits `www/luce/` entirely, though it is a
 first-class deliverable with its own build gate.
 
 The link works in the other direction: the generated footer
-(`site/src/page.zig:119`) points back at the GitHub repo.  Only the
+(`www/luce/src/page.zig:119`) points back at the GitHub repo.  Only the
 repo→site edge is missing, and it is the one a cloner needs.
 
 ### F19. No `CONTRIBUTING`, no `LICENSE`, and two agent files that disagree
@@ -575,11 +575,11 @@ repo→site edge is missing, and it is the one a cloner needs.
   pointed at them; `README.md` never names `CODING_GUIDE.md`.
 - No `LICENSE` file at all, on a repo whose site is public.
 - `AGENTS.md` and `CLAUDE.md` overlap heavily and have already drifted:
-  `CLAUDE.md:21` says `zig fmt src/ build.zig site/src/`; `AGENTS.md:13`
-  says `zig fmt src/ build.zig` — following AGENTS.md leaves `site/src/`
+  `CLAUDE.md:21` says `zig fmt src/ build.zig www/luce/src/`; `AGENTS.md:13`
+  says `zig fmt src/ build.zig` — following AGENTS.md leaves `www/luce/src/`
   unformatted.  `AGENTS.md:27` still offers a deleted subsystem as the
   model commit subject: "often scope-led (`Benchmarks: ...`, **`WASM
-  backend M3: ...`**)".  `AGENTS.md` never mentions `site/`.
+  backend M3: ...`**)".  `AGENTS.md` never mentions `www/luce/`.
 
 ### F20. `tools/vscode-luce/` ships a v1 grammar
 
@@ -645,7 +645,7 @@ marked at its own heading:
    reads zero bytes and loops.  Not a prose defect, but found by
    checking one, and now in `MISSING.md`.
 
-**The structural fix is built.**  `site/src/coverage.zig` reads five
+**The structural fix is built.**  `www/luce/src/coverage.zig` reads five
 of the compiler's lists out of `src/` at test time — builtins, the
 receiver methods, `TrapCode` and `ErrorCode`, every std `func` and
 top-level `let`, and every option and command word both mains parse —
@@ -726,7 +726,7 @@ a reader a search, while "none of them is built" costs them the feature.
 > host builtins are on `/ref/builtins/`; and the `find`/`count`
 > empty-needle disagreement is written down on `/std/strings/`.  The
 > `strings` pair stays undocumented for the reason given, now recorded
-> as a named exemption in `site/src/coverage.zig` with that reason
+> as a named exemption in `www/luce/src/coverage.zig` with that reason
 > beside it — and an exemption naming something the compiler no longer
 > has fails the build, so the list cannot rot into a blanket.
 
@@ -898,7 +898,7 @@ engine, machine-code `.lc`, no fallback.  They differ on the test count
 almost everywhere, while `README.md` is a commit or two behind on every
 number it shares.  `CLAUDE.md` serves agents well.  `README.md` does not
 yet serve humans as well, mostly by omission — the site, the coding
-guide, `MISSING.md` and `site/` itself are all absent from it.
+guide, `MISSING.md` and `www/luce/` itself are all absent from it.
 
 `AGENTS.md` is the odd file out: a third overlapping description with its
 own drift (**F19**).  Either it should be a stub pointing at `CLAUDE.md`,
@@ -908,14 +908,14 @@ or the two should be generated from one source.
 
 # Part 5 — The site's ops story
 
-**There is no `site/README.md`**, and no page documents how to build or
+**There is no `www/luce/README.md`**, and no page documents how to build or
 deploy the site.  What exists instead is better than nothing and better
 than most: both scripts carry real header comments.
 
-`site/build.sh:1-11` explains the ordering and the `--fast` escape, and
-matches its behaviour exactly — I ran `./site/build.sh --fast` and it
+`www/luce/build.sh:1-11` explains the ordering and the `--fast` escape, and
+matches its behaviour exactly — I ran `./www/luce/build.sh --fast` and it
 built the toolchain check, the generator, ran the generator's own 18
-tests, and emitted 48 pages with 173 samples verified.  `site/deploy.sh:1-9`
+tests, and emitted 48 pages with 173 samples verified.  `www/luce/deploy.sh:1-9`
 documents build-from-clean-first with a `--fast` override, names its three
 environment overrides (`LUCE_SITE_HOST`, `LUCE_SITE_KEY`,
 `LUCE_SITE_ROOT`), refuses to publish an unbuilt tree, and curls the live
@@ -924,17 +924,17 @@ URL afterwards.  Both are accurate.
 What is missing is the *pointer*.  `CLAUDE.md:65` is the only place in the
 repository that says the site exists, how it is built, or where it is
 deployed.  `README.md` and `AGENTS.md` say nothing.  A contributor who
-edits `site/content/ref/types.md` has no way to learn there is a build
+edits `www/luce/content/ref/types.md` has no way to learn there is a build
 that will check their claim.
 
 The one thing genuinely undocumented anywhere: the deploy target is a
 hard-coded IP (`ubuntu@35.153.110.211`) served by Caddy, with no note of
 who owns it, where the Caddy config lives, or what to do when it moves.
 
-Recommended: a short `site/README.md` — what the generator is, the fence
+Recommended: a short `www/luce/README.md` — what the generator is, the fence
 vocabulary (`run`/`trap`/`raise`/`fail`/`module`), how to add a page, how
 to run just the site build, and where it deploys — plus one line in the
-root README naming `luce.luciaos.com` and `site/`.
+root README naming `luce.luciaos.com` and `www/luce/`.
 
 ---
 
@@ -999,7 +999,7 @@ representative of the whole.
 > structural asks at the foot of this section are the more important
 > half of the document, and both are built: `docs/` numbers that
 > drifted are now either removed or dated to a commit, and
-> `site/src/coverage.zig` is the check the last paragraph describes,
+> `www/luce/src/coverage.zig` is the check the last paragraph describes,
 > widened from the two tests it proposes to five.
 
 Twelve changes close everything above that matters.
@@ -1026,12 +1026,12 @@ Twelve changes close everything above that matters.
 11. Add `docs/README.md`, a `CONTRIBUTING.md`, a `LICENSE`, and README
     lines naming the site, `CODING_GUIDE.md` and `vendor-llvm.sh`
     (**F17**, **F18**, **F19**).
-12. Add `site/README.md` (**Part 5**), and either fix or stop shipping
+12. Add `www/luce/README.md` (**Part 5**), and either fix or stop shipping
     `tools/vscode-luce/` (**F20**).
 
 The deeper fix is structural, and the audit points at it twice.
 
-`docs/` needs the thing `site/` already has — a build that fails when a
+`docs/` needs the thing `www/luce/` already has — a build that fails when a
 sentence stops being true.  Test counts, version constants, trap-code
 counts and benchmark rows are all mechanically checkable, and every one
 of them drifted this week.

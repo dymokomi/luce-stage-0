@@ -371,7 +371,7 @@ the proof the language moved.
     takes no binding, with reasons.
 14. **Nothing pins the site's copies of `reserved_names`.**  The
     language's list lives in `04_semantics/context.zig`; the site
-    carries it twice, in `site/src/highlight.zig`'s word tables and
+    carries it twice, in `www/luce/src/highlight.zig`'s word tables and
     in the block on `/ref/lexical/`, and neither copy is checked
     against the original.  That is how the seven `term_*` builtins
     came to be in the site's "not reserved" list while the analyzer

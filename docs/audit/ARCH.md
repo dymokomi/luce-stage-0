@@ -89,14 +89,14 @@ grammar.zig` imports `luce` and generates from the real tables,
 the builtin table: *"Published … because it is what the language
 spells."*
 
-`site/src/highlight.zig` is the copy that was not fixed, and it is
+`www/luce/src/highlight.zig` is the copy that was not fixed, and it is
 failing today:
 
-* `type_names` (`site/src/highlight.zig:44-51`) lists `bool, long,
+* `type_names` (`www/luce/src/highlight.zig:44-51`) lists `bool, long,
   double, string, list, map, array, builder`.  `support/types.zig:388-
   402` has thirteen: the eight above **plus `byte`, `short`, `int`,
   `half`, `float`**.  Five of the language's own type names render as
-  plain identifiers.  `site/content/ref/types.md`, `tour/values.md`
+  plain identifiers.  `www/luce/content/ref/types.md`, `tour/values.md`
   and `examples/traps.md` all write them inside `luce` fences — the
   reference page that documents the seven-type ladder does not
   highlight five of its rungs.
@@ -117,7 +117,7 @@ equals the copy.
 
 **Verdict: restructure.**  The header's excuse — the generator links no
 part of the tree it documents — does not hold, because
-`site/src/coverage.zig` in the same directory already solved it.  It
+`www/luce/src/coverage.zig` in the same directory already solved it.  It
 reads the compiler's tables *out of the source files at test time*:
 `builtins(repository)` (`coverage.zig:173`) scrapes `builder.zig`'s
 table, `methods(repository)` (`:203`) the four method tables,
@@ -517,12 +517,12 @@ already `pub`.  Either give `spelling_guard` that import in `build.zig`
 repository, and each brought its own reader.
 
 * **Directory walking**: `spelling.zig:146` opens and iterates
-  directories itself; `site/src/coverage.zig:54-88` has a `Repository`
+  directories itself; `www/luce/src/coverage.zig:54-88` has a `Repository`
   type that finds the root by landmark and reads by path.  Two
   mechanisms, two root-finding conventions.
 * **Fenced-block extraction**: `doccheck.zig:144` (`fences`),
-  `spelling.zig:197-205` (inside `scan`), `site/src/verify.zig`, and
-  `site/src/markdown.zig:131` (`blocks`, for rendering).  **Four
+  `spelling.zig:197-205` (inside `scan`), `www/luce/src/verify.zig`, and
+  `www/luce/src/markdown.zig:131` (`blocks`, for rendering).  **Four
   parsers of the same notation.**
 * **Two fence vocabularies for one syntax.**  `doccheck` accepts
   `luce` / `fragment` / `refused` / `historical`; `verify.zig` accepts
@@ -638,7 +638,7 @@ already promises this is where such facts live.
   `spelling.zig`, `grammar.zig`, `sweep.sh` and `testdata/`.  The
   README of the guard directory is the one document in the tree no
   guard reads.
-* `site/src/highlight.zig:55` — *"The compiler's list is the table in
+* `www/luce/src/highlight.zig:55` — *"The compiler's list is the table in
   `04_semantics/builder.zig`'s `lowerIntrinsic`"*.  The table moved out
   of `lowerIntrinsic` to file scope (`:78`) when it was consolidated.
 

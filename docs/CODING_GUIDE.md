@@ -24,7 +24,7 @@ If a change makes the architecture harder to see, do not merge it.
 ## Language
 
 - Zig 0.16, pinned in `build.zig.zon`
-- `zig fmt src/ build.zig site/src/ tools/` before every commit; nothing
+- `zig fmt src/ build.zig www/luce/src/ tools/` before every commit; nothing
   to argue about
 - Errors are values: small explicit error sets, `try` at call sites,
   no panics for ordinary failure

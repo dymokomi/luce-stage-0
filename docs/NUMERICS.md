@@ -232,7 +232,7 @@ Two boundaries the uniform rule does *not* cross:
 - **Promotion does not reach through `T?`.** `Int? + Float` keeps
   today's message, which already says the useful thing (*"test it
   first (`if n != none:`) or supply a fallback"*,
-  `site/content/tour/absence.md:134`). `let x: Float? = 1` may compose
+  `www/luce/content/tour/absence.md:134`). `let x: Float? = 1` may compose
   the two steps — widen, then wrap — because refusing that is the
   arbitrary carve-out again.
 
@@ -765,23 +765,23 @@ seven sites verified by inspection.
 byte-compared output and 31 are `fail` with byte-compared diagnostics.
 Two `run` samples need more than a mechanical edit:
 
-- `site/content/examples/traps.md:52` — `func ratio(a: Int, b: Int)
+- `www/luce/content/examples/traps.md:52` — `func ratio(a: Int, b: Int)
   -> Int: return a / b`, whose recorded output *is* a
   `divide_by_zero` trace. Under D3 there is no trap and the return
   type is wrong. It becomes `//` and keeps proving exactly what it
   proved.
-- `site/content/tour/control.md:40-41` — Collatz,
+- `www/luce/content/tour/control.md:40-41` — Collatz,
   `remaining = remaining / 2` on an `Int`. Becomes `//`.
 
-Plus `site/content/tour/values.md:145` (`let half = width / 2` prints
-`40` → `//`, prints `40`), `site/content/examples/errors.md:35`
+Plus `www/luce/content/tour/values.md:145` (`let half = width / 2` prints
+`40` → `//`, prints `40`), `www/luce/content/examples/errors.md:35`
 (`return 100 / n` in `-> Int!` → `//`). Every `fail` block that
 asserts *"conversions are explicit"* is deleted or rewritten —
-principally `site/content/tour/hello.md:116`, and the prose in
+principally `www/luce/content/tour/hello.md:116`, and the prose in
 `tour/values.md:36-57`, `ref/types.md:3-6,32-41`, `tour/next.md:10`,
 `status/index.md:33,84`.
 
-`site/content/ref/expressions.md:103` currently rejects `//` by name.
+`www/luce/content/ref/expressions.md:103` currently rejects `//` by name.
 It becomes the row that documents it.
 
 **Specs.** The load-bearing ones are load-bearing *because they are

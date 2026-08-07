@@ -70,7 +70,7 @@ file splits only where a subproblem has a one-to-three-function
 interface — never because a file got long.
 
 ```sh
-zig fmt src/ build.zig site/src/
+zig fmt src/ build.zig www/luce/src/
 ```
 
 Run it before every commit.
@@ -81,7 +81,7 @@ Run it before every commit.
 says which are current and which are frozen decision records.
 
 User-facing prose lives on the site, **[luce.luciaos.com](https://luce.luciaos.com)**,
-built from [`site/`](site/) — see [site/README.md](site/README.md).
+built from [`www/luce/`](www/luce/) — see [www/luce/README.md](www/luce/README.md).
 **Every Luce sample on it is compiled and run by the freshly built
 toolchain**, and the output printed under a sample is the output that
 run produced.  A wrong claim, a dead link or a dead anchor fails the
@@ -90,7 +90,7 @@ is a build error.  There is no unverified code on the site by
 construction.
 
 The site also holds the compiler's lists to its own reference pages
-(`site/src/coverage.zig`): a builtin, method, trap code, std function
+(`www/luce/src/coverage.zig`): a builtin, method, trap code, std function
 or command-line option the compiler has and the reference does not is
 a failed build.  If you add one, the test will tell you which page
 wants it.

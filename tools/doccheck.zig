@@ -4,7 +4,7 @@
 //! The site has had this property since it was written — a fenced
 //! `luce` block that does not declare what becomes of it is a build
 //! error, and every sample's claimed output is compared with what the
-//! program actually printed (`site/src/verify.zig`).  `docs/` did not,
+//! program actually printed (`www/luce/src/verify.zig`).  `docs/` did not,
 //! and eight language generations of drift went into it: a reference
 //! page that still spelled `List(String)` after the rename, a memo
 //! whose example used a builtin the language had deleted.  A document
