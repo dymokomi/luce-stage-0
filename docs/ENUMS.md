@@ -1,0 +1,124 @@
+# Enums — a name for every number that is secretly a set
+
+Run four of the ratified roadmap (docs/MISSING.md tier 2), and the
+substrate for run five: the owner's direction of 2026-08-04 set the
+lean — *"Enums lean C: explicit member values (bytes or numbers) when
+written, sequential defaults when not"* — and named the three
+questions this memo owes answers to: the backing type, the
+conversions, and exhaustive dispatch.  **Union follows and is already
+ratified tagged** ("Tagged unions obviously"); its payloads will hang
+off the machinery this memo builds, so every decision here is taken
+with a payload-carrying member in view.
+
+## The evidence
+
+The corpus has been paying for this hole longer than any other:
+
+- `programs/editor.luc:361-405` — key handling as fifteen string
+  comparisons in an `elif` chain with no final `else`.  A misspelled
+  `"page_dwon"` compiles and silently does nothing; exhaustiveness is
+  exactly the property the chain cannot state.
+- `programs/editor.luc:189` — `# 1 keyword, 2 type name, 3 builtin,
+  0 plain.`  An enum written as a `long` with a comment.
+- `src/luce/std/zip.luc` — written *this week*, under the current
+  language, by an author trying to use it well: `method == 8` and
+  `kind == 2` against numbers whose names live in a spec PDF;
+  `Entry.deflated()` exists only because a `long` cannot be matched
+  on; the DEFLATE block dispatch is an `elif` chain over `kind` whose
+  "unknown kind" arm is a string error the type system could have
+  deleted.
+- `std.json`, two runs ahead, begins with a tag: a JSON value is one
+  of six things, and the union that models it needs an enum to be its
+  discriminant.
+
+## The neighbors
+
+**C** gives members names and then spills them into the enclosing
+scope, unqualified and colliding; nothing checks a `switch` covers
+them.  **Go** declined enums entirely — `iota` makes constants, every
+serious Go shop runs a linter that re-invents exhaustiveness, and the
+linter cannot see through an `if` — the cautionary tale.  **Zig** is
+the closest relative of the owner's lean: `enum(u8)` with explicit
+values, sequential defaults, exhaustive `switch` enforced by the
+compiler, `@tagName` for the string.  **Rust** and **Swift** both
+made the number→enum direction fallible (`TryFrom`, `init?(rawValue:)`)
+— the one lesson every post-C language agrees on, because the number
+arrives from a file and the file lies.  **Python**'s `Enum` is late
+and bolted on, but its `match` statement is the shape a
+Python-indented language wants dispatch to look like.
+
+## Decisions (proposed)
+
+| | decision |
+|---|---|
+| **D1** | **Declaration mirrors struct**: `enum Method:` then one indented member per line, snake_case members under a TitleCase type name.  A member may carry `= value` where value is a constant integer expression (folded by the stage-4 folder, like every top-level constant); an unvalued member takes the previous member's value plus one, and an unvalued first member is 0 — the C rule, verbatim, per the owner's lean.  Two members with one value are refused by name (an alias is a `let` if a program wants one). |
+| **D2** | **An enum is a value type at its backing width.**  Default backing is `int`; `enum Method(byte):` picks another rung of the integer ladder (`byte`, `short`, `int`, `long`).  A member value past the backing width is refused at compile time by the sentence literals already get, naming the width that would hold it. |
+| **D3** | **Members are namespaced, always**: `Method.stored`, resolved by the head-names-a-declaration rule that already serves `Struct.func` and `module.name`.  Nothing leaks into the enclosing scope — C's one mistake this design does not inherit. |
+| **D4** | **No implicit conversion in either direction.**  Enum to number is spelled with the conversion constructors, which accept an enum operand exactly because they are named for what they produce: `int(m)`, `long(m)`.  Number to enum is the fallible direction — see Q2. |
+| **D5** | **`string(m)` answers the member's name** — `"stored"` — and an f-string hole follows, because a hole is a `string(...)` the reader did not write.  The name table is interned per program beside the heap-type shapes and handed to `libluce_rt` the same way. |
+| **D6** | **Equality only.**  `==` and `!=` compare members; `<` on enums is refused by a sentence naming `int(m)`.  An enum is a set of names, not a number line; code that means the number says the number. |
+| **D7** | **Methods and namespace functions, exactly as structs have them** (docs/METHODS.md, rules carried over whole, `var self` included — an enum is a value and writes back by copy like any value).  `zip.Entry.deflated()` becomes `m == Method.deflated` and stops needing to exist; the ones worth keeping keep working. |
+| **D8** | **Enum members fold.**  `let default_method = Method.stored` is a top-level constant by construction — a member *is* a constant — and folds anywhere constants fold. |
+| **D9** | **Containers hold enums like any scalar**: `list(Method)`, `map(Method, T)`, `array(Method, n)` work by construction, at the backing width, unboxed where scalars are unboxed. |
+| **D10** | **In MIR an enum value is its backing integer** and the type table gains an enum row beside the struct layouts; `format_version` bumps.  No new runtime semantic — `libluce_rt` learns only the name table for D5 — so the two engines agree by sharing what they already share.  Exhaustiveness, conversion checking and member resolution are all stage 4. |
+
+## Questions for ratification
+
+**Q1 — does `match` arrive with enums, or wait for union?**  Without
+a dispatch statement an enum is `==` chains — better-named numbers,
+but the editor's misspelled-key bug survives, because exhaustiveness
+is the property an `elif` chain cannot state.  The full statement —
+payload bindings, nested patterns — belongs to union's memo.  The
+**recommendation** is the restricted form now:
+
+```
+match method:
+    stored:
+        read_stored(entry)
+    deflated:
+        read_deflated(entry)
+```
+
+Arms are member names of the scrutinee's type and nothing else (the
+type is known, the namespace is closed, so bare names are
+unambiguous); `else:` is allowed; **without `else` every member must
+appear**, and a new member added later turns every non-`else` match
+that misses it into a compile error naming the member — which is the
+entire point.  A duplicate arm is refused.  Union then *extends* this
+statement with payload bindings rather than introducing a second one.
+
+**Q2 — the number→enum direction: optional or trap?**  `Method(8)`
+reads as a constructor (an enum has no fields, so the call shape is
+free).  Two house precedents pull apart: `byte(300)` **traps**
+`conversion_range` — a number that had a home and missed it — while
+`parse_int("x")` answers **`T?`**, because "not a number" is the same
+reason every time and absence carries all the information.  A number
+becoming an enum is the parse case, not the arithmetic case: it
+arrives from a file, a wire, a spec field, and *unknown member* is
+precisely a value the caller must branch on — zip's `method` is the
+live example.  **Recommendation: `Method(n)` answers `Method?`**, and
+the caller writes `else` or narrows, like every other absence.
+
+**Q3 — the arm spelling in `match`.**  Bare `stored:` (recommended —
+the namespace is closed and the indentation already carries the
+structure), qualified `Method.stored:` (says more, says it every
+line), or Python's `case stored:` (a second keyword carrying no
+information the colon does not).  Union's payload arms would read
+`circle(r):` under the bare form, which stays clean.
+
+## Where it lands
+
+Stage 2: `enum` (and `match`, under Q1) join the keyword table —
+both verified free of use across std and the corpus.  Stage 3: a
+declaration form mirroring struct's, member lists with optional
+values; the match statement.  Stage 4: the enum table beside the
+struct layouts, member resolution through the existing
+head-names-a-declaration path, exhaustiveness, conversions, folding.
+MIR: a type-table row, values at backing width, `match` lowered to
+the compare-and-branch tree LLVM already turns into jump tables;
+`format_version` moves.  Engines: nothing new in `libluce_rt` but
+the name table; both arms run the same MIR.  Specs: two-engine rows
+for dispatch, conversion (both directions, unknown values included),
+folding, `string(m)`; refusal rows for duplicate values, oversize
+values, missing arms, duplicate arms, ordering.  Site: a tour page
+and the reference, fenced and verified, in the same commit.
