@@ -270,9 +270,7 @@ const Lexer = struct {
         return self.tokens.items[self.tokens.items.len - 1].kind;
     }
 
-    // -----------------------------------------------------------------
-    // Diagnostics
-    // -----------------------------------------------------------------
+    // -- diagnostics ------------------------------------------------------
 
     /// Add one lexical diagnostic, honoring the report cap.  Every
     /// diagnostic in this file goes through here; the scanner keeps
@@ -300,9 +298,7 @@ const Lexer = struct {
         try self.diagnostics.add(code, span, format, arguments);
     }
 
-    // -----------------------------------------------------------------
-    // Layout
-    // -----------------------------------------------------------------
+    // -- layout -----------------------------------------------------------
 
     /// Whether the line ends at `at`.  Stage 1 folded CRLF, so there
     /// is exactly one line terminator to know about.
@@ -413,9 +409,7 @@ const Lexer = struct {
         self.at_line_start = false;
     }
 
-    // -----------------------------------------------------------------
-    // The scanner
-    // -----------------------------------------------------------------
+    // -- the scanner ------------------------------------------------------
 
     fn next(self: *Lexer) Error!void {
         const character = self.source[self.offset];
@@ -739,9 +733,7 @@ const Lexer = struct {
         try self.emit(kind, span);
     }
 
-    // -----------------------------------------------------------------
-    // Numbers
-    // -----------------------------------------------------------------
+    // -- numbers ----------------------------------------------------------
 
     /// Scan a decimal literal.  On a malformed one — a radix prefix, a
     /// digit separator, letters glued to the digits — the whole run is
@@ -1014,9 +1006,7 @@ const Lexer = struct {
         }
     }
 
-    // -----------------------------------------------------------------
-    // Strings
-    // -----------------------------------------------------------------
+    // -- strings ----------------------------------------------------------
 
     /// Scan `"..."`.  A string never crosses a line ending — not even
     /// behind a backslash — so a missing quote costs one line, not the
@@ -1155,9 +1145,7 @@ const Lexer = struct {
         }
     }
 
-    // -----------------------------------------------------------------
-    // Rejections
-    // -----------------------------------------------------------------
+    // -- rejections -------------------------------------------------------
 
     /// `'x'` is not Luce, and neither is `'hello'` — the apostrophe
     /// has no role at all, so a matched pair on one line is read as

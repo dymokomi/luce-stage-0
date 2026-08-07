@@ -9,6 +9,10 @@ const luce_source = @import("../01_source.zig");
 
 const testing = std.testing;
 
+// ---------------------------------------------------------------------------
+// The helpers every test below shares
+// ---------------------------------------------------------------------------
+
 fn expectCompiles(source: []const u8) !mir.Program {
     return expectCompilesOptions(source, .{});
 }
@@ -88,6 +92,10 @@ fn expectDiagnostics(source: []const u8, options: types.CompileOptions, wanted: 
         try testing.expectEqual(want.column, at.column);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Diagnostics: the code, the span, and no cascade
+// ---------------------------------------------------------------------------
 
 test "func is strict and fn is an ordinary identifier" {
     try expectRejected(
@@ -281,6 +289,10 @@ test "the previously-unasserted diagnostic codes fire" {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Allocation failure, swept
+// ---------------------------------------------------------------------------
+
 test "the pipeline survives every allocation failure" {
     // A ratchet, not a bug-finder (all four pass today): the moment
     // someone adds a non-arena cache or an ArrayList that outlives an
@@ -334,6 +346,10 @@ test "decode survives every allocation failure" {
         }
     }.run, .{encoded});
 }
+
+// ---------------------------------------------------------------------------
+// The entry, and what a declaration may hold
+// ---------------------------------------------------------------------------
 
 test "the entry is exactly func main(), and nothing else will do" {
     try expectRejected(
@@ -462,6 +478,10 @@ test "control flow, loops, and builtins compile and verify" {
     );
     defer program.deinit();
 }
+
+// ---------------------------------------------------------------------------
+// What the lowering produces: pruning, literals, the golden dump
+// ---------------------------------------------------------------------------
 
 test "functions unreachable from the entry are pruned from the artifact" {
     // A std import brings its whole module; what is never called must
@@ -711,6 +731,10 @@ test "the IR dump has a stable golden shape (short-circuit + ownership)" {
         \\
     , dump);
 }
+
+// ---------------------------------------------------------------------------
+// What the checker refuses
+// ---------------------------------------------------------------------------
 
 test "no implicit narrowing, no reassigned let, no shadowing" {
     // `long` widens to `double` on its own (docs/NUMERICS.md); nothing
@@ -2231,6 +2255,10 @@ test "top-level var is refused with directions" {
         \\
     , "luce.parse.top");
 }
+
+// ---------------------------------------------------------------------------
+// Stores, and the places they land in
+// ---------------------------------------------------------------------------
 
 test "a plain map store reads nothing; only the compound one defines" {
     // The two spellings side by side, because the difference between
