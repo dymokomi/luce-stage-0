@@ -494,8 +494,8 @@ pub fn build(b: *std.Build) void {
 
     // The benchmark programs compile under test too, so bench/*.luc
     // cannot rot; timing them stays manual (bench/run.sh).  Every name
-    // bench/run.sh times is here, the 32-bit rows included — a guard
-    // that covers six of eight leaves two that can rot in silence.
+    // bench/run.sh times is here — a guard that covers all but one
+    // leaves one that can rot in silence.
     const benches = [_][]const u8{
         "loops",
         "math",
@@ -505,6 +505,7 @@ pub fn build(b: *std.Build) void {
         "matmul",
         "matmul32",
         "stats",
+        "lists",
     };
     for (benches) |name| {
         const compile_bench = b.addRunArtifact(compiler);

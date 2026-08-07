@@ -1,0 +1,78 @@
+# list-bound work — the row the suite was missing.  Every other
+# benchmark is scalar (`loops`, `math`), holds an `array` (`arrays`,
+# `arrays32`, `matmul`, `matmul32`, `stats`) or is allocation-bound in
+# a builder (`strings`), so none of them can see a change to how a
+# `list` stores its elements.  This one is nothing but that: build a
+# `list(byte)` by append, read it sequentially and strided, transform
+# it in place, histogram it into a `list(long)`, and then run the same
+# four shapes at eight bytes an element.  It is the shape a decoder
+# runs — zip and inflate are exactly this: a buffer that grows by
+# append, a table indexed by a byte, and a pass that rewrites in place.
+#
+# The C twin is bench/lists.c; both print the same eight numbers.
+# Every quantity is kept small enough that no sum can overflow, and
+# every operand is non-negative, so Luce's floor `//`/`%` and C's
+# truncating pair agree element for element.
+
+func main():
+    let n = 3000000
+    # Prime, so it is coprime with both walk lengths below and the
+    # stride visits every element exactly once — a whole pass over the
+    # run in an order no prefetcher follows.
+    let stride = 4099
+
+    # 1. The growth path: n appends into a list that starts empty.
+    var data = new list(byte)
+    for i in range(0, n):
+        data.append(byte((i * 7 + 11) % 251))
+
+    # 2. Sequential read.
+    var total: long = 0
+    for value in data:
+        total += value
+
+    # 3. Strided read.
+    var walk: long = 0
+    var at = 0
+    for step in range(0, n):
+        walk += data[at]
+        at += stride
+        if at >= n:
+            at -= n
+
+    # 4. In-place transform, read back by the histogram below.
+    for i in range(0, n):
+        data[i] = byte((data[i] * 3 + 1) & 0xFF)
+
+    # 5. Histogram: 256 counters in a list(long), indexed by a byte.
+    var counts = new list(long)
+    for slot in range(0, 256):
+        counts.append(0)
+    for value in data:
+        counts[value] += 1
+    var weighted: long = 0
+    var peak: long = 0
+    for slot in range(0, 256):
+        weighted += counts[slot] * slot
+        if counts[slot] > peak:
+            peak = counts[slot]
+
+    # 6. The same shapes at eight bytes an element.
+    let m = n // 8
+    var marks = new list(long)
+    for i in range(0, m):
+        marks.append(long(data[i * 8]) * 65537 + i)
+    var mark_walk: long = 0
+    at = 0
+    for step in range(0, m):
+        mark_walk += marks[at] % 1000
+        at += stride
+        if at >= m:
+            at -= m
+    for i in range(0, m):
+        marks[i] = marks[i] // 3 + 1
+    var mark_total: long = 0
+    for value in marks:
+        mark_total += value % 251
+
+    print(f"{len(data)} {total} {walk} {weighted} {peak} {len(marks)} {mark_walk} {mark_total}")

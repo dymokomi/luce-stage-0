@@ -36,7 +36,7 @@ mkdir -p build/bench
 # C twins and their recorded numbers, and `arrays32`/`matmul32` are
 # the comparison that was missing rather than a rewrite of the one
 # that existed.
-names="loops math strings arrays arrays32 matmul matmul32 stats"
+names="loops math strings arrays arrays32 matmul matmul32 stats lists"
 
 # -ffp-contract=off: Luce's determinism guarantee is strict IEEE
 # (no fused multiply-add), so C plays by the same float rules —

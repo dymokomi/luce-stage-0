@@ -1002,26 +1002,29 @@ change moves.  Absolute times mean nothing off this host — for a
 before/after, use `bench/compare.sh GIT-REF`, which interleaves the
 two on the machine in front of you.
 
-**Taken at the `byte`/`short`/`half` step (docs/TYPES.md step 5-6).**
-This table is the one number: where a document quotes a benchmark row
-it quotes the `compute` column here, and says which column it is.
+**Taken 2026-08-07, when `lists` joined the suite.**  One run, all
+nine rows: a table is one measurement or it is not a table.  This is
+the one number — where a document quotes a benchmark row it quotes the
+`compute` column here, and says which column it is.
 
 | benchmark | C        | luce     | luce/C | compute |
 |-----------|----------|----------|--------|---------|
-| loops     |  78.8 ms |  81.3 ms |  1.03x |   1.02x |
-| math      | 135.0 ms | 105.8 ms |  0.78x |   0.77x |
-| strings   |  20.1 ms |  50.6 ms |  2.51x |   2.74x |
-| arrays    |  42.5 ms |  45.3 ms |  1.06x |   1.05x |
-| arrays32  |   7.7 ms |  41.8 ms |  5.44x |   8.14x |
-| matmul    |  10.3 ms |  11.3 ms |  1.09x |   1.03x |
-| matmul32  |   6.5 ms |   7.5 ms |  1.15x |   1.07x |
-| stats     |  31.3 ms |  33.2 ms |  1.06x |   1.04x |
-| floor     |   3.0 ms |   3.7 ms |      - |       - |
+| loops     |  82.4 ms |  86.2 ms |  1.05x |   1.04x |
+| math      | 141.2 ms | 110.6 ms |  0.78x |   0.77x |
+| strings   |  20.7 ms |  55.0 ms |  2.66x |   2.90x |
+| arrays    |  44.4 ms |  48.8 ms |  1.10x |   1.09x |
+| arrays32  |   8.1 ms |  43.3 ms |  5.34x |   7.70x |
+| matmul    |  10.9 ms |  11.9 ms |  1.09x |   1.05x |
+| matmul32  |   7.0 ms |   8.0 ms |  1.13x |   1.08x |
+| stats     |  33.3 ms |  35.2 ms |  1.06x |   1.04x |
+| lists     |   8.9 ms | 178.3 ms | 19.93x |  29.10x |
+| floor     |   2.9 ms |   3.5 ms |      - |       - |
 
-The six 64-bit rows are unchanged within noise from the previous
-snapshot at `f333e12`, which is what D7 required of them: the 32-bit
-rows were *added* beside them and neither the `.luc` sources nor the C
-twins of the originals were touched.
+Every row that existed at the previous snapshot (the `byte`/`short`/
+`half` step, docs/TYPES.md step 5-6) is unchanged within noise from
+it; nothing between the two touched a `.luc` source or a C twin.
+`lists` is new, and its number is the largest in the table by a
+factor of three.  It is read below.
 
 **The bytes run (docs/BYTES.md) left every row where it found it**, and
 that is worth recording rather than assuming.  `list(T)` gave up the
@@ -1043,11 +1046,13 @@ column, which is the one a storage change moves:
 | stats     |   -0.1% |     -0.4% |   -1.1% | -0.0% |
 
 **Nothing here is a win, and nothing here should be.**  Not one row in
-the suite is list-bound: `loops` and `math` are scalar, the four array
-rows use `array`, which was already packed, and `strings` uses a
-`list(string)` — whose elements are still the boxed slot, because a
-`string` is exactly the kind that keeps one.  The one thing this table
-had to show is that the mechanism costs nothing where it buys nothing.
+the suite *at the time of that run* was list-bound: `loops` and `math`
+are scalar, the four array rows use `array`, which was already packed,
+and `strings` uses a `list(string)` — whose elements are still the
+boxed slot, because a `string` is exactly the kind that keeps one.
+The one thing this table had to show is that the mechanism costs
+nothing where it buys nothing.  What it could not show is what it
+bought, and the gap is closed below.
 
 **Read the noise floor off `arrays32` before reading `strings`.**  That
 row holds no list at all, so nothing in this run can touch it, and it
@@ -1057,7 +1062,8 @@ So the honest sentence about `strings` is that it sits somewhere in
 +0.7% to +5.4% on a machine whose floor is ±3%, and that four runs did
 not resolve it.  It is not resolvable by running a fifth: what would
 settle it is a benchmark that is actually list-bound, and the suite
-does not have one — which is a gap this run found and did not fill.
+did not have one.  It does now — `bench/lists`, below, and it answered
+in one run.
 
 One thing the runs *did* resolve.  The first measurement put `strings`
 at +2.9%, and the cause was one line: `ensureCapacity` compared
@@ -1129,6 +1135,67 @@ and both are language decisions rather than code-generation ones.
 > the table every other document quotes is the expensive kind, so it
 > is refreshed here rather than annotated.
 
+### `bench/lists`, and what packed storage actually bought
+
+The gap the bytes run found is filled.  `bench/lists.luc` is nothing
+but `list`: three million `append`s into a `list(byte)` that starts
+empty, a sequential read, a strided read at a prime stride that visits
+every element in an order no prefetcher follows, an in-place
+transform, a 256-counter histogram in a `list(long)` indexed by a
+byte, and then the same four shapes again at eight bytes an element.
+That is the shape a decoder runs — `std.zip` and any inflate are a
+buffer that grows by append, a table indexed by a byte, and a pass
+that rewrites in place.  `bench/lists.c` is the same algorithm over
+`realloc`'d buffers, down to Luce's own growth schedule (eight
+elements, then 1.5x plus one) so that neither side is copying its
+buffer a different number of times than the other; both print the same
+eight numbers and `bench/run.sh` refuses to time them otherwise.
+
+**Packed storage is worth 22% of this program, and 5.7x of its
+memory.**  `bench/compare.sh` cannot measure it — the benchmark does
+not exist at the base ref, and each side of that script compiles its
+own sources — so the A/B was done by hand and the method is: build
+`c4d172f` (the commit before `list(T)` gave up its 24-byte boxed cell)
+in a scratch worktree, copy *this* `bench/lists.luc` into it, compile
+it with **that** toolchain, and time the two artifacts interleaved on
+this host, best of seven, each side's own do-nothing floor subtracted.
+Both printed the same line before anything was timed.  Two independent
+runs:
+
+| lists     | base `c4d172f` | head    | compute delta |
+|-----------|----------------|---------|---------------|
+| run 1     |       227.4 ms | 176.5 ms |       -22.4% |
+| run 2     |       226.9 ms | 175.4 ms |       -22.7% |
+| peak RSS  |       113.3 MB |  19.9 MB |        -82.5% |
+
+Read that against the noise floor established above: `arrays32`, a row
+packed storage cannot touch, spread four points across four runs on
+this machine.  22% twice, in the same direction, is not that.  The
+`strings` row's +0.7% to +5.4% is still unresolved and still does not
+matter; **this** is the row the work was for, and it answered.
+
+**What the row does not say is that a `list` is now fast.**  It is
+29.10x its C twin, the worst number in the table by a factor of three,
+and the reason is structural rather than storage.  `lower.zig` says
+why above `arrayShape`: an `array` index is an inline address
+computation and a load *because an array's buffer never moves while it
+lives*, and a `list`'s does move, under `append` — so a `list` is
+still a call.  `index_get`, `index_set` and `append_value` on one are
+each an out-of-line `luce_rt_*` call over boxed `Value`s.
+Packed storage made each cell one byte instead of twenty-four; it did
+not remove the call.  Timing the phases inside the program puts the
+cost at 6-20 ns per element operation — build 22 ms, sequential read
+25 ms, strided read 18 ms, transform 33 ms, histogram 62 ms (three
+list operations an element), the `list(long)` leg 16 ms — where C's
+indexed load is one inlined instruction.  That is why `arrays` is
+1.09x and this is 29x over the same element widths.  Closing it means
+extending the inline path to the container whose buffer *does* move,
+which is a real code-generation problem and not a missing arm: the
+pointer has to be reloaded at each access rather than assumed, and
+what that costs against the call it replaces is unmeasured.  It is not
+in this step.  The row that would measure it now exists, which it did
+not before.
+
 ## Building
 
 libLLVM is a hard build dependency of **the `luce` compiler**, because
@@ -1151,7 +1218,7 @@ confined to the `emit` module (above), and `otool -L build/loom` is
 how that stays true.
 
 **`cc` is a dependency of building at all**, not only of testing.
-`build.zig` compiles the ten bundled programs and the six benchmarks
+`build.zig` compiles the ten bundled programs and the nine benchmarks
 with the freshly built `luce`, and under a native `.lc` that compile
 is a link.  Each one is pointed at the *installed* `libluce_rt.a`
 through `LUCE_LIB` — a configure-time path, because a `Run` step's
