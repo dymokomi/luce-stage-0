@@ -7,7 +7,8 @@ Developer tooling that ships with the repo but isn't part of loom.
 - `spelling.zig` — a rename guard: the retired spellings, held out of
   the living documents by name.
 - `grammar.zig` — generates `vscode-luce/`'s grammar from the
-  compiler's own word tables rather than from a copy of them.
+  compiler's own word and symbol tables rather than from a copy of
+  them, and refuses to write one that is short a word.
 - `sweep.sh` — the mutation harness: breaks the compiler on purpose and
   checks the suite notices.
 - `testdata/` — inputs the guards above read.
