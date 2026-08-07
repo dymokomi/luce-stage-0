@@ -4598,6 +4598,20 @@ pub const FunctionBuilder = struct {
             );
             return null;
         }
+        // And a task cannot be copied, for the same reason one step
+        // out: there is one worker behind it, and a second handle
+        // would be two joiners of one thread (docs/THREADS.md D3).
+        if (value.value_type == .heap and
+            self.analyzer.heap_types.items[value.value_type.heap] == .task)
+        {
+            try self.fail(
+                "luce.sema.own",
+                copied.span,
+                "a task cannot be copied; there is one worker behind it — give it instead [THREADS.md D3]",
+                .{},
+            );
+            return null;
+        }
         const arguments = try self.arena().alloc(Register, 1);
         arguments[0] = value.register;
         return .{
@@ -4651,6 +4665,17 @@ pub const FunctionBuilder = struct {
                     "luce.sema.new",
                     new.span,
                     "a file is opened, not made; write files.open(path) [BYTES.md R5]",
+                    .{},
+                );
+                return null;
+            }
+            // And a task is spawned, not made: a task with no worker
+            // behind it is the one state *this* type must never hold.
+            if (self.analyzer.heap_types.items[object_type.heap] == .task) {
+                try self.fail(
+                    "luce.sema.new",
+                    new.span,
+                    "a task is spawned, not made; write spawn f(…) [THREADS.md D3]",
                     .{},
                 );
                 return null;
@@ -6344,6 +6369,16 @@ pub const FunctionBuilder = struct {
         // site says which of `try` and `catch` it means, and a site
         // that says neither is `luce.sema.fallible` rather than a
         // silently dropped outcome (docs/FAILURE.md).
+        // A wait **consumes** its task: there is one answer and the
+        // caller now has it, so a second wait is refused the way a
+        // second `give` is (docs/THREADS.md D4).  Poisoning is the
+        // same machinery and the same bluntness — source-order and
+        // branch-insensitive, to the end of the scope (S29).
+        if (found.kind == .task_wait and method.target.* == .name) {
+            if (self.findLocal(method.target.name.text)) |held| {
+                held.info.poisoned = .given;
+            }
+        }
         // `wait` is the one whose fallibility is not a fact about the
         // method: it comes back errored exactly when the function the
         // task carries could, so the answer is read off the receiver's
