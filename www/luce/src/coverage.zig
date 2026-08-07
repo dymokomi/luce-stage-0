@@ -53,7 +53,7 @@ const highlight = @import("highlight.zig");
 const landmark = "src/luce/06_mir/defs.zig";
 
 /// How far up to look.  `zig build test` runs from the build root and
-/// `site/build.sh` runs from wherever it was invoked; both are at or
+/// `www/luce/build.sh` runs from wherever it was invoked; both are at or
 /// under the repository, and nothing is nested eight deep inside it.
 const max_ascent = 8;
 
@@ -492,7 +492,7 @@ fn isOption(text: []const u8) bool {
 /// A bare fence is prose set as code — a command synopsis, an import
 /// line, a quoted diagnostic — and that is a page naming something.
 fn describedCode(repository: Repository, page: []const u8) ![]u8 {
-    const path = try std.fmt.allocPrint(repository.gpa, "site/content/{s}", .{page});
+    const path = try std.fmt.allocPrint(repository.gpa, "www/luce/content/{s}", .{page});
     defer repository.gpa.free(path);
     const source = try repository.read(path);
     defer repository.gpa.free(source);
@@ -615,7 +615,7 @@ test "the reference names every builtin's parameters" {
     defer freeSignatures(gpa, rows);
     try std.testing.expect(rows.len >= 30);
 
-    const page = try repository.read("site/content/ref/builtins.md");
+    const page = try repository.read("www/luce/content/ref/builtins.md");
     defer gpa.free(page);
 
     var missing: usize = 0;

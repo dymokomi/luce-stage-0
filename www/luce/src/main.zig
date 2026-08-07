@@ -37,9 +37,9 @@ const Options = struct {
     content: []const u8 = "content",
     assets: []const u8 = "assets",
     out: []const u8 = "out",
-    toolchain: []const u8 = "../build",
+    toolchain: []const u8 = "../../build",
     work: []const u8 = "work",
-    repository: []const u8 = "..",
+    repository: []const u8 = "../..",
 };
 
 pub fn main(init: std.process.Init.Minimal) !u8 {

@@ -14,7 +14,7 @@
 //!
 //!   * `.luc` files — the corpus, the standard library, the
 //!     benchmarks, the site's included sample programs;
-//!   * fenced `luce` blocks in `site/content/**.md` — the samples the
+//!   * fenced `luce` blocks in `www/luce/content/**.md` — the samples the
 //!     site compiles and runs;
 //!   * multiline string literals in `src/luce/specs/**.zig` — the
 //!     executable specification's programs.
@@ -76,7 +76,7 @@ const trees = [_]Tree{
     .{ .path = "programs", .suffix = ".luc", .scope = .whole_file },
     .{ .path = "bench", .suffix = ".luc", .scope = .whole_file },
     .{ .path = "src/luce/std", .suffix = ".luc", .scope = .whole_file },
-    .{ .path = "site/content", .suffix = ".md", .scope = .fenced_luce },
+    .{ .path = "www/luce/content", .suffix = ".md", .scope = .fenced_luce },
     .{ .path = "src/luce/specs", .suffix = ".zig", .scope = .zig_multiline },
 };
 

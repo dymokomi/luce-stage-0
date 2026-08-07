@@ -9,7 +9,7 @@
 //! **The word tables below are copies of the language's**, and they
 //! have to be: the compiler's tables live inside the `luce` module, and
 //! this generator links nothing — it drives the built binaries as
-//! subprocesses (site/build.sh), which is what lets it verify what the
+//! subprocesses (www/luce/build.sh), which is what lets it verify what the
 //! toolchain really does.
 //!
 //! What keeps them honest is `coverage.zig`, which reads the compiler's
