@@ -72,6 +72,7 @@ and each says so in its own preamble.
 | [UNION.md](UNION.md) | **Drafted, not scheduled.** The tagged-union design distilled from the research — eighteen decisions, three questions held — written so union's own moment finds the thinking done. `std.json` proceeds without it (a closed six-kind domain is a struct with an enum tag). |
 | [THREADS.md](THREADS.md) | Workers own their world: `spawn f(give x)` onto a second runtime, `task(T)` as a scope-owned resource whose scope-end joins, races unrepresentable because the ownership model is the concurrency model. Ratified; being built. |
 | [FUNCTIONS.md](FUNCTIONS.md) | Functions as values, divided at the capture line: named functions and one-expression lambdas whose types come from where they land — and no closures, because state that travels with behavior is a struct with a method. Drafted for ratification. |
+| [SELF.md](SELF.md) | Self implied, `static` for the functions without one, and a call site that cannot lie: `f(x)` never mutates a value, `x.advance(8)` may — and reads like it. `var self` and `var` parameters retired. Ratified; queued behind the lock-run sequence. |
 
 ## History
 
