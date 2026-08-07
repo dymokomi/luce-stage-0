@@ -133,3 +133,39 @@ for dispatch, conversion (both directions, unknown values included),
 folding, `string(m)`; refusal rows for duplicate values, oversize
 values, missing arms, duplicate arms, ordering.  Site: a tour page
 and the reference, fenced and verified, in the same commit.
+
+---
+
+## As built (2026-08-06)
+
+Built the day it was ratified, in one vertical, on both engines.  The
+memo left six things open that the code had to decide; each is here
+with the reason, and each has a spec.
+
+| | decision, and where it is proved |
+|---|---|
+| **A1** | **The width travels in the type.**  `types.Type.enumeration` carries the enum-table index *and* the rung of the integer ladder its members are stored at, because every machine question about an enum — what a register holds, what tag it boxes with, how wide an array cell is, whether a constant fits — is a question about that width and nothing else.  `Type.storage()` is the one sentence saying so, and every engine-side switch starts there, which is what lets its arms answer `unreachable, // answered above` honestly rather than growing a case each.  The *name* stays in the table, because a name is not a machine fact.  `types.zig`'s own test pins both halves. |
+| **A2** | **The name table is the constant pool.**  D5 said the table would be "handed to `libluce_rt` the same way heap-type shapes are" — but heap-type shapes are not handed to it at all: the runtime is given a zero value and a rank, never a program's tables.  So `string(m)` lowers to the same compare-and-branch tree `match` is, answering a member name interned in the pool like every other string a program spells.  Nothing new in `libluce_rt`, no table of pointers emitted into an artifact and kept honest by something other than the program, and the two engines agree by running the same MIR — which is what D10 was for. |
+| **A3** | **An enum's zero is its first declared member.**  D9 wants `array(Method, n)` to work and OWNERSHIP.md S40 gives every late `var` a zero, so a zero there had to be; zero itself would be a number no member need hold, and the one promise an enum makes is that every value of it is a member.  The first member is what a declaration already put first.  `zeroOf`, `Machine.zeroValue` and `zeroField` all read it from the table. |
+| **A4** | **The last arm of an exhaustive match is the fallthrough.**  A2's promise spent: with every member named there is no value left for a final comparison to reject, so `match` emits *n-1* tests and no trap.  A hand-made module that puts a number no member holds in an enum register is refused by the verifier (`isMember`), which is where that promise is defended. |
+| **A5** | **Every numeric constructor takes an enum**, not only `int` and `long`: `byte(m)` traps `conversion_range` exactly where `byte(300)` would, and `double(m)` answers the member's number.  One rule instead of a table of pairs, which is the shape `lowerConvert` already gives the seven numeric types.  The MIR is one `convert` whose operand is enum-typed; the verifier admits same-width only from an enum, where the conversion's whole content is the type it lands in. |
+| **A6** | **An `else` that covers nothing is refused** — the sentence `a else b` already gets when `a` is never absent.  An arm that catches nothing today would quietly catch the member somebody adds tomorrow, which is the exact mistake a checked `match` exists to make impossible. |
+
+Two smaller calls: an enum member takes no visibility marker (a member
+is what the type *is*, and a match arm cannot name one the file it
+stands in cannot see — the marker on the *declaration* withholds the
+whole set); and `Method(n)` does not fold in constant position,
+because it answers `Method?` and a constant is always there — the
+refusal names the member the reader wanted.
+
+`format_version` moved to 28, and the wire fingerprint now hashes the
+type tags as well as the instruction set: a type travels as its tag's
+ordinal, so adding one renumbers the wire while the instruction set
+does not move an inch.  That gap was open until this run found it.
+
+The corpus paid for itself immediately.  `std.zip` reads a compression
+method through `Method(n)` and dispatches on it, and inflate's
+four-way `elif` chain over BTYPE — whose last arm existed only to say
+"unknown kind" — became three arms and no else.  Both enums are
+private to the module, so zip's published surface did not move and
+every zip spec passed untouched.

@@ -52,6 +52,7 @@ and each says so in its own preamble.
 | [STRINGS.md](STRINGS.md) | Why string bytes have an owner, phase by phase, with the timing after each step. |
 | [VISIBILITY.md](VISIBILITY.md) | Public until it says `private`: the file as the trust unit, `private:`/`public:` regions in structs, visibility dying in stage 4. Ratified and built. |
 | [BITWISE.md](BITWISE.md) | `& \| ^ ~ << >>` at Go's precedence, shifts as checked bit transport, hex/binary/underscore literals. R1–R3 ratified and built. |
+| [ENUMS.md](ENUMS.md) | A name for every number that is secretly a set: C-shaped member values, a chosen backing width, `Method(n) -> Method?`, and the `match` that refuses to compile with a member unaccounted for. R1–R3 ratified and built. |
 | [CONCURRENCY_RESEARCH.md](CONCURRENCY_RESEARCH.md) | **Not a decision.** The survey behind one not yet taken: nine concurrency models, cited, priced against S8, the no-collector rule and the differential oracle — and the questions the ruling turns on. |
 
 ## History

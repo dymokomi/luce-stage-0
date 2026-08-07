@@ -187,7 +187,18 @@ The corpus that argued for it, item by item:
 
 ---
 
-## Tier 2 — sum types: the absence that keeps bending other designs
+## Tier 2 — sum types: half shipped, half still bending other designs
+
+**Enums are built (docs/ENUMS.md, 2026-08-06).**  `enum Method:` and
+`enum Method(byte):`, members namespaced and folding as constants,
+`int(m)`/`string(m)` and `Method(n) -> Method?`, equality only,
+methods and namespace functions, containers at the backing width —
+and `match`, with an arm for every member or an `else`.  `std.zip`
+converted the day it landed: a compression method and a DEFLATE block
+type, read through the enums rather than through `== 8` and an `elif`
+chain.  **Union is what is left**, and it extends `match` with payload
+arms rather than introducing a second statement.
+
 
 **Owner direction, 2026-08-04 — the endgame is set.**  After the
 ratified roadmap (named args, visibility, bitwise/hex) come **enums**,
@@ -205,15 +216,14 @@ machinery, checked access, exhaustive dispatch, and the question of
 whether `T?` becomes a two-member tagged union under the hood.
 
 
-No enums, no tagged unions, no `match`.  This is the second-order
-blocker: `docs/FAILURE.md` refuses `Result<T, E>` *because* there are no
-tagged unions, which is what forced `T!` to be a function attribute.
-Now that it is built, that answer looks better than "probably right":
-the attribute is what gave Luce Ok-wrapping for free and kept
-`types.Type` out of the feature entirely.  It is still the third design
-bent around the same hole.
+No tagged unions: a member carries a name and a number, never a
+value.  That is still the second-order blocker `docs/FAILURE.md`
+refused `Result<T, E>` for, which is what forced `T!` to be a function
+attribute.  Now that it is built, that answer looks better than
+"probably right": the attribute is what gave Luce Ok-wrapping for free
+and kept `types.Type` out of the feature entirely.
 
-The corpus pays constantly:
+The corpus still pays, in the file that predates all of it:
 
 - `editor.luc:361-405` — key handling is one `elif` chain of **15
   string comparisons** with no final `else`.  A misspelled
@@ -223,10 +233,12 @@ The corpus pays constantly:
 - `editor.luc:159-187` — `is_keyword`/`is_builtin` as **46 `word == "…"`
   comparisons**: a hash set written as a truth table.
 
-**Optionals have shipped, so this is now decidable on evidence.**  A
-tagged union built later can subsume `T?` cleanly if that turns out to
-be the better factoring; what the corpus does with `T?` from here is
-what should settle it.
+**The enum half was decided on that evidence and is now evidence
+itself.**  A tagged union can subsume `T?` cleanly if that turns out
+to be the better factoring, and it inherits the machinery enums
+built: the type tag, the per-program table, the compare-and-branch
+tree, and a `match` whose arms are already the shape payload arms
+extend.
 
 ---
 

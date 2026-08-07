@@ -101,9 +101,10 @@ cannot be re-declared in an inner one.
 
 ```
 and      break    catch    continue copy     elif     else
-false    for      func     give     if       import   in
-let      new      none     not      or       private  public
-return   self     struct   true     try      var      while
+enum     false    for      func     give     if       import
+in       let      match    new      none     not      or
+private  public   return   self     struct   true     try
+var      while
 ```
 
 `private` and `public` mark a declaration's
