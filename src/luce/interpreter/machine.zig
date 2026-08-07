@@ -53,6 +53,17 @@ pub fn run(
     // compiled path installs the same five pointers through
     // `luce_rt_files_install`, so both engines reach one channel.
     if (host) |given| machine.runtime.files = given.files;
+    // And the thread channel, plus this engine's own answer to what a
+    // worker's runtime is and how one function is run in it
+    // (docs/THREADS.md D10).  The oracle threads for real: a `Machine`
+    // and a `Runtime` are a self-contained pair by construction, so a
+    // worker here is a second one of exactly what the root run is.
+    var nursery: Nursery = .{ .program = program, .host = host, .base = memory.objects };
+    if (host) |given| {
+        machine.runtime.workers = given.workers;
+        machine.runtime.nursery = nursery.channel();
+        machine.runtime.depth_budget = @intCast(budget.call_depth);
+    }
     // Object storage is a real allocator now, so the run has to hand
     // it back: scope ownership frees what the program finished with,
     // and this frees what a trap unwound past or a leak left behind
@@ -60,8 +71,11 @@ pub fn run(
     // trap's words, which live in the arena, not here.
     defer machine.runtime.deinit();
     switch (try machine.execute(program.entry_function)) {
+        // The census is this runtime's plus every worker's: a leak in
+        // a worker is a leak in the program, and both engines report
+        // the one number (docs/THREADS.md D10).
         .value => return .{ .success = .{
-            .leaked_objects = machine.runtime.live,
+            .leaked_objects = @intCast(machine.runtime.leaked()),
         } },
         // An uncaught error is news, not a bug: every frame released
         // what it owned on the way out, so the census is honest and
@@ -104,11 +118,148 @@ pub fn run(
             machine.releaseFrameStorage();
             return .{ .exited = .{
                 .status = machine.runtime.exit_status.?,
-                .leaked_objects = machine.runtime.live,
+                .leaked_objects = @intCast(machine.runtime.leaked()),
             } };
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// Workers — the oracle threads for real (docs/THREADS.md D10)
+// ---------------------------------------------------------------------------
+
+/// This engine's answer to "what is a worker's runtime, and how is one
+/// function run in it".
+///
+/// A host supplies threads and nothing else, so this half is the
+/// engine's and each engine fills it differently: a compiled artifact
+/// hands `libluce_rt` a generated trampoline and lets the library open
+/// the runtime, and the oracle hands it the three functions below.
+/// Everything *between* the two — moving the arguments across, the
+/// join, the census, adopting a worker's trap — is `runtime/workers.zig`
+/// and is one implementation, which is the only reason the two arms can
+/// be compared at all.
+///
+/// **A `Machine` and a `Runtime` are a self-contained pair**, which is
+/// what makes this cheap: a worker here is a second one of exactly what
+/// the root run is, with its own arena, its own frame stack and its own
+/// depth budget, and nothing static anywhere for the two to share.
+const Nursery = struct {
+    program: *const mir.Program,
+    host: ?interpreter.Host,
+    /// The allocator every worker's own arena and object table draw
+    /// on.  The root run's, so a spec's leak checker sees one pool.
+    base: Allocator,
+
+    /// A worker's runtime, plus the arena it draws values from — one
+    /// allocation, never moved, because the runtime holds an allocator
+    /// pointing into the arena beside it.
+    const Owned = struct {
+        arena: std.heap.ArenaAllocator,
+        runtime: runtime.Runtime,
+    };
+
+    fn channel(self: *Nursery) runtime.workers.Nursery {
+        return .{
+            .context = self,
+            .open = open,
+            .close = close,
+            .run = runWorker,
+        };
+    }
+
+    fn open(context: ?*anyopaque) callconv(.c) ?*runtime.Runtime {
+        const self: *Nursery = @ptrCast(@alignCast(context.?));
+        const owned = self.base.create(Owned) catch return null;
+        owned.arena = .init(self.base);
+        owned.runtime = .init(.{
+            .arena = owned.arena.allocator(),
+            .objects = self.base,
+        });
+        return &owned.runtime;
+    }
+
+    fn close(context: ?*anyopaque, worker: *runtime.Runtime) callconv(.c) void {
+        const self: *Nursery = @ptrCast(@alignCast(context.?));
+        const owned: *Owned = @fieldParentPtr("runtime", worker);
+        owned.runtime.deinit();
+        owned.arena.deinit();
+        self.base.destroy(owned);
+    }
+
+    /// Run one function on the worker's thread, in a `Machine` of its
+    /// own.  The arguments are already in `worker`'s runtime; what
+    /// comes back is the outcome, with the worker's trap, error or
+    /// chosen exit left in its runtime for the join to read.
+    fn runWorker(
+        context: ?*anyopaque,
+        worker: *runtime.Runtime,
+        function: i64,
+        arguments: [*]const runtime.Value,
+        count: i64,
+        out: *runtime.Value,
+        depth: i64,
+    ) callconv(.c) i32 {
+        const self: *Nursery = @ptrCast(@alignCast(context.?));
+        const owned: *Owned = @fieldParentPtr("runtime", worker);
+        var machine: Machine = .{
+            .arena = owned.arena.allocator(),
+            .runtime = undefined,
+            .program = self.program,
+            .max_depth = @intCast(depth),
+            .host = self.host,
+        };
+        // The runtime is the one `open` made and `workers.spawn` filled
+        // in: it already holds the channels, the shared lock and the
+        // arguments.  The machine borrows it rather than making one.
+        const outcome = self.execute(&machine, worker, @intCast(function), arguments[0..@intCast(count)], out);
+        return outcome;
+    }
+
+    /// The body of `runWorker`, with the machine already standing.
+    /// Split out only so the runtime pointer can be swapped in without
+    /// a second `undefined` in sight.
+    fn execute(
+        self: *Nursery,
+        machine: *Machine,
+        worker: *runtime.Runtime,
+        function: u32,
+        arguments: []const runtime.Value,
+        out: *runtime.Value,
+    ) i32 {
+        _ = self;
+        // `Machine.runtime` is a value, not a pointer, so the worker's
+        // runtime is moved in and moved back: `workers.spawn` filled it
+        // and the join reads it, and in between it is the machine's.
+        machine.runtime = worker.*;
+        defer worker.* = machine.runtime;
+        defer machine.stack.deinit(machine.arena);
+        defer machine.frame_storage.deinit(machine.arena);
+
+        const outcome = machine.call(function, arguments) catch
+            return runtime.workers.raised_trap;
+        switch (outcome) {
+            .value => |answered| {
+                out.* = answered;
+                return runtime.workers.survived;
+            },
+            .errored => return runtime.workers.raised_error,
+            .exited => {
+                machine.releaseFrameStorage();
+                return runtime.workers.raised_trap;
+            },
+            .trap => |trapped| {
+                machine.runtime.pending = .{
+                    .code = trapped.code,
+                    .message = trapped.message,
+                };
+                machine.recordUnwind();
+                machine.releaseFrameStorage();
+                return runtime.workers.raised_trap;
+            },
+        }
+    }
+};
 
 // ---------------------------------------------------------------------------
 // Frames and their outcome
@@ -233,11 +384,26 @@ pub const Machine = struct {
     /// first.  Each frame's current instruction resolves through the
     /// function's origins table when the module carries one (debug);
     /// a stripped module still names the function, with line 0.
+    /// A worker's frames arrive already recorded (`recordUnwind`) and
+    /// stand **in front of** this stack's: the trap happened inside the
+    /// worker, and the join is only where it was spoken
+    /// (docs/THREADS.md D6).  Empty for every program that never
+    /// spawned, which is every program the interpreter used to run.
     fn traceback(self: *Machine, reported: *interpreter.Trap) error{OutOfMemory}!void {
+        const adopted = self.runtime.unwound.items;
         const depth = self.stack.items.len;
-        const kept = @min(depth, max_trace_frames);
-        const frames = try self.arena.alloc(interpreter.TraceFrame, kept);
-        for (frames, 0..) |*slot, out_index| {
+        const room = max_trace_frames -| adopted.len;
+        const kept = @min(depth, room);
+        const frames = try self.arena.alloc(interpreter.TraceFrame, adopted.len + kept);
+        for (adopted, frames[0..adopted.len]) |carried, *slot| {
+            slot.* = .{
+                .function = carried.function[0..@intCast(carried.function_length)],
+                .source = carried.source[0..@intCast(carried.source_length)],
+                .line = carried.line,
+                .column = carried.column,
+            };
+        }
+        for (frames[adopted.len..], 0..) |*slot, out_index| {
             const frame = self.stack.items[depth - 1 - out_index];
             const function = &self.program.functions[frame.function];
             const items = function.blocks[frame.block].items;
@@ -257,7 +423,42 @@ pub const Machine = struct {
             };
         }
         reported.trace = frames;
-        reported.dropped = @intCast(depth - kept);
+        reported.dropped = @as(u32, @intCast(depth - kept)) +| self.runtime.dropped_frames;
+    }
+
+    /// Record this trap's frames where a **join** can read them
+    /// (docs/THREADS.md D6).
+    ///
+    /// A worker's trace has to outlive the worker's own arena — the
+    /// join is where it is spoken, and by then the worker's runtime is
+    /// closing — so it goes into `Runtime.unwound`, which is the same
+    /// place a compiled worker's frames go and is read by the same
+    /// code.  Nothing is copied and nothing needs to be: a frame names
+    /// a function and a file out of the *program*, which outlives every
+    /// runtime in it.
+    ///
+    /// Best-effort, exactly as the compiled path's recorder is: a frame
+    /// there is no memory for is counted as dropped rather than lost.
+    fn recordUnwind(self: *Machine) void {
+        const depth = self.stack.items.len;
+        const kept = @min(depth, max_trace_frames);
+        self.runtime.dropped_frames +|= @intCast(depth - kept);
+        for (0..kept) |out_index| {
+            const frame = self.stack.items[depth - 1 - out_index];
+            const function = &self.program.functions[frame.function];
+            const items = function.blocks[frame.block].items;
+            const at = items[if (frame.position == 0) 0 else frame.position - 1];
+            self.runtime.unwound.append(self.runtime.objects, .{
+                .function = function.name.ptr,
+                .function_length = @intCast(function.name.len),
+                .source = function.source.ptr,
+                .source_length = @intCast(function.source.len),
+                .line = if (at < function.origins.len) function.origins[at].line else 0,
+                .column = if (at < function.origins.len) function.origins[at].column else 0,
+            }) catch {
+                self.runtime.dropped_frames +|= 1;
+            };
+        }
     }
 
     /// Give back the value storage one frame's slots still own.
@@ -392,6 +593,18 @@ pub const Machine = struct {
             received[0] = self.commandLine() catch |mistake| return self.caught(mistake);
             arguments = &received;
         }
+        return self.call(entry, arguments);
+    }
+
+    /// Run one function with the arguments already in hand — what the
+    /// entry does once the command line is built, and what a worker's
+    /// thread does with the arguments `workers.spawn` moved across
+    /// (docs/THREADS.md).  One dispatch loop, entered two ways.
+    pub fn call(
+        self: *Machine,
+        entry: u32,
+        arguments: []const RuntimeValue,
+    ) error{OutOfMemory}!CallOutcome {
         if (try self.pushFrame(entry, arguments, 0)) |failed| return failed;
 
         dispatch: while (true) {
@@ -500,6 +713,28 @@ pub const Machine = struct {
                             return failed;
                         }
                         continue :dispatch;
+                    },
+                    // `spawn f(args)` — the arguments are gathered the
+                    // way a call's are and handed to `libluce_rt`,
+                    // which opens the worker's runtime, moves them
+                    // into it and starts the thread
+                    // (docs/THREADS.md D2).  Nothing about the callee
+                    // is entered here: the worker enters it, on its own
+                    // thread, through the nursery.
+                    .spawn => |called| {
+                        self.argument_scratch.clearRetainingCapacity();
+                        try self.argument_scratch.ensureTotalCapacity(self.arena, called.arguments.len);
+                        for (called.arguments) |argument| {
+                            self.argument_scratch.appendAssumeCapacity(registers[argument]);
+                        }
+                        var started: RuntimeValue = .none;
+                        runtime.workers.spawn(
+                            &self.runtime,
+                            called.function,
+                            self.argument_scratch.items,
+                            &started,
+                        ) catch |mistake| return self.caught(mistake);
+                        registers[item] = started;
                     },
                     .intrinsic => |operation| {
                         registers[item] = self.intrinsic(
@@ -612,6 +847,9 @@ pub const Machine = struct {
             // there is no `new file` for this to answer; stage 4
             // refuses one by name and the verifier refuses the IR.
             .file => unreachable,
+            // Nor is there a `new task`: `spawn` is the only door in,
+            // for the same reason (docs/THREADS.md D3).
+            .task => unreachable,
             .array => |shape| {
                 self.dims_scratch.clearRetainingCapacity();
                 try self.dims_scratch.ensureTotalCapacity(self.arena, new.dims.len);
@@ -641,7 +879,7 @@ pub const Machine = struct {
             .list => |element| element,
             // The verifier admits nothing else here: keys and values
             // answer a List and only a List.
-            .map, .array, .builder, .file => unreachable,
+            .map, .array, .builder, .file, .task => unreachable,
         };
     }
 
@@ -742,6 +980,27 @@ pub const Machine = struct {
     }
 
     pub fn intrinsic(
+        self: *Machine,
+        operation: mir.Instruction.IntrinsicCall,
+        registers: []const RuntimeValue,
+        serial: u64,
+        site: Site,
+    ) EvalError!RuntimeValue {
+        // The effect lock, around exactly the intrinsics that call a
+        // host service (docs/THREADS.md D9).  It costs a program that
+        // never spawns nothing at all — `Runtime.effects` stays null
+        // and both halves are a load and a branch on it — and it is
+        // what makes `print` from three workers line-atomic without
+        // any host being thread-safe.
+        if (operation.kind.reachesHost()) {
+            self.runtime.enterEffects();
+            defer self.runtime.leaveEffects();
+            return self.effect(operation, registers, serial, site);
+        }
+        return self.effect(operation, registers, serial, site);
+    }
+
+    fn effect(
         self: *Machine,
         operation: mir.Instruction.IntrinsicCall,
         registers: []const RuntimeValue,
@@ -1238,6 +1497,17 @@ pub const Machine = struct {
                     );
                     break :blk 0;
                 });
+            },
+            // `t.wait()` — join the worker and take its answer
+            // (docs/THREADS.md D4, D6).  One implementation, shared
+            // with the compiled path: a trap comes back as
+            // `error.Trap` with the worker's frames already recorded,
+            // and a raised error lands in this runtime's channel for
+            // the `errored` beside the call to read.
+            .task_wait => {
+                var answered: RuntimeValue = .none;
+                _ = try runtime.workers.wait(&self.runtime, registers[arguments[0]], &answered);
+                return answered;
             },
             .handle_flush => {
                 const held = registers[arguments[0]];

@@ -143,6 +143,13 @@ pub const Service = enum {
     luce_rt_file_read_text,
     luce_rt_file_write_text,
 
+    // -- workers (docs/THREADS.md) ------------------------------------
+    luce_rt_workers_install,
+    luce_rt_spawn,
+    luce_rt_task_wait,
+    luce_rt_effects_enter,
+    luce_rt_effects_leave,
+
     // -- objects and ownership ----------------------------------------
     luce_rt_new_list,
     luce_rt_new_map,
@@ -495,6 +502,30 @@ pub fn describe(service: Service) Effect {
         .luce_rt_files_install => .{
             .memory = touches_run,
             .parameters = &.{ .run, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown },
+        },
+        // The worker services, every one of them as wide as a call can
+        // be: a spawn starts a thread that runs *this module's own
+        // code*, and a join waits for one that already did.  Whatever
+        // the worker touched, it touched — so nothing here may be
+        // narrowed past `touches_heap`, for the reason the file
+        // channel's cannot be narrowed past a host callback.
+        .luce_rt_workers_install => .{
+            .memory = touches_run,
+            .parameters = &.{ .run, .unknown, .unknown, .unknown, .unknown, .unknown, .plain },
+        },
+        .luce_rt_spawn => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .plain, .unknown, .plain, .value_out },
+        },
+        .luce_rt_task_wait => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .value_out },
+        },
+        // The lock is a store on shared state and a wait on other
+        // threads; nothing about it may be moved across anything.
+        .luce_rt_effects_enter, .luce_rt_effects_leave => .{
+            .memory = touches_heap,
+            .parameters = &.{.run},
         },
         .luce_rt_file_open => .{
             .memory = touches_heap,
@@ -974,6 +1005,10 @@ test "every service's described shape is the export's real signature" {
 }
 
 test "every entry point the library exports is a service" {
+    // The table outgrew the default: `std.enums.values` walks every
+    // field once at compile time, and there are more than a thousand
+    // branches' worth of them now.
+    @setEvalBranchQuota(4000);
     // The other direction.  The test above cannot see an export with
     // no `Service` tag, and an entry point generated code has no way
     // to call is either a dead symbol or a missing declaration.

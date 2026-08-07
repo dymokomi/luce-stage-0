@@ -98,6 +98,8 @@ pub const array_methods = @import("04_semantics/builtins.zig").array_methods;
 pub const map_methods = @import("04_semantics/builtins.zig").map_methods;
 pub const builder_methods = @import("04_semantics/builtins.zig").builder_methods;
 pub const string_methods = @import("04_semantics/builtins.zig").string_methods;
+pub const file_methods = @import("04_semantics/builtins.zig").file_methods;
+pub const task_methods = @import("04_semantics/builtins.zig").task_methods;
 
 test {
     _ = @import("04_semantics/context.zig");

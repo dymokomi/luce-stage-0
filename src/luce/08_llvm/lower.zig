@@ -307,7 +307,27 @@ const Module = struct {
     /// test would still trap rather than follow that pointer.
     dead_row: ?Builder.Constant = null,
 
+    /// Every function this program spawns, in ascending order, or
+    /// empty when it never spawns (docs/THREADS.md D11).
+    ///
+    /// **This list is what D11 is made of.**  When it is empty nothing
+    /// below emits a single instruction it would not have emitted
+    /// before threads existed: no worker trampoline, no install call in
+    /// the prologue, and no effect lock around a host service.  A
+    /// spawn-free program's module is the module it always was, which
+    /// is a stronger promise than "the lock is cheap" and is checked
+    /// rather than asserted (`08_llvm/test.zig`).
+    spawned: []const u32 = &.{},
+
+    /// The `RunFn` a worker's thread enters through, built once when
+    /// `spawned` is non-empty.  No closure travels the C boundary and
+    /// none exists to: a `spawn` names a top-level function, so what
+    /// crosses is a function *index* and a run of boxed arguments, and
+    /// this is the switch that turns the first back into a call.
+    worker_entry: ?Builder.Function.Index = null,
+
     fn deinit(self: *Module) void {
+        self.gpa.free(self.spawned);
         self.gpa.free(self.functions);
         self.gpa.free(self.struct_zeros);
         self.texts.deinit(self.gpa);
@@ -465,6 +485,16 @@ const Module = struct {
                 &.{ .ptr, .i64 },
                 .normal,
             ),
+            // The thread channel (docs/THREADS.md D8).  Named and typed
+            // here and called from `libluce_rt`, exactly as the handle
+            // channel is: a task's join happens inside the ownership
+            // walk, where no generated code is standing.
+            .worker_spawn => builder.fnType(
+                .i32,
+                &.{ .ptr, .ptr, .ptr, .ptr },
+                .normal,
+            ),
+            .worker_join => builder.fnType(.i32, &.{ .ptr, .i64 }, .normal),
         };
     }
 
@@ -878,11 +908,205 @@ const Module = struct {
             self.functions[index] = declared;
         }
 
+        self.spawned = try self.collectSpawned();
+        if (self.spawned.len != 0) try self.lowerWorkerEntry();
+
         for (self.program.functions, 0..) |*function, index| {
             try self.lowerFunction(function, @intCast(index));
         }
         try self.lowerEntry();
         try self.describeArtifact();
+    }
+
+    /// Every function some `spawn` names, ascending and without
+    /// duplicates.  The caller owns the slice.
+    fn collectSpawned(self: *Module) Error![]const u32 {
+        var found: std.ArrayList(u32) = .empty;
+        errdefer found.deinit(self.gpa);
+        for (self.program.functions) |function| {
+            for (function.instructions) |instruction| {
+                const target = switch (instruction) {
+                    .spawn => |call| call.function,
+                    else => continue,
+                };
+                if (std.mem.indexOfScalar(u32, found.items, target) != null) continue;
+                try found.append(self.gpa, target);
+            }
+        }
+        std.mem.sort(u32, found.items, {}, std.sort.asc(u32));
+        return found.toOwnedSlice(self.gpa);
+    }
+
+    /// `i32 @luce.worker(ptr host, ptr rt, i64 which, ptr args, i64
+    /// count, ptr out, i64 depth)` — the one door a worker's thread
+    /// enters this module through (docs/THREADS.md).
+    ///
+    /// **This is what a spawn's "entry closure" is, and it is not a
+    /// closure.**  Luce has no first-class functions and a `spawn`
+    /// names a declaration, so the only two things that have to cross
+    /// the C boundary are which function and what to hand it — an
+    /// index and a run of boxed `Value`s.  This switch turns the index
+    /// back into a direct call, which means the callee is a static
+    /// target LLVM can still inline into, and no function pointer to a
+    /// Luce function ever exists.
+    ///
+    /// The host table travels as the nursery's context, so the worker
+    /// reaches the same services `main` does — serialized, because the
+    /// effect lock is installed by then (D9).
+    fn lowerWorkerEntry(self: *Module) Error!void {
+        const signature_type = try self.builder.fnType(
+            .i32,
+            &.{ .ptr, .ptr, .i64, .ptr, .i64, .ptr, .i64 },
+            .normal,
+        );
+        const declared = try self.builder.addFunction(
+            signature_type,
+            try self.builder.strtabString("luce.worker"),
+            .default,
+        );
+        declared.setLinkage(.internal, self.builder);
+        self.worker_entry = declared;
+
+        var wip: Builder.WipFunction = try .init(self.builder, .{
+            .function = declared,
+            .strip = true,
+        });
+        defer wip.deinit();
+
+        const entry = try wip.block(0, "entry");
+        wip.cursor = .{ .block = entry };
+        const host = wip.arg(0);
+        const started = wip.arg(1);
+        const which = wip.arg(2);
+        const arguments = wip.arg(3);
+        const out = wip.arg(5);
+        const depth = wip.arg(6);
+
+        // A function index this module never spawns cannot arrive here
+        // — `luce_rt_spawn` is only ever called with one of `spawned` —
+        // so the default answers "it trapped" without a trap to show,
+        // which the join reports as `host_unavailable` rather than
+        // inventing news.
+        const refused = try wip.block(1, "no.such.worker");
+        var blocks: std.ArrayList(BlockIndex) = .empty;
+        defer blocks.deinit(self.gpa);
+        for (self.spawned) |_| try blocks.append(self.gpa, try wip.block(1, "worker"));
+
+        var chosen = try wip.@"switch"(which, refused, @intCast(self.spawned.len), .none);
+        for (self.spawned, blocks.items) |index, block| {
+            try chosen.addCase(try self.builder.intConst(.i64, index), block, &wip);
+        }
+        chosen.finish(&wip);
+
+        wip.cursor = .{ .block = refused };
+        _ = try wip.ret(try self.builder.intValue(.i32, outcome_trapped));
+
+        for (self.spawned, blocks.items) |index, block| {
+            wip.cursor = .{ .block = block };
+            try self.lowerWorkerCase(&wip, entry, index, host, started, arguments, out, depth);
+        }
+        try wip.finish();
+    }
+
+    /// One arm of the trampoline: unbox the arguments, make the call,
+    /// and box the answer back.
+    ///
+    /// A `Body` is built over the callee's own `mir.Function` so the
+    /// boxing is the boxing every other runtime call in this file uses.
+    /// It walks no instructions — it is here for the value boundary and
+    /// nothing else, which is the one thing a worker's entry needs and
+    /// the one thing that must not be written twice.
+    fn lowerWorkerCase(
+        self: *Module,
+        wip: *Builder.WipFunction,
+        entry: BlockIndex,
+        index: u32,
+        host: Builder.Value,
+        started: Builder.Value,
+        arguments: Builder.Value,
+        out: Builder.Value,
+        depth: Builder.Value,
+    ) Error!void {
+        const function = &self.program.functions[index];
+        var arm: Body = .{
+            .module = self,
+            .wip = wip,
+            .function = function,
+            .index = index,
+            .host = host,
+            .runtime = started,
+            .depth = depth,
+            .entry_block = entry,
+        };
+        defer arm.deinit();
+
+        var passed: std.ArrayList(Builder.Value) = .empty;
+        defer passed.deinit(self.gpa);
+        try passed.append(self.gpa, host);
+        try passed.append(self.gpa, started);
+        try passed.append(self.gpa, depth);
+        for (function.locals[0..function.parameter_count], 0..) |parameter, at| {
+            const address = try wip.gep(
+                .inbounds,
+                self.value_type,
+                arguments,
+                &.{try self.builder.intValue(.i64, at)},
+                "worker.arg",
+            );
+            try passed.append(self.gpa, try arm.unboxed(parameter.local_type, address, "worker.in"));
+        }
+        var result_slot: Builder.Value = .none;
+        if (function.return_type != .none) {
+            result_slot = try arm.scratch(
+                try self.valueType(function.return_type),
+                valueAlignment(function.return_type),
+                "worker.result",
+            );
+            try passed.append(self.gpa, result_slot);
+        }
+
+        const target = self.functions[index];
+        const outcome = try wip.call(
+            .normal,
+            Builder.CallConv.default,
+            .none,
+            target.typeOf(self.builder),
+            target.toValue(self.builder),
+            passed.items,
+            "worker.outcome",
+        );
+
+        // The answer is boxed for the join to carry across; a worker
+        // that trapped or raised has no answer, and `out` keeps the
+        // `none` `luce_rt_spawn` left in it.
+        if (function.return_type != .none) {
+            const answered = try wip.block(1, "worker.answered");
+            const done = try wip.block(2, "worker.done");
+            _ = try wip.brCond(
+                try wip.icmp(
+                    .eq,
+                    outcome,
+                    try self.builder.intValue(.i32, outcome_ok),
+                    "worker.ok",
+                ),
+                answered,
+                done,
+                .then_likely,
+            );
+            wip.cursor = .{ .block = answered };
+            const held = try wip.load(
+                .normal,
+                try self.valueType(function.return_type),
+                result_slot,
+                valueAlignment(function.return_type),
+                "worker.value",
+            );
+            try arm.fillBoxShape(out, function.return_type);
+            try arm.fillBoxValue(out, function.return_type, held);
+            _ = try wip.br(done);
+            wip.cursor = .{ .block = done };
+        }
+        _ = try wip.ret(outcome);
     }
 
     /// Stamp the artifact with what it is: the magic, the tag's own
@@ -1166,6 +1390,27 @@ const Module = struct {
             try self.loadHostSlot(&wip, host, .handle_flush, "files.flush.fn"),
             try self.loadHostSlot(&wip, host, .handle_close, "files.close.fn"),
         }, "");
+
+        // The thread channel and this engine's nursery, handed over
+        // once — **and only when the program contains a `spawn`**
+        // (docs/THREADS.md D11).  A program without one emits nothing
+        // here, so its prologue is the prologue it always was.
+        //
+        // The host table travels as the nursery's context because that
+        // is what a worker's entry needs to reach the services `main`
+        // reaches; the two runtime-shaped slots, `open` and `close`,
+        // are `libluce_rt`'s own and are not passed.
+        if (self.worker_entry) |entry_point| {
+            _ = try self.callService(&wip, .luce_rt_workers_install, .void, &.{
+                started,
+                context,
+                try self.loadHostSlot(&wip, host, .worker_spawn, "workers.spawn.fn"),
+                try self.loadHostSlot(&wip, host, .worker_join, "workers.join.fn"),
+                host,
+                entry_point.toValue(self.builder),
+                limit,
+            }, "");
+        }
 
         // A host that allows no frames at all refuses the entry
         // function itself, exactly as the interpreter's frame stack
@@ -1736,6 +1981,7 @@ const Body = struct {
                 .const_string,
                 .local_get,
                 .local_set,
+                .spawn,
                 .binary,
                 .unary,
                 .convert,
@@ -2522,7 +2768,7 @@ const Body = struct {
                 .growable = false,
             },
             .list => |element| .{ .element = element, .rank = 1, .growable = true },
-            .map, .builder, .file => null,
+            .map, .builder, .file, .task => null,
         };
     }
 
@@ -3431,15 +3677,44 @@ const Body = struct {
         arguments: []const Builder.Value,
         name: []const u8,
     ) Error!Builder.Value {
+        try self.enterEffects();
         const answer = try self.invokeHost(slot, arguments, name);
+        try self.leaveEffects();
         try self.checkExhausted(answer);
         return answer;
+    }
+
+    /// The two halves of the effect lock, around one host service call
+    /// (docs/THREADS.md D9).
+    ///
+    /// **Emitted only in a program that contains a `spawn`** — which is
+    /// D11, kept structurally rather than measured: a spawn-free
+    /// program's module has no `luce_rt_effects_enter` in it at all, so
+    /// there is no lock to be cheap about and no branch to predict.
+    /// The pair brackets the call and nothing else, which is what makes
+    /// `print` from three workers line-atomic.
+    ///
+    /// The lock must be *left* on every path out, and there is only
+    /// one: `invokeHost` emits a call and no branch, and everything
+    /// that can unwind — the exhaustion check, the `no` handling —
+    /// stands after the leave.
+    fn enterEffects(self: *Body) Error!void {
+        if (self.module.spawned.len == 0) return;
+        _ = try self.callRuntime(.luce_rt_effects_enter, .void, &.{self.runtime}, "");
+    }
+
+    fn leaveEffects(self: *Body) Error!void {
+        if (self.module.spawned.len == 0) return;
+        _ = try self.callRuntime(.luce_rt_effects_leave, .void, &.{self.runtime}, "");
     }
 
     /// Call a host service that answers a plain number and cannot fail
     /// — a screen size, an argument count.
     fn callHostNumber(self: *Body, slot: abi.Slot, name: []const u8) Error!Builder.Value {
-        return self.invokeHost(slot, &.{}, name);
+        try self.enterEffects();
+        const answer = try self.invokeHost(slot, &.{}, name);
+        try self.leaveEffects();
+        return answer;
     }
 
     /// Call a host service that answers one fact about the machine:
@@ -3955,6 +4230,7 @@ const Body = struct {
                 try self.storageOf(set.value),
             }),
             .call => |called| try self.emitCall(register, called),
+            .spawn => |called| try self.emitSpawn(register, called),
             .intrinsic => |called| try self.emitIntrinsic(register, called),
             .heap_new => |new| try self.emitHeapNew(register, new),
             .object_bind => |bind| try self.emitOwnership(.luce_rt_bind, bind.value, bind.local),
@@ -4828,6 +5104,58 @@ const Body = struct {
         }
     }
 
+    /// `spawn f(args)` — hand the call to a worker and take the task
+    /// (docs/THREADS.md D2, D3).
+    ///
+    /// **Nothing about the callee is emitted here.**  The arguments are
+    /// boxed into a run the runtime reads, the runtime opens a second
+    /// runtime and moves them into it, and the *worker's* thread enters
+    /// this module through `@luce.worker`.  So a spawn is one runtime
+    /// call, and the boxing is the boxing every runtime call does.
+    ///
+    /// There is no depth check in front of it: a worker starts on a
+    /// stack of its own with a budget of its own, so the frames this
+    /// function has left have nothing to say about it.
+    /// Whether the function a task carries could come back errored —
+    /// read out of the task's own heap shape, which is the one place
+    /// it is written (docs/THREADS.md D4).
+    fn taskIsFallible(self: *Body, register: mir.Register) bool {
+        const held = self.function.result_types[register];
+        if (held != .heap) return false;
+        const shape = self.module.program.heap_types[held.heap];
+        return shape == .task and shape.task.fallible;
+    }
+
+    fn emitSpawn(self: *Body, register: mir.Register, called: mir.Instruction.Call) Error!void {
+        const builder = self.module.builder;
+        const count = called.arguments.len;
+        const frame = if (count == 0)
+            try builder.nullValue(.ptr)
+        else
+            try self.scratchRun(self.module.value_type, count, value_alignment, "spawn.args");
+        for (called.arguments, 0..) |argument, at| {
+            try self.boxAt(
+                frame,
+                at,
+                self.function.result_types[argument],
+                self.produced[argument].value,
+            );
+        }
+        const out = try self.scratch(self.module.value_type, value_alignment, "spawn.task");
+        try self.callChecked(.luce_rt_spawn, &.{
+            self.runtime,
+            try builder.intValue(.i64, called.function),
+            frame,
+            try builder.intValue(.i64, count),
+            out,
+        });
+        self.produced[register].value = try self.unboxed(
+            self.function.result_types[register],
+            out,
+            "spawn.task.value",
+        );
+    }
+
     /// `if (trapped) return trapped` — the unwind edge after a call
     /// that cannot error, and where this frame joins the trace on the
     /// way out.
@@ -5468,6 +5796,42 @@ const Body = struct {
                     "write.landed",
                 );
             },
+            // `t.wait()` — join, and take the worker's answer
+            // (docs/THREADS.md D4, D6).  All three endings cross here:
+            // a value, an error the task's own shape says may come, and
+            // a trap, which is this frame's trap now and unwinds with
+            // the worker's frames already in front of its own.
+            .task_wait => {
+                const result = self.function.result_types[register];
+                const out = try self.scratch(
+                    self.module.value_type,
+                    value_alignment,
+                    "wait.result",
+                );
+                const outcome = try self.callRuntime(.luce_rt_task_wait, .i32, &.{
+                    rt,
+                    try self.boxedRegister(of[0], "wait.task"),
+                    out,
+                }, "wait.outcome");
+                if (self.taskIsFallible(of[0])) {
+                    try self.propagateTrapOnly(outcome);
+                    self.produced[register].outcome = outcome;
+                } else {
+                    try self.propagate(try self.wip.icmp(
+                        .ne,
+                        outcome,
+                        try self.module.builder.intValue(.i32, outcome_ok),
+                        "wait.trapped",
+                    ));
+                }
+                self.produced[register].value = try self.unboxed(result, out, "wait.value");
+                // The box is kept, not just its contents: a worker may
+                // answer text short enough to live *inside* the value,
+                // and a fresh box built from the register would say
+                // "outside" over a pointer into this box — which reads
+                // correctly and frees catastrophically (`storageOf`).
+                self.produced[register].box = out;
+            },
             .handle_flush => {
                 self.produced[register].outcome = try self.fileService(.luce_rt_file_flush, &.{
                     try self.boxedRegister(of[0], "file"),
@@ -5508,7 +5872,9 @@ const Body = struct {
                 // the run exited; and the frame leaves on the
                 // unwinding edge, exactly as exhaustion does.  Nothing
                 // is reported — an exit is not news about a bug.
+                try self.enterEffects();
                 _ = try self.invokeHost(.exited, &.{self.produced[of[0]].value}, "exited");
+                try self.leaveEffects();
                 _ = try self.callRuntime(.luce_rt_exit, .void, &.{
                     rt,
                     self.produced[of[0]].value,
@@ -5709,7 +6075,7 @@ const Body = struct {
         if (of != .heap) return self.fail("keys or values answering no object");
         const element = switch (self.module.program.heap_types[of.heap]) {
             .list => |written| written,
-            .map, .array, .builder, .file => return self.fail(
+            .map, .array, .builder, .file, .task => return self.fail(
                 "keys or values answering something other than a list",
             ),
         };
@@ -5728,6 +6094,10 @@ const Body = struct {
             // is the one thing this type must never be able to hold.
             // Stage 4 refuses it by name; this is the wall behind that.
             .file => return self.fail("new file"),
+            // And a task is made by `spawn` and by nothing else, for
+            // the same reason: a task with no worker behind it is the
+            // one state this type must never hold (docs/THREADS.md D3).
+            .task => return self.fail("new task"),
             .builder => try self.callAnswering(register, .luce_rt_new_builder, &.{self.runtime}),
             .array => |shape| {
                 const dims = try self.scratchRun(

@@ -814,6 +814,31 @@ pub const Parser = struct {
         if (self.peekKind() != .left_paren) return self.optionalSuffix(written);
         const opener = self.advance(); // (
 
+        // `task(...)` holds a **return shape**, not a type: what stands
+        // inside is written exactly as it would be after `->`, because
+        // that is what it names (docs/THREADS.md).  So `task(double!)`
+        // and `task(!)` are spelled the way `-> double!` and `-> !`
+        // are, and a bare `task` is a worker that answers nothing and
+        // cannot fail.  Nothing else in the grammar takes a `!` here,
+        // which is why this arm is by name rather than by shape.
+        if (std.mem.eql(u8, written.name, "task")) {
+            if (self.accept(.bang)) |marker| {
+                written.fallible = true;
+                const closing = (try self.expectClose(.right_paren, opener)) orelse return null;
+                _ = marker;
+                written.span = .{ .start = item.span.start, .end = closing.span.end };
+                return self.optionalSuffix(written);
+            }
+            const answered = (try self.typeName()) orelse return null;
+            written.fallible = self.accept(.bang) != null;
+            const closing = (try self.expectClose(.right_paren, opener)) orelse return null;
+            const held = try self.arena.alloc(ast.TypeName, 1);
+            held[0] = answered;
+            written.arguments = held;
+            written.span = .{ .start = item.span.start, .end = closing.span.end };
+            return self.optionalSuffix(written);
+        }
+
         var arguments: std.ArrayList(ast.TypeName) = .empty;
         defer arguments.deinit(self.arena);
         var wildcards: u8 = 0;
@@ -2278,6 +2303,7 @@ pub fn describe(kind: Kind) []const u8 {
         .keyword_import => "the keyword 'import'",
         .keyword_give => "the keyword 'give'",
         .keyword_copy => "the keyword 'copy'",
+        .keyword_spawn => "the keyword 'spawn'",
         .keyword_none => "'none'",
         .keyword_try => "the keyword 'try'",
         .keyword_catch => "the keyword 'catch'",

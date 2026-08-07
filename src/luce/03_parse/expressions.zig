@@ -78,6 +78,7 @@ pub fn startsExpression(kind: Kind) bool {
         .keyword_not,
         .keyword_give,
         .keyword_copy,
+        .keyword_spawn,
         .keyword_try,
         .minus,
         .tilde,
@@ -380,6 +381,29 @@ fn unaryExpression(self: *Parser) Error!?*ast.Expression {
         const operand = (try unaryExpression(self)) orelse return null;
         return make(self, .{ .try_call = .{
             .operand = operand,
+            .span = .{ .start = keyword.span.start, .end = operand.span().end },
+        } });
+    }
+    // `spawn` takes a *call* and nothing else, so its operand is a
+    // postfix expression rather than a unary one: there is no verb
+    // that could stand between the keyword and the call it hands over
+    // (docs/THREADS.md D2 — the verbs go on the arguments, inside).
+    if (self.accept(.keyword_spawn)) |keyword| {
+        const operand = (try postfixExpression(self)) orelse return null;
+        switch (operand.*) {
+            .call, .method => {},
+            else => {
+                try self.report(
+                    "luce.parse.spawn",
+                    keyword.span,
+                    "spawn runs a call on a worker; write 'spawn f(…)'",
+                    .{},
+                );
+                return null;
+            },
+        }
+        return make(self, .{ .spawn = .{
+            .call = operand,
             .span = .{ .start = keyword.span.start, .end = operand.span().end },
         } });
     }

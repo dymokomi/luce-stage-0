@@ -54,6 +54,12 @@ pub const Kind = enum {
     keyword_import,
     keyword_give,
     keyword_copy,
+    /// `spawn f(args)` — run `f` on a worker with its own runtime and
+    /// answer the `task` that owns it (docs/THREADS.md D2, D3).  A
+    /// keyword rather than a builtin because its operand is a *call*
+    /// that must not be made here, which no builtin's arguments can
+    /// say: `spawn f(x)` never evaluates `f(x)`.
+    keyword_spawn,
     /// The absent value of a `T?` (docs/FAILURE.md).  A keyword rather
     /// than a name, so nothing can shadow it and `none` never reads as
     /// a variable somebody forgot to declare.
@@ -183,6 +189,7 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "import", .kind = .keyword_import },
     .{ .word = "give", .kind = .keyword_give },
     .{ .word = "copy", .kind = .keyword_copy },
+    .{ .word = "spawn", .kind = .keyword_spawn },
     .{ .word = "none", .kind = .keyword_none },
     .{ .word = "try", .kind = .keyword_try },
     .{ .word = "catch", .kind = .keyword_catch },

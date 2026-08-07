@@ -228,6 +228,21 @@ pub const Host = struct {
     /// file channel rather than two that could disagree, which is what
     /// moving UTF-8 validation into the runtime was for.
     files: runtime.files.Channel = .{},
+
+    /// The thread channel behind `spawn` (docs/THREADS.md D8).
+    ///
+    /// C-shaped for the reason `files` is, and one step more so: a
+    /// task's join happens inside the ownership walk, and the thing
+    /// the host is asked to start is a C function `libluce_rt` wrote.
+    /// Both engines install the *same two function pointers*, so a
+    /// host writes its threading once and neither engine has an
+    /// opinion about it.
+    ///
+    /// What the two engines *do* differ on is the other half — how a
+    /// runtime is made for a worker and how one function is run in it
+    /// — and that is `runtime.workers.Nursery`, filled by each engine
+    /// rather than by a host, because a machine has no answer to it.
+    workers: runtime.workers.Channel = .{},
 };
 
 /// The trusted screen behind the terminal builtins.  The host owns raw

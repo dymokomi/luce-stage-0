@@ -50,6 +50,7 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
             if (shape.rank < 1 or shape.rank > 4) return error.BadStruct;
         },
         .builder, .file => {},
+        .task => |work| try verifyType(program, work.result),
     };
     for (program.structs) |layout| {
         for (layout.fields) |field| try verifyType(program, field.field_type);
@@ -469,6 +470,26 @@ fn verifyInstruction(
             }
             if (!result.eql(callee.return_type)) return error.TypeMismatch;
         },
+        // A spawn is a call whose arguments cross a runtime boundary
+        // (docs/THREADS.md D2), so it is checked as a call plus the two
+        // things only a boundary asks: every object parameter must be
+        // declared `give`, because nothing can lend across, and the
+        // result must be the task shape this callee makes.
+        .spawn => |call| {
+            if (call.function >= program.functions.len) return error.BadFunction;
+            const callee = program.functions[call.function];
+            if (call.arguments.len != callee.parameter_count) return error.BadFunction;
+            for (call.arguments, 0..) |argument, index| {
+                const value = try operandType(function, defined, argument);
+                try expectType(value, callee.locals[index].local_type);
+            }
+            if (result != .heap) return error.TypeMismatch;
+            if (result.heap >= program.heap_types.len) return error.BadStruct;
+            const shape = program.heap_types[result.heap];
+            if (shape != .task) return error.TypeMismatch;
+            if (!shape.task.result.eql(callee.return_type)) return error.TypeMismatch;
+            if (shape.task.fallible != callee.fallible) return error.TypeMismatch;
+        },
         .intrinsic => |intrinsic| try verifyIntrinsic(program, function, defined, register, intrinsic),
         .object_bind => |bind| {
             if (bind.local >= function.locals.len) return error.BadLocal;
@@ -529,9 +550,33 @@ fn raisesError(program: *const Program, function: *const Function, register: Reg
     return switch (function.instructions[register]) {
         .call => |call| call.function < program.functions.len and
             program.functions[call.function].fallible,
-        .intrinsic => |intrinsic| intrinsic.kind.isFallible(),
+        .intrinsic => |intrinsic| switch (intrinsic.kind) {
+            // The one intrinsic whose fallibility is not a fact about
+            // the intrinsic: a wait comes back errored exactly when
+            // the function the task carries could, and the task's own
+            // shape is where that is written (docs/THREADS.md D4).
+            .task_wait => intrinsic.arguments.len == 1 and
+                taskShape(program, function, intrinsic.arguments[0]) != null and
+                taskShape(program, function, intrinsic.arguments[0]).?.fallible,
+            else => intrinsic.kind.isFallible(),
+        },
         else => false,
     };
+}
+
+/// The task shape a register holds, or null when it holds anything
+/// else.  Total rather than trusting: a `.lcm` reaches this stage
+/// without having passed the analyzer.
+fn taskShape(
+    program: *const Program,
+    function: *const Function,
+    register: Register,
+) ?@FieldType(types.HeapType, "task") {
+    if (register >= function.result_types.len) return null;
+    const held = function.result_types[register];
+    if (held != .heap or held.heap >= program.heap_types.len) return null;
+    const shape = program.heap_types[held.heap];
+    return if (shape == .task) shape.task else null;
 }
 
 // ---------------------------------------------------------------------------
@@ -716,7 +761,7 @@ fn verifyIntrinsic(
                     for (arguments[1 .. 1 + shape.rank]) |index| try expectType(index, .long);
                     break :blk shape.element;
                 },
-                .builder, .file => return error.BadIntrinsic,
+                .builder, .file, .task => return error.BadIntrinsic,
             };
             if (reads) {
                 try expectType(result, element);
@@ -853,7 +898,7 @@ fn verifyIntrinsic(
             try exactly(arguments, 1);
             switch (try heapShape(program, arguments[0])) {
                 .list, .map, .builder => {},
-                .array, .file => return error.BadIntrinsic,
+                .array, .file, .task => return error.BadIntrinsic,
             }
             try expectType(result, .none);
         },
@@ -1070,6 +1115,19 @@ fn verifyIntrinsic(
             try expectByteBuffer(program, arguments[1]);
             try expectType(arguments[2], .long);
             try expectType(result, .long);
+        },
+        // `t.wait()` — one task in, the worker's result out
+        // (docs/THREADS.md D4).  The result type is read out of the
+        // task's own shape, which is also where its fallibility is: a
+        // task is a call in flight and carries what the call answers.
+        .task_wait => {
+            try exactly(arguments, 1);
+            const held = arguments[0];
+            if (held != .heap) return error.BadIntrinsic;
+            if (held.heap >= program.heap_types.len) return error.BadIntrinsic;
+            const shape = program.heap_types[held.heap];
+            if (shape != .task) return error.BadIntrinsic;
+            if (!result.eql(shape.task.result)) return error.BadIntrinsic;
         },
         .handle_flush => {
             try exactly(arguments, 1);

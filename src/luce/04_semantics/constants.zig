@@ -448,6 +448,12 @@ pub fn fold(
         .try_call => {
             return constantError(analyzer, expression.span(), "a constant is folded at compile time and nothing can fail there; try belongs in a function", .{});
         },
+        // File scope owns nothing, so it cannot own a worker
+        // (OWNERSHIP.md S35): a task's death point is a join, and
+        // there is no scope here to arrive at one.
+        .spawn => {
+            return constantError(analyzer, expression.span(), "a constant is folded at compile time and nothing runs there; spawn belongs in a function [OWNERSHIP.md S35]", .{});
+        },
     }
 }
 
@@ -549,7 +555,7 @@ fn foldConvert(analyzer: *Analyzer, call: ast.Call, operand: TypedConstant) Erro
         .half => .half,
         .float => .float,
         .double => .double,
-        .boolean, .string, .list, .map, .array, .builder, .file => unreachable, // answered above
+        .boolean, .string, .list, .map, .array, .builder, .file, .task => unreachable, // answered above
     };
     if (!operand.value_type.isNumeric()) {
         return constantError(analyzer, call.span, "{s}() converts a number", .{call.callee});

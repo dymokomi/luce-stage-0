@@ -19,6 +19,7 @@ const vocabulary = @import("../support/vocabulary.zig");
 const files = @import("files.zig");
 const trace = @import("trace.zig");
 const value = @import("value.zig");
+const workers = @import("workers.zig");
 
 const Allocator = std.mem.Allocator;
 const Handle = value.Handle;
@@ -200,6 +201,21 @@ pub const Object = struct {
         /// (`files`): `freeObject` is where a scope's end arrives, and
         /// nothing is standing there to hand a host in.
         file: File,
+        /// A running worker (docs/THREADS.md D3).
+        ///
+        /// A resource on exactly the terms `file` is one, and the same
+        /// sentence covers it: the binding that received it owns it,
+        /// the owning scope's end releases it, and `give`/`return`/
+        /// `free` mean what OWNERSHIP.md says.  What "release" *is* is
+        /// the only thing that differs — for a file it is a close and
+        /// for a task it is a **join**, which is why an orphan thread
+        /// is as unrepresentable in Luce as a leaked list (D5).
+        ///
+        /// The pointer is null once the worker has been joined and its
+        /// runtime closed, which `wait` does early and the scope's end
+        /// does otherwise; a task whose worker is gone is spent, and
+        /// touching it again traps `use_after_free`.
+        task: ?*workers.Worker,
     };
 
     /// An open file: the number the host knows it by, and the path it
@@ -545,6 +561,11 @@ pub const Object = struct {
                 allocator.free(open.path);
                 self.data = .{ .file = .{ .handle = no_file, .path = "" } };
             },
+            // `Runtime.freeObject` has already joined the worker and
+            // closed its runtime; the pointer is blanked so the
+            // end-of-run sweep does not join a second time what
+            // ownership already joined.
+            .task => self.data = .{ .task = null },
         }
     }
 };
@@ -906,6 +927,48 @@ pub const Runtime = struct {
     /// effect.
     files: files.Channel = .{},
 
+    /// The host's thread channel, installed once at the start of a run
+    /// and inherited by every worker (docs/THREADS.md D8).  Held rather
+    /// than passed for the reason `files` is: a task's join happens at
+    /// the end of the scope that owns it, inside `freeObject`, where no
+    /// caller is standing to hand a host in.  Empty until installed,
+    /// and fail-closed like every other effect.
+    workers: workers.Channel = .{},
+
+    /// How this engine makes a runtime for a worker and runs one
+    /// function in it (docs/THREADS.md).  Not a *host* service — a
+    /// machine supplies threads, and what to run on one is the
+    /// engine's own answer, which is exactly why the two arms differ
+    /// here and nowhere else.
+    nursery: workers.Nursery = .{},
+
+    /// The one lock every runtime in this program shares, or null when
+    /// nothing has spawned (docs/THREADS.md D9, D11).  Allocated by the
+    /// **root** runtime at its first spawn and handed down to every
+    /// worker, which is sound with no counting because a scope's end
+    /// joins: every worker is finished before the root's run is, so the
+    /// root outlives all of them by construction.
+    effects: ?*workers.Effects = null,
+
+    /// What a leaked object costs in a run this one started
+    /// (docs/THREADS.md).  A worker's census is added here as its
+    /// runtime closes, so a program's total is one number however many
+    /// runtimes it used, and the two-engine comparison sees one honest
+    /// answer.
+    inherited_leaks: i64 = 0,
+
+    /// How many frames a run may take, as this program was started
+    /// with.  Recorded so a worker can be given a **fresh** budget
+    /// rather than what is left of its spawner's (docs/THREADS.md D1):
+    /// a worker's frames are its own thread's, so it starts from the
+    /// number every run starts from.  Zero until a spawn-capable run
+    /// installs it, which is the only thing that ever reads it.
+    depth_budget: i64 = 0,
+
+    /// True on the runtime that allocated `effects` — the root of a
+    /// program's runtimes, the only one that gives it back.
+    owns_effects: bool = false,
+
     pub fn init(memory: Memory) Runtime {
         return .{ .arena = memory.arena, .objects = memory.objects };
     }
@@ -947,13 +1010,58 @@ pub const Runtime = struct {
                 // A handle the program leaked is still an open file:
                 // the run gives it back even though ownership did not.
                 .file => |open| self.closeFile(open.handle),
+                // And a task the program leaked is still a running
+                // thread: the sweep joins it, for the same reason and
+                // with the same silence (`workers.release`).
+                .task => |held| if (held) |worker| workers.release(self, worker),
             }
             object.release(self.objects);
         }
         self.table.deinit(self.objects);
         self.unwound.deinit(self.objects);
         if (self.last_key_text.len != 0) self.objects.free(self.last_key_text);
+        // The shared lock belongs to the runtime that made it, and by
+        // the time that one ends every worker has been joined (D5), so
+        // there is nobody left who could be holding it.
+        if (self.owns_effects) {
+            if (self.effects) |shared| self.objects.destroy(shared);
+            self.effects = null;
+        }
         self.* = undefined;
+    }
+
+    /// Objects this run and every worker under it left alive — the
+    /// census, as one number (docs/THREADS.md D10).  A worker's total
+    /// is folded in as its runtime closes, so a leak in a worker is a
+    /// leak in the program and both engines report the same figure.
+    pub fn leaked(self: *const Runtime) i64 {
+        return @as(i64, self.live) + self.inherited_leaks;
+    }
+
+    /// The one lock this program's runtimes share, made on demand.
+    ///
+    /// **A program that never spawns never gets here**, which is the
+    /// whole of D11 in the runtime: no allocation, no lock, no branch
+    /// on a spawn-free path, because the field stays null and every
+    /// guard below is written against it.
+    pub fn sharedEffects(self: *Runtime) Error!*workers.Effects {
+        if (self.effects) |held| return held;
+        const made = try self.objects.create(workers.Effects);
+        made.* = .{};
+        self.effects = made;
+        self.owns_effects = true;
+        return made;
+    }
+
+    /// Take the effect lock, if this program has one (D9).  Paired with
+    /// `leaveEffects`, and recursive, so a service that reaches another
+    /// one does not deadlock on itself.
+    pub fn enterEffects(self: *Runtime) void {
+        if (self.effects) |shared| shared.enter();
+    }
+
+    pub fn leaveEffects(self: *Runtime) void {
+        if (self.effects) |shared| shared.leave();
     }
 
     /// Remember the text payload of the key just read.  One owned slot
@@ -1135,6 +1243,32 @@ pub const Runtime = struct {
         return self.attach(.{ .data = .{ .file = .{ .handle = handle, .path = kept } } });
     }
 
+    /// A fresh object owning a worker that is already on its way
+    /// (docs/THREADS.md D3).  Loose like every other `new`: the binding
+    /// that receives it owns it, and its scope's end joins.
+    pub fn newTask(self: *Runtime, worker: *workers.Worker) Error!Value {
+        return self.attach(.{ .data = .{ .task = worker } });
+    }
+
+    /// Move `held` out of this runtime and into `target` — what a
+    /// spawn's arguments and a wait's result both do (docs/THREADS.md
+    /// D2, D4).
+    ///
+    /// **An object moves; a value copies.**  Nothing about that is new:
+    /// it is S32 applied at one more site.  The object half is a deep
+    /// re-own into the target followed by a free here, which is the
+    /// correct floor and not a placeholder — a handle is an index into
+    /// this table and a string's bytes came from this allocator, so
+    /// there is no representation the two runtimes could share.  The
+    /// value half frees nothing, because the caller's own storage is
+    /// still the caller's: `spawn f(name)` leaves `name` exactly as a
+    /// call would.
+    pub fn moveInto(self: *Runtime, target: *Runtime, held: Value) Error!Value {
+        const carried = try target.copyFrom(self, held);
+        self.freeObjectsIn(held);
+        return carried;
+    }
+
     /// Tell the host a handle is finished with.  Called from the two
     /// places a file's life can end — the owning scope, and the run's
     /// own sweep of what a program leaked — neither of which has
@@ -1143,6 +1277,10 @@ pub const Runtime = struct {
     fn closeFile(self: *Runtime, handle: i64) void {
         if (handle == no_file) return;
         const service = self.files.close orelse return;
+        // A close is a host call like any other, and this is the one
+        // that happens with no engine standing (docs/THREADS.md D9).
+        self.enterEffects();
+        defer self.leaveEffects();
         _ = service(self.files.context, handle);
     }
 
@@ -1558,6 +1696,9 @@ pub const Runtime = struct {
             .builder => {},
             // The scope's end is the close (docs/BYTES.md R5).
             .file => |open| self.closeFile(open.handle),
+            // And for a worker the scope's end is the join
+            // (docs/THREADS.md D5).
+            .task => |held| if (held) |worker| workers.release(self, worker),
         }
         object.release(self.objects);
         // A row that has run out of generations is retired rather than
@@ -1579,7 +1720,7 @@ pub const Runtime = struct {
 
     /// The object half of `freeValue`, on its own: everything a struct
     /// value's fields name, without touching the run they sit in.
-    fn freeObjectsIn(self: *Runtime, held: Value) void {
+    pub fn freeObjectsIn(self: *Runtime, held: Value) void {
         switch (held.view()) {
             .object => |handle| self.freeObject(handle),
             .strukt => |fields| for (fields) |field| self.freeObjectsIn(field),
@@ -1617,33 +1758,48 @@ pub const Runtime = struct {
     /// recursively.  Values pass through; unfilled slots stay unfilled
     /// (only the copy verb itself demands a filled top-level object).
     pub fn deepCopy(self: *Runtime, held: Value) Error!Value {
+        return self.copyFrom(self, held);
+    }
+
+    /// The same walk, reading out of `source` and building in `self`.
+    ///
+    /// **Two runtimes is the general case and one is the special one.**
+    /// `copy xs` is this with both ends the same; a worker's arguments
+    /// and its result are this with two ends, because a handle is an
+    /// index into *one* table and a string's bytes come from *one*
+    /// allocator, so nothing an object is made of survives being
+    /// carried across (docs/THREADS.md).  Every allocation here is
+    /// `self`'s and every read is `source`'s, which is the whole of the
+    /// difference; writing the walk twice would have been two places
+    /// for one semantic.
+    pub fn copyFrom(self: *Runtime, source: *Runtime, held: Value) Error!Value {
         switch (held.view()) {
             .object => |handle| {
                 if (handle.index == value.null_index) return held;
-                if (self.liveObject(handle) == null) return self.fail(.use_after_free);
+                if (source.liveObject(handle) == null) return self.fail(.use_after_free);
                 const index = handle.index;
                 // Each arm copies the source object's contents out
-                // before recursing: `deepCopy` allocates objects, which
+                // before recursing: the walk allocates objects, which
                 // moves the table, and the source's own buffers do not
                 // move with it.
-                var storage: Object = switch (self.table.items[index].data) {
+                var storage: Object = switch (source.table.items[index].data) {
                     .list => blk: {
-                        const source = self.table.items[index].elements;
-                        var copied: Object.Elements = .{ .kind = source.kind };
+                        const run = source.table.items[index].elements;
+                        var copied: Object.Elements = .{ .kind = run.kind };
                         errdefer copied.deinit(self.objects);
-                        try copied.ensureCapacity(self.objects, source.count);
+                        try copied.ensureCapacity(self.objects, run.count);
                         // Packed cells own nothing, so the whole run
                         // copies as bytes; only a `Value` element needs
                         // a walk of its own.
-                        if (source.kind != .value) {
-                            @memcpy(copied.bytes[0..source.bytes.len], source.bytes);
-                            copied.count = source.count;
+                        if (run.kind != .value) {
+                            @memcpy(copied.bytes[0..run.bytes.len], run.bytes);
+                            copied.count = run.count;
                         } else {
-                            // `source` is a copy of the row's run, so
-                            // the buffer it names stays put while
-                            // `deepCopy` allocates and moves the table.
-                            for (source.cells(Value)) |item| {
-                                const duplicate = try self.deepCopy(item);
+                            // `run` is a copy of the row's descriptor, so
+                            // the buffer it names stays put while the
+                            // walk allocates and moves either table.
+                            for (run.cells(Value)) |item| {
+                                const duplicate = try self.copyFrom(source, item);
                                 copied.count += 1;
                                 copied.put(copied.count - 1, duplicate);
                             }
@@ -1654,36 +1810,43 @@ pub const Runtime = struct {
                         var copied: Map = .empty;
                         errdefer copied.deinit(self.objects);
                         for (map.entries.items) |entry| {
+                            // The key's bytes are the source map's, so
+                            // the copy takes its own: a `map(string, T)`
+                            // whose keys are longer than a value holds
+                            // would otherwise be two maps over one run
+                            // of bytes, and two frees of it.
+                            const key = try self.ownValue(entry.key);
+                            errdefer self.dropStorage(key);
                             try copied.insert(self.objects, .{
-                                .key = entry.key,
-                                .value = try self.deepCopy(entry.value),
+                                .key = key,
+                                .value = try self.copyFrom(source, entry.value),
                             });
                         }
                         break :blk .{ .data = .{ .map = copied } };
                     },
                     .array => blk: {
-                        const source = self.table.items[index].elements;
-                        const dims = try self.objects.dupe(i64, self.table.items[index].dims);
+                        const run = source.table.items[index].elements;
+                        const dims = try self.objects.dupe(i64, source.table.items[index].dims);
                         errdefer self.objects.free(dims);
                         const elements = try self.objects.alignedAlloc(
                             u8,
                             .of(Value),
-                            source.bytes.len,
+                            run.bytes.len,
                         );
                         errdefer self.objects.free(elements);
                         const copied: Object.Elements = .{
-                            .kind = source.kind,
+                            .kind = run.kind,
                             .bytes = elements,
-                            .count = source.count,
+                            .count = run.count,
                         };
                         // Cells that own nothing copy as bytes; only a
                         // `Value` element needs a walk of its own.
-                        if (source.kind == .value) {
-                            for (source.cells(Value), copied.cells(Value)) |item, *slot| {
-                                slot.* = try self.deepCopy(item);
+                        if (run.kind == .value) {
+                            for (run.cells(Value), copied.cells(Value)) |item, *slot| {
+                                slot.* = try self.copyFrom(source, item);
                             }
                         } else {
-                            @memcpy(elements, source.bytes);
+                            @memcpy(elements, run.bytes);
                         }
                         break :blk .{ .data = .array, .dims = dims, .elements = copied };
                     },
@@ -1699,6 +1862,11 @@ pub const Runtime = struct {
                     // 4 refuses `copy f` by name; this is the wall
                     // behind it, for IR that arrived some other way.
                     .file => return self.fail(.not_owned),
+                    // A task is one worker's, and a second handle on it
+                    // would be two joiners of one thread.  Stage 4
+                    // refuses `copy t` by name; this is the wall behind
+                    // it (docs/THREADS.md D3).
+                    .task => return self.fail(.not_owned),
                 };
                 errdefer storage.release(self.objects);
                 const duplicate = try self.attach(storage);
@@ -1709,7 +1877,7 @@ pub const Runtime = struct {
                         for (made.elements.cells(Value)) |item| self.adopt(item);
                     },
                     .map => |map| for (map.entries.items) |entry| self.adopt(entry.value),
-                    .builder, .file => {},
+                    .builder, .file, .task => {},
                 }
                 return duplicate;
             },
@@ -1722,7 +1890,7 @@ pub const Runtime = struct {
                     self.objects.free(copied);
                 }
                 for (fields, copied) |field, *slot| {
-                    slot.* = try self.deepCopy(field);
+                    slot.* = try self.copyFrom(source, field);
                     filled += 1;
                 }
                 return Value.ofStruct(copied);

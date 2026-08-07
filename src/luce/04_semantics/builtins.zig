@@ -208,6 +208,14 @@ pub const builder_methods = [_][]const u8{ "append", "append_ascii", "build", "c
 /// the end of the owning scope is the automatic one.
 pub const file_methods = [_][]const u8{ "read", "write", "flush" };
 
+/// A task's one method (docs/THREADS.md D4).  There is no `cancel`
+/// and no `done`: a worker owns its own runtime and nothing outside
+/// it may reach in, and a question whose answer is stale before it is
+/// read is not a question worth answering.  `free t` is an early join
+/// and the end of the owning scope is the automatic one, exactly as
+/// for `file`.
+pub const task_methods = [_][]const u8{"wait"};
+
 /// Builtin value methods whose result is a fresh object the caller
 /// owns (S22).  These three are intrinsics with no signature to
 /// consult, so the list is the signature; the method tables above
@@ -215,7 +223,12 @@ pub const file_methods = [_][]const u8{ "read", "write", "flush" };
 /// is *not* here — `builder.zig`'s `routedMethodYieldsObject` asks its
 /// declaration instead, so adding an object-returning `strings`
 /// function cannot quietly leak what it returns.
-pub const fresh_object_methods = [_][]const u8{ "pop", "keys", "values" };
+/// `wait` is here for the same reason `pop` is: what it hands back
+/// belonged to somebody else a moment ago and belongs to nobody now.
+/// A worker's result is *moved* into the joiner's runtime as it
+/// crosses (docs/THREADS.md D4), so the binding that receives it owns
+/// it, exactly as S16 says of a return.
+pub const fresh_object_methods = [_][]const u8{ "pop", "keys", "values", "wait" };
 
 // ---------------------------------------------------------------------------
 // Tests

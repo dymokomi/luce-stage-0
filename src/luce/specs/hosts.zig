@@ -33,6 +33,12 @@ const runtime = luce.runtime;
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
 
+/// How many workers one spec may have running at once.  A `Capture` is
+/// fixed buffers throughout (see the header), and a spec that wants
+/// more threads than this is a spec about something other than the
+/// language.
+const max_worker_threads = 16;
+
 // ---------------------------------------------------------------------------
 // The world both hosts present
 // ---------------------------------------------------------------------------
@@ -340,6 +346,87 @@ pub const World = struct {
 /// are the one difference: `abi.Host`'s slots answer `abi.Answer` and
 /// `runtime.files.Channel`'s answer the plain `i32` the runtime library
 /// speaks, which are the same three numbers.
+/// The thread channel both spec hosts offer, written once
+/// (docs/THREADS.md D8).
+///
+/// The same shape as `HandleChannel` and for the same reason: a host's
+/// whole contribution to concurrency is a thread, so the two arms hand
+/// over the same two functions and differ only in whether the answer is
+/// an `abi.Answer` or the plain `i32` the runtime library speaks.
+///
+/// **Threads under a leak-checked test allocator are real threads.**  A
+/// spec's workers run on `std.Thread` exactly as loom's do, which is
+/// the point of D10: if the oracle faked them the two-engine comparison
+/// would be comparing one engine's concurrency with the other's
+/// pretence.
+fn ThreadChannel(comptime Owner: type) type {
+    return struct {
+        const Body = *const fn (argument: ?*anyopaque) callconv(.c) void;
+
+        fn ownerOf(context: ?*anyopaque) *Owner {
+            return @ptrCast(@alignCast(context.?));
+        }
+
+        fn go(body: Body, argument: ?*anyopaque) void {
+            body(argument);
+        }
+
+        fn start(owner: *Owner, body: Body, argument: ?*anyopaque) ?i64 {
+            const started = std.Thread.spawn(.{}, go, .{ body, argument }) catch return null;
+            for (&owner.threads, 0..) |*row, index| {
+                if (row.* != null) continue;
+                row.* = started;
+                return @intCast(index + 1);
+            }
+            // No room left in the fixed table: the thread must not be
+            // left running with nobody able to wait for it.
+            started.join();
+            return null;
+        }
+
+        fn waitFor(owner: *Owner, thread: i64) bool {
+            if (thread < 1 or thread > owner.threads.len) return false;
+            const row = &owner.threads[@intCast(thread - 1)];
+            if (row.*) |running| {
+                row.* = null;
+                running.join();
+            }
+            return true;
+        }
+
+        fn spawn(
+            context: ?*anyopaque,
+            body: Body,
+            argument: ?*anyopaque,
+            thread: *i64,
+        ) callconv(.c) abi.Answer {
+            thread.* = start(ownerOf(context), body, argument) orelse return .no;
+            return .yes;
+        }
+
+        fn join(context: ?*anyopaque, thread: i64) callconv(.c) abi.Answer {
+            return if (waitFor(ownerOf(context), thread)) .yes else .no;
+        }
+
+        fn channel(owner: *Owner) luce.runtime.workers.Channel {
+            const Plain = struct {
+                fn spawnPlain(
+                    context: ?*anyopaque,
+                    body: Body,
+                    argument: ?*anyopaque,
+                    thread: *i64,
+                ) callconv(.c) i32 {
+                    return @intFromEnum(spawn(context, body, argument, thread));
+                }
+                fn joinPlain(context: ?*anyopaque, thread: i64) callconv(.c) i32 {
+                    return @intFromEnum(join(context, thread));
+                }
+            };
+            return .{ .context = owner, .spawn = Plain.spawnPlain, .join = Plain.joinPlain };
+        }
+    };
+}
+
 fn HandleChannel(comptime Owner: type) type {
     return struct {
         fn worldOf(context: ?*anyopaque) *World {
@@ -478,6 +565,11 @@ pub const Provided = struct {
     /// refusals arrive at the same trap by different roads, and both
     /// are worth a spec.
     machine: bool = true,
+    /// Whether this host can thread (docs/THREADS.md D8).  A host that
+    /// cannot is the fail-closed row: a `spawn` traps
+    /// `host_unavailable` at the keyword, on both engines, having
+    /// touched nothing.
+    threads: bool = true,
     /// The depth limit both engines run under.  The ABI's default is
     /// the interpreter's default, so a spec only names this when it
     /// wants a shallower one.
@@ -498,6 +590,7 @@ pub const Provided = struct {
         .environment = false,
         .exit = false,
         .machine = false,
+        .threads = false,
     };
 
     /// A host with a console and nothing else: every other service is
@@ -564,6 +657,12 @@ fn keepText(buffer: []u8, words: []const u8) usize {
 /// What a run of a compiled program did: the transcript it produced,
 /// how it ended, and what it left unfreed.
 pub const Capture = struct {
+    /// Every worker thread this run started (docs/THREADS.md D8).  A
+    /// fixed table because a `Capture` is fixed buffers throughout and
+    /// a spec that needs more workers than this is a spec about
+    /// something other than the language; a thread is its index plus
+    /// one, so zero is never a handle.
+    threads: [max_worker_threads]?std.Thread = @splat(null),
     world: World = .{},
     printed_storage: [32768]u8 = undefined,
     printed_length: usize = 0,
@@ -661,10 +760,13 @@ pub const Capture = struct {
             .handle_write = if (provided.files) Handles.write else null,
             .handle_flush = if (provided.files) Handles.flush else null,
             .handle_close = if (provided.files) Handles.close else null,
+            .worker_spawn = if (provided.threads) Threads.spawn else null,
+            .worker_join = if (provided.threads) Threads.join else null,
         };
     }
 
     const Handles = HandleChannel(Capture);
+    const Threads = ThreadChannel(Capture);
 
     fn of(context: ?*anyopaque) *Capture {
         return @ptrCast(@alignCast(context.?));
@@ -981,6 +1083,12 @@ pub const Capture = struct {
 /// The same program on the interpreter: the oracle, and the thing a
 /// compiled run has to agree with byte for byte.
 pub const Reference = struct {
+    /// Every worker thread this run started (docs/THREADS.md D8).  A
+    /// fixed table because a `Capture` is fixed buffers throughout and
+    /// a spec that needs more workers than this is a spec about
+    /// something other than the language; a thread is its index plus
+    /// one, so zero is never a handle.
+    threads: [max_worker_threads]?std.Thread = @splat(null),
     gpa: Allocator = testing.allocator,
     provided: Provided = .{},
     world: World = .{},
@@ -1048,10 +1156,12 @@ pub const Reference = struct {
                 .key_read = keyRead,
             } else null,
             .files = if (self.provided.files) Handles.channel(self) else .{},
+            .workers = if (self.provided.threads) Threads.channel(self) else .{},
         };
     }
 
     const Handles = HandleChannel(Reference);
+    const Threads = ThreadChannel(Reference);
 
     fn take(context: *anyopaque, text: []const u8) error{OutOfMemory}!void {
         try of(context).record("", text);

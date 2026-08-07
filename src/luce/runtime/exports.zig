@@ -71,6 +71,7 @@ const heap = @import("heap.zig");
 const operators = @import("operators.zig");
 const text = @import("text.zig");
 const trace = @import("trace.zig");
+const workers = @import("workers.zig");
 const value = @import("value.zig");
 
 const Runtime = heap.Runtime;
@@ -168,7 +169,7 @@ pub export fn luce_rt_close(runtime: *Runtime) callconv(.c) void {
 /// explicit in Luce, so this is part of what a run did, and every host
 /// (native, wasm, the specs) reads it from here.
 pub export fn luce_rt_leaked(runtime: *const Runtime) callconv(.c) i64 {
-    return runtime.live;
+    return runtime.leaked();
 }
 
 /// How the run ended, given the outcome the entry function answered.
@@ -496,6 +497,97 @@ pub export fn luce_rt_parse_string(
     out.* = files.parseString(runtime, held.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
+}
+
+// ---------------------------------------------------------------------------
+// Workers (docs/THREADS.md)
+// ---------------------------------------------------------------------------
+//
+// The same installed-channel shape the byte channel established, and
+// for the same reason: a task's join happens at the end of the scope
+// that owns it, inside the ownership walk, where no generated code is
+// standing to hand a host in.  What is new is the *second* channel —
+// how this engine makes a runtime for a worker and runs one function in
+// it — because that is the one question a host cannot answer.  Both
+// halves arrive in one call, at the top of `luce_main`, and **only in a
+// program that contains a `spawn`**: a program without one emits none
+// of this and pays nothing (D11).
+//
+// `open` and `close` are not parameters: they are this library's own,
+// and generated code has no business naming them.
+
+/// A runtime for a worker, on the same allocators the run's own uses.
+fn workerOpen(context: ?*anyopaque) callconv(.c) ?*Runtime {
+    _ = context;
+    return luce_rt_open(null, 0);
+}
+
+fn workerClose(context: ?*anyopaque, worker: *Runtime) callconv(.c) void {
+    _ = context;
+    luce_rt_close(worker);
+}
+
+pub export fn luce_rt_workers_install(
+    runtime: *Runtime,
+    context: ?*anyopaque,
+    spawn: ?workers.SpawnFn,
+    join: ?workers.JoinFn,
+    engine: ?*anyopaque,
+    run: ?workers.RunFn,
+    depth: i64,
+) callconv(.c) void {
+    runtime.workers = .{ .context = context, .spawn = spawn, .join = join };
+    runtime.nursery = .{
+        .context = engine,
+        .open = workerOpen,
+        .close = workerClose,
+        .run = run,
+    };
+    runtime.depth_budget = depth;
+}
+
+/// `spawn f(args)` — the arguments arrive as a run of boxes and are
+/// moved into the worker's runtime here, on this thread, before the
+/// thread starts (docs/THREADS.md D2).
+pub export fn luce_rt_spawn(
+    runtime: *Runtime,
+    function: i64,
+    arguments: [*]const Value,
+    count: i64,
+    out: *Value,
+) callconv(.c) i32 {
+    workers.spawn(runtime, function, arguments[0..@intCast(count)], out) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+/// `t.wait()` — join, and move the worker's result here (D4).
+///
+/// Answers all three outcomes, because all three can cross a join: a
+/// worker that returned, a worker that raised, and a worker that
+/// trapped — the last of which is this frame's trap now, carrying the
+/// worker's own frames in front of its own (D6).
+pub export fn luce_rt_task_wait(
+    runtime: *Runtime,
+    task: *const Value,
+    out: *Value,
+) callconv(.c) i32 {
+    return workers.wait(runtime, task.*, out) catch |mistake| failed(runtime, mistake);
+}
+
+/// The two halves of the effect lock (D9), emitted around every host
+/// service call — and **only** in a program that contains a `spawn`.
+///
+/// A pair of calls rather than one guarded region because a host
+/// service is a call, and what has to be atomic is the call: a `print`
+/// from three workers is line-atomic exactly when nothing else is
+/// inside the host between the enter and the leave.
+pub export fn luce_rt_effects_enter(runtime: *Runtime) callconv(.c) void {
+    runtime.enterEffects();
+}
+
+pub export fn luce_rt_effects_leave(runtime: *Runtime) callconv(.c) void {
+    runtime.leaveEffects();
 }
 
 pub export fn luce_rt_files_install(

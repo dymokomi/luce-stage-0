@@ -71,6 +71,11 @@ pub const maxElements = @import("runtime/heap.zig").maxElements;
 /// artifact reaches the same bodies through `exports.zig`.
 pub const files = @import("runtime/files.zig");
 
+/// Workers: the host's thread channel, this engine's nursery, the
+/// argument and result transfers, the join, and the effect lock
+/// (docs/THREADS.md).  Reached the same two ways `files` is.
+pub const workers = @import("runtime/workers.zig");
+
 pub const Tag = @import("runtime/value.zig").Tag;
 pub const Value = @import("runtime/value.zig").Value;
 pub const View = @import("runtime/value.zig").View;

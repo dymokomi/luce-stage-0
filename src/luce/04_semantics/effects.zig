@@ -32,6 +32,9 @@ pub fn mayMutateContainers(expression: *const ast.Expression) bool {
     return switch (expression.*) {
         .method => true,
         .give, .copy => true,
+        // A spawn moves every object argument out of this runtime,
+        // which is the largest disturbance there is (docs/THREADS.md).
+        .spawn => true,
         .try_call => true,
         .call => |call| blk: {
             if (!builtins.isPure(call.callee)) break :blk true;

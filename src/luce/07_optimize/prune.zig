@@ -42,7 +42,7 @@ pub fn prune(arena: Allocator, program: *Program) Allocator.Error!void {
     while (pending.pop()) |index| {
         for (program.functions[index].instructions) |instruction| {
             const called = switch (instruction) {
-                .call => |call| call.function,
+                .call, .spawn => |call| call.function,
                 else => continue,
             };
             if (reachable[called]) continue;
@@ -66,7 +66,7 @@ pub fn prune(arena: Allocator, program: *Program) Allocator.Error!void {
         const function = program.functions[index];
         for (function.instructions) |*instruction| {
             switch (instruction.*) {
-                .call => |*call| call.function = renumbered[call.function],
+                .call, .spawn => |*call| call.function = renumbered[call.function],
                 else => {},
             }
         }

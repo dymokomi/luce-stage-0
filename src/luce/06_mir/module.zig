@@ -64,7 +64,13 @@ pub const magic = "LUCE";
 /// `heap`, which are the other two types that index a table, so
 /// `optional` renumbers.  Safe for the reason 22's note gives and no
 /// other: the version moved with it.
-pub const format_version: u32 = 29;
+/// 30 — threads arrive (docs/THREADS.md).  One instruction (`spawn`,
+/// beside `call` because it is one), one intrinsic (`task_wait`), and
+/// one heap type (`task`, carrying the spawned function's result type
+/// and its fallibility) — all appended, and the version moves with
+/// them because `Instruction` is written by tag ordinal and `spawn`
+/// lands in the middle of the union rather than on the end.
+pub const format_version: u32 = 30;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -173,6 +179,10 @@ const Writer = struct {
                 try self.int(u8, shape.rank);
             },
             .builder, .file => {},
+            .task => |work| {
+                try self.valueType(work.result);
+                try self.int(u8, @intFromBool(work.fallible));
+            },
         }
     }
 
@@ -251,7 +261,7 @@ const Writer = struct {
                 try self.int(u32, set.field);
                 try self.int(u32, set.value);
             },
-            .call => |call| {
+            .call, .spawn => |call| {
                 try self.int(u32, call.function);
                 try self.registers(call.arguments);
             },
@@ -439,6 +449,10 @@ const Reader = struct {
             } },
             .builder => .builder,
             .file => .file,
+            .task => .{ .task = .{
+                .result = try self.valueType(),
+                .fallible = (try self.int(u8)) != 0,
+            } },
         };
     }
 
@@ -531,6 +545,10 @@ const Reader = struct {
                 .value = try self.int(u32),
             } },
             .call => .{ .call = .{
+                .function = try self.int(u32),
+                .arguments = try self.registers(arena),
+            } },
+            .spawn => .{ .spawn = .{
                 .function = try self.int(u32),
                 .arguments = try self.registers(arena),
             } },
@@ -1010,8 +1028,8 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // moved this number and left the hash alone.  A version bump is
     // still required for that, and this test is not what will remind
     // you.
-    try testing.expectEqual(@as(u32, 29), format_version);
-    try testing.expectEqual(@as(u64, 14490193926574754925), hasher.final());
+    try testing.expectEqual(@as(u32, 30), format_version);
+    try testing.expectEqual(@as(u64, 15562439270010485387), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {
