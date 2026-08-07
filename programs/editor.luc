@@ -7,12 +7,17 @@
 #
 #   loom edit FILE          (or: loom run editor.lc FILE)
 #   Ctrl-S save             Ctrl-Q quit (twice to discard changes)
+#
+# Nothing here is reachable from another module, so everything but
+# `main` is `private` (docs/VISIBILITY.md): the file is the unit, and
+# what a program's insides are called is nobody else's business.
 
 import std.files
+import std.strings
 
-struct Theme:
+private struct Theme:
     keyword: long
-    kind: long
+    type_name: long
     builtin: long
     text: long
     number: long
@@ -26,9 +31,9 @@ struct Theme:
     alert: long
 
 # One file-scope constant instead of a function per color.
-let theme = Theme(
+private let theme = Theme(
     keyword = 176,
-    kind = 80,
+    type_name = 80,
     builtin = 74,
     text = 114,
     number = 215,
@@ -42,22 +47,34 @@ let theme = Theme(
     alert = 215,
 )
 
-struct Fmt:
-    func pad_left(value: string, width: long) -> string:
-        var padded = value
-        while len(padded) < width:
-            padded = " " + padded
-        return padded
-
-struct Text:
+# What a single byte is, before anything has decided what it means.
+# Every predicate here answers about one byte and reaches nothing.
+private struct Bytes:
     func continuation(byte: byte) -> bool:
         return byte >= 128 and byte < 192
 
+    func is_digit(byte: byte) -> bool:
+        return byte >= 48 and byte <= 57
+
+    func is_upper(byte: byte) -> bool:
+        return byte >= 65 and byte <= 90
+
+    func is_alpha(byte: byte) -> bool:
+        return Bytes.is_upper(byte) or (byte >= 97 and byte <= 122)
+
+    func is_word_start(byte: byte) -> bool:
+        return Bytes.is_alpha(byte) or byte == 95 or byte >= 194
+
+    func is_word(byte: byte) -> bool:
+        return Bytes.is_word_start(byte) or Bytes.is_digit(byte) or Bytes.continuation(byte)
+
+# UTF-8 boundaries, lines and columns over a whole buffer.
+private struct Text:
     func previous_boundary(value: string, cursor: long) -> long:
         if cursor <= 0:
             return 0
         var at = cursor - 1
-        while at > 0 and Text.continuation(value.byte_at(at)):
+        while at > 0 and Bytes.continuation(value.byte_at(at)):
             at = at - 1
         return at
 
@@ -65,7 +82,7 @@ struct Text:
         if cursor >= len(value):
             return len(value)
         var at = cursor + 1
-        while at < len(value) and Text.continuation(value.byte_at(at)):
+        while at < len(value) and Bytes.continuation(value.byte_at(at)):
             at = at + 1
         return at
 
@@ -125,7 +142,7 @@ struct Text:
             columns = columns + 1
         return columns
 
-struct Editing:
+private struct Editing:
     func splice(value: string, cursor: long, extra: string) -> string:
         return value[0:cursor] + extra + value[cursor:len(value)]
 
@@ -137,66 +154,195 @@ struct Editing:
         let after = Text.next_boundary(value, cursor)
         return value[0:cursor] + value[after:len(value)]
 
-struct Words:
-    func is_digit(byte: byte) -> bool:
-        return byte >= 48 and byte <= 57
+# --- the word tables -------------------------------------------------
+#
+# **The language's own words, spelled once each.**  These used to be
+# forty-six `word == "…"` comparisons — a hash set written as a truth
+# table — and they had drifted eight language generations out of date:
+# `enum`, `match`, `new`, `import`, `give`, `copy`, `none`, `try`,
+# `catch` and `self` were all missing, and so were twenty-one builtins
+# the language has gained since.  Ground truth is the compiler's own
+# tables, which `tools/grammar.zig` reads for the VS Code grammar:
+# `02_lex/token.zig`'s `keywords` (thirty words) and
+# `04_semantics/builtins.zig`'s `builtins` (forty-five), plus `range`,
+# which is syntax the parser recognises only inside a `for`.
+#
+# Two words came *out*.  `slice` is a name the language does not have
+# at all any more, and `byte_at` is a **method**: it is only
+# a name after a receiver and a dot, which is what the VS Code grammar
+# gives its own rule for.  This highlighter colours words, not
+# receivers, so a method list here would colour a program's own `find`
+# and `get` and `build` as well — the two lists are the free builtins
+# and nothing else.
+#
+# **A space-delimited constant, searched, rather than a chain
+# compared.**  Luce has no sets and no constant containers (docs/
+# MISSING.md tier 3 §1): a top-level `let` folds a *value*, so a list
+# or a map cannot stand here, and building one per call would cost far
+# more than the comparisons it replaced.  What a constant *can* hold is
+# a string, and `listed` below searches it with `find`, which lands on
+# `find_byte` — the language's scanning primitive, and the seam SIMD
+# enters through (docs/STD.md).  Every word is fenced by a space on
+# both sides, which is what makes a search a membership test: `in`
+# never matches inside `int`, and no prefix is ever a member by
+# accident.
+#
+# **It is faster than the chain it replaces**, which was not the point
+# but is worth writing down: 0.15 µs per word against 0.22–0.29 µs for
+# the forty-six comparisons, on a table that is half again as long
+# (a paired micro-benchmark, ReleaseSafe, 156,000 classifications).  A
+# frame classifies a few hundred words, so highlighting costs about a
+# twentieth of a millisecond either way.
+#
+# What a real set would still buy: constant-time membership instead of
+# a scan, and a duplicate the compiler could refuse.  Neither is what
+# this file is waiting on.
+private let keyword_words = (
+    " and break catch continue copy elif else enum false for func give" +
+    " if import in let match new none not or private public return" +
+    " self struct true try var while "
+)
 
-    func is_upper(byte: byte) -> bool:
-        return byte >= 65 and byte <= 90
+private let builtin_words = (
+    " abs assert ceil chr clamp clock_ms dir_list env error exit" +
+    " file_append file_delete file_exists file_open file_read" +
+    " file_rename file_write floor free key_read key_text len max" +
+    " min ord os_available_memory os_cpu_count os_total_memory" +
+    " parse_float parse_int parse_string print print_error range" +
+    " read_line sleep_ms sqrt term_clear term_cols term_flush" +
+    " term_move term_rows term_style term_write trap trunc "
+)
 
-    func is_alpha(byte: byte) -> bool:
-        return Words.is_upper(byte) or (byte >= 97 and byte <= 122)
+# Whether `word` is one of the space-fenced words of `words`.
+#
+# The bounds are the constants' own: both tables open and close with a
+# space and hold no two spaces in a row, so a match can never start at
+# 0 and can never end at the last byte — `at - 1` and `at + len(word)`
+# are always inside the string, and neither needs a guard.  A hit that
+# is not fenced (`in` inside `int`) is skipped and the search goes on
+# from the byte after it.
+private func listed(words: string, word: string) -> bool:
+    var at = words.find(word)
+    while at >= 0:
+        if words.byte_at(at - 1) == 32 and words.byte_at(at + len(word)) == 32:
+            return true
+        at = words.find(word, at + 1)
+    return false
 
-    func is_word_start(byte: byte) -> bool:
-        return Words.is_alpha(byte) or byte == 95 or byte >= 194
+# What a word in a source line is, and the color that says so.
+#
+# This used to be a `long` and the comment `# 1 keyword, 2 type name,
+# 3 builtin, 0 plain` — an enum written down in prose, dispatched on
+# with an `elif` chain over numbers (docs/ENUMS.md's evidence).  The
+# `match` below has an arm for every member and no `else`, so a fifth
+# class of word cannot be added without the compiler naming this site.
+private enum Word:
+    # A reserved word: the shape of the program.
+    keyword
+    # A capitalized name — a struct, an enum, or anything else the
+    # language's own convention says is a type.
+    type_name
+    # A name the language supplies rather than the program.
+    builtin
+    # A program's own names, and everything left over.
+    plain
 
-    func is_word(byte: byte) -> bool:
-        return Words.is_word_start(byte) or Words.is_digit(byte) or Words.continuation_byte(byte)
+    # Which of the four a word is.  The order is the language's: a
+    # reserved word is a keyword before it could be anything else, and
+    # a capitalized name is a type before a builtin (no builtin is
+    # capitalized, so the two never actually race).
+    func of(text: string) -> Word:
+        if listed(keyword_words, text):
+            return Word.keyword
+        if len(text) > 0 and Bytes.is_upper(text.byte_at(0)):
+            return Word.type_name
+        if listed(builtin_words, text):
+            return Word.builtin
+        return Word.plain
 
-    func continuation_byte(byte: byte) -> bool:
-        return byte >= 128 and byte < 192
+    func style(self):
+        match self:
+            keyword:
+                term_style(theme.keyword, bold = true)
+            type_name:
+                term_style(theme.type_name)
+            builtin:
+                term_style(theme.builtin)
+            plain:
+                term_style(theme.plain)
 
-    func is_keyword(word: string) -> bool:
-        if word == "func" or word == "let" or word == "var" or word == "if":
-            return true
-        if word == "elif" or word == "else" or word == "while" or word == "for":
-            return true
-        if word == "in" or word == "return" or word == "break" or word == "continue":
-            return true
-        if word == "struct" or word == "and" or word == "or" or word == "not":
-            return true
-        if word == "public" or word == "private":
-            return true
-        return word == "true" or word == "false"
+# What a keystroke means to the editor.
+#
+# **The wart this deletes.**  `State.key` used to take the host's key
+# *name* and dispatch on it with fifteen string comparisons in one
+# `elif` chain with no final `else`: a misspelled `"page_dwon"`
+# compiled and silently did nothing, and exhaustiveness is exactly the
+# property a chain of comparisons cannot state (docs/ENUMS.md).  The
+# host's stable key names (`src/apps/host.zig`'s `keyView`) are
+# translated to intents *once*, here at the edge, and every key the
+# editor does not bind arrives as `ignored` — named, not fallen
+# through.  Past this function the editor never compares a string to
+# decide what to do, and `match` refuses to compile with a member
+# missing an arm.
+private enum Intent:
+    move_left
+    move_right
+    move_up
+    move_down
+    page_up
+    page_down
+    line_start
+    line_end
+    erase_left
+    erase_right
+    newline
+    indent
+    # `insert_text` rather than `insert`: `insert` is a list method,
+    # and the language reserves the method names for the receivers
+    # that answer to them (`luce.sema.reserved`).
+    insert_text
+    save
+    quit
+    # Every other key the terminal can send — `escape`, `ctrl_a`, a
+    # control the editor has no use for.  It is a member, so the
+    # `match` that handles it has to say so out loud.
+    ignored
 
-    func is_builtin(word: string) -> bool:
-        if word == "range" or word == "len" or word == "slice" or word == "byte_at":
-            return true
-        if word == "print" or word == "assert" or word == "trap":
-            return true
-        if word == "min" or word == "max" or word == "clamp" or word == "abs":
-            return true
-        if word == "sqrt" or word == "floor" or word == "ceil":
-            return true
-        if word == "file_read" or word == "file_write" or word == "file_exists":
-            return true
-        if word == "key_read" or word == "key_text" or word == "dir_list":
-            return true
-        if word == "term_write" or word == "term_move" or word == "term_style":
-            return true
-        if word == "term_clear" or word == "term_flush" or word == "term_rows":
-            return true
-        return word == "term_cols"
-
-    # 1 keyword, 2 type name (capitalized), 3 builtin, 0 plain.
-    func classify(word: string) -> long:
-        if Words.is_keyword(word):
-            return 1
-        if len(word) > 0 and Words.is_upper(word.byte_at(0)):
-            return 2
-        if Words.is_builtin(word):
-            return 3
-        return 0
+    # The whole of the translation, and the only place in the editor
+    # a key name is a string.  A name this does not know is `ignored`
+    # by the last line rather than by falling off the end of a chain.
+    func of(name: string) -> Intent:
+        if name == "left":
+            return Intent.move_left
+        if name == "right":
+            return Intent.move_right
+        if name == "up":
+            return Intent.move_up
+        if name == "down":
+            return Intent.move_down
+        if name == "page_up":
+            return Intent.page_up
+        if name == "page_down":
+            return Intent.page_down
+        if name == "home":
+            return Intent.line_start
+        if name == "end":
+            return Intent.line_end
+        if name == "backspace":
+            return Intent.erase_left
+        if name == "delete":
+            return Intent.erase_right
+        if name == "enter":
+            return Intent.newline
+        if name == "tab":
+            return Intent.indent
+        if name == "text":
+            return Intent.insert_text
+        if name == "ctrl_s":
+            return Intent.save
+        if name == "ctrl_q":
+            return Intent.quit
+        return Intent.ignored
 
 # The editor's whole state, and the operations on it.
 #
@@ -211,7 +357,7 @@ struct Words:
 # what `var self` requires and where S17 and S28 had already put this
 # code: had it carried a `list`, `return next` would already have been
 # refused.
-struct State:
+private struct State:
     path: string
     content: string
     message: string
@@ -236,74 +382,78 @@ struct State:
     # was the program *guessing* the sentence the runtime had already
     # written and happening to agree.  `catch reason:` reads it instead.
     func save(var self):
-        file_write(self.path, self.content) catch reason:
+        files.write(self.path, self.content) catch reason:
             self.message = reason
             return
         self.dirty = false
-        self.message = "saved " + self.path
+        self.message = f"saved {self.path}"
 
-    func key(var self, name: string, inserted: string, visible: long):
+    func key(var self, intent: Intent, inserted: string, visible: long):
         let line = Text.line_of(self.content, self.cursor)
-        if name != "ctrl_q":
+        if intent != Intent.quit:
             self.quit_pending = false
-        if len(self.message) > 0 and name != "ctrl_q" and name != "ctrl_s":
+        if len(self.message) > 0 and intent != Intent.quit and intent != Intent.save:
             self.message = ""
 
-        if name == "left":
-            self.cursor = Text.previous_boundary(self.content, self.cursor)
-        elif name == "right":
-            self.cursor = Text.next_boundary(self.content, self.cursor)
-        elif name == "up":
-            self.vertical(line - 1)
-        elif name == "down":
-            self.vertical(line + 1)
-        elif name == "page_up":
-            self.vertical(line - visible)
-        elif name == "page_down":
-            self.vertical(line + visible)
-        elif name == "home":
-            self.cursor = Text.line_start(self.content, self.cursor)
-        elif name == "end":
-            self.cursor = Text.line_end(self.content, self.cursor)
-        elif name == "backspace":
-            if self.cursor > 0:
-                # **The line docs/METHODS.md named.**  This measures
-                # against the content as it was *before* the erase, and
-                # the copy-and-return shape gave that snapshot away for
-                # free: `state` was still the old one while `next` was
-                # the new.  Under `var self` there is one name, so the
-                # snapshot has to be taken out loud — and a conversion
-                # that missed it would move the cursor by the wrong
-                # number of bytes with nothing to catch it, which is
-                # why the editor got a behavioural test first.
-                let before = self.content
-                self.content = Editing.erase_before(self.content, self.cursor)
-                self.cursor = Text.previous_boundary(before, self.cursor)
+        match intent:
+            move_left:
+                self.cursor = Text.previous_boundary(self.content, self.cursor)
+            move_right:
+                self.cursor = Text.next_boundary(self.content, self.cursor)
+            move_up:
+                self.vertical(line - 1)
+            move_down:
+                self.vertical(line + 1)
+            page_up:
+                self.vertical(line - visible)
+            page_down:
+                self.vertical(line + visible)
+            line_start:
+                self.cursor = Text.line_start(self.content, self.cursor)
+            line_end:
+                self.cursor = Text.line_end(self.content, self.cursor)
+            erase_left:
+                if self.cursor > 0:
+                    # **The line docs/METHODS.md named.**  This measures
+                    # against the content as it was *before* the erase,
+                    # and the copy-and-return shape gave that snapshot
+                    # away for free: `state` was still the old one while
+                    # `next` was the new.  Under `var self` there is one
+                    # name, so the snapshot has to be taken out loud —
+                    # and a conversion that missed it would move the
+                    # cursor by the wrong number of bytes with nothing
+                    # to catch it, which is why the editor got a
+                    # behavioural test first.
+                    let before = self.content
+                    self.content = Editing.erase_before(self.content, self.cursor)
+                    self.cursor = Text.previous_boundary(before, self.cursor)
+                    self.dirty = true
+            erase_right:
+                if self.cursor < len(self.content):
+                    self.content = Editing.erase_at(self.content, self.cursor)
+                    self.dirty = true
+            newline:
+                self.content = Editing.splice(self.content, self.cursor, "\n")
+                self.cursor = self.cursor + 1
                 self.dirty = true
-        elif name == "delete":
-            if self.cursor < len(self.content):
-                self.content = Editing.erase_at(self.content, self.cursor)
+            indent:
+                self.content = Editing.splice(self.content, self.cursor, "    ")
+                self.cursor = self.cursor + 4
                 self.dirty = true
-        elif name == "enter":
-            self.content = Editing.splice(self.content, self.cursor, "\n")
-            self.cursor = self.cursor + 1
-            self.dirty = true
-        elif name == "tab":
-            self.content = Editing.splice(self.content, self.cursor, "    ")
-            self.cursor = self.cursor + 4
-            self.dirty = true
-        elif name == "text":
-            self.content = Editing.splice(self.content, self.cursor, inserted)
-            self.cursor = self.cursor + len(inserted)
-            self.dirty = true
-        elif name == "ctrl_s":
-            self.save()
-        elif name == "ctrl_q":
-            if self.dirty and not self.quit_pending:
-                self.quit_pending = true
-                self.message = "unsaved changes; Ctrl-Q again to discard"
-            else:
-                self.quit = true
+            insert_text:
+                self.content = Editing.splice(self.content, self.cursor, inserted)
+                self.cursor = self.cursor + len(inserted)
+                self.dirty = true
+            save:
+                self.save()
+            quit:
+                if self.dirty and not self.quit_pending:
+                    self.quit_pending = true
+                    self.message = "unsaved changes; Ctrl-Q again to discard"
+                else:
+                    self.quit = true
+            ignored:
+                return
 
     func adjust(var self, visible: long):
         let cursor_line = Text.line_of(self.content, self.cursor)
@@ -322,17 +472,16 @@ struct State:
         var flag = ""
         if self.dirty:
             flag = " +"
-        var left = " " + self.path + flag + "  " + string(line + 1) + ":" + string(column + 1)
+        var left = f" {self.path}{flag}  {line + 1}:{column + 1}"
         if len(self.message) > 0:
-            left = left + "  — " + self.message
+            left = left + f"  — {self.message}"
         let hint = "Ctrl-S save  Ctrl-Q quit "
-        var pad = cols - Text.width(left) - Text.width(hint)
-        while pad > 0:
-            left = left + " "
-            pad = pad - 1
-        let bar = left + hint
+        # Padded in one call rather than one append per column: the
+        # loop this replaces built a fresh string per space, every
+        # frame.  `repeat` answers "" for a width already overrun.
+        let bar = left + strings.repeat(" ", cols - Text.width(left) - Text.width(hint)) + hint
         term_style(theme.status_fg, theme.status_bg)
-        let ignored = Draw.emit(bar, 0, len(bar), cols)
+        let ignored = Draw.emit(bar, from = 0, to = len(bar), remaining = cols)
 
     func frame(self):
         let rows = max(term_rows(), 2)
@@ -350,9 +499,9 @@ struct State:
             let line_index = self.scroll + row
             term_move(row, 0)
             if line_index < total:
-                Draw.gutter(line_index + 1, line_index == cursor_line)
+                Draw.gutter(line_index + 1, current = line_index == cursor_line)
                 let finish = Text.line_end(self.content, at)
-                Draw.line(self.content, at, finish, text_width)
+                Draw.line(self.content, from = at, to = finish, width = text_width)
                 at = finish + 1
             else:
                 term_style(theme.gutter)
@@ -364,7 +513,7 @@ struct State:
         )
         term_flush()
 
-struct Draw:
+private struct Draw:
     # Write [from, to) clipped to `remaining` display columns; returns
     # the columns actually used.
     func emit(value: string, from: long, to: long, remaining: long) -> long:
@@ -378,19 +527,19 @@ struct Draw:
         return used
 
     # One source line with Luce highlighting, clipped to `width`.
-    func line(content: string, start: long, finish: long, width: long):
-        var at = start
+    func line(content: string, from: long, to: long, width: long):
+        var at = from
         var used: long = 0
-        while at < finish and used < width:
+        while at < to and used < width:
             let byte = content.byte_at(at)
             if byte == 35:
                 term_style(theme.comment)
-                used = used + Draw.emit(content, at, finish, width - used)
-                at = finish
+                used = used + Draw.emit(content, from = at, to = to, remaining = width - used)
+                at = to
             elif byte == 34:
                 var close = at + 1
                 var closed = false
-                while close < finish and not closed:
+                while close < to and not closed:
                     let inner = content.byte_at(close)
                     if inner == 92:
                         close = close + 2
@@ -399,37 +548,30 @@ struct Draw:
                         close = close + 1
                     else:
                         close = close + 1
-                close = min(close, finish)
+                close = min(close, to)
                 term_style(theme.text)
-                used = used + Draw.emit(content, at, close, width - used)
+                used = used + Draw.emit(content, from = at, to = close, remaining = width - used)
                 at = close
-            elif Words.is_digit(byte):
+            elif Bytes.is_digit(byte):
                 var stop = at + 1
-                while stop < finish and (Words.is_digit(content.byte_at(stop)) or content.byte_at(stop) == 46):
+                while stop < to and (Bytes.is_digit(content.byte_at(stop)) or content.byte_at(stop) == 46):
                     stop = stop + 1
                 term_style(theme.number)
-                used = used + Draw.emit(content, at, stop, width - used)
+                used = used + Draw.emit(content, from = at, to = stop, remaining = width - used)
                 at = stop
-            elif Words.is_word_start(byte):
+            elif Bytes.is_word_start(byte):
                 var stop = at + 1
-                while stop < finish and Words.is_word(content.byte_at(stop)):
+                while stop < to and Bytes.is_word(content.byte_at(stop)):
                     stop = stop + 1
-                let kind = Words.classify(content[at:stop])
-                if kind == 1:
-                    term_style(theme.keyword, bold = true)
-                elif kind == 2:
-                    term_style(theme.kind)
-                elif kind == 3:
-                    term_style(theme.builtin)
-                else:
-                    term_style(theme.plain)
-                used = used + Draw.emit(content, at, stop, width - used)
+                let word = Word.of(content[at:stop])
+                word.style()
+                used = used + Draw.emit(content, from = at, to = stop, remaining = width - used)
                 at = stop
             else:
                 var stop = Text.next_boundary(content, at)
-                stop = min(stop, finish)
+                stop = min(stop, to)
                 term_style(theme.punct)
-                used = used + Draw.emit(content, at, stop, width - used)
+                used = used + Draw.emit(content, from = at, to = stop, remaining = width - used)
                 at = stop
 
     func gutter(number: long, current: bool):
@@ -437,7 +579,7 @@ struct Draw:
             term_style(theme.gutter_current)
         else:
             term_style(theme.gutter)
-        term_write(Fmt.pad_left(string(number), 4) + " ")
+        term_write(strings.pad_left(string(number), 4) + " ")
 
 func main(args: list(string)):
     if len(args) != 1:
@@ -467,4 +609,4 @@ func main(args: list(string)):
         let name = key_read()
         if name == none:
             break
-        state.key(name, key_text(), visible)
+        state.key(Intent.of(name), key_text(), visible)

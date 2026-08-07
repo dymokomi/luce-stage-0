@@ -122,30 +122,53 @@ tagged union — ratified, not built, and the reason a `Result`-style
 error type was refused in favour of `T!` as a function attribute.
 
 The half that shipped was decided on the corpus, and the corpus has
-started spending it: `std.zip` reads a compression method and a
-DEFLATE block type through enums rather than through `== 8` and an
-`elif` chain whose last arm existed to say "unknown".
+spent it. `std.zip` reads a compression method and a DEFLATE block
+type through enums rather than through `== 8` and an `elif` chain
+whose last arm existed to say "unknown". And `editor.luc` — the file
+whose three warts argued for the feature — has had all three taken
+out:
 
-What is left of the same hole is still visible in `editor.luc`, which
-predates all of it:
-
-- keys handled with **15 string comparisons in one `elif` chain and
-  no final `else`** — a misspelled `"page_dwon"` compiles and
-  silently does nothing.
+- keys were handled with **15 string comparisons in one `elif` chain
+  and no final `else`**, so a misspelled `"page_dwon"` compiled and
+  silently did nothing. There is now an `enum Intent` with sixteen
+  members; the host's key names are translated to it **once**, at the
+  edge, with the unbound case named `ignored` rather than fallen
+  through, and the `match` that dispatches has an arm for every
+  member. Past that one function the editor never compares a string
+  to decide what to do.
 - `# 1 keyword, 2 type name, 3 builtin, 0 plain` — an enum written as
-  a `long` with a comment.
-- `is_keyword` and `is_builtin` as **46 `word == "…"` comparisons**: a
-  hash set written as a truth table.
+  a `long` with a comment — is `enum Word`, and the `elif` chain over
+  the numbers is a `match` with four arms and no `else`.
+- `is_keyword` and `is_builtin` as **46 `word == "…"` comparisons** —
+  a hash set written as a truth table — are two space-fenced string
+  constants searched with `strings.find`. That is what the language
+  can say today, and it is both shorter and *faster* than the chain
+  (0.15 µs a word against 0.22–0.29 µs, on a table half again as
+  long). It is still not a set, which is the next item below.
+
+The word lists were eight language generations out of date while they
+were comparisons: ten keywords and twenty-one builtins the language
+had gained were missing, and two names it does not have as free
+builtins were still there. They are now the compiler's own tables —
+the same ones the VS Code grammar is generated from.
 
 ## The short list of what a real program hits
 
 Read out of `programs/` for awkwardness rather than for features.
-`editor.luc` is the oldest file in the corpus — it predates the
-standard library, f-strings and constants — so it is both the most
-workaround-dense and the proof that the language moved.
+`editor.luc` used to be the oldest file in the corpus — written
+before enums, `match`, visibility, the standard library, f-strings
+and constants — and was for a long time both the most workaround-dense
+program and the proof that the language moved. It has now been
+rewritten onto everything it predated, which leaves exactly one of its
+warts standing: item 1.
 
-1. **No sets and no constant containers.** Drives the 46-comparison
-   truth tables.
+1. **No sets and no constant containers.** The 46-comparison truth
+   tables became two space-fenced string constants and a
+   `strings.find` — the cleanest membership test the language can
+   state, and faster than the comparisons — but a *search* is what it
+   is. A frozen `set(string)` a top-level `let` could hold would make
+   it constant-time, and would let the compiler refuse a duplicate
+   word. Nothing is blocked on it.
 2. **No character classes in the library.** `is_digit`/`is_alpha`
    re-derived by hand three times. Five functions would fix it.
 3. ~~**No receivers on user structs.**~~ **Shipped.** A function is a
