@@ -364,41 +364,48 @@ complemented at the end, exactly as APPNOTE 4.4.7 says.
 ```text
 import std.zip
 
-zip.bytes(content)               # string -> list(long), the UTF-8 bytes
-zip.text(data)                   # list(long) -> string!, or an error
+zip.read(path)                   # list(byte)! — an archive off the disk
+zip.write(path, archive)         # ! — what writer.finish() answered
+
+zip.bytes(content)               # string -> list(byte), the UTF-8 bytes
+zip.text(data)                   # list(byte) -> string?, absent when
+                                 # the bytes are not text
 
 zip.crc32(data)                  # long — crc32("123456789") is 3421780262
 
 zip.entries(archive)             # list(Entry)! — the central directory
-zip.extract(archive, entry)      # list(long)! — checked against size and CRC
+zip.extract(archive, entry)      # list(byte)! — checked against size and CRC
   entry.name()   entry.size()   entry.packed()
   entry.crc()    entry.deflated()
 
 zip.writer()                     # Writer — a new, empty archive
   writer.add(name, data, compress = false)   # !
-  writer.finish()                            # list(long), fresh each call
+  writer.finish()                            # list(byte), fresh each call
 
-zip.inflate(data)                # list(long)! — stored, fixed and dynamic
-zip.deflate(data)                # list(long) — one fixed-Huffman block
+zip.inflate(data)                # list(byte)! — stored, fixed and dynamic
+zip.deflate(data)                # list(byte) — one fixed-Huffman block
 ```
 
-**Bytes are a `list(long)`, one byte to an element.**  Luce has a
-`byte` and a checked `byte(x)`, but a `list` is boxed whatever its
-element type (docs/TYPES.md §6): a `list(byte)` costs the same eight
-bytes an element *and* a conversion at every store.  The packed one is
-`array(byte, n)`, which cannot grow.  There is no growable packed byte
-buffer in the language, so the honest choice is the width the
-arithmetic happens at.
+**Bytes are a `list(byte)`, one byte to an element** — and one byte of
+memory, since `list` gave up the boxed slot (docs/BYTES.md R1).  This
+module is where that cost was first measured: it used to read "bytes
+are a `list(long)`", because a `list(byte)` was twenty-four bytes an
+element *and* a conversion at every store, so the honest choice was the
+width the arithmetic happens at.  The buffers are a quarter of what
+they were and not a line of the algorithms changed.
 
-**The host cannot hand a program a file's bytes, and cannot take
-them.**  `file_read` answers a `string`; a string is valid UTF-8 by
-construction, so the host refuses a file that is not text and no
-archive worth the name is text.  That is a gap in the boundary rather
-than in this module — every function here works on any bytes it is
-given — and it is the one thing standing between `std.zip` and
-`unzip`.  Until it closes, the bytes come from a program that computed
-them, from `zip.bytes` over text the host *could* read, or from a
-module of literals.
+One thing the narrower element made explicit rather than changed: a
+`byte` widens to `int` in an operator (docs/TYPES.md D5), so a 32-bit
+field's top byte would shift into a sign bit.  `read_u32` lifts its
+four bytes to `long` and says so; everything else fits.
+
+**An archive on disk is reachable.**  `zip.read(path)` and
+`zip.write(path, archive)` are the only two things here that touch the
+world, and they are what the module was written for: until a Luce
+program could read a file that was not text, "takes bytes" meant
+"takes bytes somebody computed", and no real archive could reach any
+of it.  Everything between still takes bytes and answers bytes, which
+is why the two doors are one line each.
 
 Two clauses a conforming reader has to tolerate are tolerated: an
 entry written without seeking, whose local header carries zeros where

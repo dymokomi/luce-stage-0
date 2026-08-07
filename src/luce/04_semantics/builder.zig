@@ -4876,7 +4876,22 @@ pub const FunctionBuilder = struct {
             );
             return null;
         }
-        const elements = (try self.lowerOperands(literal.elements)) orelse return null;
+        // **The elements land on the element type when the place names
+        // one.**  A literal has no type until it meets one
+        // (docs/TYPES.md §1), and what it meets here is the annotation:
+        // without this, `var xs: list(byte) = [1, 2, 3]` reads its
+        // three literals at `int` and is then refused for narrowing
+        // nobody wrote.  That was invisible while every element type
+        // was `long` or wider; `list(byte)` at one byte an element
+        // (docs/BYTES.md R1) is what made it reachable, and the same
+        // landing is what `xs.append(1)` has always had.
+        const landing: Landing = if (wanted) |element| places: {
+            const places = try self.arena().alloc(Type, literal.elements.len);
+            @memset(places, element);
+            break :places .{ .places = places };
+        } else .nothing;
+        const elements = (try self.lowerOperandsInto(literal.elements, landing)) orelse
+            return null;
         const element_type = wanted orelse unified: {
             // The elements meet where two operands of an operator meet
             // and for the same reason: `[1, 2.5]` and `[2.5, 1]` are

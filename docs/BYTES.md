@@ -184,6 +184,40 @@ clauses rather than new ones.  `map` is untouched.  `file_read`,
 `file_write` and `file_append` have the surface and the meaning they
 had.  No keyword arrived.
 
+**`std.zip` collected the payoff, and it is larger than the two doors
+it gained.**  `zip.read(path)` and `zip.write(path, archive)` are one
+line each over `std.files`, and they are what the module was written
+for — but the interesting part is what the run *deleted*:
+
+- Its buffers are `list(byte)`, a quarter of what they were, and not
+  one line of the algorithms changed to make it so.  The module's
+  header used to explain at length why `list(long)` was the honest
+  least-bad choice; that paragraph is now a record of what R1 fixed.
+- `zip.bytes` and `zip.text` are `strings.to_bytes` and
+  `strings.from_bytes`.  `text` was a **hand-written UTF-8 decoder**
+  with nine distinct "those bytes are not text" sentences — a second
+  implementation of a validator, written there only because nothing
+  exposed the first one — and R2 put it out of a job.  Its spec went
+  from five expectations to one, which is R3's `string?` doing exactly
+  what R3 said it would.
+- One thing the narrower element made **explicit rather than
+  changed**: a `byte` widens to `int` in an operator, so `read_u32`'s
+  top byte would shift into a sign bit.  It lifts its four bytes to
+  `long` and says why.  Nothing else in the module needed it, and the
+  Info-ZIP fixtures are what found the one that did.
+
+**The end-to-end proof is Info-ZIP's own bytes through a real file, and
+not a shell-out to `unzip`.**  The suite already embeds five archives
+written by Info-ZIP and Python, on the principle that a library which
+only reads what it wrote has proven nothing about ZIP; the two new
+rows carry those same bytes out through `zip.write` and back through
+`zip.read` and then read them *as an archive*, on both engines, against
+a host that accepts three bytes per write on purpose.  Running the
+system `unzip` would have added a test-time dependency on a tool
+`build.zig` does not require, to prove something the embedded bytes
+already prove — and it would have proven it on one machine's `unzip`
+rather than on the format.
+
 ## Sequencing
 
 After run four (enums + match) merges: both runs move
