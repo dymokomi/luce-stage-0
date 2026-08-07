@@ -22,7 +22,7 @@ select.  There is nothing to select.
 ```text
 FILE.luc → 02_lex → 03_parse → 04_semantics → typed MIR → 07_optimize
                                              ↓
-                            std.zig.llvm.Builder  (08_llvm/lower.zig)
+                        08_llvm/builder (vendored)  (08_llvm/lower.zig)
                                              ↓
                                         LLVM bitcode
                                              ↓
@@ -75,13 +75,17 @@ the same key names as `loom run`.  So is its arithmetic on the way
 out: the exit statuses and the two failure renderings live in that one
 file, and both runners answer from it.  **`0` finished, `1` trapped,
 `3` ended on an uncaught error, `70` ran out of memory, `71` could not
-be run or could not deliver its output** — a trap and an error being
+be run or could not deliver its output, and anything else is a program
+that called `exit(n)`** — a run that ended `.exited` answers the
+program's own status, low eight bits (`start.zig`'s `finish`), because
+`exit` is the program choosing a number and not a failure.  A trap and
+an error being
 two different sentences about a program (docs/FAILURE.md), which is
 why a script reading `$?` can tell them apart without parsing stderr.  Terminal services in a non-loom
 binary were the open question, and null slots (fail closed, trap
 `host_unavailable`) would have been defensible — but they would make
 "the compiled program behaves identically" true of one runner and not
-the other, and two of the nine bundled programs draw on a screen.  A
+the other, and two of the ten bundled programs draw on a screen.  A
 program's behaviour must not depend on who started it.
 
 For that to be a small library rather than a copy of the compiler,
@@ -92,16 +96,24 @@ two undefined Luce symbols — `luce_main` and `luce_artifact` — and no
 second copy of the runtime to collide with the real one at link time.
 
 **How an artifact says what it is.**  It exports `luce_artifact`, a
-constant `abi.Artifact`: a magic, the tag's own layout version, the
-host ABI version, the machine, a hash of the serialized module it was
-built from, what generated the code, and whether it kept its origins.
-A loader reads that *before* it calls anything, and refuses by name —
-wrong machine, wrong ABI, wrong code generator, stale program —
-because a native artifact is not portable and a file name cannot be
-trusted to say so.  Without the tag, a `.lc` copied between machines
-is a file that loads cleanly and crashes with no explanation.
+constant `artifact.Artifact`: a magic, the tag's own layout version,
+the host ABI version, the machine, a hash of the serialized module it
+was built from, what generated the code, and whether it kept its
+origins.  A loader reads that *before* it calls anything, and refuses
+by name — wrong machine, wrong ABI, wrong code generator, stale
+program — because a native artifact is not portable and a file name
+cannot be trusted to say so.  Without the tag, a `.lc` copied between
+machines is a file that loads cleanly and crashes with no explanation.
 
-The machine is `abi.machine` — `aarch64-macos-none`, architecture,
+**The tag is `08_llvm/artifact.zig` and not `abi.zig`**, and the split
+is the point: `abi.zig` is what generated code and a host agree on,
+while the tag is what a *loader* reads before it can believe any of
+that — including which host ABI the code was generated against, which
+is one field inside it.  So the two carry their own version numbers
+and move on their own schedules, and their consumers are disjoint: the
+loader sites read the tag and never touch `LuceHost`.
+
+The machine is `artifact.machine` — `aarch64-macos-none`, architecture,
 system and C ABI from `builtin` — and **not the LLVM triple**, which
 is what it used to be.  The triple is a codegen input: LLVM invents
 it, LLVM parses it, and asking for it means having libLLVM in the
@@ -127,7 +139,7 @@ hash.  (`TMPDIR` rather than `/tmp`: the file gets `dlopen`ed, and a
 world-writable directory is not where that should be decided.)
 
 **The key is content, never a timestamp.**  The tag carries
-`abi.sourceHash` of the serialized module, so a rebuild that produced
+`artifact.sourceHash` of the serialized module, so a rebuild that produced
 identical bytes hits, a program whose bytes changed misses, and a file
 restored from a backup with an old mtime does not quietly win.  That
 is PEP 552's answer rather than PEP 3147's.
@@ -135,7 +147,7 @@ is PEP 552's answer rather than PEP 3147's.
 **And the content is the compiler's as well as the program's.**  A
 `.lc` holds machine code, and which machine code depends on two
 independent things: the program, and whatever turned it into
-instructions.  `source_hash` answers the first.  `abi.generator`
+instructions.  `source_hash` answers the first.  `artifact.generator`
 answers the second, and the tag carries both, so upgrading `luce`
 rebuilds every artifact instead of leaving the previous compiler's
 output running under a program whose module re-encodes to the same
@@ -201,7 +213,11 @@ compiler is not beside /usr/local/bin and not on PATH" — rather than
 running the program some other way.
 
 Measured on the bundled programs and the benchmark set (M4 Max, best
-of several):
+of several).  **A dated snapshot, like every table in this file**:
+taken just after the loom/luce split below, and not re-measured since.
+Absolute times mean nothing off this host; what the table is for is
+the *shape* — warm is two orders of magnitude under cold, and cold is
+paid once per change to the program.
 
 | program | warm | cold (compile + link + first load) |
 |---------|------|------------------------------------|
@@ -228,7 +244,12 @@ holding.
 The reason is dyld.  Homebrew's `libLLVM.dylib` is 164 MB, and a
 process that names it maps and binds all of it before `main` — 5.7 ms
 on this host, measured against an otherwise identical binary, with
-zero LLVM functions ever called.  loom's whole job is starting
+zero LLVM functions ever called.  **That number is the shared-libLLVM
+case**, which is what a system LLVM gives you; `./vendor-llvm.sh`
+links a pinned LLVM statically instead and has no dylib to bind, so it
+pays the cost differently.  Either way the argument is the same, and
+it is about what `loom` must not carry rather than about how the one
+that does carry it is linked.  loom's whole job is starting
 programs, so it paid that on every single invocation: warm runs, cold
 runs, and `loom` with no arguments alike.  Against a C do-nothing
 binary at 2.4 ms, loom's floor was 8.8 ms; it is now 3.1 ms, and
@@ -236,9 +257,10 @@ binary at 2.4 ms, loom's floor was 8.8 ms; it is now 3.1 ms, and
 a single generated instruction.
 
 What makes the split possible is that almost nothing needs libLLVM.
-`lower.zig` builds LLVM IR with `std.zig.llvm.Builder`, which is pure
-Zig and links nothing; the artifact tag names its machine with
-`abi.machine` rather than an LLVM triple, so a loader can check it
+`lower.zig` builds LLVM IR with the vendored builder
+(`08_llvm/builder/`), which is pure Zig and links nothing; the
+artifact tag names its machine with
+`artifact.machine` rather than an LLVM triple, so a loader can check it
 with no library at all.  Exactly one file calls the C API —
 `08_llvm/emit.zig` — and it is its own build module (`emit`) that only
 the `luce` executable imports.  `otool -L build/loom` is the check.
@@ -283,8 +305,11 @@ hand-written backends cost:
   `.unsupported` naming the tag, so a gap is a message and never wrong
   code.
 
-**IR construction uses `std.zig.llvm.Builder`** — the pure-Zig builder
-in the pinned standard library — and links nothing.  `emit.zig` is the
+**IR construction uses the vendored builder** — `08_llvm/builder/`,
+the pinned standard library's pure-Zig `std.zig.llvm.Builder` taken
+in-tree so it can attach metadata to loads, stores and calls, three
+files whose every deviation carries a `LUCE:` comment — and links
+nothing.  `emit.zig` is the
 only file in the tree that touches libLLVM, and it uses the narrowest
 tier of the C API: parse a bitcode buffer, make a target machine, run
 a textual pass pipeline, write an object.  That is the tier LLVM's own
@@ -418,7 +443,7 @@ Three things make it pay, and all three are needed together:
 
 - **The row is walked directly.**  `runtime.layout` (in
   `runtime/heap.zig`) gives the byte offsets of the object table's
-  base, a row's `alive` byte, and an array's `dims`, `elements` and
+  base, a row's `generation`, and an array's `dims`, `elements` and
   `count`.  Every one is measured from the Zig types with `@offsetOf`
   and checked against a real `Runtime` by a test beside them, so the
   two cannot drift.  An array's storage is a field of the row rather
@@ -464,10 +489,11 @@ Three things make it pay, and all three are needed together:
   attachment is a miscompile, not a slowdown.
 
 **The loads move; the checks stay.**  A lifted resolution reads a row
-without deciding anything about it — a null handle reads an all-zero
-dead row, so the loads are safe unconditionally — and every access
-still tests the handle for null and the row for `alive` before it
-touches an element.  A trap fires at exactly the instruction that owes
+without deciding anything about it — a null handle reads a private
+retired row, zeros except for `runtime.retired` where the generation
+sits, so the loads are safe unconditionally — and every access still
+tests the handle for null and the row's generation against the
+handle's own before it touches an element.  A trap fires at exactly the instruction that owes
 it, with exactly the trace it had before, and a loop that runs zero
 times over a freed array still traps nowhere.  What the loop is left
 holding is two comparisons against loop-invariant values, which LLVM's
@@ -499,9 +525,10 @@ slower unrolled here.
 
 ## The extrema, and why a `min` reduction vectorizes
 
-`min`, `max` and `clamp` on double are generated too, and *which*
-intrinsic they are generated as is a decision about meaning before it
-is one about speed.
+`min`, `max` and `clamp` on the float types are generated too — `f64`
+and `f32` alike, `llvm.minimumnum.f64` and `llvm.minimumnum.f32`, one
+declaration interned per width — and *which* intrinsic they are
+generated as is a decision about meaning before it is one about speed.
 
 LLVM offers three, and only one of them says anything definite.
 `llvm.minnum` leaves `(-0.0, +0.0)` unspecified, so its constant
@@ -566,8 +593,10 @@ Three claims, each justified from the body of the corresponding export:
   `memory(argmem: readwrite, inaccessiblemem: read)`) from a mutator
   (`luce_rt_append` — `readwrite` on both).
 
-`luce_rt_report` is the one export that promises nothing: it hands
-control to the host's trap callback, and a host is anybody's code.
+`luce_rt_report` and `luce_rt_report_error` are the two exports that
+promise nothing — same attributes, same reason: each hands control to
+a host callback, and a host is anybody's code.  Not the memory it
+touches, not that it comes back, not that it does not unwind.
 `luce_rt_raise`, `luce_rt_unwound`, and `luce_rt_exhaust` are `cold`,
 so the blocks that call them sink out of the straight-line path.
 
@@ -591,8 +620,8 @@ and `%out` is `writeonly nocapture nonnull dereferenceable(n)`.
 arrived.**  It means, in LangRef's words, memory *not accessible by the
 current module*, and until generated code walked the object table that
 described the whole heap.  It no longer does: the module loads the
-table's base out of `%rt`, tests a row's `alive` byte, and loads and
-stores array elements directly.  A false `inaccessiblemem` is not a
+table's base out of `%rt`, compares a row's `generation` against the
+handle's, and loads and stores array elements directly.  A false `inaccessiblemem` is not a
 lost optimization but a miscompile — it would let LLVM conclude that
 `luce_rt_append` cannot disturb an element this module just stored — so
 anything that resolves a handle now names the *default* location
@@ -727,7 +756,7 @@ statement freed a pointer into the frame (docs/STRINGS.md).
 ## `libluce_rt`
 
 `src/luce/runtime.zig` plus
-`runtime/{value,heap,containers,text,operators,exports}.zig`.  Luce's
+`runtime/{value,heap,containers,text,operators,trace,exports}.zig`.  Luce's
 semantics below the instruction level live here: the object heap,
 ownership and serials (docs/OWNERSHIP.md), `list`/`map`/`array`/
 `builder`, string storage and the string primitives,
@@ -740,7 +769,7 @@ It builds as a real `libluce_rt.a`, installs beside the binaries, and
 stack, the traceback, and host effects.  There is exactly one
 implementation of every semantic, and the specs are what prove it.
 
-The C surface (`runtime/exports.zig`, some 58 `luce_rt_*` entry
+The C surface (`runtime/exports.zig`, some 72 `luce_rt_*` entry
 points) holds to three conventions:
 
 - **A fallible call returns `i32`; `1` means the program trapped.**
@@ -776,7 +805,7 @@ it; `abi.version` is the number a loader checks.  A compiled artifact
 exports one symbol:
 
 ```c
-int32_t luce_main(const LuceHost *host);   /* 0 ok, 1 trapped, 2 exhausted, 3 errored */
+int32_t luce_main(const LuceHost *host);   /* 0 ok, 1 trapped, 2 exhausted, 3 errored, 4 exited */
 ```
 
 `LuceHost` is a flat `extern struct` of `context` followed by one
@@ -816,9 +845,12 @@ capability a host may withhold.
   Services that cannot fail — `term_rows`, `term_cols`, `clock_ms` —
   answer their value directly.
 
-`finished` is the one outbound-only slot: the object leak census at
-the end of a run that did not trap.  Memory is explicit in Luce, so
-what a program did not free is part of what it did.
+Two slots are outbound-only — the program tells the host something and
+gets nothing back.  `finished` is the object leak census at the end of
+a run that did not trap: memory is explicit in Luce, so what a program
+did not free is part of what it did.  `exited` (ABI 10) is the number
+a program chose to stop with, handed over at the `exit(status)` site
+before the unwind.
 
 Compatibility: **fields are append-only and never reordered** (their
 order *is* the layout), any change to an existing field's meaning or
@@ -855,6 +887,27 @@ come" and one saying "not yet" arrived as the same answer and the
 program asking went round forever.  An artifact built against the old
 reading spins at the end of its input, so it is rebuilt rather than
 tolerated.
+
+**10** gave a run a fourth way to end: the program said so.  `Status`
+gained `exited`, and one optional slot arrived at the end of the table
+— `exited(status)`, called at the `exit(status)` site *before* the
+unwind, so the host records the number while the program is still
+leaving.  It fails closed like every other effect: a host without the
+slot traps `host_unavailable` at the call, because a program that
+means to stop with a number and a host that cannot carry one out is
+not a success.  No field moved.
+
+**11** let a program ask what machine it is on: `os_total_memory`,
+`os_available_memory` and `os_cpu_count`, appended together at the end
+of the table, each answering a number through an out-parameter under
+the usual `Answer` convention.  Three at once and not one at a time,
+because a version bump is a rebuild of every artifact there is and the
+machine's facts are one subject — asking for them a release apart
+would spend that three times over.  What is new is only what `no`
+*means* on these slots — **this host cannot tell** — and that is the
+same refusal a null slot gives, so the program traps
+`host_unavailable` either way and no host has to invent a number.  No
+field moved.
 
 `key_text` has no slot of its own: it answers what the last `key_read`
 carried, which the runtime remembers, so it fails closed on
@@ -1001,10 +1054,14 @@ and both are language decisions rather than code-generation ones.
 
 libLLVM is a hard build dependency of **the `luce` compiler**, because
 the one code generator calls it in process.  `build.zig` finds it by
-asking `llvm-config` — on `PATH` or in the usual Homebrew and
-distribution prefixes — for its include directory, library directory,
-libraries, system libraries, and C++ runtime.  Point the build
-elsewhere with:
+asking `llvm-config` for its include directory, library directory,
+libraries, system libraries, and C++ runtime, and it looks in three
+places in this order: **the vendored prefix
+`.llvm/install/bin/llvm-config` first** — what `./vendor-llvm.sh`
+builds, the version this compiler is tested against, statically linked
+so `luce` depends on no LLVM the machine happens to have — then
+`PATH`, then the usual Homebrew and distribution prefixes.  Point the
+build elsewhere with, which wins over all three:
 
 ```sh
 zig build -Dllvm-config=/path/to/llvm-config
@@ -1015,7 +1072,7 @@ confined to the `emit` module (above), and `otool -L build/loom` is
 how that stays true.
 
 **`cc` is a dependency of building at all**, not only of testing.
-`build.zig` compiles the nine bundled programs and the six benchmarks
+`build.zig` compiles the ten bundled programs and the six benchmarks
 with the freshly built `luce`, and under a native `.lc` that compile
 is a link.  Each one is pointed at the *installed* `libluce_rt.a`
 through `LUCE_LIB` — a configure-time path, because a `Run` step's
@@ -1040,8 +1097,8 @@ a machine it was not built for, which is the right failure.
 
 **A shared `libluce_rt`** is the other one, and it is a size decision
 taken knowingly rather than an oversight.  Every artifact statically
-links the runtime, so one is ~683 KB whatever the program says and the
-nine bundled programs total 6.1 MB.  A dylib beside the binaries would
+links the runtime, so one is ~774 KB whatever the program says and the
+ten bundled programs total 7.9 MB.  A dylib beside the binaries would
 collapse that, and would trade a self-contained file that runs
 anywhere the machine matches for an rpath and a version-matched
 install.  That is a change to what an artifact *is*, and it is not
