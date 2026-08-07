@@ -490,10 +490,15 @@ pub fn describe(service: Service) Effect {
         // Every one of these allocates, frees, or moves ownership in the
         // object table, so every one of them writes the runtime's
         // storage as well as its arguments.
-        .luce_rt_new_list,
         .luce_rt_new_map,
         .luce_rt_new_builder,
         => .{ .memory = touches_heap, .parameters = &.{ .run, .value_out } },
+        // A list is packed at its element's width now, so it is handed
+        // the element zero exactly as an array is (docs/BYTES.md R1).
+        .luce_rt_new_list => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .value_out },
+        },
         .luce_rt_new_array => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .numbers_in, .plain, .value_in, .value_out },

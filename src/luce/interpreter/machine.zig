@@ -598,7 +598,7 @@ pub const Machine = struct {
         registers: []const RuntimeValue,
     ) EvalError!RuntimeValue {
         switch (self.program.heap_types[new.heap]) {
-            .list => return self.runtime.newList(),
+            .list => |element| return self.runtime.newList(try self.zeroValue(element)),
             .map => return self.runtime.newMap(),
             .builder => return self.runtime.newBuilder(),
             .array => |shape| {

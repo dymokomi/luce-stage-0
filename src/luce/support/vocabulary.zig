@@ -172,6 +172,26 @@ pub const TrapCode = enum {
     /// masks; Luce says it out loud.  Appended, so nothing renumbers.
     shift_out_of_range,
 
+    /// The machine could not give the memory a container asked for.
+    ///
+    /// **This is where an array's ceiling went** (docs/BYTES.md, the
+    /// folded ruling): the flat `1 << 24` element cap was a policy
+    /// number nothing could see, and what actually limits an array is
+    /// the machine.  So a request beyond what it can meet stops the
+    /// program *at the site that asked*, with a location and a call
+    /// trace like every other trap, rather than being refused at an
+    /// arbitrary size or ending the run `exhausted` from somewhere
+    /// else.
+    ///
+    /// **The Linux caveat, stated rather than hidden**: under the
+    /// default `vm.overcommit_memory = 0`, a large allocation succeeds
+    /// against address space the kernel has not got, and the program is
+    /// killed by the OOM killer when it touches the pages instead of
+    /// meeting this trap.  Luce cannot fix that from inside the
+    /// process, and this trap is honest about what it does catch: a
+    /// refusal the allocator reported.
+    allocation_failed,
+
     /// A static string; the caller owns nothing.
     pub fn message(self: TrapCode) []const u8 {
         return switch (self) {
@@ -193,6 +213,7 @@ pub const TrapCode = enum {
             .bad_codepoint => "invalid character code",
             .not_owned => "object is owned by a container",
             .shift_out_of_range => "shift count out of range",
+            .allocation_failed => "not enough memory for this container",
         };
     }
 };

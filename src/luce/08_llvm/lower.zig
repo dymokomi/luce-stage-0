@@ -5392,7 +5392,10 @@ const Body = struct {
 
     fn emitHeapNew(self: *Body, register: mir.Register, new: mir.Instruction.HeapNew) Error!void {
         switch (self.module.program.heap_types[new.heap]) {
-            .list => try self.callAnswering(register, .luce_rt_new_list, &.{self.runtime}),
+            .list => |element| try self.callAnswering(register, .luce_rt_new_list, &.{
+                self.runtime,
+                try self.boxed(element, try self.zeroValue(element), "element.zero"),
+            }),
             .map => try self.callAnswering(register, .luce_rt_new_map, &.{self.runtime}),
             .builder => try self.callAnswering(register, .luce_rt_new_builder, &.{self.runtime}),
             .array => |shape| {

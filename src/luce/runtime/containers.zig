@@ -26,12 +26,9 @@ pub fn length(runtime: *Runtime, target: Value) Error!Value {
         .object => blk: {
             const object = try runtime.resolve(target);
             break :blk switch (object.data) {
-                .list => |list| list.items.len,
+                .list => object.elements.count,
                 .map => |map| map.entries.items.len,
-                .array => if (object.array.dims.len == 0)
-                    0
-                else
-                    @intCast(object.array.dims[0]),
+                .array => if (object.dims.len == 0) 0 else @intCast(object.dims[0]),
                 .builder => |builder| builder.items.len,
             };
         },
@@ -47,19 +44,21 @@ pub fn length(runtime: *Runtime, target: Value) Error!Value {
 pub fn indexGet(runtime: *Runtime, target: Value, indices: []const Value) Error!Value {
     const object = try runtime.resolve(target);
     switch (object.data) {
-        .list => |list| {
+        .list => {
             const index = indices[0].asLong();
-            if (index < 0 or index >= list.items.len) return runtime.fail(.index_bounds);
-            return list.items[@intCast(index)];
+            if (index < 0 or index >= object.elements.count) {
+                return runtime.fail(.index_bounds);
+            }
+            return object.elements.at(@intCast(index));
         },
         .map => |map| {
             const at = map.find(&indices[0]) orelse return runtime.fail(.key_missing);
             return map.entries.items[at].value;
         },
         .array => {
-            const flat = heap.flattenIndex(object.array.dims, indices) orelse
+            const flat = heap.flattenIndex(object.dims, indices) orelse
                 return runtime.fail(.index_bounds);
-            return object.array.at(flat);
+            return object.elements.at(flat);
         },
         .builder => unreachable,
     }
@@ -81,12 +80,17 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
     errdefer runtime.dropStorage(stored);
     const object = try runtime.resolve(target);
     switch (object.data) {
-        .list => |*list| {
+        .list => {
             const index = indices[0].asLong();
-            if (index < 0 or index >= list.items.len) return runtime.fail(.index_bounds);
-            // An element overwrite frees the old owned element (S22).
-            runtime.freeValue(list.items[@intCast(index)]);
-            list.items[@intCast(index)] = stored;
+            if (index < 0 or index >= object.elements.count) {
+                return runtime.fail(.index_bounds);
+            }
+            // An element overwrite frees the old owned element (S22);
+            // only a `Value` cell can be holding one.
+            if (object.elements.kind == .value) {
+                runtime.freeValue(object.elements.at(@intCast(index)));
+            }
+            object.elements.put(@intCast(index), stored);
         },
         .map => |*map| {
             const key = indices[0];
@@ -102,12 +106,14 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
             }
         },
         .array => {
-            const flat = heap.flattenIndex(object.array.dims, indices) orelse
+            const flat = heap.flattenIndex(object.dims, indices) orelse
                 return runtime.fail(.index_bounds);
             // An element overwrite frees the old owned element (S22);
             // only a `Value` cell can be holding one.
-            if (object.array.kind == .value) runtime.freeValue(object.array.at(flat));
-            object.array.put(flat, stored);
+            if (object.elements.kind == .value) {
+                runtime.freeValue(object.elements.at(flat));
+            }
+            object.elements.put(flat, stored);
         },
         .builder => unreachable,
     }
@@ -118,13 +124,19 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
 /// elements, since two containers can never own one object (S23, S31).
 pub fn listSlice(runtime: *Runtime, target: Value, start: i64, end: i64) Error!Value {
     const object = try runtime.resolve(target);
-    const list = object.data.list;
-    if (start < 0 or end < start or end > list.items.len) return runtime.fail(.index_bounds);
-    var copied: std.ArrayList(Value) = .empty;
+    const source = object.elements;
+    if (start < 0 or end < start or end > source.count) return runtime.fail(.index_bounds);
+    // The slice holds what the source holds, packed the same way.
+    var copied: heap.Object.Elements = .{ .kind = source.kind };
     errdefer copied.deinit(runtime.objects);
-    for (list.items[@intCast(start)..@intCast(end)]) |element| {
-        const duplicate = try runtime.deepCopy(element);
-        try copied.append(runtime.objects, duplicate);
+    try copied.ensureCapacity(runtime.objects, @intCast(end - start));
+    var at: usize = @intCast(start);
+    while (at < @as(usize, @intCast(end))) : (at += 1) {
+        // `source` is a copy of the row's run, so the buffer it names
+        // stays put while `deepCopy` allocates and moves the table.
+        const duplicate = try runtime.deepCopy(source.at(at));
+        copied.count += 1;
+        copied.put(copied.count - 1, duplicate);
         runtime.adopt(duplicate);
     }
     return runtime.attachList(copied);
@@ -140,9 +152,9 @@ pub fn listSlice(runtime: *Runtime, target: Value, start: i64, end: i64) Error!V
 pub fn append(runtime: *Runtime, target: Value, held: Value) Error!void {
     const object = try runtime.resolve(target);
     switch (object.data) {
-        .list => |*list| {
+        .list => {
             errdefer runtime.dropStorage(held);
-            try list.append(runtime.objects, held);
+            try object.elements.append(runtime.objects, held);
             runtime.adopt(held);
         },
         .builder => |*builder| try builder.appendSlice(runtime.objects, held.asString()),
@@ -163,8 +175,7 @@ pub fn appendAscii(runtime: *Runtime, target: Value, code: i64) Error!void {
 /// whatever receives it owns it next.
 pub fn pop(runtime: *Runtime, target: Value) Error!Value {
     const object = try runtime.resolve(target);
-    const list = &object.data.list;
-    const taken = list.pop() orelse return runtime.fail(.empty_collection);
+    const taken = object.elements.pop() orelse return runtime.fail(.empty_collection);
     runtime.loosen(taken);
     return taken;
 }
@@ -175,8 +186,8 @@ pub fn pop(runtime: *Runtime, target: Value) Error!Value {
 pub fn insert(runtime: *Runtime, target: Value, index: i64, held: Value) Error!void {
     errdefer runtime.dropStorage(held);
     const object = try runtime.resolve(target);
-    if (index < 0 or index > object.data.list.items.len) return runtime.fail(.index_bounds);
-    try object.data.list.insert(runtime.objects, @intCast(index), held);
+    if (index < 0 or index > object.elements.count) return runtime.fail(.index_bounds);
+    try object.elements.insert(runtime.objects, @intCast(index), held);
     runtime.adopt(held);
 }
 
@@ -185,10 +196,12 @@ pub fn insert(runtime: *Runtime, target: Value, index: i64, held: Value) Error!v
 pub fn remove(runtime: *Runtime, target: Value, which: Value) Error!void {
     const object = try runtime.resolve(target);
     switch (object.data) {
-        .list => |*list| {
+        .list => {
             const index = which.asLong();
-            if (index < 0 or index >= list.items.len) return runtime.fail(.index_bounds);
-            runtime.freeValue(list.orderedRemove(@intCast(index)));
+            if (index < 0 or index >= object.elements.count) {
+                return runtime.fail(.index_bounds);
+            }
+            runtime.freeValue(object.elements.orderedRemove(@intCast(index)));
         },
         .map => |*map| {
             if (map.find(&which)) |at| {
@@ -224,7 +237,7 @@ pub fn valueAt(runtime: *Runtime, target: Value, index: i64) Error!Value {
 
 pub fn dimSize(runtime: *Runtime, target: Value, axis: i64) Error!Value {
     const object = try runtime.resolve(target);
-    const dims = object.array.dims;
+    const dims = object.dims;
     if (axis < 0 or axis >= dims.len) return runtime.fail(.index_bounds);
     return Value.ofLong(dims[@intCast(axis)]);
 }
@@ -240,14 +253,13 @@ pub fn dimSize(runtime: *Runtime, target: Value, axis: i64) Error!Value {
 pub fn sort(runtime: *Runtime, target: Value) Error!void {
     const object = try runtime.resolve(target);
     switch (object.data) {
-        .list => |*list| std.sort.block(Value, list.items, {}, operators.orderedBefore),
-        // An array's cells are its own storage type, so the sort runs
-        // on `f64`s or `i64`s directly; the ordering is still Luce's,
-        // read through `Value` by the comparator.
-        .array => switch (object.array.kind) {
+        // The cells are their own storage type, so the sort runs on
+        // `f64`s or `i64`s directly; the ordering is still Luce's, read
+        // through `Value` by the comparator.
+        .list, .array => switch (object.elements.kind) {
             inline else => |kind| {
                 const Cell = kind.Cell();
-                std.sort.block(Cell, object.array.cells(Cell), {}, cellBefore(kind).before);
+                std.sort.block(Cell, object.elements.cells(Cell), {}, cellBefore(kind).before);
             },
         },
         else => unreachable,
@@ -257,9 +269,11 @@ pub fn sort(runtime: *Runtime, target: Value) Error!void {
 pub fn reverse(runtime: *Runtime, target: Value) Error!void {
     const object = try runtime.resolve(target);
     switch (object.data) {
-        .list => |*list| std.mem.reverse(Value, list.items),
-        .array => switch (object.array.kind) {
-            inline else => |kind| std.mem.reverse(kind.Cell(), object.array.cells(kind.Cell())),
+        .list, .array => switch (object.elements.kind) {
+            inline else => |kind| std.mem.reverse(
+                kind.Cell(),
+                object.elements.cells(kind.Cell()),
+            ),
         },
         else => unreachable,
     }
@@ -269,13 +283,10 @@ pub fn reverse(runtime: *Runtime, target: Value) Error!void {
 pub fn find(runtime: *Runtime, target: Value, wanted: Value) Error!i64 {
     const object = try runtime.resolve(target);
     switch (object.data) {
-        .list => |*list| for (list.items, 0..) |element, at| {
-            if (operators.compare(.equal, element, wanted)) return @intCast(at);
-        },
-        .array => {
-            const array = object.array;
-            for (0..array.count) |at| {
-                if (operators.compare(.equal, array.at(at), wanted)) return @intCast(at);
+        .list, .array => {
+            const stored = object.elements;
+            for (0..stored.count) |at| {
+                if (operators.compare(.equal, stored.at(at), wanted)) return @intCast(at);
             }
         },
         else => unreachable,
@@ -313,9 +324,11 @@ fn cellBefore(comptime kind: heap.Object.ElementKind) type {
 pub fn clear(runtime: *Runtime, target: Value) Error!void {
     const object = try runtime.resolve(target);
     switch (object.data) {
-        .list => |*list| {
-            for (list.items) |item| runtime.freeValue(item);
-            list.clearRetainingCapacity();
+        .list => {
+            if (object.elements.kind == .value) {
+                for (object.elements.cells(Value)) |item| runtime.freeValue(item);
+            }
+            object.elements.clear();
         },
         .map => |*map| {
             for (map.entries.items) |entry| {
@@ -334,27 +347,43 @@ pub fn clear(runtime: *Runtime, target: Value) Error!void {
 /// entry, so the list takes its own copy (docs/STRINGS.md).
 pub fn mapKeys(runtime: *Runtime, target: Value) Error!Value {
     const entries = (try runtime.resolve(target)).data.map.entries.items;
-    var listed: std.ArrayList(Value) = .empty;
-    errdefer {
-        for (listed.items) |item| runtime.dropStorage(item);
-        listed.deinit(runtime.objects);
-    }
+    var listed = boxed_list;
+    errdefer dropBuilt(runtime, &listed);
     for (entries) |entry| {
         try listed.append(runtime.objects, try runtime.ownValue(entry.key));
     }
     return runtime.attachList(listed);
 }
 
+/// A list under construction whose elements are the boxed slot.
+///
+/// **A list the runtime builds out of stored `Value`s is a `.value`
+/// list, whatever the program's element type is** (docs/BYTES.md R1).
+/// Packing is what the kind buys, and the kind is a property of the
+/// *storage*, not of the program: a `.value` cell holds a long or a
+/// String equally well and hands back exactly what was put in it, so
+/// the boxed run is always correct and only ever costs memory.  What
+/// the runtime cannot do here is know the element type — a map's
+/// entries are tagged values and `dir_list`'s names are text — so it
+/// takes the shape that needs no type to be right, and `new list(T)`,
+/// which does know, packs.
+const boxed_list: heap.Object.Elements = .{ .kind = .value };
+
+/// Give back a half-built run and the storage its elements own.
+fn dropBuilt(runtime: *Runtime, listed: *heap.Object.Elements) void {
+    if (listed.kind == .value) {
+        for (listed.cells(Value)) |item| runtime.dropStorage(item);
+    }
+    listed.deinit(runtime.objects);
+}
+
 /// `dir_list(path)` — a fresh `List(String)` the caller owns, holding
 /// its own copy of every name.  Each engine reaches this with the
 /// shape its host handed over, and the list they build is the same.
 pub fn listOfText(runtime: *Runtime, names: []const []const u8) Error!Value {
-    var listed: std.ArrayList(Value) = .empty;
-    errdefer {
-        for (listed.items) |item| runtime.dropStorage(item);
-        listed.deinit(runtime.objects);
-    }
-    try listed.ensureTotalCapacity(runtime.objects, names.len);
+    var listed = boxed_list;
+    errdefer dropBuilt(runtime, &listed);
+    try listed.ensureCapacity(runtime.objects, names.len);
     for (names) |name| {
         try listed.append(runtime.objects, try runtime.ownValue(Value.ofString(name)));
     }
@@ -370,11 +399,8 @@ pub fn listOfText(runtime: *Runtime, names: []const []const u8) Error!Value {
 /// empty directory, which is why the walk is written out rather than
 /// handed to a general splitter that would answer one empty name.
 pub fn listOfJoinedText(runtime: *Runtime, joined: []const u8) Error!Value {
-    var listed: std.ArrayList(Value) = .empty;
-    errdefer {
-        for (listed.items) |item| runtime.dropStorage(item);
-        listed.deinit(runtime.objects);
-    }
+    var listed = boxed_list;
+    errdefer dropBuilt(runtime, &listed);
     var rest = joined;
     while (rest.len != 0) {
         const stop = std.mem.indexOfScalar(u8, rest, 0) orelse rest.len;
@@ -411,11 +437,8 @@ pub fn listOfArguments(
     context: ?*anyopaque,
     get: ?ArgumentFn,
 ) Error!Value {
-    var listed: std.ArrayList(Value) = .empty;
-    errdefer {
-        for (listed.items) |item| runtime.dropStorage(item);
-        listed.deinit(runtime.objects);
-    }
+    var listed = boxed_list;
+    errdefer dropBuilt(runtime, &listed);
     if (get) |callback| {
         var index: i64 = 0;
         while (index < count) : (index += 1) {
@@ -439,8 +462,8 @@ pub fn mapValues(runtime: *Runtime, target: Value) Error!Value {
     // objects, which moves the object table, and the map's own entry
     // buffer does not move with it.
     const entries = (try runtime.resolve(target)).data.map.entries.items;
-    var listed: std.ArrayList(Value) = .empty;
-    errdefer listed.deinit(runtime.objects);
+    var listed = boxed_list;
+    errdefer dropBuilt(runtime, &listed);
     for (entries) |entry| {
         const duplicate = try runtime.deepCopy(entry.value);
         try listed.append(runtime.objects, duplicate);
@@ -505,10 +528,10 @@ pub fn mapPlace(runtime: *Runtime, target: Value, key: Value, zero: Value) Error
 /// old contents go back and every new one is its own copy.
 pub fn arrayFill(runtime: *Runtime, target: Value, held: Value) Error!void {
     const object = try runtime.resolve(target);
-    if (object.array.kind == .value) {
-        for (object.array.cells(Value)) |cell| runtime.dropStorage(cell);
+    if (object.elements.kind == .value) {
+        for (object.elements.cells(Value)) |cell| runtime.dropStorage(cell);
     }
-    try runtime.fillArray(object.array, held);
+    try runtime.fillElements(object.elements, held);
 }
 
 // ---------------------------------------------------------------------------

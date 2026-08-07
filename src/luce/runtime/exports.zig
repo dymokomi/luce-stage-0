@@ -534,8 +534,12 @@ fn failed(runtime: *Runtime, mistake: heap.Error) i32 {
 // three trap rather than proceed on a freed object, an unfilled slot
 // (S42), or an owner that is not the one named.
 
-pub export fn luce_rt_new_list(runtime: *Runtime, out: *Value) callconv(.c) i32 {
-    out.* = runtime.newList() catch |mistake| return failed(runtime, mistake);
+pub export fn luce_rt_new_list(
+    runtime: *Runtime,
+    zero: *const Value,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = runtime.newList(zero.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
 
