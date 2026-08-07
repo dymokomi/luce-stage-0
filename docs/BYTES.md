@@ -52,41 +52,55 @@ effect.  The compiled path loads and stores elements with one
 instruction either way; the interpreter calls the same `libluce_rt`
 accessors it calls now.
 
-## Part two — the host channel: bytes underneath, text as a reading
+## Part two — the host channel: handles, buffers, and text as a reading
 
-Today the host's file services *are text*: `file_read` validates UTF-8
-inside the host and `file_write` receives a string.  The honest
-architecture inverts that: **a file is bytes, and text is a
-validation the language performs on them.**
+Today the host's file services *are text*, whole-file, and
+path-addressed: `file_read` validates UTF-8 inside the host and
+answers everything at once.  The honest architecture (R4, R5) inverts
+all three: **a file is bytes reached through an open handle, a read
+fills a caller-owned buffer and says how much landed, and text is a
+validation the language performs on the bytes.**
 
-- `LuceHost` gains appended byte-channel slots — `read_bytes`,
-  `write_bytes`, `append_bytes` — carrying raw contents with no
-  opinion about encoding.  Fail-closed like every service,
-  `yes`/`no`/`exhausted` like every fallible one; `abi.version` bumps.
+- **The handle is a scope-owned resource** — a new object kind whose
+  create is `open` and whose scope-end release is `close`, so a file
+  cannot leak by the same construction that keeps every list from
+  leaking, and use-after-close traps like use-after-free because it
+  is the same mistake.  `give`, `return` and early `free` mean what
+  they always mean.  The run's design decides the type's spelling and
+  where it sits in `types.HeapType`; the ownership semantics are not
+  open — they are OWNERSHIP.md's, unchanged.
+- `LuceHost` gains appended handle-channel slots — open, read into a
+  buffer answering the count, write from a buffer, flush, close —
+  carrying raw bytes with no opinion about encoding.  Fail-closed
+  like every service, `yes`/`no`/`exhausted` like every fallible one;
+  `abi.version` bumps once for the whole movement.
 - **UTF-8 validation moves out of the hosts and into `libluce_rt`**,
-  the one implementation of every semantic: `file_read` (the text
-  builtin, unchanged in surface and meaning) becomes the byte read
-  followed by the runtime's own validation, so the interpreter, the
-  compiled artifact, and every future host agree byte-for-byte on
-  what "not text" means — today that sentence lives in `host.zig`
-  where only loom can say it.
-- The existing text slots are retired from use in the same movement
-  (the vtable stays append-only and nothing reorders; a version-bumped
-  artifact never indexes them, and the version is already how a stale
-  artifact is refused by name).
-- New builtins behind the same `allow_host` gate: `file_read_bytes`
-  answering `list(byte)!`, `file_write_bytes`/`file_append_bytes`
-  taking one.  Fallibility follows `docs/FAILURE.md` exactly as the
-  text builtins do.
+  the one implementation of every semantic: `file_read` (the
+  whole-file text convenience, unchanged in surface and meaning)
+  becomes open-read-close over the byte channel followed by the
+  runtime's own validation, so the interpreter, the compiled
+  artifact, and every future host agree byte-for-byte on what "not
+  text" means — today that sentence lives in `host.zig` where only
+  loom can say it.
+- The existing whole-file text slots are retired from use in the same
+  movement (the vtable stays append-only and nothing reorders; a
+  version-bumped artifact never indexes them, and the version is
+  already how a stale artifact is refused by name).
+- The gate is unchanged in principle: the handle builtins sit behind
+  `allow_host` like every effect, and fallibility follows
+  `docs/FAILURE.md` — `open` and `read` answer `T!`, because the
+  world decides.
 
 ## Part three — the std surface
 
 The owner's "std.io" is today spelled `std.files`, and it grows the
 binary half plus the bridges:
 
-- `files.read_bytes(path) -> list(byte)!`, `files.write_bytes`,
-  `files.append_bytes` — thin and honest over the builtins, like the
-  text functions beside them.
+- `files.open(path)` and the handle's own surface — read into an
+  `array(byte, n)` answering the count, write from one — plus the
+  whole-file conveniences `files.read_bytes(path) -> list(byte)!`,
+  `files.write_bytes`, `files.append_bytes`, each a loop over the
+  primitive the way Go's `os.ReadFile` is a loop over `Read`.
 - `strings.to_bytes(s) -> list(byte)` (a string always has bytes) and
   `strings.from_bytes(xs) -> string?` — the parse direction: "not
   UTF-8" is the same reason every time, so absence carries all the
@@ -107,6 +121,8 @@ sitting as the directive itself:
 | **R1** | **Unbox `list` scalar storage.**  `list(byte)` is the byte buffer; no new type.  Part one is the design. |
 | **R2** | **Bytes underneath, text as validation in `libluce_rt`.**  Host file slots carry raw bytes; the text builtins are defined over them; the old text slots retire behind the `abi.version` bump.  Part two is the design. |
 | **R3** | **`strings.from_bytes` answers `string?`** — the parse case, the `parse_int` precedent. |
+| **R4** | **The primitive is C-shaped: read into a caller-owned buffer, answering the count** (*"generally we want reading bytes into array and write just like real languages like C"* — owner, same sitting).  `array(byte, n)` is the buffer — already packed, already fixed — and whole-file read/write demote to `std.files` conveniences built over the primitive, the Go/Rust layering.  The same shape serves sockets in `std.network`, where whole-read does not exist. |
+| **R5** | **File handles enter the language in this run, as scope-owned resources.**  `files.open(path)` answers a handle; reads advance it; the owning scope's end closes it — deterministic close is exactly what scope ownership is for, and `give`/`return`/`free` mean for a handle what they mean for every object.  Doing the channel path-shaped now and handle-shaped again for sockets would have been the patch-shaped choice; this run bumps the ABI once, and `std.network` reuses the resource pattern for sockets. |
 
 ## The questions, as they were argued
 
