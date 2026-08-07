@@ -172,7 +172,7 @@ const Writer = struct {
                 try self.valueType(shape.element);
                 try self.int(u8, shape.rank);
             },
-            .builder => {},
+            .builder, .file => {},
         }
     }
 
@@ -438,6 +438,7 @@ const Reader = struct {
                 .rank = try self.int(u8),
             } },
             .builder => .builder,
+            .file => .file,
         };
     }
 
@@ -1010,7 +1011,7 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // still required for that, and this test is not what will remind
     // you.
     try testing.expectEqual(@as(u32, 29), format_version);
-    try testing.expectEqual(@as(u64, 15672746236428358988), hasher.final());
+    try testing.expectEqual(@as(u64, 14490193926574754925), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

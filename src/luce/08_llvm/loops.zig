@@ -199,7 +199,7 @@ fn arrayShape(program: *const mir.Program, of: types.Type) ?Shape {
     if (of != .heap) return null;
     return switch (program.heap_types[of.heap]) {
         .array => |shape| .{ .element = shape.element, .rank = shape.rank },
-        .list, .map, .builder => null,
+        .list, .map, .builder, .file => null,
     };
 }
 

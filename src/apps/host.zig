@@ -89,6 +89,12 @@ pub const Host = struct {
     /// One directory listing, NUL-joined, which is the shape the ABI's
     /// `dir_list` hands out (`luce_rt_names_list` splits it).
     listed_names: std.ArrayList(u8) = .empty,
+    /// Every file the byte channel has open (docs/BYTES.md R5).  A
+    /// handle is this table's index plus one, so zero is never a
+    /// handle; a closed row stays in place and is reused, which is what
+    /// makes a stale number land on a row that says "shut" rather than
+    /// on whoever moved in.
+    open_files: std.ArrayList(OpenFile) = .empty,
     // -- what a trapped or errored run left behind ------------------------
 
     /// What a compiled artifact reported through the C table.
@@ -141,6 +147,8 @@ pub const Host = struct {
         self.read_line_buffer.deinit(self.gpa);
         self.sanitized.deinit(self.gpa);
         self.listed_names.deinit(self.gpa);
+        self.closeOpenFiles();
+        self.open_files.deinit(self.gpa);
         self.* = undefined;
     }
 
@@ -194,8 +202,12 @@ pub const Host = struct {
             .print = cPrint,
             .trap = cTrap,
             .finished = cFinished,
-            .file_read = cFileRead,
-            .file_write = cFileWrite,
+            // Retired at ABI version 12 (docs/BYTES.md R2): the whole-
+            // file text services are open-read-close over the byte
+            // channel inside `libluce_rt` now, and these three slots
+            // keep their positions without being filled.
+            .file_read = null,
+            .file_write = null,
             .file_exists = cFileExists,
             .arg_count = cArgCount,
             .arg = cArg,
@@ -214,7 +226,7 @@ pub const Host = struct {
             .clock_ms = cClock,
             .sleep_ms = cSleep,
             .env = cEnv,
-            .file_append = cFileAppend,
+            .file_append = null,
             .file_delete = cFileDelete,
             .file_rename = cFileRename,
             .dir_list = cDirList,
@@ -222,6 +234,11 @@ pub const Host = struct {
             .os_total_memory = cTotalMemory,
             .os_available_memory = cAvailableMemory,
             .os_cpu_count = cCpuCount,
+            .handle_open = cHandleOpen,
+            .handle_read = cHandleRead,
+            .handle_write = cHandleWrite,
+            .handle_flush = cHandleFlush,
+            .handle_close = cHandleClose,
         };
     }
 
@@ -253,6 +270,69 @@ pub const Host = struct {
         self.out.writeAll(text) catch return;
         self.out.writeAll("\n") catch return;
         self.out.flush() catch return;
+    }
+
+    // -- the byte channel (docs/BYTES.md) ------------------------------
+    //
+    // Five slots, one open-file table, and no opinion about encoding:
+    // a read fills the caller's buffer and answers the count, a write
+    // takes a buffer and a length.  Whether the bytes are text is
+    // `libluce_rt`'s question now, not this file's, which is what puts
+    // both engines on one answer.
+    //
+    // The same five functions serve both arms — `abi.Host`'s slots and
+    // the `runtime.files.Channel` the interpreter installs — because
+    // neither engine calls them: the runtime holds them and does.
+
+    /// Open `path` and answer the number this host will know it by.
+    ///
+    /// The number is the row's index in `open_files` plus one, so zero
+    /// is never a handle and a stale number lands on a row that says
+    /// it is shut rather than on somebody else's file.
+    fn openFile(self: *Host, path: []const u8, mode: luce.runtime.files.Mode) ?i64 {
+        const opened = switch (mode) {
+            .read => std.Io.Dir.cwd().openFile(self.io, path, .{}) catch return null,
+            .write => std.Io.Dir.cwd().createFile(self.io, path, .{ .truncate = true }) catch
+                return null,
+            // No `O_APPEND` in the `Io` file API, so an append handle
+            // is a create-without-truncate positioned at the end; the
+            // position is this host's, exactly as `appendFile`'s is.
+            .append => std.Io.Dir.cwd().createFile(self.io, path, .{ .truncate = false }) catch
+                return null,
+            else => return null,
+        };
+        var at: u64 = 0;
+        if (mode == .append) at = opened.length(self.io) catch 0;
+        for (self.open_files.items, 0..) |*row, index| {
+            if (row.shut) {
+                row.* = .{ .file = opened, .position = at };
+                return @intCast(index + 1);
+            }
+        }
+        self.open_files.append(self.gpa, .{ .file = opened, .position = at }) catch {
+            opened.close(self.io);
+            return null;
+        };
+        return @intCast(self.open_files.items.len);
+    }
+
+    /// The row a handle names, or null when it names none.
+    fn openRow(self: *Host, handle: i64) ?*OpenFile {
+        if (handle < 1 or handle > self.open_files.items.len) return null;
+        const row = &self.open_files.items[@intCast(handle - 1)];
+        return if (row.shut) null else row;
+    }
+
+    /// Every file the run left open.  A program that leaks a handle is
+    /// reported rather than corrected — the leak census is what says so
+    /// — but the descriptor still goes back with the run.
+    pub fn closeOpenFiles(self: *Host) void {
+        for (self.open_files.items) |*row| {
+            if (row.shut) continue;
+            row.file.close(self.io);
+            row.shut = true;
+        }
+        self.open_files.clearRetainingCapacity();
     }
 
     /// A whole file's bytes, or null when it could not be read.  The
@@ -794,6 +874,131 @@ pub const Host = struct {
         return if (of(context).fileExists(path[0..@intCast(path_length)])) .yes else .no;
     }
 
+    // -- the byte channel's five slots ---------------------------------
+
+    fn cHandleOpen(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+        mode: i64,
+        handle: *i64,
+    ) callconv(.c) abi.Answer {
+        handle.* = of(context).openFile(
+            path[0..@intCast(path_length)],
+            @enumFromInt(mode),
+        ) orelse return .no;
+        return .yes;
+    }
+
+    fn cHandleRead(
+        context: ?*anyopaque,
+        handle: i64,
+        into: [*]u8,
+        capacity: i64,
+        filled: *i64,
+    ) callconv(.c) abi.Answer {
+        const self = of(context);
+        const row = self.openRow(handle) orelse return .no;
+        // `readPositionalAll` fills the buffer or stops at the end of
+        // the file and answers how far it got, which is exactly the
+        // count this slot promises: short is the end, not a failure
+        // (docs/BYTES.md R4).
+        const landed = row.file.readPositionalAll(
+            self.io,
+            into[0..@intCast(capacity)],
+            row.position,
+        ) catch return .no;
+        row.position += landed;
+        filled.* = @intCast(landed);
+        return .yes;
+    }
+
+    fn cHandleWrite(
+        context: ?*anyopaque,
+        handle: i64,
+        from: [*]const u8,
+        length: i64,
+        written: *i64,
+    ) callconv(.c) abi.Answer {
+        const self = of(context);
+        const row = self.openRow(handle) orelse return .no;
+        const bytes = from[0..@intCast(length)];
+        row.file.writePositionalAll(self.io, bytes, row.position) catch return .no;
+        row.position += bytes.len;
+        written.* = @intCast(bytes.len);
+        return .yes;
+    }
+
+    fn cHandleFlush(context: ?*anyopaque, handle: i64) callconv(.c) abi.Answer {
+        const self = of(context);
+        const row = self.openRow(handle) orelse return .no;
+        row.file.sync(self.io) catch return .no;
+        return .yes;
+    }
+
+    fn cHandleClose(context: ?*anyopaque, handle: i64) callconv(.c) abi.Answer {
+        const self = of(context);
+        const row = self.openRow(handle) orelse return .no;
+        row.file.close(self.io);
+        row.shut = true;
+        return .yes;
+    }
+
+    /// The channel both engines install into `libluce_rt`
+    /// (docs/BYTES.md R2).  The `i32` twins are the same five
+    /// functions: `abi.Answer` is an `enum(i32)` over the same three
+    /// numbers the runtime library's own channel speaks, and the two
+    /// spellings exist because one table is the published ABI and the
+    /// other is the library's.
+    pub fn fileChannel(self: *Host) luce.runtime.files.Channel {
+        return .{
+            .context = self,
+            .open = pHandleOpen,
+            .read = pHandleRead,
+            .write = pHandleWrite,
+            .flush = pHandleFlush,
+            .close = pHandleClose,
+        };
+    }
+
+    fn pHandleOpen(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+        mode: i64,
+        handle: *i64,
+    ) callconv(.c) i32 {
+        return @intFromEnum(cHandleOpen(context, path, path_length, mode, handle));
+    }
+
+    fn pHandleRead(
+        context: ?*anyopaque,
+        handle: i64,
+        into: [*]u8,
+        capacity: i64,
+        filled: *i64,
+    ) callconv(.c) i32 {
+        return @intFromEnum(cHandleRead(context, handle, into, capacity, filled));
+    }
+
+    fn pHandleWrite(
+        context: ?*anyopaque,
+        handle: i64,
+        from: [*]const u8,
+        length: i64,
+        written: *i64,
+    ) callconv(.c) i32 {
+        return @intFromEnum(cHandleWrite(context, handle, from, length, written));
+    }
+
+    fn pHandleFlush(context: ?*anyopaque, handle: i64) callconv(.c) i32 {
+        return @intFromEnum(cHandleFlush(context, handle));
+    }
+
+    fn pHandleClose(context: ?*anyopaque, handle: i64) callconv(.c) i32 {
+        return @intFromEnum(cHandleClose(context, handle));
+    }
+
     fn cArgCount(context: ?*anyopaque) callconv(.c) i64 {
         return @intCast(of(context).arguments.len);
     }
@@ -988,6 +1193,20 @@ pub const Host = struct {
 // ---------------------------------------------------------------------------
 // Reading a file, drawing a key, sizing a window
 // ---------------------------------------------------------------------------
+
+/// One file the byte channel has open, and where it has got to.
+///
+/// The position is this host's rather than the descriptor's: the `Io`
+/// file API is positional, which is what lets a handle be read and
+/// written without a seek and what makes an append handle simply one
+/// that started at the end.
+const OpenFile = struct {
+    file: std.Io.File,
+    position: u64 = 0,
+    /// A closed row keeps its place so a stale handle lands on it and
+    /// is refused, instead of naming whoever moved in.
+    shut: bool = false,
+};
 
 const max_file_size = 64 * 1024 * 1024;
 
@@ -1429,10 +1648,23 @@ test "the C table offers every service, over the same implementation" {
 
     const table = host.table();
     // Fail-closed is a property of the *host*, not of the table shape:
-    // loom withholds nothing, so no slot may be null.
+    // loom withholds nothing it still offers, so no slot may be null —
+    // except the three the ABI **retired** at version 12, which are
+    // deliberately empty because nothing indexes them any more
+    // (docs/BYTES.md R2).  Naming them here rather than weakening the
+    // sweep is the point: a fourth one going quiet would be caught.
+    const retired = [_][]const u8{ "file_read", "file_write", "file_append" };
     inline for (@typeInfo(abi.Host).@"struct".fields) |field| {
         if (@typeInfo(field.type) == .optional) {
-            try testing.expect(@field(table, field.name) != null);
+            var is_retired = false;
+            for (retired) |name| {
+                if (std.mem.eql(u8, name, field.name)) is_retired = true;
+            }
+            if (is_retired) {
+                try testing.expect(@field(table, field.name) == null);
+            } else {
+                try testing.expect(@field(table, field.name) != null);
+            }
         }
     }
 
@@ -1447,42 +1679,89 @@ test "the C table offers every service, over the same implementation" {
         abi.Answer.no,
         table.file_exists.?(table.context, path.ptr, @intCast(path.len)),
     );
-    try testing.expectEqual(abi.Answer.yes, table.file_write.?(
+    // Writing and reading go through the byte channel now, which is
+    // the whole of ABI version 12: the retired whole-file slots are
+    // null above, and this is what stands in their place.
+    var handle: i64 = 0;
+    try testing.expectEqual(abi.Answer.yes, table.handle_open.?(
         table.context,
         path.ptr,
         @intCast(path.len),
+        @intFromEnum(luce.runtime.files.Mode.write),
+        &handle,
+    ));
+    var moved_bytes: i64 = 0;
+    try testing.expectEqual(abi.Answer.yes, table.handle_write.?(
+        table.context,
+        handle,
         "kept",
         4,
+        &moved_bytes,
     ));
+    try testing.expectEqual(@as(i64, 4), moved_bytes);
+    try testing.expectEqual(abi.Answer.yes, table.handle_flush.?(table.context, handle));
+    try testing.expectEqual(abi.Answer.yes, table.handle_close.?(table.context, handle));
+    // A handle that has been closed names nothing, which is what makes
+    // a use after close an error a host can report rather than a
+    // descriptor somebody else has since been given.
+    try testing.expectEqual(abi.Answer.no, table.handle_close.?(table.context, handle));
     try testing.expectEqual(
         abi.Answer.yes,
         table.file_exists.?(table.context, path.ptr, @intCast(path.len)),
     );
-    try testing.expectEqual(
-        abi.Answer.yes,
-        table.file_read.?(table.context, path.ptr, @intCast(path.len), &text, &length),
-    );
-    try testing.expectEqualStrings("kept", text[0..@intCast(length)]);
+
+    var read_back: [16]u8 = undefined;
+    var filled: i64 = 0;
+    try testing.expectEqual(abi.Answer.yes, table.handle_open.?(
+        table.context,
+        path.ptr,
+        @intCast(path.len),
+        @intFromEnum(luce.runtime.files.Mode.read),
+        &handle,
+    ));
+    try testing.expectEqual(abi.Answer.yes, table.handle_read.?(
+        table.context,
+        handle,
+        &read_back,
+        read_back.len,
+        &filled,
+    ));
+    try testing.expectEqualStrings("kept", read_back[0..@intCast(filled)]);
+    // Reading again at the end of the file answers zero, not a
+    // refusal: short is how a file says it is finished.
+    try testing.expectEqual(abi.Answer.yes, table.handle_read.?(
+        table.context,
+        handle,
+        &read_back,
+        read_back.len,
+        &filled,
+    ));
+    try testing.expectEqual(@as(i64, 0), filled);
+    try testing.expectEqual(abi.Answer.yes, table.handle_close.?(table.context, handle));
 
     try testing.expectEqual(abi.Answer.yes, table.print.?(table.context, "hello", 5));
     try testing.expectEqualStrings("hello\n", written.written());
 
-    // The four file operations that arrived with the rest of the host
-    // surface, over the same real directory.
+    // The file operations beside the byte channel, over the same real
+    // directory.  An append handle starts at the end of what is there.
     const moved = try std.fs.path.join(testing.allocator, &.{ directory, "kept.txt" });
     defer testing.allocator.free(moved);
-    try testing.expectEqual(abi.Answer.yes, table.file_append.?(
+    try testing.expectEqual(abi.Answer.yes, table.handle_open.?(
         table.context,
         path.ptr,
         @intCast(path.len),
+        @intFromEnum(luce.runtime.files.Mode.append),
+        &handle,
+    ));
+    try testing.expectEqual(abi.Answer.yes, table.handle_write.?(
+        table.context,
+        handle,
         " more",
         5,
+        &moved_bytes,
     ));
-    try testing.expectEqual(
-        abi.Answer.yes,
-        table.file_read.?(table.context, path.ptr, @intCast(path.len), &text, &length),
-    );
-    try testing.expectEqualStrings("kept more", text[0..@intCast(length)]);
+    try testing.expectEqual(abi.Answer.yes, table.handle_close.?(table.context, handle));
+    try testing.expectEqualStrings("kept more", (try host.loadFile(path)).?);
     try testing.expectEqual(abi.Answer.yes, table.file_rename.?(
         table.context,
         path.ptr,

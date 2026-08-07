@@ -51,11 +51,11 @@
       "patterns": [
         {
           "name": "support.function.builtin.luce",
-          "match": "\\b(?:range|abs|min|max|clamp|sqrt|floor|ceil|trunc|len|assert|parse_int|parse_float|chr|ord)\\b"
+          "match": "\\b(?:range|abs|min|max|clamp|sqrt|floor|ceil|trunc|len|assert|parse_int|parse_float|parse_string|chr|ord)\\b"
         },
         {
           "name": "support.function.builtin.host.luce",
-          "match": "\\b(?:print|file_read|file_write|file_exists|term_rows|term_cols|term_clear|term_move|term_style|term_write|term_flush|key_read|key_text|read_line|print_error|clock_ms|sleep_ms|env|file_append|file_delete|file_rename|dir_list|exit|os_total_memory|os_available_memory|os_cpu_count)\\b"
+          "match": "\\b(?:print|file_read|file_write|file_exists|term_rows|term_cols|term_clear|term_move|term_style|term_write|term_flush|key_read|key_text|read_line|print_error|clock_ms|sleep_ms|env|file_append|file_delete|file_rename|dir_list|file_open|exit|os_total_memory|os_available_memory|os_cpu_count)\\b"
         }
       ]
     },
@@ -398,7 +398,7 @@
       "patterns": [
         {
           "name": "support.type.luce",
-          "match": "\\b(?:bool|byte|short|int|long|half|float|double|string|list|map|array|builder|None)\\b"
+          "match": "\\b(?:bool|byte|short|int|long|half|float|double|string|list|map|array|builder|file|None)\\b"
         },
         {
           "name": "entity.name.type.luce",

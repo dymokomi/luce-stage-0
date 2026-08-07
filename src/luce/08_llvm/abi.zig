@@ -134,7 +134,35 @@ const trace = @import("../runtime/trace.zig");
 /// a null slot gives, so the program traps `host_unavailable` at the
 /// call either way and no host has to invent a number.  No field
 /// moved.
-pub const version: u32 = 11;
+///
+/// 12 — **a file is bytes reached through an open handle**
+/// (docs/BYTES.md).  Five slots arrive at the end of the table —
+/// `handle_open`, `handle_read`, `handle_write`, `handle_flush`,
+/// `handle_close` — carrying raw bytes with no opinion about encoding:
+/// a read fills a buffer the caller owns and says how much landed, and
+/// a write takes a buffer and a length.  With them, three things move
+/// that are one movement:
+///
+///   * **UTF-8 validation leaves the host.**  `file_read` is now
+///     open-read-close over the byte channel followed by
+///     `libluce_rt`'s own validation, so the interpreter, a compiled
+///     artifact, and every future host agree byte-for-byte on what
+///     "not text" means — that sentence used to live in `apps/host.zig`
+///     where only loom could say it.
+///   * **The whole-file text slots retire from use.**  `file_read`,
+///     `file_write` and `file_append` keep their positions and their
+///     signatures — the table is append-only and nothing reorders —
+///     but no artifact built at this version indexes them, and the
+///     hosts in this tree leave them null.
+///   * **The handle channel is installed once**, at the start of a
+///     run, into `libluce_rt` rather than read at each call: a handle
+///     is closed when its owning scope ends, and that release happens
+///     inside the ownership walk where no generated code is standing.
+///
+/// One bump for the whole movement, because it is one movement: an
+/// artifact built against the old reading calls a `file_read` slot the
+/// host no longer fills, and must be rebuilt rather than tolerated.
+pub const version: u32 = 12;
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the
@@ -318,6 +346,12 @@ pub const MachineFactFn = *const fn (
 /// Read a whole file.  `yes` fills `text`/`length` with bytes borrowed
 /// for the duration of the call; `no` means the read failed and the
 /// program traps `file_read_failed`.
+///
+/// **Retired at version 12** (docs/BYTES.md R2), along with
+/// `FileWriteFn` and `FileAppendFn`.  The slot keeps its position
+/// because the table is append-only, but nothing calls it: `file_read`
+/// is open-read-close over the handle channel plus `libluce_rt`'s own
+/// UTF-8 validation, and the hosts in this tree leave the slot null.
 pub const FileReadFn = *const fn (
     context: ?*anyopaque,
     path: [*]const u8,
@@ -506,6 +540,65 @@ pub const DirListFn = *const fn (
     names_length: *i64,
 ) callconv(.c) Answer;
 
+// ---------------------------------------------------------------------------
+// The handle channel (version 12)
+// ---------------------------------------------------------------------------
+//
+// The C shape, deliberately: a read fills a buffer the caller owns and
+// answers the count, a write takes a buffer and a length
+// (docs/BYTES.md R4).  Nothing here has an opinion about encoding —
+// text is a validation `libluce_rt` performs on the bytes — and nothing
+// here is path-addressed after the open, which is what makes the same
+// five slots serve a socket when `std.network` arrives.
+//
+// **These are the only file slots a version-12 artifact indexes.**  The
+// runtime is handed them once, at the start of a run, because a
+// handle's close happens at a scope's end where no generated code is
+// standing (`runtime/files.zig`).
+
+/// Open `path` and answer the number the host will know it by.  `mode`
+/// is `runtime.files.Mode`: 0 read, 1 write (create and truncate), 2
+/// append (create, write at the end).  A host that does not recognise a
+/// mode says no, which the program meets as `io_failed`.
+pub const HandleOpenFn = *const fn (
+    context: ?*anyopaque,
+    path: [*]const u8,
+    path_length: i64,
+    mode: i64,
+    handle: *i64,
+) callconv(.c) Answer;
+
+/// Fill `into` with at most `capacity` bytes and say how many landed.
+/// **Zero with a `yes` is the end of the file**, which is the whole
+/// reason the count is answered rather than the buffer being assumed
+/// full: a short read is ordinary and a program loops on it.
+pub const HandleReadFn = *const fn (
+    context: ?*anyopaque,
+    handle: i64,
+    into: [*]u8,
+    capacity: i64,
+    filled: *i64,
+) callconv(.c) Answer;
+
+/// Write `length` bytes and say how many landed.  A short write is not
+/// a failure either; the caller loops.
+pub const HandleWriteFn = *const fn (
+    context: ?*anyopaque,
+    handle: i64,
+    from: [*]const u8,
+    length: i64,
+    written: *i64,
+) callconv(.c) Answer;
+
+/// `handle_flush` and `handle_close`, which take a handle and nothing
+/// else.  A close is called from the ownership walk, which has nobody
+/// to report to, so its answer is read by nothing: a host that cannot
+/// close has already lost the file.
+pub const HandlePlainFn = *const fn (
+    context: ?*anyopaque,
+    handle: i64,
+) callconv(.c) Answer;
+
 /// The service table handed to `luce_main`.
 ///
 /// The struct is `extern` so its layout is the C layout the generated
@@ -567,6 +660,17 @@ pub const Host = extern struct {
     os_total_memory: ?MachineFactFn = null,
     os_available_memory: ?MachineFactFn = null,
     os_cpu_count: ?MachineFactFn = null,
+    /// Version 12: the handle channel (docs/BYTES.md).  Five slots for
+    /// one subject, appended in one run for the reason the machine
+    /// facts were: a version is a rebuild of every artifact there is,
+    /// and a channel that arrived a slot at a time would spend that
+    /// five times over.  All optional and fail-closed; a program given
+    /// none of them computes and touches no file.
+    handle_open: ?HandleOpenFn = null,
+    handle_read: ?HandleReadFn = null,
+    handle_write: ?HandleWriteFn = null,
+    handle_flush: ?HandlePlainFn = null,
+    handle_close: ?HandlePlainFn = null,
 };
 
 /// The index of each `Host` field, as the generated code addresses it.
@@ -605,6 +709,11 @@ pub const Slot = enum(u32) {
     os_total_memory = 29,
     os_available_memory = 30,
     os_cpu_count = 31,
+    handle_open = 32,
+    handle_read = 33,
+    handle_write = 34,
+    handle_flush = 35,
+    handle_close = 36,
 
     pub const count = @typeInfo(Slot).@"enum".fields.len;
 };

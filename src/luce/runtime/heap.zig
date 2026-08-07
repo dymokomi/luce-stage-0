@@ -16,6 +16,7 @@
 
 const std = @import("std");
 const vocabulary = @import("../support/vocabulary.zig");
+const files = @import("files.zig");
 const trace = @import("trace.zig");
 const value = @import("value.zig");
 
@@ -123,6 +124,10 @@ pub const Owner = union(enum) {
 /// same row.
 pub const retired: u32 = std.math.maxInt(u32);
 
+/// The handle number of a `.file` row whose file has already been
+/// closed.  No host may name a file with it, and nothing closes it.
+pub const no_file: i64 = -1;
+
 pub const Object = struct {
     /// Which occupant of this row is the current one.  A handle names
     /// this object only while the two agree; every free moves it on,
@@ -183,6 +188,32 @@ pub const Object = struct {
         /// `Object.dims`, for the reason above.
         array,
         builder: std.ArrayList(u8),
+        /// An open file, as the host numbers it (docs/BYTES.md R5).
+        ///
+        /// **A resource, owned exactly as memory is.**  The binding
+        /// that received it owns it, the owning scope's end closes it,
+        /// `give`/`return`/`free` mean what OWNERSHIP.md says, and a
+        /// use after close traps `use_after_free` because it is the
+        /// same mistake.  What is different from every other kind is
+        /// only that its release reaches outside the process, which is
+        /// why `Runtime` holds the host's channel for the whole run
+        /// (`files`): `freeObject` is where a scope's end arrives, and
+        /// nothing is standing there to hand a host in.
+        file: File,
+    };
+
+    /// An open file: the number the host knows it by, and the path it
+    /// was opened at.
+    ///
+    /// **The path is kept because an error has to name it.**  "the read
+    /// failed" without saying which file is a message that helps
+    /// nobody (docs/FAILURE.md), and a handle two hundred lines from
+    /// its `open` is exactly where a reader has stopped being able to
+    /// supply the name themselves.  The bytes are the object's, freed
+    /// with it.
+    pub const File = struct {
+        handle: i64,
+        path: []const u8,
     };
 
     /// A run of elements stored at their real width — the storage a
@@ -304,17 +335,25 @@ pub const Object = struct {
         /// Room for `wanted` elements, growing geometrically.  The
         /// storage is the caller's allocator's; a run that cannot grow
         /// answers `error.OutOfMemory` and is left exactly as it was.
+        ///
+        /// The arithmetic is in **bytes**, not elements, and that is
+        /// not a detail: `capacity()` divides by a width the compiler
+        /// does not know, and an integer division on the hot path of
+        /// every `append` measured as a real cost on the `strings`
+        /// benchmark.  A multiply says the same thing.
         pub fn ensureCapacity(
             self: *Elements,
             allocator: Allocator,
             wanted: usize,
         ) Allocator.Error!void {
-            if (wanted <= self.capacity()) return;
-            var grown = self.capacity();
-            if (grown < 8) grown = 8;
-            while (grown < wanted) grown = grown +| grown / 2 +| 8;
             const width = self.kind.width();
-            const bytes = try allocator.alignedAlloc(u8, .of(Value), grown * width);
+            const needed = std.math.mul(usize, wanted, width) catch
+                return error.OutOfMemory;
+            if (needed <= self.bytes.len) return;
+            var grown = self.bytes.len;
+            if (grown < 8 * width) grown = 8 * width;
+            while (grown < needed) grown = grown +| grown / 2 +| width;
+            const bytes = try allocator.alignedAlloc(u8, .of(Value), grown);
             @memcpy(bytes[0 .. self.count * width], self.bytes[0 .. self.count * width]);
             allocator.free(self.bytes);
             self.bytes = bytes;
@@ -496,6 +535,15 @@ pub const Object = struct {
             .builder => |*builder| {
                 builder.deinit(allocator);
                 self.data = .{ .builder = .empty };
+            },
+            // The host owns the file; `Runtime.freeObject` has already
+            // told it to close, and there is no storage of ours here.
+            // The number is blanked so the end-of-run sweep, which
+            // releases every row occupied or not, does not close a
+            // second time what ownership already closed.
+            .file => |open| {
+                allocator.free(open.path);
+                self.data = .{ .file = .{ .handle = no_file, .path = "" } };
             },
         }
     }
@@ -840,6 +888,14 @@ pub const Runtime = struct {
     /// borrow copies like every other store (docs/STRINGS.md).
     last_key_text: []const u8 = "",
 
+    /// The host's file-handle channel, installed once at the start of a
+    /// run (`runtime/files.zig`).  Held rather than passed because a
+    /// handle's close happens at a scope's end, inside `freeObject`,
+    /// where no caller is standing to hand a host in.  Empty until
+    /// installed, and every slot is fail-closed like every other
+    /// effect.
+    files: files.Channel = .{},
+
     pub fn init(memory: Memory) Runtime {
         return .{ .arena = memory.arena, .objects = memory.objects };
     }
@@ -878,6 +934,9 @@ pub const Runtime = struct {
                     self.dropStorage(entry.value);
                 },
                 .builder => {},
+                // A handle the program leaked is still an open file:
+                // the run gives it back even though ownership did not.
+                .file => |open| self.closeFile(open.handle),
             }
             object.release(self.objects);
         }
@@ -1055,6 +1114,26 @@ pub const Runtime = struct {
 
     pub fn newBuilder(self: *Runtime) Error!Value {
         return self.attach(.{ .data = .{ .builder = .empty } });
+    }
+
+    /// A fresh object naming a file the host has already opened
+    /// (docs/BYTES.md R5).  Loose like every other `new`: the binding
+    /// that receives it owns it, and its scope's end closes it.
+    pub fn newFile(self: *Runtime, handle: i64, path: []const u8) Error!Value {
+        const kept = try self.objects.dupe(u8, path);
+        errdefer self.objects.free(kept);
+        return self.attach(.{ .data = .{ .file = .{ .handle = handle, .path = kept } } });
+    }
+
+    /// Tell the host a handle is finished with.  Called from the two
+    /// places a file's life can end — the owning scope, and the run's
+    /// own sweep of what a program leaked — neither of which has
+    /// anybody to report a failure to, so the answer is not read: a
+    /// host that cannot close has already lost the file.
+    fn closeFile(self: *Runtime, handle: i64) void {
+        if (handle == no_file) return;
+        const service = self.files.close orelse return;
+        _ = service(self.files.context, handle);
     }
 
     /// A fresh array of `dims`, every element `zero`.  The element zero
@@ -1467,6 +1546,8 @@ pub const Runtime = struct {
                 self.freeValue(entry.value);
             },
             .builder => {},
+            // The scope's end is the close (docs/BYTES.md R5).
+            .file => |open| self.closeFile(open.handle),
         }
         object.release(self.objects);
         // A row that has run out of generations is retired rather than
@@ -1602,6 +1683,12 @@ pub const Runtime = struct {
                         try copied.appendSlice(self.objects, builder.items);
                         break :blk .{ .data = .{ .builder = copied } };
                     },
+                    // A second Luce handle on one open file would be
+                    // two owners of one resource, which is the thing
+                    // scope ownership exists to make impossible.  Stage
+                    // 4 refuses `copy f` by name; this is the wall
+                    // behind it, for IR that arrived some other way.
+                    .file => return self.fail(.not_owned),
                 };
                 errdefer storage.release(self.objects);
                 const duplicate = try self.attach(storage);
@@ -1612,7 +1699,7 @@ pub const Runtime = struct {
                         for (made.elements.cells(Value)) |item| self.adopt(item);
                     },
                     .map => |map| for (map.entries.items) |entry| self.adopt(entry.value),
-                    .builder => {},
+                    .builder, .file => {},
                 }
                 return duplicate;
             },

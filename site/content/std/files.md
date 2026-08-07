@@ -26,6 +26,17 @@ error, because file access genuinely does not exist there.
 | `files.rename(from, to) -> !` | moves a file, **replacing** an existing target |
 | `files.list(path) -> list(string)!` | the names in a directory, **sorted**; plain names, not paths |
 
+And the binary half, which is the same file seen as bytes:
+
+| Signature | Notes |
+|---|---|
+| `files.open(path) -> file!` | a handle to read from the start; the file must be there |
+| `files.create(path) -> file!` | a handle to write from the start, creating the file and emptying it |
+| `files.append_to(path) -> file!` | a handle to write at the end, creating the file if it is not there |
+| `files.read_bytes(path) -> list(byte)!` | the whole file as bytes; nothing here asks whether they are text |
+| `files.write_bytes(path, bytes) -> !` | replaces whatever was there |
+| `files.append_bytes(path, bytes) -> !` | adds to the end, creating the file if it is not there |
+
 Three of those want a sentence of their own.
 
 **`append_text` is what `write` cannot be.** Read-then-write is two
@@ -180,6 +191,86 @@ real contents
 
 (handled at the top)
 ```
+
+## A handle is a scope-owned resource
+
+`open`, `create` and `append_to` answer a [`file`](/ref/types/#file).
+It is an object like a `list` is an object, and it obeys the same
+rules: the binding that received it owns it, the end of that scope
+closes the file, `free(f)` closes it early, `give` and `return` move
+it, and using one after it is closed traps `use_after_free` — because
+it is the same mistake.
+
+There is deliberately no `close`. A file you have to remember to close
+is a file somebody will not, and the whole reason
+[scope ownership](/ref/ownership/) exists is that the compiler already
+knows where a name's life ends.
+
+```luce run
+import std.files
+
+func main() -> !:
+    try files.write("notes.txt", "abcdef")
+    var f = try files.open("notes.txt")
+    var buffer = new array(byte, 4)
+    print(string(try f.read(buffer)))
+    print(string(try f.read(buffer)))
+    print(string(try f.read(buffer)))
+    try files.delete("notes.txt")
+```
+
+```output
+4
+2
+0
+```
+
+Four, then the two that were left, then zero. **A read answers how many
+bytes landed**, and zero is the end of the file: short is ordinary, not
+a refusal. A write says the same thing in the other direction —
+`f.write(buffer, count)` answers how many bytes it took, which may be
+fewer than you offered, so a caller loops. That is the C shape on
+purpose, and it is the shape a socket will want when `std.network`
+arrives.
+
+`read_bytes`, `write_bytes` and `append_bytes` are that loop, written
+once, the way Go's `os.ReadFile` is a loop over `Read`.
+
+## Bytes are not text until you say so
+
+Nothing on the byte side asks whether what it carries is text. That is
+the point: a JPEG reads as happily as a note.
+
+```luce run
+import std.files
+import std.strings
+
+func main() -> !:
+    var bytes = new list(byte)
+    bytes.append(byte(0x89))
+    bytes.append(byte(0x50))
+    bytes.append(byte(0x00))
+    try files.write_bytes("image.bin", bytes)
+    let back = try files.read_bytes("image.bin")
+    print(string(len(back)))
+    print(strings.from_bytes(back) else "(not text)")
+    try files.delete("image.bin")
+```
+
+```output
+3
+(not text)
+```
+
+Going the other way is [`strings.from_bytes`](/std/strings/), which
+answers `string?` — "not UTF-8" is the same reason every time, so
+absence carries all the information there is.
+
+`files.read` is defined over exactly this: an open, a loop of reads, a
+close, and then that check. A file whose bytes are not text is refused
+*as a string*, which is true, and it is refused identically wherever
+the program runs — the rule lives in the runtime library rather than in
+any one host.
 
 ## What is missing
 

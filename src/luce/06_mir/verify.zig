@@ -49,7 +49,7 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
             try verifyType(program, shape.element);
             if (shape.rank < 1 or shape.rank > 4) return error.BadStruct;
         },
-        .builder => {},
+        .builder, .file => {},
     };
     for (program.structs) |layout| {
         for (layout.fields) |field| try verifyType(program, field.field_type);
@@ -716,7 +716,7 @@ fn verifyIntrinsic(
                     for (arguments[1 .. 1 + shape.rank]) |index| try expectType(index, .long);
                     break :blk shape.element;
                 },
-                .builder => return error.BadIntrinsic,
+                .builder, .file => return error.BadIntrinsic,
             };
             if (reads) {
                 try expectType(result, element);
@@ -853,7 +853,7 @@ fn verifyIntrinsic(
             try exactly(arguments, 1);
             switch (try heapShape(program, arguments[0])) {
                 .list, .map, .builder => {},
-                .array => return error.BadIntrinsic,
+                .array, .file => return error.BadIntrinsic,
             }
             try expectType(result, .none);
         },
@@ -928,6 +928,16 @@ fn verifyIntrinsic(
                 .{ .optional = .long }
             else
                 .{ .optional = .double });
+        },
+        .parse_string => {
+            try exactly(arguments, 1);
+            // A packed `list(byte)` is the one shape the validator
+            // reads in place, and a `.lcm` reaches this stage without
+            // passing the analyzer, so the element type is checked
+            // here rather than trusted.
+            const shape = try heapShape(program, arguments[0]);
+            if (shape != .list or shape.list != .byte) return error.BadIntrinsic;
+            try expectType(result, .{ .optional = .string });
         },
         .chr_code => {
             try exactly(arguments, 1);
@@ -1036,7 +1046,45 @@ fn verifyIntrinsic(
             const shape = try heapShape(program, result);
             if (shape != .list or shape.list != .string) return error.BadIntrinsic;
         },
+        // The byte channel (docs/BYTES.md).  The buffer is an
+        // `array(byte, _)` in both directions and is checked here
+        // rather than trusted, because a `.lcm` reaches this stage
+        // without ever passing the analyzer: the runtime reads those
+        // cells as raw bytes, and a run of `Value`s read that way is
+        // the one shape damaged IR must not be able to ask for.
+        .file_open => {
+            try exactly(arguments, 2);
+            try expectType(arguments[0], .string);
+            try expectType(arguments[1], .long);
+            if (try heapShape(program, result) != .file) return error.BadIntrinsic;
+        },
+        .handle_read => {
+            try exactly(arguments, 2);
+            if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
+            try expectByteBuffer(program, arguments[1]);
+            try expectType(result, .long);
+        },
+        .handle_write => {
+            try exactly(arguments, 3);
+            if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
+            try expectByteBuffer(program, arguments[1]);
+            try expectType(arguments[2], .long);
+            try expectType(result, .long);
+        },
+        .handle_flush => {
+            try exactly(arguments, 1);
+            if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
+            try expectType(result, .none);
+        },
     }
+}
+
+/// The one buffer shape the byte channel reads and writes: a rank-1
+/// `array(byte, n)`, whose cells are packed bytes and nothing else.
+fn expectByteBuffer(program: *const Program, of: Type) VerifyError!void {
+    const shape = try heapShape(program, of);
+    if (shape != .array) return error.BadIntrinsic;
+    if (shape.array.element != .byte or shape.array.rank != 1) return error.BadIntrinsic;
 }
 
 // ---------------------------------------------------------------------------

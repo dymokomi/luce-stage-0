@@ -220,3 +220,30 @@ func format_float(value: double, decimals: long) -> string:
     while len(digits) < decimals:
         digits = "0" + digits
     return sign + string(whole) + "." + digits
+
+# -- bytes (docs/BYTES.md R3) -----------------------------------------
+
+# A string's bytes, as a `list(byte)`.
+#
+# Total, and it has to be: a string is already valid UTF-8, so there
+# is nothing here that can fail and nothing to ask about.  The bytes
+# are the encoding, not the characters — `len(to_bytes(s))` is
+# `len(s)`, which is bytes on both sides.
+func to_bytes(s: string) -> list(byte):
+    var out = new list(byte)
+    var at: long = 0
+    while at < len(s):
+        out.append(s.byte_at(at))
+        at += 1
+    return out
+
+# Bytes as text, or absent when they are not valid UTF-8.
+#
+# The other direction is a **parse**, which is why it answers `string?`
+# and not `string!`: "not UTF-8" is the same reason every time and the
+# name already implies it, so absence carries all the information there
+# is — the `parse_int` precedent (docs/FAILURE.md).  The validator is
+# `libluce_rt`'s, so a compiled program and the test oracle agree
+# byte-for-byte on what "not text" means.
+func from_bytes(xs: list(byte)) -> string?:
+    return parse_string(xs)

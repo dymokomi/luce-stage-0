@@ -66,6 +66,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const vocabulary = @import("../support/vocabulary.zig");
 const containers = @import("containers.zig");
+const files = @import("files.zig");
 const heap = @import("heap.zig");
 const operators = @import("operators.zig");
 const text = @import("text.zig");
@@ -468,6 +469,188 @@ pub export fn luce_rt_drop_storage(
 /// The text payload of the most recent `key_read`.
 pub export fn luce_rt_key_text(runtime: *const Runtime, out: *Value) callconv(.c) void {
     out.* = Value.ofString(runtime.last_key_text);
+}
+
+// ---------------------------------------------------------------------------
+// Files: the byte channel, and text as a validation over it
+// ---------------------------------------------------------------------------
+//
+// The five slots arrive once, at the start of a run, rather than at
+// each call (docs/BYTES.md R2): a handle is closed when its owning
+// scope ends, and that release happens inside the ownership walk, where
+// no generated code is standing to hand a host in.  Everything below
+// reads them out of the runtime.
+//
+// The three fallible answers follow the same convention as every other
+// export — 0 survived, 1 trapped — with the world's `no` carried in an
+// out-parameter the caller branches on, because "the file could not be
+// opened" is news a program may catch and not a bug (docs/FAILURE.md).
+
+/// `parse_string(xs)` — a `list(byte)` as text, or absent when the
+/// bytes are not valid UTF-8 (docs/BYTES.md R3).
+pub export fn luce_rt_parse_string(
+    runtime: *Runtime,
+    held: *const Value,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = files.parseString(runtime, held.*) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
+pub export fn luce_rt_files_install(
+    runtime: *Runtime,
+    context: ?*anyopaque,
+    open: ?files.OpenFn,
+    read: ?files.ReadFn,
+    write: ?files.WriteFn,
+    flush: ?files.FlushFn,
+    close: ?files.CloseFn,
+) callconv(.c) void {
+    runtime.files = .{
+        .context = context,
+        .open = open,
+        .read = read,
+        .write = write,
+        .flush = flush,
+        .close = close,
+    };
+}
+
+pub export fn luce_rt_file_open(
+    runtime: *Runtime,
+    path: [*]const u8,
+    length: i64,
+    mode: i64,
+    out: *Value,
+    opened: *i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    const named = path[0..@intCast(length)];
+    const answer = files.open(runtime, named, mode) catch |mistake|
+        return failed(runtime, mistake);
+    opened.* = @intFromBool(answer != null);
+    if (answer) |made| {
+        out.* = made;
+    } else {
+        runtime.raiseIo(.open, named, runtime.frameAt(function, instruction));
+    }
+    return survived;
+}
+
+pub export fn luce_rt_file_read(
+    runtime: *Runtime,
+    held: *const Value,
+    buffer: *const Value,
+    filled: *i64,
+    ok: *i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    const answer = files.read(runtime, held.*, buffer.*) catch |mistake|
+        return failed(runtime, mistake);
+    ok.* = @intFromBool(answer != null);
+    filled.* = answer orelse 0;
+    if (answer == null) runtime.raiseIo(
+        .read,
+        files.pathOf(runtime, held.*),
+        runtime.frameAt(function, instruction),
+    );
+    return survived;
+}
+
+pub export fn luce_rt_file_write(
+    runtime: *Runtime,
+    held: *const Value,
+    buffer: *const Value,
+    count: i64,
+    written: *i64,
+    ok: *i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    const answer = files.write(runtime, held.*, buffer.*, count) catch |mistake|
+        return failed(runtime, mistake);
+    ok.* = @intFromBool(answer != null);
+    written.* = answer orelse 0;
+    if (answer == null) runtime.raiseIo(
+        .write,
+        files.pathOf(runtime, held.*),
+        runtime.frameAt(function, instruction),
+    );
+    return survived;
+}
+
+pub export fn luce_rt_file_flush(
+    runtime: *Runtime,
+    held: *const Value,
+    ok: *i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    const answered = files.flush(runtime, held.*) catch |mistake|
+        return failed(runtime, mistake);
+    ok.* = @intFromBool(answered);
+    if (!answered) runtime.raiseIo(
+        .flush,
+        files.pathOf(runtime, held.*),
+        runtime.frameAt(function, instruction),
+    );
+    return survived;
+}
+
+/// `file_read(path)` — the whole file as a `string`, open-read-close
+/// over the byte channel with this library's own UTF-8 validation.
+pub export fn luce_rt_file_read_text(
+    runtime: *Runtime,
+    path: [*]const u8,
+    length: i64,
+    out: *Value,
+    ok: *i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    const named = path[0..@intCast(length)];
+    const answer = files.readText(runtime, named) catch |mistake|
+        return failed(runtime, mistake);
+    ok.* = @intFromBool(answer != null);
+    if (answer) |made| {
+        out.* = made;
+    } else {
+        runtime.raiseIo(.read, named, runtime.frameAt(function, instruction));
+    }
+    return survived;
+}
+
+/// `file_write(path, text)` at `mode` 1 and `file_append(path, text)`
+/// at `mode` 2 — one door, because they differ only in where the write
+/// starts.
+pub export fn luce_rt_file_write_text(
+    runtime: *Runtime,
+    path: [*]const u8,
+    path_length: i64,
+    content: [*]const u8,
+    content_length: i64,
+    mode: i64,
+    ok: *i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    const named = path[0..@intCast(path_length)];
+    const answered = files.writeText(
+        runtime,
+        named,
+        content[0..@intCast(content_length)],
+        @enumFromInt(mode),
+    ) catch |mistake| return failed(runtime, mistake);
+    ok.* = @intFromBool(answered);
+    if (!answered) runtime.raiseIo(
+        if (mode == @intFromEnum(files.Mode.append)) .append else .write,
+        named,
+        runtime.frameAt(function, instruction),
+    );
+    return survived;
 }
 
 /// Record allocation failure and report the call as trapped.  Every

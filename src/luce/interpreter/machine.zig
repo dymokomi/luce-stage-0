@@ -26,6 +26,7 @@ const Result = interpreter.Result;
 const Budget = interpreter.Budget;
 
 const containers = runtime.containers;
+const files = runtime.files;
 const operators = runtime.operators;
 const text = runtime.text;
 
@@ -46,6 +47,12 @@ pub fn run(
         .max_depth = budget.call_depth,
         .host = host,
     };
+    // The host's file channel goes into the runtime, which is what
+    // calls it: a handle's close happens at the end of the scope that
+    // owns it, inside the ownership walk (docs/BYTES.md R2).  The
+    // compiled path installs the same five pointers through
+    // `luce_rt_files_install`, so both engines reach one channel.
+    if (host) |given| machine.runtime.files = given.files;
     // Object storage is a real allocator now, so the run has to hand
     // it back: scope ownership frees what the program finished with,
     // and this frees what a trap unwound past or a leak left behind
@@ -601,6 +608,10 @@ pub const Machine = struct {
             .list => |element| return self.runtime.newList(try self.zeroValue(element)),
             .map => return self.runtime.newMap(),
             .builder => return self.runtime.newBuilder(),
+            // A file is made by `file_open` and by nothing else, so
+            // there is no `new file` for this to answer; stage 4
+            // refuses one by name and the verifier refuses the IR.
+            .file => unreachable,
             .array => |shape| {
                 self.dims_scratch.clearRetainingCapacity();
                 try self.dims_scratch.ensureTotalCapacity(self.arena, new.dims.len);
@@ -911,6 +922,7 @@ pub const Machine = struct {
             .str_value => return text.str(&self.runtime, registers[arguments[0]]),
             .parse_int => return text.parseInt(&self.runtime, registers[arguments[0]]),
             .parse_float => return text.parseFloat(&self.runtime, registers[arguments[0]]),
+            .parse_string => return files.parseString(&self.runtime, registers[arguments[0]]),
             .chr_code => return text.chr(&self.runtime, registers[arguments[0]].asLong()),
             .ord_text => return text.ord(&self.runtime, registers[arguments[0]]),
             .string_slice => return text.slice(
@@ -963,41 +975,38 @@ pub const Machine = struct {
                 try callback(host.context, registers[arguments[0]].asString());
                 return .none;
             },
+            // The three whole-file text services, over the byte channel
+            // (docs/BYTES.md R2).  No host callback of their own any
+            // more: they are open-read-close inside `libluce_rt` plus
+            // its own UTF-8 validation, so what "not text" means is one
+            // decision and both engines reach it.  A file the world
+            // would not read is the world deciding, and `file_exists`
+            // in front of it is a race — so it is an error, not a trap.
             .file_read => {
-                const host = try self.service();
-                const callback = host.file_read orelse return self.runtime.fail(.host_unavailable);
                 const path = registers[arguments[0]].asString();
-                return switch (try callback(host.context, self.arena, path)) {
-                    // The host allocates from the arena, which cannot
-                    // give a slice back; the program keeps an owned
-                    // copy and the arena's is scratch.
-                    .content => |content| try self.runtime.ownValue(.ofString(content)),
-                    // A file that would not read is the world
-                    // deciding, and `file_exists` before it is a race
-                    // — so it is an error, not a trap.  The answer is
-                    // a value nothing reads: the `errored` in front of
+                const found = try files.readText(&self.runtime, path);
+                return found orelse blk: {
+                    // A value nothing reads: the `errored` in front of
                     // the branch has already seen the channel.
-                    .failed => blk: {
-                        self.runtime.raiseIo(.read, path, self.placeOf(site));
-                        break :blk .ofString("");
-                    },
+                    self.runtime.raiseIo(.read, path, self.placeOf(site));
+                    break :blk .ofString("");
                 };
             },
-            .file_write => {
-                const host = try self.service();
-                const callback = host.file_write orelse return self.runtime.fail(.host_unavailable);
+            .file_write, .file_append => {
+                const appending = operation.kind == .file_append;
                 const path = registers[arguments[0]].asString();
-                if (!callback(host.context, path, registers[arguments[1]].asString())) {
-                    self.runtime.raiseIo(.write, path, self.placeOf(site));
-                }
-                return .none;
-            },
-            .file_append => {
-                const host = try self.service();
-                const callback = host.file_append orelse return self.runtime.fail(.host_unavailable);
-                const path = registers[arguments[0]].asString();
-                if (!callback(host.context, path, registers[arguments[1]].asString())) {
-                    self.runtime.raiseIo(.append, path, self.placeOf(site));
+                const landed = try files.writeText(
+                    &self.runtime,
+                    path,
+                    registers[arguments[1]].asString(),
+                    if (appending) .append else .write,
+                );
+                if (!landed) {
+                    self.runtime.raiseIo(
+                        if (appending) .append else .write,
+                        path,
+                        self.placeOf(site),
+                    );
                 }
                 return .none;
             },
@@ -1153,6 +1162,67 @@ pub const Machine = struct {
                 return self.runtime.ownValue(.ofString(event.name));
             },
             .key_text => return .ofString(self.runtime.last_key_text),
+
+            // -- the byte channel (docs/BYTES.md) ---------------------
+            //
+            // No `host` lookup and no callback of this file's own:
+            // `libluce_rt` holds the five slots and every semantic
+            // below is written there, so the oracle decodes the
+            // instruction and calls the same body a compiled artifact
+            // calls.  All four raise `io_failed` where the world said
+            // no, with the path the handle remembers.
+            .file_open => {
+                const path = registers[arguments[0]].asString();
+                const opened = try files.open(
+                    &self.runtime,
+                    path,
+                    registers[arguments[1]].asLong(),
+                );
+                return opened orelse blk: {
+                    self.runtime.raiseIo(.open, path, self.placeOf(site));
+                    break :blk .none;
+                };
+            },
+            .handle_read => {
+                const held = registers[arguments[0]];
+                const filled = try files.read(&self.runtime, held, registers[arguments[1]]);
+                return .ofLong(filled orelse blk: {
+                    self.runtime.raiseIo(
+                        .read,
+                        files.pathOf(&self.runtime, held),
+                        self.placeOf(site),
+                    );
+                    break :blk 0;
+                });
+            },
+            .handle_write => {
+                const held = registers[arguments[0]];
+                const written = try files.write(
+                    &self.runtime,
+                    held,
+                    registers[arguments[1]],
+                    registers[arguments[2]].asLong(),
+                );
+                return .ofLong(written orelse blk: {
+                    self.runtime.raiseIo(
+                        .write,
+                        files.pathOf(&self.runtime, held),
+                        self.placeOf(site),
+                    );
+                    break :blk 0;
+                });
+            },
+            .handle_flush => {
+                const held = registers[arguments[0]];
+                if (!try files.flush(&self.runtime, held)) {
+                    self.runtime.raiseIo(
+                        .flush,
+                        files.pathOf(&self.runtime, held),
+                        self.placeOf(site),
+                    );
+                }
+                return .none;
+            },
         }
     }
 

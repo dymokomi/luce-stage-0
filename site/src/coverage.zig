@@ -370,6 +370,7 @@ fn methods(repository: Repository) !Names {
         "const array_methods = [_][]const u8{",
         "const map_methods = [_][]const u8{",
         "const builder_methods = [_][]const u8{",
+        "const file_methods = [_][]const u8{",
     }) |opening| {
         const table = between(source, opening, "};") orelse return error.MethodTableNotFound;
         try quotedWhere(&names, table, isPlainName);

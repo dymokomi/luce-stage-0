@@ -134,6 +134,11 @@ pub const FileAct = enum(i32) {
     delete,
     rename,
     list,
+    /// The byte channel's own three (docs/BYTES.md).  Appended, so
+    /// nothing renumbers: the ordinal is what crosses into
+    /// `luce_rt_raise_io`.
+    open,
+    flush,
 
     /// A static string, with its trailing space; the caller owns
     /// nothing.
@@ -145,6 +150,8 @@ pub const FileAct = enum(i32) {
             .delete => "cannot delete ",
             .rename => "cannot rename ",
             .list => "cannot list ",
+            .open => "cannot open ",
+            .flush => "cannot flush ",
         };
     }
 };

@@ -65,6 +65,12 @@ pub const layout = @import("runtime/heap.zig").layout;
 /// flat element cap that used to stand here (docs/BYTES.md).
 pub const maxElements = @import("runtime/heap.zig").maxElements;
 
+/// File handles: the host's byte channel, the handle's own operations,
+/// and the whole-file text conveniences defined over them
+/// (docs/BYTES.md).  The oracle reaches these directly; a compiled
+/// artifact reaches the same bodies through `exports.zig`.
+pub const files = @import("runtime/files.zig");
+
 pub const Tag = @import("runtime/value.zig").Tag;
 pub const Value = @import("runtime/value.zig").Value;
 pub const View = @import("runtime/value.zig").View;

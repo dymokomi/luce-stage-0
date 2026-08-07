@@ -123,6 +123,7 @@ pub const builtins = [_]Builtin{
     .{ .name = "free", .kind = .free_object, .parameters = &.{.{ .name = "object" }}, .pure = false },
     .{ .name = "parse_int", .kind = .parse_int, .parameters = &.{.{ .name = "text" }} },
     .{ .name = "parse_float", .kind = .parse_float, .parameters = &.{.{ .name = "text" }} },
+    .{ .name = "parse_string", .kind = .parse_string, .parameters = &.{.{ .name = "bytes" }} },
     .{ .name = "chr", .kind = .chr_code, .parameters = &.{.{ .name = "code" }} },
     .{ .name = "ord", .kind = .ord_text, .parameters = &.{.{ .name = "text" }} },
     .{ .name = "print", .kind = .print, .parameters = &.{.{ .name = "text" }}, .host = true },
@@ -151,6 +152,7 @@ pub const builtins = [_]Builtin{
     .{ .name = "file_delete", .kind = .file_delete, .parameters = &.{.{ .name = "path" }}, .host = true },
     .{ .name = "file_rename", .kind = .file_rename, .parameters = &.{ .{ .name = "from" }, .{ .name = "to" } }, .host = true },
     .{ .name = "dir_list", .kind = .dir_list, .parameters = &.{.{ .name = "path" }}, .host = true },
+    .{ .name = "file_open", .kind = .file_open, .parameters = &.{ .{ .name = "path" }, .{ .name = "mode" } }, .host = true },
     .{ .name = "exit", .kind = .exit_program, .parameters = &.{.{ .name = "status" }}, .host = true, .pure = false },
     .{ .name = "os_total_memory", .kind = .os_total_memory, .host = true },
     .{ .name = "os_available_memory", .kind = .os_available_memory, .host = true },
@@ -2037,7 +2039,7 @@ pub const FunctionBuilder = struct {
                     .list => |element| element,
                     .array => |shape| shape.element,
                     .map => |pair| pair.value,
-                    .builder => null,
+                    .builder, .file => null,
                 };
             },
             .subscripts => {
@@ -2056,7 +2058,7 @@ pub const FunctionBuilder = struct {
         return switch (descriptor) {
             .list, .array => .long,
             .map => |pair| pair.key,
-            .builder => null,
+            .builder, .file => null,
         };
     }
 
@@ -3426,6 +3428,10 @@ pub const FunctionBuilder = struct {
                 try self.fail("luce.sema.index", span, "builder has no index; b.build() reads it", .{});
                 return null;
             },
+            .file => {
+                try self.fail("luce.sema.index", span, "file has no index; f.read(buffer) reads bytes", .{});
+                return null;
+            },
         }
     }
 
@@ -3613,6 +3619,10 @@ pub const FunctionBuilder = struct {
             },
             .builder => {
                 try self.fail("luce.sema.loop", loop.span, "builder is not iterable", .{});
+                return;
+            },
+            .file => {
+                try self.fail("luce.sema.loop", loop.span, "file is not iterable; read into a buffer with f.read(buffer)", .{});
                 return;
             },
         };
@@ -4772,6 +4782,23 @@ pub const FunctionBuilder = struct {
             );
             return null;
         }
+        // **A file cannot be copied** (docs/BYTES.md R5).  A copy is a
+        // second object that owns its own contents, and there is only
+        // one open file behind a handle: two Luce handles on it would
+        // be two owners of one resource, which is the thing scope
+        // ownership exists to make impossible.  `give` is the verb
+        // that moves one.
+        if (value.value_type == .heap and
+            self.analyzer.heap_types.items[value.value_type.heap] == .file)
+        {
+            try self.fail(
+                "luce.sema.own",
+                copied.span,
+                "a file cannot be copied; there is one open file behind a handle — give it instead [BYTES.md R5]",
+                .{},
+            );
+            return null;
+        }
         const arguments = try self.arena().alloc(Register, 1);
         arguments[0] = value.register;
         return .{
@@ -4814,6 +4841,19 @@ pub const FunctionBuilder = struct {
             object_type = (try self.analyzer.resolveType(self.module, new.type_name)) orelse return null;
             if (object_type != .heap) {
                 try self.fail("luce.sema.new", new.span, "new builds list, map, array, or builder", .{});
+                return null;
+            }
+            // **A file is opened, never made** (docs/BYTES.md R5).  A
+            // handle with no file behind it is the one thing this type
+            // must never hold, so the only way in is the door that
+            // takes a path.
+            if (self.analyzer.heap_types.items[object_type.heap] == .file) {
+                try self.fail(
+                    "luce.sema.new",
+                    new.span,
+                    "a file is opened, not made; write files.open(path) [BYTES.md R5]",
+                    .{},
+                );
                 return null;
             }
         }
@@ -6381,10 +6421,29 @@ pub const FunctionBuilder = struct {
         if (self.storedElement(found.kind, receiver.value_type)) |position| {
             registers[position] = try self.ownedForStore(values[position]);
         }
-        return .{
-            .register = try self.code.emit(.{ .intrinsic = .{ .kind = found.kind, .arguments = registers } }, found.result),
-            .value_type = found.result,
-        };
+        const emitted = try self.code.emit(
+            .{ .intrinsic = .{ .kind = found.kind, .arguments = registers } },
+            found.result,
+        );
+        // A method can fail too, since the byte channel arrived: a
+        // handle's read, write and flush all answer to the world
+        // (docs/BYTES.md).  Same rule as a free builtin's — the call
+        // site says which of `try` and `catch` it means, and a site
+        // that says neither is `luce.sema.fallible` rather than a
+        // silently dropped outcome (docs/FAILURE.md).
+        if (found.kind.isFallible()) {
+            if (!fallible_allowed) {
+                try self.fail(
+                    "luce.sema.fallible",
+                    method.span,
+                    "{s} can fail: write 'try x.{s}(…)' to pass the error on, or 'x.{s}(…) catch …' to handle it",
+                    .{ method.name, method.name, method.name },
+                );
+                return null;
+            }
+            return try self.openFallible(emitted, found.result);
+        }
+        return .{ .register = emitted, .value_type = found.result };
     }
 
     // Methods on a struct value ---------------------------------------------
@@ -6878,6 +6937,20 @@ pub const FunctionBuilder = struct {
                     std.mem.eql(u8, name, "clear")) break :blk &.{};
                 break :blk null;
             },
+            .file => blk: {
+                // The buffer is the caller's `array(byte, n)`, and the
+                // count a write takes is a `long`.  Neither landing
+                // depends on the receiver, so both are written out.
+                if (std.mem.eql(u8, name, "read")) break :blk try self.typeList(&.{
+                    try self.analyzer.internHeapType(.{ .array = .{ .element = .byte, .rank = 1 } }),
+                });
+                if (std.mem.eql(u8, name, "write")) break :blk try self.typeList(&.{
+                    try self.analyzer.internHeapType(.{ .array = .{ .element = .byte, .rank = 1 } }),
+                    .long,
+                });
+                if (std.mem.eql(u8, name, "flush")) break :blk &.{};
+                break :blk null;
+            },
         };
     }
 
@@ -7150,6 +7223,10 @@ pub const FunctionBuilder = struct {
     pub const array_methods = [_][]const u8{ "dim", "fill", "sort", "reverse", "find", "contains" };
     pub const map_methods = [_][]const u8{ "has", "get", "remove", "keys", "values", "clear" };
     pub const builder_methods = [_][]const u8{ "append", "append_ascii", "build", "clear" };
+    /// The byte channel's three (docs/BYTES.md R4).  There is no
+    /// `close`: a handle is scope-owned, so `free f` is the close and
+    /// the end of the owning scope is the automatic one.
+    pub const file_methods = [_][]const u8{ "read", "write", "flush" };
 
     /// `descriptor` is the receiver's *shape*, which is everything the
     /// dispatch below turns on: a `list(long)` and a `list(string)`
@@ -7256,6 +7333,35 @@ pub const FunctionBuilder = struct {
                     try self.fail("luce.sema.method", method.span, "builder has no method {s}; did you mean {s}?", .{ name, closest });
                 } else {
                     try self.fail("luce.sema.method", method.span, "builder has no method {s} (append append_ascii build clear)", .{name});
+                }
+                return null;
+            },
+            // The byte channel (docs/BYTES.md R4).  A read fills the
+            // caller's buffer and answers how many bytes landed — zero
+            // is the end of the file — and a write takes a buffer and
+            // a count and answers how many landed.  All three are
+            // fallible: the world decides.  There is no `close`,
+            // because `free f` is one and the end of the owning scope
+            // is the other (OWNERSHIP.md, unchanged).
+            .file => {
+                if (std.mem.eql(u8, name, "read")) {
+                    if (!try self.methodTakes(method, arguments, receiver)) return null;
+                    return .{ .kind = .handle_read, .result = .long };
+                }
+                if (std.mem.eql(u8, name, "write")) {
+                    if (!try self.methodTakes(method, arguments, receiver)) return null;
+                    return .{ .kind = .handle_write, .result = .long };
+                }
+                if (std.mem.eql(u8, name, "flush")) {
+                    if (!try self.methodTakes(method, arguments, receiver)) return null;
+                    return .{ .kind = .handle_flush, .result = .none };
+                }
+                var suggestion = helpers.Suggestion.init(name);
+                suggestion.offerAll(&file_methods);
+                if (suggestion.best()) |closest| {
+                    try self.fail("luce.sema.method", method.span, "file has no method {s}; did you mean {s}?", .{ name, closest });
+                } else {
+                    try self.fail("luce.sema.method", method.span, "file has no method {s} (read write flush; free f closes it)", .{name});
                 }
                 return null;
             },
@@ -7608,7 +7714,7 @@ pub const FunctionBuilder = struct {
             .half => .half,
             .float => .float,
             .double => .double,
-            .boolean, .string, .list, .map, .array, .builder => null,
+            .boolean, .string, .list, .map, .array, .builder, .file => null,
         };
         const value = (try self.lowerExpression(call.arguments[0].value, false)) orelse return null;
         // **A conversion accepts an enum exactly because it is named
@@ -7665,7 +7771,7 @@ pub const FunctionBuilder = struct {
             .half => .half,
             .float => .float,
             .double => .double,
-            .boolean, .string, .list, .map, .array, .builder => unreachable, // answered above
+            .boolean, .string, .list, .map, .array, .builder, .file => unreachable, // answered above
         };
         if (value.value_type.eql(target)) return value;
         if (!value.value_type.isNumeric()) return self.failConvert(call, value);
@@ -7698,7 +7804,7 @@ pub const FunctionBuilder = struct {
             .half => .half,
             .float => .float,
             .double => .double,
-            .boolean, .string, .list, .map, .array, .builder => unreachable, // answered by the caller
+            .boolean, .string, .list, .map, .array, .builder, .file => unreachable, // answered by the caller
         };
         _ = call;
         return .{
@@ -8017,6 +8123,14 @@ pub const FunctionBuilder = struct {
                 else
                     .{ .optional = .double };
             },
+            // The parse family's third member (docs/BYTES.md R3): the
+            // bytes back as text, or absent when they are not text.
+            .parse_string => {
+                const buffer = try self.analyzer.internHeapType(.{ .list = .byte });
+                if (!arguments[0].value_type.eql(buffer))
+                    return self.failIntrinsic(call, "parse_string takes a list(byte)");
+                result = .{ .optional = .string };
+            },
             .chr_code => {
                 if (!try self.widensInto(&arguments[0], .long))
                     return self.failIntrinsic(call, "chr takes a long codepoint");
@@ -8200,6 +8314,22 @@ pub const FunctionBuilder = struct {
                     return self.failIntrinsic(call, "dir_list takes a string path");
                 result = try self.analyzer.internHeapType(.{ .list = .string });
             },
+            // The byte channel's door (docs/BYTES.md R5).  The mode is
+            // a number here and a named door in `std.files`, which is
+            // where a reader meets it: a builtin speaks what the host
+            // slot speaks, and the library is where it gets a name.
+            .file_open => {
+                if (arguments[0].value_type != .string)
+                    return self.failIntrinsic(call, "file_open takes (path string, mode long)");
+                if (!try self.widensInto(&arguments[1], .long))
+                    return self.failIntrinsic(call, "file_open takes (path string, mode long)");
+                result = try self.analyzer.internHeapType(.file);
+            },
+            // Reached through `f.read(buffer)` and its two siblings,
+            // which `objectMethod` types against the receiver: a
+            // handle method is not a free builtin and has no row in
+            // the table above.
+            .handle_read, .handle_write, .handle_flush => unreachable,
         }
         // `error("…")` leaves the function, so it can stand where a
         // value belongs the way `trap("…")` can — but only inside a
