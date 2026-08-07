@@ -239,6 +239,43 @@ test "the .lc luce writes runs on a loom with no compiler at all" {
     try testing.expectEqual(@as(u8, 0), sugared.status);
 }
 
+test "a program named the way a person in its directory names it is the file, not a library" {
+    // `cd somewhere; loom run sums.lc` — no directory in the name at
+    // all, which is how anybody standing in the directory says it.
+    //
+    // A platform loader reads a bare word as a *library name* and
+    // looks where the system keeps libraries, which is never here;
+    // only dyld falls back to the working directory, so this spelling
+    // worked on macOS and on nothing else until loom made the path a
+    // path (`native.open`).
+    const gpa = testing.allocator;
+    var install = try installTree(gpa, true);
+    defer install.deinit(gpa);
+    try install.write("sums.luc", greeting);
+
+    const source = try install.at(gpa, "sums.luc");
+    defer gpa.free(source);
+    var built = try runLuce(gpa, &install, &.{ "build", source });
+    defer built.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), built.status);
+
+    const loom = try install.at(gpa, "loom");
+    defer gpa.free(loom);
+    var ran = try install.spawn(gpa, &.{ loom, "run", "sums.lc" }, .{ .in_tree = true });
+    defer ran.deinit(gpa);
+    try testing.expectEqualStrings("", ran.err);
+    try testing.expectEqualStrings(expected, ran.out);
+    try testing.expectEqual(@as(u8, 0), ran.status);
+
+    // And the same word with `run` left off, which is the spelling the
+    // shell offers.
+    var sugared = try install.spawn(gpa, &.{ loom, "sums.lc" }, .{ .in_tree = true });
+    defer sugared.deinit(gpa);
+    try testing.expectEqualStrings("", sugared.err);
+    try testing.expectEqualStrings(expected, sugared.out);
+    try testing.expectEqual(@as(u8, 0), sugared.status);
+}
+
 test "a .luc with no luce to compile it says which binary is missing and where it looked" {
     const gpa = testing.allocator;
     var install = try installTree(gpa, false);

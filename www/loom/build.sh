@@ -90,8 +90,16 @@ printf '%s\n' "$manifest" | while IFS= read -r row; do
         exit 1
     fi
 
-    # Previous and next, by position in the manifest.
-    previous=$(printf '%s\n' "$manifest" | sed -n "$((index - 1))p")
+    # Previous and next, by position in the manifest.  The first page
+    # has no previous one, and asking for line zero has to be the
+    # empty answer rather than a question: BSD sed shrugs at `0p` and
+    # GNU sed calls it an error, so the row before the first is never
+    # asked for.
+    if [ "$index" -gt 1 ]; then
+        previous=$(printf '%s\n' "$manifest" | sed -n "$((index - 1))p")
+    else
+        previous=
+    fi
     next=$(printf '%s\n' "$manifest" | sed -n "$((index + 1))p")
 
     {

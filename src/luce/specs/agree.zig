@@ -224,9 +224,11 @@ pub fn runProgram(
     defer gpa.free(library_path);
 
     // The link is also the proof that the artifact declares no
-    // undefined symbols beyond `libluce_rt`, which it links in: every
-    // effect arrives through the host table, and every semantic
-    // through the runtime library.
+    // undefined symbols beyond `libluce_rt` and the C math functions
+    // its float `%` calls: every effect arrives through the host
+    // table, and every semantic through the runtime library.  Darwin
+    // gets libm with libSystem; elsewhere it is a library of its own
+    // and `-lm` follows the archive that wants it.
     const arguments: []const []const u8 = if (builtin.os.tag.isDarwin())
         &.{ "cc", "-shared", "-o", library_path, object_path, build_options.luce_rt_library }
     else
@@ -234,7 +236,7 @@ pub fn runProgram(
             "cc",                          "-shared",
             "-Wl,--no-undefined",          "-o",
             library_path,                  object_path,
-            build_options.luce_rt_library,
+            build_options.luce_rt_library, "-lm",
         };
     const linked = try std.process.run(gpa, io, .{ .argv = arguments });
     defer gpa.free(linked.stdout);

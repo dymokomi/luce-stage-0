@@ -47,7 +47,18 @@ if [ ! -f "$tarball" ]; then
     curl -fL --progress-bar -o "$tarball.part" "$url"
     mv "$tarball.part" "$tarball"
 fi
-echo "$sha256  $tarball" | shasum -a 256 -c - >/dev/null || {
+# macOS ships `shasum` and no `sha256sum`; most Linux distributions do
+# the opposite.  Either one checks the pin, and a machine with neither
+# is told so rather than having the check quietly skipped.
+if command -v shasum >/dev/null; then
+    checksum="shasum -a 256 -c -"
+elif command -v sha256sum >/dev/null; then
+    checksum="sha256sum -c -"
+else
+    echo "vendor-llvm: neither shasum nor sha256sum is here, so the pin cannot be checked" >&2
+    exit 1
+fi
+echo "$sha256  $tarball" | $checksum >/dev/null || {
     echo "vendor-llvm: $tarball does not match the pinned hash; delete it and retry" >&2
     exit 1
 }

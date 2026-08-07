@@ -374,6 +374,11 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/apps/harness.zig"),
         .target = target,
         .optimize = optimize,
+        // It reads this process's environment to hand a copy to a
+        // child, and `std.c.environ` is the only way to ask for it.
+        // Darwin links libc into everything, so this is invisible
+        // there and load-bearing everywhere else.
+        .link_libc = true,
     });
 
     // The compiler at its command line, and the standalone binary it
