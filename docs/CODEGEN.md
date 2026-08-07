@@ -909,6 +909,39 @@ same refusal a null slot gives, so the program traps
 `host_unavailable` either way and no host has to invent a number.  No
 field moved.
 
+**12** made a file bytes reached through an open handle
+(docs/BYTES.md).  Five slots appended in one run — `handle_open`,
+`handle_read`, `handle_write`, `handle_flush`, `handle_close` —
+carrying raw bytes with no opinion about encoding: a read fills a
+buffer the caller owns and answers the count, a write takes a buffer
+and a length, and zero read with a `yes` is the end of the file rather
+than a refusal.  Named for the handle and not for the file, because
+the same five serve a socket when `std.network` arrives.
+
+Three things move with them, and they are one movement, which is why
+they are one bump.  **UTF-8 validation left the host**: `file_read` is
+open-read-close over the channel plus `libluce_rt`'s own check, so the
+interpreter, a compiled artifact and every future host agree
+byte-for-byte on what "not text" means — that sentence used to live in
+`apps/host.zig`, where only loom could say it.  **The whole-file text
+slots retired**: `file_read`, `file_write` and `file_append` keep their
+positions and their signatures, because the table is append-only and
+nothing reorders, but no version-12 artifact indexes them and the
+hosts in this tree leave them null.  And **the channel is installed
+rather than called through**: `luce_rt_files_install` hands the five
+pointers to the runtime once at the start of a run, and the runtime is
+what calls them.
+
+That last one is the shape of the decision rather than a detail of it.
+A handle is a scope-owned resource, so its close happens at the end of
+the scope that owns it — inside the ownership walk, where no generated
+code is standing to hand a table in.  Installing it also puts both
+engines on *literally the same five function pointers*, so what an
+open answers, what a short read means and when a close happens are one
+implementation rather than two that could disagree; the four handle
+intrinsics lower to plain `luce_rt_*` calls, and the backend never
+learns the handle's semantics at all.
+
 `key_text` has no slot of its own: it answers what the last `key_read`
 carried, which the runtime remembers, so it fails closed on
 `key_read`'s slot.  End of input clears it, which is why the lowering
@@ -989,6 +1022,52 @@ The six 64-bit rows are unchanged within noise from the previous
 snapshot at `f333e12`, which is what D7 required of them: the 32-bit
 rows were *added* beside them and neither the `.luc` sources nor the C
 twins of the originals were touched.
+
+**The bytes run (docs/BYTES.md) left every row where it found it**, and
+that is worth recording rather than assuming.  `list(T)` gave up the
+24-byte boxed slot for packed element storage — a `list(byte)` is one
+byte an element now and a `list(long)` eight — which is a large change
+to the container every program uses.  Four interleaved A/Bs against
+`c4d172f` on this host, taken at three points in the run; the `compute`
+column, which is the one a storage change moves:
+
+| benchmark | R1 only | + the fix | at HEAD | again |
+|-----------|---------|-----------|---------|-------|
+| loops     |   -0.7% |     +0.4% |   +0.2% | -0.5% |
+| math      |   +0.2% |     -0.4% |   -0.3% | -0.4% |
+| strings   |   +2.9% |     +0.7% |   +5.4% | +3.8% |
+| arrays    |   -0.3% |     -0.8% |   -1.9% | -0.7% |
+| arrays32  |   -1.0% |     -1.7% |   +3.0% | +1.1% |
+| matmul    |   -1.1% |     -0.6% |   -1.1% | +0.5% |
+| matmul32  |   -1.9% |     -2.6% |   -1.9% | -5.7% |
+| stats     |   -0.1% |     -0.4% |   -1.1% | -0.0% |
+
+**Nothing here is a win, and nothing here should be.**  Not one row in
+the suite is list-bound: `loops` and `math` are scalar, the four array
+rows use `array`, which was already packed, and `strings` uses a
+`list(string)` — whose elements are still the boxed slot, because a
+`string` is exactly the kind that keeps one.  The one thing this table
+had to show is that the mechanism costs nothing where it buys nothing.
+
+**Read the noise floor off `arrays32` before reading `strings`.**  That
+row holds no list at all, so nothing in this run can touch it, and it
+answered -1.0%, -1.7%, +3.0% and +1.1% across the four — a spread of
+four points on a row whose true delta is zero.  `matmul32` spread six.
+So the honest sentence about `strings` is that it sits somewhere in
++0.7% to +5.4% on a machine whose floor is ±3%, and that four runs did
+not resolve it.  It is not resolvable by running a fifth: what would
+settle it is a benchmark that is actually list-bound, and the suite
+does not have one — which is a gap this run found and did not fill.
+
+One thing the runs *did* resolve.  The first measurement put `strings`
+at +2.9%, and the cause was one line: `ensureCapacity` compared
+*element* counts, so every `append` divided a byte length by a width
+the compiler does not know — a division on the hot path of the
+most-called container operation there is.  Doing the arithmetic in
+bytes took the same row to +0.7% on the very next run.  A change that
+survives the noise in one direction and then in the other is a change
+the noise did not invent, and the row that measured it is not the row
+the work was for.
 
 `strings` is allocation-bound rather than code-generation-bound.
 Everything else at 64 bits is at parity or ahead, and `math` is ahead

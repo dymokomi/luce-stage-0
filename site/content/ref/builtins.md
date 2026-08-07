@@ -160,11 +160,30 @@ never made to invent a number for a machine it could not measure.
 | `file_rename(from: string, to: string) -> !` | moves a file, **replacing** an existing target — which is what makes write-then-rename the way to replace a file without ever leaving half of one on disk |
 | `file_exists(path: string) -> bool` | a question about the past, not a guard |
 | `dir_list(path: string) -> list(string)!` | the names in a directory — plain names, not paths, without `.` and `..`, in whatever order the file system gave them. A fresh list the caller owns |
+| `file_open(path: string, mode: long) -> file!` | a handle your scope owns. `mode` is 0 read, 1 write, 2 append — and you write [`files.open`](/std/files/), [`files.create`](/std/files/) or [`files.append_to`](/std/files/) rather than a number |
 
 Every one that changes a file is fallible, because the world decides
 whether it lands. `file_exists` is the exception and answers a plain
 `bool` — but it is a question about the past, never a guard for the
 call after it.
+
+`file_read` and `file_write` are **defined over the handle**: each is
+an open, a loop of reads or writes, a close, and — for the reading
+direction — the runtime's own UTF-8 check. They are conveniences with a
+ceiling, not a second channel.
+
+### Bytes
+
+| Signature | Notes |
+|---|---|
+| `parse_string(bytes: list(byte)) -> string?` | those bytes as text, or absent when they are not valid UTF-8 |
+
+The third member of the parse family, and it answers absence for the
+reason `parse_int` does: "not UTF-8" is the same reason every time, so
+there is nothing a carried message would add. Write it as
+[`strings.from_bytes`](/std/strings/), which is where the other
+direction — `strings.to_bytes`, total, because a string always has
+bytes — lives beside it.
 
 ### The terminal
 
@@ -275,6 +294,22 @@ func main():
 Plus `len`.  A `builder` is a heap object, so its text comes out
 through `build()` rather than through `string(...)`, which takes a
 scalar.
+
+## file
+
+| Method | Notes |
+|---|---|
+| `read(into: array(byte, _)) -> long!` | fill the buffer and answer how many bytes landed; **zero is the end of the file**, not a refusal |
+| `write(from: array(byte, _), count: long) -> long!` | write the first `count` bytes and answer how many landed, which may be fewer than you offered |
+| `flush() -> !` | everything written so far is on the device |
+
+All three are fallible: the world decides. There is deliberately no
+`close` — a [`file`](/ref/types/#file) is scope-owned, so the end of
+the owning scope closes it and `free(f)` closes it early.
+
+The buffer is the caller's, which is the C shape and is what makes the
+same three methods serve a socket later. [`std.files`](/std/files/) is
+where the loops over them live.
 
 ## string
 

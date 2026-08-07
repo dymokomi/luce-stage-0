@@ -19,33 +19,41 @@ length and distance tables, §3.2.6 the fixed codes, §3.2.7 the dynamic
 ones. A ZIP member's method-8 data is a *raw* deflate stream: no zlib
 header and no Adler-32 trailer.
 
-## Bytes are a `list(long)`
+## Bytes are a `list(byte)`
 
-One byte to an element, every element 0..255. Luce has a `byte` and a
-checked `byte(x)` to narrow into it, but a `list` is boxed whatever its
-element type: a `list(byte)` costs the same eight bytes an element as a
-`list(long)` *and* a conversion at every store. The packed one is
-`array(byte, n)`, and it cannot grow. So there is no growable packed
-byte buffer to reach for, and the honest choice is the width the
-arithmetic happens at.
+One byte to an element, and one byte of memory — a `list` stores its
+elements at their real width. This page used to say the opposite, and
+this module is where the cost was measured: a boxed slot is 24 bytes,
+so a byte buffer was 24 times its payload and `list(long)` was the
+honest least-bad choice. The buffers here are a quarter of what they
+were, and nothing above them changed to make it so.
 
-## The host cannot hand a program a file's bytes yet
+One thing the narrower element made explicit rather than changed: a
+`byte` widens to `int` in an operator, so a 32-bit field's top byte
+would shift into a sign bit. `read_u32` lifts its four bytes to `long`
+before shifting; everything else fits.
 
-`file_read` answers a `string`, and a string is valid UTF-8 by
-construction — so the host refuses a file that is not text, and no
-archive worth the name is text. That is a gap in the boundary, not in
-this module: every function here works on any bytes it is given, and
-the day the host grows a binary read the line in front of them is one
-call long. Today the bytes come from a program that computed them,
-from `zip.bytes` over text the host *could* read, or from a module of
-literals.
+## An archive on disk
+
+| Signature | Notes |
+|---|---|
+| `zip.read(path: string) -> list(byte)!` | an archive's bytes, straight off the disk |
+| `zip.write(path: string, archive: list(byte)) -> !` | write what `writer.finish()` answered |
+
+These two are the only things in the module that touch the world, and
+they are the reason it was written. Until a Luce program could read a
+file that was not text, "takes bytes" meant "takes bytes somebody
+computed", and no real archive could reach any of it. Everything
+between still takes bytes and answers bytes: a container format has no
+business deciding where its bytes live, which is why the two doors are
+one line each.
 
 ## Bytes and text
 
 | Signature | Notes |
 |---|---|
-| `zip.bytes(content: string) -> list(long)` | the UTF-8 bytes a string is made of |
-| `zip.text(data: list(long)) -> string!` | the string those bytes spell; bytes that are not text answer an error rather than trapping |
+| `zip.bytes(content: string) -> list(byte)` | the UTF-8 bytes a string is made of |
+| `zip.text(data: list(byte)) -> string?` | the string those bytes spell, or absent when they spell none |
 
 ```luce run
 import std.zip
@@ -53,8 +61,7 @@ import std.zip
 func main() -> !:
     let raw = zip.bytes("héllo")
     print(string(len(raw)))
-    let back = try zip.text(raw)
-    print(back)
+    print(zip.text(raw) else "(not text)")
 ```
 
 ```output
@@ -66,7 +73,7 @@ héllo
 
 | Signature | Notes |
 |---|---|
-| `zip.crc32(data: list(long)) -> long` | the reflected CRC-32 every entry carries (APPNOTE 4.4.7) |
+| `zip.crc32(data: list(byte)) -> long` | the reflected CRC-32 every entry carries (APPNOTE 4.4.7) |
 
 The table is built per call, because a top-level `let` is a value
 constant and a table is a list: 256 rows of eight steps in front of one
@@ -89,8 +96,8 @@ That is `0xCBF43926`, the published check value.
 
 | Signature | Notes |
 |---|---|
-| `zip.entries(archive: list(long)) -> list(Entry)!` | every entry the central directory lists, in the order it lists them |
-| `zip.extract(archive: list(long), entry: Entry) -> list(long)!` | the entry's contents, checked against the size and the CRC the directory recorded |
+| `zip.entries(archive: list(byte)) -> list(Entry)!` | every entry the central directory lists, in the order it lists them |
+| `zip.extract(archive: list(byte), entry: Entry) -> list(byte)!` | the entry's contents, checked against the size and the CRC the directory recorded |
 
 An `Entry` describes one member and is made only by reading an
 archive — its fields are the module's own, and these are how a program
@@ -121,8 +128,8 @@ not text, contents that fail their checksum.
 | Signature | Notes |
 |---|---|
 | `zip.writer() -> Writer` | a new, empty archive, owned by the binding that received it |
-| `writer.add(name: string, data: list(long), compress: bool = false) -> !` | store one entry; `compress` deflates it and keeps whichever is smaller |
-| `writer.finish() -> list(long)` | the whole archive: everything added, then the central directory over it |
+| `writer.add(name: string, data: list(byte), compress: bool = false) -> !` | store one entry; `compress` deflates it and keeps whichever is smaller |
+| `writer.finish() -> list(byte)` | the whole archive: everything added, then the central directory over it |
 
 `finish` builds a fresh list every time, so the writer stays usable.
 
@@ -132,7 +139,7 @@ import std.zip
 func main() -> !:
     var writer = zip.writer()
     try writer.add("greeting.txt", zip.bytes("hello, world\n"))
-    var raw: list(long) = [0, 255, 128, 1]
+    var raw: list(byte) = [0, 255, 128, 1]
     try writer.add("every.bin", raw)
     let archive = writer.finish()
 
@@ -140,8 +147,7 @@ func main() -> !:
     for entry in found:
         print(entry.name() + " " + string(entry.size()))
     let first = try zip.extract(archive, found[0])
-    let said = try zip.text(first)
-    print(said)
+    print(zip.text(first) else "(not text)")
 ```
 
 ```output
@@ -155,8 +161,8 @@ hello, world
 
 | Signature | Notes |
 |---|---|
-| `zip.inflate(data: list(long)) -> list(long)!` | the bytes a raw DEFLATE stream stands for — stored, fixed and dynamic Huffman blocks alike |
-| `zip.deflate(data: list(long)) -> list(long)` | a raw DEFLATE stream those bytes stand for; compression cannot fail, so it answers bytes rather than an error |
+| `zip.inflate(data: list(byte)) -> list(byte)!` | the bytes a raw DEFLATE stream stands for — stored, fixed and dynamic Huffman blocks alike |
+| `zip.deflate(data: list(byte)) -> list(byte)` | a raw DEFLATE stream those bytes stand for; compression cannot fail, so it answers bytes rather than an error |
 
 `inflate` reads everything RFC 1951 defines. `deflate` writes one final
 block on the fixed tables of §3.2.6, with LZ77 matches found through a
@@ -176,8 +182,7 @@ func main() -> !:
     let squeezed = zip.deflate(plain)
     print(string(len(plain)) + " -> " + string(len(squeezed)))
     let back = try zip.inflate(squeezed)
-    let restored = try zip.text(back)
-    print(string(restored == text))
+    print(string((zip.text(back) else "") == text))
 ```
 
 ```output
@@ -196,12 +201,12 @@ the world's, not the program's — so a reader writes `try` or `catch`:
 ```luce run
 import std.zip
 
-func count(archive: list(long)) -> !:
+func count(archive: list(byte)) -> !:
     let found = try zip.entries(archive)
     print(string(len(found)) + " entries")
 
 func main():
-    var scraps: list(long) = [80, 75, 3]
+    var scraps: list(byte) = [80, 75, 3]
     count(scraps) catch reason:
         print(reason)
 ```

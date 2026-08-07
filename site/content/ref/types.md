@@ -295,6 +295,40 @@ operations take.
 
 Accumulates text. `string(builder)` hands back the `string`.
 
+## file
+
+An open file. A heap type like the four above it, and unlike them in
+two ways: it takes no type argument, and there is no `new file` —
+`files.open(path)` is the only door in, because a handle with no file
+behind it is the one thing this type must never hold.
+
+It is a **resource**, and scope ownership is what gives a resource a
+death point. The binding that received the handle owns it, the end of
+that scope closes the file, `free(f)` closes it early, `give` and
+`return` move it, and using one after it is closed traps
+`use_after_free` — because that is the same mistake.
+
+```luce run
+import std.files
+
+func main() -> !:
+    try files.write("note.txt", "abc")
+    var f = try files.open("note.txt")
+    var buffer = new array(byte, 8)
+    print(string(try f.read(buffer)))
+    try files.delete("note.txt")
+```
+
+```output
+3
+```
+
+A file cannot be copied: there is one open file behind a handle, and a
+second Luce handle on it would be two owners of one resource. The
+methods are `f.read(buffer)`, `f.write(buffer, count)` and `f.flush()`,
+all three fallible; [`std.files`](/std/files/) is where the loops over
+them live.
+
 ## Return shapes {#return-shapes}
 
 `(long, long)` after a function's `->` says it answers two values.

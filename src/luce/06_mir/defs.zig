@@ -148,6 +148,15 @@ pub const Intrinsic = enum {
     str_value,
     parse_int,
     parse_float,
+    /// `parse_string(xs)` — a `list(byte)` as text, or absent when the
+    /// bytes are not valid UTF-8 (docs/BYTES.md R3).  The parse
+    /// family's third member, named for what it produces exactly as
+    /// its two siblings are: "not text" is the same reason every time,
+    /// so absence carries all the information there is.  It is also
+    /// the one door into a `string` that did not come from a literal
+    /// or another string, which is why the validator behind it is
+    /// `libluce_rt`'s and not a host's.
+    parse_string,
     chr_code,
     ord_text,
     print,
@@ -190,6 +199,22 @@ pub const Intrinsic = enum {
     file_delete,
     file_rename,
     dir_list,
+    /// The byte channel: a file reached through an open handle
+    /// (docs/BYTES.md R4, R5).  `file_open` answers a `file` the
+    /// caller's scope owns and whose end closes it — there is no
+    /// `close` intrinsic, because `free f` is the close and
+    /// OWNERSHIP.md already said what it means.  `handle_read` fills
+    /// an `array(byte, n)` and answers how many bytes landed, zero
+    /// being the end of the file; `handle_write` writes the first
+    /// `count` bytes of one and answers how many landed;
+    /// `handle_flush` puts what was written on the device.  All four
+    /// are fallible on the same grounds as every other file service:
+    /// the world decides, and no non-racy check stands in for the
+    /// result.
+    file_open,
+    handle_read,
+    handle_write,
+    handle_flush,
     /// `exit(status)` — the program chooses to stop, carrying a
     /// status the host maps onto whatever its world calls one.  A
     /// fourth way a run ends (docs/LANGUAGE.md): not a trap (nothing
@@ -252,6 +277,11 @@ pub const Intrinsic = enum {
             .file_delete,
             .file_rename,
             .dir_list,
+            // The byte channel, on the same grounds.
+            .file_open,
+            .handle_read,
+            .handle_write,
+            .handle_flush,
             => true,
 
             .abs,
@@ -306,6 +336,7 @@ pub const Intrinsic = enum {
             .str_value,
             .parse_int,
             .parse_float,
+            .parse_string,
             .chr_code,
             .ord_text,
             .print,
@@ -349,6 +380,7 @@ pub const Intrinsic = enum {
             // duplicates; `own_storage` is the taking of a copy itself.
             .str_value,
             .chr_code,
+            .parse_string,
             .file_read,
             .key_read,
             .read_line,
@@ -432,6 +464,10 @@ pub const Intrinsic = enum {
             .exit_program,
             .os_total_memory,
             .os_available_memory,
+            .file_open,
+            .handle_read,
+            .handle_write,
+            .handle_flush,
             .os_cpu_count,
             .drop_storage,
             .export_storage,
@@ -503,6 +539,7 @@ pub const Intrinsic = enum {
             .str_value,
             .parse_int,
             .parse_float,
+            .parse_string,
             .chr_code,
             .ord_text,
             .print,
@@ -530,6 +567,10 @@ pub const Intrinsic = enum {
             .exit_program,
             .os_total_memory,
             .os_available_memory,
+            .file_open,
+            .handle_read,
+            .handle_write,
+            .handle_flush,
             .os_cpu_count,
             .own_storage,
             .drop_storage,

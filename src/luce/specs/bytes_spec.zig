@@ -1,0 +1,346 @@
+//! The binary half of the host boundary, as an executable
+//! specification (docs/BYTES.md).
+//!
+//! Three things are proved here, and every one of them is proved on
+//! **both engines** — the interpreter and the compiled artifact, run
+//! and compared on prints, trap code, trap message, call trace, leak
+//! census and the world each left behind (`agree.zig`).  That is the
+//! bar for anything that runs a program, and it matters more than
+//! usual here: the byte channel's five slots are installed into
+//! `libluce_rt` and called by it, so the two arms reach *literally the
+//! same* code and a disagreement would mean the installation, not the
+//! semantics, went wrong.
+//!
+//!   * **Bytes round-trip**, including bytes that are not text — which
+//!     is the finding the whole run came out of: `list(byte)` at one
+//!     byte an element, `strings.to_bytes` and `strings.from_bytes`,
+//!     and `parse_string` answering absent for a sequence UTF-8 does
+//!     not admit.
+//!   * **A handle is a scope-owned resource** (R5): open, read, close
+//!     at the end of the scope; `free f` as an early close; `give` and
+//!     `return` moving one; and a use after close trapping
+//!     `use_after_free`, because it is the same mistake.
+//!   * **A read answers a count** (R4), which is what a partial read
+//!     is: the world in `agree.zig` writes three bytes at a time on
+//!     purpose, so a loop that assumed a write lands whole would fail
+//!     here rather than in somebody's program.
+
+const std = @import("std");
+const agree = @import("agree.zig");
+const luce = @import("luce");
+const mir = luce.mir;
+
+const testing = std.testing;
+
+// ---------------------------------------------------------------------------
+// Bytes, and text as a reading of them
+// ---------------------------------------------------------------------------
+
+test "a string's bytes round-trip through list(byte)" {
+    try agree.prints(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let xs = strings.to_bytes("héllo")
+        \\    print(string(len(xs)))
+        \\    print(strings.from_bytes(xs) else "(not text)")
+        \\
+    , "6\nhéllo\n");
+}
+
+test "bytes that are not UTF-8 answer absent rather than a broken string" {
+    // The parse case, and the reason `from_bytes` answers `string?`:
+    // 0xFF begins no UTF-8 sequence, and a `string` that held it would
+    // make `len` and `s[a:b]` lies (docs/BYTES.md R3).
+    try agree.prints(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    var xs = new list(byte)
+        \\    xs.append(byte(0xFF))
+        \\    xs.append(byte(0xFE))
+        \\    print(strings.from_bytes(xs) else "(not text)")
+        \\    var truncated = new list(byte)
+        \\    truncated.append(byte(0xE2))
+        \\    print(strings.from_bytes(truncated) else "(not text)")
+        \\
+    , "(not text)\n(not text)\n");
+}
+
+test "a list(byte) holds every value a byte can, packed" {
+    // R1 is storage and nothing else, so the proof is behavioural: 128
+    // and 255 are the two that come back negative if anything on the
+    // way reads the cell as signed.
+    try agree.prints(
+        \\func main():
+        \\    var xs = new list(byte)
+        \\    var at = 0
+        \\    while at < 256:
+        \\        xs.append(byte(at))
+        \\        at += 1
+        \\    print(string(len(xs)))
+        \\    print(string(int(xs[0])) + " " + string(int(xs[128])) + " " + string(int(xs[255])))
+        \\    xs.reverse()
+        \\    print(string(int(xs[0])))
+        \\
+    , "256\n0 128 255\n255\n");
+}
+
+test "a packed list still slices, sorts, finds and pops" {
+    // Every list operation there is, on a kind that is no longer the
+    // boxed slot: what R1 must not have changed is anything a program
+    // can see.
+    try agree.prints(
+        \\func main():
+        \\    var xs = new list(byte)
+        \\    xs.append(byte(3))
+        \\    xs.append(byte(1))
+        \\    xs.append(byte(2))
+        \\    xs.insert(0, byte(9))
+        \\    print(string(xs.find(byte(2))))
+        \\    print(string(xs.contains(byte(7))))
+        \\    let part = xs[1:3]
+        \\    print(string(len(part)) + " " + string(int(part[0])))
+        \\    xs.sort()
+        \\    var seen = ""
+        \\    for b in xs:
+        \\        seen = seen + string(int(b)) + ","
+        \\    print(seen)
+        \\    print(string(int(xs.pop())))
+        \\    xs.remove(0)
+        \\    print(string(len(xs)))
+        \\
+    , "3\nfalse\n2 3\n1,2,3,9,\n9\n2\n");
+}
+
+// ---------------------------------------------------------------------------
+// The handle, and the scope that owns it
+// ---------------------------------------------------------------------------
+
+test "a handle opens, reads a count, and its scope closes it" {
+    const world: agree.World = .withFile("notes.txt", "abcdef");
+
+    var session = try agree.compare(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    var f = try files.open("notes.txt")
+        \\    var buffer = new array(byte, 4)
+        \\    print(string(try f.read(buffer)))
+        \\    print(string(int(buffer[0])))
+        \\    print(string(try f.read(buffer)))
+        \\    print(string(try f.read(buffer)))
+        \\
+    , .{ .world = world });
+    defer session.deinit();
+
+    // Four, then the two that were left, then zero: a short read is
+    // the end of the file and not a refusal (docs/BYTES.md R4).  The
+    // leak census is zero, which is the scope having closed the
+    // handle — a handle is an object like any other.
+    try testing.expectEqualStrings("4\n97\n2\n0\n", session.printed());
+    try testing.expectEqual(@as(u32, 0), session.end.finished);
+}
+
+test "free closes a handle early, and using it afterwards traps" {
+    // `free` on a handle is a close, and the trap that follows is the
+    // one every other object gives: it is the same mistake
+    // (docs/BYTES.md R5, OWNERSHIP.md unchanged).
+    const world: agree.World = .withFile("notes.txt", "abcdef");
+
+    var session = try agree.compare(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    var f = try files.open("notes.txt")
+        \\    var buffer = new array(byte, 2)
+        \\    print(string(try f.read(buffer)))
+        \\    let alias = f
+        \\    free(f)
+        \\    print("closed")
+        \\    let more = try alias.read(buffer)
+        \\
+    , .{ .world = world });
+    defer session.deinit();
+
+    try testing.expectEqual(mir.TrapCode.use_after_free, session.end.trapped);
+    try testing.expectEqualStrings("2\nclosed\n", session.printed());
+}
+
+test "a handle returns out of the function that opened it" {
+    // `return` moves an object, and a handle is an object: the file
+    // stays open across the frame that made it and is closed by the
+    // scope that received it (OWNERSHIP.md S16, unchanged).
+    const world: agree.World = .withFile("notes.txt", "abcdef");
+
+    var session = try agree.compare(
+        \\import std.files
+        \\
+        \\func opened() -> file!:
+        \\    return try files.open("notes.txt")
+        \\
+        \\func main() -> !:
+        \\    var f = try opened()
+        \\    var buffer = new array(byte, 6)
+        \\    print(string(try f.read(buffer)))
+        \\
+    , .{ .world = world });
+    defer session.deinit();
+
+    try testing.expectEqualStrings("6\n", session.printed());
+    try testing.expectEqual(@as(u32, 0), session.end.finished);
+}
+
+test "give hands a handle to a parameter that owns it" {
+    const world: agree.World = .withFile("notes.txt", "abcdef");
+
+    var session = try agree.compare(
+        \\import std.files
+        \\
+        \\func drain(f: give file) -> !:
+        \\    var buffer = new array(byte, 8)
+        \\    print(string(try f.read(buffer)))
+        \\
+        \\func main() -> !:
+        \\    var f = try files.open("notes.txt")
+        \\    try drain(give f)
+        \\    print("gone")
+        \\
+    , .{ .world = world });
+    defer session.deinit();
+
+    try testing.expectEqualStrings("6\ngone\n", session.printed());
+    try testing.expectEqual(@as(u32, 0), session.end.finished);
+}
+
+test "opening a file that is not there is an error, not a trap" {
+    // The world decides, and `files.exists` in front of it would be a
+    // race — which is the proof a guard cannot stand in for a result
+    // (docs/FAILURE.md).
+    var session = try agree.compare(
+        \\import std.files
+        \\
+        \\func main():
+        \\    var note = ""
+        \\    files.open("missing.txt") catch reason:
+        \\        note = reason
+        \\    print("no: " + note)
+        \\
+    , .{});
+    defer session.deinit();
+
+    try testing.expectEqualStrings("no: cannot open missing.txt\n", session.printed());
+}
+
+// ---------------------------------------------------------------------------
+// Whole files, over the primitive
+// ---------------------------------------------------------------------------
+
+test "read_bytes and write_bytes carry bytes that are not text" {
+    // The end of the run: a byte no `string` can hold makes the round
+    // trip through a real file, which is the thing docs/BYTES.md
+    // opened by saying Luce could not do.
+    const world: agree.World = .{};
+
+    var session = try agree.compare(
+        \\import std.files
+        \\import std.strings
+        \\
+        \\func main() -> !:
+        \\    var bytes = new list(byte)
+        \\    bytes.append(byte(0x89))
+        \\    bytes.append(byte(0x50))
+        \\    bytes.append(byte(0x4E))
+        \\    bytes.append(byte(0x47))
+        \\    bytes.append(byte(0x00))
+        \\    try files.write_bytes("image.bin", bytes)
+        \\    let back = try files.read_bytes("image.bin")
+        \\    print(string(len(back)))
+        \\    var same = true
+        \\    var at = 0
+        \\    while at < len(back):
+        \\        if back[at] != bytes[at]:
+        \\            same = false
+        \\        at += 1
+        \\    print(string(same))
+        \\    print(strings.from_bytes(back) else "(not text)")
+        \\
+    , .{ .world = world });
+    defer session.deinit();
+
+    try testing.expectEqualStrings("5\ntrue\n(not text)\n", session.printed());
+    try testing.expectEqual(@as(u32, 0), session.end.finished);
+}
+
+test "append_bytes adds to the end of what is there" {
+    const world: agree.World = .withFile("log.bin", "ab");
+
+    var session = try agree.compare(
+        \\import std.files
+        \\import std.strings
+        \\
+        \\func main() -> !:
+        \\    try files.append_bytes("log.bin", strings.to_bytes("cd"))
+        \\    let back = try files.read_bytes("log.bin")
+        \\    print(strings.from_bytes(back) else "(not text)")
+        \\
+    , .{ .world = world });
+    defer session.deinit();
+
+    try testing.expectEqualStrings("abcd\n", session.printed());
+}
+
+test "the text conveniences still read and write text, over the byte channel" {
+    // `file_read` and `file_write` did not change in surface or in
+    // meaning; what changed is that they are open-read-close over the
+    // channel now, with `libluce_rt`'s own validation (R2).  A file
+    // that is not text is still refused, and still as an error.
+    const world: agree.World = .withFile("notes.txt", "file body");
+
+    var session = try agree.compare(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    print(try files.read("notes.txt"))
+        \\    try files.write("out.txt", "saved")
+        \\    print(try files.read("out.txt"))
+        \\
+    , .{ .world = world });
+    defer session.deinit();
+
+    try testing.expectEqualStrings("file body\nsaved\n", session.printed());
+}
+
+test "a file whose bytes are not text is refused as a string" {
+    // The sentence that used to live in `apps/host.zig`, where only
+    // loom could say it.  It lives in `libluce_rt` now, which is why
+    // both arms of this comparison say it identically (R2).
+    const world: agree.World = .withFile("image.bin", "\xff\xfe");
+
+    var session = try agree.compare(
+        \\import std.files
+        \\import std.strings
+        \\
+        \\func main():
+        \\    var note = ""
+        \\    var text = ""
+        \\    text = files.read("image.bin") catch reason:
+        \\        note = reason
+        \\    print("no: " + note)
+        \\    print("text: " + text)
+        \\
+    , .{ .world = world });
+    defer session.deinit();
+
+    try testing.expectEqualStrings("no: cannot read image.bin\ntext: \n", session.printed());
+}
+
+test "a host with no file services at all fails closed" {
+    try agree.trapGiven(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    var f = try files.open("notes.txt")
+        \\
+    , .nothing, .host_unavailable);
+}

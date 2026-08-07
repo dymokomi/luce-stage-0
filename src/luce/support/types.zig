@@ -401,6 +401,16 @@ pub const HeapType = union(enum) {
     map: struct { key: Type, value: Type },
     array: struct { element: Type, rank: u8 },
     builder,
+    /// An open file (docs/BYTES.md R5).  A heap type and not a scalar
+    /// because a file is a **resource**, and scope ownership is what
+    /// gives a resource a death point: the binding that received the
+    /// handle owns it, the owning scope's end closes it, and a use
+    /// after close traps like a use after free because it is the same
+    /// mistake.  It carries no element type — a file is not a
+    /// container — so the shape is the whole of it, and
+    /// `std.network`'s sockets are meant to arrive beside it wearing
+    /// the same pattern.
+    file,
 
     pub fn eql(self: HeapType, other: HeapType) bool {
         return switch (self) {
@@ -410,6 +420,7 @@ pub const HeapType = union(enum) {
             .array => |shape| other == .array and
                 shape.element.eql(other.array.element) and shape.rank == other.array.rank,
             .builder => other == .builder,
+            .file => other == .file,
         };
     }
 };
@@ -497,6 +508,12 @@ pub const Builtin = enum {
     map,
     array,
     builder,
+    /// An open file (docs/BYTES.md R5).  A heap type like the four
+    /// above it and unlike them in one way: it takes no type
+    /// argument and there is no `new file`, because a handle with no
+    /// file behind it is the one thing this type must never hold.
+    /// `files.open(path)` is the only way to make one.
+    file,
 };
 
 /// The builtin a name spells, or null when it names nothing builtin —
@@ -528,6 +545,7 @@ const builtin_table = [_]struct { name: []const u8, is: Builtin }{
     .{ .name = "map", .is = .map },
     .{ .name = "array", .is = .array },
     .{ .name = "builder", .is = .builder },
+    .{ .name = "file", .is = .file },
 };
 
 /// The lowercase name a retired TitleCase spelling is written with
@@ -572,7 +590,7 @@ pub fn conversionNamed(text: []const u8) ?Builtin {
     const builtin = builtinNamed(text) orelse return null;
     return switch (builtin) {
         .byte, .short, .int, .long, .half, .float, .double, .string => builtin,
-        .boolean, .list, .map, .array, .builder => null,
+        .boolean, .list, .map, .array, .builder, .file => null,
     };
 }
 
@@ -645,6 +663,7 @@ fn writeTypeName(
                 try written.appendSlice(allocator, ")");
             },
             .builder => try written.appendSlice(allocator, "builder"),
+            .file => try written.appendSlice(allocator, "file"),
         },
         .optional => |payload| {
             try writeTypeName(written, allocator, layouts, heap_types, enums, payload.asType());

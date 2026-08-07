@@ -49,6 +49,7 @@ const compile = luce.compile;
 const mir = luce.mir;
 const types = luce.types;
 const abi = luce.llvm.abi;
+const runtime = luce.runtime;
 const lower = luce.llvm;
 
 const Allocator = std.mem.Allocator;
@@ -122,6 +123,16 @@ pub const World = struct {
     /// `host_unavailable` — the refusal a null slot gives, arriving
     /// through a slot that is there.
     unmeasurable: bool = false,
+    /// The one handle this world will have open, or null when it has
+    /// none.  Numbers never repeat, so a handle whose scope closed it
+    /// is refused rather than mistaken for the next one — which is what
+    /// lets a spec see that a close happened.
+    open_handle: ?i64 = null,
+    next_handle: i64 = 0,
+    /// Where the open handle has read to, and whether it was opened
+    /// for writing.
+    handle_position: usize = 0,
+    handle_writes: bool = false,
 
     pub const Key = struct { name: []const u8, text: []const u8 = "" };
 
@@ -273,7 +284,183 @@ pub const World = struct {
         if (!std.mem.eql(u8, path, ".")) return null;
         return self.directory;
     }
+
+    // -- the byte channel (docs/BYTES.md) ------------------------------
+    //
+    // One open file at a time, which is all a world with one file can
+    // have.  The handle number never repeats, so a handle that outlived
+    // its close is told from a live one and a close is observable — the
+    // world can say "that file is not open any more", which is what a
+    // scope-end-closes spec has to be able to see.
+
+    /// How much of a write this world takes at a time.  Deliberately
+    /// tiny: a handle write is *defined* to be allowed to fall short
+    /// (docs/BYTES.md R4), and a world that never falls short is one
+    /// that never proves the caller loops.
+    const short_write: usize = 3;
+
+    fn openAt(self: *World, path: []const u8, mode: i64, handle: *i64) abi.Answer {
+        const wanted: runtime.files.Mode = @enumFromInt(mode);
+        switch (wanted) {
+            .read => if (!self.exists(path)) return .no,
+            .write => if (!self.write(path, "")) return .no,
+            .append => if (!self.exists(path)) {
+                if (!self.write(path, "")) return .no;
+            } else if (self.refuse_writes) return .no,
+            else => return .no,
+        }
+        if (self.open_handle != null) return .no;
+        self.next_handle += 1;
+        self.open_handle = self.next_handle;
+        self.handle_position = 0;
+        self.handle_writes = wanted != .read;
+        handle.* = self.next_handle;
+        return .yes;
+    }
+
+    fn readFrom(self: *World, handle: i64, into: []u8, filled: *i64) abi.Answer {
+        if (self.open_handle != handle) return .no;
+        if (self.handle_writes) return .no;
+        const rest = self.file_content[self.handle_position..self.file_content_length];
+        const taken = @min(rest.len, into.len);
+        @memcpy(into[0..taken], rest[0..taken]);
+        self.handle_position += taken;
+        filled.* = @intCast(taken);
+        return .yes;
+    }
+
+    fn writeTo(self: *World, handle: i64, from: []const u8, written: *i64) abi.Answer {
+        if (self.open_handle != handle) return .no;
+        if (!self.handle_writes or self.refuse_writes) return .no;
+        const wanted = @min(from.len, short_write);
+        if (self.file_content_length + wanted > self.file_content.len) return .no;
+        @memcpy(self.file_content[self.file_content_length..][0..wanted], from[0..wanted]);
+        self.file_content_length += wanted;
+        written.* = @intCast(wanted);
+        return .yes;
+    }
+
+    fn flushAt(self: *World, handle: i64) abi.Answer {
+        return if (self.open_handle == handle) .yes else .no;
+    }
+
+    fn closeAt(self: *World, handle: i64) abi.Answer {
+        if (self.open_handle != handle) return .no;
+        self.open_handle = null;
+        return .yes;
+    }
 };
+
+/// The five C functions a host installs for the byte channel, over any
+/// context that keeps a `world`.
+///
+/// **One generator rather than two hand-written sets.**  Every other
+/// row of these two hosts is written twice because the two engines
+/// reach a host differently — but this channel is not reached by either
+/// engine: `libluce_rt` holds it and calls it, so both arms install
+/// literally the same behaviour, and a generator is how "the same" is
+/// said once instead of asserted in a comment.  The two return types
+/// are the one difference: `abi.Host`'s slots answer `abi.Answer` and
+/// `runtime.files.Channel`'s answer the plain `i32` the runtime library
+/// speaks, which are the same three numbers.
+fn HandleChannel(comptime Owner: type) type {
+    return struct {
+        fn worldOf(context: ?*anyopaque) *World {
+            const owner: *Owner = @ptrCast(@alignCast(context.?));
+            return &owner.world;
+        }
+
+        fn open(
+            context: ?*anyopaque,
+            path: [*]const u8,
+            path_length: i64,
+            mode: i64,
+            handle: *i64,
+        ) callconv(.c) abi.Answer {
+            return worldOf(context).openAt(path[0..@intCast(path_length)], mode, handle);
+        }
+
+        fn read(
+            context: ?*anyopaque,
+            handle: i64,
+            into: [*]u8,
+            capacity: i64,
+            filled: *i64,
+        ) callconv(.c) abi.Answer {
+            return worldOf(context).readFrom(handle, into[0..@intCast(capacity)], filled);
+        }
+
+        fn write(
+            context: ?*anyopaque,
+            handle: i64,
+            from: [*]const u8,
+            length: i64,
+            written: *i64,
+        ) callconv(.c) abi.Answer {
+            return worldOf(context).writeTo(handle, from[0..@intCast(length)], written);
+        }
+
+        fn flush(context: ?*anyopaque, handle: i64) callconv(.c) abi.Answer {
+            return worldOf(context).flushAt(handle);
+        }
+
+        fn close(context: ?*anyopaque, handle: i64) callconv(.c) abi.Answer {
+            return worldOf(context).closeAt(handle);
+        }
+
+        // The `i32` twins the runtime library's own channel takes.
+
+        fn openPlain(
+            context: ?*anyopaque,
+            path: [*]const u8,
+            path_length: i64,
+            mode: i64,
+            handle: *i64,
+        ) callconv(.c) i32 {
+            return @intFromEnum(open(context, path, path_length, mode, handle));
+        }
+
+        fn readPlain(
+            context: ?*anyopaque,
+            handle: i64,
+            into: [*]u8,
+            capacity: i64,
+            filled: *i64,
+        ) callconv(.c) i32 {
+            return @intFromEnum(read(context, handle, into, capacity, filled));
+        }
+
+        fn writePlain(
+            context: ?*anyopaque,
+            handle: i64,
+            from: [*]const u8,
+            length: i64,
+            written: *i64,
+        ) callconv(.c) i32 {
+            return @intFromEnum(write(context, handle, from, length, written));
+        }
+
+        fn flushPlain(context: ?*anyopaque, handle: i64) callconv(.c) i32 {
+            return @intFromEnum(flush(context, handle));
+        }
+
+        fn closePlain(context: ?*anyopaque, handle: i64) callconv(.c) i32 {
+            return @intFromEnum(close(context, handle));
+        }
+
+        /// The channel the interpreter installs into `libluce_rt`.
+        fn channel(owner: *Owner) runtime.files.Channel {
+            return .{
+                .context = owner,
+                .open = openPlain,
+                .read = readPlain,
+                .write = writePlain,
+                .flush = flushPlain,
+                .close = closePlain,
+            };
+        }
+    };
+}
 
 /// The screen effects, as words: both hosts record the same ones, so a
 /// comparison covers drawing as well as printing.
@@ -489,8 +676,15 @@ pub const Capture = struct {
             .os_total_memory = if (provided.machine) totalMemory else null,
             .os_available_memory = if (provided.machine) availableMemory else null,
             .os_cpu_count = if (provided.machine) cpuCount else null,
+            .handle_open = if (provided.files) Handles.open else null,
+            .handle_read = if (provided.files) Handles.read else null,
+            .handle_write = if (provided.files) Handles.write else null,
+            .handle_flush = if (provided.files) Handles.flush else null,
+            .handle_close = if (provided.files) Handles.close else null,
         };
     }
+
+    const Handles = HandleChannel(Capture);
 
     fn of(context: ?*anyopaque) *Capture {
         return @ptrCast(@alignCast(context.?));
@@ -847,10 +1041,7 @@ pub const Reference = struct {
         return .{
             .context = self,
             .print = if (self.provided.print) take else null,
-            .file_read = if (self.provided.files) readFile else null,
-            .file_write = if (self.provided.files) writeFile else null,
             .file_exists = if (self.provided.files) fileExists else null,
-            .file_append = if (self.provided.files) appendFile else null,
             .file_delete = if (self.provided.files) deleteFile else null,
             .file_rename = if (self.provided.files) renameFile else null,
             .dir_list = if (self.provided.files) listDirectory else null,
@@ -876,32 +1067,18 @@ pub const Reference = struct {
                 .term_flush = termFlush,
                 .key_read = keyRead,
             } else null,
+            .files = if (self.provided.files) Handles.channel(self) else .{},
         };
     }
+
+    const Handles = HandleChannel(Reference);
 
     fn take(context: *anyopaque, text: []const u8) error{OutOfMemory}!void {
         try of(context).record("", text);
     }
 
-    fn readFile(
-        context: *anyopaque,
-        arena: Allocator,
-        path: []const u8,
-    ) error{OutOfMemory}!interpreter.FileRead {
-        const found = of(context).world.read(path) orelse return .failed;
-        return .{ .content = try arena.dupe(u8, found) };
-    }
-
-    fn writeFile(context: *anyopaque, path: []const u8, content: []const u8) bool {
-        return of(context).world.write(path, content);
-    }
-
     fn fileExists(context: *anyopaque, path: []const u8) bool {
         return of(context).world.exists(path);
-    }
-
-    fn appendFile(context: *anyopaque, path: []const u8, content: []const u8) bool {
-        return of(context).world.append(path, content);
     }
 
     fn deleteFile(context: *anyopaque, path: []const u8) bool {

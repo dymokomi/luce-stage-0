@@ -440,6 +440,31 @@ const Module = struct {
             .os_available_memory,
             .os_cpu_count,
             => builder.fnType(.i32, &.{ .ptr, .ptr }, .normal),
+            // The handle channel (docs/BYTES.md).  Named and typed
+            // here like `trap` is, and called from here for the same
+            // reason it is not: the five pointers are handed to
+            // `luce_rt_files_install` at the start of the run, and
+            // `libluce_rt` is what calls them.
+            .handle_open => builder.fnType(
+                .i32,
+                &.{ .ptr, .ptr, .i64, .i64, .ptr },
+                .normal,
+            ),
+            .handle_read => builder.fnType(
+                .i32,
+                &.{ .ptr, .i64, .ptr, .i64, .ptr },
+                .normal,
+            ),
+            .handle_write => builder.fnType(
+                .i32,
+                &.{ .ptr, .i64, .ptr, .i64, .ptr },
+                .normal,
+            ),
+            .handle_flush, .handle_close => builder.fnType(
+                .i32,
+                &.{ .ptr, .i64 },
+                .normal,
+            ),
         };
     }
 
@@ -1124,6 +1149,23 @@ const Module = struct {
         wip.cursor = .{ .block = empty };
         _ = try wip.ret(try self.builder.intValue(.i32, @intFromEnum(runtime.Status.exhausted)));
         wip.cursor = .{ .block = running };
+
+        // The host's handle channel, handed over once (docs/BYTES.md
+        // R2).  It goes into `libluce_rt` rather than being read at
+        // each call because a handle's close happens at the end of the
+        // scope that owns it — inside the ownership walk, where no
+        // generated code is standing to pass a table in.  A host that
+        // fills none of the five leaves the runtime fail-closed, which
+        // is what every missing service already means.
+        _ = try self.callService(&wip, .luce_rt_files_install, .void, &.{
+            started,
+            context,
+            try self.loadHostSlot(&wip, host, .handle_open, "files.open.fn"),
+            try self.loadHostSlot(&wip, host, .handle_read, "files.read.fn"),
+            try self.loadHostSlot(&wip, host, .handle_write, "files.write.fn"),
+            try self.loadHostSlot(&wip, host, .handle_flush, "files.flush.fn"),
+            try self.loadHostSlot(&wip, host, .handle_close, "files.close.fn"),
+        }, "");
 
         // A host that allows no frames at all refuses the entry
         // function itself, exactly as the interpreter's frame stack
@@ -2456,7 +2498,7 @@ const Body = struct {
         if (of != .heap) return null;
         return switch (self.module.program.heap_types[of.heap]) {
             .array => |shape| .{ .element = shape.element, .rank = shape.rank },
-            .list, .map, .builder => null,
+            .list, .map, .builder, .file => null,
         };
     }
 
@@ -3298,56 +3340,90 @@ const Body = struct {
         self.seek(surviving);
     }
 
-    /// `file_read`, whose two outcomes do genuinely different things:
-    /// only the side the host said yes on has bytes to intern, and
-    /// reading the out-parameters on the other side would read
-    /// whatever was on the stack.  So the branch comes first and the
-    /// two answers meet in a slot.
+    /// `file_read(path)` — the whole file as a `string`.
+    ///
+    /// Open-read-close over the byte channel plus `libluce_rt`'s own
+    /// UTF-8 validation since version 12 (docs/BYTES.md R2), so this is
+    /// one runtime call where it used to be a host call, a branch and
+    /// an intern.  The box is filled here first and the runtime writes
+    /// it only when the read landed: the `errored` beside this call
+    /// branches away before anything reads the value, but the box is
+    /// still copied into whatever carries it, so what it holds has to
+    /// be a value and not whatever was on the stack.
     fn emitFileRead(self: *Body, register: mir.Register, path_register: mir.Register) Error!void {
-        const builder = self.module.builder;
-        const flag = Builder.Alignment.fromByteUnits(4);
         const path, const path_length = try self.textParts(path_register, "path");
-        const content = try self.hostText("read");
-        const answer = try self.callHost(
-            .file_read,
-            &.{ path, path_length, content.text, content.length },
-            "read",
-        );
-
-        // One box, filled on both sides.  It has to be a whole
-        // `runtime.Value` rather than the register shape because the
-        // text the host handed over may be short enough to live in the
-        // value, and a caller carrying this result across the branch on
-        // its outcome copies the box, not the register
-        // (docs/STRINGS.md).
         const box = try self.scratch(self.module.value_type, value_alignment, "read.box");
-        const outcome_slot = try self.scratch(.i32, flag, "read.outcome");
-        const failing = try self.wip.block(1, "read.failed");
-        const reading = try self.wip.block(1, "read.ok");
-        const done = try self.wip.block(2, "read.done");
-        _ = try self.wip.brCond(try self.saidNo(answer), failing, reading, .else_likely);
-
-        self.seek(failing);
-        try self.emitRaiseIo(.read, path, path_length);
-        _ = try self.wip.store(.normal, try builder.intValue(.i32, outcome_errored), outcome_slot, flag);
-        // The `errored` beside this call branches away before anything
-        // reads the value — but the box is still copied into whatever
-        // carries it, so it holds the empty String rather than
-        // whatever was on the stack.
         try self.fillBoxShape(box, .string);
         try self.fillBoxValue(box, .string, (try self.module.textConstant("")).toValue());
-        _ = try self.wip.br(done);
-
-        self.seek(reading);
-        const bytes, const size = try content.load(self);
-        try self.callChecked(.luce_rt_intern_text, &.{ self.runtime, bytes, size, box });
-        _ = try self.wip.store(.normal, try builder.intValue(.i32, outcome_ok), outcome_slot, flag);
-        _ = try self.wip.br(done);
-
-        self.seek(done);
+        self.produced[register].outcome = try self.fileService(.luce_rt_file_read_text, &.{
+            path,
+            path_length,
+            box,
+        });
         self.produced[register].value = try self.unboxed(.string, box, "read.value");
         self.produced[register].box = box;
-        self.produced[register].outcome = try self.wip.load(.normal, .i32, outcome_slot, flag, "read.outcome");
+    }
+
+    /// One `libluce_rt` file service: the arguments it takes, plus the
+    /// "did the world agree" flag and the position the error is
+    /// recorded at, which every one of them ends with.
+    ///
+    /// The runtime raises the `io_failed` itself — it is the side that
+    /// knows the path a handle was opened at — so what comes back here
+    /// is only the outcome the `errored` beside the call branches on.
+    fn fileService(
+        self: *Body,
+        which: Service,
+        arguments: []const Builder.Value,
+    ) Error!Builder.Value {
+        const builder = self.module.builder;
+        const word = Builder.Alignment.fromByteUnits(4);
+        const gpa = self.module.gpa;
+        const agreed = try self.scratch(.i32, word, "io.agreed");
+        var all: std.ArrayList(Builder.Value) = .empty;
+        defer all.deinit(gpa);
+        try all.append(gpa, self.runtime);
+        try all.appendSlice(gpa, arguments);
+        try all.append(gpa, agreed);
+        try all.append(gpa, try builder.intValue(.i32, self.index));
+        try all.append(gpa, try builder.intValue(.i32, self.current));
+        try self.callChecked(which, all.items);
+        // `agreed` is 0 exactly when the runtime recorded an error, so
+        // the outcome is the flag read the other way round.
+        const said_no = try self.wip.icmp(
+            .eq,
+            try self.wip.load(.normal, .i32, agreed, word, "io.flag"),
+            try builder.intValue(.i32, 0),
+            "io.refused",
+        );
+        return self.wip.select(
+            .normal,
+            said_no,
+            try builder.intValue(.i32, outcome_errored),
+            try builder.intValue(.i32, outcome_ok),
+            "io.outcome",
+        );
+    }
+
+    /// `file_write(path, text)` and `file_append(path, text)`, which
+    /// differ only in where the write starts — one `libluce_rt` door
+    /// with the mode as an argument, since version 12 defined both as
+    /// open-write-close over the byte channel (docs/BYTES.md R2).
+    fn emitWriteText(
+        self: *Body,
+        register: mir.Register,
+        of: []const mir.Register,
+        mode: runtime.files.Mode,
+    ) Error!void {
+        const path, const path_length = try self.textParts(of[0], "path");
+        const content, const content_length = try self.textParts(of[1], "content");
+        self.produced[register].outcome = try self.fileService(.luce_rt_file_write_text, &.{
+            path,
+            path_length,
+            content,
+            content_length,
+            try self.module.builder.intValue(.i64, @intFromEnum(mode)),
+        });
     }
 
     /// A host file service said no: raise the error and answer the
@@ -5096,6 +5172,10 @@ const Body = struct {
                 rt,
                 try self.boxedRegister(of[0], "text"),
             }),
+            .parse_string => try self.callAnswering(register, .luce_rt_parse_string, &.{
+                rt,
+                try self.boxedRegister(of[0], "bytes"),
+            }),
             .parse_float => try self.callAnswering(register, .luce_rt_parse_float, &.{
                 rt,
                 try self.boxedRegister(of[0], "text"),
@@ -5126,26 +5206,8 @@ const Body = struct {
             // (docs/FAILURE.md).  Both answer an outcome the `errored`
             // beside them branches on.
             .file_read => try self.emitFileRead(register, of[0]),
-            .file_write => {
-                const path, const path_length = try self.textParts(of[0], "path");
-                const content, const content_length = try self.textParts(of[1], "content");
-                const answer = try self.callHost(
-                    .file_write,
-                    &.{ path, path_length, content, content_length },
-                    "wrote",
-                );
-                self.produced[register].outcome = try self.raiseIo(.write, answer, path, path_length);
-            },
-            .file_append => {
-                const path, const path_length = try self.textParts(of[0], "path");
-                const content, const content_length = try self.textParts(of[1], "content");
-                const answer = try self.callHost(
-                    .file_append,
-                    &.{ path, path_length, content, content_length },
-                    "appended",
-                );
-                self.produced[register].outcome = try self.raiseIo(.append, answer, path, path_length);
-            },
+            .file_write => try self.emitWriteText(register, of, .write),
+            .file_append => try self.emitWriteText(register, of, .append),
             .file_delete => {
                 const path, const path_length = try self.textParts(of[0], "path");
                 const answer = try self.callHost(
@@ -5168,6 +5230,67 @@ const Body = struct {
                 self.produced[register].outcome = try self.raiseIo(.rename, answer, from, from_length);
             },
             .dir_list => try self.emitDirList(register, of[0]),
+
+            // -- the byte channel (docs/BYTES.md) ---------------------
+            //
+            // Every one of these is a `libluce_rt` call and not a host
+            // call, which is the shape the ruling decided: the runtime
+            // holds the five host slots for the whole run, so the
+            // handle's semantics — what an open answers, what a short
+            // read means, when a close happens — are written once and
+            // both engines reach them.  The runtime raises the
+            // `io_failed` itself, with the path the handle remembers,
+            // so all that is left here is the outcome to branch on.
+            .file_open => {
+                const path, const path_length = try self.textParts(of[0], "path");
+                const box = try self.scratch(self.module.value_type, value_alignment, "open.box");
+                const opened = try self.fileService(.luce_rt_file_open, &.{
+                    path,
+                    path_length,
+                    self.produced[of[1]].value,
+                    box,
+                });
+                const made = self.function.result_types[register];
+                self.produced[register].value = try self.unboxed(made, box, "open.value");
+                self.produced[register].box = box;
+                self.produced[register].outcome = opened;
+            },
+            .handle_read => {
+                const count = try self.scratch(.i64, value_alignment, "read.count");
+                self.produced[register].outcome = try self.fileService(.luce_rt_file_read, &.{
+                    try self.boxedRegister(of[0], "file"),
+                    try self.boxedRegister(of[1], "into"),
+                    count,
+                });
+                self.produced[register].value = try self.wip.load(
+                    .normal,
+                    .i64,
+                    count,
+                    value_alignment,
+                    "read.filled",
+                );
+            },
+            .handle_write => {
+                const count = try self.scratch(.i64, value_alignment, "write.count");
+                self.produced[register].outcome = try self.fileService(.luce_rt_file_write, &.{
+                    try self.boxedRegister(of[0], "file"),
+                    try self.boxedRegister(of[1], "from"),
+                    self.produced[of[2]].value,
+                    count,
+                });
+                self.produced[register].value = try self.wip.load(
+                    .normal,
+                    .i64,
+                    count,
+                    value_alignment,
+                    "write.landed",
+                );
+            },
+            .handle_flush => {
+                self.produced[register].outcome = try self.fileService(.luce_rt_file_flush, &.{
+                    try self.boxedRegister(of[0], "file"),
+                });
+            },
             .read_line => try self.emitMaybeText(
                 register,
                 .read_line,
@@ -5392,8 +5515,16 @@ const Body = struct {
 
     fn emitHeapNew(self: *Body, register: mir.Register, new: mir.Instruction.HeapNew) Error!void {
         switch (self.module.program.heap_types[new.heap]) {
-            .list => try self.callAnswering(register, .luce_rt_new_list, &.{self.runtime}),
+            .list => |element| try self.callAnswering(register, .luce_rt_new_list, &.{
+                self.runtime,
+                try self.boxed(element, try self.zeroValue(element), "element.zero"),
+            }),
             .map => try self.callAnswering(register, .luce_rt_new_map, &.{self.runtime}),
+            // A file is made by `file_open` and by nothing else: `new
+            // file` names no path, and a handle with no file behind it
+            // is the one thing this type must never be able to hold.
+            // Stage 4 refuses it by name; this is the wall behind that.
+            .file => return self.fail("new file"),
             .builder => try self.callAnswering(register, .luce_rt_new_builder, &.{self.runtime}),
             .array => |shape| {
                 const dims = try self.scratchRun(

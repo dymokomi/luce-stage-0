@@ -134,6 +134,15 @@ pub const Service = enum {
     luce_rt_set_key_text,
     luce_rt_key_text,
 
+    // -- files: the byte channel, and text over it --------------------
+    luce_rt_files_install,
+    luce_rt_file_open,
+    luce_rt_file_read,
+    luce_rt_file_write,
+    luce_rt_file_flush,
+    luce_rt_file_read_text,
+    luce_rt_file_write_text,
+
     // -- objects and ownership ----------------------------------------
     luce_rt_new_list,
     luce_rt_new_map,
@@ -183,6 +192,7 @@ pub const Service = enum {
     luce_rt_str,
     luce_rt_parse_int,
     luce_rt_parse_float,
+    luce_rt_parse_string,
     luce_rt_chr,
     luce_rt_ord,
 
@@ -476,6 +486,68 @@ pub fn describe(service: Service) Effect {
             .memory = touches_heap,
             .parameters = &.{ .run, .unknown, .unknown, .unknown, .value_out },
         },
+        // The byte channel (docs/BYTES.md).  Every one of them calls
+        // back into the host through the slots installed at the start
+        // of the run, and a host callback is anybody's code — so
+        // nothing about memory can be narrowed beyond "the heap
+        // moves", the same reason `luce_rt_args_list` cannot be
+        // narrowed.
+        .luce_rt_files_install => .{
+            .memory = touches_run,
+            .parameters = &.{ .run, .unknown, .unknown, .unknown, .unknown, .unknown, .unknown },
+        },
+        .luce_rt_file_open => .{
+            .memory = touches_heap,
+            .parameters = &.{
+                .run,
+                .bytes_in,
+                .plain,
+                .plain,
+                .value_out,
+                .unknown,
+                .plain,
+                .plain,
+            },
+        },
+        .luce_rt_file_read => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .value_in, .unknown, .unknown, .plain, .plain },
+        },
+        .luce_rt_file_write => .{
+            .memory = touches_heap,
+            .parameters = &.{
+                .run,
+                .value_in,
+                .value_in,
+                .plain,
+                .unknown,
+                .unknown,
+                .plain,
+                .plain,
+            },
+        },
+        .luce_rt_file_flush => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .unknown, .plain, .plain },
+        },
+        .luce_rt_file_read_text => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .bytes_in, .plain, .value_out, .unknown, .plain, .plain },
+        },
+        .luce_rt_file_write_text => .{
+            .memory = touches_heap,
+            .parameters = &.{
+                .run,
+                .bytes_in,
+                .plain,
+                .bytes_in,
+                .plain,
+                .plain,
+                .unknown,
+                .plain,
+                .plain,
+            },
+        },
         .luce_rt_set_key_text => .{
             .memory = touches_text,
             .parameters = &.{ .run, .bytes_in, .plain },
@@ -490,10 +562,15 @@ pub fn describe(service: Service) Effect {
         // Every one of these allocates, frees, or moves ownership in the
         // object table, so every one of them writes the runtime's
         // storage as well as its arguments.
-        .luce_rt_new_list,
         .luce_rt_new_map,
         .luce_rt_new_builder,
         => .{ .memory = touches_heap, .parameters = &.{ .run, .value_out } },
+        // A list is packed at its element's width now, so it is handed
+        // the element zero exactly as an array is (docs/BYTES.md R1).
+        .luce_rt_new_list => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .value_out },
+        },
         .luce_rt_new_array => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .numbers_in, .plain, .value_in, .value_out },
@@ -633,6 +710,12 @@ pub fn describe(service: Service) Effect {
         },
         .luce_rt_parse_int, .luce_rt_parse_float, .luce_rt_ord => .{
             .memory = reads_text,
+            .parameters = &.{ .run, .value_in, .value_out },
+        },
+        // Reads a list's element run and makes a String out of it, so
+        // it resolves a handle: the heap is what it touches, not text.
+        .luce_rt_parse_string => .{
+            .memory = touches_heap,
             .parameters = &.{ .run, .value_in, .value_out },
         },
         .luce_rt_string_byte => .{

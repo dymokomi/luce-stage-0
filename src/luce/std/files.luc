@@ -72,6 +72,92 @@ func delete(path: string) -> !:
 func rename(from: string, to: string) -> !:
     try file_rename(from, to)
 
+# -- the byte channel (docs/BYTES.md) ---------------------------------
+#
+# A file is bytes reached through an open handle, and text is a
+# validation the language performs on the bytes.  `open`, `create` and
+# `append_to` answer a `file` your scope owns: the end of that scope
+# closes it, `free f` closes it early, `give f` and `return f` move it,
+# and using one after it is closed traps like any use after free,
+# because it is the same mistake.
+#
+# The primitive is C-shaped on purpose: a read fills a buffer you own
+# and says how many bytes landed — zero means the file is finished —
+# and a write takes a buffer and a count and says how many landed,
+# which may be fewer than you asked for.  Everything below the three
+# doors is a loop over that, the way Go's `os.ReadFile` is a loop over
+# `Read`.
+
+# How the three doors number themselves for the host.  Private: a
+# reader writes `files.open(path)`, never a number.
+private let mode_read = 0
+private let mode_write = 1
+private let mode_append = 2
+
+# How much one read of a whole-file convenience asks for.  Large
+# enough that an ordinary file is a handful of calls; small enough
+# that the buffer is not itself the memory question.
+private let chunk = 65536
+
+# Open a file to read from the start.  The file must be there.
+func open(path: string) -> file!:
+    return try file_open(path, mode_read)
+
+# Open a file to write from the start, creating it and emptying it.
+func create(path: string) -> file!:
+    return try file_open(path, mode_write)
+
+# Open a file to write at its end, creating it if it is not there.
+func append_to(path: string) -> file!:
+    return try file_open(path, mode_append)
+
+# The whole file, as bytes.  Nothing here asks whether the bytes are
+# text — that is what `strings.from_bytes` is for — so this reads a
+# JPEG as happily as a note.
+func read_bytes(path: string) -> list(byte)!:
+    var f = try open(path)
+    var buffer = new array(byte, chunk)
+    var all = new list(byte)
+    var filled = try f.read(buffer)
+    while filled > 0:
+        var at: long = 0
+        while at < filled:
+            all.append(buffer[at])
+            at += 1
+        filled = try f.read(buffer)
+    return all
+
+# Write bytes, replacing whatever was there.
+func write_bytes(path: string, bytes: list(byte)) -> !:
+    var f = try create(path)
+    try send(f, bytes)
+
+# Add bytes to the end of a file, creating it if it is not there.
+func append_bytes(path: string, bytes: list(byte)) -> !:
+    var f = try append_to(path)
+    try send(f, bytes)
+
+# The loop both writers share: fill a buffer from where the last write
+# stopped, hand it over, and go round again.  A short write is
+# ordinary and not a failure — which is the whole reason `write`
+# answers a count — so the next round refills from `at + sent` rather
+# than re-sending bytes that already landed.  A host that accepts
+# nothing at all has stopped writing, and says so as an error instead
+# of spinning.
+private func send(f: file, bytes: list(byte)) -> !:
+    var buffer = new array(byte, chunk)
+    var at: long = 0
+    while at < len(bytes):
+        var held: long = 0
+        while held < chunk and at + held < len(bytes):
+            buffer[held] = bytes[at + held]
+            held += 1
+        let sent = try f.write(buffer, held)
+        if sent <= 0:
+            error("the write made no progress")
+        at += sent
+    try f.flush()
+
 # The names in a directory, sorted.
 #
 # Sorted because the host's order is whatever the file system felt

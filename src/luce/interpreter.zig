@@ -147,27 +147,22 @@ pub const Host = struct {
         arena: Allocator,
         index: u32,
     ) error{OutOfMemory}!?[]const u8 = null,
-    /// Plain files for `file_read` / `file_write` / `file_exists`.
-    file_read: ?*const fn (
-        context: *anyopaque,
-        arena: Allocator,
-        path: []const u8,
-    ) error{OutOfMemory}!FileRead = null,
-    file_write: ?*const fn (
-        context: *anyopaque,
-        path: []const u8,
-        content: []const u8,
-    ) bool = null,
+    /// Whether a file is there.  A question about the past, and the
+    /// one file service that is not a byte channel.
     file_exists: ?*const fn (context: *anyopaque, path: []const u8) bool = null,
-    /// The four file operations beside read, write and exists.  Each
-    /// answers whether it happened; a `false` becomes the `io_failed`
-    /// error the program meets, because the world decided and no
-    /// non-racy check stands in for the result (docs/FAILURE.md).
-    file_append: ?*const fn (
-        context: *anyopaque,
-        path: []const u8,
-        content: []const u8,
-    ) bool = null,
+    /// The file operations that are about a *name* rather than about
+    /// bytes.  Each answers whether it happened; a `false` becomes the
+    /// `io_failed` error the program meets, because the world decided
+    /// and no non-racy check stands in for the result
+    /// (docs/FAILURE.md).
+    ///
+    /// **`file_read`, `file_write` and `file_append` are not here any
+    /// more** (docs/BYTES.md R2).  They were whole-file text services
+    /// each host implemented, which meant each host owned an opinion
+    /// about what "not text" means; they are open-read-close over
+    /// `files` below plus `libluce_rt`'s own UTF-8 validation now, and
+    /// there is one opinion.  The `abi.Host` slots they answered to
+    /// retired in the same movement.
     file_delete: ?*const fn (context: *anyopaque, path: []const u8) bool = null,
     file_rename: ?*const fn (
         context: *anyopaque,
@@ -219,11 +214,20 @@ pub const Host = struct {
     os_cpu_count: ?*const fn (context: *anyopaque) ?i64 = null,
     /// The interactive screen for the `term_*` and `key_*` builtins.
     terminal: ?Terminal = null,
-};
 
-pub const FileRead = union(enum) {
-    content: []const u8,
-    failed,
+    /// The byte channel behind file handles (docs/BYTES.md R2).
+    ///
+    /// **The one slot on this table that is C-shaped, and deliberately
+    /// so.**  Every other row here is a Zig twin of an `abi.Host` row,
+    /// written twice because the two engines reach a host differently;
+    /// this one is not reached by the engine at all.  `libluce_rt`
+    /// holds it for the whole run and calls it — a handle's close
+    /// happens inside the ownership walk, where no engine is standing
+    /// — so both engines install the *same five function pointers*,
+    /// and a host writes them once.  That is one implementation of the
+    /// file channel rather than two that could disagree, which is what
+    /// moving UTF-8 validation into the runtime was for.
+    files: runtime.files.Channel = .{},
 };
 
 /// The trusted screen behind the terminal builtins.  The host owns raw

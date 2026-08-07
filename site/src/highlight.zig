@@ -54,13 +54,13 @@ pub const verbs = [_][]const u8{ "give", "copy", "free", "new" };
 pub const type_names = [_][]const u8{
     // The language's own, lowercase (docs/TYPES.md D8): the seven-rung
     // numeric ladder, `bool`, `string`, and the four heap shapes.
-    "bool",    "byte",   "short",   "int",    "long",
-    "half",    "float",  "double",  "string", "list",
-    "map",     "array",  "builder",
+    "bool",  "byte",    "short",   "int",    "long",
+    "half",  "float",   "double",  "string", "list",
+    "map",   "array",   "builder", "file",
     // Retiring: the rename step takes these with it.
-    "Bool",   "Int",
-    "Float",   "String", "List",    "Map",    "Array",
-    "Builder",
+      "Bool",
+    "Int",   "Float",   "String",  "List",   "Map",
+    "Array", "Builder",
 };
 
 /// Everything callable by name on its own: the free builtins, the
@@ -78,7 +78,7 @@ pub const builtins = [_][]const u8{
     "file_append",     "file_exists",         "file_delete",  "file_rename", "dir_list",
     "term_rows",       "term_cols",           "term_clear",   "term_move",   "term_style",
     "term_write",      "term_flush",          "key_read",     "key_text",    "exit",
-    "os_total_memory", "os_available_memory", "os_cpu_count",
+    "os_total_memory", "os_available_memory", "os_cpu_count", "file_open",   "parse_string",
 };
 
 /// Names that mean something only behind a receiver: `xs.append(v)`,
@@ -94,7 +94,8 @@ pub const methods = [_][]const u8{
     "byte_at", "find_byte", "append",   "append_ascii", "build",
     "insert",  "remove",    "pop",      "clear",        "sort",
     "reverse", "find",      "contains", "dim",          "fill",
-    "has",     "get",       "keys",     "values",
+    "has",     "get",       "keys",     "values",       "read",
+    "write",   "flush",
 };
 
 pub fn inTable(table: []const []const u8, word: []const u8) bool {

@@ -143,6 +143,81 @@ UTF-8 stays loom's.
 reason, the parse case) or `string!` (the files shape, a reason
 carried, for symmetry with the module it lives beside).
 
+## As built (2026-08-07)
+
+Built in two verticals, both engines, one run.  R1 is storage and
+moves nothing a program can see; R2, R4 and R5 are one movement and
+spend one `abi.version` between them.  The rulings left several
+questions open that the code had to answer; each is here with the
+reason, and each has a spec in `specs/bytes_spec.zig`.
+
+| | decision, and where it is proved |
+|---|---|
+| **B1** | **The shape a List and an Array share is `Object.Elements`, hoisted to a row field.**  Part one said `list` adopts the `ElementKind` mechanism; what it does not say is where the mechanism lives, and duplicating a nine-arm `at`/`put` switch would have been two places for one storage semantic.  So `kind`, `bytes` and `count` are one struct, and the row holds it beside `dims` — a *row* field for the reason an Array's storage already was one: generated code walks it at a measured `@offsetOf`, and Zig promises nothing about a tagged union's payload.  The only difference between the two containers is that a List's `bytes` runs ahead of its `count` and an Array's does not, because an Array never grows.  `Data.list` and `Data.array` are payload-free tags now. |
+| **B2** | **`new list(T)` is handed the element zero, exactly as `new array` is.**  The runtime deliberately does not know the program's type table, and the zero's tag *is* the type — the sentence `ElementKind.of` already stood on.  Nothing new crosses the boundary; `luce_rt_new_list` takes one more `Value` and both engines pass it. |
+| **B3** | **A list the *runtime* builds is a `.value` list, whatever its element type.**  `m.keys()`, `m.values()`, `dir_list` and `args` are built out of stored `Value`s and the runtime has no type to read a kind from.  A boxed cell holds anything and hands back exactly what was put in it, so this is always correct and only ever costs memory; `list_slice` and `copy` preserve the source's kind, and `new list(T)`, which does know the type, packs.  Said out loud in `containers.zig` rather than left to be discovered. |
+| **B4** | **`capacity()` is not on the hot path.**  Element arithmetic in `ensureCapacity` divides by a width the compiler does not know, and one integer division per `append` measured as a real cost on the `strings` benchmark.  The growth arithmetic is in bytes; the division survives only where a reader asks for a capacity. |
+| **B5** | **The handle's type is spelled `file`, and it sits in `types.HeapType` as `.file`.**  A heap type because scope ownership is what gives a resource a death point, and it is the resource half of `HeapType` rather than a fifth container: no element type, no `new`, and the only door in is `files.open`.  `file_methods` in stage 4 is `read`/`write`/`flush`, and there is deliberately no `close` — `free(f)` is one and the end of the owning scope is the other.  `std.network`'s sockets are meant to arrive beside it wearing the same pattern, which is the whole reason the shape carries no container vocabulary. |
+| **B6** | **The channel is installed into `libluce_rt`, not read at each call.**  This is the decision the close forces, and it is the one that decided the whole architecture of part two: a scope's end arrives inside the ownership walk, where no generated code is standing to hand a host table in.  So `luce_rt_files_install` takes the five pointers once, `Runtime.files` holds them for the run, and the runtime calls them.  The consequence is better than the requirement: both engines install *literally the same five function pointers*, so the interpreter and a compiled artifact reach one implementation of what an open answers, what a short read means and when a close happens — and the four intrinsics lower to plain `luce_rt_*` calls rather than to host-slot code. |
+| **B7** | **The five slots are `handle_open`, `handle_read`, `handle_write`, `handle_flush`, `handle_close`**, appended in that order at `abi.version` 12.  Named for the handle rather than for the file, because the same five serve a socket; `file_read` and its siblings kept their names and their positions and are simply not filled any more.  Mode is a number on the slot (0 read, 1 write, 2 append) and a named door in `std.files`: a builtin speaks what the host slot speaks, and the library is where it gets a name. |
+| **B8** | **A handle remembers the path it was opened at.**  "The read failed" without saying which file is a message that helps nobody, and a handle two hundred lines from its `open` is exactly where a reader has stopped being able to supply the name themselves.  The bytes are the object's and go back with it.  `FileAct` gains `open` and `flush`, appended. |
+| **B9** | **The runtime raises the `io_failed` itself.**  It is the side that knows the path, so the exports take the raise site (`function`, `instruction`) and record the error; what reaches generated code is one flag to branch on.  `emitFileRead` went from a host call, a branch and an intern to one call. |
+| **B10** | **A method can be fallible.**  Nothing before the byte channel needed one — every fallible thing was a free builtin — so `lowerMethod` simply never opened an outcome.  `f.read(buffer)` needs `try` or `catch` for the same reason `file_read` does, and a site that says neither is `luce.sema.fallible` rather than a silently dropped outcome. |
+| **B11** | **`parse_string(xs) -> string?` is the primitive R3 needs.**  `strings.to_bytes` is an ordinary Luce loop over `byte_at`, but `from_bytes` is a *validator*, and a second UTF-8 validator written in Luce would be a second implementation of a semantic.  So the parse family takes a third member, named for what it produces exactly as `parse_int` and `parse_float` are, and `strings.from_bytes` is its one-line surface.  A packed `list(byte)` *is* its bytes, so the validator reads the run in place — which is R1 paying for R3. |
+| **B12** | **`copy f` and `new file` are refused by name, in stage 4.**  A second Luce handle on one open file would be two owners of one resource, which is the thing scope ownership exists to make impossible; a `file` with no file behind it is the one state the type must never hold.  Both have a wall behind them in the runtime and the verifier for IR that arrived some other way — a `.lcm` reaches the backend without passing the analyzer. |
+
+**The folded ruling, and what survived of the cap.**  The flat
+`max_array_elements = 1 << 24` is gone: it was a policy number
+denominated in the wrong unit, and what limits an array is the machine.
+`heap.maxElements(kind)` keeps only the ceilings docs/VECTOR.md's
+reduction proof is load-bearing on, computed from the proof's own
+obligation in `i128` — because `i64` is the width the arithmetic is
+*about* and a wrapped bound reports that everything fits.  Past that,
+RAM decides and says so: `allocation_failed`, a trap at the site that
+asked, located and traced like every other.  The Linux overcommit
+caveat is written where the trap code is defined, because it is the
+one case this trap honestly does not catch.
+
+**What did not move.**  The ownership rules are OWNERSHIP.md's,
+unchanged, and the handle specs are written against the existing
+clauses rather than new ones.  `map` is untouched.  `file_read`,
+`file_write` and `file_append` have the surface and the meaning they
+had.  No keyword arrived.
+
+**`std.zip` collected the payoff, and it is larger than the two doors
+it gained.**  `zip.read(path)` and `zip.write(path, archive)` are one
+line each over `std.files`, and they are what the module was written
+for — but the interesting part is what the run *deleted*:
+
+- Its buffers are `list(byte)`, a quarter of what they were, and not
+  one line of the algorithms changed to make it so.  The module's
+  header used to explain at length why `list(long)` was the honest
+  least-bad choice; that paragraph is now a record of what R1 fixed.
+- `zip.bytes` and `zip.text` are `strings.to_bytes` and
+  `strings.from_bytes`.  `text` was a **hand-written UTF-8 decoder**
+  with nine distinct "those bytes are not text" sentences — a second
+  implementation of a validator, written there only because nothing
+  exposed the first one — and R2 put it out of a job.  Its spec went
+  from five expectations to one, which is R3's `string?` doing exactly
+  what R3 said it would.
+- One thing the narrower element made **explicit rather than
+  changed**: a `byte` widens to `int` in an operator, so `read_u32`'s
+  top byte would shift into a sign bit.  It lifts its four bytes to
+  `long` and says why.  Nothing else in the module needed it, and the
+  Info-ZIP fixtures are what found the one that did.
+
+**The end-to-end proof is Info-ZIP's own bytes through a real file, and
+not a shell-out to `unzip`.**  The suite already embeds five archives
+written by Info-ZIP and Python, on the principle that a library which
+only reads what it wrote has proven nothing about ZIP; the two new
+rows carry those same bytes out through `zip.write` and back through
+`zip.read` and then read them *as an archive*, on both engines, against
+a host that accepts three bytes per write on purpose.  Running the
+system `unzip` would have added a test-time dependency on a tool
+`build.zig` does not require, to prove something the embedded bytes
+already prove — and it would have proven it on one machine's `unzip`
+rather than on the format.
+
 ## Sequencing
 
 After run four (enums + match) merges: both runs move

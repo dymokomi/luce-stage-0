@@ -174,6 +174,11 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .parse_int,
         .parse_float,
         => .pure,
+
+        // `parse_string` is the parse family's third member and the
+        // one exception to their purity: it reads a list's elements,
+        // which an append can change, and it makes fresh owned text.
+        .parse_string => .impure,
         // A slice is a borrow and the rest answer scalars, so none of
         // these allocates.
         .string_slice,
@@ -257,6 +262,12 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .file_delete,
         .file_rename,
         .dir_list,
+        // The byte channel: `file_open` takes a table row and every
+        // other one reaches the world through a handle.
+        .file_open,
+        .handle_read,
+        .handle_write,
+        .handle_flush,
         .exit_program,
         // A machine fact is a host call, and one of them — available
         // memory — answers differently each time it is asked, which
@@ -347,6 +358,7 @@ pub fn viewStable(instruction: Instruction) bool {
             .string_find_byte,
             .parse_int,
             .parse_float,
+            .parse_string,
             .chr_code,
             .ord_text,
             .null_object,
@@ -434,11 +446,16 @@ pub fn viewStable(instruction: Instruction) bool {
             .file_append,
             .file_delete,
             .file_rename,
+            // Reading and writing through a handle resolves that
+            // handle and the buffer, which are reads.
+            .handle_read,
+            .handle_write,
+            .handle_flush,
             => true,
-            // The one host service that makes an object: it takes a
+            // The two host services that make an object: each takes a
             // table row, which is exactly what a resolved array view
             // cannot survive.
-            .dir_list => false,
+            .dir_list, .file_open => false,
         },
     };
 }

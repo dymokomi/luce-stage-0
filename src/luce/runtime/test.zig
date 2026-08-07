@@ -72,7 +72,7 @@ test "a fresh object is loose, and the census counts what was not freed" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const first = try runtime.newList();
+    const first = try runtime.newList(Value.none);
     const second = try runtime.newMap();
     try testing.expectEqual(@as(u32, 2), runtime.live);
     try testing.expectEqual(heap.Owner.loose, (try runtime.resolve(first)).owner);
@@ -95,7 +95,7 @@ test "a freed row is reused, so the table follows live objects and not allocatio
     // the high-water mark, which here is one.
     var made: usize = 0;
     while (made < 100_000) : (made += 1) {
-        const held = try runtime.newList();
+        const held = try runtime.newList(Value.none);
         try containers.append(runtime, held, Value.ofLong(@intCast(made)));
         runtime.freeObject(held.asObject());
     }
@@ -105,7 +105,7 @@ test "a freed row is reused, so the table follows live objects and not allocatio
     // And the peak is what it costs: four alive at once needs four
     // rows, however many have come and gone before them.
     var held: [4]Value = undefined;
-    for (&held) |*slot| slot.* = try runtime.newList();
+    for (&held) |*slot| slot.* = try runtime.newList(Value.none);
     try testing.expectEqual(@as(usize, 4), runtime.table.items.len);
     for (held) |slot| runtime.freeObject(slot.asObject());
 }
@@ -158,14 +158,14 @@ test "a stale handle to a reused row names nobody, not the newcomer" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const first = try runtime.newList();
+    const first = try runtime.newList(Value.none);
     try containers.append(runtime, first, Value.ofLong(11));
     runtime.freeObject(first.asObject());
 
     // The very next object takes the row the first one vacated — the
     // whole point of the free list — and is a different object all the
     // same.
-    const second = try runtime.newList();
+    const second = try runtime.newList(Value.none);
     try testing.expectEqual(first.asObject().index, second.asObject().index);
     try testing.expect(!first.asObject().same(second.asObject()));
 
@@ -196,7 +196,7 @@ test "a row out of generations is retired rather than handed out again" {
 
     // Wind one row to its last usable generation rather than freeing
     // it four billion times.
-    const doomed = try runtime.newList();
+    const doomed = try runtime.newList(Value.none);
     const last: value.Handle = .{
         .index = doomed.asObject().index,
         .generation = heap.retired - 1,
@@ -212,10 +212,10 @@ test "a row out of generations is retired rather than handed out again" {
     // retired generation — the only handle that could name this row
     // again does not exist and cannot be made — so the next object
     // gets a row of its own, and so does the one after it.
-    const next = try runtime.newList();
+    const next = try runtime.newList(Value.none);
     try testing.expect(next.asObject().index != last.index);
     runtime.freeObject(next.asObject());
-    const after = try runtime.newList();
+    const after = try runtime.newList(Value.none);
     try testing.expect(after.asObject().index != last.index);
 
     // A row that still has generations left does keep coming back, so
@@ -237,7 +237,7 @@ test "a binding frees at scope exit, and only its own binding does" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const held = try runtime.newList();
+    const held = try runtime.newList(Value.none);
     const serial = runtime.takeSerial();
     runtime.bind(held, serial, 3);
 
@@ -257,8 +257,8 @@ test "a container owns what it adopts and frees it with itself (S20, S22)" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const outer = try runtime.newList();
-    const inner = try runtime.newList();
+    const outer = try runtime.newList(Value.none);
+    const inner = try runtime.newList(Value.none);
     try containers.append(runtime, outer, inner);
     try testing.expectEqual(heap.Owner.container, (try runtime.resolve(inner)).owner);
 
@@ -275,7 +275,7 @@ test "give demands the binding it names still owns the object (S23)" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const held = try runtime.newList();
+    const held = try runtime.newList(Value.none);
     const serial = runtime.takeSerial();
     runtime.bind(held, serial, 0);
 
@@ -293,7 +293,7 @@ test "a return moves what the finished frame owned out loose (S16)" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const held = try runtime.newList();
+    const held = try runtime.newList(Value.none);
     const serial = runtime.takeSerial();
     runtime.bind(held, serial, 0);
     runtime.loosenFromFrame(held, serial);
@@ -306,8 +306,8 @@ test "copy duplicates what an object owns, recursively (S31)" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const outer = try runtime.newList();
-    const inner = try runtime.newList();
+    const outer = try runtime.newList(Value.none);
+    const inner = try runtime.newList(Value.none);
     try containers.append(runtime, inner, Value.ofLong(7));
     try containers.append(runtime, outer, inner);
 
@@ -332,7 +332,7 @@ test "objects inside a struct value are walked, not skipped" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    var fields = [_]Value{ Value.ofLong(1), try runtime.newList() };
+    var fields = [_]Value{ Value.ofLong(1), try runtime.newList(Value.none) };
     const record = Value.ofStruct(&fields);
     const serial = runtime.takeSerial();
     runtime.bind(record, serial, 0);
@@ -364,7 +364,7 @@ test "freeing an object gives its storage back, during the run" {
     // let the scope end.  Repeated, because a single round could hide
     // behind an allocator's slack.
     for (0..8) |_| {
-        const list = try runtime.newList();
+        const list = try runtime.newList(Value.none);
         for (0..64) |number| {
             try containers.append(&runtime, list, Value.ofLong(@intCast(number)));
         }
@@ -477,7 +477,7 @@ test "lists index, append, pop, insert, remove, and bound-check" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const held = try runtime.newList();
+    const held = try runtime.newList(Value.none);
     try containers.append(runtime, held, Value.ofLong(10));
     try containers.append(runtime, held, Value.ofLong(30));
     try containers.insert(runtime, held, 1, Value.ofLong(20));
@@ -517,7 +517,7 @@ test "every list bound is checked at the last legal index and the first illegal 
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const held = try runtime.newList();
+    const held = try runtime.newList(Value.none);
     for ([_]i64{ 10, 20, 30 }) |element| try containers.append(runtime, held, Value.ofLong(element));
 
     // Reading: 0 and len-1 answer, -1 and len trap.
@@ -677,8 +677,37 @@ test "arrays flatten multi-dimensional indices and refuse an oversized shape" {
         containers.indexGet(runtime, grid, &.{ Value.ofLong(2), Value.ofLong(0) }),
     );
 
-    try testing.expectError(error.Trap, runtime.newArray(&.{ 1 << 20, 1 << 20 }, Value.none));
-    try testing.expectEqual(vocabulary.TrapCode.index_bounds, runtime.pending.?.code);
+    // Both refusals happen before anything is allocated, which is what
+    // makes them testable: the first shape's product overflows a
+    // `usize`, and the second is past the `byte` ceiling docs/VECTOR.md's
+    // reduction proof depends on.  A shape that merely needs more memory
+    // than the machine has reaches the same trap from the allocator.
+    try testing.expectError(error.Trap, runtime.newArray(&.{ 1 << 40, 1 << 40 }, Value.none));
+    try testing.expectEqual(vocabulary.TrapCode.allocation_failed, runtime.pending.?.code);
+    try testing.expectError(error.Trap, runtime.newArray(&.{1 << 41}, Value.ofByte(0)));
+    try testing.expectEqual(vocabulary.TrapCode.allocation_failed, runtime.pending.?.code);
+}
+
+test "the element ceilings are the ones docs/VECTOR.md's proof needs" {
+    // Recomputed from the proof's own obligation rather than read off
+    // the table: `N · M` must stay inside a `long`, in `i128` because
+    // `i64` is the width the arithmetic is about.
+    const largest: i128 = std.math.maxInt(i64);
+    inline for (.{
+        .{ heap.Object.ElementKind.byte, 255 * 32768 },
+        .{ heap.Object.ElementKind.short, 1 << 30 },
+        .{ heap.Object.ElementKind.int, 1 << 31 },
+    }) |row| {
+        const ceiling: i128 = heap.maxElements(row[0]);
+        try testing.expect(ceiling * row[1] <= largest);
+        try testing.expect((ceiling + 1) * row[1] > largest);
+    }
+    // The kinds no integer reduction can name carry no obligation, so
+    // their only ceiling is what keeps a byte count addressable.
+    try testing.expectEqual(
+        @as(usize, std.math.maxInt(usize) / 8),
+        heap.maxElements(.long),
+    );
 }
 
 test "compiled code's byte offsets find the fields they name" {
@@ -782,7 +811,7 @@ test "text owns, releases and leaves the frame the same on both sides of 22 byte
     // A store keeps what it is given, in whichever form fits, and the
     // container gives it back — while a map's key is still a borrow it
     // copies for itself (docs/STRINGS.md).
-    const kept = try runtime.newList();
+    const kept = try runtime.newList(Value.none);
     const table = try runtime.newMap();
     for (lengths) |length| {
         const wanted = words[0..length];
@@ -852,7 +881,7 @@ test "sort and reverse work in place on lists and arrays alike" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const held = try runtime.newList();
+    const held = try runtime.newList(Value.none);
     for ([_]i64{ 3, 1, 2 }) |number| try containers.append(runtime, held, Value.ofLong(number));
     try containers.sort(runtime, held);
     try testing.expectEqual(@as(i64, 1), (try containers.indexGet(runtime, held, &.{Value.ofLong(0)})).asLong());
@@ -866,8 +895,8 @@ test "a list slice copies its object elements rather than sharing them" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const held = try runtime.newList();
-    try containers.append(runtime, held, try runtime.newList());
+    const held = try runtime.newList(Value.none);
+    try containers.append(runtime, held, try runtime.newList(Value.none));
     const taken = try containers.listSlice(runtime, held, 0, 1);
 
     const original = try containers.indexGet(runtime, held, &.{Value.ofLong(0)});
@@ -972,8 +1001,8 @@ test "object comparison is identity, struct comparison is by field" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    const first = try runtime.newList();
-    const second = try runtime.newList();
+    const first = try runtime.newList(Value.none);
+    const second = try runtime.newList(Value.none);
     try testing.expect(operators.compare(.equal, first, first));
     try testing.expect(operators.compare(.not_equal, first, second));
 
@@ -1000,7 +1029,7 @@ extern fn luce_rt_report(
     report: trace.ReportFn,
 ) callconv(.c) void;
 extern fn luce_rt_leaked(runtime: *const Runtime) callconv(.c) i64;
-extern fn luce_rt_new_list(runtime: *Runtime, out: *Value) callconv(.c) i32;
+extern fn luce_rt_new_list(runtime: *Runtime, zero: *const Value, out: *Value) callconv(.c) i32;
 extern fn luce_rt_append(runtime: *Runtime, target: *const Value, held: *const Value) callconv(.c) i32;
 extern fn luce_rt_index_get(
     runtime: *Runtime,
@@ -1076,7 +1105,7 @@ test "the C surface opens a run, carries values, and reports its own traps" {
     defer luce_rt_close(runtime);
 
     var held: Value = .none;
-    try testing.expectEqual(0, luce_rt_new_list(runtime, &held));
+    try testing.expectEqual(0, luce_rt_new_list(runtime, &Value.none, &held));
     try testing.expectEqual(0, luce_rt_append(runtime, &held, &Value.ofLong(21)));
 
     var read: Value = .none;
@@ -1161,15 +1190,15 @@ test "an array's cells are exactly as wide as its element, which is the prize" {
     const longs = try runtime.newArray(&.{1000}, Value.ofLong(0));
     const byte_row = try runtime.resolve(bytes);
     const long_row = try runtime.resolve(longs);
-    try testing.expectEqual(@as(usize, 1000), byte_row.array.elements.len);
-    try testing.expectEqual(@as(usize, 8000), long_row.array.elements.len);
+    try testing.expectEqual(@as(usize, 1000), byte_row.elements.bytes.len);
+    try testing.expectEqual(@as(usize, 8000), long_row.elements.bytes.len);
 
     // Every value a byte can hold survives the round trip through a
     // one-byte cell, which is what says the width is honest rather
     // than merely small.  128 and 255 are the two that would come
     // back negative if anything on the way read the bits as signed.
-    for (0..256) |at| byte_row.array.put(at, Value.ofByte(@intCast(at)));
-    try testing.expectEqual(@as(u8, 0), byte_row.array.at(0).asByte());
-    try testing.expectEqual(@as(u8, 128), byte_row.array.at(128).asByte());
-    try testing.expectEqual(@as(u8, 255), byte_row.array.at(255).asByte());
+    for (0..256) |at| byte_row.elements.put(at, Value.ofByte(@intCast(at)));
+    try testing.expectEqual(@as(u8, 0), byte_row.elements.at(0).asByte());
+    try testing.expectEqual(@as(u8, 128), byte_row.elements.at(128).asByte());
+    try testing.expectEqual(@as(u8, 255), byte_row.elements.at(255).asByte());
 }

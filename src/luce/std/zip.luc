@@ -20,25 +20,25 @@
 # polynomial 0xEDB88320, preconditioned with ones and post-
 # conditioned by complement, exactly as APPNOTE 4.4.7 states it.
 #
-# **Bytes are a `list(long)`, one byte to an element.**  Luce has a
-# `byte` and a checked `byte(x)` to narrow into it, but a `list` is
-# boxed whatever its element type (docs/TYPES.md §6): a `list(byte)`
-# costs the same eight bytes an element as a `list(long)` *and* a
-# conversion at every store.  The packed one is `array(byte, n)`,
-# which cannot grow.  So there is no growable packed byte buffer to
-# use, and the honest choice is the width the arithmetic happens at.
-# Every function here reads 0..255 out of its elements and puts
-# 0..255 back.
+# **Bytes are a `list(byte)`, one byte to an element** — one byte of
+# memory, too, since `list` gave up the boxed slot (docs/BYTES.md R1).
+# This module is where that cost was first measured: it used to say
+# "bytes are a `list(long)`" and explain that a `list(byte)` cost the
+# same eight bytes an element *and* a conversion at every store, so the
+# honest choice was the width the arithmetic happens at.  That is no
+# longer true, and the buffers are a quarter of what they were.
 #
-# **The host cannot hand a program a file's bytes yet, and cannot
-# take them.**  `file_read` answers a Luce `string`, and a string is
-# valid UTF-8 by construction — so the host refuses a file that is
-# not text, and no archive worth the name is text.  That is a gap in
-# the boundary, not in this module: `zip.entries` and `zip.writer`
-# work on any bytes they are given, and the day the host grows a
-# binary read the line in front of them is one call long.  Today the
-# bytes come from a program that computed them, from `zip.bytes` over
-# text the host *could* read, or from a module of literals.
+# One thing the narrower element made explicit rather than changed: a
+# `byte` widens to `int` in an operator (docs/TYPES.md D5), so a `u32`
+# field's top byte would shift into a sign bit.  `read_u32` lifts its
+# four bytes to `long` and says why; everything else fits.
+#
+# **An archive on disk is reachable now** — `zip.read` and `zip.write`
+# at the foot of this file, over `std.files` — which is what the whole
+# module was written for and could not have while the host refused any
+# file that was not text.  Everything between still takes bytes and
+# answers bytes: a container format has no business deciding where its
+# bytes live, and the two doors are two lines each because of it.
 #
 # Sizes are the ZIP32 ones: an archive holds at most 65535 entries,
 # each at most 4 GB, and there is no Zip64 here.  Encryption, multi
@@ -52,62 +52,27 @@
 # self-extracting one — has its offsets shifted by however far the
 # directory really begins from where it says it does.
 
+import std.files
+import std.strings
+
 # --- bytes and text --------------------------------------------------
+#
+# **This section used to be the module's biggest workaround, and it is
+# two lines now** (docs/BYTES.md).  `bytes` was a hand-rolled loop over
+# `byte_at` because there was no way to say "this string's bytes", and
+# `text` was a hand-written UTF-8 decoder with nine distinct "those
+# bytes are not text" sentences — a second implementation of a
+# validator the runtime already had, written here only because nothing
+# exposed it.  Both are `std.strings` calls now, and the nine reasons
+# are one honest absence: "not UTF-8" is the same fact every time.
 
 # The UTF-8 bytes a string is made of.
-func bytes(content: string) -> list(long):
-    var out: list(long) = []
-    for at in range(0, len(content)):
-        out.append(content.byte_at(at))
-    return out
+func bytes(content: string) -> list(byte):
+    return strings.to_bytes(content)
 
-# The string those bytes spell, or an error when they spell none:
-# the archive said it held text and the bytes disagree, which is news
-# rather than a bug in the program that asked.
-func text(data: list(long)) -> string!:
-    var out = new builder()
-    var at: long = 0
-    while at < len(data):
-        let lead = data[at]
-        if lead < 0 or lead > 255:
-            error("zip: " + string(lead) + " is not a byte")
-        if lead < 0x80:
-            out.append_ascii(lead)
-            at += 1
-        else:
-            var width: long = 0
-            var code: long = 0
-            if lead & 0xE0 == 0xC0:
-                width = 2
-                code = lead & 0x1F
-            elif lead & 0xF0 == 0xE0:
-                width = 3
-                code = lead & 0x0F
-            elif lead & 0xF8 == 0xF0:
-                width = 4
-                code = lead & 0x07
-            else:
-                error("zip: those bytes are not text (byte " + string(at) + ")")
-            if at + width > len(data):
-                error("zip: those bytes are not text (they end mid-character)")
-            for step in range(1, width):
-                let following = data[at + step]
-                if following & 0xC0 != 0x80:
-                    error("zip: those bytes are not text (byte " + string(at + step) + ")")
-                code = code << 6 | following & 0x3F
-            if width == 2 and code < 0x80:
-                error("zip: those bytes are not text (an overlong character at byte " + string(at) + ")")
-            if width == 3 and code < 0x800:
-                error("zip: those bytes are not text (an overlong character at byte " + string(at) + ")")
-            if width == 4 and code < 0x10000:
-                error("zip: those bytes are not text (an overlong character at byte " + string(at) + ")")
-            if code >= 0xD800 and code <= 0xDFFF:
-                error("zip: those bytes are not text (a surrogate at byte " + string(at) + ")")
-            if code > 0x10FFFF:
-                error("zip: those bytes are not text (byte " + string(at) + " starts no character)")
-            out.append(chr(code))
-            at += width
-    return out.build()
+# The string those bytes spell, or absent when they spell none.
+func text(data: list(byte)) -> string?:
+    return strings.from_bytes(data)
 
 # --- the checksum ----------------------------------------------------
 
@@ -120,7 +85,7 @@ func text(data: list(long)) -> string!:
 # constant and a table is a list: 256 rows of eight steps in front of
 # one pass over the data.  Long inputs pay for it once and short ones
 # were never the point.
-func crc32(data: list(long)) -> long:
+func crc32(data: list(byte)) -> long:
     var table: list(long) = []
     for entry in range(0, 256):
         var row = entry
@@ -142,27 +107,33 @@ func crc32(data: list(long)) -> long:
 # every field in every structure below goes in and comes out this way,
 # and nothing in an archive is signed.
 
-private func read_u16(data: list(long), at: long) -> long!:
+private func read_u16(data: list(byte), at: long) -> long!:
     if at < 0 or at + 2 > len(data):
         error("zip: the archive is truncated")
     return data[at] | data[at + 1] << 8
 
-private func read_u32(data: list(long), at: long) -> long!:
+# **The widths are written out here, and they have to be.**  A `byte`
+# is storage, so an operator widens it to `int` (docs/TYPES.md D5) —
+# and `255 << 24` at `int` lands in the sign bit.  A `u16` field is
+# safe at that width and a `u32` field is not, so the four bytes of one
+# are lifted to `long` before they are shifted.  Nothing above this
+# line can tell, which is exactly why it is said here.
+private func read_u32(data: list(byte), at: long) -> long!:
     if at < 0 or at + 4 > len(data):
         error("zip: the archive is truncated")
-    return data[at] | data[at + 1] << 8 | data[at + 2] << 16 | data[at + 3] << 24
+    return long(data[at]) | long(data[at + 1]) << 8 | long(data[at + 2]) << 16 | long(data[at + 3]) << 24
 
-private func put_u16(out: list(long), value: long):
-    out.append(value & 0xFF)
-    out.append(value >> 8 & 0xFF)
+private func put_u16(out: list(byte), value: long):
+    out.append(byte(value & 0xFF))
+    out.append(byte(value >> 8 & 0xFF))
 
-private func put_u32(out: list(long), value: long):
-    out.append(value & 0xFF)
-    out.append(value >> 8 & 0xFF)
-    out.append(value >> 16 & 0xFF)
-    out.append(value >> 24 & 0xFF)
+private func put_u32(out: list(byte), value: long):
+    out.append(byte(value & 0xFF))
+    out.append(byte(value >> 8 & 0xFF))
+    out.append(byte(value >> 16 & 0xFF))
+    out.append(byte(value >> 24 & 0xFF))
 
-private func put_text(out: list(long), content: string):
+private func put_text(out: list(byte), content: string):
     for at in range(0, len(content)):
         out.append(content.byte_at(at))
 
@@ -233,7 +204,7 @@ struct Entry:
 # exactly the end of the archive.  Searching backwards finds the last
 # candidate first, which is the outer one when a comment contains a
 # whole archive.
-private func end_record(archive: list(long)) -> long!:
+private func end_record(archive: list(byte)) -> long!:
     let total = len(archive)
     if total < 22:
         error("zip: not an archive (only " + string(total) + " bytes)")
@@ -254,7 +225,7 @@ private func end_record(archive: list(long)) -> long!:
 # in the order it lists them — which APPNOTE 4.4.1.3 says need not be
 # the order the entries appear in.  The contents are not touched:
 # this reads the table, and `extract` reads an entry.
-func entries(archive: list(long)) -> list(Entry)!:
+func entries(archive: list(byte)) -> list(Entry)!:
     let record = try end_record(archive)
     let count = try read_u16(archive, record + 10)
     let size = try read_u32(archive, record + 12)
@@ -288,9 +259,10 @@ func entries(archive: list(long)) -> list(Entry)!:
         if at + 46 + name_length > len(archive):
             error("zip: entry " + string(index + 1) + " names more than the archive holds")
         let raw = archive[at + 46:at + 46 + name_length]
-        var name = ""
-        name = text(raw) catch:
+        let read_name = text(raw)
+        if read_name == none:
             error("zip: entry " + string(index + 1) + " has a name that is not text")
+        let name = read_name
         found.append(Entry(path = name, method = method, checksum = checksum, packed_size = packed, plain_size = plain, header_at = header))
         at += 46 + name_length + extra_length + comment_length
     return found
@@ -304,7 +276,7 @@ func entries(archive: list(long)) -> list(Entry)!:
 # is the one 4.4.7 and 4.4.8 require to be right.  So an entry
 # written by a program that could not seek reads like any other, and
 # the data descriptor behind the data is never looked at.
-func extract(archive: list(long), entry: Entry) -> list(long)!:
+func extract(archive: list(byte), entry: Entry) -> list(byte)!:
     let at = entry.header_at
     let signature = try read_u32(archive, at)
     if signature != 0x0403_4B50:
@@ -329,7 +301,7 @@ func extract(archive: list(long), entry: Entry) -> list(long)!:
             try verify(entry, plain)
             return plain
 
-private func verify(entry: Entry, plain: list(long)) -> !:
+private func verify(entry: Entry, plain: list(byte)) -> !:
     if len(plain) != entry.plain_size:
         error("zip: " + entry.path + " is " + string(len(plain)) + " bytes, not the " + string(entry.plain_size) + " the archive claims")
     if crc32(plain) != entry.checksum:
@@ -341,12 +313,12 @@ private func verify(entry: Entry, plain: list(long)) -> !:
 # `finish` answers the bytes.  Made by `zip.writer()` and owned by
 # the binding that received it, like any other object.
 struct Writer:
-    private out: list(long)
+    private out: list(byte)
     private written: list(Entry)
 
     # Store one entry.  `compress` deflates it and keeps whichever of
     # the two is smaller, so an entry never grows by being compressed.
-    func add(self, name: string, data: list(long), compress: bool = false) -> !:
+    func add(self, name: string, data: list(byte), compress: bool = false) -> !:
         if len(name) == 0:
             error("zip: an entry needs a name")
         if len(name) > 65535:
@@ -364,7 +336,7 @@ struct Writer:
         self.put_entry(name, Method.stored, checksum, len(data), data)
 
     # The local file header, APPNOTE 4.3.7, field for field.
-    private func put_entry(self, name: string, method: Method, checksum: long, plain_size: long, packed: list(long)):
+    private func put_entry(self, name: string, method: Method, checksum: long, plain_size: long, packed: list(byte)):
         let header = len(self.out)
         put_u32(self.out, 0x0403_4B50)
         put_u16(self.out, version_for(method))
@@ -384,8 +356,8 @@ struct Writer:
 
     # The whole archive: everything added, then the central directory
     # over it.  A fresh list every time, so the writer stays usable.
-    func finish(self) -> list(long):
-        var archive: list(long) = []
+    func finish(self) -> list(byte):
+        var archive = new list(byte)
         for value in self.out:
             archive.append(value)
         let directory = len(archive)
@@ -430,7 +402,7 @@ struct Writer:
 
 # A new, empty archive.
 func writer() -> Writer:
-    return Writer(out = new list(long), written = new list(Entry))
+    return Writer(out = new list(byte), written = new list(Entry))
 
 # The lowest version that can read an entry, APPNOTE 4.4.3.2: 1.0 for
 # a stored file, 2.0 for a deflated one, spelled the way 4.4.2.3
@@ -541,7 +513,7 @@ struct Stream:
     # its own least significant bit — so this is the order for
     # BFINAL, BTYPE, LEN, HLIT and every extra-bits field, and
     # `decode` assembles a Huffman code the other way round.
-    private func take(var self, data: list(long), count: long) -> long!:
+    private func take(var self, data: list(byte), count: long) -> long!:
         var value: long = 0
         var taken: long = 0
         while taken < count:
@@ -560,7 +532,7 @@ struct Stream:
     # so far is compared against the run of codes of that length,
     # which is what §3.2.2's "shorter codes lexicographically precede
     # longer codes" means when you read rather than write.
-    private func decode(var self, data: list(long), counts: list(long), symbols: list(long)) -> long!:
+    private func decode(var self, data: list(byte), counts: list(long), symbols: list(long)) -> long!:
         var code: long = 0
         var first: long = 0
         var index: long = 0
@@ -578,7 +550,7 @@ struct Stream:
     # A stored block, RFC 1951 §3.2.4: "any bits of input up to the
     # next byte boundary are ignored", then LEN, then NLEN — the
     # one's complement of LEN — then LEN bytes as they are.
-    private func stored(var self, data: list(long), out: list(long)) -> !:
+    private func stored(var self, data: list(byte), out: list(byte)) -> !:
         self.position = (self.position + 7) >> 3 << 3
         let at = self.position >> 3
         if at + 4 > len(data):
@@ -600,7 +572,7 @@ struct Stream:
     # §3.2.3's <length 5, distance 2> over X,Y giving X,Y,X,Y,X — so
     # the copy reads the output one byte at a time rather than
     # slicing it.
-    private func codes(var self, data: list(long), out: list(long), lit_counts: list(long), lit_symbols: list(long), dist_counts: list(long), dist_symbols: list(long)) -> !:
+    private func codes(var self, data: list(byte), out: list(byte), lit_counts: list(long), lit_symbols: list(long), dist_counts: list(long), dist_symbols: list(long)) -> !:
         let lengths = length_bases()
         let length_bits = length_extras()
         let distances = distance_bases()
@@ -608,7 +580,7 @@ struct Stream:
         while true:
             let symbol = try self.decode(data, lit_counts, lit_symbols)
             if symbol < 256:
-                out.append(symbol)
+                out.append(byte(symbol))
             elif symbol == 256:
                 return
             else:
@@ -633,7 +605,7 @@ struct Stream:
     # 286-287 and distance codes 30-31 never occur in a stream and are
     # built anyway, because the RFC says they "participate in the code
     # construction" — leaving them out would shift every code.
-    private func fixed(var self, data: list(long), out: list(long)) -> !:
+    private func fixed(var self, data: list(byte), out: list(byte)) -> !:
         var lengths: list(long) = []
         for symbol in range(0, 144):
             lengths.append(8)
@@ -662,7 +634,7 @@ struct Stream:
     # repeat; 16 repeats the previous length, and because the two
     # alphabets are "a single sequence of HLIT + HDIST + 258 values"
     # a repeat may cross from one into the other.
-    private func dynamic(var self, data: list(long), out: list(long)) -> !:
+    private func dynamic(var self, data: list(byte), out: list(byte)) -> !:
         let literal_bits = try self.take(data, 5)
         let distance_count_bits = try self.take(data, 5)
         let table_bits = try self.take(data, 4)
@@ -723,9 +695,9 @@ struct Stream:
 # with no zlib or gzip wrapper around it, which is what a ZIP entry
 # holds.  Damaged input is an error, never a trap: the bytes are the
 # world's, not the program's.
-func inflate(data: list(long)) -> list(long)!:
+func inflate(data: list(byte)) -> list(byte)!:
     var reader = Stream(position = 0)
-    var out: list(long) = []
+    var out = new list(byte)
     var last: long = 0
     while last == 0:
         last = try reader.take(data, 1)
@@ -750,25 +722,25 @@ struct Packer:
     private held: long
     private count: long
 
-    private func put(var self, out: list(long), value: long, count: long):
+    private func put(var self, out: list(byte), value: long, count: long):
         var bits = self.held | value << self.count
         var have = self.count + count
         while have >= 8:
-            out.append(bits & 0xFF)
+            out.append(byte(bits & 0xFF))
             bits = bits >> 8
             have -= 8
         self.held = bits
         self.count = have
 
-    private func put_code(var self, out: list(long), code: long, count: long):
+    private func put_code(var self, out: list(byte), code: long, count: long):
         var reversed: long = 0
         for step in range(0, count):
             reversed = reversed << 1 | code >> step & 1
         self.put(out, reversed, count)
 
-    private func flush(var self, out: list(long)):
+    private func flush(var self, out: list(byte)):
         if self.count > 0:
-            out.append(self.held & 0xFF)
+            out.append(byte(self.held & 0xFF))
             self.held = 0
             self.count = 0
 
@@ -798,8 +770,8 @@ private func fixed_code(symbol: long) -> long:
 # encoder with a bounded chain search is doing.
 # Compression cannot fail — worst case every byte goes out as a
 # literal — so this answers bytes rather than an error.
-func deflate(data: list(long)) -> list(long):
-    var out: list(long) = []
+func deflate(data: list(byte)) -> list(byte):
+    var out = new list(byte)
     var packer = Packer(held = 0, count = 0)
     packer.put(out, 1, 1)
     packer.put(out, 1, 2)
@@ -855,3 +827,28 @@ func deflate(data: list(long)) -> list(long):
     packer.put_code(out, fixed_code(256), fixed_bits(256))
     packer.flush(out)
     return out
+
+# --- archives on disk -------------------------------------------------
+#
+# **This is the section this module was written for and could not
+# have** (docs/BYTES.md).  Everything above takes bytes and answers
+# bytes, deliberately — a container format has no business deciding
+# where its bytes live — but until a Luce program could read a file
+# that is not text, "takes bytes" meant "takes bytes somebody computed",
+# and no real archive could reach it.  Two lines each, now, over
+# `std.files`.
+
+# The bytes of an archive on disk.  A convenience, and the only thing
+# in this module that touches the world; `entries` and `extract` take
+# what it answers.
+func read(path: string) -> list(byte)!:
+    return try files.read_bytes(path)
+
+# Write an archive to disk.  Takes what `Writer.finish` answers, so
+# building one and saving it is two sentences:
+#
+#     var w = zip.writer()
+#     try w.add("a.txt", zip.bytes("hello\n"))
+#     try zip.write("out.zip", w.finish())
+func write(path: string, archive: list(byte)) -> !:
+    try files.write_bytes(path, archive)

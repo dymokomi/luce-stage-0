@@ -176,6 +176,45 @@ so an unannotated `1.0 / 3.0` is a `float` and nine digits are enough
 to name it again; the `double` needs sixteen. Neither is rounded for
 display — both are exact descriptions of different numbers.
 
+## Bytes
+
+| Signature | Notes |
+|---|---|
+| `strings.to_bytes(s) -> list(byte)` | the string's bytes; total, because a string always has some |
+| `strings.from_bytes(xs) -> string?` | those bytes as text, or absent when they are not valid UTF-8 |
+
+The asymmetry is the whole content of the pair. **One direction cannot
+fail and the other is a parse.** A `string` is already valid UTF-8, so
+taking its bytes is a reading of something that is certainly there;
+handing bytes back is a claim about them, and the claim can be false.
+
+`from_bytes` answers `string?` and not `string!` for the reason
+[`parse_int`](/ref/builtins/) does: "not UTF-8" is the same reason
+every time, and a message that says it adds nothing a reader did not
+already know from the name.
+
+```luce run
+import std.strings
+
+func main():
+    let bytes = strings.to_bytes("héllo")
+    print(string(len(bytes)))
+    print(strings.from_bytes(bytes) else "(not text)")
+    var broken = new list(byte)
+    broken.append(byte(0xFF))
+    print(strings.from_bytes(broken) else "(not text)")
+```
+
+```output
+6
+héllo
+(not text)
+```
+
+Six, not five: `len` counts bytes on both sides of the conversion, and
+`é` is two of them. The `list(byte)` costs one byte an element, so
+carrying a file's contents around as bytes costs what the file costs.
+
 ## Why this module is fast enough to stay in Luce
 
 Two primitives carry the weight. `find` locates a needle's first

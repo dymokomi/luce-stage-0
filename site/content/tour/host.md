@@ -87,6 +87,71 @@ close.
 
 Paths resolve relative to the current directory.
 
+## Bytes, and a handle that closes itself
+
+Everything above is *text*, and a `string` is valid UTF-8 by
+construction — so `files.read` on a JPEG answers no, honestly, because
+it could not read it *as a string*. Underneath is a byte channel that
+has no opinion about encoding.
+
+```luce run
+import std.files
+import std.strings
+
+func main() -> !:
+    var bytes = new list(byte)
+    bytes.append(byte(0x89))
+    bytes.append(byte(0x50))
+    bytes.append(byte(0x00))
+    try files.write_bytes("image.bin", bytes)
+
+    let back = try files.read_bytes("image.bin")
+    print(f"{len(back)} bytes")
+    print(strings.from_bytes(back) else "(not text)")
+    print(files.read("image.bin") catch "(not text as a string either)")
+    try files.delete("image.bin")
+```
+
+```output
+3 bytes
+(not text)
+(not text as a string either)
+```
+
+`files.open(path)` answers a [`file`](/ref/types/#file), and a file is
+a **scope-owned resource**: the binding that received it owns it, the
+end of that scope closes it, `free(f)` closes it early, and using one
+after it is closed traps `use_after_free` — because it is the same
+mistake as any other use after free.
+
+There is deliberately no `close`. A file you have to remember to close
+is a file somebody will not, and [scope ownership](/ref/ownership/)
+already knows where a name's life ends.
+
+```luce run
+import std.files
+
+func main() -> !:
+    try files.write("stock.txt", "fig\npear\nplum\n")
+    var f = try files.open("stock.txt")
+    var buffer = new array(byte, 4)
+    print(string(try f.read(buffer)))
+    print(string(try f.read(buffer)))
+    print(string(int(buffer[0])))
+```
+
+```output
+4
+4
+112
+```
+
+A read fills the buffer and answers **how many bytes landed**; zero is
+the end of the file, and short is ordinary rather than a refusal. A
+write says the same thing in the other direction. That is the C shape
+on purpose — it is what a socket will want too — and
+`files.read_bytes` and its siblings are the loop over it, written once.
+
 ## Standard input, standard error, the clock
 
 Three more services, and each one's shape is a decision about what

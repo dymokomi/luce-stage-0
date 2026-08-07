@@ -3429,6 +3429,50 @@ test "luce.sema.construct: a function-namespace struct has no value fields" {
 // luce.sema.new — distinct paths
 // ---------------------------------------------------------------------------
 
+// The two sentences the byte channel adds (docs/BYTES.md R5).  A file
+// is opened, never made — a handle with no file behind it is the one
+// state the type must not hold — and it cannot be copied, because one
+// open file cannot have two owners.  Both are refused by name in stage
+// 4 rather than met as a trap; the runtime and the verifier stand
+// behind them for IR that arrived some other way.
+test "luce.sema.new: a file is opened, not made" {
+    try expectRejected("func main():\n    var f = new file\n", "luce.sema.new");
+}
+
+test "luce.sema.own: a file cannot be copied" {
+    try expectRejected(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    var f = try files.open("notes.txt")
+        \\    let twin = copy f
+        \\
+    , "luce.sema.own");
+}
+
+test "luce.sema.method: a file has read, write and flush and nothing else" {
+    try expectRejected(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    var f = try files.open("notes.txt")
+        \\    f.close()
+        \\
+    , "luce.sema.method");
+}
+
+test "luce.sema.fallible: a handle's read is fallible like every file service" {
+    try expectRejected(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    var f = try files.open("notes.txt")
+        \\    var buffer = new array(byte, 4)
+        \\    let got = f.read(buffer)
+        \\
+    , "luce.sema.fallible");
+}
+
 test "luce.sema.new: new array takes one to four dimension sizes" {
     try expectRejected("func main():\n    var a = new array(long, 1, 2, 3, 4, 5)\n", "luce.sema.new");
 }
@@ -4634,6 +4678,10 @@ test "luce.sema.struct: a cycle through a wide graph is still found" {
 
 test "luce.sema.host: file_read is gated" {
     try expectRejected("func main():\n    let a = file_read(\"x\")\n", "luce.sema.host");
+}
+
+test "luce.sema.host: file_open is gated" {
+    try expectRejected("func main():\n    let f = file_open(\"x\", 0)\n", "luce.sema.host");
 }
 
 test "luce.sema.host: key_read is gated" {

@@ -64,7 +64,7 @@ pub const magic = "LUCE";
 /// `heap`, which are the other two types that index a table, so
 /// `optional` renumbers.  Safe for the reason 22's note gives and no
 /// other: the version moved with it.
-pub const format_version: u32 = 28;
+pub const format_version: u32 = 29;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -172,7 +172,7 @@ const Writer = struct {
                 try self.valueType(shape.element);
                 try self.int(u8, shape.rank);
             },
-            .builder => {},
+            .builder, .file => {},
         }
     }
 
@@ -438,6 +438,7 @@ const Reader = struct {
                 .rank = try self.int(u8),
             } },
             .builder => .builder,
+            .file => .file,
         };
     }
 
@@ -1009,8 +1010,8 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // moved this number and left the hash alone.  A version bump is
     // still required for that, and this test is not what will remind
     // you.
-    try testing.expectEqual(@as(u32, 28), format_version);
-    try testing.expectEqual(@as(u64, 13566901066460038847), hasher.final());
+    try testing.expectEqual(@as(u32, 29), format_version);
+    try testing.expectEqual(@as(u64, 14490193926574754925), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

@@ -144,7 +144,21 @@ strings.join(parts, separator)   # list(string) -> string
 strings.pad_left(s, width)  strings.pad_right(s, width)
 strings.format_float(x, decimals)    # fixed-point: "2.50"; rounds
                                      # half away from zero
+
+strings.to_bytes(s)              # list(byte) — total; a string always
+                                 # has bytes
+strings.from_bytes(xs)           # string? — absent when the bytes are
+                                 # not valid UTF-8
 ```
+
+The asymmetry of the last pair is its whole content (docs/BYTES.md R3).
+A `string` is already valid UTF-8, so taking its bytes is a reading of
+something certainly there; handing bytes back is a *claim* about them,
+and it can be false.  `from_bytes` answers `string?` and not `string!`
+for the reason `parse_int` does: "not UTF-8" is the same reason every
+time, and a carried message adds nothing the name did not.  The
+validator behind it is `libluce_rt`'s — the same one `files.read` uses
+— so there is one answer to what "not text" means.
 
 ## files
 
@@ -197,6 +211,43 @@ Deleting a file that is not there answers `io_failed` rather than
 succeeding quietly — the host says `yes` or `no` and cannot tell
 "absent" from "refused" (`abi.Answer`), so inventing the distinction
 would be inventing it.
+
+### The byte channel (docs/BYTES.md)
+
+The same files, seen as bytes.  Nothing here asks whether what it
+carries is text; that is what `strings.from_bytes` is for, and it is
+why a JPEG reads as happily as a note.
+
+```text
+files.open(path)                 # file! — read, from the start
+files.create(path)               # file! — write, creating and emptying
+files.append_to(path)            # file! — write, at the end
+files.read_bytes(path)           # list(byte)!
+files.write_bytes(path, bytes)   # !
+files.append_bytes(path, bytes)  # !
+```
+
+`open`, `create` and `append_to` answer a **`file`**, which is a
+scope-owned resource: the binding that received it owns it, the end of
+that scope closes it, `free(f)` closes it early, `give` and `return`
+move it, and using one after it is closed traps `use_after_free`,
+because it is the same mistake.  There is deliberately no `close` — a
+file you have to remember to close is a file somebody will not, and
+the compiler already knows where a name's life ends.
+
+The handle's own three are `f.read(buffer)`, `f.write(buffer, count)`
+and `f.flush()`, all fallible.  The buffer is an `array(byte, n)` the
+caller owns; a read fills it and answers **how many bytes landed**,
+where zero is the end of the file, and a write answers how many landed,
+which may be fewer than were offered.  That is the C shape on purpose:
+short is ordinary, the caller loops, and the same three serve a socket
+when `std.network` arrives.
+
+`read_bytes`, `write_bytes` and `append_bytes` are those loops written
+once — the Go layering, where `os.ReadFile` is a loop over `Read`.
+`files.read` and `files.write` are defined over the same channel, with
+the runtime's own UTF-8 check on the reading side, so "not text" means
+one thing wherever a program runs.
 
 ---
 
@@ -313,41 +364,48 @@ complemented at the end, exactly as APPNOTE 4.4.7 says.
 ```text
 import std.zip
 
-zip.bytes(content)               # string -> list(long), the UTF-8 bytes
-zip.text(data)                   # list(long) -> string!, or an error
+zip.read(path)                   # list(byte)! — an archive off the disk
+zip.write(path, archive)         # ! — what writer.finish() answered
+
+zip.bytes(content)               # string -> list(byte), the UTF-8 bytes
+zip.text(data)                   # list(byte) -> string?, absent when
+                                 # the bytes are not text
 
 zip.crc32(data)                  # long — crc32("123456789") is 3421780262
 
 zip.entries(archive)             # list(Entry)! — the central directory
-zip.extract(archive, entry)      # list(long)! — checked against size and CRC
+zip.extract(archive, entry)      # list(byte)! — checked against size and CRC
   entry.name()   entry.size()   entry.packed()
   entry.crc()    entry.deflated()
 
 zip.writer()                     # Writer — a new, empty archive
   writer.add(name, data, compress = false)   # !
-  writer.finish()                            # list(long), fresh each call
+  writer.finish()                            # list(byte), fresh each call
 
-zip.inflate(data)                # list(long)! — stored, fixed and dynamic
-zip.deflate(data)                # list(long) — one fixed-Huffman block
+zip.inflate(data)                # list(byte)! — stored, fixed and dynamic
+zip.deflate(data)                # list(byte) — one fixed-Huffman block
 ```
 
-**Bytes are a `list(long)`, one byte to an element.**  Luce has a
-`byte` and a checked `byte(x)`, but a `list` is boxed whatever its
-element type (docs/TYPES.md §6): a `list(byte)` costs the same eight
-bytes an element *and* a conversion at every store.  The packed one is
-`array(byte, n)`, which cannot grow.  There is no growable packed byte
-buffer in the language, so the honest choice is the width the
-arithmetic happens at.
+**Bytes are a `list(byte)`, one byte to an element** — and one byte of
+memory, since `list` gave up the boxed slot (docs/BYTES.md R1).  This
+module is where that cost was first measured: it used to read "bytes
+are a `list(long)`", because a `list(byte)` was twenty-four bytes an
+element *and* a conversion at every store, so the honest choice was the
+width the arithmetic happens at.  The buffers are a quarter of what
+they were and not a line of the algorithms changed.
 
-**The host cannot hand a program a file's bytes, and cannot take
-them.**  `file_read` answers a `string`; a string is valid UTF-8 by
-construction, so the host refuses a file that is not text and no
-archive worth the name is text.  That is a gap in the boundary rather
-than in this module — every function here works on any bytes it is
-given — and it is the one thing standing between `std.zip` and
-`unzip`.  Until it closes, the bytes come from a program that computed
-them, from `zip.bytes` over text the host *could* read, or from a
-module of literals.
+One thing the narrower element made explicit rather than changed: a
+`byte` widens to `int` in an operator (docs/TYPES.md D5), so a 32-bit
+field's top byte would shift into a sign bit.  `read_u32` lifts its
+four bytes to `long` and says so; everything else fits.
+
+**An archive on disk is reachable.**  `zip.read(path)` and
+`zip.write(path, archive)` are the only two things here that touch the
+world, and they are what the module was written for: until a Luce
+program could read a file that was not text, "takes bytes" meant
+"takes bytes somebody computed", and no real archive could reach any
+of it.  Everything between still takes bytes and answers bytes, which
+is why the two doors are one line each.
 
 Two clauses a conforming reader has to tolerate are tolerated: an
 entry written without seeking, whose local header carries zeros where

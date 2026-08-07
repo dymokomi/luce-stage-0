@@ -60,7 +60,16 @@ pub const retired = @import("runtime/heap.zig").retired;
 /// Where an object row's fields sit, for the one reader that cannot
 /// call a function to ask: generated code walking an Array inline.
 pub const layout = @import("runtime/heap.zig").layout;
-pub const max_array_elements = @import("runtime/heap.zig").max_array_elements;
+/// The most elements a container of one element kind may hold — the
+/// per-width ceilings docs/VECTOR.md's proof needs, in place of the
+/// flat element cap that used to stand here (docs/BYTES.md).
+pub const maxElements = @import("runtime/heap.zig").maxElements;
+
+/// File handles: the host's byte channel, the handle's own operations,
+/// and the whole-file text conveniences defined over them
+/// (docs/BYTES.md).  The oracle reaches these directly; a compiled
+/// artifact reaches the same bodies through `exports.zig`.
+pub const files = @import("runtime/files.zig");
 
 pub const Tag = @import("runtime/value.zig").Tag;
 pub const Value = @import("runtime/value.zig").Value;

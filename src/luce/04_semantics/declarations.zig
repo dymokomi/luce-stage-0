@@ -278,7 +278,7 @@ pub const Analyzer = struct {
                 // A map key is long or string, never a struct.
                 .map => |pair| self.privateMentioned(pair.value),
                 .array => |shape| self.privateMentioned(shape.element),
-                .builder => null,
+                .builder, .file => null,
             },
             .optional => |payload| self.privateMentioned(payload.asType()),
             else => null,
@@ -376,7 +376,7 @@ pub const Analyzer = struct {
                     .float => .float,
                     .double => .double,
                     .string => .string,
-                    .list, .map, .array, .builder => unreachable, // answered by the outer switch
+                    .list, .map, .array, .builder, .file => unreachable, // answered by the outer switch
                 };
             },
             .list => {
@@ -437,6 +437,13 @@ pub const Analyzer = struct {
                     return null;
                 }
                 return try self.internHeapType(.builder);
+            },
+            .file => {
+                if (written.arguments.len != 0 or written.wildcards != 0) {
+                    try self.fail("luce.sema.type", written.span, "file takes no type arguments", .{});
+                    return null;
+                }
+                return try self.internHeapType(.file);
             },
         };
         if (written.arguments.len != 0 or written.wildcards != 0) {
@@ -1848,7 +1855,7 @@ pub const Analyzer = struct {
             .half => .half,
             .float => .float,
             .double => .double,
-            .boolean, .string, .list, .map, .array, .builder => unreachable, // answered above
+            .boolean, .string, .list, .map, .array, .builder, .file => unreachable, // answered above
         };
         if (!operand.value_type.isNumeric()) {
             return self.constantError(call.span, "{s}() converts a number", .{call.callee});
