@@ -19,10 +19,11 @@ hand-written `index.html`.
 
 ## Deploying
 
-All three land on the same server: a Lightsail instance serving each
-static root with Caddy, which takes the certificates itself.  There is
-no infrastructure-as-code for it and no record of the Caddy
-configuration here.
+All three land on the same server, one host serving each static root
+with Caddy, which takes the certificates itself.  There is no
+infrastructure-as-code for it and no record of the Caddy configuration
+here — moving a site means editing the one line that names the host
+and knowing where its certificate comes from.
 
 That shared half — the host, the key, the `rsync --delete` and the
 `curl` that checks the live URL afterwards — is **`deploy/publish.sh`**,

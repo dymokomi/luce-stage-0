@@ -18,9 +18,9 @@
 # than an environment variable, because it is the caller's business:
 # each site's deploy.sh names its own root and its own override.
 #
-# **The default target is a single host** — a Lightsail instance
-# serving each static root with Caddy, which takes the certificates
-# itself.  There is no infrastructure-as-code for it, no second host
+# **The default target is a single host** — one machine serving each
+# static root with Caddy, which takes the certificates itself.  There
+# is no infrastructure-as-code for it, no second host
 # and no record of the Caddy configuration in this repository; moving
 # a site means editing the line below and knowing where the
 # certificate comes from.  Written down because it is the one thing
