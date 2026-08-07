@@ -626,6 +626,25 @@ pub const Machine = struct {
         }
     }
 
+    /// The element type of the List an intrinsic answers, read off the
+    /// program's type table.
+    ///
+    /// `m.keys()` and `m.values()` build a list out of values the
+    /// runtime is holding, and the *kind* its cells are stored at is a
+    /// fact of the program's element type rather than of the builder
+    /// (`runtime/containers.zig`'s `emptyList`).  The oracle knows the
+    /// type table directly, where compiled code carries the zero to
+    /// the call; both ask the same question of the same table.
+    fn answeredElement(self: *Machine, site: Site) types.Type {
+        const answered = self.program.functions[site.function].result_types[site.instruction];
+        return switch (self.program.heap_types[answered.heap]) {
+            .list => |element| element,
+            // The verifier admits nothing else here: keys and values
+            // answer a List and only a List.
+            .map, .array, .builder, .file => unreachable,
+        };
+    }
+
     /// The zero value a fresh local or array element carries, per type.
     pub fn zeroValue(self: *Machine, written: types.Type) error{OutOfMemory}!RuntimeValue {
         // An enum-typed slot starts at the enum's **first declared
@@ -897,8 +916,16 @@ pub const Machine = struct {
                 try containers.clear(&self.runtime, registers[arguments[0]]);
                 return .none;
             },
-            .map_keys => return containers.mapKeys(&self.runtime, registers[arguments[0]]),
-            .map_values => return containers.mapValues(&self.runtime, registers[arguments[0]]),
+            .map_keys => return containers.mapKeys(
+                &self.runtime,
+                registers[arguments[0]],
+                try self.zeroValue(self.answeredElement(site)),
+            ),
+            .map_values => return containers.mapValues(
+                &self.runtime,
+                registers[arguments[0]],
+                try self.zeroValue(self.answeredElement(site)),
+            ),
             .map_get => return containers.mapGet(
                 &self.runtime,
                 registers[arguments[0]],

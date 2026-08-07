@@ -50,10 +50,15 @@ language question, and one benchmark row.**
 ## What is measured
 
 Against C twins at `-O3 -march=native`, on one host, on the
-floor-subtracted `compute` column: **0.77× to 1.06× on loops, math,
-arrays, matrix multiply and statistics**, and **2.73× on strings**.
-That last row is the one genuinely behind, and it is allocation-bound
-rather than code-generation-bound.
+floor-subtracted `compute` column: **0.78× to 1.06× on six of the nine
+benchmarks** — loops, math, arrays, both matrix multiplies and
+statistics. Three are behind, for three different reasons: **2.67× on
+strings**, which is allocation-bound rather than
+code-generation-bound; **2.60× on lists**, which is `append` and
+nothing else, a list's length living in the object's row where C's
+count lives in a register; and **8.66× on the 32-bit array
+reduction**, which is the price of checking every integer add — the
+loop cannot be reassociated, so it cannot be vectorized.
 [The table and its caveats](/guide/performance/).
 
 Memory, on a churn loop that retains nothing: **flat**, where it used

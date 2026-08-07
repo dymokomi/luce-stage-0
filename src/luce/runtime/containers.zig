@@ -348,9 +348,12 @@ pub fn clear(runtime: *Runtime, target: Value) Error!void {
 /// `m.keys()` — a fresh list of the keys.  Keys are long or String, so
 /// there is no object to own; a String key's bytes belong to the map's
 /// entry, so the list takes its own copy (docs/STRINGS.md).
-pub fn mapKeys(runtime: *Runtime, target: Value) Error!Value {
+///
+/// `zero` is the key type's zero, here for the reason `newList` takes
+/// one: it names the *kind* the elements are stored at (`emptyList`).
+pub fn mapKeys(runtime: *Runtime, target: Value, zero: Value) Error!Value {
     const entries = (try runtime.resolve(target)).data.map.entries.items;
-    var listed = boxed_list;
+    var listed = emptyList(zero);
     errdefer dropBuilt(runtime, &listed);
     for (entries) |entry| {
         try listed.append(runtime.objects, try runtime.ownValue(entry.key));
@@ -358,19 +361,28 @@ pub fn mapKeys(runtime: *Runtime, target: Value) Error!Value {
     return runtime.attachList(listed);
 }
 
-/// A list under construction whose elements are the boxed slot.
+/// A list under construction, storing its elements the way the
+/// program's element type says — the zero's tag *is* that type
+/// (`Object.ElementKind.of`).
 ///
-/// **A list the runtime builds out of stored `Value`s is a `.value`
-/// list, whatever the program's element type is** (docs/BYTES.md R1).
-/// Packing is what the kind buys, and the kind is a property of the
-/// *storage*, not of the program: a `.value` cell holds a long or a
-/// String equally well and hands back exactly what was put in it, so
-/// the boxed run is always correct and only ever costs memory.  What
-/// the runtime cannot do here is know the element type — a map's
-/// entries are tagged values and `dir_list`'s names are text — so it
-/// takes the shape that needs no type to be right, and `new list(T)`,
-/// which does know, packs.
-const boxed_list: heap.Object.Elements = .{ .kind = .value };
+/// **A `list(T)` is packed whoever built it** (docs/BYTES.md R1).  A
+/// `.value` cell would hold a long or a String equally well and hand
+/// back exactly what was put in it, so a boxed run is never *wrong*;
+/// what it is is a different storage for the same type depending on
+/// which code made the list.  Compiled code reads a list's cells
+/// inline (docs/CODEGEN.md), and it can only do that if the kind is a
+/// fact of the *type* rather than of the builder — so every
+/// list-producing operation here takes the element zero and packs
+/// exactly as `new list(T)` does, and the ones that can only ever
+/// produce a `List(String)` say `.value` in full below, which is what
+/// a String's zero would have said.
+fn emptyList(zero: Value) heap.Object.Elements {
+    return .{ .kind = .of(zero) };
+}
+
+/// The one element type that needs no parameter: a String, which is
+/// stored boxed because its length is not a fact of the type.
+const text_list: heap.Object.Elements = .{ .kind = .value };
 
 /// Give back a half-built run and the storage its elements own.
 fn dropBuilt(runtime: *Runtime, listed: *heap.Object.Elements) void {
@@ -384,7 +396,7 @@ fn dropBuilt(runtime: *Runtime, listed: *heap.Object.Elements) void {
 /// its own copy of every name.  Each engine reaches this with the
 /// shape its host handed over, and the list they build is the same.
 pub fn listOfText(runtime: *Runtime, names: []const []const u8) Error!Value {
-    var listed = boxed_list;
+    var listed = text_list;
     errdefer dropBuilt(runtime, &listed);
     try listed.ensureCapacity(runtime.objects, names.len);
     for (names) |name| {
@@ -402,7 +414,7 @@ pub fn listOfText(runtime: *Runtime, names: []const []const u8) Error!Value {
 /// empty directory, which is why the walk is written out rather than
 /// handed to a general splitter that would answer one empty name.
 pub fn listOfJoinedText(runtime: *Runtime, joined: []const u8) Error!Value {
-    var listed = boxed_list;
+    var listed = text_list;
     errdefer dropBuilt(runtime, &listed);
     var rest = joined;
     while (rest.len != 0) {
@@ -440,7 +452,7 @@ pub fn listOfArguments(
     context: ?*anyopaque,
     get: ?ArgumentFn,
 ) Error!Value {
-    var listed = boxed_list;
+    var listed = text_list;
     errdefer dropBuilt(runtime, &listed);
     if (get) |callback| {
         var index: i64 = 0;
@@ -459,13 +471,14 @@ pub fn listOfArguments(
 
 /// `m.values()` — the returned list independently owns its elements, so
 /// object values are deep-copied — two containers never own one object
-/// (S23, mirrors listSlice).
-pub fn mapValues(runtime: *Runtime, target: Value) Error!Value {
+/// (S23, mirrors listSlice).  `zero` is the value type's zero — see
+/// `mapKeys`.
+pub fn mapValues(runtime: *Runtime, target: Value, zero: Value) Error!Value {
     // The entries are read out before the loop: deepCopy allocates
     // objects, which moves the object table, and the map's own entry
     // buffer does not move with it.
     const entries = (try runtime.resolve(target)).data.map.entries.items;
-    var listed = boxed_list;
+    var listed = emptyList(zero);
     errdefer dropBuilt(runtime, &listed);
     for (entries) |entry| {
         const duplicate = try runtime.deepCopy(entry.value);

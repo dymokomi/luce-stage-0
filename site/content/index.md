@@ -41,10 +41,12 @@ that used to grow without bound now sits flat at about 1.8 MB.
 [The memory model](/guide/memory/).
 
 **Compiled code is at C's speed.** Against C twins built with
-`-O3 -march=native`, the same algorithms measure 0.77× to 1.06× on
-loops, math, arrays, matrix multiply and statistics. One row is not
-there: string processing measures 2.73×, and that is
-allocation-bound rather than code-generation-bound.
+`-O3 -march=native`, the same algorithms measure 0.78× to 1.06× on six
+of the nine benchmarks — loops, math, arrays, both matrix multiplies
+and statistics. Three are not there, and each says why: string
+processing at 2.67× is allocation-bound, lists at 2.60× is `append`
+alone, and a 32-bit integer reduction at 8.66× is the price of
+checking every add.
 [The numbers, and what they do not say](/guide/performance/).
 
 **Failure has three shapes, and they do not overlap.** A `T?` says

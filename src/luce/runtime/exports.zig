@@ -1039,12 +1039,17 @@ pub export fn luce_rt_clear(runtime: *Runtime, target: *const Value) callconv(.c
     return survived;
 }
 
+/// `zero` is the element zero of the list this answers, exactly as
+/// `luce_rt_new_list` takes one: it carries the *kind* the elements
+/// are stored at, and a `list(long)` is packed whether the program
+/// built it or `m.keys()` did (docs/BYTES.md R1).
 pub export fn luce_rt_map_keys(
     runtime: *Runtime,
     target: *const Value,
+    zero: *const Value,
     out: *Value,
 ) callconv(.c) i32 {
-    out.* = containers.mapKeys(runtime, target.*) catch |mistake|
+    out.* = containers.mapKeys(runtime, target.*, zero.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -1052,9 +1057,10 @@ pub export fn luce_rt_map_keys(
 pub export fn luce_rt_map_values(
     runtime: *Runtime,
     target: *const Value,
+    zero: *const Value,
     out: *Value,
 ) callconv(.c) i32 {
-    out.* = containers.mapValues(runtime, target.*) catch |mistake|
+    out.* = containers.mapValues(runtime, target.*, zero.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }

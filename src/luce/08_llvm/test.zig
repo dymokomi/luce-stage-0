@@ -129,11 +129,16 @@ test "floats, structs, and the host services all lower" {
 
 test "the runtime library is called, not reimplemented" {
     const gpa = std.testing.allocator;
+    // A Map, because a Map is the container that stays a call: a hash
+    // probe is genuinely call-worthy where an element load is not, and
+    // `len` of a List or an Array is generated inline (docs/CODEGEN.md).
     const rendered = (try render(
         \\func main():
         \\    let xs = new list(long)
+        \\    let counts = new map(string, long)
         \\    xs.append(1)
-        \\    print(string(len(xs)))
+        \\    print(string(len(counts)) + string(xs.pop()))
+        \\    free(counts)
         \\    free(xs)
         \\
     )).?;
@@ -141,7 +146,7 @@ test "the runtime library is called, not reimplemented" {
 
     for ([_][]const u8{
         "declare i32 @luce_rt_new_list",
-        "declare i32 @luce_rt_append",
+        "declare i32 @luce_rt_pop",
         "declare i32 @luce_rt_len",
         "declare i32 @luce_rt_str",
         "declare i32 @luce_rt_free",
@@ -247,10 +252,10 @@ test "every runtime declaration carries what the compiler knows about it" {
     // what proves the saying reaches the module.
     const rendered = (try render(
         \\func main():
-        \\    let xs = new list(long)
-        \\    xs.append(1)
-        \\    print(string(len(xs)) + string(xs[0]))
-        \\    free(xs)
+        \\    let counts = new map(string, long)
+        \\    counts["one"] = 1
+        \\    print(string(len(counts)) + string(counts["one"]))
+        \\    free(counts)
         \\
     )).?;
     defer gpa.free(rendered);

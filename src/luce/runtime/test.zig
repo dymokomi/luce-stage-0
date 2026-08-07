@@ -653,8 +653,41 @@ test "maps keep insertion order and answer for missing keys three ways" {
         containers.indexGet(runtime, held, &.{Value.ofString("c")}),
     );
 
-    const keys = try containers.mapKeys(runtime, held);
+    const keys = try containers.mapKeys(runtime, held, Value.ofString(""));
     try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, keys)).asLong());
+}
+
+test "a list the runtime builds is packed the way its element type says" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    // The whole of the inline path below rests on this: an element's
+    // storage width is a fact of the program's type, not of the code
+    // that happened to build the list (docs/BYTES.md R1).  A map of
+    // long to double answers two *packed* lists.
+    const held = try runtime.newMap();
+    try containers.indexSet(runtime, held, &.{Value.ofLong(7)}, Value.ofDouble(0.5));
+
+    const keys = try containers.mapKeys(runtime, held, Value.ofLong(0));
+    try testing.expectEqual(heap.Object.ElementKind.long, (try runtime.resolve(keys)).elements.kind);
+    try testing.expectEqual(@as(i64, 7), (try containers.indexGet(
+        runtime,
+        keys,
+        &.{Value.ofLong(0)},
+    )).asLong());
+
+    const values = try containers.mapValues(runtime, held, Value.ofDouble(0));
+    try testing.expectEqual(
+        heap.Object.ElementKind.double,
+        (try runtime.resolve(values)).elements.kind,
+    );
+    try testing.expectEqual(@as(f64, 0.5), (try containers.indexGet(
+        runtime,
+        values,
+        &.{Value.ofLong(0)},
+    )).asDouble());
 }
 
 test "arrays flatten multi-dimensional indices and refuse an oversized shape" {
@@ -738,12 +771,12 @@ test "compiled code's byte offsets find the fields they name" {
     try testing.expectEqual(@as(i64, 2), dims[0]);
     try testing.expectEqual(@as(i64, 3), dims[1]);
     try testing.expectEqual(@as(usize, 6), @as(*const usize, @ptrCast(@alignCast(
-        row + heap.layout.array_count,
+        row + heap.layout.elements_count,
     ))).*);
     // An `Array(double)` stores `f64`s, so the element is one load and
     // no unboxing — which is the whole reason the storage is typed.
     const elements: [*]const f64 = @ptrCast(@alignCast(@as(*const [*]const u8, @ptrCast(@alignCast(
-        row + heap.layout.array_elements,
+        row + heap.layout.elements_pointer,
     ))).*));
     try testing.expectEqual(@as(f64, 7.5), elements[1 * 3 + 2]);
 

@@ -1614,7 +1614,7 @@ const Body = struct {
     /// Arrays already resolved in the block being filled, and the axis
     /// lengths they carry.  Both are cleared at every block boundary
     /// and by any instruction `effects.viewStable` refuses.
-    views: std.ArrayList(ArrayView) = .empty,
+    views: std.ArrayList(ElementView) = .empty,
     view_bounds: std.ArrayList(Builder.Value) = .empty,
 
     /// The resolutions this function lifts out of its loops, and the
@@ -2468,37 +2468,61 @@ const Body = struct {
         return .{ run, try self.module.builder.intValue(.i64, of.len) };
     }
 
-    // -- Arrays, without the runtime call ---------------------------------
+    // -- Lists and Arrays, without the runtime call ------------------------
     //
-    // `a[i]`, `grid[r, c]`, and `len(a)` on an `Array` are generated
-    // here rather than called: the object table row, the bounds check,
-    // and the element load, inline.  A call cannot be: a boxed
-    // subscript is a store the loop cannot hoist, so the call stays
-    // pinned inside the loop however precisely it is described
-    // (docs/CODEGEN.md).
+    // `xs[i]`, `grid[r, c]`, `len(xs)` and `xs.append(v)` on a List or
+    // an Array are generated here rather than called: the object table
+    // row, the bounds check, and the element load, inline.  A call
+    // cannot be: a boxed subscript is a store the loop cannot hoist, so
+    // the call stays pinned inside the loop however precisely it is
+    // described (docs/CODEGEN.md).
     //
-    // Two facts make it sound.  The program already knows the target is
-    // an Array and what it holds — `heap_types` says so, statically —
-    // so the runtime's four-way switch on the object's kind has one
-    // arm left at compile time.  And an Array's `dims` and `elements`
-    // never move while it lives: only the row's generation changes,
-    // which is why this is the container the inline path starts with
-    // and a List, whose buffer moves under `append`, is still a call.
+    // Two facts make it sound.  The program already knows which
+    // container the target is and what it holds — `heap_types` says so,
+    // statically — so the runtime's four-way switch on the object's
+    // kind has one arm left at compile time; and the *kind* the
+    // elements are stored at is settled by the element type alone,
+    // whoever built the object (`runtime/containers.zig`'s `emptyList`),
+    // so a cell's width is a constant here.
+    //
+    // **A List's storage moves and an Array's does not**, and that is
+    // the whole difference between them.  An Array's `dims` and
+    // `elements` never move while it lives; a List's `elements` move
+    // under `append`, and its `count` moves with them.  So a resolved
+    // view is only ever reused across instructions that cannot move a
+    // buffer — `optimize.effects.viewStable`, which already answers
+    // `false` for `append_value`, `insert_value` and every call for
+    // exactly this reason, and which is what ends the block a view
+    // lives in.  Nothing here caches anything past that line.
     //
     // The offsets come from `runtime.layout`, measured from the Zig
     // types with `@offsetOf` and checked against a real `Runtime` by a
     // test beside them.
 
-    /// The shape of the Array a register holds, or null when it holds
-    /// anything else — a List, a Map, a Builder, or no object at all.
-    const ArrayShape = struct { element: types.Type, rank: u8 };
+    /// The shape of the List or Array a register holds, or null when it
+    /// holds anything else — a Map, a Builder, or no object at all.
+    const ElementShape = struct {
+        element: types.Type,
+        /// One for a List, which has a length and no other shape.
+        rank: u8,
+        /// Whether the storage can move under the program's feet.  A
+        /// List's does, under `append` and `insert`; an Array's never
+        /// does.  What reads it: `dim_size`, which is an Array's
+        /// question, and the append path, which is a List's.
+        growable: bool,
+    };
 
-    fn arrayShape(self: *Body, register: mir.Register) ?ArrayShape {
+    fn elementShape(self: *Body, register: mir.Register) ?ElementShape {
         const of = self.function.result_types[register];
         if (of != .heap) return null;
         return switch (self.module.program.heap_types[of.heap]) {
-            .array => |shape| .{ .element = shape.element, .rank = shape.rank },
-            .list, .map, .builder, .file => null,
+            .array => |shape| .{
+                .element = shape.element,
+                .rank = shape.rank,
+                .growable = false,
+            },
+            .list => |element| .{ .element = element, .rank = 1, .growable = true },
+            .map, .builder, .file => null,
         };
     }
 
@@ -2647,6 +2671,22 @@ const Body = struct {
         try self.wip.attachMetadata(stored.toValue(), .@"noalias", scopes.rows);
     }
 
+    /// A write to a row's own facts — there is exactly one, the count
+    /// an inline `append` bumps.  It carries the rows scope, so it
+    /// stops a row load being hoisted over it and does not stop an
+    /// element load.
+    fn rowStore(
+        self: *Body,
+        held: Builder.Value,
+        address: Builder.Value,
+        alignment: Builder.Alignment,
+    ) Error!void {
+        const stored = try self.wip.store(.normal, held, address, alignment);
+        const scopes = try self.module.aliasScopes();
+        try self.wip.attachMetadata(stored.toValue(), .@"alias.scope", scopes.rows);
+        try self.wip.attachMetadata(stored.toValue(), .@"noalias", scopes.elements);
+    }
+
     fn resolveRow(self: *Body, register: mir.Register) Error!Builder.Value {
         const builder = self.module.builder;
         const parts = try self.handleParts(self.produced[register].value);
@@ -2676,8 +2716,8 @@ const Body = struct {
         return row;
     }
 
-    /// One Array, resolved: the element base and one axis length per
-    /// rank, all as SSA values.
+    /// One List or Array, resolved: the element base and one axis
+    /// length per rank, all as SSA values.
     ///
     /// **Where the resolve happens is the whole point.**  Resolving at
     /// every access leaves four loads — the table base, the row's
@@ -2694,24 +2734,31 @@ const Body = struct {
     /// instruction it fires at today, because the block a view lives
     /// in ends at every instruction that could free anything
     /// (`effects.viewStable`).
-    const ArrayView = struct {
+    ///
+    /// That same line is what makes a view of a *List* sound, and it
+    /// is one sentence: a view dies at every instruction that could
+    /// move a buffer — every call, every append, every insert — which
+    /// is precisely the set `viewStable` already refuses.  Nothing is
+    /// carried across one.
+    const ElementView = struct {
         /// The MIR register whose handle this resolves.
         register: mir.Register,
-        /// `Object.array.dims.ptr`, or `.none` for a rank-1 array,
-        /// which never reads it: its one bound is `Object.array.count`,
-        /// a word in the row rather than a word behind a pointer in
-        /// the row.  That saved load is not a micro-optimization — the
-        /// dependent load is what stops LLVM's loop unswitching, and
-        /// with it the vectorizer, on the loop around the access.
+        /// `Object.dims.ptr`, or `.none` for a List and for a rank-1
+        /// array, neither of which reads it: their one bound is
+        /// `Object.elements.count`, a word in the row rather than a
+        /// word behind a pointer in the row.  That saved load is not a
+        /// micro-optimization — the dependent load is what stops LLVM's
+        /// loop unswitching, and with it the vectorizer, on the loop
+        /// around the access.
         dims: Builder.Value,
-        /// `Object.array.elements.ptr`, indexed as the element kind's
+        /// `Object.elements.bytes.ptr`, indexed as the element kind's
         /// own cell type.
         elements: Builder.Value,
         /// Where this view's axis lengths start in `view_bounds`.
         bounds_at: u32,
         rank: u8,
 
-        fn bounds(self: ArrayView, body: *const Body) []const Builder.Value {
+        fn bounds(self: ElementView, body: *const Body) []const Builder.Value {
             return body.view_bounds.items[self.bounds_at..][0..self.rank];
         }
     };
@@ -2758,6 +2805,28 @@ const Body = struct {
             .heap,
             .optional,
             => Builder.Alignment.fromByteUnits(8),
+            .enumeration => unreachable, // answered by storage() above
+        };
+    }
+
+    /// How many bytes one cell occupies — `Object.ElementKind.width`,
+    /// answered from the program's type instead of from the object,
+    /// which is the same number because the kind is a fact of the
+    /// element type (`runtime/containers.zig`'s `emptyList`).
+    ///
+    /// Only the append path needs it: everything else indexes with a
+    /// `getelementptr` over `cellType`, which does the multiply itself.
+    /// This is the arithmetic that decides whether there is room, and
+    /// it is in bytes because a capacity is (`layout.elements_capacity`).
+    fn cellWidth(written: types.Type) u32 {
+        return switch (written.storage()) {
+            .boolean, .byte => 1,
+            .short, .half => 2,
+            .int, .float => 4,
+            .long, .double => 8,
+            // The boxed slot, whose size is `runtime.Value`'s and is
+            // asserted against it by `runtime/test.zig`.
+            .none, .string, .strukt, .heap, .optional => @sizeOf(runtime.Value),
             .enumeration => unreachable, // answered by storage() above
         };
     }
@@ -2835,7 +2904,7 @@ const Body = struct {
                 .elements = try self.rowLoad(
                     .normal,
                     .ptr,
-                    try self.byteOffset(row, runtime.layout.array_elements, "elements.at"),
+                    try self.byteOffset(row, runtime.layout.elements_pointer, "elements.at"),
                     pointer_alignment,
                     "elements",
                 ),
@@ -2844,7 +2913,7 @@ const Body = struct {
                 try self.hoist_bounds.append(gpa, try self.rowLoad(
                     .normal,
                     .i64,
-                    try self.byteOffset(row, runtime.layout.array_count, "count.at"),
+                    try self.byteOffset(row, runtime.layout.elements_count, "count.at"),
                     value_alignment,
                     "count",
                 ));
@@ -2889,9 +2958,9 @@ const Body = struct {
         return index;
     }
 
-    /// The Array in `register`, resolved — reusing the resolution
-    /// already made in this block if there is one.
-    fn arrayView(self: *Body, register: mir.Register, shape: ArrayShape) Error!ArrayView {
+    /// The List or Array in `register`, resolved — reusing the
+    /// resolution already made in this block if there is one.
+    fn elementView(self: *Body, register: mir.Register, shape: ElementShape) Error!ElementView {
         for (self.views.items) |found| {
             if (found.register == register) return found;
         }
@@ -2902,7 +2971,7 @@ const Body = struct {
             const parts = try self.handleParts(self.produced[register].value);
             try self.checkHandle(parts.index);
             try self.checkOccupant(self.hoisted[index].generation, parts.generation);
-            const made: ArrayView = .{
+            const made: ElementView = .{
                 .register = register,
                 .dims = self.hoisted[index].dims,
                 .elements = self.hoisted[index].elements,
@@ -2921,11 +2990,12 @@ const Body = struct {
         var dims: Builder.Value = .none;
         if (shape.rank == 1) {
             // `count` is the product of the axes, so for one axis it
-            // *is* that axis — one load nearer than `dims[0]`.
+            // *is* that axis — one load nearer than `dims[0]`.  A
+            // List has no `dims` at all and this is its length.
             try self.view_bounds.append(gpa, try self.rowLoad(
                 .normal,
                 .i64,
-                try self.byteOffset(row, runtime.layout.array_count, "count.at"),
+                try self.byteOffset(row, runtime.layout.elements_count, "count.at"),
                 value_alignment,
                 "count",
             ));
@@ -2953,13 +3023,13 @@ const Body = struct {
                 ));
             }
         }
-        const made: ArrayView = .{
+        const made: ElementView = .{
             .register = register,
             .dims = dims,
             .elements = try self.rowLoad(
                 .normal,
                 .ptr,
-                try self.byteOffset(row, runtime.layout.array_elements, "elements.at"),
+                try self.byteOffset(row, runtime.layout.elements_pointer, "elements.at"),
                 pointer_alignment,
                 "elements",
             ),
@@ -2972,9 +3042,9 @@ const Body = struct {
 
     /// The address of the element `indices` names, bound-checked axis
     /// by axis and flattened exactly as `heap.flattenIndex` does it.
-    fn arrayElement(
+    fn elementAddress(
         self: *Body,
-        view: ArrayView,
+        view: ElementView,
         element: types.Type,
         indices: []const mir.Register,
     ) Error!Builder.Value {
@@ -3061,19 +3131,115 @@ const Body = struct {
         }
     }
 
-    /// `len(a)` on an Array: the first axis.
-    fn emitArrayLength(
+    /// `len(xs)`: a List's element count, an Array's first axis.
+    fn emitInlineLength(
         self: *Body,
         register: mir.Register,
         target: mir.Register,
-        shape: ArrayShape,
+        shape: ElementShape,
     ) Error!void {
         if (shape.rank == 0) {
             self.produced[register].value = try self.module.builder.intValue(.i64, 0);
             return;
         }
-        const view = try self.arrayView(target, shape);
+        const view = try self.elementView(target, shape);
         self.produced[register].value = view.bounds(self)[0];
+    }
+
+    /// `xs.append(v)` on a List whose elements own nothing: the store
+    /// and the count bump, inline, with the runtime called only to
+    /// grow the buffer.
+    ///
+    /// **The room is measured in bytes, not in elements.**
+    /// `Elements.ensureCapacity` grows a byte length geometrically and
+    /// does not leave it a whole multiple of the width, so
+    /// `count < capacity` would be a division — the very division the
+    /// bytes run took off this path (docs/CODEGEN.md).
+    /// `(count + 1) * width <= bytes.len` asks the same question with
+    /// a constant multiply, and the width *is* a constant here because
+    /// the storage kind is a fact of the element type
+    /// (`runtime/containers.zig`'s `emptyList`).
+    ///
+    /// The two checks the call would have made are made here, in the
+    /// same order, at the same instruction: a null handle traps
+    /// `null_object`, a stale one `use_after_free`.  The growing arm
+    /// resolves a second time, which costs one walk on the path that
+    /// was about to allocate.
+    ///
+    /// The element type is the gate.  A List append never *frees*
+    /// anything — it only adopts what arrives — so the rule is not
+    /// `index_set`'s: what it needs is that nothing has to be adopted,
+    /// which is `ownsNothing`.  A String, a struct and an object all
+    /// go on calling `luce_rt_append`, which is the one place the
+    /// ownership walk is written.
+    fn emitListAppend(
+        self: *Body,
+        target: mir.Register,
+        held: mir.Register,
+        shape: ElementShape,
+    ) Error!void {
+        const builder = self.module.builder;
+        const one = try builder.intValue(.i64, 1);
+
+        const row = try self.resolveRow(target);
+        const count_at = try self.byteOffset(row, runtime.layout.elements_count, "count.at");
+        const count = try self.rowLoad(.normal, .i64, count_at, value_alignment, "count");
+        const capacity = try self.rowLoad(
+            .normal,
+            .i64,
+            try self.byteOffset(row, runtime.layout.elements_capacity, "capacity.at"),
+            value_alignment,
+            "capacity",
+        );
+        const next = try self.wip.bin(.@"add nuw", count, one, "count.next");
+        const room = try self.wip.icmp(
+            .ule,
+            try self.wip.bin(
+                .@"mul nuw",
+                next,
+                try builder.intValue(.i64, cellWidth(shape.element)),
+                "room.wanted",
+            ),
+            capacity,
+            "has.room",
+        );
+
+        const storing = try self.wip.block(1, "append.inline");
+        const growing = try self.wip.block(1, "append.grow");
+        const done = try self.wip.block(2, "append.done");
+        _ = try self.wip.brCond(room, storing, growing, .then_likely);
+
+        self.seek(storing);
+        const elements = try self.rowLoad(
+            .normal,
+            .ptr,
+            try self.byteOffset(row, runtime.layout.elements_pointer, "elements.at"),
+            pointer_alignment,
+            "elements",
+        );
+        try self.storeCell(
+            shape.element,
+            try self.wip.gep(
+                .inbounds,
+                self.cellType(shape.element),
+                elements,
+                &.{count},
+                "element",
+            ),
+            self.produced[held].value,
+        );
+        try self.rowStore(next, count_at, value_alignment);
+        _ = try self.wip.br(done);
+
+        self.seek(growing);
+        try self.callChecked(.luce_rt_append, &.{
+            self.runtime,
+            try self.boxedRegister(target, "target"),
+            try self.storageOf(held),
+        });
+        _ = try self.wip.br(done);
+
+        self.seek(done);
     }
 
     /// `a.dim(k)` on an Array.  The rank is a compile-time fact, so the
@@ -3083,10 +3249,10 @@ const Body = struct {
         register: mir.Register,
         target: mir.Register,
         axis: mir.Register,
-        shape: ArrayShape,
+        shape: ElementShape,
     ) Error!void {
         const builder = self.module.builder;
-        const view = try self.arrayView(target, shape);
+        const view = try self.elementView(target, shape);
         const wanted = self.produced[axis].value;
         const below = try self.wip.icmp(.slt, wanted, try builder.intValue(.i64, 0), "below");
         const above = try self.wip.icmp(
@@ -4986,8 +5152,8 @@ const Body = struct {
                     );
                     return;
                 }
-                if (self.arrayShape(of[0])) |shape| {
-                    return self.emitArrayLength(register, of[0], shape);
+                if (self.elementShape(of[0])) |shape| {
+                    return self.emitInlineLength(register, of[0], shape);
                 }
                 try self.callAnswering(register, .luce_rt_len, &.{
                     rt,
@@ -4995,9 +5161,9 @@ const Body = struct {
                 });
             },
             .index_get => {
-                if (self.arrayShape(of[0])) |shape| {
-                    const view = try self.arrayView(of[0], shape);
-                    const address = try self.arrayElement(view, shape.element, of[1..]);
+                if (self.elementShape(of[0])) |shape| {
+                    const view = try self.elementView(of[0], shape);
+                    const address = try self.elementAddress(view, shape.element, of[1..]);
                     self.produced[register].value = try self.loadCell(shape.element, address);
                     if (!ownsNothing(shape.element)) self.produced[register].box = address;
                     return;
@@ -5011,10 +5177,10 @@ const Body = struct {
                 });
             },
             .index_set => {
-                if (self.arrayShape(of[0])) |shape| {
+                if (self.elementShape(of[0])) |shape| {
                     if (ownsNothing(shape.element)) {
-                        const view = try self.arrayView(of[0], shape);
-                        const address = try self.arrayElement(
+                        const view = try self.elementView(of[0], shape);
+                        const address = try self.elementAddress(
                             view,
                             shape.element,
                             of[1 .. of.len - 1],
@@ -5043,11 +5209,18 @@ const Body = struct {
                 self.produced[of[1]].value,
                 self.produced[of[2]].value,
             }),
-            .append_value => try self.callChecked(.luce_rt_append, &.{
-                rt,
-                try self.boxedRegister(of[0], "target"),
-                try self.storageOf(of[1]),
-            }),
+            .append_value => {
+                if (self.elementShape(of[0])) |shape| {
+                    if (shape.growable and ownsNothing(shape.element)) {
+                        return self.emitListAppend(of[0], of[1], shape);
+                    }
+                }
+                try self.callChecked(.luce_rt_append, &.{
+                    rt,
+                    try self.boxedRegister(of[0], "target"),
+                    try self.storageOf(of[1]),
+                });
+            },
             .append_ascii => try self.callChecked(.luce_rt_append_ascii, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
@@ -5084,8 +5257,15 @@ const Body = struct {
                 self.produced[of[1]].value,
             }),
             .dim_size => {
-                if (self.arrayShape(of[0])) |shape| {
-                    return self.emitArrayDimSize(register, of[0], of[1], shape);
+                // An Array's question and only an Array's: `dim` is
+                // not a List method, and a List has no `dims` to read.
+                // A hand-built module that asks one anyway goes to the
+                // runtime, which answers `index_bounds` — the same
+                // sentence the oracle answers.
+                if (self.elementShape(of[0])) |shape| {
+                    if (!shape.growable) {
+                        return self.emitArrayDimSize(register, of[0], of[1], shape);
+                    }
                 }
                 try self.callAnswering(register, .luce_rt_dim_size, &.{
                     rt,
@@ -5118,10 +5298,12 @@ const Body = struct {
             .map_keys => try self.callAnswering(register, .luce_rt_map_keys, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
+                try self.answeredZero(register),
             }),
             .map_values => try self.callAnswering(register, .luce_rt_map_values, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
+                try self.answeredZero(register),
             }),
             .map_get => try self.callAnswering(register, .luce_rt_map_get, &.{
                 rt,
@@ -5512,6 +5694,27 @@ const Body = struct {
     /// Builder`.  The shape is a compile-time fact, so the kind picks
     /// the entry point and only an array's sizes travel at runtime.
     // -- objects, ownership, and the words a trap carries -----------------
+
+    /// The element zero of the List an intrinsic answers, boxed.
+    ///
+    /// `m.keys()` and `m.values()` build a list out of values the
+    /// runtime is holding, and which *kind* its cells are is a fact of
+    /// the program's element type rather than of the code that built
+    /// it (`runtime/containers.zig`'s `emptyList`).  So the zero
+    /// travels with the call, exactly as it does for `new list(T)`,
+    /// and the lowering below may read a list's cells knowing their
+    /// width.
+    fn answeredZero(self: *Body, register: mir.Register) Error!Builder.Value {
+        const of = self.function.result_types[register];
+        if (of != .heap) return self.fail("keys or values answering no object");
+        const element = switch (self.module.program.heap_types[of.heap]) {
+            .list => |written| written,
+            .map, .array, .builder, .file => return self.fail(
+                "keys or values answering something other than a list",
+            ),
+        };
+        return self.boxed(element, try self.zeroValue(element), "element.zero");
+    }
 
     fn emitHeapNew(self: *Body, register: mir.Register, new: mir.Instruction.HeapNew) Error!void {
         switch (self.module.program.heap_types[new.heap]) {

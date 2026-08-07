@@ -719,13 +719,17 @@ integer product over more than ~63 non-unit elements overflows
 whatever you do.  **Sums and multiply-accumulates only**; the honest
 sentence is that nobody's hot loop is an integer product.
 
-**Lists are out of scope for both layers.**  A `list` element read is
-a runtime call, not an inline load, so a `list` reduction is not
-view-stable and would not vectorize even unchecked.  Inlining `list`
-indexing is a separate piece of work with its own reason to exist (the
-buffer moves under `append`, which is why it is off the inline path
-today), and this design should be re-read after it lands rather than
-anticipating it.
+**Lists were out of scope for both layers when this was written, and
+that reason has since expired.**  The sentence here was that a `list`
+element read is a runtime call rather than an inline load, so a `list`
+reduction is not view-stable and would not vectorize even unchecked.
+A `list` is on the inline path now (`docs/CODEGEN.md`, "Inline
+access"): the read is a bounds check and a load, and a loop that could
+grow one is still refused by `viewStable`, which is what makes the
+lifted resolution sound in the first place.  So a `list` reduction is
+in the same position as an `array` reduction and this design should
+say so when it is next executed — nothing below has been re-measured
+against that, and neither layer is built yet.
 
 **The interpreter arm does not change and must not.**  It keeps
 calling `runtime/operators.zig`'s `@addWithOverflow` on every element.

@@ -2588,6 +2588,99 @@ test "lists: literals, indexing, growth, and iteration" {
     );
 }
 
+test "lists: the inline path answers what the call answered, at every width" {
+    // Element access and `append` on a list are generated rather than
+    // called (docs/CODEGEN.md), and the two engines are how that is
+    // held to the semantics: the oracle still calls `libluce_rt` for
+    // every one of these, so any disagreement is the lowering's.
+    //
+    // What this walks is the edges the inline path has and the call
+    // did not: the growth boundary, crossed hundreds of times at four
+    // storage widths, and the buffer moving under a handle that
+    // another name also holds.
+    try agreeOk(
+        \\func main():
+        \\    var small = new list(byte)
+        \\    var wide = new list(long)
+        \\    var real = new list(double)
+        \\    var flags = new list(bool)
+        \\    for i in range(0, 500):
+        \\        small.append(byte(i % 251))
+        \\        wide.append(i * 7)
+        \\        real.append(double(i) / 4.0)
+        \\        flags.append(i % 3 == 0)
+        \\    assert(len(small) == 500 and len(flags) == 500)
+        \\    var total: long = 0
+        \\    var set = 0
+        \\    for i in range(0, 500):
+        \\        assert(small[i] == byte(i % 251))
+        \\        assert(real[i] == double(i) / 4.0)
+        \\        total += wide[i]
+        \\        if flags[i]:
+        \\            set += 1
+        \\    assert(total == 500 * 499 // 2 * 7)
+        \\    assert(set == 167)
+        \\
+    );
+}
+
+test "lists: an append through one name is seen through the other" {
+    // The buffer a list holds moves under `append`, so a resolved view
+    // of it is only ever reused across instructions that cannot move
+    // one — every call and every append end the run.  This is the
+    // program that would catch a view kept one instruction too long.
+    try agreeOk(
+        \\func grow(target: list(long), many: long):
+        \\    for i in range(0, many):
+        \\        target.append(i)
+        \\
+        \\func main():
+        \\    var xs = new list(long)
+        \\    let alias = xs
+        \\    xs.append(1)
+        \\    alias.append(2)
+        \\    assert(xs[1] == 2 and len(alias) == 2)
+        \\    # The callee grows it far past the eight elements the
+        \\    # first allocation holds; the caller's next read must be
+        \\    # of the buffer that came back, not the one it lent.
+        \\    grow(xs, 300)
+        \\    assert(len(xs) == 302)
+        \\    assert(xs[301] == 299)
+        \\    # And an append between two reads of the same list, in one
+        \\    # statement's worth of code.
+        \\    let first = xs[0]
+        \\    xs.append(first)
+        \\    assert(xs[302] == 1)
+        \\
+    );
+}
+
+test "trap: an inline append refuses a freed list where the call did" {
+    // The free happens where the analyzer cannot follow it — a scope
+    // the alias outlives — so the refusal is the *engine's*, which is
+    // the one the inline path now owes.
+    try agreeTrap(
+        \\func main():
+        \\    var xs = new list(long)
+        \\    var view = xs
+        \\    if true:
+        \\        var inner = new list(long)
+        \\        view = inner
+        \\        view.append(2)
+        \\    view.append(3)
+        \\
+    , .use_after_free);
+}
+
+test "trap: an inline append refuses a list that was never made" {
+    try agreeTrap(
+        \\func main():
+        \\    var xs: list(long)
+        \\    xs.append(1)
+        \\
+    , .null_object);
+}
+
 test "maps: upsert, lookup, membership, keys in insertion order" {
     try agreeOk(
         \\func main():

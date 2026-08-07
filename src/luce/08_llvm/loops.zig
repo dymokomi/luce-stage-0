@@ -1,7 +1,7 @@
-//! Where an Array's row can be read once instead of once per
+//! Where a container's row can be read once instead of once per
 //! iteration.
 //!
-//! Stage 10 indexes an Array inline (`lower.zig`), and every access
+//! Stage 10 indexes a List or an Array inline (`lower.zig`), and every access
 //! begins by *resolving* the handle: load the object table's base out
 //! of the runtime, step to the row, then load the row's generation,
 //! its element count, and its element pointer.  Four loads before the
@@ -42,9 +42,17 @@
 //! object (the table's rows are one allocation and move when it
 //! grows), free one (the row's generation would move on and the row
 //! could be re-occupied at once, so a check reading a stale generation
-//! would miss the trap it owes), or replace an Array's storage.  That is `optimize.effects.viewStable`, plus the one
+//! would miss the trap it owes), or replace a container's storage.
+//! That is `optimize.effects.viewStable`, plus the one
 //! refinement this stage can make and that one cannot — an
 //! `index_set` whose element type owns nothing frees nothing.
+//!
+//! **A List is lifted under exactly that gate and needs no other.**
+//! Its buffer moves under `append` and `insert` — and both, like every
+//! call, are already outside `viewStable`, so a loop that could move a
+//! buffer never reaches the lifting in the first place.  What is left
+//! is the shape that matters: a read, a strided read, or an in-place
+//! transform over a list nothing grows while it runs.
 //!
 //! And the local must not be *assigned* in the loop, or the handle the
 //! preheader read is not the handle the body means.
@@ -64,7 +72,8 @@ pub const Hoist = struct {
     preheader: mir.BlockId,
     /// The local whose handle is resolved.
     local: mir.LocalId,
-    /// The Array shape it holds, from the program's heap-type table.
+    /// The container shape it holds, from the program's heap-type
+    /// table.  A List is rank 1.
     element: types.Type,
     rank: u8,
 };
@@ -154,7 +163,7 @@ pub fn plan(
         for (wanted, assigned, 0..) |is_wanted, is_assigned, local| {
             if (!is_wanted or is_assigned) continue;
             if (madeAlready(hoists.items, readable[loop.header].items, @intCast(local))) continue;
-            const shape = arrayShape(program, function.locals[local].local_type) orelse continue;
+            const shape = storedShape(program, function.locals[local].local_type) orelse continue;
 
             const index: u32 = @intCast(hoists.items.len);
             try hoists.append(gpa, .{
@@ -195,11 +204,18 @@ fn madeAlready(hoists: []const Hoist, readable: []const u32, local: mir.LocalId)
 
 const Shape = struct { element: types.Type, rank: u8 };
 
-fn arrayShape(program: *const mir.Program, of: types.Type) ?Shape {
+/// The shape of the List or Array a type names — the same question
+/// `lower.zig`'s `elementShape` asks, of a type rather than a
+/// register, and the two must answer alike or a lifted resolution
+/// would be read by an access that did not expect one.
+fn storedShape(program: *const mir.Program, of: types.Type) ?Shape {
     if (of != .heap) return null;
     return switch (program.heap_types[of.heap]) {
         .array => |shape| .{ .element = shape.element, .rank = shape.rank },
-        .list, .map, .builder, .file => null,
+        // A List has one bound and it is `count`, which is where a
+        // rank-1 array's bound already comes from.
+        .list => |element| .{ .element = element, .rank = 1 },
+        .map, .builder, .file => null,
     };
 }
 
@@ -228,7 +244,7 @@ fn writesPlainElement(
     if (instruction != .intrinsic) return false;
     if (instruction.intrinsic.kind != .index_set) return false;
     const target = instruction.intrinsic.arguments[0];
-    const shape = arrayShape(program, function.result_types[target]) orelse return false;
+    const shape = storedShape(program, function.result_types[target]) orelse return false;
     // An enum element is a number in a cell and owns nothing to free
     // (docs/ENUMS.md D9), so it joins the plain kinds by being one.
     return switch (shape.element.storage()) {
@@ -252,7 +268,8 @@ fn writesPlainElement(
     };
 }
 
-/// Which Array locals the loop reads through, and which it assigns.
+/// Which List and Array locals the loop reads through, and which it
+/// assigns.
 fn collect(
     program: *const mir.Program,
     function: *const mir.Function,
@@ -272,7 +289,7 @@ fn collect(
                         else => continue,
                     }
                     const target = call.arguments[0];
-                    if (arrayShape(program, function.result_types[target]) == null) continue;
+                    if (storedShape(program, function.result_types[target]) == null) continue;
                     // Only a handle read straight out of a local can be
                     // read again in the preheader; anything else is a
                     // value this loop computed.

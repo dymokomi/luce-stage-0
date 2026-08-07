@@ -691,7 +691,7 @@ pub fn describe(service: Service) Effect {
         },
         .luce_rt_map_keys, .luce_rt_map_values => .{
             .memory = touches_heap,
-            .parameters = &.{ .run, .value_in, .value_out },
+            .parameters = &.{ .run, .value_in, .value_in, .value_out },
         },
 
         // -- strings and conversions ----------------------------------

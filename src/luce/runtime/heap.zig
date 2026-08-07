@@ -729,7 +729,7 @@ fn proofCeiling(comptime magnitude: i128) usize {
 
 /// Where an object row's fields sit, in bytes, for the one reader that
 /// cannot call a function to ask: generated machine code
-/// (`08_llvm/lower.zig`), which indexes an `Array` inline.
+/// (`08_llvm/lower.zig`), which indexes a `List` or an `Array` inline.
 ///
 /// Nothing here is *written down* — every offset is measured from the
 /// Zig types above with `@offsetOf`, so the two cannot drift, and the
@@ -754,19 +754,29 @@ pub const layout = struct {
     /// test generated code emits is this one load and one compare,
     /// and a reused row fails it for every handle but the newest.
     pub const generation = @offsetOf(Object, "generation");
-    /// `Object.dims.ptr` — `[*]i64`, one entry per axis.  The rank is a
-    /// compile-time fact, so the length is not read.  Only a
-    /// rank-2-or-higher access reads it at all: rank 1 bound-checks
-    /// against `array_count`, one load nearer.
+    /// `Object.dims.ptr` — `[*]i64`, one entry per axis.  An Array's
+    /// alone: a List has no shape but its length.  The rank is a
+    /// compile-time fact, so the length is not read, and only a
+    /// rank-2-or-higher access reads this at all — rank 1 and every
+    /// List bound-check against `elements_count`, one load nearer.
     pub const array_dims = @offsetOf(Object, "dims") + slice_pointer;
     /// `Object.elements.bytes.ptr` — the elements, in the element
     /// kind's own storage (`Object.ElementKind`), which the program
-    /// knows statically.
-    pub const array_elements = @offsetOf(Object, "elements") +
+    /// knows statically.  A List's and an Array's alike: the run is
+    /// one field, shared, at one offset (`Object.elements`).
+    pub const elements_pointer = @offsetOf(Object, "elements") +
         @offsetOf(Object.Elements, "bytes") + slice_pointer;
-    /// `Object.elements.count` — the product of the axes, and the one
-    /// bound a rank-1 index is checked against.
-    pub const array_count = @offsetOf(Object, "elements") +
+    /// `Object.elements.bytes.len` — the room, **in bytes**, not in
+    /// elements: `Elements.ensureCapacity` grows a byte length and
+    /// need not leave it a whole multiple of the width.  What an
+    /// inline `append` compares against, and the reason it compares
+    /// `(count + 1) * width` rather than a count.
+    pub const elements_capacity = @offsetOf(Object, "elements") +
+        @offsetOf(Object.Elements, "bytes") + slice_count;
+    /// `Object.elements.count` — a List's length, an Array's product
+    /// of the axes, and the one bound a rank-1 index is checked
+    /// against.  An inline `append` writes it.
+    pub const elements_count = @offsetOf(Object, "elements") +
         @offsetOf(Object.Elements, "count");
 
     /// A Zig slice is `{ ptr, len }`, in that order, on every target.
