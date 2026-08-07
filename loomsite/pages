@@ -1,0 +1,16 @@
+# The pages of loom.luciaos.com, in order.
+#
+# One row per page: SLUG | NAV LABEL | TITLE | DESCRIPTION.  The first
+# row is the front page and its slug is empty, so it is written to
+# `out/index.html`; every other row becomes `out/SLUG/index.html`.
+#
+# The order here is the order of the tabs in the bar and the order the
+# Previous/Next links walk, so adding a page is one row and a file
+# under `content/`.  Nothing else lists the pages.
+
+	Overview	loom	The environment that runs compiled Luce: a shell, a runner, an editor, and the host boundary programs reach the world through.
+running	Running	Running programs	How loom starts a program: one dlopen for a .lc, compile-and-cache for a .luc, artifacts refused by name, and the exit status a script reads afterwards.
+shell	Shell	The shell	loom's interactive line shell — its five commands, bare program paths, colour, and what a piped script gets that a person at a prompt does not.
+editor	Editor	The editor	loom edit: a full-screen editor with Luce syntax highlighting, written in Luce, carried inside the loom binary.
+host	Host	The host	Every effect a Luce program can have is a service loom hands it. The whole surface, the gate that governs it, and why a missing service refuses rather than guesses.
+direction	Direction	Where loom is going	What v1 wanted, what v2 kept and dropped, and the honest shape of loom's growth. Direction, not documentation of anything built.
