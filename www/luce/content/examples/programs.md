@@ -217,18 +217,24 @@ Two programs cannot be shown here, because they draw on a real screen.
 
 `programs/editor.luc` is the flagship: a full-screen editor with
 movement, editing, scrolling, line numbers, a status bar and per-line
-Luce syntax highlighting — 445 lines, written entirely in Luce. Its
+Luce syntax highlighting — 612 lines, written entirely in Luce. Its
 source ships embedded in the `loom` binary, so `loom edit` always
 works, and a test in the repository compiles the embedded copy so it
-can never rot.
+can never rot, while another drives it through every key it handles
+and compares the whole terminal transcript, byte for byte, on both
+engines.
 
 ```sh
 build/loom edit notes.txt          # Ctrl-S saves, Ctrl-Q quits
 build/loom run programs/life.lc
 ```
 
-The editor is also the honest example of what Luce still lacks: its
-key handling is one `elif` chain of fifteen string comparisons with no
-final `else`, and its keyword tables are forty-six `word == "…"`
-comparisons — a hash set written as a truth table, because there are
-no sets and no tagged unions. The [status page](/status/) counts them.
+The editor used to be the honest example of what Luce still lacked:
+key handling as one `elif` chain of fifteen string comparisons with no
+final `else`, and keyword tables as forty-six `word == "…"`
+comparisons. Enums took the first two — a keystroke becomes an
+`Intent` once, at the edge, and a `match` with an arm for every member
+decides what it does — and the truth tables became two space-fenced
+string constants searched with `strings.find`. What is left is the
+last of it: that is a *search*, and a frozen set would make it a
+lookup. The [status page](/status/) says where that stands.

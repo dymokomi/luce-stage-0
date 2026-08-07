@@ -63,7 +63,7 @@ struct zero templates, host text on its way into owned storage).
   language's own claim made literal — *values copy*.
 
 The flagship program was the worked example and is now the proof.
-`Editing.splice` (`programs/editor.luc:129`) is
+`Editing.splice` (`programs/editor.luc:146`) is
 `value[0:cursor] + extra + value[cursor:len(value)]`, and 20,000
 keystrokes into a 40 KB file peaked at **1204 MB RSS**.  The same
 simulation now peaks at **3.3 MB**, and costs 24 µs a keystroke
@@ -225,15 +225,32 @@ attribute.  Now that it is built, that answer looks better than
 "probably right": the attribute is what gave Luce Ok-wrapping for free
 and kept `types.Type` out of the feature entirely.
 
-The corpus still pays, in the file that predates all of it:
+The corpus has since been paid back, in the file that predated all of
+it.  All three of the debts this section listed are gone from
+`editor.luc`:
 
-- `editor.luc:361-405` — key handling is one `elif` chain of **15
-  string comparisons** with no final `else`.  A misspelled
-  `"page_dwon"` compiles and silently does nothing.
-- `editor.luc:189` — `# 1 keyword, 2 type name, 3 builtin, 0 plain.`  An
-  enum written as a long with a comment.
-- `editor.luc:159-187` — `is_keyword`/`is_builtin` as **46 `word == "…"`
-  comparisons**: a hash set written as a truth table.
+- key handling was one `elif` chain of **15 string comparisons** with
+  no final `else`, so a misspelled `"page_dwon"` compiled and silently
+  did nothing.  It is `enum Intent` — sixteen members, the host's key
+  names translated to it once at the edge, the unbound case named
+  `ignored` rather than fallen through, and a `match` with an arm for
+  every member.  Past `Intent.of` the editor never compares a string
+  to decide what to do.
+- `# 1 keyword, 2 type name, 3 builtin, 0 plain.` — an enum written as
+  a long with a comment — is `enum Word`, and the `elif` chain over
+  those numbers is a four-arm `match` with no `else`.
+- `is_keyword`/`is_builtin` as **46 `word == "…"` comparisons** — a
+  hash set written as a truth table — are two space-fenced string
+  constants searched with `strings.find`, which is the closest thing
+  to a set the language can state and measured *faster* than the
+  comparisons (0.15 µs a word against 0.22–0.29 µs, on a table half
+  again as long).  Tier 3 §1 below is what is left of this one.
+
+Two things the rewrite found that no feature would have: the word
+lists had drifted eight language generations (ten keywords and
+twenty-one builtins missing, two names present that are not free
+builtins), and an enum member may not be named `insert`, because the
+list-method table reserves it.
 
 **The enum half was decided on that evidence and is now evidence
 itself.**  A tagged union can subsume `T?` cleanly if that turns out
@@ -247,12 +264,19 @@ extend.
 ## Tier 3 — what a real program actually hits
 
 Read from `programs/` for awkwardness rather than features.
-`editor.luc` is the oldest file in the corpus — it predates std,
-f-strings and constants — so it is both the most workaround-dense and
-the proof the language moved.
+`editor.luc` was the oldest file in the corpus — written before enums,
+`match`, visibility, std, f-strings and constants — so it was both the
+most workaround-dense and the proof the language moved.  It has now
+been rewritten onto all of them, and §1 is the one item of this list
+it still hits.
 
-1. **No sets, no constant containers.**  Drives the 46-comparison truth
-   tables.  Cheap if scoped to a frozen container.
+1. **No sets, no constant containers.**  The 46-comparison truth
+   tables are now two space-fenced string constants and a
+   `strings.find` — shorter and faster than what they replaced, but a
+   *search*.  A frozen `set(string)` a top-level `let` could hold
+   would make membership constant-time and let the compiler refuse a
+   duplicate word.  Cheap if scoped to a frozen container; nothing is
+   blocked on it.
 2. **No character classes in std.**  `is_digit`/`is_alpha` re-derived by
    hand three times.  Trivial — five functions.
 3. ~~**No receivers on user structs.**~~ **Done** (docs/METHODS.md).
@@ -355,9 +379,11 @@ the proof the language moved.
     stays refused by name.  What it unblocks is `std.zip` — CRC-32
     and Huffman without division-and-modulo soup.
 12. **No codepoint iteration.**  `for c in "abc"` is refused; every
-    UTF-8 walk is hand-written, and `editor.luc:53`
-    (`Text.continuation`) and `:156` (`Words.continuation_byte`) are
-    the same function copied across two namespaces.
+    UTF-8 walk is hand-written.  The editor's two copies of the same
+    continuation-byte test — `Text.continuation` and
+    `Words.continuation_byte`, one per namespace — are down to one
+    (`editor.luc:53`, `Bytes.continuation`), but the walk itself is
+    still spelled out by hand in six functions.
 13. ~~**`catch` cannot see the reason.**~~  **Closed.**  `CALL catch
     NAME:` binds the error's message to an immutable `string` scoped
     to the handler block, and both callers the item named took it:
