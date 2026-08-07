@@ -469,12 +469,13 @@ the proof the language moved.
   an LSP both want stage 5's faithful tree first — an argument for
   writing it.
 - **Docs to correct:** `tools/vscode-luce/syntaxes/luce.tmLanguage.json`
-  is stale — it highlights removed v1 Fabric builtins and knows none of
-  `give`, `copy`, `new`, `try`, `catch`, `none`, `import`, or the
-  conversion builtins, and its type list has `Input`/`Output` but not
-  the four heap types.  `site/src/highlight.zig` is generated from the
-  lexer's own keyword table and has a test asserting the two agree; the
-  editor grammar should be too, or dropped.  The interpolation
+  used to be the worst of these — hand-written, highlighting removed v1
+  Fabric builtins, knowing none of `give`, `copy`, `new`, `try`,
+  `catch`, `none` or `import`.  It is now **generated** by
+  `tools/grammar.zig` from the compiler's own keyword, symbol, builtin
+  and method tables, and pinned byte-for-byte by a test in
+  `zig build test`, so the drift that entry described cannot happen
+  again in silence.  The interpolation
   contradiction in `LANGUAGE.md` and the "future ReleaseFast" in
   `OWNERSHIP.md` are both fixed.  `STD.md` documents sixteen of the
   eighteen functions in `strings.luc`, and the two it omits —

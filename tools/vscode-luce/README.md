@@ -10,14 +10,18 @@ dependency on LuciaOS: three files, no build step, no code.
   in a colon opens a block", which is true of `func`, `struct`, `if`, `elif`,
   `else`, `while`, `for` and `catch` alike and stays true of whatever opens a
   block next.
-- `package.json` — what VS Code loads.
+- `package.json` — what VS Code loads, plus the two defaults below.
+
+Only `.luc` is claimed. A `.lc` is a compiled artifact and a `.lcm` a serialized
+module — both are binary, and an editor that offered to open one as text would
+be offering the wrong thing.
 
 ## The grammar is generated, and pinned
 
 `syntaxes/luce.tmLanguage.json` is written by `tools/grammar.zig` from the
-compiler's own tables — the lexer's keyword table, the reserved-name list, the
-free-builtin table, and the five method tables — and must not be edited by
-hand.
+compiler's own tables — the lexer's keyword table and token kinds, the
+reserved-name list, the free-builtin table, and the five method tables — and
+must not be edited by hand.
 
 ```sh
 zig build grammar     # rewrite syntaxes/luce.tmLanguage.json
@@ -35,12 +39,15 @@ Nothing tied it to the language, so nothing said anything for a year.
 `test "the committed grammar is what the generator emits"`, which embeds this
 file and compares it byte-for-byte against a fresh run of the generator. Add a
 keyword, a builtin or a method to the language without regenerating and the
-suite fails, naming this path. Two more tests in the same file keep the
-generator honest: every keyword the lexer reserves must have a class, and every
+suite fails, naming this path. Five more tests in the same file keep the
+generator honest: every keyword the lexer reserves must have a class; every
 name in `reserved_names` must be coloured exactly once — no name uncoloured, no
-name claimed by two classes. A fourth reads `programs/editor.luc`, the largest
-Luce program there is, and checks that every language word it actually uses has
-a class.
+name claimed by two classes; every *symbol* token kind must have a row in the
+generator's spelling table, and every row's text must lex back to the kind it
+claims; and no spelling may be written before a longer one it opens with, which
+is what makes `<<=` a compound assignment rather than a shift and a stray `=`.
+A last one reads `programs/editor.luc`, the largest Luce program there is, and
+checks that every language word it actually uses has a class.
 
 ## What is coloured
 
@@ -48,21 +55,27 @@ a class.
 | --- | --- |
 | `keyword.control.luce` | `if`, `elif`, `else`, `while`, `for`, `in`, `return`, `break`, `continue` |
 | `keyword.control.exception.luce` | `try`, `catch` |
-| `keyword.control.import.luce` | `import`, and the module path after it |
+| `keyword.control.import.luce` | `import`, and the module path after it — `std.strings` as readily as a sibling `geometry` |
+| `keyword.control.raise.luce` / `.trap.luce` | `error` and `trap`, the two ways a program stops — **coloured red**, see below |
 | `keyword.operator.word.luce` | `and`, `or`, `not` |
 | `keyword.other.ownership.luce` | `new`, `give`, `copy`, `free` — the words that move ownership, in a class of their own |
 | `storage.type.luce` | `func`, `struct`, `let`, `var` |
+| `storage.modifier.luce` | `private`, `public` — the visibility markers (docs/VISIBILITY.md) |
 | `constant.language.luce` | `true`, `false`, `none` |
-| `support.type.luce` | `Int`, `Float`, `Bool`, `String`, `List`, `Map`, `Array`, `Builder`, `None` |
+| `support.type.luce` | the builtin type names, plus `None` |
 | `entity.name.type.luce` | every other capitalised name — the convention the language enforces for structs |
 | `support.function.builtin.luce` | the pure free builtins, plus `range` |
 | `support.function.builtin.host.luce` | the host-gated builtins, which need `allow_host` |
 | `support.function.method.luce` | the receiver methods, **only** after a `.` |
 | `entity.name.function.luce` | the name a `func` declares, and a qualified call's tail |
+| `constant.numeric.integer.luce` / `.float.luce` / `.hex.luce` / `.binary.luce` | `1_000_000`, `1.5e-3`, `0xFF_FF`, `0b1010_1010` |
+| `keyword.operator.bitwise.luce` | `&`, `\|`, `^`, `~`, `<<`, `>>` (docs/BITWISE.md) |
+| `keyword.operator.assignment.luce` | `=` and every compound form, `<<=` and `//=` included |
 | `keyword.operator.optional.luce` / `.fallible.luce` | the `T?` and `T!` markers |
 | `invalid.illegal.number.luce` | the numeric literals the lexer refuses |
+| `invalid.illegal.name.luce` | a word that opens with an underscore, which is not a name |
 
-Two decisions worth knowing about:
+Three decisions worth knowing about:
 
 - **Methods are coloured only behind a dot.** `find`, `get`, `clear` and
   `values` are words a program may perfectly well use for a function of its
@@ -72,12 +85,36 @@ Two decisions worth knowing about:
   string except strings and comments — which a hole cannot contain, because the
   lexer scans an f-string as one token that ends at the first unescaped quote.
   `{{` and `}}` are literal braces.
+- **Symbols are written longest first.** The operator rules come out of one
+  table sorted by spelling length, so `<<=` is tried before `<<`, `<<` before
+  `<`, and `==` before `=`. That order is the whole reason a compound
+  assignment does not read as a comparison with something after it, and a test
+  states it rather than trusting the order the table happens to be in.
 
 The invalid-number rules follow the lexer exactly, including the boundaries it
 draws: `1.2.3` is one mistake rather than a float and an integer, `0755` is
 refused because Luce has no octal literals, `1.` needs a digit after the point
-while `1.foo` is member access, and a radix prefix or digit separator is one
-malformed literal rather than a number glued to a word.
+while `1.foo` is member access, and a base with no digits (`0x`), a digit that
+does not belong to it (`0b12`), a misplaced separator (`1_`, `1__0`) or a unit
+suffix (`12ab`) is one malformed literal rather than a number glued to a word.
+
+## The two defaults it sets
+
+`contributes.configurationDefaults` carries exactly two, both of them the
+language's own rules rather than anybody's taste:
+
+- **`error` and `trap` are red**, through a `textMateRules` entry on their two
+  scopes. They are the two ways a Luce program stops — one raises and can be
+  caught, one ends the run — and a reader scanning a file wants to see every
+  such place at a glance. The rule sits on the scopes rather than in a theme so
+  it holds in whichever theme you use; a theme's own colour for
+  `keyword.control` is what you would fall back to if you removed it.
+- **Four spaces, spaces only, no detection.** A Luce block opens exactly four
+  columns deeper than the one containing it and a tab is refused outright by
+  the lexer, so an editor guessing indentation from the file can only guess
+  wrong.
+
+Both are defaults: a setting of your own in `settings.json` still wins.
 
 ## Package and install
 

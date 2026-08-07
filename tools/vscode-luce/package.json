@@ -2,7 +2,7 @@
   "name": "luce-language",
   "displayName": "Luce Language",
   "description": "TextMate syntax highlighting and editor configuration for Luce.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "luciaos",
   "license": "UNLICENSED",
   "repository": {
@@ -21,6 +21,12 @@
     "luciaos",
     "loom"
   ],
+  "capabilities": {
+    "virtualWorkspaces": true,
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
   "files": [
     "language-configuration.json",
     "syntaxes/luce.tmLanguage.json",
@@ -46,6 +52,26 @@
         "scopeName": "source.luce",
         "path": "./syntaxes/luce.tmLanguage.json"
       }
-    ]
+    ],
+    "configurationDefaults": {
+      "[luce]": {
+        "editor.insertSpaces": true,
+        "editor.tabSize": 4,
+        "editor.detectIndentation": false
+      },
+      "editor.tokenColorCustomizations": {
+        "textMateRules": [
+          {
+            "scope": [
+              "keyword.control.raise.luce",
+              "keyword.control.trap.luce"
+            ],
+            "settings": {
+              "foreground": "#e5484d"
+            }
+          }
+        ]
+      }
+    }
   }
 }

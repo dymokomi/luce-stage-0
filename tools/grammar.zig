@@ -21,17 +21,25 @@
 //! tables into one JSON file — so the import is free, and a copy would
 //! only be one more thing to keep honest.
 //!
-//! The five classes and what they read:
+//! The six classes and what they read:
 //!
 //!   keywords  `02_lex/token.zig`'s `keywords`, by kind
 //!   verbs     the same table's `new`/`give`/`copy`, plus `free`
+//!   symbols   `02_lex/token.zig`'s `Kind`, one row per punctuation
+//!             and operator token — the bit set included
 //!   types     `support/types.zig`'s `builtin_names`, plus `None`
 //!   builtins  `04_semantics/builder.zig`'s `builtins`
 //!   methods   the same file's five method tables
 //!
 //! A keyword the language gains reaches the grammar by itself; a
 //! keyword whose colour nobody has decided stops the generator by
-//! name rather than being quietly left out.
+//! name rather than being quietly left out.  The symbols are the same
+//! bargain one step further: their spellings live here, because the
+//! lexer spells them in a `switch` and not in a table, and two tests
+//! hold the copy honest — every symbol kind must have a row, and
+//! every row's text must lex back to the kind it claims.  The bit set
+//! (`& | ^ ~ << >>` and the five compound forms) reached the language
+//! and not the grammar, which is the drift that argued for the table.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -63,6 +71,11 @@ const Class = enum {
     word_operator,
     /// `func`, `struct`, `let`, `var` — what a declaration opens with.
     storage,
+    /// `private`, `public` — who may reach the declaration they stand
+    /// in front of (docs/VISIBILITY.md).  `storage.modifier` is the
+    /// scope every grammar gives Java's and C#'s pair, so a theme
+    /// already tells them apart from the `func` they precede.
+    visibility,
     /// `import`.
     import,
     /// `try`, `catch` (docs/FAILURE.md).
@@ -85,6 +98,7 @@ const Class = enum {
             .control => "keyword.control.luce",
             .word_operator => "keyword.operator.word.luce",
             .storage => "storage.type.luce",
+            .visibility => "storage.modifier.luce",
             .import => "keyword.control.import.luce",
             .exception => "keyword.control.exception.luce",
             .constant => "constant.language.luce",
@@ -97,8 +111,9 @@ const Class = enum {
 /// Every class, in the order their rules are written.  Iterated rather
 /// than listed twice, so a new class cannot be added without a rule.
 const classes = [_]Class{
-    .control,   .word_operator, .storage,   .import,
-    .exception, .constant,      .ownership, .receiver,
+    .control,  .word_operator, .storage,  .visibility,
+    .import,   .exception,     .constant, .ownership,
+    .receiver,
 };
 
 /// The class each keyword the lexer reserves belongs to.
@@ -126,9 +141,9 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
         .keyword_struct,
         .keyword_let,
         .keyword_var,
-        .keyword_public,
-        .keyword_private,
         => .storage,
+
+        .keyword_public, .keyword_private => .visibility,
 
         .keyword_import => .import,
 
@@ -151,6 +166,22 @@ fn isOwnershipBuiltin(builtin: luce.semantics.Builtin) bool {
     return builtin.kind == .free_object;
 }
 
+/// The two builtins that end a run, and the scope each gets.
+///
+/// `error` raises — a caller may `try` it on or `catch` it — and
+/// `trap` stops the program dead, so they are two sentences and not
+/// one; they share a colour because what a reader wants from either
+/// is to see, at a glance, every place this program can stop.  Both
+/// are matched on what they lower to rather than on their spelling,
+/// so renaming one in the language renames it here.
+fn stoppingScope(builtin: luce.semantics.Builtin) ?[]const u8 {
+    return switch (builtin.kind) {
+        .raise_error => "keyword.control.raise.luce",
+        .trap_message => "keyword.control.trap.luce",
+        else => null,
+    };
+}
+
 /// Reserved names the language spells nowhere else.
 ///
 /// `range` is *syntax*: the parser recognises it only in
@@ -167,6 +198,155 @@ const reserved_syntax = [_][]const u8{"range"};
 /// the feature, so the word needs no claiming) — and it stays here so
 /// the next fossil has a place to be noticed instead of coloured.
 const unspellable = [_][]const u8{};
+
+// ---------------------------------------------------------------------------
+// The symbols
+// ---------------------------------------------------------------------------
+
+/// What a symbol token reads as.  One role per TextMate scope, split
+/// into the operators and the punctuation because the grammar carries
+/// them in two groups a reader can turn off separately.
+const Role = enum {
+    /// `->`, which is neither an operator on values nor punctuation:
+    /// it introduces the answer a function gives.
+    function_return,
+    comparison,
+    assignment,
+    arithmetic,
+    /// `& | ^ ~ << >>` — the bit set (docs/BITWISE.md).
+    bitwise,
+    /// `?`: the optional marker, and Luce spells nothing else with a
+    /// question mark — there is no conditional expression.
+    optional,
+    /// `!`: the fallible marker (docs/FAILURE.md), never a prefix
+    /// negation — `not` is the negation.
+    fallible,
+    group_begin,
+    group_end,
+    brackets_begin,
+    brackets_end,
+    separator_comma,
+    separator_colon,
+    accessor,
+
+    fn scope(self: Role) []const u8 {
+        return switch (self) {
+            .function_return => "keyword.operator.function-return.luce",
+            .comparison => "keyword.operator.comparison.luce",
+            .assignment => "keyword.operator.assignment.luce",
+            .arithmetic => "keyword.operator.arithmetic.luce",
+            .bitwise => "keyword.operator.bitwise.luce",
+            .optional => "keyword.operator.optional.luce",
+            .fallible => "keyword.operator.fallible.luce",
+            .group_begin => "punctuation.section.group.begin.luce",
+            .group_end => "punctuation.section.group.end.luce",
+            .brackets_begin => "punctuation.section.brackets.begin.luce",
+            .brackets_end => "punctuation.section.brackets.end.luce",
+            .separator_comma => "punctuation.separator.comma.luce",
+            .separator_colon => "punctuation.separator.colon.luce",
+            .accessor => "punctuation.accessor.luce",
+        };
+    }
+
+    /// True for the roles the `#punctuation` group carries.  Every
+    /// other role is an operator, and the two groups are emitted
+    /// separately.
+    fn isPunctuation(self: Role) bool {
+        return switch (self) {
+            .group_begin,
+            .group_end,
+            .brackets_begin,
+            .brackets_end,
+            .separator_comma,
+            .separator_colon,
+            .accessor,
+            => true,
+            else => false,
+        };
+    }
+};
+
+/// One symbol token: the kind the lexer gives it, the one way it is
+/// spelled, and what it reads as.
+const Symbol = struct { kind: luce.lex.Kind, text: []const u8, role: Role };
+
+/// Every symbol the lexer has a kind for, spelled and classed.
+///
+/// **The one table here that is a copy**, because the lexer spells
+/// its symbols in a `switch` over bytes rather than in a table there
+/// is anything to read.  Two tests pay for the copy: one fails when a
+/// symbol kind has no row — the way the bit set arrived and the
+/// grammar did not hear — and one lexes every row's text back and
+/// checks it comes out as the kind claimed, so a spelling that moves
+/// in the language moves here or the suite says which row lied.
+const symbols = [_]Symbol{
+    .{ .kind = .arrow, .text = "->", .role = .function_return },
+
+    .{ .kind = .equal, .text = "==", .role = .comparison },
+    .{ .kind = .not_equal, .text = "!=", .role = .comparison },
+    .{ .kind = .less_equal, .text = "<=", .role = .comparison },
+    .{ .kind = .greater_equal, .text = ">=", .role = .comparison },
+    .{ .kind = .less, .text = "<", .role = .comparison },
+    .{ .kind = .greater, .text = ">", .role = .comparison },
+
+    .{ .kind = .shift_left_assign, .text = "<<=", .role = .assignment },
+    .{ .kind = .shift_right_assign, .text = ">>=", .role = .assignment },
+    .{ .kind = .slash_slash_assign, .text = "//=", .role = .assignment },
+    .{ .kind = .plus_assign, .text = "+=", .role = .assignment },
+    .{ .kind = .minus_assign, .text = "-=", .role = .assignment },
+    .{ .kind = .star_assign, .text = "*=", .role = .assignment },
+    .{ .kind = .slash_assign, .text = "/=", .role = .assignment },
+    .{ .kind = .percent_assign, .text = "%=", .role = .assignment },
+    .{ .kind = .ampersand_assign, .text = "&=", .role = .assignment },
+    .{ .kind = .pipe_assign, .text = "|=", .role = .assignment },
+    .{ .kind = .caret_assign, .text = "^=", .role = .assignment },
+    .{ .kind = .assign, .text = "=", .role = .assignment },
+
+    .{ .kind = .shift_left, .text = "<<", .role = .bitwise },
+    .{ .kind = .shift_right, .text = ">>", .role = .bitwise },
+    .{ .kind = .ampersand, .text = "&", .role = .bitwise },
+    .{ .kind = .pipe, .text = "|", .role = .bitwise },
+    .{ .kind = .caret, .text = "^", .role = .bitwise },
+    .{ .kind = .tilde, .text = "~", .role = .bitwise },
+
+    .{ .kind = .slash_slash, .text = "//", .role = .arithmetic },
+    .{ .kind = .plus, .text = "+", .role = .arithmetic },
+    .{ .kind = .minus, .text = "-", .role = .arithmetic },
+    .{ .kind = .star, .text = "*", .role = .arithmetic },
+    .{ .kind = .slash, .text = "/", .role = .arithmetic },
+    .{ .kind = .percent, .text = "%", .role = .arithmetic },
+
+    .{ .kind = .question, .text = "?", .role = .optional },
+    .{ .kind = .bang, .text = "!", .role = .fallible },
+
+    .{ .kind = .left_paren, .text = "(", .role = .group_begin },
+    .{ .kind = .right_paren, .text = ")", .role = .group_end },
+    .{ .kind = .left_bracket, .text = "[", .role = .brackets_begin },
+    .{ .kind = .right_bracket, .text = "]", .role = .brackets_end },
+    .{ .kind = .comma, .text = ",", .role = .separator_comma },
+    .{ .kind = .colon, .text = ":", .role = .separator_colon },
+    .{ .kind = .dot, .text = ".", .role = .accessor },
+};
+
+/// True for the token kinds that are neither layout, nor a word, nor
+/// a literal — the ones `symbols` must have a row for.  Named as an
+/// exclusion because that is how the enum is written: everything left
+/// over after the four groups above it is spelled with punctuation.
+fn isSymbolKind(kind: luce.lex.Kind) bool {
+    return switch (kind) {
+        .newline,
+        .indent,
+        .dedent,
+        .end_of_file,
+        .identifier,
+        .int_literal,
+        .float_literal,
+        .string_literal,
+        .fstring,
+        => false,
+        else => !std.mem.startsWith(u8, @tagName(kind), "keyword_"),
+    };
+}
 
 // ---------------------------------------------------------------------------
 // Reading the language's tables
@@ -250,17 +430,95 @@ fn typeNames(gpa: Allocator) Allocator.Error!Words {
     return words;
 }
 
-/// The free builtins, host-gated or not.  `free` is left out: it is an
-/// ownership verb (`isOwnershipBuiltin`).
+/// The free builtins, host-gated or not.  Three are left out and each
+/// has a rule of its own: `free` is an ownership verb, and `error` and
+/// `trap` are the two ways a program stops.
 fn builtinNames(gpa: Allocator, host: bool) Allocator.Error!Words {
     var words: Words = .{ .gpa = gpa };
     errdefer words.deinit();
     if (!host) try words.addAll(&reserved_syntax);
     for (luce.semantics.builtins) |builtin| {
         if (isOwnershipBuiltin(builtin)) continue;
+        if (stoppingScope(builtin) != null) continue;
         if (builtin.host == host) try words.add(builtin.name);
     }
     return words;
+}
+
+/// The stopping builtins, one word to a rule, in the builtin table's
+/// order.  One rule each rather than an alternation: the two scopes
+/// differ, and a theme that wants to colour raising and trapping
+/// apart can, while `package.json` colours both of them red.
+fn stoppingRules(arena: Allocator) Allocator.Error![]const Rule {
+    var rules: std.ArrayList(Rule) = .empty;
+    for (luce.semantics.builtins) |builtin| {
+        const scope = stoppingScope(builtin) orelse continue;
+        try rules.append(arena, .{ .match = .{
+            .scope = scope,
+            .pattern = try std.fmt.allocPrint(arena, "\\b{s}\\b", .{builtin.name}),
+        } });
+    }
+    return rules.toOwnedSlice(arena);
+}
+
+/// The symbol rules of one half of the table — the punctuation or
+/// everything else — **longest spelling first**.
+///
+/// The order is the whole correctness argument.  TextMate takes the
+/// match that starts earliest and, among those, the rule written
+/// first; so `<<=` must be tried before `<<`, `<<` before `<`, and
+/// `==` before `=`, or a compound assignment reads as a comparison
+/// with a stray `=` after it.  Sorting by length gives that for every
+/// pair at once, and rows that stay adjacent afterwards and share a
+/// role are merged into one alternation, which is only a smaller file
+/// and never a different answer.
+fn symbolRules(arena: Allocator, punctuation: bool) Allocator.Error![]const Rule {
+    const rows = try sortedSymbols(arena, punctuation);
+    var rules: std.ArrayList(Rule) = .empty;
+    var start: usize = 0;
+    while (start < rows.len) {
+        var end = start + 1;
+        while (end < rows.len and rows[end].role == rows[start].role) end += 1;
+        var alternatives: std.ArrayList([]const u8) = .empty;
+        for (rows[start..end]) |row| {
+            try alternatives.append(arena, try escaped(arena, row.text));
+        }
+        try rules.append(arena, .{ .match = .{
+            .scope = rows[start].role.scope(),
+            .pattern = try std.mem.join(arena, "|", alternatives.items),
+        } });
+        start = end;
+    }
+    return rules.toOwnedSlice(arena);
+}
+
+/// One half of the symbol table, longest spelling first and the
+/// table's own order within a length — a stable sort, so the output is
+/// a function of the table and nothing else.
+fn sortedSymbols(arena: Allocator, punctuation: bool) Allocator.Error![]Symbol {
+    var rows: std.ArrayList(Symbol) = .empty;
+    for (symbols) |symbol| {
+        if (symbol.role.isPunctuation() == punctuation) try rows.append(arena, symbol);
+    }
+    std.sort.insertion(Symbol, rows.items, {}, struct {
+        fn longerFirst(_: void, left: Symbol, right: Symbol) bool {
+            return left.text.len > right.text.len;
+        }
+    }.longerFirst);
+    return rows.toOwnedSlice(arena);
+}
+
+/// A literal spelling as a regex: every byte a regex would read as
+/// syntax gets a backslash.  Applied to all of them rather than to the
+/// ones that need it today, so a symbol the language gains cannot
+/// arrive as an accidental metacharacter.
+fn escaped(arena: Allocator, text: []const u8) Allocator.Error![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (text) |byte| {
+        if (std.mem.indexOfScalar(u8, "\\^$.[]|()?*+{}", byte) != null) try out.append(arena, '\\');
+        try out.append(arena, byte);
+    }
+    return out.toOwnedSlice(arena);
 }
 
 /// Every name that means the language only behind a `.`: the four
@@ -370,25 +628,34 @@ pub fn emit(gpa: Allocator) Error![]u8 {
         .{try method_words.joined(arena)},
     );
 
+    // A name starts with a letter and carries letters, digits and
+    // underscores after it [VISIBILITY.md R3].  Written once and used
+    // by every rule that names something, so the one place a leading
+    // underscore is refused is `#names` below.
+    const name = "[A-Za-z][A-Za-z0-9_]*";
+
     const func_pattern = try std.fmt.allocPrint(
         arena,
-        "\\b({s})\\s+([A-Za-z_][A-Za-z0-9_]*)",
-        .{spelling(.keyword_func)},
+        "\\b({s})\\s+({s})",
+        .{ spelling(.keyword_func), name },
     );
     const struct_pattern = try std.fmt.allocPrint(
         arena,
-        "\\b({s})\\s+([A-Za-z_][A-Za-z0-9_]*)",
-        .{spelling(.keyword_struct)},
+        "\\b({s})\\s+({s})",
+        .{ spelling(.keyword_struct), name },
     );
     const binding_pattern = try std.fmt.allocPrint(
         arena,
-        "\\b({s}|{s})\\s+([A-Za-z_][A-Za-z0-9_]*)",
-        .{ spelling(.keyword_let), spelling(.keyword_var) },
+        "\\b({s}|{s})\\s+({s})",
+        .{ spelling(.keyword_let), spelling(.keyword_var), name },
     );
+    // `import std.zip` and `import geometry` alike: the module path is
+    // one name or several joined by dots, and the `std.` namespace is
+    // reserved rather than special (docs/STD.md).
     const import_pattern = try std.fmt.allocPrint(
         arena,
-        "\\b({s})\\s+([A-Za-z_][A-Za-z0-9_.]*)",
-        .{spelling(.keyword_import)},
+        "\\b({s})\\s+({s}(?:\\.{s})*)",
+        .{ spelling(.keyword_import), name, name },
     );
 
     // -- comments ----------------------------------------------------------
@@ -503,46 +770,66 @@ pub fn emit(gpa: Allocator) Error![]u8 {
     };
 
     // -- numbers -----------------------------------------------------------
-    // Decimal only, and in the order the lexer decides them
-    // (02_lex/lexer.zig's `number`): the malformed shapes are matched
-    // before the well-formed ones they start with, so `1.2.3` reads as
-    // one mistake rather than a float, a dot and an integer.
+    // **The one correspondence no test here can hold**: there is no
+    // regex engine in this program, so nothing can run these patterns
+    // over a literal and compare the answer to the lexer's.  They are
+    // written next to the lexer's rules and cited to them, and a
+    // change to `number()` is a change to be made here by reading.
+    //
+    // Three bases and the digit separator (docs/BITWISE.md R3, D7),
+    // in the order the lexer decides them (02_lex/lexer.zig's `number`
+    // and `basedNumber`).  The well-formed shapes are written exactly
+    // — separators between digits and nowhere else — and everything a
+    // digit starts that they decline is one malformed literal, which
+    // is the lexer's own boundary: `12ab`, `0x`, `1__0` and `0755` are
+    // each one mistake rather than a number with something after it.
     const number_rules = [_]Rule{
-        // "a number has one decimal point".
+        // "a number has one decimal point", before the float rule that
+        // would otherwise claim the first two thirds of `1.2.3`.
         .{ .match = .{
             .scope = "invalid.illegal.number.luce",
-            .pattern = "\\b\\d+(?:\\.\\d+){2,}",
+            .pattern = "\\b\\d[\\d_]*(?:\\.[\\d_]+){2,}",
         } },
+        // A fraction, an exponent, or both.  A leading zero is only
+        // refused on an *integer*, so `01.5` is a float the lexer
+        // accepts and this rule accepts with it.
         .{ .match = .{
             .scope = "constant.numeric.float.luce",
-            .pattern = "\\b\\d+(?:\\.\\d+(?:[eE][+-]?\\d+)?|[eE][+-]?\\d+)\\b",
+            .pattern = "\\b\\d(?:_?\\d)*(?:\\.\\d(?:_?\\d)*(?:[eE][+-]?\\d(?:_?\\d)*)?" ++
+                "|[eE][+-]?\\d(?:_?\\d)*)\\b",
         } },
         // "a float needs a digit after the point" — but `1.foo` is
         // member access and is left to the accessor rules.
         .{ .match = .{
             .scope = "invalid.illegal.number.luce",
-            .pattern = "\\b\\d+\\.(?![A-Za-z_])",
+            .pattern = "\\b\\d[\\d_]*\\.(?![A-Za-z_])",
         } },
-        // A radix prefix, a digit separator, a unit suffix: one
-        // malformed literal, not a number and a word.
+        .{ .match = .{
+            .scope = "constant.numeric.hex.luce",
+            .pattern = "\\b0[xX][0-9a-fA-F](?:_?[0-9a-fA-F])*\\b",
+        } },
+        .{ .match = .{
+            .scope = "constant.numeric.binary.luce",
+            .pattern = "\\b0[bB][01](?:_?[01])*\\b",
+        } },
+        // A decimal integer, which may not start with a zero: there
+        // are no octal literals in Luce, so `0755` falls through to
+        // the rule below and is refused whole.
+        .{ .match = .{
+            .scope = "constant.numeric.integer.luce",
+            .pattern = "\\b(?:0|[1-9](?:_?\\d)*)\\b",
+        } },
+        // Everything else a digit opens: an octal, an empty or glued
+        // base (`0x`, `0b12`), a misplaced separator (`1_`, `1__0`), a
+        // unit suffix (`12ab`), an unfinished exponent (`1e`).
         .{ .match = .{
             .scope = "invalid.illegal.number.luce",
-            .pattern = "\\b\\d+[A-Za-z_][A-Za-z0-9_]*\\b",
-        } },
-        // "a decimal integer may not start with a zero; there are no
-        // octal literals in Luce".
-        .{ .match = .{
-            .scope = "invalid.illegal.number.luce",
-            .pattern = "\\b0\\d+\\b",
+            .pattern = "\\b\\d[A-Za-z0-9_]*",
         } },
         // "a float needs a digit before the point".
         .{ .match = .{
             .scope = "invalid.illegal.number.luce",
-            .pattern = "(?<![A-Za-z0-9_)\\]])\\.\\d+(?:[eE][+-]?\\d+)?",
-        } },
-        .{ .match = .{
-            .scope = "constant.numeric.integer.luce",
-            .pattern = "\\b\\d+\\b",
+            .pattern = "(?<![A-Za-z0-9_)\\]])\\.\\d[\\d_]*(?:[eE][+-]?\\d[\\d_]*)?",
         } },
     };
 
@@ -579,14 +866,14 @@ pub fn emit(gpa: Allocator) Error![]u8 {
             },
         } },
         .{ .match = .{
-            .pattern = "(\\.)([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\()",
+            .pattern = try std.fmt.allocPrint(arena, "(\\.)({s})(?=\\s*\\()", .{name}),
             .captures = &.{
                 .{ .group = "1", .scope = "punctuation.accessor.luce" },
                 .{ .group = "2", .scope = "entity.name.function.luce" },
             },
         } },
         .{ .match = .{
-            .pattern = "(\\.)([A-Za-z_][A-Za-z0-9_]*)",
+            .pattern = try std.fmt.allocPrint(arena, "(\\.)({s})", .{name}),
             .captures = &.{
                 .{ .group = "1", .scope = "punctuation.accessor.luce" },
                 .{ .group = "2", .scope = "variable.other.member.luce" },
@@ -603,55 +890,32 @@ pub fn emit(gpa: Allocator) Error![]u8 {
         .{ .match = .{ .scope = "support.function.builtin.host.luce", .pattern = host_pattern } },
     };
 
+    // -- the two words that stop a program ---------------------------------
+    const stopping_rules = try stoppingRules(arena);
+
+    // -- names -------------------------------------------------------------
+    // A name starts with a letter, so a word that opens with an
+    // underscore is `luce.lex.name` and not a name at all
+    // [VISIBILITY.md R3].  The lone `_` is left alone: it is the
+    // array-shape wildcard (`array(double, _, _)`) and declares
+    // nothing, so it is neither a name nor a mistake.
+    const name_rules = [_]Rule{
+        .{ .match = .{
+            .scope = "invalid.illegal.name.luce",
+            .pattern = "\\b_[A-Za-z0-9_]+\\b",
+        } },
+    };
+
     // -- calls, operators, punctuation -------------------------------------
     const call_rules = [_]Rule{
         .{ .match = .{
             .scope = "entity.name.function.call.luce",
-            .pattern = "\\b[A-Za-z_][A-Za-z0-9_]*(?=\\s*\\()",
+            .pattern = try std.fmt.allocPrint(arena, "\\b{s}(?=\\s*\\()", .{name}),
         } },
     };
 
-    const operator_rules = [_]Rule{
-        .{ .match = .{
-            .scope = "keyword.operator.function-return.luce",
-            .pattern = "->",
-        } },
-        .{ .match = .{
-            .scope = "keyword.operator.comparison.luce",
-            .pattern = "==|!=|<=|>=|<|>",
-        } },
-        .{ .match = .{
-            .scope = "keyword.operator.assignment.luce",
-            .pattern = "(?<![=!<>])=(?!=)",
-        } },
-        // `T!` and `-> !`: the fallible marker (docs/FAILURE.md).  `!=`
-        // is matched above, so what is left here is never a comparison.
-        .{ .match = .{
-            .scope = "keyword.operator.fallible.luce",
-            .pattern = "!(?!=)",
-        } },
-        // `T?`: the optional marker.  Luce spells nothing else with a
-        // question mark — there is no conditional expression — so the
-        // bare character is exact.
-        .{ .match = .{
-            .scope = "keyword.operator.optional.luce",
-            .pattern = "\\?",
-        } },
-        .{ .match = .{
-            .scope = "keyword.operator.arithmetic.luce",
-            .pattern = "\\+|-|\\*|/|%",
-        } },
-    };
-
-    const punctuation_rules = [_]Rule{
-        .{ .match = .{ .scope = "punctuation.section.group.begin.luce", .pattern = "\\(" } },
-        .{ .match = .{ .scope = "punctuation.section.group.end.luce", .pattern = "\\)" } },
-        .{ .match = .{ .scope = "punctuation.section.brackets.begin.luce", .pattern = "\\[" } },
-        .{ .match = .{ .scope = "punctuation.section.brackets.end.luce", .pattern = "\\]" } },
-        .{ .match = .{ .scope = "punctuation.separator.comma.luce", .pattern = "," } },
-        .{ .match = .{ .scope = "punctuation.separator.colon.luce", .pattern = ":" } },
-        .{ .match = .{ .scope = "punctuation.accessor.luce", .pattern = "\\." } },
-    };
+    const operator_rules = try symbolRules(arena, false);
+    const punctuation_rules = try symbolRules(arena, true);
 
     // -- the code group ----------------------------------------------------
     // Everything that is neither a comment nor a string, named once so
@@ -659,9 +923,11 @@ pub fn emit(gpa: Allocator) Error![]u8 {
     const code_rules = [_]Rule{
         .{ .include = "#numbers" },
         .{ .include = "#keywords" },
+        .{ .include = "#stopping" },
         .{ .include = "#types" },
         .{ .include = "#accessors" },
         .{ .include = "#builtins" },
+        .{ .include = "#names" },
         .{ .include = "#calls" },
         .{ .include = "#operators" },
         .{ .include = "#punctuation" },
@@ -675,9 +941,11 @@ pub fn emit(gpa: Allocator) Error![]u8 {
         .{ .name = "comments", .patterns = &comment_rules },
         .{ .name = "declarations", .patterns = &declaration_rules },
         .{ .name = "keywords", .patterns = &keyword_rules },
+        .{ .name = "names", .patterns = &name_rules },
         .{ .name = "numbers", .patterns = &number_rules },
-        .{ .name = "operators", .patterns = &operator_rules },
-        .{ .name = "punctuation", .patterns = &punctuation_rules },
+        .{ .name = "operators", .patterns = operator_rules },
+        .{ .name = "punctuation", .patterns = punctuation_rules },
+        .{ .name = "stopping", .patterns = stopping_rules },
         .{ .name = "strings", .patterns = &string_rules },
         .{ .name = "types", .patterns = &type_rules },
     };
@@ -997,13 +1265,17 @@ test "every keyword the lexer reserves has a class" {
     }
 }
 
-/// How many of the five word classes claim `word`.
+/// How many of the word classes claim `word`.
 fn classesClaiming(gpa: Allocator, word: []const u8) !usize {
     var count: usize = 0;
     for (classes) |class| {
         var words = try keywordsOf(gpa, class);
         defer words.deinit();
         if (words.has(word)) count += 1;
+    }
+    for (luce.semantics.builtins) |builtin| {
+        if (stoppingScope(builtin) == null) continue;
+        if (std.mem.eql(u8, builtin.name, word)) count += 1;
     }
     var types = try typeNames(gpa);
     defer types.deinit();
@@ -1100,4 +1372,81 @@ fn isWordStart(byte: u8) bool {
 
 fn isWordPart(byte: u8) bool {
     return byte == '_' or std.ascii.isAlphanumeric(byte);
+}
+
+test "every symbol the lexer has a kind for has a row, and only one" {
+    // The guard the bit set went without: `&`, `|`, `^`, `~`, `<<` and
+    // `>>` reached `Kind` and the grammar heard nothing, because the
+    // operator rules were a hand-written list nothing compared to the
+    // language.  This is that comparison.
+    inline for (std.meta.fields(luce.lex.Kind)) |declared| {
+        const kind: luce.lex.Kind = @enumFromInt(declared.value);
+        if (isSymbolKind(kind)) {
+            var found: usize = 0;
+            for (symbols) |symbol| {
+                if (symbol.kind == kind) found += 1;
+            }
+            if (found != 1) {
+                std.debug.print(
+                    "token kind '{s}' has {d} rows in `symbols`, want 1\n",
+                    .{ declared.name, found },
+                );
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}
+
+test "every symbol's spelling lexes back to the kind it claims" {
+    // The other half of the copy's price: a row may not merely exist,
+    // it has to be what the lexer reads.  Each spelling is lexed on
+    // its own line, and the token in front of the layout must be the
+    // kind the row names — so a symbol that changes meaning in the
+    // language changes here or this names the row that lied.
+    const gpa = std.testing.allocator;
+    for (symbols) |symbol| {
+        var text: [16]u8 = undefined;
+        const source = try std.fmt.bufPrint(&text, "{s}\n", .{symbol.text});
+        var diagnostics = luce.diagnostics.Diagnostics.init(gpa);
+        defer diagnostics.deinit();
+        const lexed = try luce.lex.lex(gpa, source, &diagnostics);
+        defer gpa.free(lexed.tokens);
+        if (lexed.tokens.len == 0 or lexed.tokens[0].kind != symbol.kind) {
+            std.debug.print(
+                "'{s}' lexes as {s}, not {s}\n",
+                .{
+                    symbol.text,
+                    if (lexed.tokens.len == 0) "nothing" else @tagName(lexed.tokens[0].kind),
+                    @tagName(symbol.kind),
+                },
+            );
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "a symbol is always tried before the shorter one it opens with" {
+    // What makes `<<=` a compound assignment rather than a shift and a
+    // stray `=`, and `==` a comparison rather than two assignments:
+    // TextMate takes the first rule that matches at a position, and
+    // the rules are written in this order, so a spelling that another
+    // one starts with must come after it.
+    const gpa = std.testing.allocator;
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    for ([_]bool{ false, true }) |punctuation| {
+        const rows = try sortedSymbols(arena, punctuation);
+        for (rows, 0..) |row, index| {
+            for (rows[index + 1 ..]) |later| {
+                if (!std.mem.startsWith(u8, later.text, row.text)) continue;
+                if (later.text.len == row.text.len) continue;
+                std.debug.print(
+                    "'{s}' is written before '{s}', which opens with it\n",
+                    .{ row.text, later.text },
+                );
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
 }
