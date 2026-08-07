@@ -46,7 +46,10 @@ test` is green: **849/849 in 71.1 s**.
 > arms. This file is the decision record, so the measurements and the
 > names stay as taken; `docs/CODEGEN.md` and `docs/PIPELINE.md`
 > describe what is there now, and where they disagree with a Hat, they
-> win.
+> win.  **The same holds for "What is actually there" immediately
+> below**: its line counts and test counts were taken at `df5d48f` as
+> well, and they are the measurement this audit reasoned from, not a
+> figure kept current — the build summary is the only live number.
 
 ---
 

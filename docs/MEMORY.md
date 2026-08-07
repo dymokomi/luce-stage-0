@@ -11,7 +11,7 @@
 
 > **Decided and implemented.**  The situation-by-situation
 > specification distilled from this memo lives in `docs/OWNERSHIP.md`
-> (ratified S1–S43) and is live in the compiler and in `libluce_rt`,
+> (ratified S1–S45) and is live in the compiler and in `libluce_rt`,
 > the one runtime compiled code and the test suite's oracle both call
 > (`docs/CODEGEN.md`), proven by `src/luce/specs/ownership_spec.zig`.
 > This memo is kept as the record of the options weighed and why scope

@@ -72,57 +72,59 @@ sophisticated half of the design — it is the half that pays.
 
 The rest of what the tree says, checked rather than assumed:
 
-- **MIR has no unchecked add to lower to.**  `06_mir/defs.zig:246`:
-  `Binary = struct { op, operand_type, left, right }`.  Checkedness is
+- **MIR has no unchecked add to lower to.**  `06_mir/defs.zig`'s
+  `Instruction.Binary` is `{ op, operand_type, left, right }`.  Checkedness is
   not a field; it is implied by `operand_type` being `.int` or
   `.long`.  Every `.binary` with an integer operand type is checked,
   everywhere, on both engines.
-- **The check is a branch per operation.**  `lower.zig:3986`
-  (`emitChecked`) calls `llvm.sadd.with.overflow` / `ssub` / `smul`,
-  extracts the flag, and hands it to `check` (`lower.zig:3410`), which
+- **The check is a branch per operation.**  `lower.zig`'s
+  `emitChecked` calls `llvm.sadd.with.overflow` / `ssub` / `smul`,
+  extracts the flag, and hands it to `Body.check`, which
   makes a *fresh* pair of blocks — `trap` and `ok` — per operation and
   continues lowering in `ok`.  `arrays32`'s inner loop therefore has
   two side exits per element.
 - **The trap path is cold, not `noreturn`.**  It calls
   `luce_rt_raise`, then `luce_rt_unwound(runtime, function, instruction)`,
   then `ret i32 1`.  Both runtime calls are `.cold`
-  (`08_llvm/runtime_effects.zig:373`).  The instruction index it
-  reports is `self.current`, set per MIR instruction at
-  `lower.zig:3425`, and resolved against the per-function
+  (`08_llvm/runtime_effects.zig`'s table).  The instruction index it
+  reports is `Body.current`, set per MIR instruction as `lower.zig`
+  walks the block, and resolved against the per-function
   `luce.origins.{d}` table.
 - **There is one arithmetic implementation.**  The oracle executes
-  `.binary` by calling the same `runtime/operators.zig:47` the
-  compiled path's semantics come from (`interpreter/machine.zig:405`).
+  `.binary` by calling the same `runtime/operators.zig`'s `binary` the
+  compiled path's semantics come from (`interpreter/machine.zig`'s
+  dispatch loop).
   The two arms differ only in *how* the overflow bit is obtained.
-- **Both engines see the same post-optimize MIR.**  `compile.zig:145`
-  runs stage 7 and re-verifies, and `compileProject` returns the
-  optimized program; `specs/agree.zig:1259` hands one
-  `*const mir.Program` to both arms.  No serialization sits between
+- **Both engines see the same post-optimize MIR.**  `compile.zig`'s
+  stage 7 runs `optimize.run` and re-verifies, and `compileProject`
+  returns the optimized program; `specs/agree.zig`'s `compareProgram`
+  hands one `*const mir.Program` to both arms.  No serialization sits between
   them.
 - **Nothing in the tree does value-range analysis**, and
-  `07_optimize.zig:16-19, 97-105` records that two passes which tried
+  `07_optimize.zig`'s header — "Not for scalar optimization" and "What
+  deliberately does not run, and why" — records that two passes which tried
   (`flow` and `values`, ~498 lines) were *deleted* after measuring 0%
   benefit on the compiled path, on the ground that `default<O3>` does
   it better.  Any design that adds a lattice is arguing against a
   written and measured position.
-- **`heap.max_array_elements` is `1 << 24`** (`runtime/heap.zig:514`),
-  enforced by `newArray` per dimension and on the product
-  (`heap.zig:892, 896`).  It is re-exported at `runtime.zig:63` and
-  **has no consumers**.  `docs/TYPES.md:1516` records that it counts
-  elements rather than bytes and that this is a known wart left
-  deliberately unfixed.
+- **`heap.max_array_elements` is `1 << 24`** (`runtime/heap.zig`),
+  enforced by `newArray` per dimension and on the product.  It is
+  re-exported from the `runtime.zig` barrel and **has no consumers**.
+  `docs/TYPES.md` records that it counts elements rather than bytes
+  and that this is a known wart left deliberately unfixed.
 - **Lists have no cap and no inline indexing.**  A `list` element read
   is a runtime call (`docs/CODEGEN.md`: "`list`, whose buffer moves
   under `append`" is deliberately off the inline path), and a call in
   the loop defeats both view-stability and the vectorizer.  Everything
   below is about `array` and says so.
 - **`byte` and `short` are storage, not arithmetic**
-  (`support/types.zig:43, 173`).  `byte + byte` is an `int`; the
-  verifier refuses storage-width arithmetic outright
-  (`06_mir/verify.zig:333`).  So the integer accumulator widths are
+  (`support/types.zig`'s `Type`, and its `widensTo`).  `byte + byte`
+  is an `int`; the verifier refuses storage-width arithmetic outright
+  (`06_mir/verify.zig`, D5: "No operator computes at a storage
+  width").  So the integer accumulator widths are
   `int` and `long`, and only those two.
-- **`abs` already knows `minInt` is a trap** (`lower.zig:4415`,
-  `operators.zig:611`).  The witness below must not use it.
+- **`abs` already knows `minInt` is a trap** (`lower.zig`'s `.abs`
+  arm, `operators.zig`'s `absolute`).  The witness below must not use it.
 
 ---
 
@@ -170,7 +172,7 @@ have trapped.  If the proof lives in the lowering, **the oracle keeps
 checking**: it runs `runtime/operators.zig`'s `@addWithOverflow` on
 every element, always.  A proof that is wrong by one element produces a
 compiled run that wraps and an interpreted run that traps, and
-`specs/agree.zig:1276` fails on the trap code, the message, the trace
+`specs/agree.zig`'s `compare` fails on the trap code, the message, the trace
 and the transcript at once.  The differential oracle is the
 un-optimized reference this design needs, and it already exists.  It
 ships in nothing, so it costs nothing to keep checking.
@@ -206,7 +208,7 @@ and `N` terms each of magnitude at most `M`, every prefix satisfies
 `N` is `heap.max_array_elements` = 2^24 = 16,777,216, which bounds the
 trip count *only because the loop's bound is that array's own length*
 — see [what the proof must see](#what-the-proof-must-see).  `M` comes
-from `types.Type.integerRange` (`support/types.zig:158`), which is the
+from `types.Type.integerRange` (`support/types.zig`), which is the
 only bound source this design uses: **type-derived, never
 dataflow-derived.**  A type-derived bound needs no lattice and cannot
 go stale.
@@ -278,7 +280,7 @@ additional requirements are:
   array-bounded.
 - **The proof is re-derivable from MIR alone.**  A `.lcm` reaches
   stage 8 through `decode` without ever passing the analyzer
-  (`loops.zig:180` makes the same point about block ordering).  Every
+  (`loops.zig`'s header makes the same point about block ordering).  Every
   fact used here is either a type in the module or a cap the *runtime*
   enforces at `new array`, so the proof holds for any module that
   reaches the backend, forged or not.
@@ -436,8 +438,8 @@ may not itself wrap into a value that makes a false witness true.
 
 - **The magnitude is unsigned, never `abs`.**  `|INT64_MIN|` is not
   representable as an `i64`, and the tree already knows it —
-  `lower.zig:4415` checks `held == minInt` before `llvm.abs` and
-  `operators.zig:611` raises `integer_overflow` there.  The witness
+  `lower.zig`'s `.abs` arm checks `held == minInt` before `llvm.abs`
+  and `operators.zig`'s `absolute` raises `integer_overflow` there.  The witness
   computes the magnitude as a `u64`: `x < 0 ? 0 − (u64)x : (u64)x`,
   which is exact for `INT64_MIN` (it gives `2^63`) and is two vector
   instructions.  The same expression serves every element width after
@@ -536,7 +538,7 @@ And the proof of (4) is not a proof, it is a test suite: **the oracle
 always runs `slow`'s semantics.**  Every program in `specs/` executes
 on both arms and is compared on the transcript, the trap code, the
 trap message, the call trace frame for frame, the leak census and the
-world left behind (`agree.zig:1276`).  A speculation bug is a
+world left behind (`agree.zig`'s `compare`).  A speculation bug is a
 divergence, and a divergence is a red suite.  This needs no new
 verification machinery and no compile-time knob to disable
 vectorization — **adding such a knob would be the mistake**, since it
@@ -551,7 +553,7 @@ extracted `cfg.zig`) satisfying all of:
 - `L` has a single preheader whose only successor is `L`'s header —
   `loops.zig`'s existing `preheader` test — and the preheader is
   lowered before every block that reads what it emits
-  (`loops.zig:182`).
+  (`loops.zig`'s `emittedFirst`).
 - **View-stable.**  `optimize.effects.viewStable` holds for every
   instruction in `L`, with `loops.zig`'s one refinement for
   `index_set` of a plain element.  No call, no allocation, no free —
@@ -872,11 +874,12 @@ has read only the benchmark.
 
 Sized honestly, and placed against the queue: map-upsert (a
 `V?`-returning `m.get`, `docs/MISSING.md` item 6) is in flight, the
-host surface still owes `exit` and `std.paths`, and cross-compilation
-(item 8) is the largest backend item outstanding.  This work goes
+host surface still owes `exit` and `std.paths` [both shipped since
+this was written — the queue moved, the ranking below did not], and
+cross-compilation (item 8) is the largest backend item outstanding.  This work goes
 **after the two small in-flight items and before cross-compilation**,
 because `docs/MISSING.md`'s own summary says the runtime's outstanding
-item is speed and names `strings` at 2.73× — and `arrays32` at 8.14×
+item is speed and names `strings` at 2.74× — and `arrays32` at 8.14×
 is now the worse row by a factor of three.
 
 **Step 0 — the ceiling. Half a day. Gates everything.**
@@ -902,7 +905,7 @@ The witness emission, the two-arm shape, the phi.  The hard part is
 not the mathematics — it is above, and it is short — it is making
 `lower.zig` emit *two* loops where it has only ever emitted one: the
 `blocks: []BlockIndex` map holds only the first LLVM block of each IR
-block (`lower.zig:1445`), and every checked operation already
+block (`lower.zig`'s `Body`), and every checked operation already
 continues into blocks nothing jumps to.  Budget the block bookkeeping,
 not the algebra.  Then the Layer 2 specs, then the thirteen-mutation
 sweep, then a `docs/CODEGEN.md` snapshot with `arrays32` re-measured
