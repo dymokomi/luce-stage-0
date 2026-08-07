@@ -1229,7 +1229,19 @@ per **struct** (its namespaced functions: `Text.width(...)`), and per
 **function** (parameters and every indented block; `if`/`while`/`for`
 bodies open nested scopes).  No shadowing anywhere; `let` is
 immutable; `var` is mutable; loop variables are immutable inside the
-body.  Structs contain namespace functions and methods
+body.
+
+**`let` freezes the name, not the object it reached.**  `xs.append(v)`,
+`xs.sort()`, `xs[0] = v`, `bag.counts[0] = v` and `cells[0].value += 1`
+all go through an immutable name, because none of them writes the
+name: the store lands in the heap object, which is shared and mutable
+whoever holds it (S8).  That is what lets every function that takes a
+container fill it — a parameter is a `let`-bound name.  What `let`
+refuses is a store that lands in the binding's own storage: `p = q`,
+`p.x = 3` and `p.inner.y = 3` on a struct **value**, at any depth,
+because a value lives in the name.
+
+Structs contain namespace functions and methods
 (docs/METHODS.md); there is no inheritance and no dispatch —
 `Struct.func(...)` is a name.
 

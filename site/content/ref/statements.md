@@ -241,6 +241,33 @@ Neither freezes what the name points at: `let xs = [1, 2]` still
 permits `xs.append(3)`, and refuses `xs = [9]`. This is JavaScript's
 `const`, not Swift's `let`.
 
+The rule reaches every spelling of a store, not only the method call.
+`xs[0] = 9`, `bag.counts[0] = 9` and `cells[0].value += 1` are all
+legal through an immutable name, because the store lands in the heap
+object rather than in the name — which is what lets a function fill a
+container it was handed, since a parameter is a `let`-bound name. What
+`let` refuses is a store that lands in the binding's own storage:
+`p.x = 3` and `p.inner.y = 3` on a struct **value**, at any depth,
+because a value lives in the name.
+
+```luce run
+struct Cell:
+    value: long
+
+func bump(cells: list(Cell)):
+    cells[0].value += 1
+
+func main():
+    let cells: list(Cell) = [Cell(value = 1)]
+    cells[0].value = 10
+    bump(cells)
+    print(string(cells[0].value))
+```
+
+```output
+11
+```
+
 No name may shadow one from an enclosing scope. A loop variable is
 immutable inside its body.
 

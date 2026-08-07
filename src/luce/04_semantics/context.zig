@@ -177,9 +177,21 @@ pub fn writeMissingFields(
 /// left out.  It was left out seven times: the `term_*` services
 /// arrived without their names, so a program could declare
 /// `func term_rows():` over the builtin and get whichever the
-/// resolver reached first.  The names of the *methods* are deliberately
-/// not here — `sort` and `has` are resolved by receiver type, so a
-/// function called `sort` collides with nothing.
+/// resolver reached first.
+///
+/// **Most method names are deliberately not here** — `sort`, `find`,
+/// `contains`, `clear`, `keys`, `values`, `get`, `build` and the rest
+/// are resolved by receiver type, so a function called `sort` collides
+/// with nothing.  **Seven are here anyway**: `append`, `insert`,
+/// `pop`, `remove`, `has`, `dim` and `byte_at`.  Nothing in the
+/// resolver needs them to be — a method call names its receiver — so
+/// the rule a reader can predict from this list is not the rule the
+/// list states, and the cost is real: `std.files` spells
+/// `append_text` because `append` is here, and `std.json` offers no
+/// `has` beside its `get` for the same reason.  Whether those seven
+/// should stay is a language question and not a resolver one; until it
+/// is answered, this paragraph is the answer to "why can I write
+/// `func sort` and not `func has`".
 pub const reserved_names = [_][]const u8{
     // The three conversion constructors (docs/TYPES.md D8).  The
     // container names are deliberately *not* here: `list` and `map`

@@ -151,6 +151,15 @@ func main():
 Decision: aliasing is free and untracked.  (Casual users never meet
 ownership here.)
 
+The alias above is a `let`, and it mutates: **`let` freezes the name,
+not the object.**  Every spelling of a store into the object is legal
+through an immutable name — `view.append(4)`, `view[0] = 9`,
+`bag.counts[0] = 9`, `cells[0].value += 1` — because none of them
+writes the name, and a parameter is a `let`-bound name, which is what
+lets a function fill the container it was handed.  What `let` refuses
+is a store that lands in the binding's own storage: `p.x = 3` on a
+struct **value**, at any depth (docs/LANGUAGE.md, "Scope").
+
 **S9. An alias used after the owner is gone traps at use.**
 ```luce
 func main():

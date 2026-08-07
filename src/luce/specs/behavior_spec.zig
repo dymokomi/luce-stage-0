@@ -1110,6 +1110,57 @@ test "compound assignment on struct fields and container elements" {
     );
 }
 
+test "a let binding freezes the name, never the object it reached" {
+    // The rule everywhere else in the language: `xs.append(v)`,
+    // `xs.sort()` and `xs[0] = v` all go through an immutable name,
+    // because none of them writes the name.  A nested place is the
+    // same store spelled with a field on the end — the rebuild stops
+    // at the innermost `index_set` and the local is never re-stored —
+    // so it obeys the same rule.  It did not until this spec was
+    // written, and the sentence it was refused with named a
+    // reassignment that the emitted code does not perform.
+    //
+    // A borrowed parameter is the case that matters: every function
+    // that takes a container takes a `let`-bound name for it.
+    try agreeOk(
+        \\struct Cell:
+        \\    value: long
+        \\    label: string
+        \\
+        \\struct Bag:
+        \\    cells: list(Cell)
+        \\
+        \\func bump(cells: list(Cell)):
+        \\    cells[0].value += 1
+        \\
+        \\func main():
+        \\    let cells: list(Cell) = [Cell(value = 1, label = "a")]
+        \\    cells[0].value = 10
+        \\    cells[0].label = "b"
+        \\    bump(cells)
+        \\    assert(cells[0].value == 11)
+        \\    assert(cells[0].label == "b")
+        \\
+        \\    # Down a field, into the object it names, and on to a
+        \\    # field of the element.
+        \\    let bag = Bag(cells = [Cell(value = 2, label = "x")])
+        \\    bag.cells[0].value = 7
+        \\    assert(bag.cells[0].value == 7)
+        \\
+        \\    # And the two spellings that were always legal, beside
+        \\    # the one that now is.
+        \\    let numbers = [1, 2, 3]
+        \\    numbers[0] = 9
+        \\    numbers.append(4)
+        \\    assert(numbers[0] == 9 and len(numbers) == 4)
+        \\
+        \\    let grid = new array(Cell, 2)
+        \\    grid[1].value = 5
+        \\    assert(grid[1].value == 5)
+        \\
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Zero values: define on write, never on read
 // ---------------------------------------------------------------------------

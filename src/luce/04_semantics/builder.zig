@@ -2544,7 +2544,33 @@ pub const FunctionBuilder = struct {
         };
         std.mem.reverse(*const ast.Expression, steps.items);
 
-        // The root must be a mutable, usable local.
+        // **Does this store land in the root's own slot?**  It does
+        // when every step is a field: the rebuild below functionally
+        // updates each struct outward and finishes with a `store` into
+        // the local, so the local is genuinely reassigned and `let`
+        // forbids it.  It does *not* when any step is an index: the
+        // rebuild stops at the innermost `index_set`, which writes
+        // through the object reference and never reaches the local
+        // (`06_mir/build.zig`'s `rebuild` — "the object mutated in
+        // place").
+        //
+        // `let` freezes the binding, not the object, everywhere else
+        // in the language — `xs.append(v)`, `xs.sort()`, `xs[0] = v`
+        // and `bag.counts[0] = v` are all legal through an immutable
+        // name, because none of them writes the name.  Asking `var` of
+        // `xs[0].field = v` alone made two spellings of one store
+        // disagree, and said so in a sentence about a reassignment the
+        // emitted code provably does not perform.
+        var writes_root = true;
+        for (steps.items) |node| {
+            if (node.* == .index) {
+                writes_root = false;
+                break;
+            }
+        }
+
+        // The root must be a usable local, and a mutable one when the
+        // store lands in it.
         if (std.mem.eql(u8, root.text, "input") or std.mem.eql(u8, root.text, "output")) {
             try self.fail("luce.sema.name", root.span, "ports are not nested places", .{});
             return;
@@ -2554,7 +2580,7 @@ pub const FunctionBuilder = struct {
             return;
         };
         const info = found.info;
-        if (!info.mutable) {
+        if (!info.mutable and writes_root) {
             try self.fail("luce.sema.let", root.span, "{s} is let-bound; use var for reassignment", .{root.text});
             return;
         }
