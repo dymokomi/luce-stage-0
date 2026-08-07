@@ -35,6 +35,9 @@ pub const ownership = @import("specs/ownership_spec.zig");
 pub const errors = @import("specs/errors_spec.zig");
 /// The standard library (docs/STD.md).
 pub const standard = @import("specs/std_spec.zig");
+/// `std.zip`: a container format, so the specification is other
+/// people's bytes as well as its own.
+pub const zip = @import("specs/zip_spec.zig");
 /// The host boundary: every effect, offered and withheld.
 pub const host = @import("specs/host_spec.zig");
 /// Several files compiled as one program (`compile/modules.zig`).
@@ -56,6 +59,7 @@ test {
     _ = ownership;
     _ = errors;
     _ = standard;
+    _ = zip;
     _ = host;
     _ = modules;
     _ = optimizer;

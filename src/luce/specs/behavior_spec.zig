@@ -5373,3 +5373,51 @@ test "storage: a parameter and a return may be a storage width" {
         \\
     );
 }
+
+// ---------------------------------------------------------------------------
+// What a call that raises leaves behind
+// ---------------------------------------------------------------------------
+
+test "failure: a call that raises leaves nothing where its value would have gone" {
+    // The lowering stores a fallible call's result into the temporary
+    // *before* it branches on `errored`, because one register carries
+    // both answers.  So what a raising call leaves in that register is
+    // load-bearing, and it has to be nothing: inside a loop the
+    // register still holds the previous turn's result, whose storage
+    // the body has already released.  Storing that into an owning
+    // local hands a freed struct run to the release at frame end.
+    //
+    // Found by `std.zip`: an `inflate` whose bit reader raised on the
+    // second turn of the block loop segfaulted the interpreter, while
+    // the compiled arm — where a raising call returns a zeroed result
+    // — was fine.  This is the two engines saying the same thing.
+    try agree.errors(
+        \\struct Cursor:
+        \\    private position: long
+        \\
+        \\    func take(var self, data: list(long)) -> long!:
+        \\        if self.position >= len(data):
+        \\            error("out of bits")
+        \\        let value = data[self.position]
+        \\        self.position += 1
+        \\        return value
+        \\
+        \\    func drain(var self, data: list(long), out: list(long)) -> !:
+        \\        while true:
+        \\            let value = try self.take(data)
+        \\            if value == 0:
+        \\                return
+        \\            out.append(value)
+        \\
+        \\func run(data: list(long)) -> list(long)!:
+        \\    var cursor = Cursor(position = 0)
+        \\    var out: list(long) = []
+        \\    try cursor.drain(data, out)
+        \\    return out
+        \\
+        \\func main() -> !:
+        \\    var data: list(long) = [7, 9]
+        \\    let back = try run(data)
+        \\
+    , budget, .user_error, "out of bits");
+}

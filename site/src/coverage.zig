@@ -704,6 +704,15 @@ test "each std page names every function and constant its module exports" {
         // visibility rather than by documentation.
         try expectDocumented(repository, "std/strings.md", names, &.{});
     }
+    {
+        var names = try standardModule(repository, "zip");
+        defer names.deinit();
+        // No exemptions: everything below the surface — the
+        // little-endian field readers, the DEFLATE tables, the
+        // Huffman construction — is `private`, so the roster is the
+        // eight functions the page documents and nothing else.
+        try expectDocumented(repository, "std/zip.md", names, &.{});
+    }
 }
 
 test "the toolchain page names every option and command word the binaries take" {
