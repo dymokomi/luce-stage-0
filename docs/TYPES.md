@@ -456,7 +456,7 @@ let h: Half = 1e5               # 100000 > 65504 — refused, at compile time
 Three properties, and the third is the one that matters:
 
 **Constants stay untyped through arithmetic.** `2 * 3`, `-4`, and every
-file-scope `let` — which `04_semantics/declarations.zig` already folds
+file-scope `let` — which `04_semantics/constants.zig` already folds
 — remain untyped, so `let width = 4` composes into a `Byte` context and
 a `Long` context alike.
 

@@ -28,7 +28,7 @@
 //!   symbols   `02_lex/token.zig`'s `Kind`, one row per punctuation
 //!             and operator token — the bit set included
 //!   types     `support/types.zig`'s `builtin_names`, plus `None`
-//!   builtins  `04_semantics/builder.zig`'s `builtins`
+//!   builtins  `04_semantics/builtins.zig`'s `builtins`
 //!   methods   the same file's five method tables
 //!
 //! A keyword the language gains reaches the grammar by itself; a

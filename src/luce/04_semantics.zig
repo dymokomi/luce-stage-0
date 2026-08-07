@@ -61,9 +61,21 @@
 //!   declarations.zig — pass one: collect struct layouts, function
 //!                      signatures, top-level constants, and the
 //!                      selected entry; then drive pass two.
+//!   constants.zig    — compile-time evaluation: the one folder every
+//!                      constant, enum value and default goes through.
+//!                      It answers with a value and never emits, which
+//!                      is what makes it a file rather than a region
+//!                      of pass one.
 //!   builder.zig      — pass two: the checked walk of every function
 //!                      body, recording what it decides on stage 6's
 //!                      tape as it goes.
+//!   builtins.zig     — what the language spells for itself: the free
+//!                      builtins, the method tables, and what each
+//!                      lowers to.  Data, read by the walk *and* by
+//!                      the editor grammar and the site's coverage
+//!                      test, which is why it is its own file.
+//!   effects.zig      — what running an AST subtree could disturb,
+//!                      asked before it is lowered.
 //!   helpers.zig      — the small shared predicates both passes use.
 
 pub const Error = @import("04_semantics/context.zig").Error;
@@ -72,25 +84,27 @@ pub const ModuleTree = @import("04_semantics/context.zig").ModuleTree;
 pub const analyze = @import("04_semantics/declarations.zig").analyze;
 pub const max_diagnostics = @import("04_semantics/declarations.zig").max_diagnostics;
 
-// What the language spells, published for the one tool that has to say
+// What the language spells, published for the tools that have to say
 // the same words the compiler does: `tools/grammar.zig` generates the
 // editor's TextMate grammar from these tables, so a name added to the
 // language reaches the grammar without anyone remembering to copy it.
-// Each table still lives beside the dispatch that reads it.
+// The tables themselves are `04_semantics/builtins.zig`.
 pub const reserved_names = @import("04_semantics/context.zig").reserved_names;
 pub const isReserved = @import("04_semantics/context.zig").isReserved;
-pub const Builtin = @import("04_semantics/builder.zig").Builtin;
-pub const builtins = @import("04_semantics/builder.zig").builtins;
-const FunctionBuilder = @import("04_semantics/builder.zig").FunctionBuilder;
-pub const list_methods = FunctionBuilder.list_methods;
-pub const array_methods = FunctionBuilder.array_methods;
-pub const map_methods = FunctionBuilder.map_methods;
-pub const builder_methods = FunctionBuilder.builder_methods;
-pub const string_methods = FunctionBuilder.string_methods;
+pub const Builtin = @import("04_semantics/builtins.zig").Builtin;
+pub const builtins = @import("04_semantics/builtins.zig").builtins;
+pub const list_methods = @import("04_semantics/builtins.zig").list_methods;
+pub const array_methods = @import("04_semantics/builtins.zig").array_methods;
+pub const map_methods = @import("04_semantics/builtins.zig").map_methods;
+pub const builder_methods = @import("04_semantics/builtins.zig").builder_methods;
+pub const string_methods = @import("04_semantics/builtins.zig").string_methods;
 
 test {
     _ = @import("04_semantics/context.zig");
     _ = @import("04_semantics/declarations.zig");
     _ = @import("04_semantics/builder.zig");
+    _ = @import("04_semantics/builtins.zig");
+    _ = @import("04_semantics/constants.zig");
+    _ = @import("04_semantics/effects.zig");
     _ = @import("04_semantics/helpers.zig");
 }

@@ -194,7 +194,7 @@ fn builtins(repository: Repository) !Names {
     var names: Names = .{ .gpa = repository.gpa };
     errdefer names.deinit();
 
-    const source = try repository.read("src/luce/04_semantics/builder.zig");
+    const source = try repository.read("src/luce/04_semantics/builtins.zig");
     defer repository.gpa.free(source);
 
     // The table's own closing brace, at column zero — not the first
@@ -235,7 +235,7 @@ const BuiltinSignature = struct {
 /// multi-line row (`term_style`) carries one slot per deeper-indented
 /// line.  Caller frees with `freeSignatures`.
 fn builtinSignatures(repository: Repository) ![]BuiltinSignature {
-    const source = try repository.read("src/luce/04_semantics/builder.zig");
+    const source = try repository.read("src/luce/04_semantics/builtins.zig");
     defer repository.gpa.free(source);
     const table = between(source, "const builtins = [_]Builtin{", "\n};") orelse
         return error.BuiltinTableNotFound;
@@ -362,7 +362,7 @@ fn methods(repository: Repository) !Names {
     var names: Names = .{ .gpa = repository.gpa };
     errdefer names.deinit();
 
-    const source = try repository.read("src/luce/04_semantics/builder.zig");
+    const source = try repository.read("src/luce/04_semantics/builtins.zig");
     defer repository.gpa.free(source);
 
     for ([_][]const u8{

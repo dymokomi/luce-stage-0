@@ -987,7 +987,7 @@ parameter. §2 says why for each.
 
 ### The folder already exists and is most of the implementation
 
-`foldConstant` (`04_semantics/declarations.zig:1107`) folds file-scope
+`constants.fold` (`04_semantics/constants.zig`) folds file-scope
 `let` today, with a landing type, lazy evaluation, cross-module
 references and cycle detection (`ConstantInfo.state`,
 `04_semantics/context.zig:314-322`). Its doc comment is already the

@@ -9,6 +9,20 @@
 //! name resolved first.  What is *not* here is how MIR is made — the
 //! register numbering, the block bookkeeping, the local table, and the
 //! assembly of a `mir.Program` all belong to `06_mir/build.zig`.
+//!
+//! **Why this is one file, and what would legitimately split it.**  A
+//! file boundary in Zig is a privacy boundary, so a split is right only
+//! where an API boundary is (docs/CODING_GUIDE.md).  What had one has
+//! gone: the tables the language spells are `builtins.zig`, and the two
+//! predicates that need no checker state are `effects.zig`.  Everything
+//! left below is a method on this walker reaching this walker's scopes,
+//! its tape, or both — carving it into siblings would mean publishing
+//! `fail`, `fit`, `lowerExpression` and the rest for no reader but the
+//! sibling, which is the split the guide names as the wrong one.  The
+//! next honest cut is the check/lower seam, where the interface is a
+//! *value* rather than a set of methods: `05_hir.zig`'s header lists
+//! the six couplings that hold the two halves together here today, and
+//! what each becomes on the far side.
 
 const std = @import("std");
 const source_mod = @import("../01_source.zig");
@@ -17,6 +31,26 @@ const types = @import("../support/types.zig");
 const conversionNamed = types.conversionNamed;
 const mir = @import("../06_mir.zig");
 const helpers = @import("helpers.zig");
+
+// What running a subtree could disturb, asked before it is lowered
+// (`effects.zig`).
+const effects = @import("effects.zig");
+
+// What the language spells, and what each spelling lowers to
+// (`builtins.zig`).  Named here under the names the walk below uses, so
+// the tables read the same whether the reader came from the dispatch or
+// from the editor grammar that is generated out of them.
+const builtins_mod = @import("builtins.zig");
+const Builtin = builtins_mod.Builtin;
+const builtins = builtins_mod.builtins;
+const retired_builtins = builtins_mod.retired_builtins;
+const string_methods = builtins_mod.string_methods;
+const list_methods = builtins_mod.list_methods;
+const array_methods = builtins_mod.array_methods;
+const map_methods = builtins_mod.map_methods;
+const builder_methods = builtins_mod.builder_methods;
+const file_methods = builtins_mod.file_methods;
+const fresh_object_methods = builtins_mod.fresh_object_methods;
 
 // Pass one, for the one thing this walk needs from it: the collected
 // project it runs against.
@@ -44,137 +78,6 @@ const StructLayout = types.StructLayout;
 const Register = mir.Register;
 const BlockId = mir.BlockId;
 const LocalId = mir.LocalId;
-
-// ---------------------------------------------------------------------------
-// The free builtins
-// ---------------------------------------------------------------------------
-
-/// One parameter slot of a builtin: its name, and its default where
-/// the corpus asked for one (docs/ARGS.md D10) — the same folded
-/// constant a user parameter's default is, at the type the checking
-/// switch below expects for that slot.
-pub const Slot = struct {
-    name: []const u8,
-    default: ?context.TypedConstant = null,
-};
-
-/// One free builtin: what it is called, what it lowers to, the slots
-/// it takes, whether it needs the host gate, whether a call to it can
-/// leave a container different from how it found it, and whether it
-/// answers its operand's own width.
-pub const Builtin = struct {
-    name: []const u8,
-    kind: mir.Intrinsic,
-    /// The signature: **a builtin is a declaration the compiler
-    /// writes in a table instead of in Luce, and the table is its
-    /// signature** (docs/ARGS.md §3).  `parameters.len` is what
-    /// `arity` used to be; the names are what a call site may write,
-    /// and the defaults are trailing exactly as a declaration's are.
-    parameters: []const Slot = &.{},
-    host: bool = false,
-    /// False for the two calls that are not a pure walk over their
-    /// arguments: `free` ends an object's life, and `error` leaves by
-    /// unwinding.  `isPureBuiltin` reads it, which is what decides
-    /// whether a container resolution may be lifted out of a loop.
-    pure: bool = true,
-    /// True for the eight whose result type *is* their operand's, so
-    /// their operands must land where the whole call lands
-    /// (docs/TYPES.md §9).  Every other builtin names its own operand
-    /// types and takes no landing.  `lowerIntrinsic` reads it; it was
-    /// an `else`-guarded switch 6,300 lines below this table, which is
-    /// a per-builtin fact written away from the row it belongs to.
-    polymorphic: bool = false,
-};
-
-/// `-1` and `false`, as `term_style`'s table row spells them — the
-/// two defaults the shipped corpus asked for (docs/ARGS.md §3), and
-/// today the only ones any builtin has.
-const default_background: context.TypedConstant = .{ .value = .{ .long = -1 }, .value_type = .long };
-const default_not_bold: context.TypedConstant = .{ .value = .{ .boolean = false }, .value_type = .boolean };
-
-/// **The one table.**  `lowerIntrinsic` resolves a call through it and
-/// `isPureBuiltin` asks it what a call costs.  Those were two lists of
-/// the same thirty-nine names, 3,375 lines apart in this file, with
-/// nothing checking they agreed — so a builtin added to one and not the
-/// other silently changed the ownership analysis.
-///
-/// Published, with the method tables below, because it is *what the
-/// language spells*: `tools/grammar.zig` generates the editor grammar
-/// from these tables rather than from a copy of them, and a copy is
-/// exactly how the old grammar came to highlight builtins the language
-/// had deleted (tools/vscode-luce/README.md).  `site/src/coverage.zig`
-/// reads the rows *textually* — a top-level row starts at one indent,
-/// a slot one deeper — and holds `ref/builtins.md` to both the names
-/// and the parameter names, so the table and the reference cannot
-/// drift.
-pub const builtins = [_]Builtin{
-    .{ .name = "abs", .kind = .abs, .parameters = &.{.{ .name = "value" }}, .polymorphic = true },
-    .{ .name = "min", .kind = .min, .parameters = &.{ .{ .name = "a" }, .{ .name = "b" } }, .polymorphic = true },
-    .{ .name = "max", .kind = .max, .parameters = &.{ .{ .name = "a" }, .{ .name = "b" } }, .polymorphic = true },
-    .{ .name = "clamp", .kind = .clamp, .parameters = &.{ .{ .name = "value" }, .{ .name = "low" }, .{ .name = "high" } }, .polymorphic = true },
-    .{ .name = "sqrt", .kind = .sqrt, .parameters = &.{.{ .name = "value" }}, .polymorphic = true },
-    .{ .name = "floor", .kind = .floor, .parameters = &.{.{ .name = "value" }}, .polymorphic = true },
-    .{ .name = "ceil", .kind = .ceil, .parameters = &.{.{ .name = "value" }}, .polymorphic = true },
-    .{ .name = "trunc", .kind = .trunc, .parameters = &.{.{ .name = "value" }}, .polymorphic = true },
-    .{ .name = "len", .kind = .len, .parameters = &.{.{ .name = "value" }} },
-    .{ .name = "assert", .kind = .assert_true, .parameters = &.{.{ .name = "condition" }} },
-    .{ .name = "trap", .kind = .trap_message, .parameters = &.{.{ .name = "message" }} },
-    .{ .name = "error", .kind = .raise_error, .parameters = &.{.{ .name = "message" }}, .pure = false },
-    .{ .name = "free", .kind = .free_object, .parameters = &.{.{ .name = "object" }}, .pure = false },
-    .{ .name = "parse_int", .kind = .parse_int, .parameters = &.{.{ .name = "text" }} },
-    .{ .name = "parse_float", .kind = .parse_float, .parameters = &.{.{ .name = "text" }} },
-    .{ .name = "parse_string", .kind = .parse_string, .parameters = &.{.{ .name = "bytes" }} },
-    .{ .name = "chr", .kind = .chr_code, .parameters = &.{.{ .name = "code" }} },
-    .{ .name = "ord", .kind = .ord_text, .parameters = &.{.{ .name = "text" }} },
-    .{ .name = "print", .kind = .print, .parameters = &.{.{ .name = "text" }}, .host = true },
-    .{ .name = "file_read", .kind = .file_read, .parameters = &.{.{ .name = "path" }}, .host = true },
-    .{ .name = "file_write", .kind = .file_write, .parameters = &.{ .{ .name = "path" }, .{ .name = "content" } }, .host = true },
-    .{ .name = "file_exists", .kind = .file_exists, .parameters = &.{.{ .name = "path" }}, .host = true },
-    .{ .name = "term_rows", .kind = .term_rows, .host = true },
-    .{ .name = "term_cols", .kind = .term_cols, .host = true },
-    .{ .name = "term_clear", .kind = .term_clear, .host = true },
-    .{ .name = "term_move", .kind = .term_move, .parameters = &.{ .{ .name = "row" }, .{ .name = "column" } }, .host = true },
-    .{ .name = "term_style", .kind = .term_style, .host = true, .parameters = &.{
-        .{ .name = "fg" },
-        .{ .name = "bg", .default = default_background },
-        .{ .name = "bold", .default = default_not_bold },
-    } },
-    .{ .name = "term_write", .kind = .term_write, .parameters = &.{.{ .name = "text" }}, .host = true },
-    .{ .name = "term_flush", .kind = .term_flush, .host = true },
-    .{ .name = "key_read", .kind = .key_read, .host = true },
-    .{ .name = "key_text", .kind = .key_text, .host = true },
-    .{ .name = "read_line", .kind = .read_line, .parameters = &.{.{ .name = "prompt" }}, .host = true },
-    .{ .name = "print_error", .kind = .print_error, .parameters = &.{.{ .name = "text" }}, .host = true },
-    .{ .name = "clock_ms", .kind = .clock_ms, .host = true },
-    .{ .name = "sleep_ms", .kind = .sleep_ms, .parameters = &.{.{ .name = "milliseconds" }}, .host = true },
-    .{ .name = "env", .kind = .env_get, .parameters = &.{.{ .name = "name" }}, .host = true },
-    .{ .name = "file_append", .kind = .file_append, .parameters = &.{ .{ .name = "path" }, .{ .name = "content" } }, .host = true },
-    .{ .name = "file_delete", .kind = .file_delete, .parameters = &.{.{ .name = "path" }}, .host = true },
-    .{ .name = "file_rename", .kind = .file_rename, .parameters = &.{ .{ .name = "from" }, .{ .name = "to" } }, .host = true },
-    .{ .name = "dir_list", .kind = .dir_list, .parameters = &.{.{ .name = "path" }}, .host = true },
-    .{ .name = "file_open", .kind = .file_open, .parameters = &.{ .{ .name = "path" }, .{ .name = "mode" } }, .host = true },
-    .{ .name = "exit", .kind = .exit_program, .parameters = &.{.{ .name = "status" }}, .host = true, .pure = false },
-    .{ .name = "os_total_memory", .kind = .os_total_memory, .host = true },
-    .{ .name = "os_available_memory", .kind = .os_available_memory, .host = true },
-    .{ .name = "os_cpu_count", .kind = .os_cpu_count, .host = true },
-};
-
-/// Names the language spelled once and does not any more, and what to
-/// write instead.
-///
-/// **A table to empty, never to grow.**  A deleted builtin is normally
-/// just an unknown name, and that is the right answer for a private
-/// program — but these two are on a public documentation site, and
-/// `unknown function arg` points nowhere.  One release of a pointer is
-/// worth more here than the purity of having deleted the row; the row
-/// itself comes out when the site no longer teaches the old spelling.
-pub const retired_builtins = [_]struct {
-    name: []const u8,
-    instead: []const u8,
-}{
-    .{ .name = "arg", .instead = "declare func main(args: list(string)): and index args" },
-    .{ .name = "arg_count", .instead = "declare func main(args: list(string)): and write len(args)" },
-};
 
 // ---------------------------------------------------------------------------
 // FunctionBuilder
@@ -1250,142 +1153,6 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    /// Could evaluating this expression free something a container or
-    /// a struct field is holding?
-    ///
-    /// Conservative, and it can afford to be: Luce has no mutable
-    /// globals, so the only way an expression reaches a container the
-    /// surrounding statement is also reading is by being handed one.
-    /// That means a call to a declaration or any method — a method's
-    /// receiver is the container in `xs.remove(0)`.  Every builtin but
-    /// `free` moves no ownership at all (`07_optimize/effects.zig`
-    /// answers the same question about instructions), so `string(i)` and
-    /// `len(xs)` beside a container read cost nothing.
-    fn mayMutateContainers(expression: *const ast.Expression) bool {
-        return switch (expression.*) {
-            .method => true,
-            .give, .copy => true,
-            .try_call => true,
-            .call => |call| blk: {
-                if (!isPureBuiltin(call.callee)) break :blk true;
-                for (call.arguments) |argument| {
-                    if (mayMutateContainers(argument.value)) break :blk true;
-                }
-                break :blk false;
-            },
-            .binary => |binary| mayMutateContainers(binary.left) or
-                mayMutateContainers(binary.right),
-            .unary => |unary| mayMutateContainers(unary.operand),
-            .field => |field| mayMutateContainers(field.target),
-            .index => |index| blk: {
-                if (mayMutateContainers(index.target)) break :blk true;
-                for (index.indices) |subscript| {
-                    if (mayMutateContainers(subscript)) break :blk true;
-                }
-                break :blk false;
-            },
-            .slice_range => |slice| blk: {
-                if (mayMutateContainers(slice.target)) break :blk true;
-                if (slice.start) |bound| {
-                    if (mayMutateContainers(bound)) break :blk true;
-                }
-                if (slice.end) |bound| {
-                    if (mayMutateContainers(bound)) break :blk true;
-                }
-                break :blk false;
-            },
-            .list_literal => |literal| blk: {
-                for (literal.elements) |element| {
-                    if (mayMutateContainers(element)) break :blk true;
-                }
-                break :blk false;
-            },
-            .new_object => |new| blk: {
-                for (new.dims) |dimension| {
-                    if (mayMutateContainers(dimension)) break :blk true;
-                }
-                break :blk false;
-            },
-            .name,
-            .int_literal,
-            .float_literal,
-            .string_literal,
-            .bool_literal,
-            .none_literal,
-            => false,
-        };
-    }
-
-    /// The same question of a whole block: could running it free
-    /// something a container or a struct field is holding?
-    fn blockMayMutateContainers(block: ast.Block) bool {
-        for (block.statements) |statement| {
-            if (statementMayMutateContainers(statement)) return true;
-        }
-        return false;
-    }
-
-    fn anyMutates(expressions: []const *ast.Expression) bool {
-        for (expressions) |expression| {
-            if (mayMutateContainers(expression)) return true;
-        }
-        return false;
-    }
-
-    fn blockAnyMutates(arms: []const ast.MatchArm) bool {
-        for (arms) |arm| {
-            if (blockMayMutateContainers(arm.body)) return true;
-        }
-        return false;
-    }
-
-    fn statementMayMutateContainers(statement: ast.Statement) bool {
-        return switch (statement) {
-            // A write through a place is exactly a container or field
-            // store, and that frees what it replaced (S22, S25).
-            .assign => |assign| assign.target != .name or
-                mayMutateContainers(assign.value),
-            .let => |binding| mayMutateContainers(binding.value),
-            .destructure => |bind| mayMutateContainers(bind.value),
-            .variable => |binding| binding.value != null and
-                mayMutateContainers(binding.value.?),
-            .expression => |expression| mayMutateContainers(expression.value),
-            .guarded => |guarded| statementMayMutateContainers(guarded.attempt.*) or
-                blockMayMutateContainers(guarded.handler),
-            .return_statement => |returned| anyMutates(returned.values),
-            .conditional => |conditional| mayMutateContainers(conditional.condition) or
-                blockMayMutateContainers(conditional.then_block) or
-                (conditional.else_block != null and
-                    blockMayMutateContainers(conditional.else_block.?)),
-            .while_loop => |loop| mayMutateContainers(loop.condition) or
-                blockMayMutateContainers(loop.body),
-            .for_range => |loop| mayMutateContainers(loop.start) or
-                mayMutateContainers(loop.end) or
-                blockMayMutateContainers(loop.body),
-            .for_each => |loop| mayMutateContainers(loop.iterable) or
-                blockMayMutateContainers(loop.body),
-            .match => |matched| mayMutateContainers(matched.scrutinee) or
-                blockAnyMutates(matched.arms) or
-                (matched.else_block != null and
-                    blockMayMutateContainers(matched.else_block.?)),
-            .break_statement, .continue_statement => false,
-        };
-    }
-
-    /// Whether a call to this builtin can leave a container different
-    /// from how it found it.  False for anything not named here,
-    /// including every user function, which is the conservative answer
-    /// `mayMutateContainers` needs.
-    fn isPureBuiltin(callee: []const u8) bool {
-        // `long(...)` and `double(...)` are conversions rather than
-        // intrinsics, so they are not in the table above; both are pure.
-        if (conversionNamed(callee)) |produces| return produces != .string;
-        for (builtins) |builtin| {
-            if (std.mem.eql(u8, callee, builtin.name)) return builtin.pure;
-        }
-        return false;
-    }
-
     /// Park a freshly allocated string or struct value that was not
     /// produced through `lowerExpression` — a compound assignment's
     /// concatenation, say — so the statement's end reclaims it.
@@ -1502,16 +1269,6 @@ pub const FunctionBuilder = struct {
     }
 
     // Ownership classification ---------------------------------------------
-
-    /// Builtin value methods whose result is a fresh object the caller
-    /// owns (S22).  These three are intrinsics with no signature to
-    /// consult, so the list is the signature; the method tables in
-    /// `objectMethod` and `sequenceMethod` must agree with it.  A
-    /// method that routes into the standard library is *not* here —
-    /// `routedMethodYieldsObject` asks its declaration instead, so
-    /// adding an object-returning `strings` function cannot quietly
-    /// leak what it returns.
-    const fresh_object_methods = [_][]const u8{ "pop", "keys", "values" };
 
     /// True when evaluating this expression yields an object the
     /// receiver may own: something fresh (new, a literal, a slice, a
@@ -2137,7 +1894,7 @@ pub const FunctionBuilder = struct {
         while (backwards > 0) {
             backwards -= 1;
             mutating[backwards] = any_mutation;
-            if (mayMutateContainers(expressions[backwards])) any_mutation = true;
+            if (effects.mayMutateContainers(expressions[backwards])) any_mutation = true;
         }
 
         for (expressions, 0..) |expression, index| {
@@ -3647,7 +3404,7 @@ pub const FunctionBuilder = struct {
         // at the top of the next iteration and at the end of the loop;
         // a body that provably cannot keeps the borrow, which is what
         // makes `for piece in pieces:` cost nothing.
-        const keeps_view = !blockMayMutateContainers(loop.body);
+        const keeps_view = !effects.blockMayMutateContainers(loop.body);
         const storage_class: StorageClass = if (keeps_view) .borrows else .owns;
         const name_local = (try self.declareLocalAs(
             loop.name,
@@ -6290,33 +6047,6 @@ pub const FunctionBuilder = struct {
         return .value;
     }
 
-    /// The string methods the language keeps for itself, and what each
-    /// lowers to.  Everything else a program writes on a string routes
-    /// to the std `strings` module (`stringsCall`, docs/STD.md), so
-    /// this table is the whole closed set — a table rather than the two
-    /// `if`s it used to be, because it is the only place these two
-    /// names are written and the editor grammar reads it
-    /// (`tools/grammar.zig`).
-    pub const string_methods = [_]struct {
-        name: []const u8,
-        kind: mir.Intrinsic,
-        takes: []const Type,
-        result: Type,
-    }{
-        // The language's primitive byte access.
-        // **The one builtin that answers a `byte`** (docs/TYPES.md
-        // §9): its result is definitionally one, both engines have
-        // always produced 0..255, and it is the natural producer for
-        // the one place an `array(byte, _)` gets filled from.  It
-        // costs nothing at a call site, because a `byte` reaches a
-        // `long` parameter and a comparison with nothing written down.
-        .{ .name = "byte_at", .kind = .string_byte, .takes = &.{.long}, .result = .byte },
-        // The scanning primitive that `byte_at` is the access
-        // primitive: std strings builds substring search on it, and it
-        // is the seam SIMD would enter through (docs/STD.md).
-        .{ .name = "find_byte", .kind = .string_find_byte, .takes = &.{ .byte, .long }, .result = .long },
-    };
-
     /// Builtin methods on values: strings, lists, arrays, maps, and
     /// builders.  `x.f(y)` is sugar for a plain typed operation with
     /// the receiver first — there is no dispatch.
@@ -7222,26 +6952,6 @@ pub const FunctionBuilder = struct {
         if (info.fallible) return try self.openFallible(call, info.return_type);
         return .{ .register = call, .value_type = info.return_type };
     }
-
-    /// The method names each receiver kind answers to — the tables
-    /// below dispatch on them, and a "did you mean" needs the same
-    /// list to measure against.  Kept beside the dispatch so the two
-    /// cannot drift apart unnoticed.
-    ///
-    /// Published for the same reason `builtins` is: these names are
-    /// what the language spells behind a `.`, and the editor grammar
-    /// is generated from them (`tools/grammar.zig`).
-    pub const list_methods = [_][]const u8{
-        "append", "insert",  "remove", "pop",      "clear",
-        "sort",   "reverse", "find",   "contains",
-    };
-    pub const array_methods = [_][]const u8{ "dim", "fill", "sort", "reverse", "find", "contains" };
-    pub const map_methods = [_][]const u8{ "has", "get", "remove", "keys", "values", "clear" };
-    pub const builder_methods = [_][]const u8{ "append", "append_ascii", "build", "clear" };
-    /// The byte channel's three (docs/BYTES.md R4).  There is no
-    /// `close`: a handle is scope-owned, so `free f` is the close and
-    /// the end of the owning scope is the automatic one.
-    pub const file_methods = [_][]const u8{ "read", "write", "flush" };
 
     /// `descriptor` is the receiver's *shape*, which is everything the
     /// dispatch below turns on: a `list(long)` and a `list(string)`
@@ -8405,41 +8115,3 @@ pub const FunctionBuilder = struct {
         return .failed;
     }
 };
-
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
-test "every free builtin's name is reserved" {
-    // Read from the two tables rather than from a copy of either, so
-    // adding a builtin and forgetting to reserve its name fails here
-    // instead of shipping a name a program can quietly take over.
-    //
-    // It shipped that way seven times.  The `term_*` services were
-    // added to `builtins` and not to `reserved_names`, so
-    // `func term_rows():` compiled and stood in front of the builtin
-    // for the rest of the program — a name collision the language
-    // refuses everywhere else, missed because nothing was checking.
-    for (builtins) |builtin| {
-        if (!isReserved(builtin.name)) {
-            std.debug.print(
-                "builtin '{s}' is dispatched but not in reserved_names\n",
-                .{builtin.name},
-            );
-            return error.TestUnexpectedResult;
-        }
-    }
-}
-
-test "no name is reserved twice" {
-    // A duplicate is harmless to `isReserved` and a lie to every
-    // reader of the list, including the site page that mirrors it.
-    for (context.reserved_names, 0..) |name, index| {
-        for (context.reserved_names[index + 1 ..]) |later| {
-            if (std.mem.eql(u8, name, later)) {
-                std.debug.print("'{s}' is reserved twice\n", .{name});
-                return error.TestUnexpectedResult;
-            }
-        }
-    }
-}
