@@ -796,6 +796,13 @@ fn newObject(self: *Parser) Error!?*ast.Expression {
         if (try self.missingSeparator(previous_end)) return null;
         const closing = (try self.expectClose(.right_paren, opener)) orelse return null;
         closing_end = closing.span.end;
+    } else if (builtin == .file) {
+        // Parsed, then refused by name in stage 4 (docs/BYTES.md R5).
+        // The sentence a reader needs here is "a file is opened, not
+        // made — write files.open(path)", and that sentence belongs
+        // where the language's types are known, not where a `(` is
+        // being looked for.
+        _ = self.advance();
     } else {
         try self.report(
             "luce.parse.new",

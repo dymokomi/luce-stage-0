@@ -856,6 +856,39 @@ program asking went round forever.  An artifact built against the old
 reading spins at the end of its input, so it is rebuilt rather than
 tolerated.
 
+**12** made a file bytes reached through an open handle
+(docs/BYTES.md).  Five slots appended in one run — `handle_open`,
+`handle_read`, `handle_write`, `handle_flush`, `handle_close` —
+carrying raw bytes with no opinion about encoding: a read fills a
+buffer the caller owns and answers the count, a write takes a buffer
+and a length, and zero read with a `yes` is the end of the file rather
+than a refusal.  Named for the handle and not for the file, because
+the same five serve a socket when `std.network` arrives.
+
+Three things move with them, and they are one movement, which is why
+they are one bump.  **UTF-8 validation left the host**: `file_read` is
+open-read-close over the channel plus `libluce_rt`'s own check, so the
+interpreter, a compiled artifact and every future host agree
+byte-for-byte on what "not text" means — that sentence used to live in
+`apps/host.zig`, where only loom could say it.  **The whole-file text
+slots retired**: `file_read`, `file_write` and `file_append` keep their
+positions and their signatures, because the table is append-only and
+nothing reorders, but no version-12 artifact indexes them and the
+hosts in this tree leave them null.  And **the channel is installed
+rather than called through**: `luce_rt_files_install` hands the five
+pointers to the runtime once at the start of a run, and the runtime is
+what calls them.
+
+That last one is the shape of the decision rather than a detail of it.
+A handle is a scope-owned resource, so its close happens at the end of
+the scope that owns it — inside the ownership walk, where no generated
+code is standing to hand a table in.  Installing it also puts both
+engines on *literally the same five function pointers*, so what an
+open answers, what a short read means and when a close happens are one
+implementation rather than two that could disagree; the four handle
+intrinsics lower to plain `luce_rt_*` calls, and the backend never
+learns the handle's semantics at all.
+
 `key_text` has no slot of its own: it answers what the last `key_read`
 carried, which the runtime remembers, so it fails closed on
 `key_read`'s slot.  End of input clears it, which is why the lowering
@@ -936,6 +969,42 @@ The six 64-bit rows are unchanged within noise from the previous
 snapshot at `f333e12`, which is what D7 required of them: the 32-bit
 rows were *added* beside them and neither the `.luc` sources nor the C
 twins of the originals were touched.
+
+**The bytes run (docs/BYTES.md) left every row where it found it**, and
+that is worth recording rather than assuming.  `list(T)` gave up the
+24-byte boxed slot for packed element storage — a `list(byte)` is one
+byte an element now and a `list(long)` eight — which is a large change
+to the container every program uses, and the interleaved A/B against
+`c4d172f` on this host says it costs nothing measurable:
+
+| benchmark | base    | head    | delta | base compute | head compute | delta |
+|-----------|---------|---------|-------|--------------|--------------|-------|
+| loops     |  82.9ms |  83.2ms | +0.5% |       79.4ms |       79.7ms | +0.4% |
+| math      | 106.2ms | 105.8ms | -0.4% |      102.8ms |      102.3ms | -0.4% |
+| strings   |  52.0ms |  52.3ms | +0.7% |       48.5ms |       48.8ms | +0.7% |
+| arrays    |  45.8ms |  45.5ms | -0.7% |       42.3ms |       42.0ms | -0.8% |
+| arrays32  |  42.7ms |  42.1ms | -1.4% |       39.3ms |       38.6ms | -1.7% |
+| matmul    |  11.4ms |  11.4ms | +0.0% |        8.0ms |        7.9ms | -0.6% |
+| matmul32  |   7.6ms |   7.6ms | -0.8% |        4.2ms |        4.1ms | -2.6% |
+| stats     |  33.5ms |  33.5ms | -0.2% |       30.1ms |       30.0ms | -0.4% |
+
+**Nothing here is a win, and nothing here should be.**  Not one row in
+the suite is list-bound: `loops` and `math` are scalar, the four array
+rows use `array`, which was already packed, and `strings` uses a
+`list(string)` — whose elements are still the boxed slot, because a
+`string` is exactly the kind that keeps one.  The one thing this table
+had to prove is that the mechanism costs nothing where it buys nothing,
+and it does.
+
+It very nearly did not.  The first measurement put `strings` at +2.9%,
+which is a real number on a row this suite watches, and the cause was
+one line: `ensureCapacity` compared *element* counts, so every `append`
+divided a byte length by a width the compiler does not know.  A
+division on the hot path of the most-called container operation there
+is.  Doing the arithmetic in bytes — a multiply instead — took the row
+back to +0.7%, which is where it sits above.  The row that measured it
+is not the row the change was for, which is the argument for having a
+suite rather than a benchmark.
 
 `strings` is allocation-bound rather than code-generation-bound.
 Everything else at 64 bits is at parity or ahead, and `math` is ahead

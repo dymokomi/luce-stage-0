@@ -144,7 +144,21 @@ strings.join(parts, separator)   # list(string) -> string
 strings.pad_left(s, width)  strings.pad_right(s, width)
 strings.format_float(x, decimals)    # fixed-point: "2.50"; rounds
                                      # half away from zero
+
+strings.to_bytes(s)              # list(byte) — total; a string always
+                                 # has bytes
+strings.from_bytes(xs)           # string? — absent when the bytes are
+                                 # not valid UTF-8
 ```
+
+The asymmetry of the last pair is its whole content (docs/BYTES.md R3).
+A `string` is already valid UTF-8, so taking its bytes is a reading of
+something certainly there; handing bytes back is a *claim* about them,
+and it can be false.  `from_bytes` answers `string?` and not `string!`
+for the reason `parse_int` does: "not UTF-8" is the same reason every
+time, and a carried message adds nothing the name did not.  The
+validator behind it is `libluce_rt`'s — the same one `files.read` uses
+— so there is one answer to what "not text" means.
 
 ## files
 
@@ -197,6 +211,43 @@ Deleting a file that is not there answers `io_failed` rather than
 succeeding quietly — the host says `yes` or `no` and cannot tell
 "absent" from "refused" (`abi.Answer`), so inventing the distinction
 would be inventing it.
+
+### The byte channel (docs/BYTES.md)
+
+The same files, seen as bytes.  Nothing here asks whether what it
+carries is text; that is what `strings.from_bytes` is for, and it is
+why a JPEG reads as happily as a note.
+
+```text
+files.open(path)                 # file! — read, from the start
+files.create(path)               # file! — write, creating and emptying
+files.append_to(path)            # file! — write, at the end
+files.read_bytes(path)           # list(byte)!
+files.write_bytes(path, bytes)   # !
+files.append_bytes(path, bytes)  # !
+```
+
+`open`, `create` and `append_to` answer a **`file`**, which is a
+scope-owned resource: the binding that received it owns it, the end of
+that scope closes it, `free(f)` closes it early, `give` and `return`
+move it, and using one after it is closed traps `use_after_free`,
+because it is the same mistake.  There is deliberately no `close` — a
+file you have to remember to close is a file somebody will not, and
+the compiler already knows where a name's life ends.
+
+The handle's own three are `f.read(buffer)`, `f.write(buffer, count)`
+and `f.flush()`, all fallible.  The buffer is an `array(byte, n)` the
+caller owns; a read fills it and answers **how many bytes landed**,
+where zero is the end of the file, and a write answers how many landed,
+which may be fewer than were offered.  That is the C shape on purpose:
+short is ordinary, the caller loops, and the same three serve a socket
+when `std.network` arrives.
+
+`read_bytes`, `write_bytes` and `append_bytes` are those loops written
+once — the Go layering, where `os.ReadFile` is a loop over `Read`.
+`files.read` and `files.write` are defined over the same channel, with
+the runtime's own UTF-8 check on the reading side, so "not text" means
+one thing wherever a program runs.
 
 ---
 

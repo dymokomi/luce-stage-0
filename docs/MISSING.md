@@ -678,6 +678,41 @@ family, and `!x`, `//`, `else if`, `def`/`class`/`const`.
 
 ---
 
+## Tier 3b — ~~the binary boundary~~ — **closed**
+
+The `std.zip` run measured it rather than guessing at it: **Luce could
+not read or write an arbitrary binary file in either direction.**
+`src/apps/host.zig` refused anything that was not valid UTF-8 —
+deliberately, because a half-read JPEG handed over as a `string` would
+make every string guarantee a lie — and the writing direction was
+closed by construction, since a `string` *is* valid UTF-8 and nothing
+could build one that is not.  So `std.zip` shipped as a complete
+byte-buffer library that no real archive could reach.
+
+**Closed** (docs/BYTES.md, ratified R1–R5 and built).  Three things
+that were one movement:
+
+- **`list(T)` stores its elements at their real width.**  A
+  `list(byte)` is one byte an element where it was twenty-four; the
+  boxed slot survives for the kinds that need it (strings, structs,
+  objects), and `map` is untouched.  No surface changed, and the
+  interleaved A/B on every benchmark row moved nothing outside noise.
+- **A file is bytes reached through an open handle.**  `file` is a
+  heap type and a **scope-owned resource**: `files.open(path)` answers
+  one, the owning scope's end closes it, `free(f)` closes it early,
+  and a use after close traps `use_after_free` because it is the same
+  mistake.  The primitive is C-shaped — a read fills the caller's
+  buffer and answers the count, a write takes a buffer and a length —
+  which is the shape `std.network`'s sockets are meant to reuse.
+- **Text is a validation the language performs on the bytes.**  The
+  UTF-8 check moved out of the hosts and into `libluce_rt`, so the
+  interpreter, a compiled artifact and every future host agree
+  byte-for-byte on what "not text" means.  `strings.to_bytes` is
+  total and `strings.from_bytes` answers `string?`.
+
+What is left of the item is smaller and named in `docs/BYTES.md`: no
+seek on a handle, no file metadata, and no directory creation.
+
 ## Tier 6 — the OS beyond the language
 
 Fabric, persistence, braids and sync, capabilities, the agent,
