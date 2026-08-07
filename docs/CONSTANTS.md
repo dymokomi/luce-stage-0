@@ -506,6 +506,19 @@ in common with a constant.  The two files that pay for it first are
 what they are — and `programs/editor.luc`, where a fenced scan becomes
 `keywords.has(word)` and a doc comment about `at - 1` goes away.
 
+## Ratified (owner, 2026-08-07/08, in conversation)
+
+The feature in principle first ("we need constant containers
+obviously"), then the details as the conversation sharpened them:
+
+| | ruling |
+|---|---|
+| **R-A** | **The `const` keyword** (*"so we have const, let and var"*): file scope declares with `const` — values as before, containers as this memo designs.  Top-level `let` retires for one-spelling-per-meaning; the refusal teaches (`file scope declares with const`).  `let` and `var` stay function-scope, unchanged.  Three keywords, three disjoint jobs. |
+| **R-B** | **The dictionary literal is ratified**: braces belong to dictionaries — `{"jan": 1}` — with `map` confirmed as exactly the Python-dict sense.  Empty `{}` stays refused naming `new map(K, V)`. |
+| **R-C** | **Constants are owned by the program's root** (the owner's framing, adopted over the memo's ownerless draft): everything keeps an owner, constants die when the program ends, and the future where modules load and unload at runtime inherits "unloading frees its constants" for free.  Implementation unchanged — nothing is freed mid-run; teardown reclaims. |
+| **R-D** | **Enforcement through calls: the dynamic backstop** (§6's recommendation, taken on non-objection): the compiler refuses every mutation it can see; one trap code (`immutable_object`) covers the one shape it cannot — a write through a parameter. |
+| **R-E** | **Scope defaults stand**: flat tables (no nesting) and no set type this version — a `const` dictionary of `word: true` is the membership answer.  Both revisitable without breaking a program. |
+
 ## Ratification
 
 Four, and the first two decide the shape.
