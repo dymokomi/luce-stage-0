@@ -2671,6 +2671,22 @@ const Body = struct {
         try self.wip.attachMetadata(stored.toValue(), .@"noalias", scopes.rows);
     }
 
+    /// A write to a row's own facts — there is exactly one, the count
+    /// an inline `append` bumps.  It carries the rows scope, so it
+    /// stops a row load being hoisted over it and does not stop an
+    /// element load.
+    fn rowStore(
+        self: *Body,
+        held: Builder.Value,
+        address: Builder.Value,
+        alignment: Builder.Alignment,
+    ) Error!void {
+        const stored = try self.wip.store(.normal, held, address, alignment);
+        const scopes = try self.module.aliasScopes();
+        try self.wip.attachMetadata(stored.toValue(), .@"alias.scope", scopes.rows);
+        try self.wip.attachMetadata(stored.toValue(), .@"noalias", scopes.elements);
+    }
+
     fn resolveRow(self: *Body, register: mir.Register) Error!Builder.Value {
         const builder = self.module.builder;
         const parts = try self.handleParts(self.produced[register].value);
@@ -2789,6 +2805,28 @@ const Body = struct {
             .heap,
             .optional,
             => Builder.Alignment.fromByteUnits(8),
+            .enumeration => unreachable, // answered by storage() above
+        };
+    }
+
+    /// How many bytes one cell occupies — `Object.ElementKind.width`,
+    /// answered from the program's type instead of from the object,
+    /// which is the same number because the kind is a fact of the
+    /// element type (`runtime/containers.zig`'s `emptyList`).
+    ///
+    /// Only the append path needs it: everything else indexes with a
+    /// `getelementptr` over `cellType`, which does the multiply itself.
+    /// This is the arithmetic that decides whether there is room, and
+    /// it is in bytes because a capacity is (`layout.elements_capacity`).
+    fn cellWidth(written: types.Type) u32 {
+        return switch (written.storage()) {
+            .boolean, .byte => 1,
+            .short, .half => 2,
+            .int, .float => 4,
+            .long, .double => 8,
+            // The boxed slot, whose size is `runtime.Value`'s and is
+            // asserted against it by `runtime/test.zig`.
+            .none, .string, .strukt, .heap, .optional => @sizeOf(runtime.Value),
             .enumeration => unreachable, // answered by storage() above
         };
     }
@@ -3106,6 +3144,102 @@ const Body = struct {
         }
         const view = try self.elementView(target, shape);
         self.produced[register].value = view.bounds(self)[0];
+    }
+
+    /// `xs.append(v)` on a List whose elements own nothing: the store
+    /// and the count bump, inline, with the runtime called only to
+    /// grow the buffer.
+    ///
+    /// **The room is measured in bytes, not in elements.**
+    /// `Elements.ensureCapacity` grows a byte length geometrically and
+    /// does not leave it a whole multiple of the width, so
+    /// `count < capacity` would be a division — the very division the
+    /// bytes run took off this path (docs/CODEGEN.md).
+    /// `(count + 1) * width <= bytes.len` asks the same question with
+    /// a constant multiply, and the width *is* a constant here because
+    /// the storage kind is a fact of the element type
+    /// (`runtime/containers.zig`'s `emptyList`).
+    ///
+    /// The two checks the call would have made are made here, in the
+    /// same order, at the same instruction: a null handle traps
+    /// `null_object`, a stale one `use_after_free`.  The growing arm
+    /// resolves a second time, which costs one walk on the path that
+    /// was about to allocate.
+    ///
+    /// The element type is the gate.  A List append never *frees*
+    /// anything — it only adopts what arrives — so the rule is not
+    /// `index_set`'s: what it needs is that nothing has to be adopted,
+    /// which is `ownsNothing`.  A String, a struct and an object all
+    /// go on calling `luce_rt_append`, which is the one place the
+    /// ownership walk is written.
+    fn emitListAppend(
+        self: *Body,
+        target: mir.Register,
+        held: mir.Register,
+        shape: ElementShape,
+    ) Error!void {
+        const builder = self.module.builder;
+        const one = try builder.intValue(.i64, 1);
+
+        const row = try self.resolveRow(target);
+        const count_at = try self.byteOffset(row, runtime.layout.elements_count, "count.at");
+        const count = try self.rowLoad(.normal, .i64, count_at, value_alignment, "count");
+        const capacity = try self.rowLoad(
+            .normal,
+            .i64,
+            try self.byteOffset(row, runtime.layout.elements_capacity, "capacity.at"),
+            value_alignment,
+            "capacity",
+        );
+        const next = try self.wip.bin(.@"add nuw", count, one, "count.next");
+        const room = try self.wip.icmp(
+            .ule,
+            try self.wip.bin(
+                .@"mul nuw",
+                next,
+                try builder.intValue(.i64, cellWidth(shape.element)),
+                "room.wanted",
+            ),
+            capacity,
+            "has.room",
+        );
+
+        const storing = try self.wip.block(1, "append.inline");
+        const growing = try self.wip.block(1, "append.grow");
+        const done = try self.wip.block(2, "append.done");
+        _ = try self.wip.brCond(room, storing, growing, .then_likely);
+
+        self.seek(storing);
+        const elements = try self.rowLoad(
+            .normal,
+            .ptr,
+            try self.byteOffset(row, runtime.layout.elements_pointer, "elements.at"),
+            pointer_alignment,
+            "elements",
+        );
+        try self.storeCell(
+            shape.element,
+            try self.wip.gep(
+                .inbounds,
+                self.cellType(shape.element),
+                elements,
+                &.{count},
+                "element",
+            ),
+            self.produced[held].value,
+        );
+        try self.rowStore(next, count_at, value_alignment);
+        _ = try self.wip.br(done);
+
+        self.seek(growing);
+        try self.callChecked(.luce_rt_append, &.{
+            self.runtime,
+            try self.boxedRegister(target, "target"),
+            try self.storageOf(held),
+        });
+        _ = try self.wip.br(done);
+
+        self.seek(done);
     }
 
     /// `a.dim(k)` on an Array.  The rank is a compile-time fact, so the
@@ -5075,11 +5209,18 @@ const Body = struct {
                 self.produced[of[1]].value,
                 self.produced[of[2]].value,
             }),
-            .append_value => try self.callChecked(.luce_rt_append, &.{
-                rt,
-                try self.boxedRegister(of[0], "target"),
-                try self.storageOf(of[1]),
-            }),
+            .append_value => {
+                if (self.elementShape(of[0])) |shape| {
+                    if (shape.growable and ownsNothing(shape.element)) {
+                        return self.emitListAppend(of[0], of[1], shape);
+                    }
+                }
+                try self.callChecked(.luce_rt_append, &.{
+                    rt,
+                    try self.boxedRegister(of[0], "target"),
+                    try self.storageOf(of[1]),
+                });
+            },
             .append_ascii => try self.callChecked(.luce_rt_append_ascii, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
