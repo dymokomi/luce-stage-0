@@ -425,6 +425,113 @@ A library that only reads what it wrote has proven nothing about ZIP.
 
 ---
 
+## json
+
+JSON, in pure Luce.  Parse a document, walk it, read the leaves, print
+it back.  Nothing here is a builtin, nothing here imports anything
+(not even `std.strings`), and nothing here touches the world: `parse`
+takes a string and answers a document.
+
+**Written against RFC 8259**, and every rule in the source names the
+clause it implements — §2 the structural characters and the four
+whitespace bytes, §3 the three literal names, §4 objects, §5 arrays,
+§6 numbers, §7 strings and their escapes, §8.1 encoding, §8.2 unpaired
+surrogates, §9 nesting.  ECMA-404 is cited where the two documents
+leave a reader a choice.  The spec suite is
+`src/luce/specs/json_spec.zig`, and most of it is **refusals**: a
+parser is defined by what it will not take, and the fixtures are
+Nicolas Seriot's JSONTestSuite (*Parsing JSON is a Minefield*, 2016) —
+its `y_` rows, which every parser must accept, its `n_` rows, which
+every parser must refuse, and its `i_` rows, which real parsers
+disagree about and this one decides out loud.
+
+```text
+import std.json
+
+json.parse(text)                 # Document! — the whole grammar, or an
+                                 # error naming the byte and the problem
+json.quote(text)                 # string -> a JSON string literal, the
+                                 # escaping done right
+
+doc.root()                       # Node — the one top-level value
+doc.get(node, name)              # Node? — an object's member, or absent
+doc.at(node, index)              # Node — an element; past the end traps
+doc.items(node)                  # list(Node) — every child, in order
+doc.keys(node)                   # list(string) — every member name
+doc.write(node)                  # string — JSON with no whitespace
+doc.pretty(node, spaces)         # string — the same, indented
+
+node.kind()                      # Kind — object array text number
+                                 #        boolean null
+node.count()                     # long — members or elements; 0 for a leaf
+node.key()                       # string — its member name, decoded
+node.raw()                       # string — its text exactly as written
+node.is_null()                   # bool
+node.as_bool()  node.as_long()  node.as_double()  node.as_text()
+                                 # bool? long? double? string?
+```
+
+**Lazy, in simdjson's On-Demand sense.**  A parse walks the text once,
+checks that every byte of it is grammatical, and records where each
+value begins and ends; it does not turn `"1e3"` into a double or a
+`𝄞` into 𝄞 until somebody asks.  A document read for one
+field pays for one field, and `node.raw()` is always exactly what the
+author wrote.
+
+**A document is flat, and a node is a value that points into it.**
+`Document` owns one `list(Node)` holding every value in document
+order; a `Node` is a plain value — a kind, two spans of text, three
+numbers — so it copies for nothing, returns from any function, and
+needs no ownership verb anywhere.  Each node records the index one
+past its own subtree, which is simdjson's tape: a container's first
+child is the node after it, and any value's next sibling is that
+index.  Navigation is therefore a method on the *document*, because a
+node on its own does not know where the rest of the document lives.
+
+That shape is what the language allows rather than a preference.  A
+nested tree of `list(Node)` children cannot answer `get(name) ->
+Node?` at all: returning an object-carrying struct read out of a
+container is refused (OWNERSHIP.md S17, S22), and returning a `copy`
+of one would deep-copy the whole subtree on every field access.  Flat
+costs one heap object for a document of any size, and the reading path
+allocates only what it hands back.
+
+Reaching a member is two steps, because `get` answers `Node?` and a
+method needs a `Node` — and the narrowing is a function, which is
+legal precisely because a node returns from one:
+
+```text
+func child(doc: json.Document, node: json.Node, name: string) -> json.Node:
+    let found = doc.get(node, name)
+    if found != none:
+        return found
+    trap("no member named " + name)
+```
+
+**Reading a file is three calls and this module makes none of them:**
+`files.read_bytes(path)`, then `strings.from_bytes(bytes)`, then
+`json.parse(text)`.  UTF-8 needs no checking on the way (RFC 8259
+§8.1): the input is a Luce string, so it is valid UTF-8 by
+construction and the encoding question was answered before the text
+arrived.
+
+The calls other parsers argue about, each with its reason:
+
+| | this module |
+|---|---|
+| **Nesting** | bounded at **128** (§9 allows a limit).  The parse is iterative and would not care, but a document is *walked* by callers, and loom lets a program nest 128 calls before `call_depth_exceeded` — so accepting a deeper one would hand a caller a tree no recursive function of theirs can walk.  serde_json's default is the same number from the other direction.  A 10,000-deep array is an error with a name, not a machine falling over |
+| **Duplicate names** | `get` resolves to the **last** (§4: names SHOULD be unique, behaviour otherwise unpredictable), as JavaScript, Python and Go all do.  The document is not edited to match — `count`, `items` and `keys` still show every member as written, because a reader who wants to know a document repeats itself should be able to find out |
+| **Unpaired surrogates** | **refused** by name at the byte (§8.2 warns; ECMA-404 permits the code unit).  A Luce string is UTF-8 and half a pair has none, so the alternatives were refusing and quietly substituting U+FFFD.  A well-formed pair is one codepoint |
+| **`as_long`** | reads the **notation**: `42` answers 42, and `4.2`, `42.0` and `4.2e1` all answer `none` and are read with `as_double`.  A number written as a real is a real; absence says so, where truncating would drop information silently.  Too large for a `long` is `none` too, exactly as `parse_int` says it |
+| **NaN, Infinity** | not JSON (§6 has one number grammar and no names in it), refused like any other unknown word |
+| **`write`** | not a byte-for-byte echo — the whitespace a document arrived with is not kept — but every *token* is the one that was read, escapes and number notation and all.  So `parse → write → parse → write` is a fixed point, and a document that arrived minified comes back identical |
+
+`has` is missing on purpose: it is a reserved name (`m.has(k)`, the map
+method), so `doc.get(node, name) != none` is the membership question
+and it is the same one call.
+
+---
+
 ## Adding a module
 
 1. Write `src/luce/std/NAME.luc` — ordinary Luce, documented with

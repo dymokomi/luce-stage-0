@@ -1,0 +1,855 @@
+# json — JSON, in pure Luce.
+#
+# Parse a document, walk it, read the leaves, and print it back out.
+# Nothing here is a builtin, nothing here imports anything, and
+# nothing here touches the host: `parse` takes a string and answers a
+# document, and where the string came from is the caller's business.
+#
+# **Written against the normative documents.**  The grammar is RFC
+# 8259 — §2 the structural characters and the four whitespace bytes,
+# §3 the three literal names, §4 objects, §5 arrays, §6 numbers, §7
+# strings and their escapes, §8.1 encoding, §8.2 unpaired surrogates,
+# §9 nesting limits.  ECMA-404 says the same grammar in other words
+# and is cited where the two documents leave a reader a choice.  Every
+# rule below names the clause it implements, and the specification
+# (`src/luce/specs/json_spec.zig`) proves each one on both engines.
+#
+# **Lazy, in simdjson's On-Demand sense.**  A parse walks the text
+# once, checks that every byte of it is grammatical, and records where
+# each value's text begins and ends — it does not turn `"1e3"` into a
+# double or `"é"` into é until somebody asks.  A document that is
+# read for one field pays for one field.  The leaf's **original text**
+# is what a node holds, so `node.raw()` is always exactly what the
+# author wrote, and `write` puts the same bytes back.
+#
+# **A document is flat, and a node is a value that points into it.**
+# `Document` owns one `list(Node)` holding every value in document
+# order; a `Node` is a plain value — a kind, two spans of text, and
+# three numbers — so it copies for nothing, returns from any function,
+# and needs no ownership verb anywhere.  Each node records `beyond`,
+# the index one past the last node of its own subtree, which is
+# simdjson's tape: the first child of a container is the node after
+# it, and the next sibling of any value is its `beyond`.  Navigation
+# is therefore a method on the *document* (`doc.get(node, "name")`),
+# because a node on its own does not know where the rest of the
+# document lives.
+#
+# That shape is not a preference, it is what the language allows: a
+# nested tree of `list(Node)` children cannot answer `get(key) ->
+# Node?` at all, because returning an object-carrying struct read out
+# of a container is refused (OWNERSHIP.md S17, S22) and returning a
+# `copy` of one would deep-copy the whole subtree on every field
+# access.  A flat document has one heap object for a document of any
+# size, and the reading path allocates nothing.
+#
+# **Ownership.**  The binding that receives the document owns it, and
+# the end of that scope frees it — one list, however large the
+# document.  A `Node` owns nothing at all: it is a value, and copying
+# one copies a kind, two short strings and three numbers.  A node
+# belongs to the document it came from; handing one to a *different*
+# document reads whatever that document holds at the same index, or
+# traps on the way, so keep the pair together the way you would a
+# slice and the thing it slices.
+#
+# **Reading a file** is three calls, and the module deliberately makes
+# none of them:
+#
+#     let bytes = try files.read_bytes(path)
+#     let text = strings.from_bytes(bytes) else ""
+#     let doc = try json.parse(text)
+#
+# **UTF-8 needs no checking here** (RFC 8259 §8.1).  The input is a
+# Luce string, which is valid UTF-8 by construction, so the encoding
+# question every other parser has to answer was answered before the
+# text arrived.  What is left is the grammar, and that is all this
+# module checks.
+#
+# **The calls this module makes that other parsers argue about**, each
+# with its reason:
+#
+# * **Nesting is bounded at 128** (RFC 8259 §9 explicitly allows a
+#   parser to set a limit).  The parse itself is iterative and would
+#   not care, but a document is walked by callers, and loom lets a
+#   Luce program nest 128 calls before it traps `call_depth_exceeded`
+#   (`src/apps/host.zig`).  Accepting a document deeper than that
+#   would hand a caller a tree no recursive function of theirs can
+#   walk.  serde_json's default recursion limit is the same number,
+#   arrived at from the other direction.
+# * **A duplicate member name resolves to the last one written**
+#   (RFC 8259 §4: names SHOULD be unique, and the behaviour when they
+#   are not is unpredictable).  Every mainstream parser — JavaScript's
+#   `JSON.parse`, Python's `json`, Go's `encoding/json` — keeps the
+#   last, and so does `get`.  The *document* is not edited to match:
+#   `count`, `items` and `keys` still show every member as written,
+#   because a reader that wants to know a document repeats itself
+#   should be able to find out.
+# * **An unpaired surrogate escape is refused** (RFC 8259 §8.2 warns
+#   about them; ECMA-404 permits the code unit sequence).  A Luce
+#   string is UTF-8 and there is no UTF-8 for half a surrogate pair,
+#   so the honest answers are "refuse" or "quietly substitute U+FFFD",
+#   and this module refuses by name at the byte where it happened.
+#   A well-formed pair — `𝄞` — is one codepoint, 𝄞, and is
+#   read as one.
+# * **`as_long` reads the notation, not the value.**  `42` answers
+#   42; `4.2`, `42.0` and `4.2e1` all answer `none`, and are read with
+#   `as_double`.  A number written as a real is a real, and answering
+#   absence says so — where truncating would throw information away
+#   silently and rounding would invent it.  An integer too large for
+#   `long` also answers `none`, for the same reason `parse_int` does.
+# * **NaN and Infinity are not JSON** (RFC 8259 §6 lists exactly one
+#   number grammar and no names in it), so they are refused like any
+#   other unknown word.
+#
+# Errors name a byte offset, because that is the position the parser
+# genuinely has and a line and column would be a second thing to keep
+# right.  `parse` answers `Document!` and not `Document?` because
+# there are many distinct ways for a document to be wrong and the one
+# it met is worth carrying (docs/FAILURE.md).
+
+# --- the vocabulary of the grammar -----------------------------------
+#
+# RFC 8259 §2: the six structural characters, the two quoting bytes,
+# and nothing else in this module is written as a bare number.
+
+private let quote_byte: byte = 34
+private let backslash: byte = 92
+private let brace_open: byte = 123
+private let brace_close: byte = 125
+private let bracket_open: byte = 91
+private let bracket_close: byte = 93
+private let colon: byte = 58
+private let comma: byte = 44
+private let minus: byte = 45
+private let plus: byte = 43
+private let point: byte = 46
+private let digit_zero: byte = 48
+private let digit_nine: byte = 57
+
+# RFC 8259 §9 leaves the limit to the parser; this one is loom's own
+# call-depth policy, so every document this module accepts is a
+# document a recursive Luce function can walk.
+private let max_depth = 128
+
+# --- what a value is -------------------------------------------------
+
+# The six kinds of JSON value (RFC 8259 §3 the literal names, §4
+# objects, §5 arrays, §6 numbers, §7 strings).
+#
+# Five carry the spec's own word.  The sixth cannot: `string` is a
+# reserved name in Luce (it is the type, and the conversion
+# constructor named for it), so JSON's string kind is spelled `text`
+# here — the same word `strings.from_bytes` uses for the same thing.
+enum Kind:
+    object
+    array
+    text
+    number
+    boolean
+    null
+
+# One value in a document: what kind it is, the text it was written
+# as, and where it sits.
+#
+# A plain value with no object fields, so it copies for nothing and
+# crosses every boundary without a verb.  The fields are the module's
+# own — a program reads a node through the methods below and gets one
+# only by parsing a document (docs/VISIBILITY.md §6).
+struct Node:
+    # What the value is.
+    private tag: Kind
+    # A leaf's text exactly as it was written, quotes and escapes and
+    # all; "" for an object or an array, whose text is their children.
+    private source: string
+    # This value's member name as it was written, quotes included, when
+    # it is a member of an object; "" when it is not one.  An object
+    # member whose name is empty holds the two bytes of `""`, so the
+    # two cases never collide.
+    private label: string
+    # Where this value sits in its document.
+    private position: long
+    # One past the last node of this value's subtree — the index of the
+    # next sibling, and simdjson's tape link.
+    private beyond: long
+    # How many members or elements; 0 for every leaf.
+    private size: long
+
+    # Which of the six kinds this is.  Worth a `match`: without an
+    # `else` the compiler checks all six are handled.
+    func kind(self) -> Kind:
+        return self.tag
+
+    # The value's text exactly as it was written — the escapes still
+    # escaped, the number still in its own notation.  A container
+    # answers "": its text is its children, and `doc.write(node)` is
+    # what puts that back together.
+    func raw(self) -> string:
+        return self.source
+
+    # How many members an object has, or elements an array has.  A
+    # leaf answers 0.  Members are counted as written, so a document
+    # that names one twice counts it twice.
+    func count(self) -> long:
+        return self.size
+
+    # This value's member name, decoded, when it is a member of an
+    # object; "" when it is not one.  The decoding happens here rather
+    # than at parse time, like every other unpacking in this module.
+    func key(self) -> string:
+        if len(self.label) == 0:
+            return ""
+        return unescape(self.label)
+
+    # True for JSON's `null` and nothing else — which is a different
+    # question from "is this value missing", and that is the point of
+    # having both (`doc.get` answers absence).
+    func is_null(self) -> bool:
+        return self.tag == Kind.null
+
+    # `true` or `false`; absent for every other kind.
+    func as_bool(self) -> bool?:
+        if self.tag != Kind.boolean:
+            return none
+        return self.source == "true"
+
+    # The number as a whole number — absent when the value is not a
+    # number, when it was written with a fraction or an exponent, or
+    # when it does not fit a `long`.
+    func as_long(self) -> long?:
+        if self.tag != Kind.number:
+            return none
+        if not written_whole(self.source):
+            return none
+        return parse_int(self.source)
+
+    # The number as a double — absent when the value is not a number,
+    # and when the magnitude is past what a double can hold.
+    func as_double(self) -> double?:
+        if self.tag != Kind.number:
+            return none
+        return parse_float(self.source)
+
+    # The string with its escapes decoded (RFC 8259 §7); absent for
+    # every other kind.  This is where a `\n` becomes a newline and a
+    # `𝄞` becomes 𝄞.
+    func as_text(self) -> string?:
+        if self.tag != Kind.text:
+            return none
+        return unescape(self.source)
+
+# A parsed document: every value in it, in the order they were
+# written, and the root at the front.
+#
+# The one heap object this module makes.  It owns nothing else, and
+# the binding that receives it frees it.
+struct Document:
+    private nodes: list(Node)
+
+    # The one top-level value (RFC 8259 §2: a document is one value).
+    func root(self) -> Node:
+        return self.nodes[0]
+
+    # The member of an object named `name`, or absent — for a name
+    # that is not there and for a value that is not an object, which
+    # are the same news to a caller who was looking for a field.
+    #
+    # The members are scanned in order, the way simdjson's On-Demand
+    # interface scans them: an object is a short list in practice and
+    # an index over it would cost every document to serve some.  The
+    # scan runs to the end rather than stopping at the first hit, so a
+    # document that names a member twice resolves to the last one, as
+    # every mainstream parser does.
+    #
+    # `has` would be the other half of this pair, and it is a reserved
+    # name (it is `m.has(k)`, the map method); `doc.get(node, name) !=
+    # none` is the question, and it is the same one call.
+    func get(self, node: Node, name: string) -> Node?:
+        if node.tag != Kind.object:
+            return none
+        var found: long = -1
+        var at = node.position + 1
+        for i in range(0, node.size):
+            let child = self.nodes[at]
+            if label_is(child.label, name):
+                found = at
+            at = child.beyond
+        if found < 0:
+            return none
+        return self.nodes[found]
+
+    # The element at `index` of an array, or the member at that
+    # position of an object.  Out of range traps: `node.count()` is
+    # right there, and asking past it is a bug rather than news
+    # (docs/FAILURE.md).
+    #
+    # Reaching element `i` walks `i` siblings, so a loop that wants
+    # every element should ask `items` for them once instead.
+    func at(self, node: Node, index: long) -> Node:
+        if index < 0 or index >= node.size:
+            trap(f"json: no element {index} in a value of {node.size}")
+        var found = node.position + 1
+        for i in range(0, index):
+            found = self.nodes[found].beyond
+        return self.nodes[found]
+
+    # Every member or element, in the order written; a fresh list the
+    # caller owns.  A leaf answers an empty one.
+    func items(self, node: Node) -> list(Node):
+        var out: list(Node) = []
+        var at = node.position + 1
+        for i in range(0, node.size):
+            let child = self.nodes[at]
+            out.append(child)
+            at = child.beyond
+        return out
+
+    # Every member name of an object, decoded, in the order written —
+    # duplicates included, because they are in the document.  Anything
+    # that is not an object answers an empty list.
+    func keys(self, node: Node) -> list(string):
+        var out: list(string) = []
+        if node.tag != Kind.object:
+            return out
+        var at = node.position + 1
+        for i in range(0, node.size):
+            let child = self.nodes[at]
+            out.append(unescape(child.label))
+            at = child.beyond
+        return out
+
+    # The value as JSON text, with nothing between the tokens.
+    #
+    # Not a byte-for-byte echo of the input — the whitespace a document
+    # arrived with is not kept — but every *token* is the one that was
+    # read, escapes and number notation and all, so parsing the answer
+    # gives the same document and writing that gives the same bytes.
+    func write(self, node: Node) -> string:
+        return render(self, node, 0)
+
+    # The same, indented: every member and element on its own line,
+    # `spaces` further in than its container.  `spaces` of 0 is
+    # `write`.
+    func pretty(self, node: Node, spaces: long) -> string:
+        if spaces < 0:
+            trap("json: pretty needs spaces >= 0")
+        return render(self, node, spaces)
+
+# --- parsing ---------------------------------------------------------
+
+# Read one JSON document (RFC 8259 §2: exactly one value, with
+# whitespace allowed around it).
+#
+# Everything that can be wrong with the text is an error naming the
+# byte it happened at.  Nothing is decoded here beyond what checking
+# the grammar requires: the values keep their text and unpack when
+# they are read.
+func parse(content: string) -> Document!:
+    var nodes: list(Node) = []
+    var at = skip_blank(content, 0)
+    if at >= len(content):
+        error("json: there is no value in the text")
+    at = try scan_value(nodes, content, at)
+    at = skip_blank(content, at)
+    if at != len(content):
+        error(f"json: text after the document's one value, at byte {at}")
+    return Document(nodes = give nodes)
+
+# The whole grammar, as one loop over the text with an explicit stack
+# of open containers.
+#
+# Iterative rather than recursive on purpose: recursion would make the
+# depth a program may parse a function of the host's call-depth policy
+# and the shape of this file, which is not something a document should
+# depend on.  The limit is a number this module states (`max_depth`)
+# and reports by name.
+#
+# `open` holds the node index of every container still waiting for its
+# closing byte; `tally` counts what has gone into each of them.
+#
+# The growing document is passed as the list itself rather than as the
+# `Document` that will own it: closing a container is `nodes[i].size =
+# n`, and a struct read out of a `let`-bound name is not a place to
+# assign into — the store would land in the name, which is exactly
+# what `let` forbids.  Through the list it lands in the object, which
+# is what it means to.  `parse` gives the finished list to the
+# document it hands back.
+private func scan_value(nodes: list(Node), content: string, start: long) -> long!:
+    var at = start
+    var open: list(long) = []
+    var tally: list(long) = []
+    while true:
+        at = skip_blank(content, at)
+        # RFC 8259 §4: inside an object every value is preceded by a
+        # string and a colon.  Whether that is the case is a question
+        # about the innermost open container and nothing else, which
+        # is why it is asked here rather than at each of the two
+        # places that lead to a value.
+        var label = ""
+        if len(open) > 0 and nodes[open[len(open) - 1]].tag == Kind.object:
+            if at >= len(content) or content.byte_at(at) != quote_byte:
+                error(f"json: a member name must be a string, at byte {at}")
+            let name_at = at
+            at = try scan_string(content, at)
+            label = content[name_at:at]
+            at = skip_blank(content, at)
+            if at >= len(content) or content.byte_at(at) != colon:
+                error(f"json: a member name must be followed by a colon, at byte {at}")
+            at = skip_blank(content, at + 1)
+        if at >= len(content):
+            error(f"json: a value was expected at byte {at}")
+
+        let head = content.byte_at(at)
+        if head == brace_open or head == bracket_open:
+            if len(open) >= max_depth:
+                error(f"json: values nested deeper than {max_depth}, at byte {at}")
+            var tag = Kind.array
+            if head == brace_open:
+                tag = Kind.object
+            let opened = len(nodes)
+            nodes.append(Node(
+                tag = tag,
+                source = "",
+                label = label,
+                position = opened,
+                beyond = opened + 1,
+                size = 0,
+            ))
+            open.append(opened)
+            tally.append(0)
+            at = skip_blank(content, at + 1)
+            # An empty container closes where it opened; anything else
+            # sends the loop round for its first member or element.
+            if at < len(content) and content.byte_at(at) == closer_of(tag):
+                at += 1
+                close_top(nodes, open, tally)
+            else:
+                continue
+        else:
+            let value_at = at
+            var tag = Kind.null
+            if head == quote_byte:
+                tag = Kind.text
+                at = try scan_string(content, at)
+            elif head == minus or is_digit(head):
+                tag = Kind.number
+                at = try scan_number(content, at)
+            elif word_at(content, at, "true"):
+                tag = Kind.boolean
+                at += 4
+            elif word_at(content, at, "false"):
+                tag = Kind.boolean
+                at += 5
+            elif word_at(content, at, "null"):
+                tag = Kind.null
+                at += 4
+            else:
+                error(f"json: a value was expected at byte {at}")
+            let leaf = len(nodes)
+            nodes.append(Node(
+                tag = tag,
+                source = content[value_at:at],
+                label = label,
+                position = leaf,
+                beyond = leaf + 1,
+                size = 0,
+            ))
+
+        # A value has just been finished.  Count it in whatever
+        # contains it, and close every container it was the last of —
+        # each of which is a finished value in its own right, which is
+        # why this is a loop and not a step.
+        while true:
+            if len(open) == 0:
+                return at
+            tally[len(tally) - 1] += 1
+            at = skip_blank(content, at)
+            let top = nodes[open[len(open) - 1]]
+            if at >= len(content):
+                error(f"json: the text ends inside the {string(top.tag)} opened at byte {top.position}")
+            let mark = content.byte_at(at)
+            if mark == comma:
+                at += 1
+                break
+            elif mark == closer_of(top.tag):
+                at += 1
+                close_top(nodes, open, tally)
+            else:
+                error(f"json: a comma or a close was expected at byte {at}")
+    # The loop above leaves only by returning or by reporting, and the
+    # compiler cannot see that a `while true:` never falls out — so the
+    # promise is written here, where it can be read.
+    trap("json: the parse loop fell out of a loop it cannot leave")
+
+# Finish the innermost open container: it holds what the tally counted
+# and its subtree is everything appended since it opened.
+private func close_top(nodes: list(Node), open: list(long), tally: list(long)):
+    let last = len(open) - 1
+    let closed = open[last]
+    nodes[closed].size = tally[last]
+    nodes[closed].beyond = len(nodes)
+    open.remove(last)
+    tally.remove(last)
+
+# RFC 8259 §2: whitespace is exactly these four bytes — space,
+# horizontal tab, line feed and carriage return.  Nothing else is
+# whitespace, which is why a vertical tab or a form feed between two
+# tokens is an error rather than a shrug.
+private func skip_blank(content: string, from: long) -> long:
+    var at = from
+    while at < len(content):
+        let c = content.byte_at(at)
+        if c == 32 or c == 9 or c == 10 or c == 13:
+            at += 1
+        else:
+            return at
+    return at
+
+# RFC 8259 §7.  Answers the byte after the closing quote, having
+# checked every escape on the way — so `as_text` can decode without
+# asking any question twice.
+private func scan_string(content: string, from: long) -> long!:
+    var at = from + 1
+    while at < len(content):
+        let c = content.byte_at(at)
+        if c == quote_byte:
+            return at + 1
+        elif c == backslash:
+            at = try scan_escape(content, at)
+        elif c < 32:
+            # §7: the control characters must be escaped.  A raw
+            # newline inside a string is the usual way to meet this.
+            error(f"json: an unescaped control character inside a string, at byte {at}")
+        else:
+            at += 1
+    error(f"json: the string opened at byte {from} is never closed")
+
+# RFC 8259 §7's eight escapes.  Answers the byte after the escape.
+private func scan_escape(content: string, from: long) -> long!:
+    if from + 1 >= len(content):
+        error(f"json: the text ends inside an escape, at byte {from}")
+    let c = content.byte_at(from + 1)
+    if c == 117:
+        # \uXXXX.  A high surrogate is half of a codepoint and must be
+        # followed by its low half (§7); a low one on its own is not a
+        # codepoint at all (§8.2).  Refusing both is what keeps every
+        # string this module accepts decodable into UTF-8, which is
+        # the only thing a Luce string can be.
+        let value = try read_hex4(content, from + 2)
+        if value >= 55296 and value <= 56319:
+            if from + 7 >= len(content) or content.byte_at(from + 6) != backslash or content.byte_at(from + 7) != 117:
+                error(f"json: a high surrogate escape at byte {from} is not followed by its low half")
+            let low = try read_hex4(content, from + 8)
+            if low < 56320 or low > 57343:
+                error(f"json: a high surrogate escape at byte {from} is followed by something that is not a low surrogate")
+            return from + 12
+        elif value >= 56320 and value <= 57343:
+            error(f"json: a low surrogate escape stands alone at byte {from}")
+        return from + 6
+    elif c == quote_byte or c == backslash or c == 47 or c == 98 or c == 102 or c == 110 or c == 114 or c == 116:
+        # " \ / b f n r t — the whole of the rest of §7.
+        return from + 2
+    error(f"json: unknown escape at byte {from}")
+
+# Four hexadecimal digits, as the number they spell.
+private func read_hex4(content: string, from: long) -> long!:
+    if from + 4 > len(content):
+        error(f"json: an escape at byte {from} wants four hexadecimal digits and the text ends first")
+    var value: long = 0
+    for i in range(0, 4):
+        let c = content.byte_at(from + i)
+        var part = -1
+        if c >= digit_zero and c <= digit_nine:
+            part = c - digit_zero
+        elif c >= 97 and c <= 102:
+            part = c - 97 + 10
+        elif c >= 65 and c <= 70:
+            part = c - 65 + 10
+        else:
+            error(f"json: an escape at byte {from} wants four hexadecimal digits")
+        value = value * 16 + part
+    return value
+
+# RFC 8259 §6, and the whole of it: an optional minus, an integer part
+# that is either a single zero or a digit string not starting with
+# one, an optional fraction with at least one digit, and an optional
+# exponent with at least one digit.  `.5`, `5.`, `01`, `+1`, `1e`,
+# `0x10`, `NaN` and `Infinity` are all outside it, and none of them
+# reaches a caller as a number.
+private func scan_number(content: string, from: long) -> long!:
+    var at = from
+    if content.byte_at(at) == minus:
+        at += 1
+    if at >= len(content) or not is_digit(content.byte_at(at)):
+        error(f"json: a number needs a digit, at byte {at}")
+    if content.byte_at(at) == digit_zero:
+        at += 1
+        if at < len(content) and is_digit(content.byte_at(at)):
+            error(f"json: a number may not have a leading zero, at byte {from}")
+    else:
+        while at < len(content) and is_digit(content.byte_at(at)):
+            at += 1
+    if at < len(content) and content.byte_at(at) == point:
+        at += 1
+        if at >= len(content) or not is_digit(content.byte_at(at)):
+            error(f"json: a fraction needs a digit after the point, at byte {at}")
+        while at < len(content) and is_digit(content.byte_at(at)):
+            at += 1
+    if at < len(content) and (content.byte_at(at) == 101 or content.byte_at(at) == 69):
+        at += 1
+        if at < len(content) and (content.byte_at(at) == plus or content.byte_at(at) == minus):
+            at += 1
+        if at >= len(content) or not is_digit(content.byte_at(at)):
+            error(f"json: an exponent needs a digit, at byte {at}")
+        while at < len(content) and is_digit(content.byte_at(at)):
+            at += 1
+    return at
+
+private func is_digit(c: byte) -> bool:
+    return c >= digit_zero and c <= digit_nine
+
+# True when `word` stands at `at`.  Byte by byte rather than by slice,
+# because a slice that ended inside a character would trap and the
+# text after a literal name is whatever the document says it is.
+private func word_at(content: string, at: long, word: string) -> bool:
+    if at + len(word) > len(content):
+        return false
+    for i in range(0, len(word)):
+        if content.byte_at(at + i) != word.byte_at(i):
+            return false
+    return true
+
+# Which byte closes a container of this kind.
+private func closer_of(tag: Kind) -> long:
+    if tag == Kind.object:
+        return brace_close
+    return bracket_close
+
+# True when a number was written without a fraction and without an
+# exponent — the question `as_long` asks.
+private func written_whole(source: string) -> bool:
+    return source.find_byte(point, 0) < 0 and source.find_byte(101, 0) < 0 and source.find_byte(69, 0) < 0
+
+# --- text, both directions -------------------------------------------
+
+# A quoted, escaped member name compared against a plain one, without
+# building anything.  Names hold no escapes in almost every document
+# there is, so that case is a length check and a byte compare; the
+# rest decode and compare.
+private func label_is(label: string, name: string) -> bool:
+    if len(label) < 2:
+        return false
+    if label.find_byte(backslash, 1) < 0:
+        if len(label) - 2 != len(name):
+            return false
+        for i in range(0, len(name)):
+            if label.byte_at(1 + i) != name.byte_at(i):
+                return false
+        return true
+    return unescape(label) == name
+
+# A JSON string token — quotes included — as the text it spells (RFC
+# 8259 §7).
+#
+# Total, because the parser already refused every escape this cannot
+# decode; the trap at the bottom is that promise written down.  A
+# token with no backslash in it is its own contents, and is sliced
+# rather than rebuilt.
+private func unescape(token: string) -> string:
+    let last = len(token) - 1
+    if token.find_byte(backslash, 1) < 0:
+        return token[1:last]
+    var out = new builder()
+    var at = 1
+    while at < last:
+        let c = token.byte_at(at)
+        if c != backslash:
+            # A run of ordinary bytes goes in whole: it can hold whole
+            # characters of any width, and it ends at a backslash or
+            # at the closing quote, both of which are ASCII.
+            let run = at
+            while at < last and token.byte_at(at) != backslash:
+                at += 1
+            out.append(token[run:at])
+        else:
+            let e = token.byte_at(at + 1)
+            if e == quote_byte or e == backslash or e == 47:
+                out.append_ascii(e)
+                at += 2
+            elif e == 98:
+                out.append_ascii(8)
+                at += 2
+            elif e == 102:
+                out.append_ascii(12)
+                at += 2
+            elif e == 110:
+                out.append_ascii(10)
+                at += 2
+            elif e == 114:
+                out.append_ascii(13)
+                at += 2
+            elif e == 116:
+                out.append_ascii(9)
+                at += 2
+            elif e == 117:
+                var code = hex4(token, at + 2)
+                at += 6
+                if code >= 55296 and code <= 56319:
+                    # RFC 8259 §7's example is this exact pair: 𝄞 is
+                    # one codepoint written as two escapes.
+                    let low = hex4(token, at + 2)
+                    code = 65536 + (code - 55296) * 1024 + (low - 56320)
+                    at += 6
+                out.append(chr(code))
+            else:
+                trap("json: an escape the parser accepted has no decoding")
+    return out.build()
+
+# Four hexadecimal digits the parser has already checked.
+private func hex4(token: string, from: long) -> long:
+    var value: long = 0
+    for i in range(0, 4):
+        let c = token.byte_at(from + i)
+        if c >= digit_zero and c <= digit_nine:
+            value = value * 16 + (c - digit_zero)
+        elif c >= 97 and c <= 102:
+            value = value * 16 + (c - 97 + 10)
+        else:
+            value = value * 16 + (c - 65 + 10)
+    return value
+
+# Text as a JSON string, quotes and escapes and all (RFC 8259 §7).
+#
+# The two escapes that are required — the quote and the backslash —
+# and the control characters, which the six short names cover where
+# they can and `\u00xx` covers where they cannot.  Everything else
+# goes in as itself: the solidus needs no escape (§7 permits one and
+# does not ask for it), and a character outside ASCII is UTF-8 in the
+# output exactly as it was in the input, which is what §8.1 recommends
+# and what makes a `\u` escape unnecessary here.
+#
+# This is the door for a program that builds JSON of its own out of a
+# builder rather than parsing any, and it is the same escaping `write`
+# puts back around a name.
+func quote(content: string) -> string:
+    var out = new builder()
+    out.append_ascii(quote_byte)
+    var run = 0
+    var at = 0
+    while at < len(content):
+        let c = content.byte_at(at)
+        if c == quote_byte or c == backslash or c < 32:
+            if at > run:
+                out.append(content[run:at])
+            put_escape(out, c)
+            run = at + 1
+        at += 1
+    out.append(content[run:])
+    out.append_ascii(quote_byte)
+    return out.build()
+
+private func put_escape(out: builder, c: byte):
+    out.append_ascii(backslash)
+    if c == quote_byte or c == backslash:
+        out.append_ascii(c)
+    elif c == 8:
+        out.append_ascii(98)
+    elif c == 12:
+        out.append_ascii(102)
+    elif c == 10:
+        out.append_ascii(110)
+    elif c == 13:
+        out.append_ascii(114)
+    elif c == 9:
+        out.append_ascii(116)
+    else:
+        # Every other control character, four hexadecimal digits of
+        # it.  Lowercase, as JavaScript and Python both write them.
+        out.append_ascii(117)
+        out.append_ascii(digit_zero)
+        out.append_ascii(digit_zero)
+        out.append_ascii(hex_digit(c >> 4 & 15))
+        out.append_ascii(hex_digit(c & 15))
+
+private func hex_digit(value: int) -> int:
+    if value < 10:
+        return digit_zero + value
+    return 97 + value - 10
+
+# --- writing ---------------------------------------------------------
+
+# One value and its subtree as JSON text, in document order.
+#
+# The same walk `parse` made, run backwards through the tape: a
+# container's first child is the node after it, and every value's next
+# sibling is its `beyond`.  Iterative for the same reason the parser
+# is — a document 128 deep is one this module accepted, so it has to
+# be one this module can print.
+private func render(doc: Document, node: Node, spaces: long) -> string:
+    var out = new builder()
+    var open: list(long) = []
+    var left: list(long) = []
+    var at = node.position
+    while true:
+        let current = doc.nodes[at]
+        if len(open) > 0:
+            let parent = doc.nodes[open[len(open) - 1]]
+            if left[len(left) - 1] < parent.size:
+                out.append(",")
+            put_break(out, spaces, len(open))
+            if parent.tag == Kind.object:
+                # The name goes back exactly as it arrived, escapes
+                # and all: it was checked, so it needs no rewriting.
+                out.append(current.label)
+                out.append(":")
+                if spaces > 0:
+                    out.append(" ")
+            left[len(left) - 1] -= 1
+        if current.tag == Kind.object or current.tag == Kind.array:
+            if current.size == 0:
+                out.append(empty_of(current.tag))
+            else:
+                out.append(opener_of(current.tag))
+                open.append(at)
+                left.append(current.size)
+                at += 1
+                continue
+        else:
+            out.append(current.source)
+        # The value is written; close every container it completed,
+        # innermost first, and go on to whatever follows the outermost
+        # of them.
+        var last = at
+        while len(open) > 0 and left[len(left) - 1] == 0:
+            last = open[len(open) - 1]
+            open.remove(len(open) - 1)
+            left.remove(len(left) - 1)
+            put_break(out, spaces, len(open))
+            out.append(closer_text(doc.nodes[last].tag))
+        if len(open) == 0:
+            return out.build()
+        at = doc.nodes[last].beyond
+    # As in `scan_value`: the loop leaves by returning, and this says so.
+    trap("json: the writer fell out of a loop it cannot leave")
+
+# A line break and one level of indentation, or nothing at all when
+# the caller asked for no spaces.
+private func put_break(out: builder, spaces: long, depth: long):
+    if spaces <= 0:
+        return
+    out.append_ascii(10)
+    for i in range(0, spaces * depth):
+        out.append_ascii(32)
+
+private func opener_of(tag: Kind) -> string:
+    if tag == Kind.object:
+        return "{"
+    return "["
+
+private func closer_text(tag: Kind) -> string:
+    if tag == Kind.object:
+        return "}"
+    return "]"
+
+private func empty_of(tag: Kind) -> string:
+    if tag == Kind.object:
+        return "{}"
+    return "[]"

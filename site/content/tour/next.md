@@ -42,9 +42,9 @@ the exact grammar, every operator's precedence, all 45 ownership
 situations with individual anchors, every trap code, every builtin
 signature. It is the document to cite.
 
-**Read the library.** [The standard library](/std/) is six modules —
-`math`, `strings`, `files`, `paths`, `os` — written in ordinary Luce
-and embedded in the compiler.
+**Read the library.** [The standard library](/std/) is seven modules —
+`math`, `strings`, `files`, `paths`, `os`, `zip`, `json` — written in
+ordinary Luce and embedded in the compiler.
 
 ## Writing something real
 

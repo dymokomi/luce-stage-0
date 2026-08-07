@@ -59,7 +59,7 @@ one-to-one.
 | `interpreter/` | **the differential oracle, and it ships in nothing** — the dispatch loop, the explicit frame stack, the traceback, host effects. Everything below the instruction level is a `runtime` call. `interpreter.zig` is its header as well as its barrel: `Host`, `Budget`, `Result`, `Trap` and `Raised` are its shapes, and were `backend.zig`'s until stage 10 turned out to bring its own published ABI rather than slot in behind them (docs/ENGINE.md step 6). Its own suite is two tests, both about the frame stack: what it *computes* is proved in `specs/`, on both engines. |
 | `support/` | `diagnostics.zig` and `types.zig`: cross-cutting, used by every stage, owned by none. |
 | `std/` | the standard library, written in Luce and embedded with `@embedFile`. |
-| `specs/` | the executable specification, eleven files: ownership (S1-S45), behaviour, errors, std, the host boundary, projects, the optimizer, the serialized-module round trip, `std.zip`, the editor, and the adventure. **Its own module**, not part of `luce`: every test that runs a program runs it on both engines and compares them (`specs/agree.zig`), which needs `emit` and the libLLVM `luce` does not link (docs/ENGINE.md). |
+| `specs/` | the executable specification: ownership (S1-S45), behaviour, enums, errors, std, the byte channel, the host boundary, projects, the optimizer, the serialized-module round trip, `std.zip`, `std.json`, the editor, and the adventure. **Its own module**, not part of `luce`: every test that runs a program runs it on both engines and compares them (`specs/agree.zig`), which needs `emit` and the libLLVM `luce` does not link (docs/ENGINE.md). |
 
 ## Where the two arms meet
 

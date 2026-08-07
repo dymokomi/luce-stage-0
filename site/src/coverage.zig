@@ -714,6 +714,15 @@ test "each std page names every function and constant its module exports" {
         // eight functions the page documents and nothing else.
         try expectDocumented(repository, "std/zip.md", names, &.{});
     }
+    {
+        var names = try standardModule(repository, "json");
+        defer names.deinit();
+        // No exemptions: everything below the surface — the scanners,
+        // the escape decoder, the byte names of the grammar — is
+        // `private`, so the roster is `parse` and `quote`, and the
+        // page's tables carry the methods those two hand back.
+        try expectDocumented(repository, "std/json.md", names, &.{});
+    }
 }
 
 test "the toolchain page names every option and command word the binaries take" {

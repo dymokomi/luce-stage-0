@@ -41,6 +41,9 @@ pub const standard = @import("specs/std_spec.zig");
 /// `std.zip`: a container format, so the specification is other
 /// people's bytes as well as its own.
 pub const zip = @import("specs/zip_spec.zig");
+/// `std.json`: a grammar, so the specification is mostly what it
+/// refuses — RFC 8259 clause by clause, over JSONTestSuite's rows.
+pub const json = @import("specs/json_spec.zig");
 /// The binary half of the host boundary: packed byte lists, file
 /// handles as scope-owned resources, and text as a validation
 /// (docs/BYTES.md).
@@ -68,6 +71,7 @@ test {
     _ = errors;
     _ = standard;
     _ = zip;
+    _ = json;
     _ = bytes;
     _ = host;
     _ = modules;
