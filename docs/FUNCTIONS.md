@@ -83,6 +83,22 @@ block-colon the eye is trained on); `|a, b| …` (the pipes are
 bitwise-or now); a `=>` arrow (a second arrow spelling when `->`
 already means "answers").
 
+**Block-bodied anonymous functions, asked about and declined**
+(owner, same sitting: *"anonymous function definition right as
+function parameter, or is it too much JavaScript?"*).  The blocker is
+grammatical before it is aesthetic: an indentation language cannot
+put a statement block inside a call's parentheses — this is exactly
+why Python's `lambda` is one expression, after years of rejected
+multi-line proposals.  JavaScript affords it with braces and owns the
+captures with a collector; Luce has neither, on purpose.  The one
+shape that fits indentation languages is the **trailing block**
+(Swift, Ruby, Kotlin) — the body after the call, indented normally —
+and it is declined *because it works*: a body with room for
+statements immediately wants the enclosing scope, which is capture.
+Recorded as the shape this would take if a future corpus bleeds for
+it (a `spawn:` block is the plausible customer); the door is marked,
+not bricked up.
+
 ## Decisions
 
 | | decision |
