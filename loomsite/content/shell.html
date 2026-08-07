@@ -1,0 +1,155 @@
+<!-- Every transcript on this page was produced by running loom from a
+     freshly built toolchain (./build.sh) and pasting what it printed. -->
+
+<p>Run <code>loom</code> with no arguments and it reads lines. That is the whole
+of it: a prompt, a short list of commands, and a rule about the file
+extension.</p>
+
+<figure class="sample">
+<figcaption class="cap shell">Shell</figcaption>
+<div class="code"><pre><samp><span class="prompt">$</span> <kbd>loom</kbd>
+loom — the luce environment. help lists commands.
+loom ▸ <kbd>help</kbd>
+  run PROGRAM.lc [ARGS]   run a compiled Luce program
+  luce PROGRAM.luc [ARGS] compile and run a Luce source file
+  edit FILE              open the Luce editor (LOOM_EDITOR overrides)
+  clear                  clear the screen
+  exit                   leave loom
+  a bare PROGRAM.lc or .luc path runs it directly
+loom ▸ <kbd>exit</kbd></samp></pre></div>
+</figure>
+
+<h2 id="commands">The commands</h2>
+
+<div class="table">
+<table>
+<tr><th>Line</th><th>What it does</th></tr>
+<tr><td><code>run PROGRAM.lc [ARGS]</code></td><td>Opens a compiled artifact and
+calls it — <a href="@/running/">Running programs</a></td></tr>
+<tr><td><code>luce PROGRAM.luc [ARGS]</code></td><td>Compiles a source file if
+needed, then runs it</td></tr>
+<tr><td><code>edit FILE</code></td><td>Opens the <a href="@/editor/">editor</a> on
+one file</td></tr>
+<tr><td><code>clear</code></td><td>Clears the screen</td></tr>
+<tr><td><code>help</code></td><td>Lists the rest — a test in the repository fails
+if it ever stops naming one of them</td></tr>
+<tr><td><code>exit</code> or <code>quit</code></td><td>Leaves</td></tr>
+<tr><td><code>PROGRAM.lc</code> / <code>PROGRAM.luc</code></td><td>A bare path
+runs directly: the sugar for the two commands above</td></tr>
+</table>
+</div>
+
+<p>Anything else is named back to you, so a typo reads as a typo rather than as a
+missing feature:</p>
+
+<figure class="sample">
+<figcaption class="cap bad">Standard error</figcaption>
+<div class="code result bad"><pre><samp>loom: unknown command rnu (try help)</samp></pre></div>
+</figure>
+
+<p><code>edit</code> takes exactly one file, and a second one is refused rather
+than ignored: an editor opening the wrong file is worse than one that does not
+open.</p>
+
+<h2 id="nothing">What the shell deliberately does not have</h2>
+
+<p>No variables. No history file. No configuration. No pipes, no redirection, no
+globbing, no <code>cd</code>. No aliases and no prompt customisation.</p>
+
+<p>This is not a list of things that have not been got to yet. <strong>Everything
+durable belongs to the programs and to the filesystem, not to the shell.</strong>
+loom's job is starting programs; a shell that accumulated state would become a
+thing you have to manage, back up, and reason about when a program misbehaves.
+Where a real shell is what you want, loom's command forms are exactly the ones
+you type into it:</p>
+
+<figure class="sample">
+<figcaption class="cap shell">Shell</figcaption>
+<div class="code"><pre><samp><span class="prompt">$</span> <kbd>loom run build/programs/wordcount.lc hello.luc</kbd>
+11 distinct words in hello.luc
+  2  args
+  2  print
+  2  name
+  1  func
+  1  main
+<span class="prompt">$</span> <kbd>loom run build/programs/wordcount.lc hello.luc &gt; counts.txt</kbd></samp></pre></div>
+</figure>
+
+<h2 id="colour">Colour, and when there is none</h2>
+
+<p>The shell is coloured when a terminal is reading it and plain when anything
+else is. One palette travels with the shell, and when it is disabled every code
+renders as the empty string — so the printing code never branches on colour
+support and there is no path where half a message is escaped and half is
+not.</p>
+
+<p>Colour is off when standard output is not a terminal, or when
+<code>NO_COLOR</code> is set to anything at all. That rule reaches further than
+it looks: <code>clear</code> writes its escape sequence only where escape
+sequences are read, because a <code>clear</code> in a piped script would
+otherwise put one in somebody's log file.</p>
+
+<p>Failure text is never coloured. It is written on standard error, which may not
+be the same terminal standard output is.</p>
+
+<h2 id="scripts">A person and a script are different about failure</h2>
+
+<p>loom reads lines the same way whether they come from a keyboard or a pipe, but
+it exits differently, and the difference is deliberate.</p>
+
+<p><strong>An interactive loom always exits 0.</strong> A person at a prompt has
+already been told that a program failed — the trap is on their screen — and wants
+the prompt back. A shell that exited nonzero because of something typed an hour
+ago would be reporting on the person rather than on a program.</p>
+
+<p><strong>A script piped into loom exits with the worst status any line
+produced.</strong> Nobody is watching it. <code>echo "run boom.lc" | loom</code>
+inside a build is the only thing that will ever know that the program did not
+run, so the worst thing any line did becomes loom's own status.</p>
+
+<figure class="sample">
+<figcaption class="cap shell">Shell</figcaption>
+<div class="code"><pre><samp><span class="prompt">$</span> <kbd>printf 'help\nrun no/such/program.lc\nhelp\n' | loom ; echo "status=$?"</kbd>
+loom: cannot read no/such/program.lc: no such file
+status=1</samp></pre></div>
+</figure>
+
+<p>The shell keeps going after a failed line — it is not a <code>set -e</code>
+script — but it remembers. An <code>exit</code> in the middle does not wipe what
+came before it, and a typo counts too: a command that was not recognised is a
+command that did not run.</p>
+
+<h2 id="line">One line, one program</h2>
+
+<p>A command line is split on spaces and tabs, and that is the entire parser.
+There are no quotes and no escapes, so an argument with a space in it is a thing
+to pass through a real shell — <code>loom run calc.lc "2 + 3 * (10 - 4)"</code> —
+rather than something loom pretends to handle.</p>
+
+<p>There is a cap on how many words a line may have, and a line that reached it
+is refused rather than truncated:</p>
+
+<figure class="sample">
+<figcaption class="cap bad">Standard error</figcaption>
+<div class="code result bad"><pre><samp>loom: too many arguments</samp></pre></div>
+</figure>
+
+<p>Running the part that fits would be running a different command from the one
+that was typed, which is the one kind of failure a person does not think to look
+for.</p>
+
+<h2 id="programs">While a program is running</h2>
+
+<p>Nothing bounds how long a program runs. An interactive one blocks on
+<code>key_read</code> for as long as it likes, and loom is not a supervisor: it
+made the call and it is waiting for it to return. What it does guarantee is the
+other side of that — <strong>the screen is restored before any trap is
+reported</strong>, so a full-screen program that crashed hands the terminal back
+in the state it borrowed it in, and its message lands where you can read it.</p>
+
+<p>Runaway recursion is caught. Call depth is policy rather than a native-stack
+accident: generated code carries how many frames it may still take, and traps
+<code>call_depth_exceeded</code> at the call that would exhaust it. loom sets that
+number — conservatively, deep enough for any reasonable program and shallow
+enough that a runaway one reports promptly and well inside the machine's own
+stack.</p>
