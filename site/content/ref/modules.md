@@ -263,7 +263,8 @@ std.files` inside a program compiled without host access is a compile
 error, because file access genuinely does not exist there.
 
 The modules are [`math`](/std/math/), [`strings`](/std/strings/),
-[`files`](/std/files/), [`paths`](/std/paths/) and [`os`](/std/os/).
+[`files`](/std/files/), [`paths`](/std/paths/), [`os`](/std/os/) and
+[`zip`](/std/zip/).
 
 ## Multi-file programs
 

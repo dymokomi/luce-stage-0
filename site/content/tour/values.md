@@ -2,12 +2,12 @@
 
 Every expression in Luce has one type, known when the program is
 compiled. Annotations are optional wherever the initializer decides
-the answer: `let n = 1` is an `long`, and `let n: long = 1` says so out
-loud.
+the answer: `let n = 1` is an `int`, and `let n: long = 1` says
+otherwise out loud.
 
 ```luce run
 func main():
-    let count = 7                 # long
+    let count = 7                 # int
     let ratio: double = 0.5        # said out loud
     let ready = true              # bool
     let name = "loom"             # string
@@ -185,7 +185,7 @@ negative answer, so `x % 256` wraps a byte for every `x` and
 `(row - 1) % height` walks a torus, without the `+ height` other
 languages need.
 
-`//` and `%` by zero are traps, because they answer an `long` and
+`//` and `%` by zero are traps, because they answer a `long` and
 there is no `long` that means "undefined". `/` answers a `double` and is
 IEEE like every other `double` operation: `1 / 0` is `inf` and `0 / 0`
 is NaN, neither of them a trap.

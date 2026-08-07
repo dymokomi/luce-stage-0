@@ -16,7 +16,7 @@ in the repository are the last word.
 
 ## Citing a rule
 
-The [ownership](ownership/) page gives every one of the 43 ratified
+The [ownership](ownership/) page gives every one of the 45 ratified
 situations a fixed anchor — `#s21`, `#s13` — that does not move when
 its wording does. The compiler quotes those numbers in its
 diagnostics, so a message that says `[OWNERSHIP.md S21]` points at

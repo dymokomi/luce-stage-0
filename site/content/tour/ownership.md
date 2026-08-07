@@ -24,7 +24,7 @@ func main():
 The whole model is four words — `new`, `give`, `copy`, `free` — and
 three of them are needed only where the compiler genuinely cannot see
 what you mean. The full specification is
-[43 numbered situations](/ref/ownership/), each one addressable on its
+[45 numbered situations](/ref/ownership/), each one addressable on its
 own, and the compiler quotes their numbers in its diagnostics.
 
 ## What owns what

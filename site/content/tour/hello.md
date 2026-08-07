@@ -101,7 +101,7 @@ does not turn off a single safety check. See
 ## Errors, at compile time
 
 Luce is statically typed with inference, and the only conversion it
-makes on its own is widening an `long` to a `double`. Mistakes are
+makes on its own is widening a `long` to a `double`. Mistakes are
 caught before anything runs, and the message tries to name the fix
 rather than the parser's predicament:
 

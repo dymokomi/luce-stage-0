@@ -13,7 +13,7 @@ every `file:line` here was re-derived rather than carried forward.
 ## Scorecard
 
 The **language surface is done.**  Ten conceptual stages, seven
-folders, eight executable specs, stages 1 and 2 marked *Locked*, and a
+folders, eleven executable specs, stages 1 and 2 marked *Locked*, and a
 front end whose diagnostics mostly name the fix rather than the
 parser's predicament — mostly, because the ownership, optional and
 failure families set a standard that fifteen other places do not yet
@@ -106,9 +106,11 @@ content hash of the program, and the identity of the code generator —
 so a stale or foreign one is refused by name instead of crashing.  The
 key is content, never mtime.
 
-What is left of this item is named in docs/ENGINE.md: an artifact is
-666–716 KB whatever the program says, because `libluce_rt` is linked
-statically into each one, and a shared `libluce_rt` is the named
+What is left of this item is named in docs/ENGINE.md: **an artifact is
+mostly `libluce_rt` by size**, because the runtime is linked
+statically into each one, so what a program says barely moves the
+number — `hello.lc` is 756 KB and the largest bundled program,
+`adventure.lc`, is 871 KB.  A shared `libluce_rt` is the named
 future optimization; and a `.lc` runs only on the machine that built
 it, because cross-compilation needs one `libluce_rt` per target and a
 linker willing to take it.
@@ -274,19 +276,20 @@ the proof the language moved.
    80 ms waited out, so `sleep_ms` is called with a negative number
    whenever a frame overruns — which is why it is not a trap).
 
-   What was left out, and why:
+   What was left out at the time, and what became of it:
 
-   - **`exit`.**  Not one builtin.  It is a fourth way for a run to
-     end, and every party would need an answer for it: `luce_main`'s
-     `Status`, the leak census, what the oracle's frame stack
-     does on the way out, and what "scope ownership" means when a
-     scope never closes.  `main() -> !` already ends a program early
-     with a reason and a status a shell can read, which is what the
-     corpus actually wanted.
-   - **Path manipulation.**  Not a host gap at all — joining and
-     splitting a path is pure text, so it is a std module (`paths`)
-     over `strings`, and it should be designed against a program that
-     needs it rather than guessed at.
+   - ~~**`exit`.**~~  **Shipped**, and it is a host builtin like any
+     other.  It waited because it is a fourth way for a run to end and
+     every party needed an answer for it: `luce_main`'s `Status`, the
+     leak census, what the oracle's frame stack does on the way out,
+     and what "scope ownership" means when a scope never closes.  Those
+     answers were written rather than guessed, which is why it is here
+     now and was not then; `main() -> !` remains the way to end a
+     program early *with a reason*.
+   - ~~**Path manipulation.**~~  **Shipped as `std.paths`.**  It was
+     never a host gap — joining and splitting a path is pure text, so
+     it is a std module over `strings` — and it waited to be designed
+     against a program that needed it rather than guessed at.
    - **A wall clock and a calendar.**  `clock_ms` is monotonic and
      says only that differences mean something.  Dates are a library,
      not a builtin, and the library does not exist.
@@ -477,8 +480,8 @@ the proof the language moved.
   `zig build test`, so the drift that entry described cannot happen
   again in silence.  The interpolation
   contradiction in `LANGUAGE.md` and the "future ReleaseFast" in
-  `OWNERSHIP.md` are both fixed.  `STD.md` documents sixteen of the
-  eighteen functions in `strings.luc`, and the two it omits —
+  `OWNERSHIP.md` are both fixed.  `STD.md` documents fifteen of the
+  seventeen functions in `strings.luc`, and the two it omits —
   `fold_case` and `is_space_byte` — are omitted on purpose because
   they are internals; they were *reachable* anyway until item 10's
   visibility run marked them `private`, and now the documentation and
@@ -655,31 +658,11 @@ plus four found while sweeping:
    that a nested place cannot be moved out of (S21, S25) — the fix
    offered is right, the sentence describing why is not.
 
-**Not a defect, recorded because it looks like one:** `give` through
-an alias (`let a = xs; stash(give a)`) compiles and traps
-`use_after_free` at run time rather than being refused, while
-`free(a)` on the same shape is a compile error.  That asymmetry is
-ratified — `OWNERSHIP.md` S23 makes the alias case "the one dynamic
-ownership check", and the trap fires correctly with file, line and
-column.  The binding's `.alias` class *is* statically known, so a
-static refusal is available if the owner wants to revisit S23; it is a
-language decision, not a bug to fix quietly.
-
 **Swept with nothing to fix**, so the next sweep can start elsewhere:
 the `give`/`copy` family (names the situation, its S-numbers and the
 fix at every site tried), method and builtin arity and argument types,
 index and slice type mistakes, the rest of the `T!`/`try`/`catch`
 family, and `!x`, `//`, `else if`, `def`/`class`/`const`.
-
-**Not a defect, recorded because it looks like one:** `give` through
-an alias (`let a = xs; stash(give a)`) compiles and traps
-`use_after_free` at run time rather than being refused, while
-`free(a)` on the same shape is a compile error.  That asymmetry is
-ratified — `OWNERSHIP.md` S23 makes the alias case "the one dynamic
-ownership check", and the trap fires correctly with file, line and
-column.  The binding's `.alias` class *is* statically known, so a
-static refusal is available if the owner wants to revisit S23; it is a
-language decision, not a bug to fix quietly.
 
 ---
 
@@ -734,8 +717,9 @@ multi-user — all deferred by design in `docs/V2.md`.
 **The honest summary:** the language is complete as designed.  The
 front end is in genuinely good shape, and the remaining language work
 is one open question (sum types) and a short list of library
-functions.  The host surface is closed but for `exit` and paths, and
-both were left out with reasons rather than unreached.  The runtime's
+functions.  The host surface is closed: the last two names on its gap
+list, `exit` and path manipulation, both shipped — `exit` as a gated
+builtin and paths as `std.paths` over `strings`.  The runtime's
 outstanding item is not correctness but speed: `strings` is the one
 benchmark row still behind its C twin, at **2.73× on the compute
 column** (`docs/CODEGEN.md`'s table is the one place that number is

@@ -1,6 +1,6 @@
 # Ownership
 
-The memory model, as ratified: forty-three numbered situations, each
+The memory model, as ratified: forty-five numbered situations, each
 with a fixed anchor. The compiler quotes these numbers in its
 diagnostics — a message ending `[OWNERSHIP.md S21]` points at
 [S21](#s21) below — and an executable specification in the repository

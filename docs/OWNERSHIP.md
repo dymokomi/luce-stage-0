@@ -2,8 +2,9 @@
 
 This is the specification of Luce's memory model — every situation
 that defines the rules, numbered, with the decision and example
-code.  **Ratified 2026-07-30: S1–S43 approved as written.
-Implemented the same day** — the compiler and `libluce_rt` enforce
+code.  **Ratified 2026-07-30: S1–S43 approved as written and
+implemented the same day; S44 and S45 ratified since, and enforced —
+so the model is S1–S45** — the compiler and `libluce_rt` enforce
 every situation below, diagnostics quote the S-numbers, and
 `src/luce/specs/ownership_spec.zig` is the executable form of this
 document.  Optionals (`T?`) are Phase 3, designed together with
@@ -32,7 +33,7 @@ That is deliberate — a situation belongs beside the ones it is about,
 and a number, once a compiler diagnostic quotes it (`[OWNERSHIP.md
 S21]`), is not something to renumber.  The site's
 [ownership reference](https://luce.luciaos.com/ref/ownership/)
-presents the same 43 in numeric order with a stable `#sNN` anchor
+presents the same 45 in numeric order with a stable `#sNN` anchor
 each, which is what those diagnostics point at.
 
 ---
