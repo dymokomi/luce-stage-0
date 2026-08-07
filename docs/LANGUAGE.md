@@ -1305,6 +1305,79 @@ assigned or shadowed.  Every use site inlines the folded value.
 Top-level `var` does not exist (whether mutable file scope ever
 arrives is a separate decision — docs/V2.md).
 
+## Workers: `spawn` and `task`
+
+`spawn f(args)` runs `f` on a **worker** — a thread with a runtime of
+its own: its own heap, its own scopes, its own fresh call-depth budget
+— and answers a `task` the spawning scope owns (docs/THREADS.md).
+Nothing a worker touches is reachable from anywhere else and nothing
+elsewhere is reachable from a worker, so **the ownership model is the
+concurrency model**: races are not detected, they are unrepresentable.
+
+```luce
+func crunch(chunk: give list(double)) -> double:
+    var total: double = 0.0
+    for value in chunk:
+        total += value * value
+    free(chunk)
+    return total
+
+func main(args: list(string)):
+    var tasks = new list(task(double))
+    for part in range(0, 4):
+        var chunk = new list(double)
+        chunk.append(double(part))
+        tasks.append(spawn crunch(give chunk))
+    var total: double = 0.0
+    for t in tasks:
+        total += t.wait()
+    print(string(total))
+```
+
+Four sentences are the whole of it, and three of them are rules the
+language already had.
+
+**Arguments cross a boundary.**  A worker has a heap of its own, so it
+cannot borrow anything of the spawner's: every object argument must be
+`give`n or `copy`ed, or be fresh, and a function whose object
+parameter is an ordinary borrow cannot be spawned at all.  `give`
+poisons the sender's name from that line (S10, S23, unchanged), so
+after the spawn there is nothing left behind to race on.  Values copy
+as they copy everywhere (S32).
+
+**A task is a scope-owned resource**, the `file` precedent exactly:
+made by `spawn` and by nothing else — there is no `new task` and no
+`copy t`, because one worker has one owner — and released by its
+owning scope.  What "release" *is* differs: for a file it is a close,
+for a task it is a **join**.  So structured concurrency is a
+consequence of scope ownership rather than a discipline laid over it,
+and an orphan thread is as unrepresentable as a leaked list.  `free(t)`
+joins early; `return t` hands the wait to the caller.
+
+**`t.wait()` moves the answer here, once.**  A second wait is refused
+the way a second `give` is.  The type is written as the return shape
+it names — `task`, `task(!)`, `task(double)`, `task(double!)` — so a
+worker whose function is `-> T!` gives a task whose wait is a site
+that says `try` or `catch`, and the error crosses whole: code,
+message, and the place it was raised.  A **trap** is not data and
+never was: one in a worker surfaces at the join with the worker's own
+frames in front of the joiner's, and stops the program.  A task
+nobody waits on is joined all the same and its answer discarded —
+only a wait observes.
+
+**Effects from workers are serialized.**  The host's services are
+called from one thread at a time, so a `print` from a worker is
+line-atomic and no host implementation needs to be thread-safe.  A
+program that never spawns pays nothing for that: its compiled module
+contains no lock, no install, and no worker entry at all.
+
+Absent from the surface, permanently: locks, atomics, shared mutable
+state, condition variables, thread identifiers, priorities, and
+`async`/`await` colouring.  Their jobs are done by moving ownership,
+or they do not exist here.  Workers are OS threads — thousands, not
+millions — and typed channels between them are the next piece
+(docs/THREADS.md D12).
+
 ## Traps
 
 A trap is a **bug**: deterministic, with a stable code, and it aborts

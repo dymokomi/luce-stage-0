@@ -73,3 +73,65 @@ across spawn, borrow refusal, scope-end join, free-as-early-join,
 unwaited discard, census across runtimes, and the fail-closed row.
 The site gains a tour chapter; STD.md is untouched (nothing here is a
 module — it is the language).
+
+## As built (2026-08-07)
+
+Built in one run, on both engines, the same day the design was
+ratified.  D1–D11 hold as written; every decision the code had to make
+that the design left open is below, with the reason and the spec that
+proves it (`src/luce/specs/threads_spec.zig`, 24 two-engine programs).
+
+The two numbers the run was asked for, measured on an Apple M4 Max
+with `--release` artifacts (`bench/crossing.luc`):
+
+- **Crossing a 1,000,000-element `list(long)` into a worker and its
+  answer back: 2–3 ms.**  A packed list copies as bytes, so the
+  crossing is one 8 MB `@memcpy` each way plus the row.
+- **The same arithmetic over 200,000 elements, one worker against
+  four: 47–61 ms against 13 ms — about 4×.**  Four workers use four
+  cores; there is no shared state for them to contend on, which is the
+  point.
+
+The eight benchmark rows held within noise across the change, which
+D11 predicted and which the two IR tests below make structural rather
+than statistical.
+
+| | decision, and where it is proved |
+|---|---|
+| **T1** | **`task(...)` holds a *return shape*, written exactly as it would be after `->`.**  `task`, `task(!)`, `task(double)`, `task(double!)` — the last two say what `-> double` and `-> double!` say.  The design said `spawn` answers `task(T)` and left the fallible case unspelled; spelling it any other way would have made two tasks that differ only in whether their wait must say `try` into one type, and a `list(task(double))` able to hold both.  `HeapType.task` carries `{result, fallible}`, which does **not** make `T!` a type (docs/FAILURE.md): `types.Type` is untouched, and the flag sits beside the result exactly as `Function.fallible` sits beside `Function.return_type` — a task is a call in flight and carries its function's attributes. |
+| **T2** | **A worker's entry closure is a function index and a run of boxed arguments, because no closure exists.**  `spawn` names a top-level declaration, so nothing that could capture anything is ever built.  The compiled artifact generates one internal `@luce.worker(host, rt, which, args, count, out, depth)` that switches on the index and makes a *direct* call — so the callee stays a static target LLVM can still inline into, and no function pointer to a Luce function exists anywhere.  The oracle's arm of the same channel builds a `Machine`. |
+| **T3** | **Two channels, and the split between them is the architecture.**  `worker_spawn`/`worker_join` are the *host's* (D8) and carry no Luce vocabulary at all — start this C function on a thread, wait for it.  How a runtime is *made* for a worker and how one function is *run* in it is the **engine's**, and is `runtime.workers.Nursery`, filled by each engine rather than by a host: a compiled artifact hands over the trampoline and lets `libluce_rt` open the runtime, the oracle hands over its own allocator and `Machine`.  It is deliberately not a host slot, because a host is a machine and this is not machinery. |
+| **T4** | **Storage crosses by a deep re-own, and that is the floor rather than a placeholder.**  `Runtime.copyFrom(source, value)` is `deepCopy` generalized to two runtimes — every read is the source's, every allocation is the target's — because a handle is an index into *one* table and a string's bytes come from *one* allocator, so there is no representation two runtimes could share.  Writing the walk twice would have been two places for one semantic; the one-runtime case is now the special case of the two-runtime one.  Measured above. |
+| **T5** | **A worker takes the *caller's* two steps on its own answer, on its own thread.**  A `ret` hands its storage to the caller, who copies it (`own_storage`) and releases what it was handed — and a worker has no caller standing at its `ret`.  So `workers.body` does both, in the worker's runtime, the moment the run comes back: after it the answer is unambiguously the worker's runtime's, which is what lets the join move it across and lets the release free it without either having to know whether the bytes were an allocation or a borrow of a program constant.  Getting this wrong is a free of the artifact's own data in one direction and a leak in the other; both were seen before it was right. |
+| **T6** | **The census is one number, rolled up as each worker's runtime closes.**  `Runtime.inherited_leaks` accumulates a worker's `live` plus whatever it inherited, and `Runtime.leaked()` is what `luce_rt_leaked` and the oracle both answer.  A leak in a worker is a leak in the program, and the two-engine comparison sees one honest total. |
+| **T7** | **Only a `wait` observes.**  A release — `free(t)`, the end of the owning scope, the run's own sweep of what a program leaked — joins the worker and discards *everything*, a trap included.  D4 already said the result is discarded; this extends it to the trap for one reason: the ownership walk is total and must stay total.  It runs inside `freeObject`, from a scope's end, from an unwind that is already carrying a trap, and from the sweep at the end of a run, and not one of those three has anybody to report a second trap to.  A program that wants a worker's trap to stop it waits for the worker. |
+| **T8** | **`exit` from a worker stops the program at the join, carrying the status the worker chose.**  The same edge a trap rides, at the same place, because there is exactly one point at which a worker's ending can be spoken and this is it.  Killing the process from the worker's thread was the alternative and it is not available honestly — other threads are mid-flight, and the leak census and the two-engine comparison both end. |
+| **T9** | **What may be spawned is a function you declared, and every object parameter of it must say `give`.**  A method is refused by name: a method's receiver is a place in the caller's frame — and `var self` writes back into it — so there is nothing a worker could be given that would still be the receiver when it finished.  A borrow parameter is refused for the reason D2 exists: a worker cannot borrow from another runtime, and the diagnostic says so and names the fix.  A multi-value return is refused because a task carries one answer and `task(A, B)` is not a spelling. |
+| **T10** | **A bare `spawn f()` statement is legal and joins at the end of that statement.**  No new rule: a task nobody binds is a statement temporary (S3/S19), and a temporary's death point is the end of its statement, and a task's death point is a join.  It computes the same answer a plain call would; fire-and-forget across a loop wants a binding, which is what D4 describes. |
+| **T11** | **The effect lock is recursive, and a spawn-free program does not contain one.**  Recursive because effects nest — `f.read(buffer)` is a `libluce_rt` call that reaches a host slot — and a coarser guard higher up would deadlock a plain mutex at the inner one.  Absent because the lowering emits `luce_rt_effects_enter`/`leave` only when the program contains a `spawn`, and the interpreter's guard is a load and a branch on a pointer that stays null: **`08_llvm/test.zig` proves the module of a spawn-free program contains neither the lock, the install, nor the trampoline.**  That is D11 kept structurally rather than measured, which is a stronger promise than "within noise". |
+| **T12** | **`libluce_rt` takes the platform's own mutex.**  `std.Thread` has no mutex in Zig 0.16 and `std.Io.Mutex` needs an `Io`, which a C ABI over Luce's semantics does not have and must not acquire — so `pthread_mutex_t` on the POSIX arm and `SRWLOCK` on Windows, both zero-initialized because both platforms' static initializers are.  The one thing it must not be is a spin: the lock is held across `read_line` and `key_read`, which block for a person. |
+| **T13** | **A worker's trap trace crosses through `Runtime.unwound`, which both engines fill.**  A frame names a function and a file out of the *program*, which outlives every runtime in it, so nothing is copied; only a `trap("…")`'s own words are, into the joiner's run-lifetime storage, because those die with the worker.  The oracle gained `recordUnwind` for it and its `traceback` puts adopted frames in front of the live stack's — the trap happened inside the worker, and the join is only where it was spoken. |
+
+**What did not move.**  The ownership rules are OWNERSHIP.md's,
+unchanged, and every thread spec is written against the existing
+clauses.  No trap code arrived: a host that cannot thread is
+`host_unavailable` like every other withheld service, and a second wait
+is `use_after_free` like every other use of a spent name.  `std` is
+untouched — nothing here is a module, it is the language.
+
+**Two bugs fell out of the run**, both older than it and both fixed
+where they were:
+
+- `copy m` on a `map(string, T)` whose keys were longer than a value
+  holds gave the copy the *original's* key bytes, so the two maps
+  shared one run and freed it twice.  `Runtime.copyFrom`'s map arm now
+  takes its own key, which the cross-runtime walk needed anyway.
+- `file_methods` never reached `tools/grammar.zig`, so `f.read(…)`
+  and its two siblings were not highlighted in the editor grammar the
+  language generates for itself.  The re-export was missing;
+  `task_methods` went in beside it.
+
+**What is next is D12.**  Channels — typed pipes whose `send(give x)`
+moves an object between workers — build on exactly the machinery this
+run wrote: `Runtime.copyFrom`'s two-runtime walk, the effect lock, and
+the host's two thread slots.  Nothing about a channel needs a third.

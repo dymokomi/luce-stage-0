@@ -2302,3 +2302,65 @@ test "array loops carry the two alias scopes, and runtime calls carry neither" {
     }
     try std.testing.expect(element_store_scoped);
 }
+
+test "a program that never spawns pays nothing for threads" {
+    // **This is docs/THREADS.md D11, and it is structural rather than
+    // measured.**  The claim is not that the effect lock is cheap; it
+    // is that a spawn-free program's module does not contain one — no
+    // worker trampoline, no `luce_rt_workers_install` in the prologue,
+    // and no `luce_rt_effects_enter` around the `print` that reaches
+    // the host.  A benchmark can only ever say "within noise"; this
+    // says "not emitted", which is the promise that was made.
+    const gpa = std.testing.allocator;
+    const rendered = (try render(
+        \\func main():
+        \\    var total: long = 0
+        \\    for i in range(0, 10):
+        \\        total = total + i
+        \\    print(string(total))
+        \\
+    )).?;
+    defer gpa.free(rendered);
+    errdefer std.debug.print("rendered IR:\n{s}\n", .{rendered});
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "luce.worker") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "luce_rt_workers_install") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "luce_rt_effects_enter") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "luce_rt_effects_leave") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "luce_rt_spawn") == null);
+}
+
+test "a program that spawns installs the channel once and brackets every host call" {
+    // The other direction of the same promise: what a spawning program
+    // *does* emit, so the absence above is a fact about the program
+    // rather than about the lowering having been left out.
+    const gpa = std.testing.allocator;
+    const rendered = (try render(
+        \\func announce(n: long) -> long:
+        \\    print(string(n))
+        \\    return n
+        \\
+        \\func main():
+        \\    let t = spawn announce(1)
+        \\    print(string(t.wait()))
+        \\
+    )).?;
+    defer gpa.free(rendered);
+    errdefer std.debug.print("rendered IR:\n{s}\n", .{rendered});
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "@luce.worker") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "luce_rt_workers_install") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "luce_rt_spawn") != null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "luce_rt_task_wait") != null);
+    // Exactly one install, in the prologue, however many spawns there
+    // are: it is a fact about the run and not about a call site.
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        std.mem.count(u8, rendered, "call void @luce_rt_workers_install"),
+    );
+    // The lock brackets each host call, and both halves are there.
+    const entered = std.mem.count(u8, rendered, "call void @luce_rt_effects_enter");
+    const left = std.mem.count(u8, rendered, "call void @luce_rt_effects_leave");
+    try std.testing.expect(entered != 0);
+    try std.testing.expectEqual(entered, left);
+}
