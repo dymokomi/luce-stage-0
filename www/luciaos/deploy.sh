@@ -1,28 +1,26 @@
 #!/bin/sh
 # Publish luciaos.com.
 #
-# The landing page is one self-contained file — no build step, nothing to
-# verify beyond its existence — so deploying is mirroring this directory
-# to the static root Caddy serves.
+# The landing page is one self-contained file — no build step, nothing
+# to verify beyond its existence — so deploying is handing this
+# directory to the shared publisher, minus the two files that are
+# about the page rather than part of it.
 #
-#   ./www/deploy.sh
+#   ./www/luciaos/deploy.sh
+#
+# `LUCIAOS_HOME_ROOT` overrides where it lands; the host and the key
+# are `www/deploy/publish.sh`'s, and shared with the other two sites.
 set -e
 
 here=$(cd "$(dirname "$0")" && pwd)
-
-host=${LUCIAOS_HOME_HOST:-ubuntu@35.153.110.211}
-key=${LUCIAOS_HOME_KEY:-$HOME/.ssh/lightsail-apps-edge.pem}
-target=${LUCIAOS_HOME_ROOT:-/opt/apps/luciaos_home}
 
 if [ ! -f "$here/index.html" ]; then
     echo "deploy: $here/index.html is missing" >&2
     exit 1
 fi
 
-echo "==> publishing to $host:$target"
-rsync -az --delete -e "ssh -i $key" \
-    --exclude deploy.sh --exclude README.md \
-    "$here/" "$host:$target/"
-
-echo "==> checking"
-curl -fsS -o /dev/null -w 'https://luciaos.com/ %{http_code}\n' https://luciaos.com/
+exec "$here/../deploy/publish.sh" \
+    "$here" \
+    "${LUCIAOS_HOME_ROOT:-/opt/apps/luciaos_home}" \
+    https://luciaos.com/ \
+    --exclude deploy.sh --exclude README.md
