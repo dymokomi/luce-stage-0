@@ -134,7 +134,15 @@ pub const Parser = struct {
 
     pub const max_depth: u32 = 512;
 
-    // Token helpers --------------------------------------------------------
+    // -- the token cursor -------------------------------------------------
+    //
+    // Every `pub` method on `Parser` is `expressions.zig`'s
+    // contract and nothing else: the sibling drives this cursor,
+    // spends this file's recursion budget, reports through this
+    // file's diagnostics, and asks it for a written type.  What
+    // is not marked is private to this file, which is every
+    // production the grammar has — the sibling parses
+    // expressions, never a declaration and never a statement.
 
     pub fn peek(self: *const Parser) Token {
         return self.tokens[self.index];
@@ -172,7 +180,7 @@ pub const Parser = struct {
         return item.span.slice(self.source);
     }
 
-    // Recursion bound ------------------------------------------------------
+    // -- bounded recursion ------------------------------------------------
 
     /// Take one level of recursive descent, reporting once when the
     /// bound is reached.  Returns false to mean "unwind"; callers
@@ -198,7 +206,7 @@ pub const Parser = struct {
         self.depth -= 1;
     }
 
-    // Diagnostics ----------------------------------------------------------
+    // -- reporting and recovery -------------------------------------------
 
     /// Add one parse diagnostic, honoring the report cap.  Every
     /// diagnostic in this stage goes through here; recovery keeps
@@ -251,7 +259,7 @@ pub const Parser = struct {
 
     /// Report "expected `what`, found X" at the offending token — the
     /// token the parser is looking at, never the one after it.
-    pub fn expected(self: *Parser, what: []const u8) Error!void {
+    fn expected(self: *Parser, what: []const u8) Error!void {
         try self.report(
             "luce.parse.expected",
             self.peek().span,
@@ -285,7 +293,7 @@ pub const Parser = struct {
     /// token in front of it and blaming an opener further back.
     /// Brackets suspend newlines, so this reads the source text, not
     /// the token stream.
-    pub fn sameLine(self: *const Parser, from: usize, to: usize) bool {
+    fn sameLine(self: *const Parser, from: usize, to: usize) bool {
         const start = @min(from, self.source.len);
         const end = @min(@max(to, start), self.source.len);
         return std.mem.indexOfScalar(u8, self.source[start..end], '\n') == null;
@@ -362,20 +370,18 @@ pub const Parser = struct {
         };
     }
 
-    // Recovery -------------------------------------------------------------
-
     /// Resume after a broken construct: drop the rest of the current
     /// line, then drop the indented block that followed it, if any.
     /// The second half is what keeps one missing `:` from turning a
     /// whole function body into nonsense at the outer level.
-    pub fn recover(self: *Parser) void {
+    fn recover(self: *Parser) void {
         self.syncToLine();
         self.skipIndentedBlock();
     }
 
     /// Skip to the start of the next line at the current block level.
     /// A nested block encountered on the way is consumed whole.
-    pub fn syncToLine(self: *Parser) void {
+    fn syncToLine(self: *Parser) void {
         var depth: usize = 0;
         while (true) {
             switch (self.peekKind()) {
@@ -400,6 +406,8 @@ pub const Parser = struct {
             }
         }
     }
+
+    // -- blocks, and what a header owes -----------------------------------
 
     /// The `:` that opens a block body.  A missing one is the commonest
     /// mistake there is in an indentation language, and bailing out
@@ -486,9 +494,9 @@ pub const Parser = struct {
         self.recover();
     }
 
-    // Declarations ---------------------------------------------------------
+    // -- the file: imports and private markers ----------------------------
 
-    pub fn program(self: *Parser) Error!ast.Program {
+    fn program(self: *Parser) Error!ast.Program {
         var imports: std.ArrayList(ast.Import) = .empty;
         defer imports.deinit(self.arena);
         var constants: std.ArrayList(ast.ConstDecl) = .empty;
@@ -749,8 +757,10 @@ pub const Parser = struct {
         );
     }
 
+    // -- declarations: constants, types, structs --------------------------
+
     /// let name = value at file scope — a constant declaration.
-    pub fn constDecl(self: *Parser) Error!?ast.ConstDecl {
+    fn constDecl(self: *Parser) Error!?ast.ConstDecl {
         const start = self.advance(); // let
         const name = (try self.expect(.identifier, "a constant name")) orelse return null;
         try self.refuseWildcardName(name);
@@ -863,7 +873,7 @@ pub const Parser = struct {
         return written;
     }
 
-    pub fn structDecl(self: *Parser) Error!?ast.StructDecl {
+    fn structDecl(self: *Parser) Error!?ast.StructDecl {
         const start = self.advance(); // struct
         const name = (try self.expect(.identifier, "a struct name")) orelse return null;
         try self.refuseWildcardName(name);
@@ -1059,6 +1069,8 @@ pub const Parser = struct {
         }
     }
 
+    // -- declarations: enums ----------------------------------------------
+
     /// `enum Method:` / `enum Method(byte):` — the declaration form
     /// that mirrors struct's (docs/ENUMS.md D1): a name, an optional
     /// backing width in parentheses, then one indented member per
@@ -1069,7 +1081,7 @@ pub const Parser = struct {
     /// folded by stage 4, exactly as a field default is: what the
     /// expression may *be* is the folder's question, so `= 1 << 3` is
     /// a constant and `= f()` is a constant diagnostic.
-    pub fn enumDecl(self: *Parser) Error!?ast.EnumDecl {
+    fn enumDecl(self: *Parser) Error!?ast.EnumDecl {
         const start = self.advance(); // enum
         const name = (try self.expect(.identifier, "an enum name")) orelse return null;
         try self.refuseWildcardName(name);
@@ -1189,6 +1201,8 @@ pub const Parser = struct {
         };
     }
 
+    // -- declarations: functions ------------------------------------------
+
     /// `self` or `var self` in a parameter list.  `already` is how many
     /// parameters stand in front of it, which is the one thing about a
     /// receiver this stage can decide: a receiver is parameter zero or
@@ -1243,7 +1257,7 @@ pub const Parser = struct {
         };
     }
 
-    pub fn funcDecl(self: *Parser) Error!?ast.FuncDecl {
+    fn funcDecl(self: *Parser) Error!?ast.FuncDecl {
         const start = self.advance(); // func
         const name = (try self.expect(.identifier, "a function name")) orelse return null;
         try self.refuseWildcardName(name);
@@ -1405,13 +1419,13 @@ pub const Parser = struct {
         return true;
     }
 
-    // Statements -----------------------------------------------------------
+    // -- statements -------------------------------------------------------
 
     /// The `: NEWLINE INDENT …` body of a header.  `opener` names the
     /// keyword that opened it, so a missing or empty body can say which
     /// header is waiting for statements rather than which token the
     /// parser wanted.
-    pub fn block(self: *Parser, opener: []const u8) Error!?ast.Block {
+    fn block(self: *Parser, opener: []const u8) Error!?ast.Block {
         if (!try self.colonOrLayout("':' to open the block")) return null;
         if ((try self.expect(.newline, "end of line after ':'")) == null) return null;
         const opened = (try self.blockBody(opener)) orelse return null;
@@ -1438,7 +1452,7 @@ pub const Parser = struct {
         };
     }
 
-    pub fn statement(self: *Parser) Error!?ast.Statement {
+    fn statement(self: *Parser) Error!?ast.Statement {
         if (!try self.enter("block")) return null;
         defer self.leave();
 
@@ -1507,7 +1521,7 @@ pub const Parser = struct {
         }
     }
 
-    pub fn binding(self: *Parser, mutable: bool) Error!?ast.Statement {
+    fn binding(self: *Parser, mutable: bool) Error!?ast.Statement {
         const start = self.advance(); // let or var
         const name = (try self.expect(.identifier, "a binding name")) orelse return null;
         try self.refuseWildcardName(name);
@@ -1665,7 +1679,7 @@ pub const Parser = struct {
         } };
     }
 
-    pub fn conditional(self: *Parser) Error!?ast.Statement {
+    fn conditional(self: *Parser) Error!?ast.Statement {
         // Held across the elif recursion below as well as the block,
         // so neither a tower of `if`s nor a long elif chain can
         // outrun the native stack.
@@ -1737,7 +1751,7 @@ pub const Parser = struct {
         } });
     }
 
-    pub fn whileLoop(self: *Parser) Error!?ast.Statement {
+    fn whileLoop(self: *Parser) Error!?ast.Statement {
         const start = self.advance();
         const written = (try self.expression()) orelse return null;
         const condition = (try self.conditionAfterAssign(written)) orelse return null;
@@ -1749,7 +1763,7 @@ pub const Parser = struct {
         } };
     }
 
-    pub fn forLoop(self: *Parser) Error!?ast.Statement {
+    fn forLoop(self: *Parser) Error!?ast.Statement {
         const start = self.advance();
         const name = (try self.expect(.identifier, "a loop variable")) orelse return null;
         try self.refuseWildcardName(name);
@@ -1819,7 +1833,7 @@ pub const Parser = struct {
     /// What it does know is the two shapes a reader arrives with from
     /// another language — `case stored:` and `Method.stored:` — and
     /// both get the one sentence that says how Luce writes it.
-    pub fn matchStatement(self: *Parser) Error!?ast.Statement {
+    fn matchStatement(self: *Parser) Error!?ast.Statement {
         if (!try self.enter("block")) return null;
         defer self.leave();
 
@@ -1925,7 +1939,7 @@ pub const Parser = struct {
         };
     }
 
-    pub fn returnStatement(self: *Parser) Error!?ast.Statement {
+    fn returnStatement(self: *Parser) Error!?ast.Statement {
         const start = self.advance();
         if (self.accept(.newline) != null) {
             return .{ .return_statement = .{ .values = &.{}, .span = start.span } };
@@ -1949,10 +1963,12 @@ pub const Parser = struct {
         } };
     }
 
+    // -- assignment and its targets ---------------------------------------
+
     // PLACE = expression, or a bare expression statement.  The place
     // is parsed as an ordinary expression and then classified: a name,
     // one dotted field on a name, or an indexed expression.
-    pub fn assignOrExpression(self: *Parser) Error!?ast.Statement {
+    fn assignOrExpression(self: *Parser) Error!?ast.Statement {
         const left = (try self.expression()) orelse return null;
         // `low, high = minmax(xs)` — plain multi-assignment, which is
         // refused: what Go needs it for is `v, err = f()`, and Luce
@@ -2111,7 +2127,7 @@ pub const Parser = struct {
         };
     }
 
-    pub fn targetFrom(self: *Parser, left: *ast.Expression) Error!?ast.Target {
+    fn targetFrom(self: *Parser, left: *ast.Expression) Error!?ast.Target {
         switch (left.*) {
             .name => |name| return .{ .name = .{ .text = name.text, .span = name.span } },
             .field => |field| {
@@ -2153,12 +2169,13 @@ pub const Parser = struct {
         }
     }
 
-    // Expression entry — delegates to expressions.zig.
-    pub fn expression(self: *Parser) Error!?*ast.Expression {
+    // -- the bridge to the expression grammar -----------------------------
+
+    fn expression(self: *Parser) Error!?*ast.Expression {
         return expr.expression(self);
     }
 
-    pub fn make(self: *Parser, value: ast.Expression) Error!*ast.Expression {
+    fn make(self: *Parser, value: ast.Expression) Error!*ast.Expression {
         return expr.make(self, value);
     }
 };
