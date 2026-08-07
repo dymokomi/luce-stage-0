@@ -82,10 +82,12 @@ so a runtime trap prints `file:line:column` and a call trace.
 behaves identically (docs/MODES.md).
 
 All three compile through LLVM, which measures at 0.77-1.07x of C on
-six of the eight benchmarks; `strings` (2.74x) and `arrays32` (8.14x)
-are the two rows still behind — `arrays32` is the price of checked
-integer arithmetic in a reduction, which is what
-[docs/VECTOR.md](docs/VECTOR.md) is about.  Those are
+six of the nine benchmarks; `strings` (2.74x), `arrays32` (8.14x) and
+`lists` (29.10x compute) are the three rows still behind — `arrays32`
+is the price of checked integer arithmetic in a reduction, which is
+what [docs/VECTOR.md](docs/VECTOR.md) is about, and `lists` is
+element access as an out-of-line runtime call, priced and scoped in
+[docs/CODEGEN.md](docs/CODEGEN.md).  Those are
 `bench/run.sh`'s floor-subtracted `compute` column,
 the one a code-generation change moves; the table and the host it was
 taken on are in [docs/CODEGEN.md](docs/CODEGEN.md).  They are stamped with the
