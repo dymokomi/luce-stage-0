@@ -101,7 +101,7 @@ The three decisions, all in `docs/CODEGEN.md`: `cc` links, at build
 time only, so the *run* path still invokes nothing; a standalone
 binary gets **loom's own host**, terminal included, because a
 program's behaviour must not depend on who started it; and every
-artifact carries an `abi.Artifact` tag — machine, ABI version, a
+artifact carries an `artifact.Artifact` tag — machine, ABI version, a
 content hash of the program, and the identity of the code generator —
 so a stale or foreign one is refused by name instead of crashing.  The
 key is content, never mtime.

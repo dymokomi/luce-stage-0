@@ -664,7 +664,7 @@ changed. Luce has no separate compilation, no binary libraries and no
 distribution format for a module: `.lcm` is *"a seam, not a
 deliverable"* (CLAUDE.md), std ships as `@embedFile`d source inside
 the compiler, and a `.lc` is a whole program's machine code keyed on
-`abi.sourceHash` of the program that made it, refused by name if the
+`artifact.sourceHash` of the program that made it, refused by name if the
 generator identity has moved. **There is no such thing as a caller
 compiled against an older callee.** The versioning hazard that made
 C# resist this for a decade is structurally absent, which is why Luce

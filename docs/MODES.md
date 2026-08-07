@@ -14,7 +14,7 @@ constant data beside the code rather than as LLVM debug metadata, and
 loom runs, of a standalone executable, and of the serialized module
 the two are built from.  An artifact's tag records which of the two
 modes it is, so a loader can say so without running it
-(`abi.Artifact.debug`).
+(`artifact.Artifact.debug`).
 
 A debug module carries *origins* — for every IR instruction, the
 line and column of the statement it came from, plus the source file
