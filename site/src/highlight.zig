@@ -65,7 +65,7 @@ pub const type_names = [_][]const u8{
 
 /// Everything callable by name on its own: the free builtins, the
 /// host-gated ones, and `range`.  The compiler's list is the
-/// file-scope `builtins` table in `04_semantics/builder.zig`, less
+/// file-scope `builtins` table in `04_semantics/builtins.zig`, less
 /// `free`, which is a verb above, and less the conversion
 /// constructors, which are named for the types they produce and are
 /// spelled in `type_names`.
@@ -88,7 +88,7 @@ pub const builtins = [_][]const u8{
 /// and colouring one of those as language would be a lie about it.
 ///
 /// The compiler's lists are `list_methods`, `array_methods`,
-/// `map_methods` and `builder_methods` in `04_semantics/builder.zig`,
+/// `map_methods` and `builder_methods` in `04_semantics/builtins.zig`,
 /// plus the two String primitives beside them.
 pub const methods = [_][]const u8{
     "byte_at", "find_byte", "append",   "append_ascii", "build",
