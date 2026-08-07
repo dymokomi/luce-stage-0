@@ -545,6 +545,23 @@ pub const Machine = struct {
                         self.releaseSlots(finished);
                         self.frame_storage.shrinkRetainingCapacity(finished.slots_at);
                         if (self.stack.items.len == 0) return .{ .errored = {} };
+                        // A frame that unwound hands back *nothing*, and
+                        // nothing has to be written down.  Leaving the
+                        // destination register as it was leaves whatever
+                        // an earlier iteration of the same loop put
+                        // there — storage the caller has since released
+                        // — and the caller's lowering stores that
+                        // register into the call's temporary before it
+                        // branches on `errored`.  A stale struct run
+                        // then reaches `dropStorage` at frame end, which
+                        // is a use-after-free the compiled arm does not
+                        // have, because a trapped call there returns a
+                        // zeroed result.
+                        const parent = &self.stack.items[self.stack.items.len - 1];
+                        const parent_function = &self.program.functions[parent.function];
+                        if (parent_function.result_types[finished.destination] != .none) {
+                            self.frame_storage.items[parent.slots_at + finished.destination] = .none;
+                        }
                         continue :dispatch;
                     },
                 }

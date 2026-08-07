@@ -1,0 +1,828 @@
+# zip — ZIP archives, in pure Luce.
+#
+# Read an archive's central directory, pull an entry's contents out
+# of it, and build an archive of your own; DEFLATE both ways, fixed
+# and dynamic Huffman on the reading side.  Nothing here is a
+# builtin and nothing here touches the host: every function takes
+# bytes and answers bytes, and the caller decides where the bytes
+# came from.
+#
+# **Written against the normative documents, and every structure
+# says which clause it is.**  The container is PKWARE's APPNOTE.TXT
+# 6.3.10 — section 4.3.7 is the local header, 4.3.12 the central
+# directory, 4.3.16 the end record, 4.4.4 the flags, 4.4.5 the
+# methods.  The compression is RFC 1951 — §3.2.2 canonical Huffman,
+# §3.2.4 stored blocks, §3.2.5 the length and distance tables,
+# §3.2.6 the fixed codes, §3.2.7 the dynamic ones.  A ZIP member's
+# method-8 data is a **raw** deflate stream: no zlib header, no
+# Adler-32 trailer (APPNOTE §5.5 spells the bitstream out inline,
+# beginning at the block header).  The CRC-32 is zlib's — reflected
+# polynomial 0xEDB88320, preconditioned with ones and post-
+# conditioned by complement, exactly as APPNOTE 4.4.7 states it.
+#
+# **Bytes are a `list(long)`, one byte to an element.**  Luce has a
+# `byte` and a checked `byte(x)` to narrow into it, but a `list` is
+# boxed whatever its element type (docs/TYPES.md §6): a `list(byte)`
+# costs the same eight bytes an element as a `list(long)` *and* a
+# conversion at every store.  The packed one is `array(byte, n)`,
+# which cannot grow.  So there is no growable packed byte buffer to
+# use, and the honest choice is the width the arithmetic happens at.
+# Every function here reads 0..255 out of its elements and puts
+# 0..255 back.
+#
+# **The host cannot hand a program a file's bytes yet, and cannot
+# take them.**  `file_read` answers a Luce `string`, and a string is
+# valid UTF-8 by construction — so the host refuses a file that is
+# not text, and no archive worth the name is text.  That is a gap in
+# the boundary, not in this module: `zip.entries` and `zip.writer`
+# work on any bytes they are given, and the day the host grows a
+# binary read the line in front of them is one call long.  Today the
+# bytes come from a program that computed them, from `zip.bytes` over
+# text the host *could* read, or from a module of literals.
+#
+# Sizes are the ZIP32 ones: an archive holds at most 65535 entries,
+# each at most 4 GB, and there is no Zip64 here.  Encryption, multi
+# disk archives and compression methods other than stored (0) and
+# deflated (8) are refused by name rather than half-read.  Two things
+# a conforming reader has to tolerate are tolerated: an entry written
+# with a data descriptor (APPNOTE 4.4.4 bit 3, whose local header
+# carries zeros where the CRC and the sizes belong) is read from the
+# central directory, which 4.4.7 and 4.4.8 require to hold the
+# correct values; and an archive with a program in front of it — a
+# self-extracting one — has its offsets shifted by however far the
+# directory really begins from where it says it does.
+
+# --- bytes and text --------------------------------------------------
+
+# The UTF-8 bytes a string is made of.
+func bytes(content: string) -> list(long):
+    var out: list(long) = []
+    for at in range(0, len(content)):
+        out.append(content.byte_at(at))
+    return out
+
+# The string those bytes spell, or an error when they spell none:
+# the archive said it held text and the bytes disagree, which is news
+# rather than a bug in the program that asked.
+func text(data: list(long)) -> string!:
+    var out = new builder()
+    var at: long = 0
+    while at < len(data):
+        let lead = data[at]
+        if lead < 0 or lead > 255:
+            error("zip: " + string(lead) + " is not a byte")
+        if lead < 0x80:
+            out.append_ascii(lead)
+            at += 1
+        else:
+            var width: long = 0
+            var code: long = 0
+            if lead & 0xE0 == 0xC0:
+                width = 2
+                code = lead & 0x1F
+            elif lead & 0xF0 == 0xE0:
+                width = 3
+                code = lead & 0x0F
+            elif lead & 0xF8 == 0xF0:
+                width = 4
+                code = lead & 0x07
+            else:
+                error("zip: those bytes are not text (byte " + string(at) + ")")
+            if at + width > len(data):
+                error("zip: those bytes are not text (they end mid-character)")
+            for step in range(1, width):
+                let following = data[at + step]
+                if following & 0xC0 != 0x80:
+                    error("zip: those bytes are not text (byte " + string(at + step) + ")")
+                code = code << 6 | following & 0x3F
+            if width == 2 and code < 0x80:
+                error("zip: those bytes are not text (an overlong character at byte " + string(at) + ")")
+            if width == 3 and code < 0x800:
+                error("zip: those bytes are not text (an overlong character at byte " + string(at) + ")")
+            if width == 4 and code < 0x10000:
+                error("zip: those bytes are not text (an overlong character at byte " + string(at) + ")")
+            if code >= 0xD800 and code <= 0xDFFF:
+                error("zip: those bytes are not text (a surrogate at byte " + string(at) + ")")
+            if code > 0x10FFFF:
+                error("zip: those bytes are not text (byte " + string(at) + " starts no character)")
+            out.append(chr(code))
+            at += width
+    return out.build()
+
+# --- the checksum ----------------------------------------------------
+
+# The reflected CRC-32 every ZIP entry carries (APPNOTE 4.4.7): the
+# register is preconditioned with all ones and the residual is
+# complemented, over zlib's reflected polynomial 0xEDB88320.  Its
+# published check value over "123456789" is 0xCBF43926 — 3421780262.
+#
+# The table is built per call, because a top-level `let` is a value
+# constant and a table is a list: 256 rows of eight steps in front of
+# one pass over the data.  Long inputs pay for it once and short ones
+# were never the point.
+func crc32(data: list(long)) -> long:
+    var table: list(long) = []
+    for entry in range(0, 256):
+        var row = entry
+        for step in range(0, 8):
+            if row & 1 != 0:
+                row = 0xEDB8_8320 ^ row >> 1
+            else:
+                row = row >> 1
+        table.append(row)
+    var checksum: long = 0xFFFF_FFFF
+    for value in data:
+        checksum = table[(checksum ^ value) & 0xFF] ^ checksum >> 8
+    return checksum ^ 0xFFFF_FFFF
+
+# --- little-endian fields --------------------------------------------
+#
+# APPNOTE 4.4.1.1: "All fields unless otherwise noted are unsigned and
+# stored in Intel low-byte:high-byte, low-word:high-word order."  So
+# every field in every structure below goes in and comes out this way,
+# and nothing in an archive is signed.
+
+private func read_u16(data: list(long), at: long) -> long!:
+    if at < 0 or at + 2 > len(data):
+        error("zip: the archive is truncated")
+    return data[at] | data[at + 1] << 8
+
+private func read_u32(data: list(long), at: long) -> long!:
+    if at < 0 or at + 4 > len(data):
+        error("zip: the archive is truncated")
+    return data[at] | data[at + 1] << 8 | data[at + 2] << 16 | data[at + 3] << 24
+
+private func put_u16(out: list(long), value: long):
+    out.append(value & 0xFF)
+    out.append(value >> 8 & 0xFF)
+
+private func put_u32(out: list(long), value: long):
+    out.append(value & 0xFF)
+    out.append(value >> 8 & 0xFF)
+    out.append(value >> 16 & 0xFF)
+    out.append(value >> 24 & 0xFF)
+
+private func put_text(out: list(long), content: string):
+    for at in range(0, len(content)):
+        out.append(content.byte_at(at))
+
+# Bit 11 of an entry's flags says the name is UTF-8.  An ASCII name
+# means the same thing either way; anything else has to say so, or a
+# reader is entitled to read the bytes as code page 437.
+private func name_flags(name: string) -> long:
+    for at in range(0, len(name)):
+        if name.byte_at(at) >= 0x80:
+            return 0x0800
+    return 0
+
+# --- reading ---------------------------------------------------------
+
+# One entry of an archive, as its central directory describes it.
+# The fields are the module's own — a program reads an entry through
+# the methods below and builds one only by reading an archive
+# (docs/VISIBILITY.md §6).
+struct Entry:
+    private path: string
+    private method: long
+    private checksum: long
+    private packed_size: long
+    private plain_size: long
+    private header_at: long
+
+    # The entry's name inside the archive, exactly as it is stored:
+    # "/" separated, never absolute in an archive worth trusting.
+    func name(self) -> string:
+        return self.path
+
+    # How many bytes the contents are.
+    func size(self) -> long:
+        return self.plain_size
+
+    # How many bytes the contents take up in the archive.
+    func packed(self) -> long:
+        return self.packed_size
+
+    # The CRC-32 the archive records for the contents.  `extract`
+    # checks it, so this is for reporting rather than for deciding.
+    func crc(self) -> long:
+        return self.checksum
+
+    # True when the entry is deflated rather than stored whole.
+    func deflated(self) -> bool:
+        return self.method == 8
+
+# The offset of the end-of-central-directory record (APPNOTE 4.3.16),
+# found the way every reader finds it: from the back, because the
+# record ends with a comment of its own length and nothing in front
+# says where it starts.  The comment length is a 16-bit field, so the
+# signature can be 22 + 65535 bytes from the end and no further.
+#
+# A comment is arbitrary bytes and may hold the signature itself, so
+# a match is only the record when its own comment length reaches
+# exactly the end of the archive.  Searching backwards finds the last
+# candidate first, which is the outer one when a comment contains a
+# whole archive.
+private func end_record(archive: list(long)) -> long!:
+    let total = len(archive)
+    if total < 22:
+        error("zip: not an archive (only " + string(total) + " bytes)")
+    var at = total - 22
+    var earliest = total - 22 - 65535
+    if earliest < 0:
+        earliest = 0
+    while at >= earliest:
+        let signature = try read_u32(archive, at)
+        if signature == 0x0605_4B50:
+            let comment = try read_u16(archive, at + 20)
+            if at + 22 + comment == total:
+                return at
+        at -= 1
+    error("zip: not an archive (no end-of-central-directory record)")
+
+# Every entry the archive's central directory lists (APPNOTE 4.3.12),
+# in the order it lists them — which APPNOTE 4.4.1.3 says need not be
+# the order the entries appear in.  The contents are not touched:
+# this reads the table, and `extract` reads an entry.
+func entries(archive: list(long)) -> list(Entry)!:
+    let record = try end_record(archive)
+    let count = try read_u16(archive, record + 10)
+    let size = try read_u32(archive, record + 12)
+    let claimed = try read_u32(archive, record + 16)
+    # APPNOTE 4.4.16: every offset is measured from the start of the
+    # archive, and in a self-extracting file that is not the start of
+    # the file — there is a program in front.  The directory ends
+    # where the end record begins, so where it really starts says how
+    # far everything moved.
+    var shift: long = 0
+    if record >= size and record - size != claimed:
+        shift = record - size - claimed
+    var at = claimed + shift
+    var found: list(Entry) = []
+    for index in range(0, count):
+        let signature = try read_u32(archive, at)
+        if signature != 0x0201_4B50:
+            error("zip: entry " + string(index + 1) + " of the central directory has no header")
+        let flags = try read_u16(archive, at + 8)
+        if flags & 1 != 0:
+            error("zip: entry " + string(index + 1) + " is encrypted")
+        let method = try read_u16(archive, at + 10)
+        let checksum = try read_u32(archive, at + 16)
+        let packed = try read_u32(archive, at + 20)
+        let plain = try read_u32(archive, at + 24)
+        let name_length = try read_u16(archive, at + 28)
+        let extra_length = try read_u16(archive, at + 30)
+        let comment_length = try read_u16(archive, at + 32)
+        let header_offset = try read_u32(archive, at + 42)
+        let header = header_offset + shift
+        if at + 46 + name_length > len(archive):
+            error("zip: entry " + string(index + 1) + " names more than the archive holds")
+        let raw = archive[at + 46:at + 46 + name_length]
+        var name = ""
+        name = text(raw) catch:
+            error("zip: entry " + string(index + 1) + " has a name that is not text")
+        found.append(Entry(path = name, method = method, checksum = checksum, packed_size = packed, plain_size = plain, header_at = header))
+        at += 46 + name_length + extra_length + comment_length
+    return found
+
+# The entry's contents, checked against the size and the CRC-32 the
+# directory recorded for them.
+#
+# The local header (APPNOTE 4.3.7) is read for the two lengths in
+# front of the data and for nothing else: its CRC and its sizes are
+# zeros whenever flag bit 3 said so (4.4.4), and the directory's copy
+# is the one 4.4.7 and 4.4.8 require to be right.  So an entry
+# written by a program that could not seek reads like any other, and
+# the data descriptor behind the data is never looked at.
+func extract(archive: list(long), entry: Entry) -> list(long)!:
+    let at = entry.header_at
+    let signature = try read_u32(archive, at)
+    if signature != 0x0403_4B50:
+        error("zip: " + entry.path + " has no local header")
+    let name_length = try read_u16(archive, at + 26)
+    let extra_length = try read_u16(archive, at + 28)
+    let start = at + 30 + name_length + extra_length
+    let stop = start + entry.packed_size
+    if stop > len(archive):
+        error("zip: " + entry.path + " runs past the end of the archive")
+    if entry.method == 0:
+        let stored = archive[start:stop]
+        try verify(entry, stored)
+        return stored
+    if entry.method == 8:
+        let packed = archive[start:stop]
+        let plain = try inflate(packed)
+        try verify(entry, plain)
+        return plain
+    error("zip: " + entry.path + " uses compression method " + string(entry.method) + ", which zip cannot read")
+
+private func verify(entry: Entry, plain: list(long)) -> !:
+    if len(plain) != entry.plain_size:
+        error("zip: " + entry.path + " is " + string(len(plain)) + " bytes, not the " + string(entry.plain_size) + " the archive claims")
+    if crc32(plain) != entry.checksum:
+        error("zip: " + entry.path + " fails its checksum")
+
+# --- writing ---------------------------------------------------------
+
+# An archive under construction: entries go in with `add`, and
+# `finish` answers the bytes.  Made by `zip.writer()` and owned by
+# the binding that received it, like any other object.
+struct Writer:
+    private out: list(long)
+    private written: list(Entry)
+
+    # Store one entry.  `compress` deflates it and keeps whichever of
+    # the two is smaller, so an entry never grows by being compressed.
+    func add(self, name: string, data: list(long), compress: bool = false) -> !:
+        if len(name) == 0:
+            error("zip: an entry needs a name")
+        if len(name) > 65535:
+            error("zip: the name " + name + " does not fit an archive's name field")
+        if len(self.written) >= 65535:
+            error("zip: an archive holds at most 65535 entries")
+        if len(data) > 4294967295:
+            error("zip: " + name + " is too big for an archive without Zip64")
+        let checksum = crc32(data)
+        if compress:
+            let squeezed = deflate(data)
+            if len(squeezed) < len(data):
+                self.put_entry(name, 8, checksum, len(data), squeezed)
+                return
+        self.put_entry(name, 0, checksum, len(data), data)
+
+    # The local file header, APPNOTE 4.3.7, field for field.
+    private func put_entry(self, name: string, method: long, checksum: long, plain_size: long, packed: list(long)):
+        let header = len(self.out)
+        put_u32(self.out, 0x0403_4B50)
+        put_u16(self.out, version_for(method))
+        put_u16(self.out, name_flags(name))
+        put_u16(self.out, method)
+        put_u16(self.out, 0)
+        put_u16(self.out, 0x0021)
+        put_u32(self.out, checksum)
+        put_u32(self.out, len(packed))
+        put_u32(self.out, plain_size)
+        put_u16(self.out, len(name))
+        put_u16(self.out, 0)
+        put_text(self.out, name)
+        for value in packed:
+            self.out.append(value)
+        self.written.append(Entry(path = name, method = method, checksum = checksum, packed_size = len(packed), plain_size = plain_size, header_at = header))
+
+    # The whole archive: everything added, then the central directory
+    # over it.  A fresh list every time, so the writer stays usable.
+    func finish(self) -> list(long):
+        var archive: list(long) = []
+        for value in self.out:
+            archive.append(value)
+        let directory = len(archive)
+        # The central directory file header, APPNOTE 4.3.12.  "Version
+        # made by" stays 2.0 whatever the entry needs: it is what wrote
+        # the archive, not what is required to read it.
+        for entry in self.written:
+            put_u32(archive, 0x0201_4B50)
+            put_u16(archive, 20)
+            put_u16(archive, version_for(entry.method))
+            put_u16(archive, name_flags(entry.path))
+            put_u16(archive, entry.method)
+            put_u16(archive, 0)
+            put_u16(archive, 0x0021)
+            put_u32(archive, entry.checksum)
+            put_u32(archive, entry.packed_size)
+            put_u32(archive, entry.plain_size)
+            put_u16(archive, len(entry.path))
+            put_u16(archive, 0)
+            put_u16(archive, 0)
+            put_u16(archive, 0)
+            put_u16(archive, 0)
+            put_u32(archive, 0)
+            put_u32(archive, entry.header_at)
+            put_text(archive, entry.path)
+        # The end of central directory record, APPNOTE 4.3.16: one
+        # disk, no comment, and the two entry counts are the same
+        # number because there is only ever the one disk.
+        let size = len(archive) - directory
+        put_u32(archive, 0x0605_4B50)
+        put_u16(archive, 0)
+        put_u16(archive, 0)
+        put_u16(archive, len(self.written))
+        put_u16(archive, len(self.written))
+        put_u32(archive, size)
+        put_u32(archive, directory)
+        put_u16(archive, 0)
+        return archive
+
+# A new, empty archive.
+func writer() -> Writer:
+    return Writer(out = new list(long), written = new list(Entry))
+
+# The lowest version that can read an entry, APPNOTE 4.4.3.2: 1.0 for
+# a stored file, 2.0 for a deflated one, spelled the way 4.4.2.3
+# spells a version — ten times the major plus the minor.
+private func version_for(method: long) -> long:
+    if method == 8:
+        return 20
+    return 10
+
+# --- the DEFLATE tables ----------------------------------------------
+#
+# RFC 1951 §3.2.5, transcribed from the tables as printed, both
+# directions.  Length code 284 stops at 227-257 and 285 is a code of
+# its own for exactly 258, which is the one irregularity in the two
+# tables and the one every implementation gets wrong once.  They are
+# functions rather than constants for the reason the CRC table is: a
+# list is not a value, and a top-level `let` only holds values.
+
+private func length_bases() -> list(long):
+    var table: list(long) = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258]
+    return table
+
+private func length_extras() -> list(long):
+    var table: list(long) = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0]
+    return table
+
+private func distance_bases() -> list(long):
+    var table: list(long) = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577]
+    return table
+
+private func distance_extras() -> list(long):
+    var table: list(long) = [0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13]
+    return table
+
+# The largest index whose base is at or below `value` — the code a
+# length or a distance is written as.
+private func code_for(bases: list(long), value: long) -> long:
+    var index = len(bases) - 1
+    while index > 0 and bases[index] > value:
+        index -= 1
+    return index
+
+# A canonical Huffman table (RFC 1951 §3.2.2), in the form a decoder
+# wants it: `counts[n]` is how many codes are n bits long, and
+# `symbols` holds the symbols in canonical order.  Both come in empty
+# and go out filled, which is what a borrowed object is for.
+#
+# §3.2.2 states the construction as "count the codes of each length,
+# then give each length a first code value, then hand codes out in
+# symbol order".  Its step 2 accumulates `next_code[bits]` — the
+# numeric value of the shortest code of that length; `offsets` below
+# is the same accumulation carried in *symbol* positions instead of
+# code values, which is the same sequence with the doubling left out
+# because a table indexed by position does not need it.  `decode`
+# then walks the lengths and puts the doubling back one bit at a
+# time, which is why the two together are §3.2.2 and not a variation
+# on it.  (Mark Adler's `puff.c`, zlib's own reference decoder, is
+# written this way for the same reason.)
+#
+# Over-subscription is refused; an *incomplete* table is not, because
+# §3.2.7 requires one — "if only one distance code is used, it is
+# encoded using one bit", leaving a code unused.
+private func huffman(lengths: list(long), counts: list(long), symbols: list(long)) -> !:
+    for slot in range(0, 16):
+        counts.append(0)
+    for length in lengths:
+        if length < 0 or length > 15:
+            error("zip: a Huffman code of " + string(length) + " bits")
+        counts[length] += 1
+    var left: long = 1
+    for length in range(1, 16):
+        left = left * 2 - counts[length]
+        if left < 0:
+            error("zip: an over-subscribed Huffman table")
+    var offsets: list(long) = [0, 0]
+    for length in range(1, 15):
+        offsets.append(offsets[length] + counts[length])
+    for slot in range(0, len(lengths)):
+        symbols.append(0)
+    for symbol in range(0, len(lengths)):
+        let length = lengths[symbol]
+        if length != 0:
+            symbols[offsets[length]] = symbol
+            offsets[length] += 1
+
+# --- inflate ---------------------------------------------------------
+
+# The decoder's cursor: one bit position into the compressed bytes.
+# It carries no objects, which is what lets every method write the
+# advanced cursor back through `var self` (docs/METHODS.md).
+struct Stream:
+    private position: long
+
+    # `count` bits, least significant first.  RFC 1951 §3.1.1: data
+    # elements pack into bytes starting at the least significant bit,
+    # and every element except a Huffman code is packed starting at
+    # its own least significant bit — so this is the order for
+    # BFINAL, BTYPE, LEN, HLIT and every extra-bits field, and
+    # `decode` assembles a Huffman code the other way round.
+    private func take(var self, data: list(long), count: long) -> long!:
+        var value: long = 0
+        var taken: long = 0
+        while taken < count:
+            let index = self.position >> 3
+            if index >= len(data):
+                error("zip: the compressed stream ends in the middle of a code")
+            let bit = data[index] >> (self.position & 7) & 1
+            value = value | bit << taken
+            self.position += 1
+            taken += 1
+        return value
+
+    # One symbol out of a canonical Huffman table.  A code is packed
+    # most significant bit first (§3.1.1), so it arrives one bit at a
+    # time and is shifted in from the bottom; at each length the code
+    # so far is compared against the run of codes of that length,
+    # which is what §3.2.2's "shorter codes lexicographically precede
+    # longer codes" means when you read rather than write.
+    private func decode(var self, data: list(long), counts: list(long), symbols: list(long)) -> long!:
+        var code: long = 0
+        var first: long = 0
+        var index: long = 0
+        for length in range(1, 16):
+            let bit = try self.take(data, 1)
+            code = code | bit
+            let count = counts[length]
+            if code - first < count:
+                return symbols[index + code - first]
+            index += count
+            first = (first + count) << 1
+            code = code << 1
+        error("zip: a code the compressed stream's Huffman table does not have")
+
+    # A stored block, RFC 1951 §3.2.4: "any bits of input up to the
+    # next byte boundary are ignored", then LEN, then NLEN — the
+    # one's complement of LEN — then LEN bytes as they are.
+    private func stored(var self, data: list(long), out: list(long)) -> !:
+        self.position = (self.position + 7) >> 3 << 3
+        let at = self.position >> 3
+        if at + 4 > len(data):
+            error("zip: a stored block with no header")
+        let length = data[at] | data[at + 1] << 8
+        let complement = data[at + 2] | data[at + 3] << 8
+        if length + complement != 65535:
+            error("zip: a stored block whose length does not check out")
+        if at + 4 + length > len(data):
+            error("zip: a stored block that runs past the end of the stream")
+        for step in range(0, length):
+            out.append(data[at + 4 + step])
+        self.position = (at + 4 + length) << 3
+
+    # The body of a compressed block, once both Huffman tables are in
+    # hand (RFC 1951 §3.2.3): a symbol under 256 is a literal, 256
+    # ends the block, and 257-285 is a length whose distance code
+    # follows it.  A match may overlap what it is still writing —
+    # §3.2.3's <length 5, distance 2> over X,Y giving X,Y,X,Y,X — so
+    # the copy reads the output one byte at a time rather than
+    # slicing it.
+    private func codes(var self, data: list(long), out: list(long), lit_counts: list(long), lit_symbols: list(long), dist_counts: list(long), dist_symbols: list(long)) -> !:
+        let lengths = length_bases()
+        let length_bits = length_extras()
+        let distances = distance_bases()
+        let distance_bits = distance_extras()
+        while true:
+            let symbol = try self.decode(data, lit_counts, lit_symbols)
+            if symbol < 256:
+                out.append(symbol)
+            elif symbol == 256:
+                return
+            else:
+                let code = symbol - 257
+                if code >= 29:
+                    error("zip: an invalid length code in the compressed stream")
+                let extra = try self.take(data, length_bits[code])
+                let length = lengths[code] + extra
+                let far = try self.decode(data, dist_counts, dist_symbols)
+                if far >= 30:
+                    error("zip: an invalid distance code in the compressed stream")
+                let far_extra = try self.take(data, distance_bits[far])
+                let distance = distances[far] + far_extra
+                if distance > len(out):
+                    error("zip: the compressed stream reaches back before its start")
+                for step in range(0, length):
+                    out.append(out[len(out) - distance])
+
+    # A block on the fixed tables of RFC 1951 §3.2.6: literal/length
+    # codes of 8 bits for 0-143, 9 for 144-255, 7 for 256-279 and 8
+    # for 280-287, and 32 distance codes of 5 bits each.  Symbols
+    # 286-287 and distance codes 30-31 never occur in a stream and are
+    # built anyway, because the RFC says they "participate in the code
+    # construction" — leaving them out would shift every code.
+    private func fixed(var self, data: list(long), out: list(long)) -> !:
+        var lengths: list(long) = []
+        for symbol in range(0, 144):
+            lengths.append(8)
+        for symbol in range(144, 256):
+            lengths.append(9)
+        for symbol in range(256, 280):
+            lengths.append(7)
+        for symbol in range(280, 288):
+            lengths.append(8)
+        var lit_counts: list(long) = []
+        var lit_symbols: list(long) = []
+        try huffman(lengths, lit_counts, lit_symbols)
+        var far_lengths: list(long) = []
+        for code in range(0, 32):
+            far_lengths.append(5)
+        var dist_counts: list(long) = []
+        var dist_symbols: list(long) = []
+        try huffman(far_lengths, dist_counts, dist_symbols)
+        try self.codes(data, out, lit_counts, lit_symbols, dist_counts, dist_symbols)
+
+    # A block that carries its own tables, themselves Huffman coded
+    # (RFC 1951 §3.2.7): HLIT + 257 literal/length lengths and
+    # HDIST + 1 distance lengths, written with a third Huffman code
+    # whose own lengths arrive in the order 16, 17, 18, 0, 8, 7, 9,
+    # 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15.  Codes 16, 17 and 18
+    # repeat; 16 repeats the previous length, and because the two
+    # alphabets are "a single sequence of HLIT + HDIST + 258 values"
+    # a repeat may cross from one into the other.
+    private func dynamic(var self, data: list(long), out: list(long)) -> !:
+        let literal_bits = try self.take(data, 5)
+        let distance_count_bits = try self.take(data, 5)
+        let table_bits = try self.take(data, 4)
+        let literals = literal_bits + 257
+        let far_count = distance_count_bits + 1
+        let table_count = table_bits + 4
+        if literals > 286 or far_count > 30:
+            error("zip: the compressed stream declares more codes than DEFLATE has")
+        var order: list(long) = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
+        var code_lengths: list(long) = []
+        for slot in range(0, 19):
+            code_lengths.append(0)
+        for slot in range(0, table_count):
+            let value = try self.take(data, 3)
+            code_lengths[order[slot]] = value
+        var code_counts: list(long) = []
+        var code_symbols: list(long) = []
+        try huffman(code_lengths, code_counts, code_symbols)
+        var lengths: list(long) = []
+        while len(lengths) < literals + far_count:
+            let symbol = try self.decode(data, code_counts, code_symbols)
+            if symbol < 16:
+                lengths.append(symbol)
+            else:
+                var repeat: long = 0
+                var value: long = 0
+                if symbol == 16:
+                    if len(lengths) == 0:
+                        error("zip: the compressed stream repeats a code length that is not there")
+                    value = lengths[len(lengths) - 1]
+                    let more = try self.take(data, 2)
+                    repeat = 3 + more
+                elif symbol == 17:
+                    let zeros = try self.take(data, 3)
+                    repeat = 3 + zeros
+                else:
+                    let many = try self.take(data, 7)
+                    repeat = 11 + many
+                if len(lengths) + repeat > literals + far_count:
+                    error("zip: the compressed stream repeats past its own code table")
+                for step in range(0, repeat):
+                    lengths.append(value)
+        var lit_lengths: list(long) = []
+        for slot in range(0, literals):
+            lit_lengths.append(lengths[slot])
+        var far_lengths: list(long) = []
+        for slot in range(0, far_count):
+            far_lengths.append(lengths[literals + slot])
+        var lit_counts: list(long) = []
+        var lit_symbols: list(long) = []
+        try huffman(lit_lengths, lit_counts, lit_symbols)
+        var dist_counts: list(long) = []
+        var dist_symbols: list(long) = []
+        try huffman(far_lengths, dist_counts, dist_symbols)
+        try self.codes(data, out, lit_counts, lit_symbols, dist_counts, dist_symbols)
+
+# The bytes a DEFLATE stream (RFC 1951) stands for — the raw stream,
+# with no zlib or gzip wrapper around it, which is what a ZIP entry
+# holds.  Damaged input is an error, never a trap: the bytes are the
+# world's, not the program's.
+func inflate(data: list(long)) -> list(long)!:
+    var reader = Stream(position = 0)
+    var out: list(long) = []
+    var last: long = 0
+    while last == 0:
+        last = try reader.take(data, 1)
+        let kind = try reader.take(data, 2)
+        if kind == 0:
+            try reader.stored(data, out)
+        elif kind == 1:
+            try reader.fixed(data, out)
+        elif kind == 2:
+            try reader.dynamic(data, out)
+        else:
+            error("zip: the compressed stream has a block of an unknown kind")
+    return out
+
+# --- deflate ---------------------------------------------------------
+
+# The other end of the bit reader, and RFC 1951 §3.1.1 read the other
+# way: bits go out least significant first, and a Huffman code goes
+# out most significant first, which is `put_code`'s whole job.
+struct Packer:
+    private held: long
+    private count: long
+
+    private func put(var self, out: list(long), value: long, count: long):
+        var bits = self.held | value << self.count
+        var have = self.count + count
+        while have >= 8:
+            out.append(bits & 0xFF)
+            bits = bits >> 8
+            have -= 8
+        self.held = bits
+        self.count = have
+
+    private func put_code(var self, out: list(long), code: long, count: long):
+        var reversed: long = 0
+        for step in range(0, count):
+            reversed = reversed << 1 | code >> step & 1
+        self.put(out, reversed, count)
+
+    private func flush(var self, out: list(long)):
+        if self.count > 0:
+            out.append(self.held & 0xFF)
+            self.held = 0
+            self.count = 0
+
+private func fixed_bits(symbol: long) -> long:
+    if symbol < 144:
+        return 8
+    if symbol < 256:
+        return 9
+    if symbol < 280:
+        return 7
+    return 8
+
+private func fixed_code(symbol: long) -> long:
+    if symbol < 144:
+        return 0x30 + symbol
+    if symbol < 256:
+        return 0x190 + symbol - 144
+    if symbol < 280:
+        return symbol - 256
+    return 0xC0 + symbol - 280
+
+# A DEFLATE stream those bytes stand for: one final block on the
+# fixed Huffman tables of RFC 1951 §3.2.6, with LZ77 matches found
+# through a hash of three bytes and a chain of the positions that
+# hashed the same.  §3.3 allows a compressor to use less than the
+# format's full range and stay compliant, which is what a fixed-code
+# encoder with a bounded chain search is doing.
+# Compression cannot fail — worst case every byte goes out as a
+# literal — so this answers bytes rather than an error.
+func deflate(data: list(long)) -> list(long):
+    var out: list(long) = []
+    var packer = Packer(held = 0, count = 0)
+    packer.put(out, 1, 1)
+    packer.put(out, 1, 2)
+    let lengths = length_bases()
+    let length_bits = length_extras()
+    let distances = distance_bases()
+    let distance_bits = distance_extras()
+    var recent = new map(long, long)
+    var earlier: list(long) = []
+    for slot in range(0, len(data)):
+        earlier.append(-1)
+    var at: long = 0
+    while at < len(data):
+        var best_length: long = 0
+        var best_distance: long = 0
+        if at + 3 <= len(data):
+            let key = data[at] << 16 | data[at + 1] << 8 | data[at + 2]
+            var candidate = recent.get(key, -1)
+            var tries: long = 0
+            while candidate >= 0 and tries < 24:
+                let distance = at - candidate
+                if distance > 32768:
+                    candidate = -1
+                else:
+                    var length: long = 0
+                    while length < 258 and at + length < len(data) and data[candidate + length] == data[at + length]:
+                        length += 1
+                    if length > best_length:
+                        best_length = length
+                        best_distance = distance
+                    candidate = earlier[candidate]
+                    tries += 1
+            earlier[at] = recent.get(key, -1)
+            recent[key] = at
+        if best_length >= 3:
+            let code = code_for(lengths, best_length)
+            let symbol = 257 + code
+            packer.put_code(out, fixed_code(symbol), fixed_bits(symbol))
+            packer.put(out, best_length - lengths[code], length_bits[code])
+            let far = code_for(distances, best_distance)
+            packer.put_code(out, far, 5)
+            packer.put(out, best_distance - distances[far], distance_bits[far])
+            for step in range(1, best_length):
+                let position = at + step
+                if position + 3 <= len(data):
+                    let key = data[position] << 16 | data[position + 1] << 8 | data[position + 2]
+                    earlier[position] = recent.get(key, -1)
+                    recent[key] = position
+            at += best_length
+        else:
+            packer.put_code(out, fixed_code(data[at]), fixed_bits(data[at]))
+            at += 1
+    packer.put_code(out, fixed_code(256), fixed_bits(256))
+    packer.flush(out)
+    return out

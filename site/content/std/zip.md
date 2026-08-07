@@ -1,0 +1,211 @@
+# std.zip
+
+ZIP archives and DEFLATE, in pure Luce. Read a real archive's central
+directory, pull an entry's contents out of it, and write an archive of
+your own. Nothing here is a builtin and nothing here touches the host:
+every function takes bytes and answers bytes, and where the bytes came
+from is the caller's business.
+
+```
+import std.zip
+```
+
+Written against the normative documents, and every structure in the
+source names its clause. The container is PKWARE's **APPNOTE.TXT
+6.3.10** — 4.3.7 the local header, 4.3.12 the central directory,
+4.3.16 the end record, 4.4.4 the flags. The compression is **RFC
+1951** — §3.2.2 canonical Huffman, §3.2.4 stored blocks, §3.2.5 the
+length and distance tables, §3.2.6 the fixed codes, §3.2.7 the dynamic
+ones. A ZIP member's method-8 data is a *raw* deflate stream: no zlib
+header and no Adler-32 trailer.
+
+## Bytes are a `list(long)`
+
+One byte to an element, every element 0..255. Luce has a `byte` and a
+checked `byte(x)` to narrow into it, but a `list` is boxed whatever its
+element type: a `list(byte)` costs the same eight bytes an element as a
+`list(long)` *and* a conversion at every store. The packed one is
+`array(byte, n)`, and it cannot grow. So there is no growable packed
+byte buffer to reach for, and the honest choice is the width the
+arithmetic happens at.
+
+## The host cannot hand a program a file's bytes yet
+
+`file_read` answers a `string`, and a string is valid UTF-8 by
+construction — so the host refuses a file that is not text, and no
+archive worth the name is text. That is a gap in the boundary, not in
+this module: every function here works on any bytes it is given, and
+the day the host grows a binary read the line in front of them is one
+call long. Today the bytes come from a program that computed them,
+from `zip.bytes` over text the host *could* read, or from a module of
+literals.
+
+## Bytes and text
+
+| Signature | Notes |
+|---|---|
+| `zip.bytes(content: string) -> list(long)` | the UTF-8 bytes a string is made of |
+| `zip.text(data: list(long)) -> string!` | the string those bytes spell; bytes that are not text answer an error rather than trapping |
+
+```luce run
+import std.zip
+
+func main() -> !:
+    let raw = zip.bytes("héllo")
+    print(string(len(raw)))
+    let back = try zip.text(raw)
+    print(back)
+```
+
+```output
+6
+héllo
+```
+
+## The checksum
+
+| Signature | Notes |
+|---|---|
+| `zip.crc32(data: list(long)) -> long` | the reflected CRC-32 every entry carries (APPNOTE 4.4.7) |
+
+The table is built per call, because a top-level `let` is a value
+constant and a table is a list: 256 rows of eight steps in front of one
+pass over the data.
+
+```luce run
+import std.zip
+
+func main():
+    print(string(zip.crc32(zip.bytes("123456789"))))
+```
+
+```output
+3421780262
+```
+
+That is `0xCBF43926`, the published check value.
+
+## Reading
+
+| Signature | Notes |
+|---|---|
+| `zip.entries(archive: list(long)) -> list(Entry)!` | every entry the central directory lists, in the order it lists them |
+| `zip.extract(archive: list(long), entry: Entry) -> list(long)!` | the entry's contents, checked against the size and the CRC the directory recorded |
+
+An `Entry` describes one member and is made only by reading an
+archive — its fields are the module's own, and these are how a program
+asks:
+
+| Method | Notes |
+|---|---|
+| `entry.name() -> string` | the name inside the archive, as it is stored |
+| `entry.size() -> long` | how many bytes the contents are |
+| `entry.packed() -> long` | how many bytes it takes up in the archive |
+| `entry.crc() -> long` | the CRC-32 the archive records |
+| `entry.deflated() -> bool` | true when it is deflated rather than stored whole |
+
+Two things a conforming reader has to tolerate are tolerated. An entry
+written by a program that could not seek has zeros where its local
+header's CRC and sizes belong (APPNOTE 4.4.4 bit 3); this reads the
+central directory, which 4.4.7 requires to hold the right values. And
+an archive with a program in front of it — a self-extracting one — has
+every offset shifted by however far its directory really begins from
+where it says it does.
+
+Anything else is refused by name rather than half-read: an encrypted
+entry, a compression method the module does not have, a name that is
+not text, contents that fail their checksum.
+
+## Writing
+
+| Signature | Notes |
+|---|---|
+| `zip.writer() -> Writer` | a new, empty archive, owned by the binding that received it |
+| `writer.add(name: string, data: list(long), compress: bool = false) -> !` | store one entry; `compress` deflates it and keeps whichever is smaller |
+| `writer.finish() -> list(long)` | the whole archive: everything added, then the central directory over it |
+
+`finish` builds a fresh list every time, so the writer stays usable.
+
+```luce run
+import std.zip
+
+func main() -> !:
+    var writer = zip.writer()
+    try writer.add("greeting.txt", zip.bytes("hello, world\n"))
+    var raw: list(long) = [0, 255, 128, 1]
+    try writer.add("every.bin", raw)
+    let archive = writer.finish()
+
+    let found = try zip.entries(archive)
+    for entry in found:
+        print(entry.name() + " " + string(entry.size()))
+    let first = try zip.extract(archive, found[0])
+    let said = try zip.text(first)
+    print(said)
+```
+
+```output
+greeting.txt 13
+every.bin 4
+hello, world
+
+```
+
+## DEFLATE on its own
+
+| Signature | Notes |
+|---|---|
+| `zip.inflate(data: list(long)) -> list(long)!` | the bytes a raw DEFLATE stream stands for — stored, fixed and dynamic Huffman blocks alike |
+| `zip.deflate(data: list(long)) -> list(long)` | a raw DEFLATE stream those bytes stand for; compression cannot fail, so it answers bytes rather than an error |
+
+`inflate` reads everything RFC 1951 defines. `deflate` writes one final
+block on the fixed tables of §3.2.6, with LZ77 matches found through a
+hash of three bytes and a chain of the positions that hashed the same —
+§3.3 lets a compressor use less than the format's full range and stay
+compliant, which is what a fixed-code encoder with a bounded search is
+doing.
+
+```luce run
+import std.zip
+
+func main() -> !:
+    var text = ""
+    for step in range(0, 40):
+        text += "the quick brown fox jumps over the lazy dog. "
+    let plain = zip.bytes(text)
+    let squeezed = zip.deflate(plain)
+    print(string(len(plain)) + " -> " + string(len(squeezed)))
+    let back = try zip.inflate(squeezed)
+    let restored = try zip.text(back)
+    print(string(restored == text))
+```
+
+```output
+1800 -> 61
+true
+```
+
+## Limits
+
+The sizes are the ZIP32 ones: at most 65535 entries, each at most 4 GB,
+and there is no Zip64. Encryption, multi-disk archives and compression
+methods other than stored and deflated are refused rather than
+half-read. Damaged input is an **error**, never a trap — the bytes are
+the world's, not the program's — so a reader writes `try` or `catch`:
+
+```luce run
+import std.zip
+
+func count(archive: list(long)) -> !:
+    let found = try zip.entries(archive)
+    print(string(len(found)) + " entries")
+
+func main():
+    var scraps: list(long) = [80, 75, 3]
+    count(scraps) catch reason:
+        print(reason)
+```
+
+```output
+zip: not an archive (only 3 bytes)
+```

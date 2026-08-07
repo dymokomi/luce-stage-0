@@ -291,6 +291,82 @@ have cost every artifact in the world a rebuild to learn one number.
 
 ---
 
+## zip
+
+ZIP archives and DEFLATE, in pure Luce — and the module that says out
+loud where the host boundary stops.  Nothing here is a builtin and
+nothing here touches the world: every function takes bytes and answers
+bytes.
+
+**Written against the normative documents, and every structure in the
+source names its clause.**  The container is PKWARE's APPNOTE.TXT
+6.3.10 — 4.3.7 local header, 4.3.12 central directory, 4.3.16 end
+record, 4.4.4 flags, 4.4.5 methods, 4.4.3.2 the version an entry
+needs.  The compression is RFC 1951 — §3.2.2 canonical Huffman,
+§3.2.4 stored blocks, §3.2.5 the length and distance tables
+(transcribed as printed, code 285's lone 258 included), §3.2.6 the
+fixed codes, §3.2.7 the dynamic ones.  A member's method-8 data is a
+**raw** deflate stream: no zlib header, no Adler-32 trailer.  The
+CRC-32 is zlib's reflected 0xEDB88320, preconditioned with ones and
+complemented at the end, exactly as APPNOTE 4.4.7 says.
+
+```text
+import std.zip
+
+zip.bytes(content)               # string -> list(long), the UTF-8 bytes
+zip.text(data)                   # list(long) -> string!, or an error
+
+zip.crc32(data)                  # long — crc32("123456789") is 3421780262
+
+zip.entries(archive)             # list(Entry)! — the central directory
+zip.extract(archive, entry)      # list(long)! — checked against size and CRC
+  entry.name()   entry.size()   entry.packed()
+  entry.crc()    entry.deflated()
+
+zip.writer()                     # Writer — a new, empty archive
+  writer.add(name, data, compress = false)   # !
+  writer.finish()                            # list(long), fresh each call
+
+zip.inflate(data)                # list(long)! — stored, fixed and dynamic
+zip.deflate(data)                # list(long) — one fixed-Huffman block
+```
+
+**Bytes are a `list(long)`, one byte to an element.**  Luce has a
+`byte` and a checked `byte(x)`, but a `list` is boxed whatever its
+element type (docs/TYPES.md §6): a `list(byte)` costs the same eight
+bytes an element *and* a conversion at every store.  The packed one is
+`array(byte, n)`, which cannot grow.  There is no growable packed byte
+buffer in the language, so the honest choice is the width the
+arithmetic happens at.
+
+**The host cannot hand a program a file's bytes, and cannot take
+them.**  `file_read` answers a `string`; a string is valid UTF-8 by
+construction, so the host refuses a file that is not text and no
+archive worth the name is text.  That is a gap in the boundary rather
+than in this module — every function here works on any bytes it is
+given — and it is the one thing standing between `std.zip` and
+`unzip`.  Until it closes, the bytes come from a program that computed
+them, from `zip.bytes` over text the host *could* read, or from a
+module of literals.
+
+Two clauses a conforming reader has to tolerate are tolerated: an
+entry written without seeking, whose local header carries zeros where
+the CRC and sizes belong (4.4.4 bit 3, read from the directory 4.4.7
+requires to be right), and an archive with a program in front of it,
+whose offsets are shifted by however far its directory really begins
+from where it claims to.  Everything else — encryption, an unknown
+method, a name that is not text, contents that fail their checksum, a
+comment holding a false end-record signature — is refused by name.
+
+The spec suite is `src/luce/specs/zip_spec.zig`, and it is the one
+std suite whose fixtures are **other people's bytes**: five archives
+embedded as the decimal numbers they are, four of them written by
+Info-ZIP and Python and one shaped by hand, covering stored, fixed
+Huffman, dynamic Huffman, a data descriptor and a prepended program.
+A library that only reads what it wrote has proven nothing about ZIP.
+
+---
+
 ## Adding a module
 
 1. Write `src/luce/std/NAME.luc` — ordinary Luce, documented with
