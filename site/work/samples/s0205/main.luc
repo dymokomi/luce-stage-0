@@ -1,6 +1,0 @@
-func stash(index: map(string, list(long)), hits: list(long)):
-    index["latest"] = hits
-
-func main():
-    var index = new map(string, list(long))
-    stash(index, [1, 2])

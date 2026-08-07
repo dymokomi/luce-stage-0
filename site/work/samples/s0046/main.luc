@@ -1,3 +1,0 @@
-func main():
-    let mean = 23.998425
-    print(f"mean = {mean:.2f}")

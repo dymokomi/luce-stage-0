@@ -1,7 +1,0 @@
-func main(args: list(string)):
-    let raw = args[0]
-    let n = parse_int(raw)
-    if n == none:
-        print(f"not a number: {raw}")
-        return
-    print(f"{n} squared is {n * n}")     # n is long from here down

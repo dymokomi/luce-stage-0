@@ -1,5 +1,0 @@
-import shapes
-
-func main():
-    let r = shapes.square(3.0)
-    print(f"{r.width}x{r.height} area {shapes.Rect.area(r)} unit {shapes.unit}")

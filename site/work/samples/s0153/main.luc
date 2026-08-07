@@ -1,4 +1,0 @@
-func main():
-    var m = new map(string, long)
-    m["a"] = 1
-    print(string(m["b"]))

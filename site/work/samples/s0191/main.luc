@@ -1,2 +1,0 @@
-func main():
-    print(string(1 < 2 < 3))

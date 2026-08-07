@@ -1,4 +1,0 @@
-func main():
-    let text = "not a number"
-    let n = parse_int(text) else trap(f"expected a number, got {text}")
-    print(string(n))

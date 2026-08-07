@@ -1,4 +1,0 @@
-func main():
-    var ages = new map(string, long)
-    ages["ada"] = 36
-    print(string(ages["nobody"]))

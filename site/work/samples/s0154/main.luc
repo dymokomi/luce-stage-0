@@ -1,4 +1,0 @@
-func main():
-    let text = "naïve"
-    print(f"{len(text)} bytes")
-    print(text[0:3])

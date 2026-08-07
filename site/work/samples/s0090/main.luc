@@ -1,9 +1,0 @@
-import std.files
-
-func main() -> !:
-    try files.write("stock.txt", "fig\npear\nplum\n")
-    var f = try files.open("stock.txt")
-    var buffer = new array(byte, 4)
-    print(string(try f.read(buffer)))
-    print(string(try f.read(buffer)))
-    print(string(int(buffer[0])))

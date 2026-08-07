@@ -1,7 +1,0 @@
-func take(xs: give list(long)) -> long:
-    return len(xs)
-
-func main():
-    var xs = [1, 2]
-    let view = xs
-    let n = take(give view)

@@ -1,8 +1,0 @@
-func main():
-    var first = new list(list(long))
-    var second = new list(list(long))
-    var item: list(long) = [1]
-    let alias = item
-    second.append(copy alias)
-    first.append(give item)
-    print(string(len(first) + len(second)))

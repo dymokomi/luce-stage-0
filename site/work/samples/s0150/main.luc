@@ -1,4 +1,0 @@
-func main():
-    let a: long = 4611686018427387904
-    print("doubling")
-    print(string(a * 2))

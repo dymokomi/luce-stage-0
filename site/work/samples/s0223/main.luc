@@ -1,5 +1,0 @@
-import session
-
-func main():
-    let s = session.open("dy")
-    print(s.name)

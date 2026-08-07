@@ -1,5 +1,0 @@
-func main():
-    let after: long = 9007199254740993
-    let rounded: double = 9007199254740992.0
-    print(string(1 < 1.5))
-    print(string(after == rounded))

@@ -1,7 +1,0 @@
-func main():
-    var values = new array(double, 6)
-    values.fill(1.5)
-    values[0] = 9.5
-    values[5] = 0.5
-    values.sort()
-    print(f"{values[0]} .. {values[5]}, contains 1.5: {values.contains(1.5)}")

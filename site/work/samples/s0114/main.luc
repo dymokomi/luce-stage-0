@@ -1,6 +1,0 @@
-import std.strings
-
-func main():
-    let messy = "  a   b  c  "
-    print(f"whitespace: {len(messy.split(""))} pieces")
-    print(f"on space:   {len(messy.split(" "))} pieces")

@@ -1,8 +1,0 @@
-func main():
-    for step in range(0, 6):
-        if step % 3 == 0:
-            print(f"{step}: fizz")
-        elif step % 2 == 0:
-            print(f"{step}: even")
-        else:
-            print(f"{step}: odd")

@@ -1,8 +1,0 @@
-enum Priority:
-    low
-    high
-
-func main():
-    let a = Priority.low
-    let b = Priority.high
-    assert(a < b)

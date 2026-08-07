@@ -1,5 +1,0 @@
-func main():
-    var pixels = new array(byte, 4)
-    pixels[0] = 255
-    pixels[1] = 128
-    print(string(pixels[0] + pixels[1]))

@@ -1,5 +1,0 @@
-func main():
-    var sink = new list(list(long))
-    var xs = [1]
-    for i in range(0, 3):
-        sink.append(give xs)

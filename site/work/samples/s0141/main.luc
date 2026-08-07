@@ -1,4 +1,0 @@
-func main():
-    let config = "port=notanumber"
-    let port = parse_int(config[5:len(config)]) else trap("bad port in config")
-    print(string(port))

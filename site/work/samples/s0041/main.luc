@@ -1,6 +1,0 @@
-func main():
-    var a = [1, 2, 3]
-    var b = [1, 2, 3]
-    let same = a
-    print(f"a == b: {a == b}")
-    print(f"a == same: {a == same}")

@@ -1,8 +1,0 @@
-enum Method:
-    stored = 0
-    shrunk = 1
-    deflated = 8
-
-func main():
-    print(f"{Method.stored} is {int(Method.stored)}")
-    print(f"{Method.deflated} is {int(Method.deflated)}")

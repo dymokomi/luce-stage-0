@@ -1,4 +1,0 @@
-import geometry
-
-func main():
-    print("x")

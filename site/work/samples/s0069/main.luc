@@ -1,4 +1,0 @@
-import std.files
-
-func main():
-    files.write("notes.txt", "hello")

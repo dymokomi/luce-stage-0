@@ -1,5 +1,0 @@
-struct Holder:
-    value: long!
-
-func main():
-    print("unreachable")

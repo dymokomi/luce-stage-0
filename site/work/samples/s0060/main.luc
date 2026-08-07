@@ -1,6 +1,0 @@
-func main():
-    var big = new array(long, 100000)
-    big.fill(7)
-    let sum = big[0] + big[99999]
-    free(big)                     # done with it, on purpose
-    print(f"sum {sum}")

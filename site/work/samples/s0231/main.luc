@@ -1,4 +1,0 @@
-func main():
-    var grid = new array(long, 2, 3)
-    grid.fill(7)
-    print(f"{grid.dim(0)} by {grid.dim(1)}, corner {grid[1, 2]}")

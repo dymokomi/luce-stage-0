@@ -1,6 +1,0 @@
-func main():
-    var xs = [1, 2]
-    let view = xs
-    free(xs)
-    let bad = view[0]
-    print(string(bad))

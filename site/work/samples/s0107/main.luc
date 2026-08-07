@@ -1,8 +1,0 @@
-func main():
-    var row = new array(long, 5)
-    for i in range(0, 5):
-        row[i] = i * i
-    print(f"{len(row)} elements, last {row[4]}")
-
-    var flags = new array(bool, 3)
-    print(f"zero value is {flags[0]}")

@@ -1,3 +1,0 @@
-func main():
-    var xs = new list(long)
-    xs.append("hello")

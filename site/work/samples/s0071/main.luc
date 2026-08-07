@@ -1,9 +1,0 @@
-func check(n: long) -> long!:
-    if n < 0:
-        error(f"negative: {n}")
-    return n
-
-func main() -> !:
-    print(string(try check(5)))
-    let fallback = check(-1) catch 0
-    print(f"fallback {fallback}")

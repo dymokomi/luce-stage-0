@@ -1,2 +1,0 @@
-func main():
-    let p: (long, long) = 1

@@ -1,5 +1,0 @@
-func main():
-    let started = clock_ms()
-    sleep_ms(0)
-    sleep_ms(-40)
-    print(f"an overrun frame waits {clock_ms() - started} ms")

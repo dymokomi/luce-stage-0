@@ -1,5 +1,0 @@
-func main():
-    let expected = 3
-    let actual = 4
-    print("checking")
-    assert(expected == actual)

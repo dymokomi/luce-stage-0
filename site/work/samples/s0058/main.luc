@@ -1,9 +1,0 @@
-func stash(index: map(string, list(long)), hits: give list(long)):
-    index["latest"] = give hits
-
-func main():
-    var index = new map(string, list(long))
-    var mine: list(long) = [1, 2]
-    stash(index, give mine)          # said at both ends
-    stash(index, [3, 4])             # fresh needs no word
-    print(f"latest has {len(index["latest"])}")

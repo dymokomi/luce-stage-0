@@ -1,4 +1,0 @@
-func main():
-    let text = "λx"          # the lambda is two bytes
-    print(f"{len(text)} bytes")
-    print(text[0:1])

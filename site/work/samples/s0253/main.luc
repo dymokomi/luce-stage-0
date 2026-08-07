@@ -1,4 +1,0 @@
-import std.zip
-
-func main():
-    print(string(zip.crc32(zip.bytes("123456789"))))

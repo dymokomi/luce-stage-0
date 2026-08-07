@@ -1,7 +1,0 @@
-func main():
-    let greeting = "hello, loom"
-    print(f"{len(greeting)} bytes")
-    print(greeting[0:5])                # a slice; still a value
-    print(string(greeting.byte_at(0)))     # 'h'
-    print(string(greeting.find_byte(44, 0)))  # first comma
-    print(string("apple" < "banana"))

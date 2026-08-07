@@ -1,8 +1,0 @@
-struct Options:
-    depth: long = 3
-    wide: bool = false
-
-func main():
-    let plain = Options()
-    let tuned = Options(depth = 9)
-    print(f"{plain.depth} {plain.wide} {tuned.depth}")

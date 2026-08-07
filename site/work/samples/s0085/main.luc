@@ -1,5 +1,0 @@
-private:
-    let limit = 10
-
-func main():
-    print(string(limit))

@@ -1,5 +1,0 @@
-func main():
-    let _ = read_count()
-
-func read_count() -> long:
-    return 3

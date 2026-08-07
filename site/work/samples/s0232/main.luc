@@ -1,7 +1,0 @@
-func main():
-    let s = "hello, loom"
-    print(f"{len(s)} bytes")
-    print(s[7:11])
-    print(string(s.byte_at(0)))
-    print(string(s.find_byte(44, 0)))
-    print(string(s.find_byte(122, 0)))

@@ -1,5 +1,0 @@
-import std.math
-
-func main():
-    print("about to take a logarithm")
-    print(string(math.ln(0.0)))

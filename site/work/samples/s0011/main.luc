@@ -1,5 +1,0 @@
-func main():
-    print(string(1 / 2))
-    print(string(7 // 2) + " " + string(7 % 2))
-    print(string(-7 // 3) + " " + string(-7 % 3))
-    print(string(-1 % 256))

@@ -1,8 +1,0 @@
-import std.paths
-
-func main():
-    print(paths.extension("notes/report.tar.gz"))
-    print(paths.stem("notes/report.tar.gz"))
-    print(paths.base("notes/report.tar.gz"))
-    print(paths.extension(".bashrc"))
-    print(paths.stem(".bashrc"))

@@ -1,5 +1,0 @@
-func main():
-    var xs = [1, 2]
-    let view = xs
-    free(xs)                  # released early, on purpose
-    print(string(view[0]))

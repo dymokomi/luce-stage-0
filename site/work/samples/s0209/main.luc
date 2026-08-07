@@ -1,7 +1,0 @@
-func main():
-    var a = new list(list(long))
-    var b = new list(list(long))
-    var item: list(long) = [1]
-    let alias = item
-    a.append(give item)
-    b.append(give alias)

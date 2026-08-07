@@ -1,4 +1,0 @@
-func main():
-    let name = "loom"
-    let title = give name
-    print(title)

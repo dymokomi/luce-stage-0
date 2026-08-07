@@ -1,7 +1,0 @@
-import geometry
-
-func main():
-    let a = geometry.Point(x = 0.0, y = 0.0)
-    let b = geometry.Point(x = 3.0, y = 4.0)
-    print(string(geometry.distance(a, b)))
-    print(string(geometry.unit))

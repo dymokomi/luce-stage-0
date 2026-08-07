@@ -1,9 +1,0 @@
-import std.os
-
-func main():
-    let total = os.total_memory()
-    let available = os.available_memory()
-    print(f"total is positive: {total > 0}")
-    print(f"available fits inside it: {available <= total}")
-    print(f"used is a part of the whole: {os.used_memory() <= total}")
-    print(f"at least one processor: {os.cpu_count() >= 1}")

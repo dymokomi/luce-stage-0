@@ -1,3 +1,0 @@
-func main():
-    var over: long = 300
-    print(string(byte(over)))

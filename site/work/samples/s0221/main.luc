@@ -1,5 +1,0 @@
-import geo
-
-func main():
-    print(string(geo.visible()))
-    print(string(geo.answer))

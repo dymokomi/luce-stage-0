@@ -1,8 +1,0 @@
-import std.files
-
-func main() -> !:
-    try files.write("note.txt", "abc")
-    var f = try files.open("note.txt")
-    var buffer = new array(byte, 8)
-    print(string(try f.read(buffer)))
-    try files.delete("note.txt")

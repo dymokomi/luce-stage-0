@@ -1,6 +1,0 @@
-func main():
-    var counts = new map(string, long)
-    counts["a"] += 5
-    var text = "x"
-    text += "y"
-    print(f"{counts["a"]} {text}")

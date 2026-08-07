@@ -1,5 +1,0 @@
-import std.strings
-
-func main():
-    let x = 1.5
-    print(f"{x:.2}")

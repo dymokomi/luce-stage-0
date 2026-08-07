@@ -1,9 +1,0 @@
-func main():
-    var user: string? = none
-    let limit: long? = 10              # a long? that is there
-    let parsed = parse_int("42")      # long?
-    let bad = parse_int("hello")      # also long?, and it is none
-    print(f"user absent: {user == none}")
-    print(f"parsed absent: {parsed == none}, bad absent: {bad == none}")
-    user = "ada"
-    print(f"user now: {user}, limit {limit}")

@@ -1,2 +1,0 @@
-func start():
-    print("x")

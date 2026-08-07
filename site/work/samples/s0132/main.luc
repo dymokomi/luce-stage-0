@@ -1,6 +1,0 @@
-func main():
-    var big = new array(long, 200000)
-    big.fill(3)
-    let sample = big[199999]
-    free(big)                      # the memory goes back now
-    print(f"sample {sample}")

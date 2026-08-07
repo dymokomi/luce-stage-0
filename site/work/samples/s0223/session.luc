@@ -1,7 +1,0 @@
-struct Session:
-    name: string
-    private id: long
-    private token: long = 0
-
-func open(name: string) -> Session:
-    return Session(name = name, id = 7)

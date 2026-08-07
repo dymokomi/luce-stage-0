@@ -1,4 +1,0 @@
-import tally
-
-func main():
-    print(string(tally.count("Bee bee BEE tree", "bee")))

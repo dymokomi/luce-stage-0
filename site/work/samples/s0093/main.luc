@@ -1,8 +1,0 @@
-func main(args: list(string)):
-    if len(args) == 0:
-        print("usage: greet NAME [NAME ...]")
-        return
-    var index = 0
-    for name in args:
-        index = index + 1
-        print(f"{index}. hello, {name}")

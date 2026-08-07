@@ -1,8 +1,0 @@
-private struct Inner:
-    n: long
-
-func read() -> Inner:
-    return Inner(n = 1)
-
-func main():
-    print(string(read().n))

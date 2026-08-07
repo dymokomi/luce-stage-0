@@ -1,5 +1,0 @@
-func main():
-    var xs = [1, 2, 3]
-    let view = xs             # an alias; xs still owns
-    view.append(4)            # one list, two names
-    print(f"{len(xs)} elements")

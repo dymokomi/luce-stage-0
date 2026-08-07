@@ -1,5 +1,0 @@
-func risky() -> long!:
-    error("no")
-
-func main():
-    risky()

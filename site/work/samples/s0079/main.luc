@@ -1,4 +1,0 @@
-import tally
-
-func main():
-    print(tally.clean("  Bee "))

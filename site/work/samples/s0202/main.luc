@@ -1,4 +1,0 @@
-func main():
-    let a = 1
-    return
-    let b = a

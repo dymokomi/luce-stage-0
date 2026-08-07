@@ -1,8 +1,0 @@
-import std.strings
-
-func main():
-    let line = "  name , age , city  "
-    var fields: list(string) = []
-    for raw in line.split(","):
-        fields.append(raw.trim())
-    print(f"{len(fields)}: [{fields.join("][")}]")

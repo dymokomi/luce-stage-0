@@ -1,4 +1,0 @@
-func main():
-    print(string(1.0 / 3.0))
-    print(string(double(1.0) / double(3.0)))
-    print(string(half(65504.0)))

@@ -1,9 +1,0 @@
-func remember(store: list(list(long)), values: list(long)):
-    store.append(copy values)      # values is borrowed; copy is allowed
-
-func main():
-    var store = new list(list(long))
-    var mine: list(long) = [1, 2, 3]
-    remember(store, mine)
-    mine.append(4)
-    print(f"stored {len(store[0])}, mine {len(mine)}")

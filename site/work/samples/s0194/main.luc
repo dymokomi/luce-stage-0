@@ -1,5 +1,0 @@
-func size(width: long, height: long) -> long:
-    return width * height
-
-func main():
-    let a = size(width = 1, 2)

@@ -1,6 +1,0 @@
-enum Method(byte):
-    stored = 0
-    deflated = 300
-
-func main():
-    return

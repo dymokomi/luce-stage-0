@@ -1,5 +1,0 @@
-import gauge
-
-func main():
-    var g = gauge.open("power", 10)
-    print(string(g.reading))

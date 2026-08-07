@@ -1,8 +1,0 @@
-func main():
-    var table = new builder()
-    for row in range(0, 4):
-        for column in range(0, 4):
-            table.append(string(row * column))
-            table.append_ascii(9)      # a tab, without allocating a string
-        table.append("\n")
-    print(table.build())

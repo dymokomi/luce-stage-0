@@ -1,4 +1,0 @@
-import std.nope
-
-func main():
-    print("x")
