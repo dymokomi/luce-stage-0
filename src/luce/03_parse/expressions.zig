@@ -84,6 +84,7 @@ pub fn startsExpression(kind: Kind) bool {
         .tilde,
         .left_paren,
         .left_bracket,
+        .left_brace,
         => true,
         else => false,
     };
@@ -645,6 +646,7 @@ fn primaryExpression(self: *Parser) Error!?*ast.Expression {
             return inner;
         },
         .left_bracket => return listLiteral(self),
+        .left_brace => return mapLiteral(self),
         .keyword_new => return newObject(self),
         // `!` is the fallibility mark on a return type and nothing
         // else.  It used to be refused by the lexer, which is where
@@ -839,6 +841,45 @@ fn listLiteral(self: *Parser) Error!?*ast.Expression {
     const closing = (try self.expectClose(.right_bracket, opener)) orelse return null;
     return make(self, .{ .list_literal = .{
         .elements = try elements.toOwnedSlice(self.arena),
+        .span = .{ .start = opener.span.start, .end = closing.span.end },
+    } });
+}
+
+/// `{key: value, ...}` — the runtime and constant map literal share
+/// one syntax (docs/CONSTANTS.md R-B).  A literal is deliberately
+/// non-empty: without an entry there is nowhere to infer either type,
+/// so the constructor is the honest spelling.
+fn mapLiteral(self: *Parser) Error!?*ast.Expression {
+    const opener = self.advance(); // {
+    if (self.accept(.right_brace)) |closing| {
+        try self.report(
+            "luce.parse.expression",
+            .{ .start = opener.span.start, .end = closing.span.end },
+            "an empty map has no literal; write 'new map(K, V)' so its key and value types are explicit",
+            .{},
+        );
+        return null;
+    }
+
+    var entries: std.ArrayList(ast.MapEntry) = .empty;
+    defer entries.deinit(self.arena);
+    var previous_end = opener.span.end;
+    while (!endsList(self.peekKind(), .right_brace)) {
+        const key = (try expression(self)) orelse return null;
+        if ((try self.expect(.colon, "':' between a map key and value")) == null) return null;
+        const value = (try expression(self)) orelse return null;
+        try entries.append(self.arena, .{
+            .key = key,
+            .value = value,
+            .span = .{ .start = key.span().start, .end = value.span().end },
+        });
+        previous_end = value.span().end;
+        if (self.accept(.comma) == null) break;
+    }
+    if (try self.missingSeparator(previous_end)) return null;
+    const closing = (try self.expectClose(.right_brace, opener)) orelse return null;
+    return make(self, .{ .map_literal = .{
+        .entries = try entries.toOwnedSlice(self.arena),
         .span = .{ .start = opener.span.start, .end = closing.span.end },
     } });
 }
@@ -1210,7 +1251,7 @@ fn subExpression(self: *Parser, bytes: []const u8, offset: usize) Error!?*ast.Ex
 }
 
 /// The offset of a `:` in an f-string hole that sits outside any
-/// string literal and any bracket — the shape a Python format
+/// string literal or grouping delimiter — the shape a Python format
 /// specifier has, and one no Luce expression ever has.
 /// Where a hole's format spec begins, or null when it has none.
 ///
@@ -1219,9 +1260,9 @@ fn subExpression(self: *Parser, bytes: []const u8, offset: usize) Error!?*ast.Ex
 /// tail rarely even lexes, so it was caught before the lexer could
 /// call it a malformed expression.  It is the feature now
 /// (docs/NUMERICS.md §8), and this is the same scan: a colon *inside*
-/// brackets belongs to whatever opened them, which is what keeps
-/// `f"{s[1:3]}"` a slice and `f"{m[k]}"` a lookup, and a colon inside
-/// a string is text.
+/// grouping belongs to whatever opened it, which is what keeps
+/// `f"{s[1:3]}"` a slice, `f"{copy {"a": 1}}"` a map, and a colon inside a
+/// string as text.
 fn topLevelColon(bytes: []const u8) ?usize {
     var brackets: usize = 0;
     var index: usize = 0;
@@ -1234,8 +1275,8 @@ fn topLevelColon(bytes: []const u8) ?usize {
                     index += 1;
                 }
             },
-            '(', '[' => brackets += 1,
-            ')', ']' => brackets -|= 1,
+            '(', '[', '{' => brackets += 1,
+            ')', ']', '}' => brackets -|= 1,
             ':' => if (brackets == 0) return index,
             else => {},
         }

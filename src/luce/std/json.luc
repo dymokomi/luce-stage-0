@@ -111,24 +111,24 @@
 # RFC 8259 §2: the six structural characters, the two quoting bytes,
 # and nothing else in this module is written as a bare number.
 
-private let quote_byte: byte = 34
-private let backslash: byte = 92
-private let brace_open: byte = 123
-private let brace_close: byte = 125
-private let bracket_open: byte = 91
-private let bracket_close: byte = 93
-private let colon: byte = 58
-private let comma: byte = 44
-private let minus: byte = 45
-private let plus: byte = 43
-private let point: byte = 46
-private let digit_zero: byte = 48
-private let digit_nine: byte = 57
+private const quote_byte: byte = 34
+private const backslash: byte = 92
+private const brace_open: byte = 123
+private const brace_close: byte = 125
+private const bracket_open: byte = 91
+private const bracket_close: byte = 93
+private const colon: byte = 58
+private const comma: byte = 44
+private const minus: byte = 45
+private const plus: byte = 43
+private const point: byte = 46
+private const digit_zero: byte = 48
+private const digit_nine: byte = 57
 
 # RFC 8259 §9 leaves the limit to the parser; this one is loom's own
 # call-depth policy, so every document this module accepts is a
 # document a recursive Luce function can walk.
-private let max_depth = 128
+private const max_depth = 128
 
 # --- what a value is -------------------------------------------------
 

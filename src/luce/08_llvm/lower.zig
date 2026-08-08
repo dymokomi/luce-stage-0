@@ -22,14 +22,14 @@
 //! Each Luce function becomes an `internal` LLVM function
 //!
 //! ```llvm
-//! define internal i1 @"luce.3.gcd"(ptr %host, ptr %rt, i64 %depth, i64 %0, i64 %1, ptr %out)
+//! define internal i32 @"luce.3.gcd"(ptr %host, ptr %rt, i64 %depth, i64 %0, i64 %1, ptr %out)
 //! ```
 //!
-//! whose `i1` result is the **trapped** flag: true means the program is
-//! unwinding, and the caller must return true in turn without reading
-//! `%out`.  Traps in Luce are fatal and uncatchable, so the flag only
-//! ever travels one way.  A returned value is written through `%out`,
-//! which is absent when the function returns nothing.
+//! whose `i32` result is the **outcome**: zero returned, one trapped,
+//! and two raised a catchable Luce error.  A caller branches before
+//! reading `%out`; traps unwind, while an error reaches `try`/`catch`.
+//! A returned value is written through `%out`, which is absent when
+//! the function returns nothing.
 //!
 //! That convention is internal — `internal` linkage, no stability
 //! promise — and it was chosen over the zero-cost alternative (a
@@ -38,7 +38,7 @@
 //! docs/CODEGEN.md names as a required target.
 //!
 //! `luce_main` (see `abi.zig`) is the one exported wrapper: it opens a
-//! runtime, calls the entry function, and turns the flag into a status
+//! runtime, calls the entry function, and turns the outcome into a status
 //! code.
 //!
 //! Locals live in entry-block `alloca`s that LLVM's mem2reg promotes.
@@ -90,6 +90,7 @@ const builtin = @import("builtin");
 const mir = @import("../06_mir.zig");
 const optimize = @import("../07_optimize.zig");
 const loops = @import("loops.zig");
+const roots = @import("roots.zig");
 const runtime = @import("../runtime.zig");
 const types = @import("../support/types.zig");
 const abi = @import("abi.zig");
@@ -284,6 +285,16 @@ const Module = struct {
     /// (docs/FUNCTIONS.md D2, D3).
     function_table: ?Builder.Variable.Index = null,
     function_names: ?Builder.Variable.Index = null,
+
+    /// The eager program-root builder shared by `luce_main` and every
+    /// worker runtime.  Absent when reachability pruning left no
+    /// container constants, which keeps the old prologue and all six
+    /// materialization services out of such a module entirely.
+    constant_materializer: ?Builder.Function.Index = null,
+    /// Unique suffix for private `Value` runs that represent folded
+    /// struct atoms before `luce_rt_own_storage` copies them into one
+    /// runtime's storage.
+    constant_value_serial: u32 = 0,
 
     /// The zero value of each struct layout, as a pointer to a private
     /// constant run of `Value`s.  Built on first use, shared by every
@@ -634,9 +645,11 @@ const Module = struct {
     // -- what the artifact says about itself -----------------------------
 
     /// The constant table a trap's call trace is resolved through: one
-    /// entry per Luce function, in program order, holding its name, the
-    /// file it came from, and one `line:column` per instruction
-    /// (`runtime/trace.zig`).  Answers a pointer to the table.
+    /// entry per Luce function, in program order, followed by one per
+    /// constant-container declaration.  A function holds one
+    /// `line:column` per instruction; a declaration holds its one
+    /// allocation origin (`runtime/trace.zig`).  Answers a pointer to
+    /// the table.
     ///
     /// A `--release` program was stripped before it got here, so its
     /// entries carry names and no origins — which is exactly the
@@ -657,6 +670,20 @@ const Module = struct {
                 try self.builder.intConst(.i64, function.source.len),
                 try self.originTable(function, index),
                 try self.builder.intConst(.i64, function.origins.len),
+            }));
+        }
+        for (self.program.container_constants, 0..) |constant, index| {
+            const stripped = constant.source.len == 0;
+            try entries.append(self.gpa, try self.builder.structConst(info_type, &.{
+                try self.textBytes(constant.name),
+                try self.builder.intConst(.i64, constant.name.len),
+                try self.textBytes(constant.source),
+                try self.builder.intConst(.i64, constant.source.len),
+                if (stripped)
+                    try self.builder.nullConst(.ptr)
+                else
+                    try self.constantOrigin(constant, index),
+                try self.builder.intConst(.i64, @intFromBool(!stripped)),
             }));
         }
 
@@ -699,6 +726,37 @@ const Module = struct {
         );
         try variable.setInitializer(
             try self.builder.arrayConst(run_type, places.items),
+            self.builder,
+        );
+        variable.setMutability(.constant, self.builder);
+        variable.ptrConst(self.builder).global.setLinkage(.private, self.builder);
+        return variable.toConst(self.builder);
+    }
+
+    /// A constant declaration's sole allocation origin.  Unlike a
+    /// function's instruction table this is always exactly one entry
+    /// in a debug artifact; stripping clears both source and origin,
+    /// so the caller omits the global altogether in release output.
+    fn constantOrigin(
+        self: *Module,
+        constant: mir.ContainerConstant,
+        index: usize,
+    ) Error!Builder.Constant {
+        const origin_type = try self.builder.structType(.normal, &.{ .i32, .i32 });
+        const run_type = try self.builder.arrayType(1, origin_type);
+        const variable = try self.builder.addVariable(
+            try self.builder.strtabStringFmt("luce.origins.constant.{d}", .{index}),
+            run_type,
+            .default,
+        );
+        try variable.setInitializer(
+            try self.builder.arrayConst(run_type, &.{try self.builder.structConst(
+                origin_type,
+                &.{
+                    try self.builder.intConst(.i32, constant.origin.line),
+                    try self.builder.intConst(.i32, constant.origin.column),
+                },
+            )}),
             self.builder,
         );
         variable.setMutability(.constant, self.builder);
@@ -887,6 +945,142 @@ const Module = struct {
         });
     }
 
+    /// One folded atom as the borrowed `runtime.Value` the
+    /// materializer hands to `luce_rt_own_storage`.  The folded union
+    /// carries a number at its widest family member; `wanted` supplies
+    /// the storage width and therefore the exact runtime tag, just as
+    /// an ordinary MIR result type does when `Body.boxed` lowers it.
+    fn constantValue(
+        self: *Module,
+        folded: mir.ConstantValue,
+        wanted: types.Type,
+    ) Error!Builder.Constant {
+        var expected = wanted;
+        if (expected == .optional) {
+            if (folded == .absent) return self.constantBox(
+                .none,
+                0,
+                try self.builder.intConst(.i64, 0),
+                0,
+            );
+            expected = expected.optional.asType();
+        } else if (folded == .absent) {
+            return self.fail("absence outside an optional constant field");
+        }
+
+        const stored = expected.storage();
+        const tag = mir.boxTag(expected) orelse
+            return self.fail("an optional constant atom without a presence decision");
+        var form: u8 = 0;
+        var length: u64 = 0;
+        const bits: Builder.Constant = switch (folded) {
+            .boolean => |held| blk: {
+                if (stored != .boolean) return self.fail("a Boolean constant at another type");
+                break :blk try self.builder.intConst(.i64, @intFromBool(held));
+            },
+            .long => |held| blk: {
+                if (!stored.isInteger()) return self.fail("an integer constant at another type");
+                break :blk try self.builder.intConst(
+                    .i64,
+                    @as(i64, @bitCast(narrowBits(held, stored))),
+                );
+            },
+            .double => |held| blk: {
+                const raw: u64 = switch (stored) {
+                    .half => raw: {
+                        const narrowed: f16 = @floatCast(held);
+                        const word: u16 = @bitCast(narrowed);
+                        break :raw word;
+                    },
+                    .float => raw: {
+                        const narrowed: f32 = @floatCast(held);
+                        const word: u32 = @bitCast(narrowed);
+                        break :raw word;
+                    },
+                    .double => @bitCast(held),
+                    else => return self.fail("a floating constant at another type"),
+                };
+                break :blk try self.builder.intConst(.i64, @as(i64, @bitCast(raw)));
+            },
+            .string => |index| blk: {
+                if (stored != .string) return self.fail("a String constant at another type");
+                const text = self.program.constants[index];
+                form = runtime.text_outside;
+                length = text.len;
+                break :blk try self.builder.castConst(
+                    .ptrtoint,
+                    try self.textBytes(text),
+                    .i64,
+                );
+            },
+            .strukt => |held| blk: {
+                if (stored != .strukt or stored.strukt != held.layout) {
+                    return self.fail("a struct constant at another layout");
+                }
+                length = held.fields.len;
+                break :blk try self.builder.castConst(
+                    .ptrtoint,
+                    try self.constantFields(held),
+                    .i64,
+                );
+            },
+            .absent => unreachable, // answered before the type was peeled
+        };
+        return self.constantBox(tag, form, bits, length);
+    }
+
+    /// The private borrowed field run behind one folded struct atom.
+    /// `luce_rt_own_storage` recursively copies it into the runtime, so
+    /// these pointers are never retained by a run and remain constant
+    /// artifact data.
+    fn constantFields(
+        self: *Module,
+        folded: mir.ConstantValue.Struct,
+    ) Error!Builder.Constant {
+        const layout = self.program.structs[folded.layout];
+        var fields: std.ArrayList(Builder.Constant) = .empty;
+        defer fields.deinit(self.gpa);
+        for (folded.fields, layout.fields) |field, declared| {
+            try fields.append(self.gpa, try self.constantValue(field, declared.field_type));
+        }
+
+        const run_type = try self.builder.arrayType(fields.items.len, self.value_type);
+        const variable = try self.builder.addVariable(
+            try self.builder.strtabStringFmt(
+                "luce.constant.fields.{d}",
+                .{self.constant_value_serial},
+            ),
+            run_type,
+            .default,
+        );
+        self.constant_value_serial += 1;
+        try variable.setInitializer(
+            try self.builder.arrayConst(run_type, fields.items),
+            self.builder,
+        );
+        variable.setMutability(.constant, self.builder);
+        variable.ptrConst(self.builder).global.setLinkage(.private, self.builder);
+        return variable.toConst(self.builder);
+    }
+
+    /// Assemble the C layout of one `runtime.Value` constant.
+    fn constantBox(
+        self: *Module,
+        tag: runtime.Tag,
+        form: u8,
+        bits: Builder.Constant,
+        length: u64,
+    ) Error!Builder.Constant {
+        const head = try self.builder.arrayType(8 - runtime.inline_at, .i8);
+        return self.builder.structConst(self.value_type, &.{
+            try self.builder.intConst(.i8, @intFromEnum(tag)),
+            try self.builder.intConst(.i8, form),
+            try self.builder.zeroInitConst(head),
+            bits,
+            try self.builder.intConst(.i64, @as(i64, @bitCast(length))),
+        });
+    }
+
     // -- construction --------------------------------------------------
 
     fn build(self: *Module) Error!void {
@@ -922,6 +1116,10 @@ const Module = struct {
             self.functions[index] = declared;
         }
 
+        if (self.program.container_constants.len != 0) {
+            try self.lowerConstantMaterializer();
+        }
+
         self.spawned = try self.collectSpawned();
         if (self.spawned.len != 0) try self.lowerWorkerEntry();
 
@@ -930,6 +1128,335 @@ const Module = struct {
         }
         try self.lowerEntry();
         try self.describeArtifact();
+    }
+
+    /// `i32 @luce.constants(ptr rt)` — eagerly build every reachable
+    /// constant-container row in this runtime and publish it under the
+    /// program root (CONSTANTS.md R-C).
+    ///
+    /// The same helper is called once by `luce_main` and once by every
+    /// worker trampoline, preserving THREADS.md's share-nothing rule.
+    /// Every fallible edge converges on one cleanup: discard the one
+    /// loose construction, abort earlier roots, record the declaration
+    /// whose allocation failed, and answer the ordinary trapped outcome.
+    fn lowerConstantMaterializer(self: *Module) Error!void {
+        std.debug.assert(self.program.container_constants.len != 0);
+        const signature_type = try self.builder.fnType(.i32, &.{.ptr}, .normal);
+        const declared = try self.builder.addFunction(
+            signature_type,
+            try self.builder.strtabString("luce.constants"),
+            .default,
+        );
+        declared.setLinkage(.internal, self.builder);
+        self.constant_materializer = declared;
+
+        var wip: Builder.WipFunction = try .init(self.builder, .{
+            .function = declared,
+            .strip = true,
+        });
+        defer wip.deinit();
+
+        const entry = try wip.block(0, "entry");
+        const failed = try wip.block(self.materializerFailureEdges(), "constants.failed");
+        wip.cursor = .{ .block = entry };
+        const rt = wip.arg(0);
+        const value_alignment = Builder.Alignment.fromByteUnits(@alignOf(runtime.Value));
+        const number_alignment = Builder.Alignment.fromByteUnits(@alignOf(i64));
+        const index_alignment = Builder.Alignment.fromByteUnits(@alignOf(u32));
+        const target = try wip.alloca(
+            .normal,
+            self.value_type,
+            .none,
+            value_alignment,
+            .default,
+            "constant.target",
+        );
+        const source = try wip.alloca(
+            .normal,
+            self.value_type,
+            .none,
+            value_alignment,
+            .default,
+            "constant.source",
+        );
+        const owned = try wip.alloca(
+            .normal,
+            self.value_type,
+            .none,
+            value_alignment,
+            .default,
+            "constant.owned",
+        );
+        const subscript = try wip.alloca(
+            .normal,
+            self.value_type,
+            .none,
+            value_alignment,
+            .default,
+            "constant.subscript",
+        );
+        const dimension = try wip.alloca(
+            .normal,
+            .i64,
+            .none,
+            number_alignment,
+            .default,
+            "constant.dimension",
+        );
+        const current = try wip.alloca(
+            .normal,
+            .i32,
+            .none,
+            index_alignment,
+            .default,
+            "constant.current",
+        );
+        const none = try self.zeroField(.none);
+        _ = try wip.store(.normal, none.toValue(), target, value_alignment);
+        _ = try wip.store(
+            .normal,
+            try self.builder.intValue(.i32, 0),
+            current,
+            index_alignment,
+        );
+
+        try self.materializerChecked(&wip, failed, .luce_rt_constants_begin, &.{
+            rt,
+            try self.builder.intValue(.i32, self.program.container_constants.len),
+        });
+
+        for (self.program.container_constants, 0..) |constant, index| {
+            _ = try wip.store(
+                .normal,
+                try self.builder.intValue(.i32, index),
+                current,
+                index_alignment,
+            );
+            _ = try wip.store(.normal, none.toValue(), target, value_alignment);
+
+            const descriptor = self.program.heap_types[constant.heap];
+            switch (descriptor) {
+                .list => |element| {
+                    _ = try wip.store(
+                        .normal,
+                        (try self.zeroField(element)).toValue(),
+                        source,
+                        value_alignment,
+                    );
+                    try self.materializerChecked(&wip, failed, .luce_rt_new_list, &.{
+                        rt,
+                        source,
+                        target,
+                    });
+                    for (constant.payload.sequence) |folded| {
+                        const held = try self.materializerValue(
+                            &wip,
+                            failed,
+                            rt,
+                            source,
+                            owned,
+                            folded,
+                            element,
+                        );
+                        try self.materializerChecked(&wip, failed, .luce_rt_append, &.{
+                            rt,
+                            target,
+                            held,
+                        });
+                    }
+                },
+                .array => |shape| {
+                    _ = try wip.store(
+                        .normal,
+                        try self.builder.intValue(.i64, constant.payload.sequence.len),
+                        dimension,
+                        number_alignment,
+                    );
+                    _ = try wip.store(
+                        .normal,
+                        (try self.zeroField(shape.element)).toValue(),
+                        source,
+                        value_alignment,
+                    );
+                    try self.materializerChecked(&wip, failed, .luce_rt_new_array, &.{
+                        rt,
+                        dimension,
+                        try self.builder.intValue(.i64, 1),
+                        source,
+                        target,
+                    });
+                    for (constant.payload.sequence, 0..) |folded, at| {
+                        _ = try wip.store(
+                            .normal,
+                            (try self.constantValue(.{ .long = @intCast(at) }, .long)).toValue(),
+                            subscript,
+                            value_alignment,
+                        );
+                        const held = try self.materializerValue(
+                            &wip,
+                            failed,
+                            rt,
+                            source,
+                            owned,
+                            folded,
+                            shape.element,
+                        );
+                        try self.materializerChecked(&wip, failed, .luce_rt_index_set, &.{
+                            rt,
+                            target,
+                            subscript,
+                            try self.builder.intValue(.i64, 1),
+                            held,
+                        });
+                    }
+                },
+                .map => |pair| {
+                    try self.materializerChecked(&wip, failed, .luce_rt_new_map, &.{
+                        rt,
+                        target,
+                    });
+                    for (constant.payload.map) |entry_value| {
+                        _ = try wip.store(
+                            .normal,
+                            (try self.constantValue(entry_value.key, pair.key)).toValue(),
+                            subscript,
+                            value_alignment,
+                        );
+                        const held = try self.materializerValue(
+                            &wip,
+                            failed,
+                            rt,
+                            source,
+                            owned,
+                            entry_value.value,
+                            pair.value,
+                        );
+                        try self.materializerChecked(&wip, failed, .luce_rt_index_set, &.{
+                            rt,
+                            target,
+                            subscript,
+                            try self.builder.intValue(.i64, 1),
+                            held,
+                        });
+                    }
+                },
+                .builder, .file, .task => return self.fail(
+                    "a non-container in the constant-container pool",
+                ),
+            }
+            try self.materializerChecked(&wip, failed, .luce_rt_constant_publish, &.{
+                rt,
+                try self.builder.intValue(.i32, index),
+                target,
+            });
+        }
+
+        _ = try self.callService(&wip, .luce_rt_constants_finish, .void, &.{rt}, "");
+        _ = try wip.ret(try self.builder.intValue(.i32, outcome_ok));
+
+        wip.cursor = .{ .block = failed };
+        _ = try self.callService(&wip, .luce_rt_discard_loose, .void, &.{ rt, target }, "");
+        _ = try self.callService(&wip, .luce_rt_constants_abort, .void, &.{rt}, "");
+        const declaration = try wip.bin(
+            .add,
+            try wip.load(.normal, .i32, current, index_alignment, "constant.failed.at"),
+            try self.builder.intValue(.i32, self.program.functions.len),
+            "constant.declaration",
+        );
+        _ = try self.callService(&wip, .luce_rt_unwound, .void, &.{
+            rt,
+            declaration,
+            try self.builder.intValue(.i32, 0),
+        }, "");
+        _ = try wip.ret(try self.builder.intValue(.i32, outcome_trapped));
+        try wip.finish();
+    }
+
+    /// Number of branches that converge on the materializer's one
+    /// cleanup block: `begin`, one create and one publish per row, one
+    /// store per atom, and an additional storage copy only for the atom
+    /// kinds that own bytes or a struct run.
+    fn materializerFailureEdges(self: *const Module) u32 {
+        var count: usize = 1;
+        for (self.program.container_constants) |constant| {
+            count += 2;
+            switch (self.program.heap_types[constant.heap]) {
+                .list => |element| for (constant.payload.sequence) |_| {
+                    count += 1 + @as(usize, @intFromBool(constantOwnsStorage(element)));
+                },
+                .array => |shape| for (constant.payload.sequence) |_| {
+                    count += 1 + @as(usize, @intFromBool(constantOwnsStorage(shape.element)));
+                },
+                .map => |pair| for (constant.payload.map) |_| {
+                    count += 1 + @as(usize, @intFromBool(constantOwnsStorage(pair.value)));
+                },
+                .builder, .file, .task => {},
+            }
+        }
+        return @intCast(count);
+    }
+
+    fn constantOwnsStorage(of: types.Type) bool {
+        return switch (of) {
+            .string, .strukt => true,
+            .optional => |payload| constantOwnsStorage(payload.asType()),
+            else => false,
+        };
+    }
+
+    /// Store one folded atom in `source`, copying it through the
+    /// runtime only when its type owns storage.  Scalars pass their box
+    /// straight to the consuming container call, avoiding a C call per
+    /// CRC-table entry while preserving the ordinary store contract.
+    fn materializerValue(
+        self: *Module,
+        wip: *Builder.WipFunction,
+        failed: BlockIndex,
+        rt: Builder.Value,
+        source: Builder.Value,
+        owned: Builder.Value,
+        folded: mir.ConstantValue,
+        of: types.Type,
+    ) Error!Builder.Value {
+        _ = try wip.store(
+            .normal,
+            (try self.constantValue(folded, of)).toValue(),
+            source,
+            Builder.Alignment.fromByteUnits(@alignOf(runtime.Value)),
+        );
+        if (!constantOwnsStorage(of)) return source;
+        try self.materializerChecked(wip, failed, .luce_rt_own_storage, &.{
+            rt,
+            source,
+            owned,
+        });
+        return owned;
+    }
+
+    /// Call one fallible materialization service and continue in a new
+    /// block only when it returned zero.  The failed edge owns all
+    /// cleanup, so no call site can forget half of it.
+    fn materializerChecked(
+        self: *Module,
+        wip: *Builder.WipFunction,
+        failed: BlockIndex,
+        which: Service,
+        arguments: []const Builder.Value,
+    ) Error!void {
+        const result = try self.callService(wip, which, .i32, arguments, "constant.result");
+        const next = try wip.block(1, "constant.next");
+        _ = try wip.brCond(
+            try wip.icmp(
+                .ne,
+                result,
+                try self.builder.intValue(.i32, 0),
+                "constant.failed",
+            ),
+            failed,
+            next,
+            .else_likely,
+        );
+        wip.cursor = .{ .block = next };
     }
 
     /// Every function some `spawn` names, ascending and without
@@ -995,6 +1522,38 @@ const Module = struct {
         const arguments = wip.arg(3);
         const out = wip.arg(5);
         const depth = wip.arg(6);
+
+        // A worker owns a runtime of its own (THREADS.md D1), so it
+        // owns a program-root table of its own too.  The generated
+        // helper is absent when pruning left no pool, and this branch
+        // therefore emits literally nothing in the common case.
+        if (self.constant_materializer) |materializer| {
+            const outcome = try wip.call(
+                .normal,
+                Builder.CallConv.default,
+                .none,
+                materializer.typeOf(self.builder),
+                materializer.toValue(self.builder),
+                &.{started},
+                "constants.outcome",
+            );
+            const failed = try wip.block(1, "constants.failed");
+            const dispatching = try wip.block(1, "constants.ready");
+            _ = try wip.brCond(
+                try wip.icmp(
+                    .ne,
+                    outcome,
+                    try self.builder.intValue(.i32, outcome_ok),
+                    "constants.failed",
+                ),
+                failed,
+                dispatching,
+                .else_likely,
+            );
+            wip.cursor = .{ .block = failed };
+            _ = try wip.ret(try self.builder.intValue(.i32, outcome_trapped));
+            wip.cursor = .{ .block = dispatching };
+        }
 
         // A function index this module never spawns cannot arrive here
         // — `luce_rt_spawn` is only ever called with one of `spawned` —
@@ -1158,8 +1717,11 @@ const Module = struct {
             .normal,
             &.{ .i64, .i64, .i64, .i32, .i32, .i32, .i32, name_type },
         );
-        const debug_build = for (self.program.functions) |function| {
+        const debug_functions = for (self.program.functions) |function| {
             if (function.origins.len != 0) break true;
+        } else false;
+        const debug_build = debug_functions or for (self.program.container_constants) |constant| {
+            if (constant.source.len != 0) break true;
         } else false;
         const initializer = try self.builder.structConst(tag_type, &.{
             try self.builder.intConst(.i64, @as(i64, @bitCast(artifact.magic))),
@@ -1484,7 +2046,13 @@ const Module = struct {
             .ptr,
             &.{
                 described.toValue(),
-                try self.builder.intValue(.i64, self.program.functions.len),
+                try self.builder.intValue(
+                    .i64,
+                    @as(
+                        i64,
+                        @intCast(self.program.functions.len + self.program.container_constants.len),
+                    ),
+                ),
             },
             "rt",
         );
@@ -1502,6 +2070,49 @@ const Module = struct {
         wip.cursor = .{ .block = empty };
         _ = try wip.ret(try self.builder.intValue(.i32, @intFromEnum(runtime.Status.exhausted)));
         wip.cursor = .{ .block = running };
+
+        // Constant containers are the program root of this runtime and
+        // exist before the first instruction of `main`.  Keep the old
+        // block graph exactly when the pruned pool is empty; otherwise
+        // the failed prologue becomes one more predecessor of `ended`,
+        // where the ordinary trap report, status, and close already
+        // live.
+        var constants_ending: ?BlockIndex = null;
+        if (self.constant_materializer) |materializer| {
+            const ending = try wip.block(if (takes_arguments) 4 else 3, "ended");
+            constants_ending = ending;
+            const materialized = try wip.call(
+                .normal,
+                Builder.CallConv.default,
+                .none,
+                materializer.typeOf(self.builder),
+                materializer.toValue(self.builder),
+                &.{started},
+                "constants.outcome",
+            );
+            const failed = try wip.block(1, "constants.failed");
+            const installing = try wip.block(1, "constants.ready");
+            _ = try wip.brCond(
+                try wip.icmp(
+                    .ne,
+                    materialized,
+                    try self.builder.intValue(.i32, outcome_ok),
+                    "constants.failed",
+                ),
+                failed,
+                installing,
+                .else_likely,
+            );
+            wip.cursor = .{ .block = failed };
+            _ = try wip.store(
+                .normal,
+                try self.builder.intValue(.i32, outcome_trapped),
+                outcome_slot,
+                word,
+            );
+            _ = try wip.br(ending);
+            wip.cursor = .{ .block = installing };
+        }
 
         // The host's handle channel, handed over once (docs/BYTES.md
         // R2).  It goes into `libluce_rt` rather than being read at
@@ -1550,7 +2161,8 @@ const Module = struct {
         // Two ways in, or three when the command line has to be built:
         // that build is the one thing between the depth check and the
         // call that can run out of memory.
-        const ending = try wip.block(if (takes_arguments) 3 else 2, "ended");
+        const ending = constants_ending orelse
+            try wip.block(if (takes_arguments) 3 else 2, "ended");
         _ = try wip.brCond(
             try wip.icmp(.slt, limit, try self.builder.intValue(.i64, 1), "no.frames"),
             refused,
@@ -1985,6 +2597,10 @@ const Body = struct {
     produced: []Produced = &.{},
     /// One entry-block `alloca` per Luce local.
     local_slots: []Builder.Value = &.{},
+    /// Whether each heap register may name an immutable program root,
+    /// derived from this final MIR rather than trusted from the front
+    /// end (`roots.zig`).
+    roots: roots.Plan = .{},
     /// The first LLVM block of each IR block.  An IR block that
     /// contains a checked operation continues into further LLVM blocks,
     /// which no jump ever targets.
@@ -2012,6 +2628,7 @@ const Body = struct {
         const gpa = self.module.gpa;
         gpa.free(self.produced);
         gpa.free(self.local_slots);
+        self.roots.deinit(gpa);
         gpa.free(self.blocks);
         self.views.deinit(gpa);
         self.view_bounds.deinit(gpa);
@@ -2042,6 +2659,7 @@ const Body = struct {
         @memset(self.produced, .{});
         self.local_slots = try gpa.alloc(Builder.Value, function.locals.len);
         @memset(self.local_slots, .none);
+        self.roots = try roots.plan(gpa, function);
         self.blocks = try gpa.alloc(BlockIndex, function.blocks.len);
 
         if (function.return_type != .none) {
@@ -2113,6 +2731,7 @@ const Body = struct {
                 .const_long,
                 .const_double,
                 .const_string,
+                .const_container,
                 .const_function,
                 .local_get,
                 .local_set,
@@ -3149,6 +3768,10 @@ const Body = struct {
     const ElementView = struct {
         /// The MIR register whose handle this resolves.
         register: mir.Register,
+        /// The resolved object-table row.  Inline mutations inspect its
+        /// owner after the ordinary null/stale checks, matching
+        /// `Runtime.resolveMutable` without giving up the scalar path.
+        row: Builder.Value,
         /// `Object.dims.ptr`, or `.none` for a List and for a rank-1
         /// array, neither of which reads it: their one bound is
         /// `Object.elements.count`, a word in the row rather than a
@@ -3243,6 +3866,7 @@ const Body = struct {
     /// One resolution the preheader of a loop already made: the row's
     /// three facts, read once for the whole loop.
     const Hoisted = struct {
+        row: Builder.Value = .none,
         generation: Builder.Value = .none,
         dims: Builder.Value = .none,
         elements: Builder.Value = .none,
@@ -3302,6 +3926,7 @@ const Body = struct {
 
             var made: Hoisted = .{
                 .made = true,
+                .row = row,
                 .bounds_at = @intCast(self.hoist_bounds.items.len),
                 .generation = try self.rowLoad(
                     .normal,
@@ -3382,6 +4007,7 @@ const Body = struct {
             try self.checkOccupant(self.hoisted[index].generation, parts.generation);
             const made: ElementView = .{
                 .register = register,
+                .row = self.hoisted[index].row,
                 .dims = self.hoisted[index].dims,
                 .elements = self.hoisted[index].elements,
                 .bounds_at = @intCast(self.view_bounds.items.len),
@@ -3434,6 +4060,7 @@ const Body = struct {
         }
         const made: ElementView = .{
             .register = register,
+            .row = row,
             .dims = dims,
             .elements = try self.rowLoad(
                 .normal,
@@ -3447,6 +4074,39 @@ const Body = struct {
         };
         try self.views.append(gpa, made);
         return made;
+    }
+
+    /// Reject a program-root row before an inline mutation.  The row
+    /// has already passed the null and generation checks, so this is
+    /// exactly the owner half of `Runtime.resolveMutable`: callers
+    /// through an unknown parameter alias cannot mutate a constant
+    /// merely because their scalar element type selected generated
+    /// storage instead of a runtime container call.
+    fn checkMutableRow(
+        self: *Body,
+        target: mir.Register,
+        row: Builder.Value,
+    ) Error!void {
+        // `roots` proves this from the final MIR, so a decoded module
+        // cannot forge a trusted bit.  A fresh row can never become a
+        // program root after the constants prologue has finished.
+        if (!self.roots.mayProgramRoot(target)) return;
+        const owner = try self.rowLoad(
+            .normal,
+            .i32,
+            try self.byteOffset(row, runtime.layout.owner_kind, "owner.at"),
+            Builder.Alignment.fromByteUnits(@alignOf(u32)),
+            "owner",
+        );
+        try self.check(
+            try self.wip.icmp(
+                .eq,
+                owner,
+                try self.module.builder.intValue(.i32, runtime.layout.owner_program),
+                "immutable",
+            ),
+            .immutable_object,
+        );
     }
 
     /// The address of the element `indices` names, bound-checked axis
@@ -3593,6 +4253,7 @@ const Body = struct {
         const one = try builder.intValue(.i64, 1);
 
         const row = try self.resolveRow(target);
+        try self.checkMutableRow(target, row);
         const count_at = try self.byteOffset(row, runtime.layout.elements_count, "count.at");
         const count = try self.rowLoad(.normal, .i64, count_at, value_alignment, "count");
         const capacity = try self.rowLoad(
@@ -4346,6 +5007,29 @@ const Body = struct {
             .const_string => |constant| {
                 const text = self.module.program.constants[constant];
                 self.produced[register].value = (try self.module.textConstant(text)).toValue();
+            },
+            // A constant-container instruction is only a borrowed load
+            // from this runtime's program-root table.  The prologue
+            // materialized the row before any Luce instruction ran,
+            // and MIR verification proved both the slot and its heap
+            // type, so this operation cannot trap.
+            .const_container => |constant| {
+                const out = try self.scratch(
+                    self.module.value_type,
+                    value_alignment,
+                    "constant.out",
+                );
+                _ = try self.callRuntime(.luce_rt_constant_load, .void, &.{
+                    self.runtime,
+                    try self.module.builder.intValue(.i32, constant),
+                    out,
+                }, "");
+                self.produced[register].value = try self.unboxed(
+                    self.function.result_types[register],
+                    out,
+                    "constant.handle",
+                );
+                self.produced[register].box = out;
             },
             // A function value is the index of the function it names,
             // held as the `i32` a `.function` register is
@@ -5844,6 +6528,7 @@ const Body = struct {
                 if (self.elementShape(of[0])) |shape| {
                     if (ownsNothing(shape.element)) {
                         const view = try self.elementView(of[0], shape);
+                        try self.checkMutableRow(of[0], view.row);
                         const address = try self.elementAddress(
                             view,
                             shape.element,

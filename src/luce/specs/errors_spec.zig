@@ -527,7 +527,7 @@ test "luce.sema.convert: an f-string hole must be a scalar" {
     , "luce.sema.convert");
 }
 
-test "luce.parse.top: only func/struct/let/import at file scope" {
+test "luce.parse.top: only import/const/struct/enum/func at file scope" {
     try expectRejected("fn main():\n    return\n", "luce.parse.top");
     try expectRejected("var counter = 0\n", "luce.parse.top");
 }
@@ -597,7 +597,7 @@ test "a matched pair of typographic quotes is one mistake" {
 }
 
 test "luce.parse.expected: a malformed binding name is reported at the name" {
-    try expectRejectedAt("let 3 = 4\n", "luce.parse.expected", 1, 5);
+    try expectRejectedAt("func main():\n    let 3 = 4\n", "luce.parse.expected", 2, 9);
 }
 
 test "luce.parse.precedence: 'not' in front of a comparison must be parenthesized" {
@@ -1758,14 +1758,14 @@ test "luce.sema.duplicate: a duplicate function points at the first" {
 
 test "luce.sema.duplicate: a duplicate constant points at the first" {
     try expectOnlySayingAt(
-        \\let k = 1
+        \\const k = 1
         \\
-        \\let k = 2
+        \\const k = 2
         \\
         \\func main():
         \\    return
         \\
-    , "luce.sema.duplicate", "duplicate name k; the first is on line 1", 3, 5);
+    , "luce.sema.duplicate", "duplicate name k; the first is on line 1", 3, 7);
 }
 
 test "luce.sema.duplicate: a redeclared local points at the first" {
@@ -2043,18 +2043,18 @@ test "luce.sema.type: a narrowing argument earns the same sentence" {
 
 test "luce.sema.const: a folded narrowing is range-checked at its own width" {
     try expectOnlySayingAt(
-        \\let wide: long = 3000000000
-        \\let narrowed = int(wide)
+        \\const wide: long = 3000000000
+        \\const narrowed = int(wide)
         \\
         \\func main():
         \\    print(string(narrowed))
         \\
-    , "luce.sema.const", "constant conversion out of range", 2, 16);
+    , "luce.sema.const", "constant conversion out of range", 2, 18);
     // One below the top fits, so the check is the boundary and not a
     // refusal of the whole conversion.
     try expectCompiles(
-        \\let wide: long = 2147483647
-        \\let narrowed = int(wide)
+        \\const wide: long = 2147483647
+        \\const narrowed = int(wide)
         \\
         \\func main():
         \\    print(string(narrowed))
@@ -2064,19 +2064,19 @@ test "luce.sema.const: a folded narrowing is range-checked at its own width" {
 
 test "luce.sema.const: a folded float-to-integer is range-checked at its own width" {
     try expectOnlySayingAt(
-        \\let big: double = 3.0e9
-        \\let narrowed = int(big)
+        \\const big: double = 3.0e9
+        \\const narrowed = int(big)
         \\
         \\func main():
         \\    print(string(narrowed))
         \\
-    , "luce.sema.const", "constant conversion out of range", 2, 16);
+    , "luce.sema.const", "constant conversion out of range", 2, 18);
     // The same value reaches a `long` without complaint, which is what
     // makes the message above a statement about the width rather than
     // about the number.
     try expectCompiles(
-        \\let big: double = 3.0e9
-        \\let widened = long(big)
+        \\const big: double = 3.0e9
+        \\const widened = long(big)
         \\
         \\func main():
         \\    print(string(widened))
@@ -2432,12 +2432,12 @@ test "luce.sema.const: a folded constant says the same thing as a body" {
         \\    b: long
         \\    c: long
         \\
-        \\let origin = P(a = 1)
+        \\const origin = P(a = 1)
         \\
         \\func main():
         \\    return
         \\
-    , "luce.sema.const", "P is missing fields b and c", 6, 14);
+    , "luce.sema.const", "P is missing fields b and c", 6, 16);
 }
 
 test "luce.sema.new: new builds only the heap types" {
@@ -2596,8 +2596,8 @@ test "luce.sema.struct: the fix the cycle diagnostic names actually compiles" {
     }
 }
 
-test "luce.sema.const: a top-level let is a constant, not a computation" {
-    try expectRejected("let bad = new list(long)\n\nfunc main():\n    return\n", "luce.sema.const");
+test "luce.sema.const: a top-level const is not a computation" {
+    try expectRejected("const bad = new list(long)\n\nfunc main():\n    return\n", "luce.sema.const");
 }
 
 test "luce.sema.host: host builtins are gated off by default" {
@@ -2812,9 +2812,9 @@ test "luce.sema.type: the bit set works on integers, said with the fact that ref
 test "luce.sema.const: a constant shift with a bad count is the trap's compile-time face" {
     // docs/BITWISE.md D6: the folder answers what a run answers, and
     // a count out of range cannot quietly fold to anything.
-    try expectRejected("let bad = 1 << 64\n\nfunc main():\n    return\n", "luce.sema.const");
-    try expectRejected("let bad = 1 << -1\n\nfunc main():\n    return\n", "luce.sema.const");
-    try expectCompiles("let fine: long = 1 << 62\n\nfunc main():\n    let x = fine\n    if x > 0:\n        return\n");
+    try expectRejected("const bad = 1 << 64\n\nfunc main():\n    return\n", "luce.sema.const");
+    try expectRejected("const bad = 1 << -1\n\nfunc main():\n    return\n", "luce.sema.const");
+    try expectCompiles("const fine: long = 1 << 62\n\nfunc main():\n    let x = fine\n    if x > 0:\n        return\n");
 }
 
 test "luce.parse.expression: '&&' and '||' name the Luce keyword" {
@@ -3314,15 +3314,15 @@ test "luce.sema.const: a call is not a default" {
     , "luce.sema.const", "a default is a constant: cost(…) is a call");
 }
 
-test "luce.sema.const: an object is not a default" {
+test "luce.sema.const: a runtime-created object is not a default" {
     try expectSaying(
-        \\func f(xs: list(long) = [1]):
+        \\func f(xs: list(long) = new list(long)):
         \\    return
         \\
         \\func main():
         \\    return
         \\
-    , "luce.sema.const", "a default is a constant, and an object is not one");
+    , "luce.sema.const", "a default must fold at compile time; new, slicing, and indexing belong in a function");
 }
 
 test "luce.sema.const: a default cannot read an earlier parameter" {
@@ -3344,7 +3344,7 @@ test "luce.sema.own: a give parameter has no default" {
         \\func main():
         \\    return
         \\
-    , "luce.sema.own", "a give parameter takes ownership of an object, and an object is never a default");
+    , "luce.sema.own", "a give parameter takes ownership, so its default cannot be a shared constant container");
 }
 
 test "luce.sema.type: a default lands at the parameter's type or is refused" {
@@ -3430,7 +3430,7 @@ test "luce.sema.own: an object-carrying field has no default" {
         \\func main():
         \\    return
         \\
-    , "luce.sema.own", "Bag.items keeps its object, and an object is never a default [OWNERSHIP.md S21, S24]");
+    , "luce.sema.own", "Bag.items keeps its object, so its default cannot be a shared object [OWNERSHIP.md S21, S24, S46]");
 }
 
 test "luce.sema.const: a field default is a constant, called or not" {
@@ -3825,7 +3825,7 @@ test "luce.sema.const: a call is not a constant" {
         \\func f() -> long:
         \\    return 1
         \\
-        \\let bad = f()
+        \\const bad = f()
         \\
         \\func main():
         \\    return
@@ -3834,33 +3834,47 @@ test "luce.sema.const: a call is not a constant" {
 }
 
 test "luce.sema.const: an unknown name is not a constant" {
-    try expectRejected("let bad = ghost\n\nfunc main():\n    return\n", "luce.sema.const");
+    try expectRejected("const bad = ghost\n\nfunc main():\n    return\n", "luce.sema.const");
 }
 
 test "luce.sema.const: a constant cannot depend on itself" {
-    try expectRejected("let bad = bad\n\nfunc main():\n    return\n", "luce.sema.const");
+    try expectRejected("const bad = bad\n\nfunc main():\n    return\n", "luce.sema.const");
 }
 
-test "luce.sema.const: a list literal is an object, not a constant" {
-    try expectRejected("let bad = [1, 2]\n\nfunc main():\n    return\n", "luce.sema.const");
+test "luce.sema.const: a constant container cannot contain another container" {
+    try expectRejected("const bad = [[1], [2]]\n\nfunc main():\n    return\n", "luce.sema.const");
 }
 
 test "luce.sema.const: a bare none is still refused — nothing says what is absent" {
-    // `let x: long? = none` folds (docs/ARGS.md D9); without the
+    // `const x: long? = none` folds (docs/ARGS.md D9); without the
     // annotation there is no type to be absent at, and the refusal
     // stands.
     try expectSaying(
-        "let bad = none\n\nfunc main():\n    return\n",
+        "const bad = none\n\nfunc main():\n    return\n",
         "luce.sema.const",
-        "none needs a place that says what it is absent of",
+        "annotate it: const name: T? = none",
     );
 }
 
 test "luce.sema.const: none refuses a place that is always there" {
     try expectSaying(
-        "let bad: long = none\n\nfunc main():\n    return\n",
+        "const bad: long = none\n\nfunc main():\n    return\n",
         "luce.sema.const",
         "long is always there; only long? is ever none",
+    );
+}
+
+test "luce.sema.const: optional fallback is a runtime operation" {
+    try expectSaying(
+        \\const missing: long? = none
+        \\const bad = missing else 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.const",
+        "else is a runtime optional operation and does not fold in a constant initializer",
     );
 }
 
@@ -3885,11 +3899,11 @@ test "luce.sema.literal: a float literal that is not finite is rejected" {
 }
 
 test "luce.sema.const: a non-finite float constant is rejected as well" {
-    try expectRejected("let a = 1e400\n\nfunc main():\n    let b = a\n", "luce.sema.const");
+    try expectRejected("const a = 1e400\n\nfunc main():\n    let b = a\n", "luce.sema.const");
 }
 
 test "luce.sema.const: ord of an empty string has no codepoint to fold" {
-    try expectRejected("let a = ord(\"\")\n\nfunc main():\n    let b = a\n", "luce.sema.const");
+    try expectRejected("const a = ord(\"\")\n\nfunc main():\n    let b = a\n", "luce.sema.const");
 }
 
 // ---------------------------------------------------------------------------
@@ -3922,7 +3936,7 @@ test "luce.sema.nesting: a flat operator chain is bounded, not overflowed" {
 }
 
 test "luce.sema.nesting: a flat chain in a constant is bounded too" {
-    const source = try longChain(testing.allocator, "let a = ", "1", 5000, "\n\nfunc main():\n    let b = a\n");
+    const source = try longChain(testing.allocator, "const a = ", "1", 5000, "\n\nfunc main():\n    let b = a\n");
     defer testing.allocator.free(source);
     try expectRejected(source, "luce.sema.nesting");
 }
@@ -4067,9 +4081,10 @@ test "luce.sema.absent: none needs somewhere to be none of" {
         \\    assert(none == none)
         \\
     , "luce.sema.absent");
-    // A constant is a value that is there.
+    // Bare none supplies no payload type; an annotated optional
+    // constant is covered by the constants surface below.
     try expectRejected(
-        \\let missing = none
+        \\const missing = none
         \\
         \\func main():
         \\    return
@@ -5239,12 +5254,27 @@ test "luce.sema.let: every assignment form refuses a let, not only the plain one
     // A file-scope constant is immutable for a different reason, and
     // says so in different words.
     try expectSaying(
-        \\let width = 80
+        \\const width = 80
         \\
         \\func main():
         \\    width = 3
         \\
-    , "luce.sema.let", "width is a file-scope constant");
+    , "luce.sema.const", "width is a file-scope constant");
+
+    // Existing-name multi-assignment performs the same preflight before
+    // the call runs and keeps constants in the constants diagnostic
+    // family rather than calling them let-bound locals.
+    try expectSaying(
+        \\func pair() -> (long, long):
+        \\    return 1, 2
+        \\
+        \\const left = 0
+        \\
+        \\func main():
+        \\    var right: long = 0
+        \\    left, right = pair()
+        \\
+    , "luce.sema.const", "left is a file-scope constant");
 }
 
 test "luce.sema.field: an unknown field is named wherever the chain meets it" {
@@ -5320,25 +5350,24 @@ test "luce.sema.type: a nested place and a compound assignment check their own t
     , "luce.sema.type", "has no compound assignment");
 }
 
-test "luce.sema.type: an empty list literal needs somewhere to learn its element from" {
-    // Three different checks, three different sentences: annotated
-    // with a list type, annotated with something else, and not
-    // annotated at all.
+test "luce.sema.type: an empty bracket literal needs a container annotation" {
+    // The same literal can build a list or a rank-1 array now, so all
+    // three contexts name the two annotations that can decide it.
     try expectSaying(
         \\func main():
         \\    var xs = []
         \\
-    , "luce.sema.type", "an empty [] needs an annotation");
+    , "luce.sema.type", "an empty [] needs a list(T) or array(T, _) annotation");
     try expectSaying(
         \\func main():
         \\    var xs: long = []
         \\
-    , "luce.sema.type", "[] builds a list, but xs is annotated long");
+    , "luce.sema.type", "an empty [] needs a list(T) or array(T, _) annotation");
     try expectSaying(
         \\func main():
         \\    let size = len([])
         \\
-    , "luce.sema.type", "an empty [] needs an annotated binding");
+    , "luce.sema.type", "an empty [] needs a list(T) or array(T, _) annotation");
 }
 
 test "luce.sema.index: every shape of index says what it will accept" {
@@ -5727,8 +5756,8 @@ test "luce.sema.struct: a struct whose fields all fell away has an empty body" {
 
 test "luce.sema.duplicate: two file-scope constants cannot share a name" {
     try expectSaying(
-        \\let width = 80
-        \\let width = 90
+        \\const width = 80
+        \\const width = 90
         \\
         \\func main():
         \\    return
@@ -6199,14 +6228,14 @@ test "luce.sema.const: a member folds, and Method(n) does not" {
         \\    stored
         \\    deflated
         \\
-        \\let chosen = Method(1)
+        \\const chosen = Method(1)
         \\
         \\func main():
         \\    return
         \\
     ,
         "luce.sema.const",
-        "Method(…) answers Method?, and a constant is always there; name the member: Method.stored",
+        "Method(…) is a runtime lookup that answers Method?; name the constant member: Method.stored",
     );
 }
 
@@ -6409,14 +6438,14 @@ test "luce.sema.method: a task has wait and nothing else" {
 }
 
 test "luce.sema.const: a constant cannot spawn" {
-    // File scope owns nothing, so it cannot own a worker: a task's
-    // death point is a join and there is no scope here to reach one
-    // (OWNERSHIP.md S35).
+    // The program root owns materialized constants, not a running
+    // worker: a task's death point is a join and only a function scope
+    // can reach one (OWNERSHIP.md S35, S46).
     try expectRejected(
         \\func work() -> long:
         \\    return 1
         \\
-        \\let started = spawn work()
+        \\const started = spawn work()
         \\
         \\func main():
         \\    print("hi")
@@ -6801,9 +6830,9 @@ test "luce.sema.own: a give through a function value still needs the verb" {
     , "luce.sema.own", "takes ownership");
 }
 
-test "luce.sema.const: a top-level let is not a place for a lambda" {
+test "luce.sema.const: a top-level const is not a place for a lambda" {
     try expectRejectedOptions(
-        \\let f = (x) -> x + 1
+        \\const f = (x) -> x + 1
         \\
         \\func main():
         \\    print("hi")

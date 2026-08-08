@@ -555,18 +555,27 @@ pub const Parser = struct {
                     );
                     self.recover();
                 },
-                .keyword_let => {
+                .keyword_const => {
                     if (try self.constDecl()) |declaration| {
                         try constants.append(self.arena, declaration);
                     } else {
                         self.recover();
                     }
                 },
+                .keyword_let => {
+                    try self.report(
+                        "luce.parse.top",
+                        self.peek().span,
+                        "file scope declares with const; let lives inside functions",
+                        .{},
+                    );
+                    self.recover();
+                },
                 .keyword_var => {
                     try self.report(
                         "luce.parse.top",
                         self.peek().span,
-                        "top-level declarations are let constants; var lives inside functions",
+                        "file scope declares with const; var lives inside functions",
                         .{},
                     );
                     self.recover();
@@ -600,7 +609,7 @@ pub const Parser = struct {
                     try self.report(
                         "luce.parse.top",
                         self.peek().span,
-                        "expected import, let, struct, enum, or func at file scope, found {s}",
+                        "expected import, const, struct, enum, or func at file scope, found {s}",
                         .{try self.found()},
                     );
                     self.recover();
@@ -617,7 +626,7 @@ pub const Parser = struct {
     }
 
     /// A visibility marker at file scope: `public` or `private` before
-    /// func, let, or struct, and nowhere else (docs/VISIBILITY.md §5).
+    /// func, const, or struct, and nowhere else (docs/VISIBILITY.md §5).
     /// The marker parses onto the declaration it fronts; the refusals —
     /// a region label at module level, a second visibility word, a
     /// marker fronting anything unmarkable — are §8's, wordings and all.
@@ -669,7 +678,7 @@ pub const Parser = struct {
                 );
                 self.recover();
             },
-            .keyword_let => {
+            .keyword_const => {
                 if (try self.constDecl()) |declaration| {
                     var marked = declaration;
                     marked.visibility = visibility;
@@ -677,6 +686,15 @@ pub const Parser = struct {
                 } else {
                     self.recover();
                 }
+            },
+            .keyword_let, .keyword_var => {
+                try self.report(
+                    "luce.parse.top",
+                    self.peek().span,
+                    "file scope declares with const; {s} lives inside functions",
+                    .{keywordWord(self.peekKind()).?},
+                );
+                self.recover();
             },
             .keyword_struct => {
                 if (try self.structDecl()) |declaration| {
@@ -700,7 +718,7 @@ pub const Parser = struct {
                 try self.report(
                     "luce.parse.top",
                     marker.span,
-                    "'{s}' marks a declaration: expected func, let, struct, or enum after it, found {s}",
+                    "'{s}' marks a declaration: expected func, const, struct, or enum after it, found {s}",
                     .{ keywordWord(marker.kind).?, try self.found() },
                 );
                 self.recover();
@@ -777,9 +795,9 @@ pub const Parser = struct {
 
     // -- declarations: constants, types, structs --------------------------
 
-    /// let name = value at file scope — a constant declaration.
+    /// const name = value at file scope — a constant declaration.
     fn constDecl(self: *Parser) Error!?ast.ConstDecl {
-        const start = self.advance(); // let
+        const start = self.advance(); // const
         const name = (try self.expect(.identifier, "a constant name")) orelse return null;
         try self.refuseWildcardName(name);
         var annotation: ?ast.TypeName = null;
@@ -1596,6 +1614,15 @@ pub const Parser = struct {
         switch (self.peekKind()) {
             .keyword_let => return self.binding(false),
             .keyword_var => return self.binding(true),
+            .keyword_const => {
+                try self.report(
+                    "luce.parse.expected",
+                    self.peek().span,
+                    "const declares at file scope; use let or var inside a function",
+                    .{},
+                );
+                return null;
+            },
             .keyword_if => return self.conditional(),
             .keyword_while => return self.whileLoop(),
             .keyword_for => return self.forLoop(),
@@ -2421,8 +2448,7 @@ fn foreignWord(word: []const u8) ?[]const u8 {
         .{ .word = "function", .advice = "functions are declared with 'func'" },
         .{ .word = "class", .advice = "there are no classes; 'struct' declares a value type" },
         .{ .word = "type", .advice = "there are no type aliases; 'struct' declares a value type" },
-        .{ .word = "const", .advice = "file-scope constants are declared with 'let'" },
-        .{ .word = "final", .advice = "file-scope constants are declared with 'let'" },
+        .{ .word = "final", .advice = "file-scope constants are declared with 'const'" },
         .{ .word = "from", .advice = import_advice },
         .{ .word = "include", .advice = import_advice },
         .{ .word = "require", .advice = import_advice },
@@ -2472,6 +2498,7 @@ pub fn describe(kind: Kind) []const u8 {
         .keyword_struct => "the keyword 'struct'",
         .keyword_enum => "the keyword 'enum'",
         .keyword_match => "the keyword 'match'",
+        .keyword_const => "the keyword 'const'",
         .keyword_let => "the keyword 'let'",
         .keyword_var => "the keyword 'var'",
         .keyword_if => "the keyword 'if'",
@@ -2509,6 +2536,8 @@ pub fn describe(kind: Kind) []const u8 {
         .right_paren => "')'",
         .left_bracket => "'['",
         .right_bracket => "']'",
+        .left_brace => "'{'",
+        .right_brace => "'}'",
         .comma => "','",
         .colon => "':'",
         .dot => "'.'",

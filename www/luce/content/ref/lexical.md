@@ -100,11 +100,11 @@ cannot be re-declared in an inner one.
 ## Keywords
 
 ```
-and      break    catch    continue copy     elif     else
-enum     false    for      func     give     if       import
-in       let      match    new      none     not      or
-private  public   return   self     spawn    struct   true
-static   try      var      while
+and      break    catch    const    continue copy     elif
+else     enum     false    for      func     give     if
+import   in       let      match    new      none     not
+or       private  public   return   self     spawn    static
+struct   true     try      var      while
 ```
 
 `spawn` runs a call on a [worker](/tour/threads/) instead of making
@@ -125,43 +125,50 @@ declaration can call something else by that name — which is what makes
 marks the namespace member that has no implied `self`; a file-scope
 function is already a namespace function and does not say it.
 
+`const` declares a file-scope folded value or program-root constant
+container. `let` and `var` declare inside functions; a top-level `let`
+is refused with `const` named as the fix.
+
 ## Reserved names
 
 The language reserves these; nothing user-declared may take them, and
 one that does is `luce.sema.reserved`.
 
 ```
-range       long         double       bool        string
-list        map         array       builder     None
-abs         min         max         clamp       sqrt
-floor       ceil        len         slice       byte_at
-assert      trap        str         parse_int   parse_float
-chr         ord         append      pop         insert
-remove      has         dim         free        print
-file_read   file_write  file_exists key_read    key_text
-error       read_line   print_error clock_ms    sleep_ms
-env         file_append file_delete file_rename dir_list
-term_rows   term_cols   term_clear  term_move   term_style
-term_write  term_flush  exit        trunc
-
-os_total_memory          os_available_memory     os_cpu_count
+range       long         double       string              None
+abs         min          max          clamp               sqrt
+floor       ceil         trunc        len                 byte_at
+assert      trap         parse_int    parse_float         chr
+ord         append       pop          insert              remove
+has         dim          free         print               file_read
+file_write  file_exists  key_read     key_text            error
+read_line   print_error  clock_ms     sleep_ms            env
+file_append file_delete  file_rename  dir_list            term_rows
+term_cols   term_clear   term_move    term_style          term_write
+term_flush  exit         os_total_memory os_available_memory os_cpu_count
+file_open   parse_string
 ```
 
-The **methods** are not on that list. `sort`, `has`, `get` and the rest
-are resolved by the type of the receiver they are called on, so a
-function of the same name collides with nothing and a program may
-declare one.
+**Most methods** are not reserved. `sort`, `find`, `contains`, `clear`,
+`keys`, `values`, `get` and `build` are resolved by receiver type, so a
+program may declare a function of the same name. Seven historical
+exceptions are reserved anyway: `append`, `insert`, `pop`, `remove`,
+`has`, `dim` and `byte_at`. Thus `func sort` is legal while `func has`
+is refused, even though both method calls name a receiver.
 
 ## Number literals
 
-Decimal only. An integer literal is a sequence of digits and yields an
-`long`; a fraction or an exponent yields a `double`.
+A literal has no type until it lands on a context. Decimal integer and
+floating-point literals use the spellings below. An integer defaults
+to `int` when nothing supplies a type; a fraction or exponent defaults
+to `float`. An annotation, argument, return or container element may
+instead land the same text directly on another width.
 
 ```
-12        long
-1.5       double
-1e10      double
-1.5e-3    double
+12        int, without a context
+1.5       float, without a context
+1e10      float, without a context
+1.5e-3    float, without a context
 ```
 
 A `.` starts a fraction only when a digit follows it. A non-finite
@@ -212,8 +219,12 @@ worked examples.
 =  += -= *= /= //= %=      assignment
 &= |= ^= <<= >>=           assignment, the bit set's five
 :  ,  .  ->  ?  !          declaration, type and lambda syntax
-(  )  [  ]  _              grouping, indexing, array shape
+(  )  [  ]  {  }  _        grouping, indexing, map literals, array shape
 ```
+
+Indentation is suspended inside parentheses, brackets and map braces,
+so a multiline `{key: value}` literal needs no continuation marker.
+Braces inside an f-string still follow the f-string rules above.
 
 The bitwise precedence is Go's, not C's: `&`, `<<` and `>>` bind at
 the multiply level, `|` and `^` at the add level — so
@@ -251,20 +262,19 @@ stage that raised them: `luce.source.*`, `luce.lex.*`,
 
 At most 100 diagnostics are reported for one compilation.
 
-There are 59 codes and this site names about 26 of them. That is
-deliberate rather than partial: most of the rest are ordinary
-"expected `X`, found `Y`" parse errors whose message *is* the
-documentation, and a page repeating it would add nothing to search
-for. What is named is every code a reader might want to look up
-because the message alone does not say why the rule exists — the four
+This site names the codes a reader might want to look up because the
+message alone does not say why the rule exists: the lexical families
 above, the import rules on [modules](/ref/modules/), the ownership
-codes, and the two entry-point rules below.
+codes, and the entry-point rules below. It does not try to catalogue
+ordinary "expected `X`, found `Y`" parse errors whose message already
+states the rule.
 
 ## The entry point
 
-A program is exactly `func main():`, or `func main() -> !:` when the
-world can stop it. Anything else — no `main` at all, or a `main` that
-takes parameters or returns a value — is `luce.sema.main`.
+A program has exactly one `main`, with either no parameter or one
+`list(string)` command-line parameter, and with optional `-> !` on
+either shape. Anything else — no `main` at all, another parameter
+list, or a value result — is `luce.sema.main`.
 
 ```luce fail
 func start():

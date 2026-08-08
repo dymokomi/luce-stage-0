@@ -277,11 +277,11 @@ test "str is a name a program may take now" {
 
 test "string(x) folds in a constant, in the same bytes a run would print" {
     try agreeOk(
-        \\let count = string(42)
-        \\let ratio = string(2.5)
-        \\let flag = string(true)
-        \\let same = string("x")
-        \\let joined = count + " " + ratio + " " + flag + " " + same
+        \\const count = string(42)
+        \\const ratio = string(2.5)
+        \\const flag = string(true)
+        \\const same = string("x")
+        \\const joined = count + " " + ratio + " " + flag + " " + same
         \\
         \\func main():
         \\    assert(joined == "42 2.5 true x")
@@ -599,8 +599,8 @@ test "integers: int's minimum is written the way it reads too" {
 
 test "integers: long's minimum folds in a file-scope constant too" {
     try agreeOk(
-        \\let low: long = -9223372036854775808
-        \\let high: long = 9223372036854775807
+        \\const low: long = -9223372036854775808
+        \\const high: long = 9223372036854775807
         \\
         \\func main():
         \\    assert(low < high)
@@ -813,14 +813,14 @@ test "types: the language's own names are lowercase" {
 // (docs/TYPES.md D3).  With one integer width and one float width the
 // two readings agree on every value, so nothing here is a claim about
 // rounding yet — what it pins is that the landing happens at all, in
-// every place a type is written down, including the file-scope `let`
+// every place a type is written down, including the file-scope `const`
 // that used to refuse an integer spelling outright.
 test "literals: a number lands on the type its context names" {
     try agreeOk(
-        \\let whole: double = 7
-        \\let negative: double = -3
-        \\let folded: double = 2 * 3 + 1
-        \\let plain = 7
+        \\const whole: double = 7
+        \\const negative: double = -3
+        \\const folded: double = 2 * 3 + 1
+        \\const plain = 7
         \\
         \\func takes(x: double) -> double:
         \\    return x
@@ -1030,13 +1030,13 @@ test "mixing: infinity and NaN compare with a long without widening it" {
 
 test "mixing: an exact comparison folds the same way in a constant" {
     try agreeOk(
-        \\let two53: long = 9007199254740992
-        \\let after53: long = 9007199254740993
-        \\let as_double: double = 9007199254740992.0
-        \\let below = two53 == as_double
-        \\let above = after53 == as_double
-        \\let ordered = as_double < after53
-        \\let widened = 1 + 2.5
+        \\const two53: long = 9007199254740992
+        \\const after53: long = 9007199254740993
+        \\const as_double: double = 9007199254740992.0
+        \\const below = two53 == as_double
+        \\const above = after53 == as_double
+        \\const ordered = as_double < after53
+        \\const widened = 1 + 2.5
         \\
         \\func main():
         \\    assert(below)
@@ -1658,8 +1658,8 @@ test "ord of a literal is a compile-time constant" {
 
 test "ord folds in a file-scope constant, and an empty one still traps at run time" {
     try agreeOk(
-        \\let open_paren = ord("(")
-        \\let lambda = ord("λ")
+        \\const open_paren = ord("(")
+        \\const lambda = ord("λ")
         \\
         \\func main():
         \\    assert(open_paren == 40)
@@ -2308,10 +2308,11 @@ test "named arguments: a named literal lands at the slot it names" {
 }
 
 test "defaults: an omitted trailing argument is filled from the declaration" {
-    // D2 and D3 of docs/ARGS.md: a default is a folded compile-time
-    // constant, materialised at each call site, and the suffix a call
-    // omits is the suffix the declaration filled in — by count or by
-    // name.
+    // D2 and D3 of docs/ARGS.md: this value default is a folded
+    // compile-time constant, materialised at each call site, and the
+    // suffix a call omits is the suffix the declaration filled in — by
+    // count or by name.  Container defaults instead share a program
+    // root, as constants_spec proves.
     try agreeOk(
         \\func grown(base: long, step: long = 5, twice: bool = false) -> long:
         \\    var total = base + step
@@ -2330,12 +2331,12 @@ test "defaults: an omitted trailing argument is filled from the declaration" {
 }
 
 test "defaults: a constant, a string, a struct value, and none all serve" {
-    // The whole of what a default may be is what foldConstant folds
-    // (docs/ARGS.md §2): other file-scope constants, string literals,
-    // value-struct construction — and, through D9, `none` where the
-    // parameter says what it is absent of.
+    // The value-default forms exercised here are other file-scope
+    // constants, string literals, value-struct construction and,
+    // through D9, `none` where the parameter says what it is absent of.
+    // Borrowed flat-container defaults are covered in constants_spec.
     try agreeOk(
-        \\let step_default = 4
+        \\const step_default = 4
         \\
         \\struct Point:
         \\    x: long
@@ -2429,7 +2430,7 @@ test "struct field defaults: constants and parameter defaults reach them" {
         \\    x: long = 1
         \\    y: long = 2
         \\
-        \\let origin = Corner()
+        \\const origin = Corner()
         \\
         \\func shifted(by: Corner = Corner(y = 5)) -> long:
         \\    return by.x + by.y
@@ -2920,12 +2921,12 @@ test "builders accumulate text" {
 // Constants
 // ---------------------------------------------------------------------------
 
-test "file-scope constants fold and inline" {
+test "file-scope value constants fold and inline" {
     try agreeOk(
-        \\let width = 80
-        \\let half = width // 2
-        \\let name = "loom"
-        \\let greeting = "hi " + name
+        \\const width = 80
+        \\const half = width // 2
+        \\const name = "loom"
+        \\const greeting = "hi " + name
         \\
         \\func main():
         \\    assert(width == 80)
@@ -3864,10 +3865,10 @@ test "a late var can be assigned after a branch decides its value" {
 
 test "constants of every scalar type fold and inline" {
     try agreeOk(
-        \\let limit = 3 * 4
-        \\let ratio = 1.0 / 4.0
-        \\let enabled = true and not false
-        \\let prefix = "id_"
+        \\const limit = 3 * 4
+        \\const ratio = 1.0 / 4.0
+        \\const enabled = true and not false
+        \\const prefix = "id_"
         \\
         \\func label(n: long) -> string:
         \\    return prefix + string(n)
@@ -3883,11 +3884,11 @@ test "constants of every scalar type fold and inline" {
 
 test "constants reference earlier constants" {
     try agreeOk(
-        \\let base = 10
-        \\let doubled = base * 2
-        \\let quadrupled = doubled * 2
-        \\let name = "core"
-        \\let full = name + "!"
+        \\const base = 10
+        \\const doubled = base * 2
+        \\const quadrupled = doubled * 2
+        \\const name = "core"
+        \\const full = name + "!"
         \\
         \\func main():
         \\    assert(doubled == 20)
@@ -5137,16 +5138,16 @@ test "file-scope constants fold every value kind" {
     try agreeOk(
         \\import std.strings
         \\
-        \\let width = 80
-        \\let tau = 2.0 * pi
-        \\let pi = 3.14159
-        \\let debug = not (width > 100)
-        \\let greeting = "hello, " + "loom"
-        \\let shout = greeting
-        \\let half_width = width // 2 - 1
-        \\let truncated = long(tau)
-        \\let widened = double(width)
-        \\let roomy = width >= 80 and tau > 6.0
+        \\const width = 80
+        \\const tau = 2.0 * pi
+        \\const pi = 3.14159
+        \\const debug = not (width > 100)
+        \\const greeting = "hello, " + "loom"
+        \\const shout = greeting
+        \\const half_width = width // 2 - 1
+        \\const truncated = long(tau)
+        \\const widened = double(width)
+        \\const roomy = width >= 80 and tau > 6.0
         \\
         \\func main():
         \\    assert(width == 80)
@@ -5170,8 +5171,8 @@ test "file-scope constants: an annotated none folds to the typed absence" {
     // closes: `T?` shipped without file-scope absences, for no reason
     // beyond the folder predating it.
     try agreeOk(
-        \\let missing: long? = none
-        \\let fallback = 4
+        \\const missing: long? = none
+        \\const fallback = 4
         \\
         \\func main():
         \\    assert((missing else fallback) == 4)
@@ -5190,8 +5191,8 @@ test "struct constants: the Theme case" {
         \\    comment: long
         \\    bold: bool
         \\
-        \\let theme = Theme(keyword = 114, comment = 238, bold = true)
-        \\let accent = theme.keyword + 1
+        \\const theme = Theme(keyword = 114, comment = 238, bold = true)
+        \\const accent = theme.keyword + 1
         \\
         \\func main():
         \\    assert(theme.keyword == 114)

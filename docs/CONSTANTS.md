@@ -529,3 +529,70 @@ Four, and the first two decide the shape.
 | **R2** | **The map literal: `{key: value, ...}`**, claiming braces and refining the lexer's sentence about them; `{}` refused with `new map(K, V)` named, which keeps braces free for a future set.  And: **legal in both constant and runtime position** (recommended — one grammar, and the runtime form is the list literal's lowering said again), or constant-only if the run should be narrower. |
 | **R3** | **S46 as written above**, including the verb split: `give` and `free` refused because there is no ownership to move or end, `copy` legal because it creates one. |
 | **R4** | **Run one is flat** — scalars, strings, enum members and object-free value structs as elements; no container inside a constant container (relaxable later without breaking a program) — and **`set(T)` does not enter**, with a constant `map(T, bool)` serving membership at constant time in the meantime. |
+
+## As built — 2026-08-08
+
+This is a frozen decision record: the proposal and its measurements
+above remain as written.  The final ratification table is authoritative,
+and this appendix records the implementation where the proposal's
+earlier examples or mechanisms disagree with it.
+
+- **Declaration.**  File scope uses `const`; top-level `let` is retired
+  and the diagnostic teaches `const`.  Function-scope `let` and `var`
+  are unchanged, and there is still no top-level `var`.
+- **Ownership.**  Ratified R-C supersedes the proposal's “ownerless” and
+  `.eternal` language.  Each materialized row is owned by the program
+  root, excluded from the user leak census while it is deliberately
+  live, and released at runtime teardown.  This is S46.  Each worker
+  has a runtime of its own and materializes roots of its own.
+- **Surface.**  `{key: value}` is an expression in runtime and constant
+  positions.  A runtime literal is a fresh mutable map; entries evaluate
+  in order and a later equal key replaces the earlier value.  An
+  unannotated integer key lands on `long`.  A constant map rejects an
+  equal folded key and names both written sites.  Empty `{}` is refused
+  naming `new map(K, V)`.
+- **Shapes.**  A bracket constant is a `list(T)` unless an
+  `array(T, _)` annotation makes it a rank-1 array; the literal supplies
+  the dimension.  The proposal's `array(T, 29)` examples were never
+  made into a sized type.  Empty lists and arrays work with an
+  annotation.  Containers stay flat: scalars, strings, enums and
+  object-free structs are elements; an optional field inside such a
+  struct may be absent or present, while an optional top-level element
+  is refused.  Nested containers, builders, object-carrying structs,
+  multidimensional arrays and sets remain out.  Contrary to the
+  proposal's earlier broad slicing example, only a list constant may
+  be sliced, producing a fresh owned list.  Constant arrays support
+  indexing, iteration and `copy`, but the language has no array slice
+  expression.
+- **Identity and defaults.**  The compiler emits one pool row per
+  written construction rather than interning equal contents.  Aliases,
+  imports, uses and a borrowing parameter default share that row;
+  separately written equal constructions compare as different objects.
+  A `give` parameter still cannot have an object default.
+- **Visibility.**  Constant containers obey the ordinary file boundary.
+  A public container cannot expose a private element or map-value type;
+  marking the container private or making the type public closes the
+  surface.  A public folded value may still be computed from a private
+  constant because the value, not the private name, crosses the boundary.
+- **Enforcement.**  Stage 4 tracks visible roots through aliases and
+  control flow, refusing mutating methods (including `sort_by`), indexed
+  and nested stores, `file.read` destinations, ownership verbs, returns
+  and retaining stores.  A parameter boundary hides provenance, so all
+  runtime mutation paths, including LLVM's inline stores, trap
+  `immutable_object` before changing the row.  `copy` remains the one
+  door to a fresh owned mutable object.
+- **Representation.**  Verified MIR carries a distinct
+  `container_constants` pool and `const_container` instruction.  Dead
+  rows are compacted after dead instructions, then both engines eagerly
+  materialize the surviving rows before user code.  Allocation failure
+  cleans partial rows and names the declaration in debug mode.  The
+  serialized module is `format_version = 33`; the published host table
+  did not change and remains `abi.version = 13`.
+- **Customers and proof.**  `std.zip` now holds the CRC table, four
+  length/distance base and extra tables, and the code-length order as
+  six file-scope constants.  The editor's keyword and builtin sets are
+  immutable `map(string, bool)` literals.  `constants_spec.zig` is the
+  eighteenth feature package in the dual-engine executable
+  specification and covers materialization, identity, imports,
+  defaults, workers, every static escape and mutation family, and the
+  dynamic backstop.

@@ -9,6 +9,7 @@
 const std = @import("std");
 const vocabulary = @import("../support/vocabulary.zig");
 const containers = @import("containers.zig");
+const files = @import("files.zig");
 const heap = @import("heap.zig");
 const operators = @import("operators.zig");
 const text = @import("text.zig");
@@ -326,6 +327,251 @@ test "copy duplicates what an object owns, recursively (S31)" {
     _ = try runtime.resolve(inner);
 }
 
+test "program roots stay rooted, leave the census, and copy into mutable ownership" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    try runtime.beginConstants(1);
+    const rooted = try runtime.newList(Value.ofLong(0));
+    try containers.append(runtime, rooted, Value.ofLong(7));
+    try runtime.publishConstant(0, rooted);
+    runtime.finishConstants();
+
+    try testing.expect(runtime.constant(0).asObject().same(rooted.asObject()));
+    try testing.expectEqual(heap.Owner.Kind.program, (try runtime.resolve(rooted)).owner.kind);
+    try testing.expectEqual(@as(u32, 1), runtime.live);
+    try testing.expectEqual(@as(u32, 1), runtime.program_root_count);
+    try testing.expectEqual(@as(i64, 0), runtime.leaked());
+
+    // Every ordinary ownership transition leaves the program root in
+    // place, including the defensive release paths damaged IR can
+    // reach.  The source front line refuses give/free by name; the
+    // runtime keeps them safe and reports not-owned.
+    const serial = runtime.takeSerial();
+    runtime.bind(rooted, serial, 4);
+    runtime.adopt(rooted);
+    runtime.loosen(rooted);
+    runtime.loosenFromFrame(rooted, serial);
+    runtime.unbind(rooted, serial, 4);
+    runtime.freeObject(rooted.asObject());
+    try testing.expectEqual(heap.Owner.Kind.program, (try runtime.resolve(rooted)).owner.kind);
+    try expectTrap(.not_owned, runtime, containers.giveVerb(runtime, rooted, null));
+    try expectTrap(.not_owned, runtime, containers.freeVerb(runtime, rooted, null));
+
+    // Copy is the sanctioned door back to ordinary mutable ownership.
+    const copied = try containers.copyVerb(runtime, rooted);
+    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(copied)).owner.kind);
+    try containers.append(runtime, copied, Value.ofLong(8));
+    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, copied)).asLong());
+    try testing.expectEqual(@as(i64, 1), runtime.leaked());
+    runtime.freeObject(copied.asObject());
+    try testing.expectEqual(@as(i64, 0), runtime.leaked());
+}
+
+test "every boxed container mutation refuses a program root without consuming a borrow" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    try runtime.beginConstants(4);
+
+    const list = try runtime.newList(Value.ofString(""));
+    try containers.append(runtime, list, try runtime.ownValue(Value.ofString("three")));
+    try containers.append(runtime, list, try runtime.ownValue(Value.ofString("one")));
+    try runtime.publishConstant(0, list);
+
+    const map = try runtime.newMap();
+    try containers.indexSet(runtime, map, &.{Value.ofString("a")}, Value.ofLong(1));
+    try runtime.publishConstant(1, map);
+
+    const array = try runtime.newArray(&.{3}, Value.ofLong(0));
+    try runtime.publishConstant(2, array);
+
+    // Builder is not a legal constant-container pool row.  Rooting
+    // one by hand proves the shared mutation gate stays total for a
+    // damaged artifact instead of leaving one object kind writable.
+    const builder = try runtime.newBuilder();
+    try containers.append(runtime, builder, Value.ofString("seed"));
+    try runtime.publishConstant(3, builder);
+    runtime.finishConstants();
+
+    const long_text = "this value owns storage beyond the inline capacity";
+
+    // The three consuming list stores release what they were handed
+    // even though the immutable check is the point that rejects them.
+    try expectTrap(
+        .immutable_object,
+        runtime,
+        containers.indexSet(
+            runtime,
+            list,
+            &.{Value.ofLong(0)},
+            try runtime.ownValue(Value.ofString(long_text)),
+        ),
+    );
+    try expectTrap(
+        .immutable_object,
+        runtime,
+        containers.append(runtime, list, try runtime.ownValue(Value.ofString(long_text))),
+    );
+    try expectTrap(
+        .immutable_object,
+        runtime,
+        containers.insert(runtime, list, 0, try runtime.ownValue(Value.ofString(long_text))),
+    );
+    try expectTrap(.immutable_object, runtime, containers.pop(runtime, list));
+    try expectTrap(.immutable_object, runtime, containers.remove(runtime, list, Value.ofLong(0)));
+    try expectTrap(.immutable_object, runtime, containers.sort(runtime, list));
+    try expectTrap(.immutable_object, runtime, containers.reverse(runtime, list));
+    try expectTrap(.immutable_object, runtime, containers.clear(runtime, list));
+
+    try expectTrap(
+        .immutable_object,
+        runtime,
+        containers.indexSet(
+            runtime,
+            map,
+            &.{Value.ofString("b")},
+            try runtime.ownValue(Value.ofString(long_text)),
+        ),
+    );
+    try expectTrap(.immutable_object, runtime, containers.remove(runtime, map, Value.ofString("a")));
+    try expectTrap(
+        .immutable_object,
+        runtime,
+        containers.mapPlace(runtime, map, Value.ofString("a"), Value.ofLong(0)),
+    );
+    try expectTrap(.immutable_object, runtime, containers.clear(runtime, map));
+
+    try expectTrap(
+        .immutable_object,
+        runtime,
+        containers.indexSet(runtime, array, &.{Value.ofLong(0)}, Value.ofLong(1)),
+    );
+    try expectTrap(.immutable_object, runtime, containers.arrayFill(runtime, array, Value.ofLong(2)));
+
+    // Builder append is a borrow, unlike List append.  The failed
+    // mutation must leave the caller's owned String intact.
+    const borrowed = try runtime.ownValue(Value.ofString(long_text));
+    defer runtime.dropStorage(borrowed);
+    try expectTrap(.immutable_object, runtime, containers.append(runtime, builder, borrowed));
+    try testing.expectEqualStrings(long_text, borrowed.asString());
+    try expectTrap(.immutable_object, runtime, containers.appendAscii(runtime, builder, 'x'));
+    try expectTrap(.immutable_object, runtime, containers.clear(runtime, builder));
+
+    try testing.expectEqual(@as(i64, 0), runtime.leaked());
+}
+
+test "a host read cannot write into a program-root byte array" {
+    const Host = struct {
+        calls: usize = 0,
+
+        fn read(
+            context: ?*anyopaque,
+            _: i64,
+            _: [*]u8,
+            _: i64,
+            _: *i64,
+        ) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.calls += 1;
+            return files.yes;
+        }
+    };
+
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+    var host: Host = .{};
+    runtime.files = .{ .context = &host, .read = Host.read };
+
+    try runtime.beginConstants(1);
+    const bytes = try runtime.newArray(&.{8}, Value.ofByte(0));
+    try runtime.publishConstant(0, bytes);
+    runtime.finishConstants();
+    const file = try runtime.newFile(17, "input.bin");
+
+    try expectTrap(.immutable_object, runtime, files.read(runtime, file, bytes));
+    try testing.expectEqual(@as(usize, 0), host.calls);
+    runtime.freeObject(file.asObject());
+}
+
+test "failed materialization discards its partial object and every published root" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    try runtime.beginConstants(2);
+    const published = try runtime.newList(Value.ofString(""));
+    try containers.append(
+        runtime,
+        published,
+        try runtime.ownValue(Value.ofString("published storage lives here")),
+    );
+    try runtime.publishConstant(0, published);
+
+    const partial = try runtime.newMap();
+    try containers.indexSet(
+        runtime,
+        partial,
+        &.{Value.ofString("long key that owns its bytes")},
+        try runtime.ownValue(Value.ofString("partial storage lives here too")),
+    );
+    runtime.discardLoose(partial);
+    runtime.abortConstants();
+
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+    try testing.expectEqual(@as(u32, 0), runtime.program_root_count);
+    try testing.expectEqual(@as(usize, 0), runtime.constant_roots.len);
+    try testing.expect(!runtime.materializing_constants);
+    try testing.expectEqual(@as(i64, 0), runtime.leaked());
+    try expectTrap(.use_after_free, runtime, runtime.resolve(published));
+    try expectTrap(.use_after_free, runtime, runtime.resolve(partial));
+}
+
+test "runtime teardown releases ordinary rows before the program root" {
+    const Host = struct {
+        handles: [2]i64 = undefined,
+        count: usize = 0,
+
+        fn close(context: ?*anyopaque, handle: i64) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.handles[self.count] = handle;
+            self.count += 1;
+            return files.yes;
+        }
+    };
+
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var runtime: Runtime = .init(.{
+        .arena = arena.allocator(),
+        .objects = testing.allocator,
+    });
+    var host: Host = .{};
+    runtime.files = .{ .context = &host, .close = Host.close };
+
+    // A file cannot be a source-level constant.  It makes destruction
+    // order observable, though, so this hand-made runtime state proves
+    // the two teardown passes rather than merely reading their code.
+    try runtime.beginConstants(1);
+    const rooted = try runtime.newFile(11, "root");
+    try runtime.publishConstant(0, rooted);
+    runtime.finishConstants();
+    _ = try runtime.newFile(22, "ordinary");
+    try testing.expectEqual(@as(i64, 1), runtime.leaked());
+
+    runtime.deinit();
+    try testing.expectEqual(@as(usize, 2), host.count);
+    try testing.expectEqual(@as(i64, 22), host.handles[0]);
+    try testing.expectEqual(@as(i64, 11), host.handles[1]);
+}
+
 test "objects inside a struct value are walked, not skipped" {
     var bench: Bench = undefined;
     bench.setup();
@@ -337,7 +583,7 @@ test "objects inside a struct value are walked, not skipped" {
     const serial = runtime.takeSerial();
     runtime.bind(record, serial, 0);
     try testing.expectEqual(
-        heap.Owner{ .binding = .{ .serial = serial, .local = 0 } },
+        heap.Owner.bound(.{ .serial = serial, .local = 0 }),
         (try runtime.resolve(fields[1])).owner,
     );
     runtime.unbind(record, serial, 0);
@@ -751,6 +997,10 @@ test "compiled code's byte offsets find the fields they name" {
 
     const grid = try runtime.newArray(&.{ 2, 3 }, Value.ofDouble(0.0));
     try containers.indexSet(runtime, grid, &.{ Value.ofLong(1), Value.ofLong(2) }, Value.ofDouble(7.5));
+    try runtime.beginConstants(1);
+    const rooted = try runtime.newList(Value.ofLong(0));
+    try runtime.publishConstant(0, rooted);
+    runtime.finishConstants();
 
     // Exactly the walk `08_llvm/lower.zig` emits: the table base out of
     // the `Runtime`, the row by handle, then `generation`, `count`,
@@ -761,6 +1011,21 @@ test "compiled code's byte offsets find the fields they name" {
         base + heap.layout.table_pointer,
     ))).*;
     try testing.expectEqual(@intFromPtr(runtime.table.items.ptr), @intFromPtr(table));
+
+    // The other direct walk generated code makes: a constant-pool
+    // slot through the runtime's program-root table, followed by the
+    // owner-kind check used at inline writes.
+    const roots: [*]const Value = @ptrCast(@alignCast(@as(*const [*]const u8, @ptrCast(@alignCast(
+        base + heap.layout.constant_roots_pointer,
+    ))).*));
+    try testing.expectEqual(@intFromPtr(runtime.constant_roots.ptr), @intFromPtr(roots));
+    try testing.expectEqual(@as(usize, 1), @as(*const usize, @ptrCast(@alignCast(
+        base + heap.layout.constant_roots_count,
+    ))).*);
+    try testing.expect(roots[0].asObject().same(rooted.asObject()));
+    const rooted_row = table + heap.layout.row_size * rooted.asObject().index;
+    const owner_kind: *const u32 = @ptrCast(@alignCast(rooted_row + heap.layout.owner_kind));
+    try testing.expectEqual(heap.layout.owner_program, owner_kind.*);
 
     const row = table + heap.layout.row_size * grid.asObject().index;
     const generation: *const u32 = @ptrCast(@alignCast(row + heap.layout.generation));
@@ -1062,6 +1327,20 @@ extern fn luce_rt_report(
     report: trace.ReportFn,
 ) callconv(.c) void;
 extern fn luce_rt_leaked(runtime: *const Runtime) callconv(.c) i64;
+extern fn luce_rt_constants_begin(runtime: *Runtime, count: u32) callconv(.c) i32;
+extern fn luce_rt_constant_publish(
+    runtime: *Runtime,
+    slot: u32,
+    held: *const Value,
+) callconv(.c) i32;
+extern fn luce_rt_constant_load(
+    runtime: *const Runtime,
+    slot: u32,
+    out: *Value,
+) callconv(.c) void;
+extern fn luce_rt_constants_finish(runtime: *Runtime) callconv(.c) void;
+extern fn luce_rt_constants_abort(runtime: *Runtime) callconv(.c) void;
+extern fn luce_rt_discard_loose(runtime: *Runtime, held: *const Value) callconv(.c) void;
 extern fn luce_rt_new_list(runtime: *Runtime, zero: *const Value, out: *Value) callconv(.c) i32;
 extern fn luce_rt_append(runtime: *Runtime, target: *const Value, held: *const Value) callconv(.c) i32;
 extern fn luce_rt_index_get(
@@ -1167,6 +1446,64 @@ test "the C surface opens a run, carries values, and reports its own traps" {
 
     // The census sees the one list nobody freed.
     try testing.expectEqual(@as(i64, 1), luce_rt_leaked(runtime));
+}
+
+test "the C materialization surface roots, loads, freezes, and excludes a constant" {
+    const runtime = luce_rt_open(null, 0).?;
+    defer luce_rt_close(runtime);
+
+    try testing.expectEqual(@as(i32, 0), luce_rt_constants_begin(runtime, 1));
+    var rooted: Value = .none;
+    try testing.expectEqual(@as(i32, 0), luce_rt_new_list(runtime, &Value.none, &rooted));
+    try testing.expectEqual(@as(i32, 0), luce_rt_append(runtime, &rooted, &Value.ofLong(3)));
+    try testing.expectEqual(@as(i32, 0), luce_rt_constant_publish(runtime, 0, &rooted));
+    luce_rt_constants_finish(runtime);
+
+    var loaded: Value = .none;
+    luce_rt_constant_load(runtime, 0, &loaded);
+    try testing.expect(loaded.asObject().same(rooted.asObject()));
+    try testing.expectEqual(@as(i64, 0), luce_rt_leaked(runtime));
+    try testing.expectEqual(@as(i32, 1), luce_rt_append(runtime, &loaded, &Value.ofLong(4)));
+    try testing.expectEqual(vocabulary.TrapCode.immutable_object, runtime.pending.?.code);
+}
+
+test "materialization allocation failure traps and its C cleanup leaves no rows" {
+    var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{
+        .arena = arena.allocator(),
+        .objects = objects.allocator(),
+    });
+
+    // The root table itself can be the allocation RAM refuses.  It is
+    // still a located container failure, not an exhausted run.
+    objects.fail_index = objects.alloc_index;
+    try testing.expectEqual(@as(i32, 1), luce_rt_constants_begin(&runtime, 1));
+    try testing.expectEqual(vocabulary.TrapCode.allocation_failed, runtime.pending.?.code);
+    try testing.expect(!runtime.exhausted);
+    try testing.expect(!runtime.materializing_constants);
+
+    // Start again, then fail an ordinary runtime export while the
+    // prologue is active.  The shared `failed` funnel must make the
+    // same trap and the explicit cleanup must reclaim both table and
+    // half-built object.
+    objects.fail_index = std.math.maxInt(usize);
+    runtime.pending = null;
+    try testing.expectEqual(@as(i32, 0), luce_rt_constants_begin(&runtime, 1));
+    var partial: Value = .none;
+    try testing.expectEqual(@as(i32, 0), luce_rt_new_list(&runtime, &Value.none, &partial));
+    objects.fail_index = objects.alloc_index;
+    try testing.expectEqual(@as(i32, 1), luce_rt_append(&runtime, &partial, &Value.ofLong(1)));
+    try testing.expectEqual(vocabulary.TrapCode.allocation_failed, runtime.pending.?.code);
+    try testing.expect(!runtime.exhausted);
+    luce_rt_discard_loose(&runtime, &partial);
+    luce_rt_constants_abort(&runtime);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+    try testing.expectEqual(@as(i64, 0), runtime.leaked());
+
+    runtime.deinit();
+    arena.deinit();
+    try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
 }
 
 test "a trace keeps the innermost frames and counts the rest" {

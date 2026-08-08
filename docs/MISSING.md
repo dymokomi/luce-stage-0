@@ -1,10 +1,11 @@
 # What Luce is still missing — the honest inventory
 
 Rewritten 2026-08-02, after the front-end hardening pass, the `std.`
-namespace, the LLVM backend, and `docs/FAILURE.md`.  **Re-verified
-line by line against the tree at `f333e12`**, which is where the line
-references and corpus counts below now point.  Where a doc and the
-code disagree, the code wins and it is said so.
+namespace, the LLVM backend, and `docs/FAILURE.md`; refreshed
+2026-08-08 after file-scope `const` and program-root constant
+containers shipped.  Older point-in-time measurements keep their
+original commit and line context.  Where a doc and the code disagree,
+the code wins and it is said so.
 
 A gap list whose numbers cannot be trusted is still useful and is no
 longer *authoritative*, which is the thing it is for.  Every count and
@@ -13,10 +14,10 @@ every `file:line` here was re-derived rather than carried forward.
 ## Scorecard
 
 The **language surface is done.**  Ten conceptual stages, seven
-folders, seventeen executable specs, stages 1 and 2 marked *Locked*, and a
-front end whose diagnostics mostly name the fix rather than the
-parser's predicament — mostly, because the ownership, optional and
-failure families set a standard that fifteen other places do not yet
+folders, eighteen executable spec packages, stages 1 and 2 marked
+*Locked*, and a front end whose diagnostics mostly name the fix rather
+than the parser's predicament — mostly, because the ownership, optional
+and failure families set a standard that fifteen other places do not yet
 meet (Tier 5b).  `T?` closed the absence half of the last semantic
 hole and `T!` closed the failure half; nothing designed is now
 unbuilt.
@@ -240,11 +241,11 @@ it.  All three of the debts this section listed are gone from
   a long with a comment — is `enum Word`, and the `elif` chain over
   those numbers is a four-arm `match` with no `else`.
 - `is_keyword`/`is_builtin` as **46 `word == "…"` comparisons** — a
-  hash set written as a truth table — are two space-fenced string
-  constants searched with `strings.find`, which is the closest thing
-  to a set the language can state and measured *faster* than the
-  comparisons (0.15 µs a word against 0.22–0.29 µs, on a table half
-  again as long).  Tier 3 §1 below is what is left of this one.
+  hash set written as a truth table — first became two space-fenced
+  strings, then immutable `map(string, bool)` constants once the
+  language could state them.  Lookup is now O(1), the compiler rejects
+  a duplicate key, and the boundary left is the hand-maintained copy of
+  the compiler vocabulary rather than the data structure.
 
 Two things the rewrite found that no feature would have: the word
 lists had drifted eight language generations (ten keywords and
@@ -270,13 +271,15 @@ most workaround-dense and the proof the language moved.  It has now
 been rewritten onto all of them, and §1 is the one item of this list
 it still hits.
 
-1. **No sets, no constant containers.**  The 46-comparison truth
-   tables are now two space-fenced string constants and a
-   `strings.find` — shorter and faster than what they replaced, but a
-   *search*.  A frozen `set(string)` a top-level `let` could hold
-   would make membership constant-time and let the compiler refuse a
-   duplicate word.  Cheap if scoped to a frozen container; nothing is
-   blocked on it.
+1. ~~**No constant containers.**~~  **Shipped.**  File scope now uses
+   `const` for folded values and flat program-root lists, maps and
+   rank-1 arrays.  The editor's two truth tables are immutable
+   `map(string, bool)` literals with O(1) `has`, and `std.zip`'s six
+   printed tables are built once per runtime rather than once per call.
+   Duplicate constant-map keys are refused.  **There is still no
+   `set(T)`**, deliberately: a constant `map(T, bool)` covers the only
+   two callers, so a fifth heap type and a second brace meaning have no
+   corpus pressure behind them.
 2. **No character classes in std.**  `is_digit`/`is_alpha` re-derived by
    hand three times.  Trivial — five functions.
 3. ~~**No receivers on user structs.**~~ **Done** (docs/SELF.md,
@@ -408,20 +411,16 @@ it still hits.
     what the report for an error nobody caught is for
     (docs/FAILURE.md's As-shipped note).  The expression form still
     takes no binding, with reasons.
-14. **Nothing pins the site's copies of `reserved_names`.**  The
-    language's list lives in `04_semantics/context.zig`; the site
-    carries it twice, in `www/luce/src/highlight.zig`'s word tables and
-    in the block on `/ref/lexical/`, and neither copy is checked
-    against the original.  That is how the seven `term_*` builtins
-    came to be in the site's "not reserved" list while the analyzer
-    dispatched them — the copy was right about the language and the
-    language was wrong.  Both are correct now and nothing stops them
-    drifting again.  The generator deliberately imports nothing, not
-    `luce` and so not libLLVM (`build.zig` says why), so the pin
-    cannot be an import; it wants either a generated table checked
-    into the site or a test in `luce` that reads the site's text.
-    Neither is obviously right, which is why this is written down
-    rather than done.
+14. **Nothing pins the site's explicit `reserved_names` roster.**  The
+    language's list lives in `04_semantics/context.zig`.  Coverage now
+    checks `www/luce/src/highlight.zig`'s composite word tables against
+    that source, but the code block on `/ref/lexical/` remains a hand
+    copy.  It was manually resynchronized during the constants
+    closeout and can drift again.  The generator deliberately imports
+    nothing, not `luce` and so not libLLVM (`build.zig` says why), so
+    the deferred fix is a source-derived generated table checked into
+    the site or an equivalent test that reads the roster from the
+    page (audit F52).
 15. **A field of an element needs a `var` root binding.**  `xs[i] = v`
     through a `let`-bound list is ordinary content mutation (S38), and
     `xs[i].field = v` through the same binding is refused — "`xs` is
@@ -445,6 +444,102 @@ it still hits.
     shape itself is still a papercut, and `assert` of a comparison
     with `none` is a narrowing form the flow analysis could read
     exactly as it reads a guard that leaves.
+
+### Follow-ups found while building constant containers
+
+These are deliberately not hidden in the feature's implementation
+ledger.  None changes the constant surface, but each is a concrete
+improvement the audit exposed:
+
+- **Whitespace immediately inside an f-string hole is rejected**
+  (`f"{ value }"`).  A hole is re-lexed as a standalone buffer, where
+  the leading space is mistaken for indentation.  Nested map braces in
+  a hole now work; trimming or offset-aware hole lexing is the remaining
+  parser improvement (audit F17).
+- **Function pruning can retain an otherwise dead function through an
+  orphan `const_function`.**  It scans a reachable function's raw
+  instruction pool conservatively rather than only surviving block
+  items.  This changes artifact size, not behavior; constant-container
+  rows themselves are compacted after dead instructions (F22).
+- **Interpreter-worker arena exhaustion may be reported as
+  `host_unavailable`.**  The worker can reach trap adoption without a
+  pending runtime trap, and the fallback names the host instead of the
+  allocator.  This affects the differential oracle's failure
+  translation, not compiled program semantics (F30).
+- **The release-mode differential harness strips origins twice.**  The
+  operation is currently idempotent, so this is redundant test work
+  rather than a semantic defect (F35).
+- **LLVM materialization of a constant array of value structs first
+  fills every cell with the zero struct, then replaces every cell with
+  its folded value.**  The stable array API makes this cleanup-safe and
+  correct; a bulk or final-content constructor could remove the duplicate
+  storage work if startup measurements justify one (F40).
+- **Arrays still have no slice expression.**  A constant list may be
+  sliced and the result is a fresh owned list; constant arrays, like
+  ordinary arrays, support indexing, iteration and `copy` only.  Adding
+  array slicing is a future language feature rather than part of
+  constant containers (F49).
+- **The dual-engine world's file-handle state is not compared
+  generically.**  `specs.agree.sameWorld` does not inspect facts such as
+  `handle_position` or which handles remain open, so a one-engine file
+  effect could evade the ordinary world comparison.  The constant
+  `file.read` immutability spec pins `handle_position == 0` explicitly;
+  extending the harness to compare all file-handle state remains the
+  broader test improvement (F51).
+- **The site and generated TextMate highlighters only approximate
+  f-string holes.**  The compiler accepts a nested string or nested map
+  braces inside one, but the TextMate hole region does not recursively
+  enter strings or balance braces, while the site's single-string scan
+  stops at the inner quote.  Highlighting can therefore end early.  The
+  generator, highlighter and extension README no longer misstate that
+  tooling limitation as a language restriction; recursive hole-aware
+  scanning remains editor work (F54).
+- **VS Code's word-free colon indentation is not brace-aware.**  The
+  language suspends layout inside braces, so a map entry may legally
+  put its value on the line after `"key":`.  The extension's
+  `:\s*$` rule treats that colon like a block opener, overindents the
+  value and cannot know to return for the next key.  A real fix needs
+  brace-aware editor state rather than another one-line regex; the
+  extension README now states the approximation (F73).
+- **An unimported loaded namespace has two diagnostics.**  Calling a
+  name through it reports `luce.sema.import` and teaches `import X`,
+  while the same dotted value or constant read falls through to
+  `luce.sema.name` as `unknown name X`.  Constants preflight now keeps
+  that boundary instead of leaking the hidden declaration; unifying
+  field and value namespace diagnostics remains follow-up work (F72).
+- **Verified hostile MIR can still spell `heap_new` for `file` or
+  `task`.**  The verifier accepts those resource kinds even though they
+  have no ordinary heap construction: the interpreter reaches an
+  `unreachable`, while LLVM lowering returns an error.  The verifier
+  should reject the malformed instruction before either engine sees it
+  (F55).
+- **Verified MIR can carry an empty constant-map pool row.**  Source
+  `{}` is deliberately refused because it supplies neither key nor
+  value type, but a decoded module may name both in its heap row and
+  provide zero entries.  Materializing that row is safe; deciding
+  whether the wire should reject every source-impossible constant
+  shape, or treat typed empty rows as valid MIR, remains a verifier
+  canonicalization question (F75).
+- **The final-MIR program-root proof is conservative beyond
+  `heap_new`.**  Every other heap-producing instruction starts as
+  may-root, so fresh runtime operations such as `copy`, a list slice,
+  or map `keys()`/`values()` can retain an unnecessary inline owner
+  guard after local flow.  The full benchmark A/B is flat.  A future
+  whitelist belongs behind runtime-contract tests and the same
+  hostile-MIR proof, not behind assumptions in lowering (F61).
+- **`CONTRIBUTING.md` contains two incompatible license statements.**
+  One says there is no license and the tree is exclusively copyrighted;
+  the next says submitted contributions are dual MIT/Apache.  The root
+  README and two license files also describe dual-license terms, but
+  choosing which contribution-language section represents owner intent
+  is a governance decision, not a documentation cleanup.  Once decided,
+  remove the contradictory section and keep one policy (F69).
+- **Flatness is an implementation boundary as well as a language
+  decision.**  If nested constant containers are admitted later, the
+  program-root census and teardown must count and sweep child rows, and
+  `copy` plus mutable-container adoption need the recursive ownership
+  rule.  Relaxing flatness is source-compatible, but it is not merely
+  deleting the front-end refusal.
 
 ---
 
@@ -541,13 +636,13 @@ it still hits.
   visibility run marked them `private`, and now the documentation and
   the compiler say the same thing.
 - **The editor still mirrors the compiler's word vocabulary by hand.**
-  `programs/editor.luc` carries its own space-delimited keyword and
-  builtin tables for syntax highlighting.  The SELF migration found
-  that `spawn` had been omitted and added it alongside `static`, but
-  nothing derives or checks that in-language copy against the compiler
-  tables.  Generating or otherwise deriving the editor vocabulary is
-  the remaining maintenance improvement; the generated VS Code grammar
-  above does not solve it.
+  `programs/editor.luc` now carries immutable keyword and builtin maps
+  for syntax highlighting.  They include `const`, and lookup is no
+  longer a fenced string scan, but nothing derives or checks that
+  in-language copy against the compiler tables.  Generating or
+  otherwise deriving the editor vocabulary is the remaining
+  maintenance improvement; the generated VS Code grammar above does
+  not solve it.
 
 ---
 
@@ -795,8 +890,9 @@ multi-user — all deferred by design in `docs/V2.md`.
 3. ~~**`T?`, `none`, narrowing, `else`**~~ — **done**;
    `parse_int` and `parse_float` answer `long?`/`double?`, and a `T?`
    lowers to `{T, i1}`.
-4. **The cheap Tier-3 slice:** character classes, and a frozen
-   container or `Set`.  ~~`read_line`, `clock`, `sleep`, `env`,
+4. **The cheap Tier-3 slice:** character classes.  Constant
+   containers shipped; a `set` waits for pressure a constant map does
+   not answer.  ~~`read_line`, `clock`, `sleep`, `env`,
    stderr, directory listing~~ — **done**; see Tier 3
    item 6 for what shipped and what was deliberately left out.
 5. ~~**Cut `Bytes`**~~ — done; stage 10 is total.

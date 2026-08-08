@@ -99,17 +99,38 @@ pub const Memory = struct {
 /// Who frees an object (OWNERSHIP.md): `loose` — a fresh value or
 /// statement temporary; `container` — an element some container
 /// adopted and frees with itself; `binding` — a named local of one
-/// specific call frame, released when that scope exits.
+/// specific call frame, released when that scope exits; `program` — a
+/// constant container held until the runtime ends (CONSTANTS.md R-C).
 // ---------------------------------------------------------------------------
 // Objects, and who owns one
 // ---------------------------------------------------------------------------
 
 pub const OwnedBy = struct { serial: u64, local: u32 };
 
-pub const Owner = union(enum) {
-    loose,
-    container,
-    binding: OwnedBy,
+/// An explicitly laid-out ownership discriminator and its binding
+/// payload.  Generated code checks `kind` before an inline mutation,
+/// so it is a plain measured field rather than a tagged-union detail.
+pub const Owner = struct {
+    /// The owner class generated code may inspect through `layout`.
+    kind: Kind = .loose,
+    /// Meaningful only for `.binding`; zeroed for the other kinds.
+    binding: OwnedBy = .{ .serial = 0, .local = 0 },
+
+    pub const Kind = enum(u32) {
+        loose,
+        container,
+        binding,
+        program,
+    };
+
+    pub const loose: Owner = .{};
+    pub const container: Owner = .{ .kind = .container };
+    pub const program: Owner = .{ .kind = .program };
+
+    /// The owner naming one local in one live call frame.
+    pub fn bound(binding: OwnedBy) Owner {
+        return .{ .kind = .binding, .binding = binding };
+    }
 };
 
 /// The generation a row is retired at: reached, it is never handed
@@ -776,6 +797,13 @@ pub const layout = struct {
     /// test generated code emits is this one load and one compare,
     /// and a reused row fails it for every handle but the newest.
     pub const generation = @offsetOf(Object, "generation");
+    /// `Object.owner.kind` — the `u32` generated code compares before
+    /// an inline mutation whose receiver may have come through a
+    /// parameter (CONSTANTS.md R-D).
+    pub const owner_kind = @offsetOf(Object, "owner") + @offsetOf(Owner, "kind");
+    /// The value of `Owner.Kind.program`, beside the measured offset
+    /// so generated code never writes down either half of the check.
+    pub const owner_program: u32 = @intFromEnum(Owner.Kind.program);
     /// `Object.dims.ptr` — `[*]i64`, one entry per axis.  An Array's
     /// alone: a List has no shape but its length.  The rank is a
     /// compile-time fact, so the length is not read, and only a
@@ -800,6 +828,13 @@ pub const layout = struct {
     /// against.  An inline `append` writes it.
     pub const elements_count = @offsetOf(Object, "elements") +
         @offsetOf(Object.Elements, "count");
+
+    /// `Runtime.constant_roots.ptr` — one `Value` per reachable
+    /// constant-container pool row, materialized for this runtime.
+    pub const constant_roots_pointer = @offsetOf(Runtime, "constant_roots") + slice_pointer;
+    /// `Runtime.constant_roots.len`, measured for the layout proof and
+    /// bounds diagnostics; verified generated code indexes directly.
+    pub const constant_roots_count = @offsetOf(Runtime, "constant_roots") + slice_count;
 
     /// A Zig slice is `{ ptr, len }`, in that order, on every target.
     /// Named here rather than spelled `0` at four call sites, and
@@ -847,6 +882,23 @@ pub const Runtime = struct {
     /// re-resolve, or work through a copy of the object's contents,
     /// whose buffers the table does not own.
     table: std.ArrayList(Object) = .empty,
+
+    /// Handles for this runtime's materialized constant containers,
+    /// indexed by the program's pruned constant-container pool.  The
+    /// slice is object-allocator-owned; its entries borrow rows whose
+    /// owner is `.program` and own no value storage themselves.
+    constant_roots: []Value = &.{},
+
+    /// Live rows owned by the program root.  These rows are excluded
+    /// from the ownership leak census and are reclaimed only by abort
+    /// or by the runtime's final sweep (CONSTANTS.md R-C).
+    program_root_count: u32 = 0,
+
+    /// True only while the eager constant prologue is constructing
+    /// this runtime's roots.  The C boundary uses it to turn allocator
+    /// failure into the located `allocation_failed` trap promised for
+    /// materialization, rather than the run-wide exhausted status.
+    materializing_constants: bool = false,
 
     /// The first row free for reuse, or `value.null_index` when there
     /// is none.  A last-in-first-out list threaded through
@@ -996,29 +1048,17 @@ pub const Runtime = struct {
     /// object ownership already released reclaims nothing, because
     /// `Object.release` left the empty value of its kind behind.
     pub fn deinit(self: *Runtime) void {
+        // The program root is the last owner to die (CONSTANTS.md
+        // R-C).  Ordinary leaks and resources are reclaimed first;
+        // constant rows follow in a separate, explicit pass.
         for (self.table.items) |*object| {
-            switch (object.data) {
-                // Only a `Value` element can be holding storage; a
-                // packed cell owns nothing (docs/BYTES.md R1).
-                .list, .array => if (object.elements.kind == .value) {
-                    for (object.elements.cells(Value)) |item| self.dropStorage(item);
-                },
-                .map => |map| for (map.entries.items) |entry| {
-                    self.dropStorage(entry.key);
-                    self.dropStorage(entry.value);
-                },
-                .builder => {},
-                // A handle the program leaked is still an open file:
-                // the run gives it back even though ownership did not.
-                .file => |open| self.closeFile(open.handle),
-                // And a task the program leaked is still a running
-                // thread: the sweep joins it, for the same reason and
-                // with the same silence (`workers.release`).
-                .task => |held| if (held) |worker| workers.release(self, worker),
-            }
-            object.release(self.objects);
+            if (object.owner.kind != .program) self.sweep(object);
+        }
+        for (self.table.items) |*object| {
+            if (object.owner.kind == .program) self.sweep(object);
         }
         self.table.deinit(self.objects);
+        if (self.constant_roots.len != 0) self.objects.free(self.constant_roots);
         self.unwound.deinit(self.objects);
         if (self.last_key_text.len != 0) self.objects.free(self.last_key_text);
         // The shared lock belongs to the runtime that made it, and by
@@ -1036,7 +1076,34 @@ pub const Runtime = struct {
     /// is folded in as its runtime closes, so a leak in a worker is a
     /// leak in the program and both engines report the same figure.
     pub fn leaked(self: *const Runtime) i64 {
-        return @as(i64, self.live) + self.inherited_leaks;
+        return @as(i64, self.live) - @as(i64, self.program_root_count) +
+            self.inherited_leaks;
+    }
+
+    /// Release one row during the final sweep.  The caller decides the
+    /// owner order; this gives storage back directly because every row
+    /// is swept and no ownership walk may run twice at teardown.
+    fn sweep(self: *Runtime, object: *Object) void {
+        switch (object.data) {
+            // Only a `Value` element can be holding storage; a packed
+            // cell owns nothing (docs/BYTES.md R1).
+            .list, .array => if (object.elements.kind == .value) {
+                for (object.elements.cells(Value)) |item| self.dropStorage(item);
+            },
+            .map => |map| for (map.entries.items) |entry| {
+                self.dropStorage(entry.key);
+                self.dropStorage(entry.value);
+            },
+            .builder => {},
+            // A handle the program leaked is still an open file: the
+            // run gives it back even though ownership did not.
+            .file => |open| self.closeFile(open.handle),
+            // And a task the program leaked is still a running thread:
+            // the sweep joins it, for the same reason and with the
+            // same silence (`workers.release`).
+            .task => |held| if (held) |worker| workers.release(self, worker),
+        }
+        object.release(self.objects);
     }
 
     /// The one lock this program's runtimes share, made on demand.
@@ -1238,6 +1305,84 @@ pub const Runtime = struct {
     }
 
     // -- allocation --------------------------------------------------------
+
+    /// Begin eager materialization for `count` reachable constant
+    /// containers.  The handle table is this runtime's and is released
+    /// by `abortConstants` or `deinit`; allocation failure is the
+    /// located container trap promised before `main`, never exhaustion.
+    pub fn beginConstants(self: *Runtime, count: u32) Error!void {
+        if (self.materializing_constants or
+            self.constant_roots.len != 0 or
+            self.program_root_count != 0)
+        {
+            return self.fail(.not_owned);
+        }
+        self.materializing_constants = true;
+        errdefer self.materializing_constants = false;
+        if (count == 0) return;
+        const roots = self.objects.alloc(Value, count) catch
+            return self.fail(.allocation_failed);
+        @memset(roots, Value.none);
+        self.constant_roots = roots;
+    }
+
+    /// Publish one fully built loose container into the program root.
+    /// The handle is borrowed by the table and stays live until abort
+    /// or runtime teardown; a failed publication leaves it loose for
+    /// `discardLoose` to reclaim.  Invalid state, slot, handle, or
+    /// ownership traps `not_owned`/the handle's ordinary liveness trap.
+    pub fn publishConstant(self: *Runtime, slot: u32, held: Value) Error!void {
+        if (!self.materializing_constants or slot >= self.constant_roots.len) {
+            return self.fail(.not_owned);
+        }
+        if (!self.constant_roots[slot].isNone()) return self.fail(.not_owned);
+        if (held.tag != .object) return self.fail(.not_owned);
+        const object = try self.resolve(held);
+        if (object.owner.kind != .loose) return self.fail(.not_owned);
+        object.owner = .program;
+        self.constant_roots[slot] = held;
+        self.program_root_count += 1;
+    }
+
+    /// The constant-container handle at `slot`.  It is a borrow of the
+    /// runtime's program-root table and is invalid after teardown.
+    /// Verified MIR guarantees the slot exists and was materialized,
+    /// so this access cannot fail and performs no bounds recovery.
+    pub fn constant(self: *const Runtime, slot: u32) Value {
+        return self.constant_roots[slot];
+    }
+
+    /// Complete materialization.  From here allocator failure is an
+    /// exhausted run again, and every published root remains frozen.
+    pub fn finishConstants(self: *Runtime) void {
+        self.materializing_constants = false;
+    }
+
+    /// Abandon a failed prologue: destroy every root it published and
+    /// give back the table.  The caller first passes any current,
+    /// unpublished construction to `discardLoose`, since no table slot
+    /// names that object yet.
+    pub fn abortConstants(self: *Runtime) void {
+        for (self.constant_roots) |*root| {
+            if (root.tag == .object) self.destroyObject(root.asObject());
+            root.* = .none;
+        }
+        if (self.constant_roots.len != 0) self.objects.free(self.constant_roots);
+        self.constant_roots = &.{};
+        self.program_root_count = 0;
+        self.materializing_constants = false;
+    }
+
+    /// Destroy an unpublished, partially filled loose container.  It
+    /// consumes only that construction; a bound, adopted, stale, or
+    /// already published handle is deliberately left alone.
+    pub fn discardLoose(self: *Runtime, held: Value) void {
+        if (held.tag != .object) return;
+        const handle = held.asObject();
+        const object = self.liveObject(handle) orelse return;
+        if (object.owner.kind != .loose) return;
+        self.destroyObject(handle);
+    }
 
     /// A fresh empty list whose elements are stored at the width of
     /// `zero`'s type (docs/BYTES.md R1).  The element zero comes from
@@ -1599,6 +1744,28 @@ pub const Runtime = struct {
         return found;
     }
 
+    /// Resolve a live object for a write, trapping when the program
+    /// root owns it.  Every boxed mutation reaches the shared
+    /// `requireMutable` owner gate through this wrapper or after its
+    /// own first resolution; generated inline writes perform the same
+    /// measured owner-kind check (`layout.owner_kind`, CONSTANTS.md
+    /// R-D).  This wrapper carries `resolve`'s null/stale traps and
+    /// pointer lifetime, and adds the `immutable_object` trap before
+    /// returning a program-owned row.
+    pub inline fn resolveMutable(self: *Runtime, held: Value) Error!*Object {
+        const found = try self.resolve(held);
+        try self.requireMutable(found);
+        return found;
+    }
+
+    /// The owner half of `resolveMutable`, for a caller which already
+    /// resolved the row to establish another operation-specific
+    /// contract.  Kept inline with its wrapper so ordinary mutators pay
+    /// for one handle walk and one owner comparison, not two calls.
+    pub inline fn requireMutable(self: *Runtime, found: *Object) Error!void {
+        if (found.owner.kind == .program) return self.fail(.immutable_object);
+    }
+
     /// The live object behind a handle, or null when the handle is null,
     /// out of range, or already freed.  Ownership walks use this: they
     /// must never trap, because they run on paths that are already
@@ -1625,7 +1792,9 @@ pub const Runtime = struct {
         switch (held.view()) {
             .object => |handle| {
                 const object = self.liveObject(handle) orelse return;
-                object.owner = .{ .binding = .{ .serial = serial, .local = local } };
+                if (object.owner.kind != .program) {
+                    object.owner = .bound(.{ .serial = serial, .local = local });
+                }
             },
             .strukt => |fields| for (fields) |field| self.bind(field, serial, local),
             else => {},
@@ -1637,7 +1806,7 @@ pub const Runtime = struct {
         switch (held.view()) {
             .object => |handle| {
                 const object = self.liveObject(handle) orelse return;
-                object.owner = .container;
+                if (object.owner.kind != .program) object.owner = .container;
             },
             .strukt => |fields| for (fields) |field| self.adopt(field),
             else => {},
@@ -1650,7 +1819,7 @@ pub const Runtime = struct {
         switch (held.view()) {
             .object => |handle| {
                 const object = self.liveObject(handle) orelse return;
-                object.owner = .loose;
+                if (object.owner.kind != .program) object.owner = .loose;
             },
             .strukt => |fields| for (fields) |field| self.loosen(field),
             else => {},
@@ -1663,7 +1832,7 @@ pub const Runtime = struct {
         switch (held.view()) {
             .object => |handle| {
                 const object = self.liveObject(handle) orelse return;
-                if (object.owner == .binding and object.owner.binding.serial == serial) {
+                if (object.owner.kind == .binding and object.owner.binding.serial == serial) {
                     object.owner = .loose;
                 }
             },
@@ -1679,7 +1848,7 @@ pub const Runtime = struct {
         switch (held.view()) {
             .object => |handle| {
                 const object = self.liveObject(handle) orelse return;
-                if (object.owner == .binding and
+                if (object.owner.kind == .binding and
                     object.owner.binding.serial == serial and
                     object.owner.binding.local == local)
                 {
@@ -1704,8 +1873,22 @@ pub const Runtime = struct {
     /// the table stays good across all of it.
     pub fn freeObject(self: *Runtime, handle: Handle) void {
         const object = self.liveObject(handle) orelse return;
+        // The program root is sticky: releases reached through an
+        // alias, a damaged module, or an unwinding ownership walk are
+        // safe no-ops.  The source front line refuses them by name.
+        if (object.owner.kind == .program) return;
+        self.destroyObject(handle);
+    }
+
+    /// End a live object regardless of whether its owner is the
+    /// program root.  Ordinary releases enter through `freeObject`;
+    /// only failed materialization uses this on `.program` rows.
+    fn destroyObject(self: *Runtime, handle: Handle) void {
+        const object = self.liveObject(handle) orelse return;
+        const was_program = object.owner.kind == .program;
         object.generation += 1;
         self.live -= 1;
+        if (was_program) self.program_root_count -= 1;
         switch (object.data) {
             // Only a `Value` element can hold an object; a `f64`, an
             // `i64` or a byte cell owns nothing and has nothing to walk.
@@ -1765,9 +1948,11 @@ pub const Runtime = struct {
                 if (handle.index == value.null_index) return;
                 const found = self.liveObject(handle) orelse
                     return self.fail(.use_after_free);
-                if (found.owner == .container) return self.fail(.not_owned);
+                if (found.owner.kind == .container or found.owner.kind == .program) {
+                    return self.fail(.not_owned);
+                }
                 if (expected) |owner| {
-                    if (!(found.owner == .binding and
+                    if (!(found.owner.kind == .binding and
                         found.owner.binding.serial == owner.serial and
                         found.owner.binding.local == owner.local))
                     {

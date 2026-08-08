@@ -123,7 +123,7 @@ pub fn close(out: *Buffer, where: Where, headings: []const markdown.Heading) !vo
 
     try out.add(
         \\<footer>
-        \\<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every sample on this site was compiled and run to produce the output shown beneath it.</p>
+        \\<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every Luce sample on this site was checked by the freshly built toolchain; runnable output and expected failure results are verified separately.</p>
         \\</footer>
         \\<script src="
     );

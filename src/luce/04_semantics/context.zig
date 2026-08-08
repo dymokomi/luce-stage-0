@@ -38,7 +38,7 @@ pub const Error = error{OutOfMemory};
 //
 // A constant folder and a lowering walk legitimately differ in what
 // they do with an answer; they must not differ in the answer, and a
-// reader who meets one of these in a `let` at file scope must not meet
+// reader who meets one of these in a `const` at file scope must not meet
 // different words for the same mistake inside a function.  So the
 // wording lives here and each pass formats it.
 
@@ -80,6 +80,29 @@ pub fn rangeMessage(landed: Type) []const u8 {
         .float => float_range_message,
         .double => double_range_message,
         .none, .boolean, .string, .strukt, .heap, .enumeration, .function, .optional => long_range_message,
+    };
+}
+
+/// The scalar type a literal going into `expected` lands on, or null
+/// when the place names no scalar width (docs/TYPES.md D3).  Both the
+/// ordinary lowerer and the constant folder ask this one question so
+/// `byte?` and `half?` look through their optional layer identically.
+pub fn literalLandingType(expected: Type) ?Type {
+    return switch (expected) {
+        .byte, .short, .int, .long, .half, .float, .double => expected,
+        .optional => |payload| switch (payload) {
+            .byte => .byte,
+            .short => .short,
+            .int => .int,
+            .long => .long,
+            .half => .half,
+            .float => .float,
+            .double => .double,
+            // A number never lands on an enum: `Method` is a set of
+            // names and `Method(8)` is the only way in (D4, R2).
+            .boolean, .string, .strukt, .heap, .enumeration => null,
+        },
+        .none, .boolean, .string, .strukt, .heap, .enumeration, .function => null,
     };
 }
 
@@ -391,18 +414,21 @@ pub const StructShape = struct {
     values: u32 = 0,
 };
 
-/// The folded value of a file-scope constant.  Constants are values
-/// only — scalars, string, and value structs — computed entirely at
-/// compile time and inlined at every use site.
+/// The folded value of a file-scope constant.  Scalars, strings and
+/// value structs are inlined at each use; a container names the
+/// program-root pool row each runtime materializes once
+/// (docs/CONSTANTS.md R-C).  The row, and every slice below, is
+/// arena-owned by the analyzed program.
 pub const ConstantValue = union(enum) {
     long: i64,
     double: f64,
     boolean: bool,
     string: []const u8, // arena-owned
     strukt: struct { layout: u32, fields: []ConstantValue },
+    container: u32,
     /// `none`, folded where something said what it is absent *of* — a
     /// `T?` annotation on the declaration is such a place, so
-    /// `let x: long? = none` folds (docs/ARGS.md D9).  It carries
+    /// `const x: long? = none` folds (docs/ARGS.md D9).  It carries
     /// nothing; the constant's type says all there is.
     absent,
 };
@@ -444,6 +470,27 @@ pub const OwnershipClass = enum { owned, alias, borrow_param, inout_receiver };
 
 pub const Poison = enum { given, freed };
 
+/// What stage 4 knows about the root object behind an object-typed
+/// value.  A direct constant and every plain alias retain its written
+/// declaration name; a control-flow join of visible roots keeps a
+/// `maybe_constant` taint even when no one declaration remains exact;
+/// fresh/copy/give results are mutable; and a borrow crossing a function
+/// boundary is unknown.  Unknown is not permission: `libluce_rt`'s
+/// program-root owner remains the dynamic backstop (docs/CONSTANTS.md
+/// R-C, R-D).
+pub const RootState = union(enum) {
+    mutable,
+    unknown,
+    maybe_constant,
+    constant: struct {
+        /// Pool-row identity, not merely the written declaration name:
+        /// aliases of one construction share it, while equal literals
+        /// in distinct declarations remain distinct objects (C5).
+        row: u32,
+        name: []const u8,
+    },
+};
+
 pub const LocalInfo = struct {
     local: LocalId,
     mutable: bool,
@@ -465,6 +512,10 @@ pub const LocalInfo = struct {
     /// True while a for-loop iterates this name: reassignment would
     /// free the collection under the loop's feet (S5 meets S9).
     iterating: bool = false,
+    /// Static knowledge about a container's ultimate root.  Meaningful
+    /// only when `carries` is true; value locals keep the harmless
+    /// `.mutable` default.
+    root: RootState = .mutable,
 };
 
 /// One local this scope has to release on the way out, and in which of

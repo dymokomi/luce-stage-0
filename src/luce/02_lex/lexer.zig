@@ -63,9 +63,11 @@
 //!   than the one containing it (`luce.lex.indent` otherwise).  Tabs
 //!   are rejected outright — no `TabError`-style "consistent use is
 //!   fine" rule to reason about — and blank or comment-only lines
-//!   produce no layout tokens.  Inside parentheses and brackets,
-//!   newlines and indentation are plain spacing, so calls and
-//!   expressions may span lines.  Nesting is bounded by
+//!   produce no layout tokens.  Inside parentheses, brackets, and map
+//!   literal braces, newlines and indentation are plain spacing, so
+//!   calls and expressions may span lines.  F-string braces are
+//!   scanned inside their single token and never enter this layout
+//!   depth.  Nesting is bounded by
 //!   `max_indent_depth`.
 //!
 //! ## The recovery contract
@@ -231,8 +233,9 @@ const Lexer = struct {
     /// with 0, so it is never empty.
     indents: std.ArrayList(usize) = .empty,
     offset: usize = 0,
-    /// Open `(` and `[` together: layout is suspended while any are
-    /// open, exactly as in Python.
+    /// Open `(`, `[`, and map-literal `{` together: layout is
+    /// suspended while any are open.  F-string holes are scanned whole
+    /// by `fstring()` and keep their own independent brace depth.
     paren_depth: usize = 0,
     at_line_start: bool = true,
     /// Diagnostics this lexer has added, for the `max_diagnostics`
@@ -456,6 +459,14 @@ const Lexer = struct {
             ']' => {
                 if (self.paren_depth > 0) self.paren_depth -= 1;
                 try self.single(.right_bracket);
+            },
+            '{' => {
+                self.paren_depth += 1;
+                try self.single(.left_brace);
+            },
+            '}' => {
+                if (self.paren_depth > 0) self.paren_depth -= 1;
+                try self.single(.right_brace);
             },
             ',' => try self.single(.comma),
             ':' => try self.single(.colon),
@@ -1484,8 +1495,6 @@ fn hintFor(character: u8) ?[]const u8 {
     return switch (character) {
         '!' => "use 'not'; '!=' is inequality",
         ';' => "a statement ends at the line, not at a ';'",
-        '{', '}' => "blocks are indentation; braces belong to f-strings",
-
         '\'' => "strings are written with double quotes",
         '\\' => "a backslash only escapes inside a string",
         else => null,
@@ -1967,6 +1976,20 @@ test "indentation inside brackets is plain spacing" {
     });
 }
 
+test "map braces suspend layout and remain separate from f-string braces" {
+    try lexKinds(testing.allocator,
+        \\const names = {
+        \\        "one": 1,
+        \\  "two": f"{2}",
+        \\}
+    , &.{
+        .keyword_const,  .identifier, .assign,      .left_brace,
+        .string_literal, .colon,      .int_literal, .comma,
+        .string_literal, .colon,      .fstring,     .comma,
+        .right_brace,    .newline,    .end_of_file,
+    });
+}
+
 test "empty and whitespace-only inputs produce just end of file" {
     try lexKinds(testing.allocator, "", &.{.end_of_file});
     try lexKinds(testing.allocator, "\n\n\n", &.{.end_of_file});
@@ -2026,7 +2049,7 @@ test "a lone apostrophe does not swallow the rest of the line" {
 
 test "habitual punctuation gets a hint toward the Luce spelling" {
     const allocator = testing.allocator;
-    for ([_][]const u8{ "a = 1;\n", "a = {1}\n" }) |source| {
+    for ([_][]const u8{"a = 1;\n"}) |source| {
         var diagnostics = Diagnostics.init(allocator);
         defer diagnostics.deinit();
         const tokens = (try lex(allocator, source, &diagnostics)).tokens;

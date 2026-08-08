@@ -118,25 +118,25 @@ test "an import cycle is allowed: a three-file ring loads, compiles, and runs" {
 }
 
 test "constants reach across modules through imports" {
-    // The importable half of S35: file scope owns nothing, so a
-    // constant is a value — and a value crosses a module boundary as
-    // `module.name` with no owner to hand over.  ownership_spec proves
-    // the rest of the situation within one file.
+    // The importable half of S35: a folded value constant has no
+    // runtime owner to hand over when it crosses a module boundary as
+    // `module.name`.  Program-root containers cross by shared handle
+    // under S46.  ownership_spec proves the rest within one file.
     const config: agree.File = .{ .name = "config", .source =
         \\struct Size:
         \\    rows: long
         \\    cols: long
         \\
-        \\let version = "2.0"
-        \\let rows = 24
-        \\let screen = Size(rows = rows, cols = 80)
+        \\const version = "2.0"
+        \\const rows = 24
+        \\const screen = Size(rows = rows, cols = 80)
         \\
     };
     var program = try agree.project(
         \\import config
         \\import std.strings
         \\
-        \\let banner = "loom " + config.version
+        \\const banner = "loom " + config.version
         \\
         \\func main():
         \\    assert(config.rows == 24)

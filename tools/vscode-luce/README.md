@@ -6,10 +6,10 @@ dependency on LuciaOS: three files, no build step, no code.
 
 - `syntaxes/luce.tmLanguage.json` — **generated**, see below.
 - `language-configuration.json` — comments, brackets, folding, indentation.
-  Hand-written and deliberately word-free: the indent rule is "a line that ends
-  in a colon opens a block", which is true of `func`, `struct`, `if`, `elif`,
-  `else`, `while`, `for` and `catch` alike and stays true of whatever opens a
-  block next.
+  Hand-written and deliberately word-free: the indent rule recognizes a line
+  ending in a colon, which covers every ordinary layout block. It is an editor
+  approximation rather than the parser's brace-aware layout rule; the split
+  map-value exception is documented below.
 - `package.json` — what VS Code loads, plus the two defaults below.
 
 Only `.luc` is claimed. A `.lc` is a compiled artifact and a `.lcm` a serialized
@@ -20,7 +20,7 @@ be offering the wrong thing.
 
 `syntaxes/luce.tmLanguage.json` is written by `tools/grammar.zig` from the
 compiler's own tables — the lexer's keyword table and token kinds, the
-reserved-name list, the free-builtin table, and the five method tables — and
+reserved-name list, the free-builtin table, and the receiver-method tables — and
 must not be edited by hand.
 
 ```sh
@@ -53,14 +53,15 @@ checks that every language word it actually uses has a class.
 
 | Scope | What it covers |
 | --- | --- |
-| `keyword.control.luce` | `if`, `elif`, `else`, `while`, `for`, `in`, `return`, `break`, `continue` |
+| `keyword.control.luce` | `if`, `elif`, `else`, `while`, `for`, `in`, `return`, `break`, `continue`, `match` |
 | `keyword.control.exception.luce` | `try`, `catch` |
 | `keyword.control.import.luce` | `import`, and the module path after it — `std.strings` as readily as a sibling `geometry` |
 | `keyword.control.raise.luce` / `.trap.luce` | `error` and `trap`, the two ways a program stops — **coloured red**, see below |
 | `keyword.operator.word.luce` | `and`, `or`, `not` |
-| `keyword.other.ownership.luce` | `new`, `give`, `copy`, `free` — the words that move ownership, in a class of their own |
-| `storage.type.luce` | `func`, `struct`, `let`, `var` |
-| `storage.modifier.luce` | `private`, `public` — the visibility markers (docs/VISIBILITY.md) |
+| `keyword.other.ownership.luce` | `new`, `give`, `copy`, `free`, `spawn` — the words that create or move owned objects and resources, in a class of their own |
+| `storage.type.luce` | `func`, `struct`, `enum`, `const`, `let`, `var` |
+| `storage.modifier.luce` | `private`, `public`, `static` — visibility and namespace markers |
+| `variable.language.luce` | `self`, the receiver supplied by the language |
 | `constant.language.luce` | `true`, `false`, `none` |
 | `support.type.luce` | the builtin type names, plus `None` |
 | `entity.name.type.luce` | every other capitalised name — the convention the language enforces for structs |
@@ -72,6 +73,7 @@ checks that every language word it actually uses has a class.
 | `keyword.operator.bitwise.luce` | `&`, `\|`, `^`, `~`, `<<`, `>>` (docs/BITWISE.md) |
 | `keyword.operator.assignment.luce` | `=` and every compound form, `<<=` and `//=` included |
 | `keyword.operator.optional.luce` / `.fallible.luce` | the `T?` and `T!` markers |
+| `punctuation.section.braces.*.luce` | `{` and `}` around runtime and constant map literals |
 | `invalid.illegal.number.luce` | the numeric literals the lexer refuses |
 | `invalid.illegal.name.luce` | a word that opens with an underscore, which is not a name |
 
@@ -82,9 +84,10 @@ Three decisions worth knowing about:
   own; `xs.find(1)` is the language and a bare `find(1)` is not.
 - **An f-string hole is real code.** `f"total {n + 1}"` highlights the
   expression inside the braces, using the same rules as everything outside a
-  string except strings and comments — which a hole cannot contain, because the
-  lexer scans an f-string as one token that ends at the first unescaped quote.
-  `{{` and `}}` are literal braces.
+  string. The compiler also accepts nested strings and map braces in a hole;
+  the current TextMate grammar does not recursively recognize those two shapes,
+  so their colouring can end early. `{{` and `}}` are literal braces. The
+  editor-only gap is tracked in `docs/MISSING.md`.
 - **Symbols are written longest first.** The operator rules come out of one
   table sorted by spelling length, so `<<=` is tried before `<<`, `<<` before
   `<`, and `==` before `=`. That order is the whole reason a compound
@@ -113,6 +116,12 @@ language's own rules rather than anybody's taste:
   columns deeper than the one containing it and a tab is refused outright by
   the lexer, so an editor guessing indentation from the file can only guess
   wrong.
+
+  The word-free `:\s*$` rule cannot see whether layout is suspended inside map
+  braces. It therefore adds an extra indent after a legal split map entry such
+  as `"key":` followed by its value on the next line, and cannot know to return
+  for the next key. Fixing that needs brace-aware editor state rather than a
+  different one-line regex; the approximation is tracked in `docs/MISSING.md`.
 
 Both are defaults: a setting of your own in `settings.json` still wins.
 

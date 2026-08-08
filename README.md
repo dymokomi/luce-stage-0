@@ -10,10 +10,13 @@ ordinary files on Linux and macOS.
 **The documentation is [luce.luciaos.com](https://luce.luciaos.com)** —
 a tour, worked examples, a reference, and a status page that says out
 loud what the language cannot yet do.  It is built from
-[`www/luce/`](www/luce/) in this repository, and **every Luce sample on it is
-compiled and run by the freshly built toolchain**, with the output on
-the page compared byte for byte against what the program actually
-printed.  A wrong claim fails the build.
+[`www/luce/`](www/luce/) in this repository.  **Every Luce sample on it is
+checked by the freshly built toolchain**: runnable examples execute,
+their printed output is compared byte for byte, and expected traps,
+raises and refusals are checked as such.  A broken sample or mismatched
+claimed result fails the build.  Links, anchors and selected
+compiler-to-reference vocabulary are checked too; prose beyond those
+checks remains human-reviewed.
 
 v1 — the persistent Fabric of Texels and Fibers — lives on the
 `main-v1` branch and in [docs/v1/](docs/v1/).  Its lesson drives v2:
@@ -131,7 +134,7 @@ means **a machine that only runs Luce programs needs neither LLVM nor
 
 A Luce program is a script with a `main` entry.  The language is
 statically typed with inference, has structs, `list`/`map`/`array`/
-`builder` heap objects created with `new` and freed by scope
+`builder` heap objects created with `new` or literals and freed by scope
 ownership (`give`/`copy`/`free`, docs/OWNERSHIP.md), slices, and
 checked traps — `docs/LANGUAGE.md` is the
 reference.  Effects — console,

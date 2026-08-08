@@ -1,7 +1,7 @@
 # Where to go next
 
-That is the language. Fifteen chapters covered every construct Luce
-has: there is no chapter sixteen holding back generics or traits or
+That is the language. Sixteen chapters covered every construct Luce
+has: there is no hidden chapter holding back generics or traits or
 async, because those are not in it.
 
 ## What you have seen
@@ -9,6 +9,8 @@ async, because those are not in it.
 Scalars, structs, enums and function values that copy; four heap
 objects that do not. Named functions as values, and capture-free
 lambdas whose types come from where they land.
+Folded file-scope values and flat immutable tables owned by each
+runtime's program root.
 Static types with inference, and one widening: `long` into `double`.
 Dispatch that checks you covered every member. Checked
 arithmetic and bounds checks that no build mode turns off. Scope
@@ -30,9 +32,10 @@ decisions with reasons written down; some are simply not built. The
 ## Four directions
 
 **Read short programs.** [Luce by example](/examples/) is complete
-programs one concept at a time, each compiled and run to produce the
-output shown — plus the real userland from the repository, including
-a Brainfuck interpreter and a recursive-descent calculator.
+programs one concept at a time, each checked for its shown result —
+normal output, trap, raise or refusal — plus the real userland from the
+repository, including a Brainfuck interpreter and a recursive-descent
+calculator.
 
 **Go deeper on the unusual parts.** [The guides](/guide/) are the
 longer pieces: why memory works this way and what it measured, the one
@@ -40,7 +43,7 @@ rule that decides trap-or-error, what strings cost, what the benchmark
 table does and does not say, and how the toolchain fits together.
 
 **Look something up.** [The reference](/ref/) is normative and terse:
-the exact grammar, every operator's precedence, all 45 ownership
+the exact grammar, every operator's precedence, all 46 ownership
 situations with individual anchors, every trap code, every builtin
 signature. It is the document to cite.
 

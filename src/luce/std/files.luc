@@ -90,14 +90,14 @@ func rename(from: string, to: string) -> !:
 
 # How the three doors number themselves for the host.  Private: a
 # reader writes `files.open(path)`, never a number.
-private let mode_read = 0
-private let mode_write = 1
-private let mode_append = 2
+private const mode_read = 0
+private const mode_write = 1
+private const mode_append = 2
 
 # How much one read of a whole-file convenience asks for.  Large
 # enough that an ordinary file is a handful of calls; small enough
 # that the buffer is not itself the memory question.
-private let chunk = 65536
+private const chunk = 65536
 
 # Open a file to read from the start.  The file must be there.
 func open(path: string) -> file!:

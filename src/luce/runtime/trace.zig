@@ -33,9 +33,10 @@ pub const Origin = extern struct {
     column: u32,
 };
 
-/// What a compiled artifact says about one of its own functions.  One
-/// per Luce function in `mir.Program.functions` order, so a recorded
-/// function index indexes this table directly.
+/// What a compiled artifact says about a traceable source site.  Luce
+/// functions come first in `mir.Program.functions` order, so an ordinary
+/// function index addresses the table directly.  Synthetic constant
+/// declaration rows follow them for failures in the pre-entry materializer.
 pub const FunctionInfo = extern struct {
     name: [*]const u8,
     name_length: i64,

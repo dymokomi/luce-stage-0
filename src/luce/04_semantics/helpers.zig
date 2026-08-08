@@ -133,6 +133,9 @@ pub fn deeperThan(expression: *const ast.Expression, budget: u32) bool {
             anyDeeperArgument(method.arguments, left),
         .new_object => |new| anyDeeper(new.dims, left),
         .list_literal => |literal| anyDeeper(literal.elements, left),
+        .map_literal => |literal| for (literal.entries) |entry| {
+            if (deeperThan(entry.key, left) or deeperThan(entry.value, left)) break true;
+        } else false,
         .index => |index| deeperThan(index.target, left) or anyDeeper(index.indices, left),
         .slice_range => |slice| deeperThan(slice.target, left) or
             (slice.start != null and deeperThan(slice.start.?, left)) or

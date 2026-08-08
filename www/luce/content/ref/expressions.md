@@ -143,12 +143,13 @@ argument ends the positional run — everything after it must be named —
 and named arguments may be written in any order. Names are never
 required. Arguments are evaluated in the order they are *written* and
 bound to the slots they *name*; the two differ only when a call
-reorders. A parameter may declare a trailing **default**, a
-compile-time constant filled in wherever a call omits the argument.
-There are no variadics. These names and defaults belong to a direct
-call of a declared function. A call through a function value is
-positional: its type carries parameter types and `give`, but no names
-or defaults.
+reorders. A parameter may declare a trailing **default**, checked at
+the declaration and supplied wherever a call omits the argument. A
+folded value default inlines there; a flat container default instead
+borrows the same per-runtime program root on every omission. There are
+no variadics. These names and defaults belong to a direct call of a
+declared function. A call through a function value is positional: its
+type carries parameter types and `give`, but no names or defaults.
 
 ```luce run
 func grown(base: long, step: long = 5, twice: bool = false) -> long:
@@ -345,12 +346,20 @@ Open slice ends default to `0` and to the length.
 ```
 [1, 2, 3]                  a list literal; element type inferred
 []                         empty; needs an annotated binding
+{"one": 1, "two": 2}       a map literal; key and value inferred
 new list(T)
 new map(K, V)
 new array(T, size, ...)
 new builder()
 Struct(field = expr, ...)  every field, by name
 ```
+
+A map literal evaluates its entries in written order and creates a
+fresh mutable map. A later equal key replaces the earlier value while
+keeping its insertion position. An unannotated integer key is `long`.
+Empty `{}` is refused because it supplies neither `K` nor `V`; write
+`new map(K, V)`. At file scope the same nonempty literal may initialize
+an immutable [constant container](../statements/#file-scope-constants).
 
 ## Ownership operators
 

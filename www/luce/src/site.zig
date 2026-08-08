@@ -36,7 +36,7 @@ pub const sections = [_]Section{
         .slug = "tour",
         .label = "Tour",
         .title = "A tour of Luce",
-        .blurb = "Start here. Fifteen short chapters, in order, from installing the compiler to writing a program that reads a file.",
+        .blurb = "Start here. Sixteen short chapters, in order, from installing the compiler to writing a program that reads a file.",
         .pages = &.{
             .{ .slug = "hello", .title = "Hello, Luce", .blurb = "Build the toolchain, compile a program, run it." },
             .{ .slug = "values", .title = "Values and types", .blurb = "Numbers, strings, enums and function values, plus the one-way numeric promotion rules." },
@@ -44,6 +44,7 @@ pub const sections = [_]Section{
             .{ .slug = "functions", .title = "Functions and structs", .blurb = "func, parameters, returns, function values, capture-free lambdas, and value structs." },
             .{ .slug = "enums", .title = "Enums", .blurb = "A name for every number that is secretly a set, and the match that checks you covered them." },
             .{ .slug = "collections", .title = "Lists, maps and arrays", .blurb = "The four heap objects, their methods, and how you walk them." },
+            .{ .slug = "constants", .title = "Constants and shared tables", .blurb = "File-scope const, map literals, program-root identity, and the immutable boundary." },
             .{ .slug = "strings", .title = "Strings", .blurb = "Immutable UTF-8, f-strings, slicing, and where the rest of the string library lives." },
             .{ .slug = "ownership", .title = "Memory", .blurb = "Scope ownership: no collector, no reference counting, and four words to learn." },
             .{ .slug = "absence", .title = "Absence", .blurb = "T?, none, narrowing, and else — saying that a thing might not be there." },
@@ -59,7 +60,7 @@ pub const sections = [_]Section{
         .slug = "examples",
         .label = "Examples",
         .title = "Luce by example",
-        .blurb = "Complete programs, each one compiled and run to produce the output printed beneath it. Read them in any order.",
+        .blurb = "Complete programs and failure cases, each checked against the result printed beneath it. Read them in any order.",
         .pages = &.{
             .{ .slug = "hello", .title = "Hello and arguments", .blurb = "The smallest program, and reading the command line." },
             .{ .slug = "loops", .title = "Loops and ranges", .blurb = "range, for over a collection, enumerate, while, break and continue." },
@@ -73,7 +74,7 @@ pub const sections = [_]Section{
             .{ .slug = "errors", .title = "Errors", .blurb = "A fallible function, try, catch, and an uncaught error's one-line report." },
             .{ .slug = "traps", .title = "Traps", .blurb = "What a bug looks like: a stable code, a line, and a call trace." },
             .{ .slug = "files", .title = "Files", .blurb = "Reading and writing through std.files, with the failure handled." },
-            .{ .slug = "programs", .title = "The bundled programs", .blurb = "The real userland in the repository, compiled and run from its own source." },
+            .{ .slug = "programs", .title = "The bundled programs", .blurb = "The real userland in the repository, included from source and exercised by the site." },
         },
     },
     .{
@@ -99,7 +100,7 @@ pub const sections = [_]Section{
             .{ .slug = "types", .title = "Types", .blurb = "Values, function signatures, heap objects, optionals, and the type of every expression." },
             .{ .slug = "expressions", .title = "Expressions", .blurb = "Operators, precedence, direct and indirect calls, lambdas, indexing, slicing, and the two refused shapes." },
             .{ .slug = "statements", .title = "Statements and declarations", .blurb = "let, var, assignment, control flow, func, struct, and file-scope constants." },
-            .{ .slug = "ownership", .title = "Ownership", .blurb = "The ratified memory model, S1 to S45, each one addressable on its own." },
+            .{ .slug = "ownership", .title = "Ownership", .blurb = "The ratified memory model, S1 to S46, each one addressable on its own." },
             .{ .slug = "failure", .title = "Traps and errors", .blurb = "Every trap code, both error codes, and what each one means." },
             .{ .slug = "modules", .title = "Modules", .blurb = "Imports, the std namespace, and the three rules that keep it honest." },
             .{ .slug = "builtins", .title = "Builtins", .blurb = "Every free function and every method, with its signature." },

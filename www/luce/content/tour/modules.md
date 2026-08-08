@@ -8,7 +8,7 @@ struct Point:
     x: double
     y: double
 
-let unit = 1.0
+const unit = 1.0
 
 func distance(a: Point, b: Point) -> double:
     let dx = a.x - b.x

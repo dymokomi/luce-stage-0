@@ -65,6 +65,7 @@ const FunctionDeclInfo = context.FunctionDeclInfo;
 const EnclosingLocal = context.EnclosingLocal;
 const ConstantValue = context.ConstantValue;
 const OwnershipClass = context.OwnershipClass;
+const RootState = context.RootState;
 const Poison = context.Poison;
 const LocalInfo = context.LocalInfo;
 const Scope = context.Scope;
@@ -91,6 +92,10 @@ const LocalId = mir.LocalId;
 const Typed = struct {
     register: Register,
     value_type: Type,
+    /// Static knowledge of the root behind an object value.  Most
+    /// producers are fresh/mutable; names and borrowed reads override
+    /// the default where the distinction matters (CONSTANTS R-C/R-D).
+    root: RootState = .mutable,
 };
 
 /// Whether a call answering a return shape is being received by a
@@ -230,25 +235,26 @@ pub const FunctionBuilder = struct {
     /// a multi-valued call used as arguments must be the *only*
     /// arguments — and the reader is owed the one line that fixes it.
     shape_position: ShapePosition = .refused,
-    /// The element type the next list literal should be built at, when
-    /// the place it is going into names one — `let xs: list(double) =
-    /// [1, 2, 3]` (docs/NUMERICS.md).  A literal has no annotation of
-    /// its own, so without this the elements infer `long` and the whole
-    /// list refuses to fit a `list(double)` it could have been.
+    /// The container type the next bracket or map literal should be
+    /// built at, when the place it is going into names one —
+    /// `let xs: list(double) = [1, 2, 3]`, a rank-1 array annotation,
+    /// or `let names: map(string, long) = {"one": 1}`.  A literal has
+    /// no annotation of its own, so the container supplies both its
+    /// shape and the landing types of its contents.
     ///
     /// Set for exactly one hop, the way `allow_fallible` is:
     /// `lowerExpressionInner` reads and clears it, so it reaches the
     /// literal it was raised in front of and nothing nested inside it.
     /// Inference where nothing is expected is untouched — `let xs =
     /// [1, 2, 3]` is still a `list(long)`.
-    wanted_element: ?Type = null,
+    wanted_container: ?Type = null,
     /// The scalar type the next expression lands on, when the place it
     /// is going into names one — `let x: double = 7` (docs/TYPES.md §1,
     /// D3).  **A numeric literal has no type of its own**; it takes the
     /// type of its context if it fits, and this is how the context
     /// reaches it.
     ///
-    /// Set for exactly one hop, the way `wanted_element` is:
+    /// Set for exactly one hop, the way `wanted_container` is:
     /// `lowerExpressionInner` reads and clears it, so it reaches the
     /// literal it was raised in front of and nothing nested inside it
     /// that has a landing width of its own.  Inference where nothing is
@@ -378,6 +384,211 @@ pub const FunctionBuilder = struct {
         }
     }
 
+    const RootFact = struct { local: LocalId, state: RootState };
+
+    fn sameRoot(left: RootState, right: RootState) bool {
+        return switch (left) {
+            .mutable => right == .mutable,
+            .unknown => right == .unknown,
+            .maybe_constant => right == .maybe_constant,
+            .constant => |held| right == .constant and held.row == right.constant.row,
+        };
+    }
+
+    fn joinedRoot(left: RootState, right: RootState) RootState {
+        if (sameRoot(left, right)) return left;
+        if (left == .constant or left == .maybe_constant or
+            right == .constant or right == .maybe_constant)
+        {
+            return .maybe_constant;
+        }
+        return .unknown;
+    }
+
+    fn localById(self: *FunctionBuilder, local: LocalId) ?*LocalInfo {
+        for (self.scopes.items) |*scope| {
+            var names = scope.names.valueIterator();
+            while (names.next()) |info| {
+                if (info.local == local) return info;
+            }
+        }
+        return null;
+    }
+
+    /// Record the root fact for a local stage 4 just declared.  The
+    /// declaration driver uses this for parameters: owned/give inputs
+    /// are mutable, while an ordinary borrow may hide a program root.
+    pub fn setRoot(self: *FunctionBuilder, local: LocalId, state: RootState) void {
+        const info = self.localById(local) orelse return;
+        info.root = state;
+    }
+
+    /// Snapshot the root provenance of every visible local.  Branches
+    /// restore the entry snapshot before lowering their sibling and
+    /// join exact agreement afterwards, beside optional narrowing's
+    /// own flow facts.
+    fn rootSave(self: *FunctionBuilder) Error![]RootFact {
+        var facts: std.ArrayList(RootFact) = .empty;
+        defer facts.deinit(self.temporary());
+        for (self.scopes.items) |*scope| {
+            var names = scope.names.valueIterator();
+            while (names.next()) |info| {
+                try facts.append(self.temporary(), .{ .local = info.local, .state = info.root });
+            }
+        }
+        return facts.toOwnedSlice(self.temporary());
+    }
+
+    fn rootRestore(self: *FunctionBuilder, saved: []const RootFact) void {
+        for (saved) |fact| {
+            const info = self.localById(fact.local) orelse continue;
+            info.root = fact.state;
+        }
+    }
+
+    fn rootIntersect(self: *FunctionBuilder, other: []const RootFact) void {
+        for (other) |fact| {
+            const info = self.localById(fact.local) orelse continue;
+            info.root = joinedRoot(info.root, fact.state);
+        }
+    }
+
+    fn rootCaptureInto(self: *FunctionBuilder, target: []RootFact) void {
+        for (target) |*fact| {
+            const info = self.localById(fact.local) orelse continue;
+            fact.state = info.root;
+        }
+    }
+
+    fn rootJoinInto(self: *FunctionBuilder, target: []RootFact) void {
+        for (target) |*fact| {
+            const info = self.localById(fact.local) orelse continue;
+            fact.state = joinedRoot(fact.state, info.root);
+        }
+    }
+
+    fn refuseConstantWrite(
+        self: *FunctionBuilder,
+        state: RootState,
+        span: Span,
+        action: []const u8,
+    ) Error!bool {
+        return switch (state) {
+            .mutable, .unknown => false,
+            .constant => |held| blk: {
+                try self.fail(
+                    "luce.sema.const",
+                    span,
+                    "{s} is a constant; {s} would write the program [CONSTANTS.md R-D]",
+                    .{ held.name, action },
+                );
+                break :blk true;
+            },
+            .maybe_constant => blk: {
+                try self.fail(
+                    "luce.sema.const",
+                    span,
+                    "this value may name a constant; {s} would write the program — use copy before the paths join [CONSTANTS.md R-D]",
+                    .{action},
+                );
+                break :blk true;
+            },
+        };
+    }
+
+    fn refuseConstantEscape(
+        self: *FunctionBuilder,
+        state: RootState,
+        span: Span,
+        action: []const u8,
+    ) Error!bool {
+        return switch (state) {
+            .mutable, .unknown => false,
+            .constant => |held| blk: {
+                try self.fail(
+                    "luce.sema.const",
+                    span,
+                    "{s} is a constant owned by the program; {s} cannot move or retain it — use copy on the value first [CONSTANTS.md R-C, R-D]",
+                    .{ held.name, action },
+                );
+                break :blk true;
+            },
+            .maybe_constant => blk: {
+                try self.fail(
+                    "luce.sema.const",
+                    span,
+                    "this value may name a constant owned by the program; {s} cannot move or retain it — use copy before the paths join [CONSTANTS.md R-C, R-D]",
+                    .{action},
+                );
+                break :blk true;
+            },
+        };
+    }
+
+    fn constantState(self: *const FunctionBuilder, index: u32) ?RootState {
+        const info = self.analyzer.constant_infos.items[index];
+        if (info.state != .ready or info.value != .container) return null;
+        return .{ .constant = .{
+            .row = info.value.container,
+            .name = info.declaration.name,
+        } };
+    }
+
+    const WrittenConstant = union(enum) { not_constant, reported, root: RootState };
+
+    fn writtenConstantIndex(self: *FunctionBuilder, expression: *const ast.Expression) Error!?u32 {
+        switch (expression.*) {
+            .name => |name| {
+                if (self.findLocal(name.text) != null) return null;
+                const qualified = try self.analyzer.qualify(self.prefix, name.text);
+                return self.analyzer.constant_names.get(qualified);
+            },
+            .field => |field| {
+                if (field.target.* != .name or self.findLocal(field.target.name.text) != null) return null;
+                if (!self.analyzer.importsModule(self.module, field.target.name.text)) return null;
+                const joined = try std.fmt.allocPrint(self.temporary(), "{s}.{s}", .{
+                    field.target.name.text,
+                    field.name,
+                });
+                defer self.temporary().free(joined);
+                return self.analyzer.constant_names.get(joined);
+            },
+            else => return null,
+        }
+    }
+
+    fn writtenConstant(self: *FunctionBuilder, expression: *const ast.Expression) Error!WrittenConstant {
+        const index = (try self.writtenConstantIndex(expression)) orelse return .not_constant;
+        switch (expression.*) {
+            .field => |field| {
+                const info = self.analyzer.constant_infos.items[index];
+                if (info.declaration.visibility == .private and info.module != self.module) {
+                    try self.fail("luce.sema.private", field.span, "{s} is private to {s}", .{
+                        field.name,
+                        self.analyzer.moduleName(info.module),
+                    });
+                    return .reported;
+                }
+            },
+            else => {},
+        }
+        return if (self.constantState(index)) |root| .{ .root = root } else .not_constant;
+    }
+
+    fn constantPlaceRoot(self: *FunctionBuilder, expression: *const ast.Expression) Error!WrittenConstant {
+        return switch (expression.*) {
+            .index => |index| blk: {
+                const written = try self.writtenConstant(index.target);
+                break :blk if (written == .not_constant)
+                    try self.constantPlaceRoot(index.target)
+                else
+                    written;
+            },
+            .field => |field| try self.constantPlaceRoot(field.target),
+            else => try self.writtenConstant(expression),
+        };
+    }
+
     /// What `condition` proves about absence when it evaluates to
     /// `want`: `x != none` proves `x` present when true, `x == none`
     /// proves it present when false, `and` passes both facts through on
@@ -427,14 +638,103 @@ pub const FunctionBuilder = struct {
         for (block.statements) |statement| self.widenAssignedBy(statement);
     }
 
+    fn expressionMayNameVisibleConstant(
+        self: *FunctionBuilder,
+        expression: *const ast.Expression,
+    ) Error!bool {
+        if (try self.writtenConstantIndex(expression)) |index| {
+            return self.constantState(index) != null;
+        }
+        return switch (expression.*) {
+            .name => |name| if (self.findLocal(name.text)) |found|
+                found.info.root == .constant or found.info.root == .maybe_constant
+            else
+                false,
+            .binary => |binary| (binary.op == .coalesce and
+                (try self.expressionMayNameVisibleConstant(binary.left) or
+                    try self.expressionMayNameVisibleConstant(binary.right))),
+            else => false,
+        };
+    }
+
+    fn taintLoopRootsBy(self: *FunctionBuilder, statement: ast.Statement) Error!bool {
+        return switch (statement) {
+            .assign => |assign| switch (assign.target) {
+                .name => |name| blk: {
+                    if (!try self.expressionMayNameVisibleConstant(assign.value)) break :blk false;
+                    const found = self.findLocal(name.text) orelse break :blk false;
+                    if (found.info.root == .constant or found.info.root == .maybe_constant) break :blk false;
+                    found.info.root = .maybe_constant;
+                    break :blk true;
+                },
+                .field, .index, .chain => false,
+            },
+            .conditional => |conditional| blk: {
+                var changed = try self.taintLoopRootsIn(conditional.then_block);
+                if (conditional.else_block) |arm| changed = try self.taintLoopRootsIn(arm) or changed;
+                break :blk changed;
+            },
+            .while_loop => |loop| self.taintLoopRootsIn(loop.body),
+            .for_range => |loop| self.taintLoopRootsIn(loop.body),
+            .for_each => |loop| self.taintLoopRootsIn(loop.body),
+            .guarded => |guarded| blk: {
+                var changed = try self.taintLoopRootsBy(guarded.attempt.*);
+                changed = try self.taintLoopRootsIn(guarded.handler) or changed;
+                break :blk changed;
+            },
+            .match => |matched| blk: {
+                var changed = false;
+                for (matched.arms) |arm| changed = try self.taintLoopRootsIn(arm.body) or changed;
+                if (matched.else_block) |arm| changed = try self.taintLoopRootsIn(arm) or changed;
+                break :blk changed;
+            },
+            .let,
+            .variable,
+            .destructure,
+            .assign_many,
+            .return_statement,
+            .break_statement,
+            .continue_statement,
+            .expression,
+            => false,
+        };
+    }
+
+    fn taintLoopRootsIn(self: *FunctionBuilder, block: ast.Block) Error!bool {
+        var changed = false;
+        for (block.statements) |statement| changed = try self.taintLoopRootsBy(statement) or changed;
+        return changed;
+    }
+
+    fn prepareLoopFacts(self: *FunctionBuilder, block: ast.Block) Error!void {
+        // Follow visible root aliases to a fixed point before lowering
+        // the loop body.  The body can run again: `xs = TABLE` at its
+        // end makes an earlier `xs.append(...)` a constant write on the
+        // next iteration even when `xs` entered mutable.  This tiny
+        // name-flow pass preserves that fact without treating fresh-only
+        // loop assignments as constants.
+        while (try self.taintLoopRootsIn(block)) {}
+        self.widenAssignedIn(block);
+    }
+
+    fn forgetAssignedFacts(self: *FunctionBuilder, local: LocalId) void {
+        self.widen(local);
+        if (self.localById(local)) |info| {
+            info.root = switch (info.root) {
+                .constant, .maybe_constant => .maybe_constant,
+                .mutable, .unknown => .unknown,
+            };
+        }
+    }
+
     fn widenAssignedBy(self: *FunctionBuilder, statement: ast.Statement) void {
         switch (statement) {
             .assign => |assign| switch (assign.target) {
-                .name => |name| if (self.findLocal(name.text)) |found| self.widen(found.info.local),
+                .name => |name| if (self.findLocal(name.text)) |found| self.forgetAssignedFacts(found.info.local),
                 .field, .index, .chain => {},
             },
             .assign_many => |assign| for (assign.names) |name| {
-                if (self.findLocal(name.text)) |found| self.widen(found.info.local);
+                if (self.findLocal(name.text)) |found| self.forgetAssignedFacts(found.info.local);
             },
             .conditional => |conditional| {
                 self.widenAssignedIn(conditional.then_block);
@@ -1316,6 +1616,9 @@ pub const FunctionBuilder = struct {
             .list_literal => |literal| for (literal.elements) |element| {
                 if (self.splitsBlocks(element, left)) break true;
             } else false,
+            .map_literal => |literal| for (literal.entries) |entry| {
+                if (self.splitsBlocks(entry.key, left) or self.splitsBlocks(entry.value, left)) break true;
+            } else false,
             .index => |index| self.splitsBlocks(index.target, left) or for (index.indices) |item| {
                 if (self.splitsBlocks(item, left)) break true;
             } else false,
@@ -1408,7 +1711,7 @@ pub const FunctionBuilder = struct {
         return switch (expression.*) {
             // A spawn makes a task nobody has named, exactly as `new`
             // makes a list nobody has named (docs/THREADS.md D3).
-            .new_object, .list_literal, .slice_range, .call, .give, .copy, .spawn => true,
+            .new_object, .list_literal, .map_literal, .slice_range, .call, .give, .copy, .spawn => true,
             // `try f()` hands over exactly what `f()` does: the value
             // crosses a block boundary through a slot, and a slot
             // carrying an object changes nothing about who owns it.
@@ -1675,6 +1978,7 @@ pub const FunctionBuilder = struct {
                 expected,
             ),
             .value_type = expected,
+            .root = inner.root,
         };
     }
 
@@ -1699,6 +2003,7 @@ pub const FunctionBuilder = struct {
                 to,
             ),
             .value_type = to,
+            .root = value.root,
         };
     }
 
@@ -1721,40 +2026,16 @@ pub const FunctionBuilder = struct {
         return true;
     }
 
-    /// The element type a `list(T)` place names, for the literal about
-    /// to be lowered into it; null for every place that is not one.
-    fn elementOf(self: *FunctionBuilder, expected: Type) ?Type {
+    /// The container place a literal can take its shape from.  Bracket
+    /// literals accept lists and rank-1 arrays; map literals accept
+    /// maps.  The particular literal checks the descriptor after this
+    /// one-hop signal reaches it.
+    fn containerPlace(self: *FunctionBuilder, expected: Type) ?Type {
         const descriptor = self.analyzer.heapOf(expected) orelse return null;
-        return if (descriptor == .list) descriptor.list else null;
-    }
-
-    /// The scalar type a literal going into `expected` lands on, or
-    /// null when `expected` names no scalar for it to land on
-    /// (docs/TYPES.md D3).
-    ///
-    /// `T?` looks through to its `T`: `let x: double? = 1` lands the
-    /// literal at a float and wraps it, which is the same order `fit`
-    /// composes its two widenings in.
-    fn landingType(expected: Type) ?Type {
-        return switch (expected) {
-            // A storage type is a place a literal lands on like any
-            // other — `pixels[i] = 200` with a `byte` element is §1's
-            // own example, and 200 fits while 300 is refused where it
-            // is written rather than where it is stored.
-            .byte, .short, .int, .long, .half, .float, .double => expected,
-            .optional => |payload| switch (payload) {
-                .byte => .byte,
-                .short => .short,
-                .int => .int,
-                .long => .long,
-                .half => .half,
-                .float => .float,
-                .double => .double,
-                // A number never lands on an enum: `Method` is a set of
-                // names and `Method(8)` is the only way in (D4, R2).
-                .boolean, .string, .strukt, .heap, .enumeration => null,
-            },
-            .none, .boolean, .string, .strukt, .heap, .enumeration, .function => null,
+        return switch (descriptor) {
+            .list, .map => expected,
+            .array => |shape| if (shape.rank == 1) expected else null,
+            .builder, .file, .task => null,
         };
     }
 
@@ -1768,8 +2049,8 @@ pub const FunctionBuilder = struct {
     /// that names none of the three raises none, and inference where
     /// nothing is expected stays untouched.
     fn wantPlace(self: *FunctionBuilder, expected: Type) void {
-        self.wanted = landingType(expected);
-        self.wanted_element = self.elementOf(expected);
+        self.wanted = context.literalLandingType(expected);
+        self.wanted_container = self.containerPlace(expected);
         self.wanted_function = if (expected == .function) expected.function else null;
     }
 
@@ -2053,6 +2334,7 @@ pub const FunctionBuilder = struct {
         switch (landing) {
             .nothing => return null,
             .places => |places| return places[index],
+            .maybe_places => |places| return places[index],
             .method => |method| {
                 if (index == 0) return null;
                 // A struct receiver's parameters come from the
@@ -2133,6 +2415,11 @@ pub const FunctionBuilder = struct {
         nothing,
         /// One type per operand, positionally.
         places: []const Type,
+        /// One optional type per operand.  Runtime map literals use
+        /// this because their keys always have a landing (`long` when
+        /// unannotated), while their values only do when an annotated
+        /// map names one.
+        maybe_places: []const ?Type,
         /// Operand zero is a method receiver and names what the rest
         /// take — through the declaration for a struct receiver,
         /// through `methodParameters` for a builtin one.
@@ -2470,6 +2757,11 @@ pub const FunctionBuilder = struct {
         // (`lowerWhile` widens the same way, for the same reason).
         const entry = try self.narrowSave();
         defer self.temporary().free(entry);
+        const root_entry = try self.rootSave();
+        defer self.temporary().free(root_entry);
+        const joined_roots = try self.temporary().dupe(RootFact, root_entry);
+        defer self.temporary().free(joined_roots);
+        var has_continuing_root = false;
 
         // With no else and every member named, the last arm needs no
         // test: it is where a value that matched nothing above must be.
@@ -2491,21 +2783,37 @@ pub const FunctionBuilder = struct {
             } }, .boolean);
             const arms = try self.code.openIf(same, true);
             try self.narrowRestore(entry);
+            self.rootRestore(root_entry);
             try self.lowerBlock(arm.body);
+            if (!helpers.alwaysExits(arm.body)) {
+                if (has_continuing_root) self.rootJoinInto(joined_roots) else self.rootCaptureInto(joined_roots);
+                has_continuing_root = true;
+            }
             try self.code.elseArm(arms);
             try frames.append(self.temporary(), arms);
         }
         try self.narrowRestore(entry);
+        self.rootRestore(root_entry);
         if (matched.else_block) |otherwise| {
             try self.lowerBlock(otherwise);
+            if (!helpers.alwaysExits(otherwise)) {
+                if (has_continuing_root) self.rootJoinInto(joined_roots) else self.rootCaptureInto(joined_roots);
+                has_continuing_root = true;
+            }
         } else {
-            try self.lowerBlock(matched.arms[matched.arms.len - 1].body);
+            const last = matched.arms[matched.arms.len - 1].body;
+            try self.lowerBlock(last);
+            if (!helpers.alwaysExits(last)) {
+                if (has_continuing_root) self.rootJoinInto(joined_roots) else self.rootCaptureInto(joined_roots);
+                has_continuing_root = true;
+            }
         }
         while (frames.pop()) |arms| try self.code.closeIf(arms);
 
         try self.narrowRestore(entry);
         for (matched.arms) |arm| self.widenAssignedIn(arm.body);
         if (matched.else_block) |otherwise| self.widenAssignedIn(otherwise);
+        if (has_continuing_root) self.rootRestore(joined_roots) else self.rootRestore(root_entry);
     }
 
     /// A match arm, or a `Method.x`, naming something the enum has not.
@@ -2577,36 +2885,6 @@ pub const FunctionBuilder = struct {
         mutable: bool,
         span: Span,
     ) Error!void {
-        // An empty [] has no element type of its own; the annotation
-        // supplies it: var xs: list(long) = []
-        if (value_expression.* == .list_literal and value_expression.list_literal.elements.len == 0) {
-            const written = annotation orelse {
-                try self.fail(
-                    "luce.sema.type",
-                    span,
-                    "an empty [] needs an annotation: var {s}: list(T) = []",
-                    .{name},
-                );
-                return self.forgetName(name);
-            };
-            const expected = (try self.analyzer.resolveType(self.module, written)) orelse
-                return self.forgetName(name);
-            const descriptor = self.analyzer.heapOf(expected);
-            if (descriptor == null or descriptor.? != .list) {
-                try self.fail("luce.sema.type", span, "[] builds a list, but {s} is annotated {s}", .{
-                    name,
-                    try self.analyzer.typeName(expected),
-                });
-                return self.forgetName(name);
-            }
-            const list = try self.code.emit(.{ .heap_new = .{ .heap = expected.heap, .dims = &.{} } }, expected);
-            const local = (try self.declareLocal(name, expected, mutable, .owned, name_span)) orelse
-                return self.forgetName(name);
-            try self.code.store(local, list);
-            try self.code.bind(local, list);
-            return;
-        }
-
         // A binding whose initializer failed still declares a name the
         // reader meant; remembering it keeps one mistake from
         // producing an "unknown name" per later use.
@@ -2669,6 +2947,7 @@ pub const FunctionBuilder = struct {
             if (owns) .owned else .alias,
             name_span,
         )) orelse return self.forgetName(name);
+        self.setRoot(local, value.root);
         try self.storeOwned(local, value);
         if (owns) {
             try self.code.bind(local, value.register);
@@ -2786,7 +3065,7 @@ pub const FunctionBuilder = struct {
         const found = self.findLocal(name.text) orelse {
             const qualified = try self.analyzer.qualify(self.prefix, name.text);
             if (self.analyzer.constant_names.contains(qualified)) {
-                try self.fail("luce.sema.let", name.span, "{s} is a file-scope constant and cannot be assigned", .{name.text});
+                try self.fail("luce.sema.const", name.span, "{s} is a file-scope constant and cannot be assigned", .{name.text});
             } else {
                 try self.failUnknownName(name.text, name.span);
             }
@@ -2900,6 +3179,7 @@ pub const FunctionBuilder = struct {
             if (item.target.value_type == .optional) {
                 if (item.present) try self.narrow(item.target.local) else self.widen(item.target.local);
             }
+            if (self.localById(item.target.local)) |info| info.root = .mutable;
         }
         // The targets now own every object the return shape carried;
         // its statement temporary keeps only its own field storage.
@@ -3041,11 +3321,25 @@ pub const FunctionBuilder = struct {
             try self.fail("luce.sema.name", root.span, "ports are not nested places", .{});
             return;
         }
+        switch (try self.constantPlaceRoot(chain.place)) {
+            .not_constant => {},
+            .reported => return,
+            .root => |state| {
+                _ = try self.refuseConstantWrite(state, chain.span, "a nested store");
+                return;
+            },
+        }
         const found = self.findLocal(root.text) orelse {
+            const qualified = try self.analyzer.qualify(self.prefix, root.text);
+            if (self.analyzer.constant_names.contains(qualified)) {
+                try self.fail("luce.sema.const", chain.span, "{s} is a file-scope constant and cannot be assigned", .{root.text});
+                return;
+            }
             try self.failUnknownName(root.text, root.span);
             return;
         };
         const info = found.info;
+        if (try self.refuseConstantWrite(info.root, chain.span, "a nested store")) return;
         if (!info.mutable and writes_root) {
             try self.fail("luce.sema.let", root.span, "{s} is let-bound; use var for reassignment", .{root.text});
             return;
@@ -3349,7 +3643,7 @@ pub const FunctionBuilder = struct {
         const found = self.findLocal(base) orelse {
             const qualified = try self.analyzer.qualify(self.prefix, base);
             if (self.analyzer.constant_names.contains(qualified)) {
-                try self.fail("luce.sema.let", span, "{s} is a file-scope constant and cannot be assigned", .{base});
+                try self.fail("luce.sema.const", span, "{s} is a file-scope constant and cannot be assigned", .{base});
             } else {
                 try self.failUnknownName(base, span);
             }
@@ -3382,6 +3676,14 @@ pub const FunctionBuilder = struct {
             });
             return;
         }
+        // A compound assignment works on the value the place holds, so
+        // a narrowed `T?` combines at `T` and widens the result back.
+        const narrowed_place = local_type == .optional and self.isNarrowed(local);
+        const combine_type = if (narrowed_place) local_type.held().? else local_type;
+        const wanted = if (assign.compound != null) combine_type else local_type;
+
+        const fitted = (try self.lowerTyped(assign.value, wanted, assign.span, base)) orelse return;
+        const value = fitted.value;
         if (info.carries) {
             // Assigning `none` is a legitimate way for an owner to let
             // go: the release below frees what was there and the slot
@@ -3390,6 +3692,7 @@ pub const FunctionBuilder = struct {
                 try self.yieldsOwnership(assign.value);
             const owns_place = class == .owned or class == .inout_receiver;
             if (owns_place and !yields) {
+                if (try self.refuseConstantEscape(value.root, assign.span, "assignment")) return;
                 try self.fail(
                     "luce.sema.own",
                     assign.span,
@@ -3408,14 +3711,6 @@ pub const FunctionBuilder = struct {
                 return;
             }
         }
-        // A compound assignment works on the value the place holds, so
-        // a narrowed `T?` combines at `T` and widens the result back.
-        const narrowed_place = local_type == .optional and self.isNarrowed(local);
-        const combine_type = if (narrowed_place) local_type.held().? else local_type;
-        const wanted = if (assign.compound != null) combine_type else local_type;
-
-        const fitted = (try self.lowerTyped(assign.value, wanted, assign.span, base)) orelse return;
-        const value = fitted.value;
         // What the slot now holds decides whether the name reads as
         // its payload from here on: a plain `T` is present, a `T?` or
         // a `none` is back to being a question.  A compound assignment
@@ -3455,10 +3750,16 @@ pub const FunctionBuilder = struct {
         if (owns_objects) {
             try self.code.bind(local, store);
         }
+        info.root = value.root;
     }
 
     fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast.Assign) Error!void {
         const found = self.findLocal(target.base) orelse {
+            const qualified = try self.analyzer.qualify(self.prefix, target.base);
+            if (self.analyzer.constant_names.contains(qualified)) {
+                try self.fail("luce.sema.const", target.span, "{s} is a file-scope constant and cannot be assigned", .{target.base});
+                return;
+            }
             try self.failUnknownName(target.base, target.span);
             return;
         };
@@ -3498,9 +3799,16 @@ pub const FunctionBuilder = struct {
                 );
                 return;
             }
-            // `none` owns nothing, so emptying an optional object field
-            // is always legal — the release below frees what was there.
-            if (assign.value.* != .none_literal and !(try self.yieldsOwnership(assign.value))) {
+        }
+        const named = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ target.base, target.field });
+        const value = ((try self.lowerTyped(assign.value, expected, assign.span, named)) orelse return).value;
+        // `none` owns nothing, so emptying an optional object field is
+        // always legal.  Otherwise the field retains the object: a
+        // program root must be copied first, and an ordinary value must
+        // arrive fresh/given/copied under the existing ownership rule.
+        if (field_carries and assign.value.* != .none_literal) {
+            if (try self.refuseConstantEscape(value.root, assign.span, "a field store")) return;
+            if (!(try self.yieldsOwnership(assign.value))) {
                 try self.failNeedsOwnership(
                     assign.span,
                     "this field keeps its object",
@@ -3510,8 +3818,6 @@ pub const FunctionBuilder = struct {
                 return;
             }
         }
-        const named = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ target.base, target.field });
-        const value = ((try self.lowerTyped(assign.value, expected, assign.span, named)) orelse return).value;
         const current = try self.code.load(local);
         var store = value.register;
         if (assign.compound) |op| {
@@ -3564,6 +3870,7 @@ pub const FunctionBuilder = struct {
         const object = values[0];
         const indices = values[1 .. values.len - 1];
         const value = &values[values.len - 1];
+        if (try self.refuseConstantWrite(object.root, target.span, "an indexed store")) return;
         const element_type = (try self.checkIndex(object, indices, target.span)) orelse return;
         // The value was lowered before the container named a type for
         // it, so a wider element widens it here (docs/TYPES.md §2).
@@ -3573,8 +3880,8 @@ pub const FunctionBuilder = struct {
         // Containers own their object elements: storing one takes a
         // fresh value, a give, or a copy (S20, S21).
         if (self.analyzer.carriesObjects(element_type) and
-            !(try self.yieldsOwnership(assign.value)))
-        {
+            try self.refuseConstantEscape(value.root, assign.span, "a container store")) return;
+        if (self.analyzer.carriesObjects(element_type) and !(try self.yieldsOwnership(assign.value))) {
             try self.failNeedsOwnership(
                 assign.span,
                 "a container keeps its object elements",
@@ -3718,14 +4025,19 @@ pub const FunctionBuilder = struct {
         // guard narrow the rest of the block below it.
         const entry = try self.narrowSave();
         defer self.temporary().free(entry);
+        const root_entry = try self.rootSave();
+        defer self.temporary().free(root_entry);
 
         const arms = try self.code.openIf(condition.register, conditional.else_block != null);
         try self.applyFacts(conditional.condition, true, split_search_depth);
         try self.lowerBlock(conditional.then_block);
         const after_then = try self.narrowSave();
         defer self.temporary().free(after_then);
+        const roots_after_then = try self.rootSave();
+        defer self.temporary().free(roots_after_then);
 
         try self.narrowRestore(entry);
+        self.rootRestore(root_entry);
         try self.applyFacts(conditional.condition, false, split_search_depth);
         if (conditional.else_block) |else_block| {
             try self.code.elseArm(arms);
@@ -3742,17 +4054,22 @@ pub const FunctionBuilder = struct {
         if (then_leaves) return; // the else arm's state is already current
         if (else_leaves) {
             try self.narrowRestore(after_then);
+            self.rootRestore(roots_after_then);
             return;
         }
         self.narrowIntersect(after_then);
+        self.rootIntersect(roots_after_then);
     }
 
     fn lowerWhile(self: *FunctionBuilder, loop: ast.While) Error!void {
         // The body runs before the back edge re-enters the header, so
         // anything it assigns may be absent again on the next pass.
-        self.widenAssignedIn(loop.body);
+        try self.prepareLoopFacts(loop.body);
         const entry = try self.narrowSave();
         defer self.temporary().free(entry);
+        const root_entry = try self.rootSave();
+        defer self.temporary().free(root_entry);
+        defer self.rootRestore(root_entry);
         const shape = try self.code.openWhile();
         // The frame is pushed before the condition lowers: the header
         // re-runs every iteration, so the S30 give/free guard must see
@@ -3783,9 +4100,12 @@ pub const FunctionBuilder = struct {
     }
 
     fn lowerForRange(self: *FunctionBuilder, loop: ast.ForRange) Error!void {
-        self.widenAssignedIn(loop.body);
+        try self.prepareLoopFacts(loop.body);
         const entry = try self.narrowSave();
         defer self.temporary().free(entry);
+        const root_entry = try self.rootSave();
+        defer self.temporary().free(root_entry);
+        defer self.rootRestore(root_entry);
         const temps_floor = self.temps.items.len;
         const bounds = (try self.lowerOperands(&.{ loop.start, loop.end })) orelse return;
         // Widened *before* the registers are read: a bound written as
@@ -3838,9 +4158,12 @@ pub const FunctionBuilder = struct {
     /// while the loop runs.  What that costs in blocks and hidden
     /// locals is `Lowering.openIteration`'s.
     fn lowerForEach(self: *FunctionBuilder, loop: ast.ForEach) Error!void {
-        self.widenAssignedIn(loop.body);
+        try self.prepareLoopFacts(loop.body);
         const entry = try self.narrowSave();
         defer self.temporary().free(entry);
+        const root_entry = try self.rootSave();
+        defer self.temporary().free(root_entry);
+        defer self.rootRestore(root_entry);
         const iterable = (try self.lowerExpression(loop.iterable, false)) orelse return;
         const descriptor = self.analyzer.heapOf(iterable.value_type) orelse {
             try self.fail("luce.sema.loop", loop.span, "for iterates a list, a rank-1 array, or a map, not {s}{s}", .{
@@ -4018,17 +4341,19 @@ pub const FunctionBuilder = struct {
             // Whatever a function returns, the caller owns (S16, S17):
             // an owned name moves out, fresh values flow out, borrows
             // are compile errors.
+            if (self.analyzer.carriesObjects(value.value_type) and
+                try self.refuseConstantEscape(value.root, returned.span, "return")) return;
             var moved_storage: [1]LocalId = undefined;
             var moved: []const LocalId = &.{};
             if (self.analyzer.carriesObjects(value.value_type)) {
                 switch (expression.*) {
                     .name => |name| {
                         // The name lowered to a value of an
-                        // object-carrying type, so it is a local: a
-                        // constant can never carry an object.  Said
-                        // out loud rather than asserted, because a
-                        // compiler that unwraps its beliefs crashes
-                        // when one of them turns out to be wrong.
+                        // object-carrying type.  A visible program-root
+                        // constant was refused above, so this name is a
+                        // local.  Said out loud rather than asserted,
+                        // because a compiler that unwraps its beliefs
+                        // crashes when one turns out to be wrong.
                         const found = self.findLocal(name.text) orelse return;
                         switch (found.info.class) {
                             .owned => {
@@ -4217,6 +4542,7 @@ pub const FunctionBuilder = struct {
         if (!self.analyzer.carriesObjects(value.value_type)) {
             return try self.ownedForStore(value);
         }
+        if (try self.refuseConstantEscape(value.root, expression.span(), "return")) return null;
         switch (expression.*) {
             .name => |name| {
                 const found = self.findLocal(name.text) orelse return null;
@@ -4388,8 +4714,8 @@ pub const FunctionBuilder = struct {
         self.allow_fallible = false;
         const shape_position = self.shape_position;
         self.shape_position = .refused;
-        const wanted_element = self.wanted_element;
-        self.wanted_element = null;
+        const wanted_container = self.wanted_container;
+        self.wanted_container = null;
         const wanted = self.wanted;
         self.wanted = null;
         const wanted_function = self.wanted_function;
@@ -4453,9 +4779,10 @@ pub const FunctionBuilder = struct {
                             payload,
                         ),
                         .value_type = payload,
+                        .root = found.info.root,
                     };
                 }
-                return .{ .register = loaded, .value_type = local_type };
+                return .{ .register = loaded, .value_type = local_type, .root = found.info.root };
             },
             // `none` has no type of its own; every place that can
             // accept it supplies one through `lowerTyped`, so reaching
@@ -4502,7 +4829,8 @@ pub const FunctionBuilder = struct {
             .unary => |unary| return self.lowerUnary(unary, wanted),
             .method => |method| return self.lowerMethod(method, as_statement, fallible_allowed, shape_position),
             .new_object => |new| return self.lowerNew(new),
-            .list_literal => |literal| return self.lowerListLiteral(literal, wanted_element),
+            .list_literal => |literal| return self.lowerListLiteral(literal, wanted_container),
+            .map_literal => |literal| return self.lowerMapLiteral(literal, wanted_container),
             .index => |index| return self.lowerIndex(index),
             .slice_range => |slice| return self.lowerSliceRange(slice),
             .give => |give| return self.lowerGive(give),
@@ -4875,6 +5203,8 @@ pub const FunctionBuilder = struct {
         // what every continuing path proves.
         const entry = try self.narrowSave();
         defer self.temporary().free(entry);
+        const root_entry = try self.rootSave();
+        defer self.temporary().free(root_entry);
 
         // The permission reaches the *value* of the statement, which
         // is the first expression either shape lowers: the call
@@ -4909,11 +5239,14 @@ pub const FunctionBuilder = struct {
 
         const succeeded = try self.narrowSave();
         defer self.temporary().free(succeeded);
+        const roots_succeeded = try self.rootSave();
+        defer self.temporary().free(roots_succeeded);
 
         const merge = try self.code.reserveBlock();
         try self.code.jump(merge);
         self.code.switchTo(opened.handler);
         try self.narrowRestore(entry);
+        self.rootRestore(root_entry);
 
         // The binding lives in a scope of its own, wrapped around the
         // handler's: it is not one of the handler's statements, and a
@@ -4947,10 +5280,12 @@ pub const FunctionBuilder = struct {
         if (helpers.alwaysExits(guarded.handler)) {
             // Only the successful call reaches the merge.
             try self.narrowRestore(succeeded);
+            self.rootRestore(roots_succeeded);
         } else {
             // Current is the handler's state; retain only the facts it
             // shares with the successful assignment/call.
             self.narrowIntersect(succeeded);
+            self.rootIntersect(roots_succeeded);
         }
     }
 
@@ -4974,11 +5309,20 @@ pub const FunctionBuilder = struct {
             return null;
         }
         const name = give.operand.name.text;
+        switch (try self.writtenConstant(give.operand)) {
+            .not_constant => {},
+            .reported => return null,
+            .root => |state| {
+                _ = try self.refuseConstantEscape(state, give.span, "give");
+                return null;
+            },
+        }
         const found = self.findLocal(name) orelse {
             try self.failUnknownName(name, give.operand.name.span);
             return null;
         };
         const info = found.info;
+        if (try self.refuseConstantEscape(info.root, give.span, "give")) return null;
         const local = info.local;
         const local_type = self.code.localType(local);
         if (!info.carries) {
@@ -5087,10 +5431,27 @@ pub const FunctionBuilder = struct {
         return .{
             .register = try self.emitConstantValue(info.value, info.value_type),
             .value_type = info.value_type,
+            .root = if (info.value == .container)
+                .{ .constant = .{ .row = info.value.container, .name = info.declaration.name } }
+            else
+                .mutable,
         };
     }
 
     fn emitConstantValue(self: *FunctionBuilder, value: ConstantValue, value_type: Type) Error!Register {
+        // A present folded payload carries no separate union tag in
+        // `ConstantValue`; its optional landing type is the decision.
+        // Build the payload at T, then wrap it exactly as ordinary
+        // expression lowering does.  `.absent` remains the zero value
+        // handled below.
+        if (value_type == .optional and value != .absent) {
+            const arguments = try self.arena().alloc(Register, 1);
+            arguments[0] = try self.emitConstantValue(value, value_type.optional.asType());
+            return self.code.emit(
+                .{ .intrinsic = .{ .kind = .optional_wrap, .arguments = arguments } },
+                value_type,
+            );
+        }
         return switch (value) {
             // The width is the constant's own, not the widest of its
             // family: a folded constant carries its value at the
@@ -5121,6 +5482,7 @@ pub const FunctionBuilder = struct {
                     value_type,
                 );
             },
+            .container => |row| try self.code.emit(.{ .const_container = row }, value_type),
             // The typed absence a `T?` place gives a bare `none`: the
             // constant's type is the whole of its value (docs/ARGS.md
             // D9), and it inlines as the same zero `lowerTyped` emits.
@@ -5250,15 +5612,35 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    /// `[a, b, c]`.  `wanted` is the element type the place this
-    /// literal is going into names, when it names one; without it the
-    /// first element decides, exactly as it always has.
-    fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted: ?Type) Error!?Typed {
-        if (literal.elements.len == 0) {
+    /// `[a, b, c]`.  A list place keeps it a list; a rank-1 array place
+    /// builds an array whose sole dimension is the written element
+    /// count.  With no place, the first element decides a list as it
+    /// always has.
+    fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted_container: ?Type) Error!?Typed {
+        var wanted_element: ?Type = null;
+        var expected_container: ?Type = null;
+        var builds_array = false;
+        if (wanted_container) |place| {
+            const descriptor = self.analyzer.heapOf(place).?;
+            switch (descriptor) {
+                .list => |element| {
+                    wanted_element = element;
+                    expected_container = place;
+                },
+                .array => |shape| {
+                    std.debug.assert(shape.rank == 1);
+                    wanted_element = shape.element;
+                    expected_container = place;
+                    builds_array = true;
+                },
+                .map, .builder, .file, .task => {},
+            }
+        }
+        if (literal.elements.len == 0 and wanted_element == null) {
             try self.fail(
                 "luce.sema.type",
                 literal.span,
-                "an empty [] needs an annotated binding (var xs: list(long) = []) or new list(T)",
+                "an empty [] needs a list(T) or array(T, _) annotation",
                 .{},
             );
             return null;
@@ -5272,14 +5654,14 @@ pub const FunctionBuilder = struct {
         // was `long` or wider; `list(byte)` at one byte an element
         // (docs/BYTES.md R1) is what made it reachable, and the same
         // landing is what `xs.append(1)` has always had.
-        const landing: Landing = if (wanted) |element| places: {
+        const landing: Landing = if (wanted_element) |element| places: {
             const places = try self.arena().alloc(Type, literal.elements.len);
             @memset(places, element);
             break :places .{ .places = places };
         } else .nothing;
         const elements = (try self.lowerOperandsInto(literal.elements, landing)) orelse
             return null;
-        const element_type = wanted orelse unified: {
+        const element_type = wanted_element orelse unified: {
             // The elements meet where two operands of an operator meet
             // and for the same reason: `[1, 2.5]` and `[2.5, 1]` are
             // the same list, as `1 + 2.5` and `2.5 + 1` are the same
@@ -5301,7 +5683,7 @@ pub const FunctionBuilder = struct {
                 element.* = try self.widenNumeric(element.*, element_type);
             }
             if (!element.value_type.eql(element_type)) {
-                try self.fail("luce.sema.type", expression.span(), "list elements are all {s}, got {s}", .{
+                try self.fail("luce.sema.type", expression.span(), "container elements are all {s}, got {s}", .{
                     try self.analyzer.typeName(element_type),
                     try self.analyzer.typeName(element.value_type),
                 });
@@ -5310,26 +5692,132 @@ pub const FunctionBuilder = struct {
             // A literal is a container door like any other (S20, S21):
             // object elements must be fresh, given, or copied.
             if (self.analyzer.carriesObjects(element.value_type) and
-                !(try self.yieldsOwnership(expression)))
-            {
+                try self.refuseConstantEscape(element.root, expression.span(), "a container store")) return null;
+            if (self.analyzer.carriesObjects(element.value_type) and !(try self.yieldsOwnership(expression))) {
                 try self.failNeedsOwnership(
                     expression.span(),
-                    "a list literal keeps its object elements",
+                    "a container literal keeps its object elements",
                     expression,
                     "S21",
                 );
                 return null;
             }
         }
-        const object_type = try self.analyzer.internHeapType(.{ .list = element_type });
-        const list = try self.code.emit(.{ .heap_new = .{ .heap = object_type.heap, .dims = &.{} } }, object_type);
-        for (elements) |element| {
-            const arguments = try self.arena().alloc(Register, 2);
-            arguments[0] = list;
-            arguments[1] = try self.ownedForStore(element);
-            _ = try self.code.emit(.{ .intrinsic = .{ .kind = .append_value, .arguments = arguments } }, .none);
+        const object_type = expected_container orelse
+            try self.analyzer.internHeapType(.{ .list = element_type });
+        var dims: []Register = &.{};
+        if (builds_array) {
+            dims = try self.arena().alloc(Register, 1);
+            dims[0] = try self.code.emit(.{ .const_long = @intCast(literal.elements.len) }, .long);
         }
-        return .{ .register = list, .value_type = object_type };
+        const object = try self.code.emit(.{ .heap_new = .{ .heap = object_type.heap, .dims = dims } }, object_type);
+        for (elements, 0..) |element, index| {
+            if (builds_array) {
+                const arguments = try self.arena().alloc(Register, 3);
+                arguments[0] = object;
+                arguments[1] = try self.code.emit(.{ .const_long = @intCast(index) }, .long);
+                arguments[2] = try self.ownedForStore(element);
+                _ = try self.code.emit(.{ .intrinsic = .{ .kind = .index_set, .arguments = arguments } }, .none);
+            } else {
+                const arguments = try self.arena().alloc(Register, 2);
+                arguments[0] = object;
+                arguments[1] = try self.ownedForStore(element);
+                _ = try self.code.emit(.{ .intrinsic = .{ .kind = .append_value, .arguments = arguments } }, .none);
+            }
+        }
+        return .{ .register = object, .value_type = object_type };
+    }
+
+    /// `{key: value, ...}`.  Keys and values are evaluated once in
+    /// written order.  An annotation supplies both types; otherwise an
+    /// integer key lands on `long` (maps do not admit `int` keys) and
+    /// the first value begins the ordinary numeric unification.
+    fn lowerMapLiteral(self: *FunctionBuilder, literal: ast.MapLiteral, wanted_container: ?Type) Error!?Typed {
+        std.debug.assert(literal.entries.len != 0); // stage 3 refuses `{}`
+
+        var wanted_key: ?Type = null;
+        var wanted_value: ?Type = null;
+        var expected_container: ?Type = null;
+        if (wanted_container) |place| {
+            const descriptor = self.analyzer.heapOf(place).?;
+            if (descriptor == .map) {
+                wanted_key = descriptor.map.key;
+                wanted_value = descriptor.map.value;
+                expected_container = place;
+            }
+        }
+
+        const expressions = try self.arena().alloc(*ast.Expression, literal.entries.len * 2);
+        const places = try self.arena().alloc(?Type, expressions.len);
+        for (literal.entries, 0..) |entry, index| {
+            expressions[index * 2] = entry.key;
+            expressions[index * 2 + 1] = entry.value;
+            places[index * 2] = wanted_key orelse .long;
+            places[index * 2 + 1] = wanted_value;
+        }
+        const lowered = (try self.lowerOperandsInto(expressions, .{ .maybe_places = places })) orelse return null;
+
+        const key_type: Type = wanted_key orelse inferred: {
+            const first = lowered[0].value_type;
+            if (first == .string) break :inferred .string;
+            if (first.isInteger()) break :inferred .long;
+            try self.fail("luce.sema.type", literal.entries[0].key.span(), "map keys are long or string, got {s}", .{
+                try self.analyzer.typeName(first),
+            });
+            return null;
+        };
+        const value_type: Type = wanted_value orelse inferred: {
+            var meeting = lowered[1].value_type;
+            var at: usize = 3;
+            while (at < lowered.len) : (at += 2) {
+                meeting = Type.unified(meeting, lowered[at].value_type) orelse
+                    break :inferred lowered[1].value_type;
+            }
+            break :inferred meeting;
+        };
+
+        for (literal.entries, 0..) |entry, index| {
+            const key = &lowered[index * 2];
+            const value = &lowered[index * 2 + 1];
+            if (key.value_type.widensTo(key_type)) key.* = try self.widenNumeric(key.*, key_type);
+            if (!key.value_type.eql(key_type)) {
+                try self.fail("luce.sema.type", entry.key.span(), "map keys are all {s}, got {s}", .{
+                    try self.analyzer.typeName(key_type),
+                    try self.analyzer.typeName(key.value_type),
+                });
+                return null;
+            }
+            if (value.value_type.widensTo(value_type)) value.* = try self.widenNumeric(value.*, value_type);
+            if (!value.value_type.eql(value_type)) {
+                try self.fail("luce.sema.type", entry.value.span(), "map values are all {s}, got {s}", .{
+                    try self.analyzer.typeName(value_type),
+                    try self.analyzer.typeName(value.value_type),
+                });
+                return null;
+            }
+            if (self.analyzer.carriesObjects(value_type) and !(try self.yieldsOwnership(entry.value))) {
+                if (try self.refuseConstantEscape(value.root, entry.value.span(), "a map store")) return null;
+                try self.failNeedsOwnership(
+                    entry.value.span(),
+                    "a map literal keeps its object values",
+                    entry.value,
+                    "S21",
+                );
+                return null;
+            }
+        }
+
+        const object_type = expected_container orelse
+            try self.analyzer.internHeapType(.{ .map = .{ .key = key_type, .value = value_type } });
+        const map = try self.code.emit(.{ .heap_new = .{ .heap = object_type.heap, .dims = &.{} } }, object_type);
+        for (literal.entries, 0..) |_, index| {
+            const arguments = try self.arena().alloc(Register, 3);
+            arguments[0] = map;
+            arguments[1] = lowered[index * 2].register;
+            arguments[2] = try self.ownedForStore(lowered[index * 2 + 1]);
+            _ = try self.code.emit(.{ .intrinsic = .{ .kind = .index_set, .arguments = arguments } }, .none);
+        }
+        return .{ .register = map, .value_type = object_type };
     }
 
     fn lowerIndex(self: *FunctionBuilder, index: ast.Index) Error!?Typed {
@@ -5579,7 +6067,7 @@ pub const FunctionBuilder = struct {
     /// constant expression over literals, which evaluates to itself
     /// with no effects, no calls and no traps.
     ///
-    /// `04_semantics/declarations.zig` folds a file-scope `let` by the
+    /// `04_semantics/declarations.zig` folds a file-scope `const` by the
     /// same two rules, because the two must agree about what `2 * 0.1`
     /// is.
     /// Whether this expression is a **bare declaration name** that a
@@ -6034,6 +6522,7 @@ pub const FunctionBuilder = struct {
             payload,
         );
         const either = try self.code.openCoalesce(absent, present, payload);
+        var root = left.root;
         if (isLeavingCall(binary.right)) {
             // `x else trap("…")` is the assert-unwrap, and it is
             // greppable — which is why Luce has no force-unwrap sigil
@@ -6042,10 +6531,12 @@ pub const FunctionBuilder = struct {
             _ = try self.lowerExpression(binary.right, true);
         } else if (try self.lowerTyped(binary.right, payload, binary.span, "the else fallback")) |fallback| {
             try self.code.store(either.result, fallback.value.register);
+            root = joinedRoot(left.root, fallback.value.root);
         }
         return .{
             .register = try self.code.closeShortCircuit(either),
             .value_type = payload,
+            .root = root,
         };
     }
 
@@ -7023,6 +7514,7 @@ pub const FunctionBuilder = struct {
                 // list method sugar and specialized at the receiver's
                 // monomorphic element type (FUNCTIONS.md D6).
                 if (descriptor == .list and std.mem.eql(u8, method.name, "sort_by")) {
+                    if (try self.refuseConstantWrite(receiver.root, method.span, "sort_by")) return null;
                     return self.listsCall(method, values, descriptor.list, as_statement);
                 }
                 if (try self.refuseNamedMethodArguments(method)) return null;
@@ -7058,12 +7550,21 @@ pub const FunctionBuilder = struct {
             try self.fail("luce.sema.method", method.span, "{s} returns nothing", .{method.name});
             return null;
         }
+        if (methodWritesReceiver(found.kind) and
+            try self.refuseConstantWrite(receiver.root, method.span, method.name)) return null;
+        if (found.kind == .handle_read and arguments.len != 0 and
+            try self.refuseConstantWrite(arguments[0].root, method.arguments[0].span, "file.read")) return null;
         // Containers own their object elements: append/insert take a
         // fresh value, a give, or a copy (S20, S21).
         if (found.kind == .append_value or found.kind == .insert_value) {
             if (self.analyzer.heapOf(receiver.value_type)) |descriptor| {
                 if (descriptor == .list and self.analyzer.carriesObjects(descriptor.list)) {
                     const value_index: usize = if (found.kind == .append_value) 0 else 1;
+                    if (try self.refuseConstantEscape(
+                        arguments[value_index].root,
+                        method.arguments[value_index].span,
+                        "a container store",
+                    )) return null;
                     if (!(try self.yieldsOwnership(method.arguments[value_index].value))) {
                         try self.failNeedsOwnership(
                             method.arguments[value_index].span,
@@ -7141,6 +7642,22 @@ pub const FunctionBuilder = struct {
             return try self.openFallible(emitted, found.result);
         }
         return .{ .register = emitted, .value_type = found.result };
+    }
+
+    fn methodWritesReceiver(kind: mir.Intrinsic) bool {
+        return switch (kind) {
+            .append_value,
+            .append_ascii,
+            .insert_value,
+            .remove_entry,
+            .pop_value,
+            .clear_object,
+            .array_fill,
+            .list_sort,
+            .list_reverse,
+            => true,
+            else => false,
+        };
     }
 
     // Methods on a struct value ---------------------------------------------
@@ -8284,6 +8801,9 @@ pub const FunctionBuilder = struct {
             // `none` owns nothing, so it is always a legal filling.
             if (self.analyzer.carriesObjects(expected) and
                 argument.value.* != .none_literal and
+                try self.refuseConstantEscape(value.root, argument.span, "a struct field")) return null;
+            if (self.analyzer.carriesObjects(expected) and
+                argument.value.* != .none_literal and
                 !(try self.yieldsOwnership(argument.value)))
             {
                 try self.failNeedsOwnership(
@@ -8755,7 +9275,7 @@ pub const FunctionBuilder = struct {
         // the polymorphic landing is one type for every slot, so a
         // reordered name cannot land a literal differently.
         const written = written: {
-            const landing = if (matched.polymorphic) landingType(wanted orelse .none) else null;
+            const landing = if (matched.polymorphic) context.literalLandingType(wanted orelse .none) else null;
             if (landing) |place| {
                 const places = try self.arena().alloc(Type, expressions.len);
                 @memset(places, place);
@@ -8837,6 +9357,7 @@ pub const FunctionBuilder = struct {
                 result = .long;
             },
             .free_object => {
+                if (try self.refuseConstantEscape(arguments[0].root, call.span, "free")) return .failed;
                 // `self` is a caller-owned place even when its value is
                 // a struct rather than a heap handle.  Diagnose that
                 // ownership boundary before free's ordinary type gate,

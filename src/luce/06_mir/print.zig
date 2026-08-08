@@ -36,6 +36,36 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
         }
     }
 
+    for (program.container_constants, 0..) |constant, index| {
+        const constant_type_name = try typeName(allocator, program, .{ .heap = constant.heap });
+        defer allocator.free(constant_type_name);
+        try appendPrint(&text, allocator, "constant container#{d} {s}: {s} = ", .{
+            index,
+            constant.name,
+            constant_type_name,
+        });
+        switch (constant.payload) {
+            .sequence => |values| {
+                try text.append(allocator, '[');
+                for (values, 0..) |value, value_index| {
+                    if (value_index != 0) try text.appendSlice(allocator, ", ");
+                    try printConstantValue(&text, allocator, program, value);
+                }
+                try text.appendSlice(allocator, "]\n");
+            },
+            .map => |entries| {
+                try text.append(allocator, '{');
+                for (entries, 0..) |entry, entry_index| {
+                    if (entry_index != 0) try text.appendSlice(allocator, ", ");
+                    try printConstantValue(&text, allocator, program, entry.key);
+                    try text.appendSlice(allocator, ": ");
+                    try printConstantValue(&text, allocator, program, entry.value);
+                }
+                try text.appendSlice(allocator, "}\n");
+            },
+        }
+    }
+
     for (program.functions) |*function| {
         try appendPrint(&text, allocator, "func {s}(", .{function.name});
         for (function.locals[0..function.parameter_count], 0..) |local, index| {
@@ -88,6 +118,31 @@ fn appendPrint(
     try text.appendSlice(allocator, line);
 }
 
+fn printConstantValue(
+    text: *std.ArrayList(u8),
+    allocator: Allocator,
+    program: *const Program,
+    constant: defs.ConstantValue,
+) error{OutOfMemory}!void {
+    switch (constant) {
+        .boolean => |value| try appendPrint(text, allocator, "{}", .{value}),
+        .long => |value| try appendPrint(text, allocator, "{d}", .{value}),
+        .double => |value| try appendPrint(text, allocator, "{d}", .{value}),
+        .string => |index| try appendPrint(text, allocator, "data#{d}", .{index}),
+        .strukt => |value| {
+            const layout = program.structs[value.layout];
+            try appendPrint(text, allocator, "{s}(", .{layout.name});
+            for (value.fields, layout.fields, 0..) |field, declared, index| {
+                if (index != 0) try text.appendSlice(allocator, ", ");
+                try appendPrint(text, allocator, "{s}=", .{declared.name});
+                try printConstantValue(text, allocator, program, field);
+            }
+            try text.append(allocator, ')');
+        },
+        .absent => try text.appendSlice(allocator, "none"),
+    }
+}
+
 fn printInstruction(
     text: *std.ArrayList(u8),
     allocator: Allocator,
@@ -107,6 +162,7 @@ fn printInstruction(
         .const_long => |value| try appendPrint(text, allocator, "const {d}", .{value}),
         .const_double => |value| try appendPrint(text, allocator, "const {d}", .{value}),
         .const_string => |constant| try appendPrint(text, allocator, "const data#{d}", .{constant}),
+        .const_container => |constant| try appendPrint(text, allocator, "const_container container#{d}", .{constant}),
         .const_function => |named| try appendPrint(text, allocator, "const_function {s}", .{program.functions[named].name}),
         .local_get => |local| try appendPrint(text, allocator, "local_get %{d}", .{local}),
         .local_set => |set| try appendPrint(text, allocator, "local_set %{d}, r{d}", .{ set.local, set.value }),

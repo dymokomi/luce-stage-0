@@ -37,6 +37,10 @@ pub const Kind = enum {
     /// (docs/ENUMS.md R1).  The restricted statement union will extend
     /// with payload bindings rather than a second keyword.
     keyword_match,
+    /// File-scope compile-time values and frozen containers.  `let`
+    /// and `var` are function-scope bindings; the three declaration
+    /// words have disjoint jobs (docs/CONSTANTS.md R-A).
+    keyword_const,
     keyword_let,
     keyword_var,
     keyword_if,
@@ -107,6 +111,10 @@ pub const Kind = enum {
     right_paren,
     left_bracket,
     right_bracket,
+    /// `{key: value}` — a map literal.  Braces never delimit blocks;
+    /// layout remains indentation-based (docs/CONSTANTS.md R-B).
+    left_brace,
+    right_brace,
     comma,
     colon,
     dot,
@@ -170,6 +178,7 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "struct", .kind = .keyword_struct },
     .{ .word = "enum", .kind = .keyword_enum },
     .{ .word = "match", .kind = .keyword_match },
+    .{ .word = "const", .kind = .keyword_const },
     .{ .word = "let", .kind = .keyword_let },
     .{ .word = "var", .kind = .keyword_var },
     .{ .word = "if", .kind = .keyword_if },
@@ -242,4 +251,9 @@ test "the lookup map holds exactly the declared table, and nothing else" {
 test "static is a reserved member-function word" {
     try std.testing.expectEqual(Kind.keyword_static, keyword_map.get("static").?);
     try std.testing.expect(keyword_map.get("statics") == null);
+}
+
+test "const is a reserved file-scope declaration word" {
+    try std.testing.expectEqual(Kind.keyword_const, keyword_map.get("const").?);
+    try std.testing.expect(keyword_map.get("constants") == null);
 }

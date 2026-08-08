@@ -129,7 +129,7 @@
           }
         },
         {
-          "match": "\\b(let|var)\\s+([A-Za-z][A-Za-z0-9_]*)",
+          "match": "\\b(const|let|var)\\s+([A-Za-z][A-Za-z0-9_]*)",
           "captures": {
             "1": { "name": "storage.type.luce" },
             "2": { "name": "variable.other.definition.luce" }
@@ -156,7 +156,7 @@
         },
         {
           "name": "storage.type.luce",
-          "match": "\\b(?:func|struct|enum|let|var)\\b"
+          "match": "\\b(?:func|struct|enum|const|let|var)\\b"
         },
         {
           "name": "storage.modifier.luce",
@@ -297,6 +297,14 @@
         {
           "name": "punctuation.section.brackets.end.luce",
           "match": "\\]"
+        },
+        {
+          "name": "punctuation.section.braces.begin.luce",
+          "match": "\\{"
+        },
+        {
+          "name": "punctuation.section.braces.end.luce",
+          "match": "\\}"
         },
         {
           "name": "punctuation.separator.comma.luce",

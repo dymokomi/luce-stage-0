@@ -10,13 +10,14 @@ decision has reasons worth reading, [the guides](/guide/) hold them
 and this document links out.
 
 **Where it disagrees with the compiler, the compiler is right.** These
-pages are written against the tree, and every sample on them is
-compiled and run when the site is built, but the source and the tests
-in the repository are the last word.
+pages are written against the tree, and every sample on them is checked
+when the site is built — runnable examples execute and expected traps,
+raises and refusals take their named paths — but the source and the
+tests in the repository are the last word.
 
 ## Citing a rule
 
-The [ownership](ownership/) page gives every one of the 45 ratified
+The [ownership](ownership/) page gives every one of the 46 ratified
 situations a fixed anchor — `#s21`, `#s13` — that does not move when
 its wording does. The compiler quotes those numbers in its
 diagnostics, so a message that says `[OWNERSHIP.md S21]` points at

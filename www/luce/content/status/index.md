@@ -11,8 +11,8 @@ prediction was too optimistic, this page says so too.
 ## The short version
 
 **The language surface is done as designed.** Ten conceptual pipeline
-stages, seventeen executable specifications, and a front end whose
-diagnostics name the fix rather than the parser's predicament.
+stages, eighteen executable specification packages, and a front end
+whose diagnostics name the fix rather than the parser's predicament.
 Optionals closed the absence half of the last semantic hole and errors
 closed the failure half; nothing that was designed is now unbuilt.
 
@@ -32,11 +32,12 @@ language question, and one benchmark row.**
 |---|---|
 | Static typing with inference; `long` widens to `double`, nothing narrows | shipped |
 | Checked arithmetic, bounds checks, UTF-8 boundary checks, in every mode | shipped |
-| Scope ownership: `give`, `copy`, `free`, 45 ratified situations | shipped |
+| Scope ownership: `give`, `copy`, `free`, 46 ratified situations | shipped |
 | `T?`, `none`, narrowing, `else` | shipped |
 | `T!`, `try`, `catch`, `error` | shipped |
 | f-strings, compound assignment, nested place assignment | shipped |
-| File-scope constants, folded and inlined | shipped |
+| File-scope `const`: folded values and flat immutable program-root containers | shipped |
+| Runtime and constant `{key: value}` map literals; empty `{}` refused | shipped |
 | Modules, and a reserved `std.` namespace | shipped |
 | Function values and capture-free expression lambdas | shipped |
 | Implied-self methods and `static` namespace functions | shipped |
@@ -51,9 +52,10 @@ language question, and one benchmark row.**
 | Two build modes that differ only in what a trap can say | shipped |
 | map lookups O(1); sort O(n log n) and stable by guarantee | shipped |
 
-The compiler-internal serialized module is format **32**. The
-published host ABI is **13**; implied-self writers changed the former
-by adding MIR `call_inout`, but changed no host slot in the latter.
+The compiler-internal serialized module is format **33**. The
+published host ABI is **13**; program-root containers changed the
+former by adding a pool, instruction and trap code, but changed no
+host slot in the latter.
 
 ## What is measured
 
@@ -149,17 +151,17 @@ out:
   a `long` with a comment — is `enum Word`, and the `elif` chain over
   the numbers is a `match` with four arms and no `else`.
 - `is_keyword` and `is_builtin` as **46 `word == "…"` comparisons** —
-  a hash set written as a truth table — are two space-fenced string
-  constants searched with `strings.find`. That is what the language
-  can say today, and it is both shorter and *faster* than the chain
-  (0.15 µs a word against 0.22–0.29 µs, on a table half again as
-  long). It is still not a set, which is the next item below.
+  a hash set written as a truth table — are two immutable constant
+  maps. Membership is now the direct hash lookup the intent asked for;
+  the remaining wart is only that `map(string, bool)` carries an
+  unused value where a future `set(string)` would not.
 
 The word lists were eight language generations out of date while they
 were comparisons: ten keywords and twenty-one builtins the language
 had gained were missing, and two names it does not have as free
-builtins were still there. They are now the compiler's own tables —
-the same ones the VS Code grammar is generated from.
+builtins were still there. The editor maps are current but still
+mirror those tables by hand. The VS Code grammar takes the stronger
+route: it is generated directly from the compiler's tables.
 
 ## The short list of what a real program hits
 
@@ -168,16 +170,14 @@ Read out of `programs/` for awkwardness rather than for features.
 before enums, `match`, visibility, the standard library, f-strings
 and constants — and was for a long time both the most workaround-dense
 program and the proof that the language moved. It has now been
-rewritten onto everything it predated, which leaves exactly one of its
-warts standing: item 1.
+rewritten onto everything it predated, which leaves one representational
+wart standing: item 1.
 
-1. **No sets and no constant containers.** The 46-comparison truth
-   tables became two space-fenced string constants and a
-   `strings.find` — the cleanest membership test the language can
-   state, and faster than the comparisons — but a *search* is what it
-   is. A frozen `set(string)` a top-level `let` could hold would make
-   it constant-time, and would let the compiler refuse a duplicate
-   word. Nothing is blocked on it.
+1. **No sets.** Constant containers shipped, and the editor's former
+   46-comparison truth tables are now immutable `map(string, bool)`
+   literals with constant-time membership and duplicate-key checking.
+   A future `set(string)` would express the same table without an
+   unused `bool`; nothing is blocked on it.
 2. **No character classes in the library.** `is_digit`/`is_alpha`
    re-derived by hand three times. Five functions would fix it.
 3. ~~**No receivers on user structs.**~~ **Shipped.** Every plain
@@ -265,9 +265,9 @@ than shipping a highlighter that disagrees with the compiler.
 
 ## The order the work goes in
 
-1. The cheap slice: character classes, and a frozen container or a
-   `Set`. `exit` and path manipulation were on this list and have
-   shipped.
+1. The cheap slice: character classes, then decide whether a dedicated
+   `set` earns its surface. Constant containers, `exit` and path
+   manipulation were on this list and have shipped.
 2. `m.get(k) -> V?`, and a corpus sweep.
 3. ~~Decide receivers and multiple returns~~ — shipped; the
    integer-division spelling is decided too.

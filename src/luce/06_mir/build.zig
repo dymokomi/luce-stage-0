@@ -59,6 +59,9 @@ pub const ConstantPool = struct {
     scratch: Allocator,
     items: std.ArrayList([]const u8) = .empty,
     index: std.StringHashMapUnmanaged(u32) = .empty,
+    /// Constant containers keep declaration identity, so this is an
+    /// append-only list rather than an interning table.
+    containers: std.ArrayList(OpenContainerConstant) = .empty,
 
     pub fn deinit(self: *ConstantPool) void {
         self.index.deinit(self.scratch);
@@ -74,6 +77,40 @@ pub const ConstantPool = struct {
         try self.index.put(self.scratch, owned, slot);
         return slot;
     }
+
+    /// Append one container declaration and return its eventual MIR
+    /// row.  `payload` and everything nested in it must already live in
+    /// `arena`; the pool copies the declaration name.  Equal rows are
+    /// intentionally not coalesced: a declaration is an object
+    /// identity, not merely its contents.
+    pub fn addContainer(
+        self: *ConstantPool,
+        name: []const u8,
+        file: source_mod.FileId,
+        origin_offset: u32,
+        heap: u32,
+        payload: defs.ContainerConstant.Payload,
+    ) Error!u32 {
+        const slot: u32 = @intCast(self.containers.items.len);
+        try self.containers.append(self.arena, .{
+            .name = try self.arena.dupe(u8, name),
+            .file = file,
+            .origin_offset = origin_offset,
+            .heap = heap,
+            .payload = payload,
+        });
+        return slot;
+    }
+};
+
+/// A constant-container row before source offsets have become final
+/// line-and-column origins.  All memory it references is arena-owned.
+pub const OpenContainerConstant = struct {
+    name: []const u8,
+    file: source_mod.FileId,
+    origin_offset: u32,
+    heap: u32,
+    payload: defs.ContainerConstant.Payload,
 };
 
 // ---------------------------------------------------------------------------
@@ -858,6 +895,9 @@ pub const Lowered = struct {
     signatures: []types.Signature = &.{},
     /// The constant pool, in the order the checker interned it.
     constants: []const []const u8,
+    /// Constant containers in declaration order.  Unlike strings,
+    /// these rows are never interned.
+    container_constants: []OpenContainerConstant = &.{},
     entry_function: u32,
     functions: []Lowering,
 };
@@ -904,6 +944,18 @@ pub fn build(
     program.signatures = lowered.signatures;
     program.functions = functions;
     program.constants = lowered.constants;
+    const container_constants = try arena.alloc(defs.ContainerConstant, lowered.container_constants.len);
+    for (lowered.container_constants, container_constants) |open, *constant| {
+        const at = sources.place(open.file, open.origin_offset);
+        constant.* = .{
+            .name = open.name,
+            .heap = open.heap,
+            .payload = open.payload,
+            .source = try fileName(arena, scratch, sources, &file_names, open.file),
+            .origin = .{ .line = @intCast(at.line), .column = @intCast(at.column) },
+        };
+    }
+    program.container_constants = container_constants;
     program.entry_function = lowered.entry_function;
 }
 
@@ -922,4 +974,72 @@ fn fileName(
     const name = try arena.dupe(u8, if (path.len != 0) path else "main.luc");
     try cache.put(scratch, file, name);
     return name;
+}
+
+test "container pool preserves declaration identity" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var pool: ConstantPool = .{ .arena = arena, .scratch = std.testing.allocator };
+    defer pool.deinit();
+
+    const values = try arena.alloc(defs.ConstantValue, 1);
+    values[0] = .{ .long = 7 };
+    const first = try pool.addContainer(
+        "first",
+        source_mod.root_file,
+        0,
+        0,
+        .{ .sequence = values },
+    );
+    const second = try pool.addContainer(
+        "second",
+        source_mod.root_file,
+        0,
+        0,
+        .{ .sequence = values },
+    );
+
+    try std.testing.expectEqual(@as(u32, 0), first);
+    try std.testing.expectEqual(@as(u32, 1), second);
+    try std.testing.expectEqual(@as(usize, 2), pool.containers.items.len);
+    try std.testing.expectEqualStrings("first", pool.containers.items[0].name);
+    try std.testing.expectEqualStrings("second", pool.containers.items[1].name);
+}
+
+test "build resolves a container declaration's final source origin" {
+    var program: defs.Program = .{ .arena = std.heap.ArenaAllocator.init(std.testing.allocator) };
+    defer program.deinit();
+    const arena = program.arena.allocator();
+
+    var sources = source_mod.Sources.init(std.testing.allocator);
+    defer sources.deinit();
+    const text = try std.testing.allocator.dupe(u8, "line one\nconst table = []\n");
+    const file = try sources.add(.root, "", "tables.luc", text);
+
+    var pool: ConstantPool = .{ .arena = arena, .scratch = std.testing.allocator };
+    defer pool.deinit();
+    const values = try arena.alloc(defs.ConstantValue, 0);
+    _ = try pool.addContainer("table", file, 9, 0, .{ .sequence = values });
+    const open = try pool.containers.toOwnedSlice(arena);
+
+    try build(
+        arena,
+        std.testing.allocator,
+        &sources,
+        .{
+            .structs = try arena.alloc(StructLayout, 0),
+            .heap_types = try arena.alloc(types.HeapType, 0),
+            .constants = &.{},
+            .container_constants = open,
+            .entry_function = 0,
+            .functions = try arena.alloc(Lowering, 0),
+        },
+        &program,
+    );
+
+    try std.testing.expectEqual(@as(usize, 1), program.container_constants.len);
+    try std.testing.expectEqualStrings("table", program.container_constants[0].name);
+    try std.testing.expectEqualStrings("tables.luc", program.container_constants[0].source);
+    try std.testing.expectEqual(defs.Origin{ .line = 2, .column = 1 }, program.container_constants[0].origin);
 }

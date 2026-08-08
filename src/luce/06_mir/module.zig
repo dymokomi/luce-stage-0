@@ -1,9 +1,10 @@
 //! The serialized module — a verified Luce program between the
 //! compiler's two halves.
 //!
-//! The format is a direct serialization of the IR: constants, struct
-//! layouts, heap-type shapes, functions with their instruction pools
-//! and blocks, and the entry function.  Decoding re-runs the IR
+//! The format is a direct serialization of the IR: shared string
+//! constants, constant-container declarations, struct layouts,
+//! heap-type shapes, functions with their instruction pools and
+//! blocks, and the entry function.  Decoding re-runs the IR
 //! verifier, so a damaged or hand-forged module is rejected instead of
 //! executed; instruction *types* beyond the verifier's checks are
 //! trusted, so treat a module like an executable — decode only what
@@ -83,7 +84,11 @@ pub const magic = "LUCE";
 /// 32 — implied writing receivers arrive (docs/SELF.md). `call_inout`
 /// joins the instruction set and a local gains the `inout` bit that
 /// makes logical parameter zero alias its caller's mutable binding.
-pub const format_version: u32 = 32;
+///
+/// 33 — constant containers arrive (docs/CONSTANTS.md): a second
+/// constant pool, its flat recursive value encoding, `const_container`,
+/// and the `immutable_object` trap.  All are wire surface.
+pub const format_version: u32 = 33;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -112,6 +117,9 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
 
     try writer.int(u32, @intCast(program.constants.len));
     for (program.constants) |constant| try writer.blob(constant);
+
+    try writer.int(u32, @intCast(program.container_constants.len));
+    for (program.container_constants) |constant| try writer.containerConstant(constant);
 
     try writer.int(u32, @intCast(program.structs.len));
     for (program.structs) |layout| {
@@ -210,6 +218,44 @@ const Writer = struct {
         }
     }
 
+    fn constantValue(self: *Writer, constant: mir.ConstantValue) error{OutOfMemory}!void {
+        try self.int(u8, @intFromEnum(std.meta.activeTag(constant)));
+        switch (constant) {
+            .boolean => |value| try self.int(u8, @intFromBool(value)),
+            .long => |value| try self.int(i64, value),
+            .double => |value| try self.int(u64, @bitCast(value)),
+            .string => |index| try self.int(u32, index),
+            .strukt => |value| {
+                try self.int(u32, value.layout);
+                try self.int(u32, @intCast(value.fields.len));
+                for (value.fields) |field| try self.constantValue(field);
+            },
+            .absent => {},
+        }
+    }
+
+    fn containerConstant(self: *Writer, constant: mir.ContainerConstant) error{OutOfMemory}!void {
+        try self.blob(constant.name);
+        try self.int(u32, constant.heap);
+        try self.int(u8, @intFromEnum(std.meta.activeTag(constant.payload)));
+        switch (constant.payload) {
+            .sequence => |values| {
+                try self.int(u32, @intCast(values.len));
+                for (values) |value| try self.constantValue(value);
+            },
+            .map => |entries| {
+                try self.int(u32, @intCast(entries.len));
+                for (entries) |entry| {
+                    try self.constantValue(entry.key);
+                    try self.constantValue(entry.value);
+                }
+            },
+        }
+        try self.blob(constant.source);
+        try self.int(u32, constant.origin.line);
+        try self.int(u32, constant.origin.column);
+    }
+
     fn registers(self: *Writer, list: []const mir.Register) error{OutOfMemory}!void {
         try self.int(u32, @intCast(list.len));
         for (list) |register| try self.int(u32, register);
@@ -255,6 +301,7 @@ const Writer = struct {
             .const_long => |value| try self.int(i64, value),
             .const_double => |value| try self.int(u64, @bitCast(value)),
             .const_string => |constant| try self.int(u32, constant),
+            .const_container => |constant| try self.int(u32, constant),
             .const_function => |named| try self.int(u32, named),
             .local_get => |local| try self.int(u32, local),
             .local_set => |set| {
@@ -356,6 +403,11 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
     for (constants) |*slot| slot.* = try arena.dupe(u8, try reader.blob());
     program.constants = constants;
 
+    const container_constant_count = try reader.count();
+    const container_constants = try arena.alloc(mir.ContainerConstant, container_constant_count);
+    for (container_constants) |*slot| slot.* = try reader.containerConstant(arena);
+    program.container_constants = container_constants;
+
     const struct_count = try reader.count();
     const structs = try arena.alloc(types.StructLayout, struct_count);
     for (structs) |*layout| {
@@ -425,6 +477,10 @@ const Reader = struct {
     /// Cap per-list allocation before contents are read, so a short
     /// hostile module cannot request absurd allocations up front.
     const max_count = 1 << 24;
+    /// Source expressions are bounded to 400 levels before lowering.
+    /// Repeat the bound at the wire boundary so a forged chain of
+    /// nested struct values cannot consume the native stack.
+    const max_recursive_depth = 400;
 
     fn take(self: *Reader, length: usize) DecodeError![]const u8 {
         if (self.data.len - self.offset < length) return error.InvalidModule;
@@ -460,6 +516,11 @@ const Reader = struct {
     }
 
     fn valueType(self: *Reader) DecodeError!types.Type {
+        return self.valueTypeAt(0);
+    }
+
+    fn valueTypeAt(self: *Reader, depth: u32) DecodeError!types.Type {
+        if (depth > max_recursive_depth) return error.InvalidModule;
         const tag = try self.enumTag(std.meta.Tag(types.Type));
         return switch (tag) {
             .none => .none,
@@ -481,7 +542,7 @@ const Reader = struct {
             } },
             // `T??` has no representation, so a payload that decodes
             // as optional is a damaged module, not a nested one.
-            .optional => types.Type.optionalOf(try self.valueType()) orelse
+            .optional => types.Type.optionalOf(try self.valueTypeAt(depth + 1)) orelse
                 return error.InvalidModule,
         };
     }
@@ -504,6 +565,62 @@ const Reader = struct {
                 .result = try self.valueType(),
                 .fallible = (try self.int(u8)) != 0,
             } },
+        };
+    }
+
+    fn constantValue(self: *Reader, arena: Allocator, depth: u32) DecodeError!mir.ConstantValue {
+        if (depth > max_recursive_depth) return error.InvalidModule;
+        const tag = try self.enumTag(std.meta.Tag(mir.ConstantValue));
+        return switch (tag) {
+            .boolean => blk: {
+                const raw = try self.int(u8);
+                if (raw > 1) return error.InvalidModule;
+                break :blk .{ .boolean = raw != 0 };
+            },
+            .long => .{ .long = try self.int(i64) },
+            .double => .{ .double = @bitCast(try self.int(u64)) },
+            .string => .{ .string = try self.int(u32) },
+            .strukt => blk: {
+                const layout = try self.int(u32);
+                const field_count = try self.count();
+                const fields = try arena.alloc(mir.ConstantValue, field_count);
+                for (fields) |*field| field.* = try self.constantValue(arena, depth + 1);
+                break :blk .{ .strukt = .{ .layout = layout, .fields = fields } };
+            },
+            .absent => .absent,
+        };
+    }
+
+    fn containerConstant(self: *Reader, arena: Allocator) DecodeError!mir.ContainerConstant {
+        const name = try arena.dupe(u8, try self.blob());
+        const heap = try self.int(u32);
+        const tag = try self.enumTag(std.meta.Tag(mir.ContainerConstant.Payload));
+        const payload: mir.ContainerConstant.Payload = switch (tag) {
+            .sequence => blk: {
+                const value_count = try self.count();
+                const values = try arena.alloc(mir.ConstantValue, value_count);
+                for (values) |*value| value.* = try self.constantValue(arena, 0);
+                break :blk .{ .sequence = values };
+            },
+            .map => blk: {
+                const entry_count = try self.count();
+                const entries = try arena.alloc(mir.ContainerConstant.MapEntry, entry_count);
+                for (entries) |*entry| {
+                    entry.key = try self.constantValue(arena, 0);
+                    entry.value = try self.constantValue(arena, 0);
+                }
+                break :blk .{ .map = entries };
+            },
+        };
+        return .{
+            .name = name,
+            .heap = heap,
+            .payload = payload,
+            .source = try arena.dupe(u8, try self.blob()),
+            .origin = .{
+                .line = try self.int(u32),
+                .column = try self.int(u32),
+            },
         };
     }
 
@@ -565,6 +682,7 @@ const Reader = struct {
             .const_long => .{ .const_long = try self.int(i64) },
             .const_double => .{ .const_double = @bitCast(try self.int(u64)) },
             .const_string => .{ .const_string = try self.int(u32) },
+            .const_container => .{ .const_container = try self.int(u32) },
             .const_function => .{ .const_function = try self.int(u32) },
             .local_get => .{ .local_get = try self.int(u32) },
             .local_set => .{ .local_set = .{
@@ -676,6 +794,200 @@ fn compileScript(source: []const u8) !mir.Program {
     return compileScriptWith(source, true);
 }
 
+fn constantContainerProgram() !mir.Program {
+    var program: mir.Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    errdefer program.deinit();
+    const arena = program.arena.allocator();
+
+    program.constants = try arena.dupe([]const u8, &.{ "unused", "alpha", "beta", "alpha" });
+    program.structs = try arena.dupe(types.StructLayout, &.{.{
+        .name = "Label",
+        .fields = try arena.dupe(types.StructField, &.{
+            .{ .name = "text", .field_type = .string },
+            .{ .name = "fallback", .field_type = .{ .optional = .long } },
+            .{ .name = "enabled", .field_type = .boolean },
+        }),
+    }});
+    program.heap_types = try arena.dupe(types.HeapType, &.{
+        .{ .list = .{ .strukt = 0 } },
+        .{ .map = .{ .key = .string, .value = .long } },
+        .{ .array = .{ .element = .double, .rank = 1 } },
+    });
+
+    const label_fields = try arena.dupe(mir.ConstantValue, &.{
+        .{ .string = 1 },
+        .absent,
+        .{ .boolean = true },
+    });
+    const labels = try arena.dupe(mir.ConstantValue, &.{.{
+        .strukt = .{ .layout = 0, .fields = label_fields },
+    }});
+    const entries = try arena.dupe(mir.ContainerConstant.MapEntry, &.{
+        .{ .key = .{ .string = 1 }, .value = .{ .long = 10 } },
+        .{ .key = .{ .string = 2 }, .value = .{ .long = 20 } },
+    });
+    const measurements = try arena.dupe(mir.ConstantValue, &.{
+        .{ .double = 1.5 },
+        .{ .double = 2.5 },
+    });
+    const same_measurements = try arena.dupe(mir.ConstantValue, &.{
+        .{ .double = 1.5 },
+        .{ .double = 2.5 },
+    });
+    program.container_constants = try arena.dupe(mir.ContainerConstant, &.{
+        .{
+            .name = "labels",
+            .heap = 0,
+            .payload = .{ .sequence = labels },
+            .source = "tables.luc",
+            .origin = .{ .line = 4, .column = 1 },
+        },
+        .{
+            .name = "scores",
+            .heap = 1,
+            .payload = .{ .map = entries },
+            .source = "tables.luc",
+            .origin = .{ .line = 8, .column = 1 },
+        },
+        .{
+            .name = "measurements",
+            .heap = 2,
+            .payload = .{ .sequence = measurements },
+            .source = "tables.luc",
+            .origin = .{ .line = 12, .column = 1 },
+        },
+        // Identical contents are still a different declaration and a
+        // different runtime object.
+        .{
+            .name = "same_measurements",
+            .heap = 2,
+            .payload = .{ .sequence = same_measurements },
+            .source = "tables.luc",
+            .origin = .{ .line = 13, .column = 1 },
+        },
+    });
+
+    const instructions = try arena.dupe(mir.Instruction, &.{
+        .{ .const_container = 0 },
+        .{ .const_container = 1 },
+        .{ .const_container = 2 },
+        .{ .ret = null },
+    });
+    const blocks = try arena.dupe(mir.Block, &.{.{
+        .items = try arena.dupe(mir.Register, &.{ 0, 1, 2, 3 }),
+    }});
+    program.functions = try arena.dupe(mir.Function, &.{.{
+        .name = "main",
+        .parameter_count = 0,
+        .return_type = .none,
+        .locals = &.{},
+        .instructions = instructions,
+        .result_types = try arena.dupe(types.Type, &.{
+            .{ .heap = 0 },
+            .{ .heap = 1 },
+            .{ .heap = 2 },
+            .none,
+        }),
+        .blocks = blocks,
+    }});
+    return program;
+}
+
+test "constant containers round-trip with declaration identity and exact values" {
+    var program = try constantContainerProgram();
+    defer program.deinit();
+    try mir.verify(testing.allocator, &program);
+
+    const encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+    var loaded = try decode(testing.allocator, encoded);
+    defer loaded.deinit();
+
+    try testing.expectEqual(@as(usize, 4), loaded.container_constants.len);
+    try testing.expectEqualStrings("measurements", loaded.container_constants[2].name);
+    try testing.expectEqualStrings("same_measurements", loaded.container_constants[3].name);
+    try testing.expectEqual(@as(u32, 12), loaded.container_constants[2].origin.line);
+    try testing.expectEqual(@as(usize, 2), loaded.container_constants[2].payload.sequence.len);
+    try testing.expectEqual(@as(f64, 2.5), loaded.container_constants[2].payload.sequence[1].double);
+    try testing.expect(loaded.container_constants[0].payload.sequence[0].strukt.fields[1] == .absent);
+    const dump = try mir.print(testing.allocator, &loaded);
+    defer testing.allocator.free(dump);
+    try testing.expect(std.mem.indexOf(u8, dump, "constant container#0 labels: list(Label) = [Label(text=data#1, fallback=none, enabled=true)]") != null);
+
+    const again = try encode(testing.allocator, &loaded);
+    defer testing.allocator.free(again);
+    try testing.expectEqualSlices(u8, encoded, again);
+
+    mir.strip(&loaded);
+    try testing.expectEqualStrings("", loaded.container_constants[0].source);
+    try testing.expectEqual(mir.Origin{ .line = 0, .column = 0 }, loaded.container_constants[0].origin);
+    try mir.verify(testing.allocator, &loaded);
+}
+
+test "constant container rows are exhaustively verified after decode" {
+    var program = try constantContainerProgram();
+    defer program.deinit();
+    try mir.verify(testing.allocator, &program);
+
+    // An absent value is legal in the optional struct field above,
+    // but nowhere at the container's top level.
+    const saved_label = program.container_constants[0].payload.sequence[0];
+    program.container_constants[0].payload.sequence[0] = .absent;
+    try testing.expectError(error.BadConstant, mir.verify(testing.allocator, &program));
+    program.container_constants[0].payload.sequence[0] = saved_label;
+
+    // Two distinct string slots with equal bytes are the same map key.
+    program.container_constants[1].payload.map[1].key = .{ .string = 3 };
+    try testing.expectError(error.BadConstant, mir.verify(testing.allocator, &program));
+    program.container_constants[1].payload.map[1].key = .{ .string = 2 };
+
+    const saved_origin = program.container_constants[0].origin;
+    program.container_constants[0].origin.line = 0;
+    try testing.expectError(error.BadConstant, mir.verify(testing.allocator, &program));
+    program.container_constants[0].origin = saved_origin;
+
+    // Rank is not redundantly stored in the row: only rank one is
+    // admitted, and its length comes from the sequence itself.
+    program.heap_types[2].array.rank = 2;
+    try testing.expectError(error.BadConstant, mir.verify(testing.allocator, &program));
+    program.heap_types[2].array.rank = 1;
+
+    // Row three is unused by every instruction and still part of the
+    // module's trust boundary.  Encode the damage to prove decode's
+    // verifier checks the pool whole rather than on demand.
+    const saved_measurement = program.container_constants[3].payload.sequence[0];
+    program.container_constants[3].payload.sequence[0] = .{ .string = 99 };
+    const damaged = try encode(testing.allocator, &program);
+    defer testing.allocator.free(damaged);
+    try testing.expectError(error.InvalidModule, decode(testing.allocator, damaged));
+    program.container_constants[3].payload.sequence[0] = saved_measurement;
+
+    program.functions[0].instructions[0] = .{ .const_container = 99 };
+    try testing.expectError(error.BadConstant, mir.verify(testing.allocator, &program));
+}
+
+test "constant value decode depth is bounded" {
+    var bytes: std.ArrayList(u8) = .empty;
+    defer bytes.deinit(testing.allocator);
+    var writer: Writer = .{ .gpa = testing.allocator, .out = &bytes };
+    try writer.bytes(magic);
+    try writer.int(u32, format_version);
+    try writer.int(u32, 0); // strings
+    try writer.int(u32, 1); // container rows
+    try writer.blob("deep");
+    try writer.int(u32, 0); // heap row, never reached
+    const PayloadTag = std.meta.Tag(mir.ContainerConstant.Payload);
+    const ValueTag = std.meta.Tag(mir.ConstantValue);
+    try writer.int(u8, @intFromEnum(@as(PayloadTag, .sequence)));
+    try writer.int(u32, 1);
+    for (0..Reader.max_recursive_depth + 1) |_| {
+        try writer.int(u8, @intFromEnum(@as(ValueTag, .strukt)));
+        try writer.int(u32, 0);
+        try writer.int(u32, 1);
+    }
+    try testing.expectError(error.InvalidModule, decode(testing.allocator, bytes.items));
+}
+
 test "a compiled program round-trips through the module format" {
     const source =
         \\struct Point:
@@ -731,7 +1043,7 @@ test "a compiled program round-trips through the module format" {
     try testing.expectEqualSlices(u8, encoded, again);
 }
 
-test "an inout receiver and call round-trip through format 32" {
+test "an inout receiver and call round-trip through the current format" {
     var program = try compileScript(
         \\struct Counter:
         \\    value: long
@@ -1110,6 +1422,8 @@ const mutation_source =
     \\    x: double
     \\    tag: string
     \\
+    \\const seeds: list(long) = [3, 1, 2]
+    \\
     \\func total(values: list(long)) -> long:
     \\    return values[0] + values[1] + values[2]
     \\
@@ -1119,6 +1433,7 @@ const mutation_source =
     \\    var ages = new map(string, long)
     \\    ages["ada"] = total(xs)
     \\    let point = Point(x = sqrt(4.0), tag = "p"[0:1])
+    \\    assert(seeds[0] == 3)
     \\    if point.x > 1.0 and ages.has("ada"):
     \\        xs.append(long(point.x))
     \\    assert(len(xs) == 4)
@@ -1239,6 +1554,9 @@ test "decode allocates in proportion to its input" {
         @sizeOf(types.StructField),
         @sizeOf(types.HeapType),
         @sizeOf(types.Type),
+        @sizeOf(mir.ContainerConstant),
+        @sizeOf(mir.ContainerConstant.MapEntry),
+        @sizeOf(mir.ConstantValue),
     );
     const cap = 8 * widest * encoded.len + 4096;
     const scratch = try testing.allocator.alloc(u8, cap);
@@ -1282,6 +1600,15 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // Local flags are wire surface too: `inout` changes how both
     // engines interpret local zero without changing its type.
     inline for (comptime std.meta.fieldNames(mir.Local)) |name| hasher.update(name);
+    // A constant row has two wire-tagged unions of its own and three
+    // nested record shapes.  Fingerprint every name rather than only
+    // the instruction that indexes the table, or a payload edit could
+    // silently leave the version behind.
+    inline for (comptime std.meta.fieldNames(mir.ConstantValue)) |name| hasher.update(name);
+    inline for (comptime std.meta.fieldNames(mir.ConstantValue.Struct)) |name| hasher.update(name);
+    inline for (comptime std.meta.fieldNames(mir.ContainerConstant)) |name| hasher.update(name);
+    inline for (comptime std.meta.fieldNames(mir.ContainerConstant.Payload)) |name| hasher.update(name);
+    inline for (comptime std.meta.fieldNames(mir.ContainerConstant.MapEntry)) |name| hasher.update(name);
     // If this fails you changed the instruction set, the intrinsics,
     // or the trap or error codes: bump format_version and update BOTH
     // numbers.
@@ -1292,8 +1619,8 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // moved this number and left the hash alone.  A version bump is
     // still required for that, and this test is not what will remind
     // you.
-    try testing.expectEqual(@as(u32, 32), format_version);
-    try testing.expectEqual(@as(u64, 6448615045475647724), hasher.final());
+    try testing.expectEqual(@as(u32, 33), format_version);
+    try testing.expectEqual(@as(u64, 1494861490901555643), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

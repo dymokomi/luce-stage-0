@@ -55,6 +55,9 @@ pub const functions = @import("specs/functions_spec.zig");
 /// Implied receivers, inferred writers, and the `static` boundary
 /// (docs/SELF.md).
 pub const self = @import("specs/self_spec.zig");
+/// File-scope values and program-root constant containers
+/// (docs/CONSTANTS.md).
+pub const constants = @import("specs/constants_spec.zig");
 /// Threads: a worker owns its world, and the ownership model is the
 /// concurrency model (docs/THREADS.md).
 pub const threads = @import("specs/threads_spec.zig");
@@ -85,6 +88,7 @@ test {
     _ = bytes;
     _ = functions;
     _ = self;
+    _ = constants;
     _ = threads;
     _ = host;
     _ = modules;

@@ -1422,3 +1422,18 @@ struct Rng:
 
 Both members are public because they sit outside the private region;
 their implied receiver is independent of that visibility decision.
+
+## CONSTANTS syntax update — 2026-08-08
+
+Visibility itself did not change when file-scope constants moved from
+the historical `let` spelling in this record to `const`.  The current
+forms are `private const name = value` and `public const name = value`;
+local `let` and `var` do not take visibility markers.
+
+The existing public-surface check also follows a constant container's
+element or map-value type.  A public container cannot expose a private
+type; making the constant private or the type public closes the
+surface.  Folded values may still be computed from a private constant,
+because its name and type do not cross the file boundary.  This check
+still dies in stage 4.  Constant containers moved the serialized module
+to format 33; the published host ABI remains 13.

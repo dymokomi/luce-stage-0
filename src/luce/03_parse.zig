@@ -36,7 +36,7 @@
 //!   "expected ')'", `write 'elif'`, `a call needs its parentheses`,
 //!   `this 'while' block is empty`, and every "expected X" says what
 //!   it found instead.  A word that opens a declaration in another
-//!   language (`def`, `class`, `const`, `Func`) is answered with the
+//!   language (`def`, `class`, `Func`) is answered with the
 //!   Luce spelling.
 //! * **A list that runs out of input blames the bracket.**  Every
 //!   comma-separated list stops at a newline as well as at its closer,

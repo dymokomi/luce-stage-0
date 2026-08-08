@@ -6,10 +6,7 @@ dense array in arrival order, with a hash index over it.
 
 ```luce run
 func main():
-    var ages = new map(string, long)
-    ages["ada"] = 36
-    ages["grace"] = 45
-    ages["alan"] = 41
+    var ages = {"ada": 36, "grace": 45, "alan": 41}
     ages["ada"] += 1                 # the key is evaluated once
 
     for name, age in ages:
@@ -32,6 +29,24 @@ alan is 41
 has grace: true
 get nobody: -1
 2 left
+```
+
+`{key: value, ...}` creates a fresh mutable map. Entries are evaluated
+in order, so a later equal key replaces the earlier value. Empty `{}`
+is refused because it cannot say either type; use `new map(K, V)`.
+
+A file-scope map is declared with `const` and belongs to the program
+root. It is immutable, and duplicate folded keys are a compile error:
+
+```luce run
+const WORDS = {"and": true, "break": true, "const": true}
+
+func main():
+    print(string(WORDS.has("const")))
+```
+
+```output
+true
 ```
 
 Indexing a key that is not there is a **trap**, on purpose. Asking a

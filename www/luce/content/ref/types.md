@@ -165,9 +165,10 @@ function type has no `!` with which to carry the obligation.
 
 A function type may annotate a parameter or local, be a function's
 result, and nest inside another function signature. It may not be a
-container element, struct field or optional payload. A top-level
-`let` cannot hold one, and `var f: func(long)` without an initializer
-is refused because there is no zero function.
+container element, struct field or optional payload. A file-scope
+`const` cannot hold one because function declarations and lambdas are
+not constant expressions, and `var f: func(long)` without an
+initializer is refused because there is no zero function.
 
 A top-level or static namespace function becomes a value where a function
 type is expected. The expected signature supplies the landing shape,
@@ -278,8 +279,8 @@ no ownership word, and a container holds it at its backing width.
   of its members.
 - **Equality only.** `==` and `!=` compare members; `<` and its
   relatives are refused, naming `int(…)`.
-- Members fold: a member is a constant, so it stands in a top-level
-  `let`, a parameter default and a field default.
+- Members fold: a member is a constant, so it stands in a file-scope
+  `const`, a parameter default and a field default.
 
 ```luce run
 enum Method(byte):

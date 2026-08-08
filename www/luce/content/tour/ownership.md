@@ -24,7 +24,7 @@ func main():
 The whole model is four words — `new`, `give`, `copy`, `free` — and
 three of them are needed only where the compiler genuinely cannot see
 what you mean. The full specification is
-[45 numbered situations](/ref/ownership/), each one addressable on its
+[46 numbered situations](/ref/ownership/), each one addressable on its
 own, and the compiler quotes their numbers in its diagnostics.
 
 ## What owns what
@@ -34,8 +34,11 @@ structs that transitively contain one. **Values** — `long`, `double`,
 `bool`, `string`, and plain structs — copy freely and are never
 verbed.
 
-An object is freed when its owner dies, and an owner is one of exactly
-three things: a binding, a container, or the statement that made it.
+An ordinary run-created object is freed when its owner dies. Its owner
+is a binding, a container, or the statement that made it. A file-scope
+constant container instead belongs to the program root and dies when
+that runtime is torn down; [the constants chapter](../constants/)
+shows that fourth owner.
 
 ```luce run
 import std.strings
@@ -257,9 +260,10 @@ sum 14
 
 ## What this buys
 
-Nothing can leak: every object is owned by a binding, a container, or
-a statement temporary, and all three have defined death points. There
-is no collector to pause, no reference count to increment on every
+Nothing can leak: every ordinary object is owned by a binding, a
+container, or a statement temporary, while a constant container is
+owned by the program root; all four have defined death points. There is
+no collector to pause, no reference count to increment on every
 assignment, and no cycle problem to have.
 
 What it costs is the one dynamic backstop you have met — an alias used

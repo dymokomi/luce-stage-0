@@ -190,7 +190,7 @@ test "a lambda's body may name a constant and call a visible function" {
     try agree.prints(
         \\import std.math
         \\
-        \\let step = 4
+        \\const step = 4
         \\
         \\func triple(n: long) -> long:
         \\    return n * 3

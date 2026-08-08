@@ -44,6 +44,7 @@ the rest.
 | `empty_collection` | pop from an empty list | `pop()` on an empty list |
 | `use_after_free` | object used after free | an alias outliving its owner ([S9](../ownership/#s9)) |
 | `null_object` | null object reference | using an unfilled object slot ([S41](../ownership/#s41)) |
+| `immutable_object` | constant container is immutable | mutating a program-root constant through a parameter that hid its provenance ([S46](../ownership/#s46)) |
 | `bad_codepoint` | invalid character code | `chr` outside Unicode, or `append_ascii` outside 0..127 |
 | `shift_out_of_range` | shift count out of range | `x << n` or `x >> n` with `n < 0` or `n` at or past the operand's width — C leaves this undefined and Go silently masks; Luce says it |
 | `not_owned` | object is owned by a container | never, from source — see below ([S23](../ownership/#s23)) |

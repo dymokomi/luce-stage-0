@@ -30,10 +30,10 @@ gcd(17, 5): 1
 Arguments fill parameters left to right, and a call site may name
 them — `gcd(a = 1071, b = 462)` — in any order, with the first named
 argument ending the positional run. A parameter may declare a
-trailing default, a compile-time constant filled in when a call omits
-it, so `func pad(s: string, width: long = 8)` answers both `pad(s)`
-and `pad(s, 12)`. Every path through a function that declares a
-return type must return, and the compiler checks that.
+trailing default, checked at compile time and supplied when a call
+omits it, so `func pad(s: string, width: long = 8)` answers both
+`pad(s)` and `pad(s, 12)`. Every path through a function that declares
+a return type must return, and the compiler checks that.
 
 ## Functions are values
 

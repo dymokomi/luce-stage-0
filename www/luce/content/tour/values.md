@@ -282,19 +282,19 @@ main.luc:5:24: chained comparison: write 'a < b and b < c' [luce.parse.chain]
 
 ## Constants at file scope
 
-A top-level `let` is a compile-time constant. It folds when the
-program is compiled and inlines at every use, so an unused constant
-costs nothing to ship.
+File scope declares with `const`; `let` and `var` live inside
+functions. A value constant folds when the program is compiled and
+inlines at every use.
 
 ```luce run
-let width = 80
-let half = width // 2
-let version = "2"
-let banner = "loom v" + version
+const width = 80
+const half_width = width // 2
+const version = "2"
+const banner = "loom v" + version
 
 func main():
     print(banner)
-    print(string(half))
+    print(string(half_width))
 ```
 
 ```output
@@ -303,18 +303,19 @@ loom v2
 ```
 
 Constants may reference each other in any order, but never in a cycle.
-What may be folded is literals, other constants, arithmetic,
-comparisons, `and`/`or`, string concatenation, the conversion
-constructors (`byte()` through `double()`, and `string()`), and
-value-struct construction. **Calls are not constant**, and neither are heap
-objects, because a top-level binding has no scope to die at and
-therefore cannot own one:
+Foldable forms include literals, other constants, numeric and bitwise
+expressions, comparisons and logic, string concatenation, the eight
+conversion constructors and `ord()`, enum members and conversions from
+enums (`int(m)`, `string(m)`), typed `none`, and object-free
+value-struct construction. Function values and general calls do not
+fold; the conversion constructors and `ord()` are compile-time
+intrinsics, not general function calls:
 
 ```luce fail
 func label() -> string:
     return "loom"
 
-let banner = label() + " v2"
+const banner = label() + " v2"
 
 func main():
     print(banner)
@@ -322,9 +323,11 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:4:14: constants fold at compile time; calls are not constant [luce.sema.const]
-    let banner = label() + " v2"
-                 ^~~~~~~
+main.luc:4:16: constants fold at compile time; calls are not constant [luce.sema.const]
+    const banner = label() + " v2"
+                   ^~~~~~~
 ```
 
-There is no top-level `var`.
+A flat list, map or rank-1 array can be a constant too, under the
+program root rather than a function scope. The dedicated chapter is
+[constants and shared tables](../constants/).

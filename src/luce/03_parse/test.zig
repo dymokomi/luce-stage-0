@@ -158,8 +158,8 @@ test "every declaration form at file scope parses into its own list" {
         \\import std.math
         \\import geo
         \\
-        \\let width = 80
-        \\let banner: string = "loom"
+        \\const width = 80
+        \\const banner: string = "loom"
         \\
         \\struct Theme:
         \\    keyword: long
@@ -227,11 +227,11 @@ test "struct bodies parse fields and static namespace functions" {
     try testing.expectEqualStrings("Helpers", dotted.target.name.text);
 }
 
-test "top-level let constants parse; top-level var is refused" {
+test "const is file-scope, while let and var are function-scope" {
     var parsed = try expectClean(
-        \\let width = 80
-        \\let banner: string = "loom " + version
-        \\let version = "2.0"
+        \\const width = 80
+        \\const banner: string = "loom " + version
+        \\const version = "2.0"
         \\
         \\func main():
         \\    let unused = width
@@ -244,16 +244,25 @@ test "top-level let constants parse; top-level var is refused" {
     try testing.expectEqualStrings("string", parsed.program.constants[1].annotation.?.name);
     try testing.expect(parsed.program.constants[1].value.* == .binary);
 
+    try expectDiagnostics("let width = 80\n", &.{
+        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "file scope declares with const" },
+    });
     try expectDiagnostics("var counter = 0\n", &.{
-        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "var lives inside functions" },
+        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "file scope declares with const" },
+    });
+    try expectDiagnostics("private let width = 80\n", &.{
+        .{ .code = "luce.parse.top", .line = 1, .column = 9, .contains = "file scope declares with const" },
+    });
+    try expectDiagnostics("func main():\n    const width = 80\n    let okay = 1\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = "use let or var inside a function" },
     });
 }
 
 test "visibility markers parse onto every declaration form, and unmarked stays none" {
     var parsed = try expectClean(
-        \\private let seed = 41
-        \\public let answer = seed + 1
-        \\let quiet = 0
+        \\private const seed = 41
+        \\public const answer = seed + 1
+        \\const quiet = 0
         \\
         \\private struct Inner:
         \\    n: long
@@ -395,7 +404,7 @@ test "the visibility refusals land where the memo puts them" {
     );
     // A marker fronting something unmarkable names what it expected.
     try expectDiagnostics("private import math\n\nfunc main():\n    return\n", &.{
-        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "expected func, let, struct, or enum" },
+        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "expected func, const, struct, or enum" },
     });
 }
 
@@ -434,8 +443,8 @@ test "the bare underscore is refused as a declared name, everywhere one declares
     // same sentence [VISIBILITY.md D9].  The declaration still parses,
     // so each program yields exactly the one diagnostic.
     const wildcard = "_ is the array-shape wildcard";
-    try expectDiagnostics("let _ = 1\n\nfunc main():\n    return\n", &.{
-        .{ .code = "luce.parse.expected", .line = 1, .column = 5, .contains = wildcard },
+    try expectDiagnostics("const _ = 1\n\nfunc main():\n    return\n", &.{
+        .{ .code = "luce.parse.expected", .line = 1, .column = 7, .contains = wildcard },
     });
     try expectDiagnostics("func _():\n    return\n\nfunc main():\n    return\n", &.{
         .{ .code = "luce.parse.expected", .line = 1, .column = 6, .contains = wildcard },
@@ -962,6 +971,60 @@ test "every literal form parses" {
     try testing.expectEqual(@as(usize, 2), body.statements[13].let.value.new_object.dims.len);
 }
 
+test "map literals parse in constant and runtime positions, across lines and with a trailing comma" {
+    var parsed = try expectClean(
+        \\const months: map(string, long) = {
+        \\    "jan": 1,
+        \\    "feb": 1 + 1,
+        \\}
+        \\func main():
+        \\    let by_number = {1: "one", 2: "two",}
+        \\    let nested = {"numbers": {1: "one"}}
+        \\
+    );
+    defer parsed.deinit();
+
+    const months = parsed.program.constants[0].value.map_literal;
+    try testing.expectEqual(@as(usize, 2), months.entries.len);
+    try testing.expectEqualStrings("jan", months.entries[0].key.string_literal.decoded);
+    try testing.expectEqualStrings("1", months.entries[0].value.int_literal.text);
+    try testing.expect(months.entries[1].value.* == .binary);
+    try testing.expectEqual(months.entries[0].key.span().start, months.entries[0].span.start);
+    try testing.expectEqual(months.entries[0].value.span().end, months.entries[0].span.end);
+
+    const body = parsed.program.functions[0].body.statements;
+    const by_number = body[0].let.value.map_literal;
+    try testing.expectEqual(@as(usize, 2), by_number.entries.len);
+    try testing.expectEqualStrings("1", by_number.entries[0].key.int_literal.text);
+    try testing.expectEqualStrings("two", by_number.entries[1].value.string_literal.decoded);
+    try testing.expect(body[1].let.value.map_literal.entries[0].value.* == .map_literal);
+}
+
+test "empty, malformed, and truncated map literals refuse once and recover" {
+    var empty = try parseText(
+        \\func main():
+        \\    let bad = {}
+        \\    let okay = 1
+        \\
+    );
+    defer empty.deinit();
+    try testing.expectEqual(@as(usize, 1), empty.diagnostics.count());
+    try testing.expectEqualStrings("luce.parse.expression", empty.diagnostics.at(0).?.code);
+    try testing.expect(std.mem.indexOf(u8, empty.diagnostics.at(0).?.message, "new map(K, V)") != null);
+    try testing.expectEqual(@as(usize, 1), empty.program.functions[0].body.statements.len);
+    try testing.expectEqualStrings("okay", empty.program.functions[0].body.statements[0].let.name);
+
+    try expectDiagnostics("func main():\n    let bad = {\"a\", 1}\n    let okay = 1\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 19, .contains = "between a map key and value" },
+    });
+    try expectDiagnostics("func main():\n    let bad = {\"a\": 1 \"b\": 2}\n    let okay = 1\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 23, .contains = "missing ','" },
+    });
+    try expectDiagnostics("func main():\n    let bad = {\n        \"a\": 1,\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 15, .contains = "unclosed '{'" },
+    });
+}
+
 test "collections parse: types, new, literals, indexing, slices, for-in" {
     var parsed = try expectClean(
         \\func main():
@@ -1079,6 +1142,7 @@ test "f-strings expand to string()-wrapped concatenation" {
         \\    let c = f""
         \\    let d = f"{a + b}"
         \\    let e = f"{m["key"]}"
+        \\    let f = f"{copy {"a": 1}}"
         \\
     );
     defer parsed.deinit();
@@ -1094,6 +1158,9 @@ test "f-strings expand to string()-wrapped concatenation" {
     // A hole is a whole expression, and may contain a nested string.
     try testing.expect(body.statements[3].let.value.call.arguments[0].value.* == .binary);
     try testing.expect(body.statements[4].let.value.call.arguments[0].value.* == .index);
+    // A map's colon is nested syntax, not an f-string format specifier.
+    const copied_map = body.statements[5].let.value.call.arguments[0].value.copy.operand;
+    try testing.expect(copied_map.* == .map_literal);
 }
 
 test "spans point at the source the node came from" {
@@ -1212,7 +1279,7 @@ test "a statement that runs past its newline reports once and stops" {
 }
 
 test "a file that starts indented reports the indentation, not the statement" {
-    try expectDiagnostics("    let x = 1\nlet y = 2\n", &.{
+    try expectDiagnostics("    let x = 1\nconst y = 2\n", &.{
         .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "left margin" },
     });
 }
@@ -1347,8 +1414,8 @@ test "the mistakes a beginner actually makes name the Luce spelling" {
             .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "no classes" },
         },
         .{
-            .source = "const width = 80\n",
-            .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "declared with 'let'" },
+            .source = "final width = 80\n",
+            .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "declared with 'const'" },
         },
         .{
             .source = "from math import sqrt\n",
@@ -1681,7 +1748,7 @@ test "truncated input at every prefix terminates and stays inside the source" {
     const whole =
         \\import math
         \\
-        \\let width = 80
+        \\const width = 80
         \\
         \\struct Point:
         \\    x: double

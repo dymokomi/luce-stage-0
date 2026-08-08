@@ -31,7 +31,7 @@ private struct Theme:
     alert: long
 
 # One file-scope constant instead of a function per color.
-private let theme = Theme(
+private const theme = Theme(
     keyword = 176,
     type_name = 80,
     builtin = 74,
@@ -164,7 +164,7 @@ private struct Editing:
 # twenty-one builtins the language has gained since.  Ground truth is
 # the compiler's own tables, which `tools/grammar.zig` reads for the
 # VS Code grammar:
-# `02_lex/token.zig`'s `keywords` (thirty-two words) and
+# `02_lex/token.zig`'s `keywords` (thirty-three words) and
 # `04_semantics/builtins.zig`'s `builtins` (forty-five), plus `range`,
 # which is syntax the parser recognises only inside a `for`.
 #
@@ -176,59 +176,37 @@ private struct Editing:
 # and `get` and `build` as well — the two lists are the free builtins
 # and nothing else.
 #
-# **A space-delimited constant, searched, rather than a chain
-# compared.**  Luce has no sets and no constant containers (docs/
-# MISSING.md tier 3 §1): a top-level `let` folds a *value*, so a list
-# or a map cannot stand here, and building one per call would cost far
-# more than the comparisons it replaced.  What a constant *can* hold is
-# a string, and `listed` below searches it with `find`, which lands on
-# `find_byte` — the language's scanning primitive, and the seam SIMD
-# enters through (docs/STD.md).  Every word is fenced by a space on
-# both sides, which is what makes a search a membership test: `in`
-# never matches inside `int`, and no prefix is ever a member by
-# accident.
-#
-# **It is faster than the chain it replaces**, which was not the point
-# but is worth writing down: 0.15 µs per word against 0.22–0.29 µs for
-# the forty-six comparisons, on a table that is half again as long
-# (a paired micro-benchmark, ReleaseSafe, 156,000 classifications).  A
-# frame classifies a few hundred words, so highlighting costs about a
-# twentieth of a millisecond either way.
-#
-# What a real set would still buy: constant-time membership instead of
-# a scan, and a duplicate the compiler could refuse.  Neither is what
-# this file is waiting on.
-private let keyword_words = (
-    " and break catch continue copy elif else enum false for func give" +
-    " if import in let match new none not or private public return" +
-    " self spawn static struct true try var while "
-)
+# **An immutable lookup table, rather than a chain compared.**  Luce
+# has no set type yet, so a program-root `map(string, bool)` is the
+# exact membership table: one lookup, no fenced-string scan, and a
+# duplicate spelling is a compile-time error.
+private const keyword_words = {
+    "and": true, "break": true, "catch": true, "const": true,
+    "continue": true, "copy": true, "elif": true, "else": true,
+    "enum": true, "false": true, "for": true, "func": true,
+    "give": true, "if": true, "import": true, "in": true,
+    "let": true, "match": true, "new": true, "none": true,
+    "not": true, "or": true, "private": true, "public": true,
+    "return": true, "self": true, "spawn": true, "static": true,
+    "struct": true, "true": true, "try": true, "var": true,
+    "while": true,
+}
 
-private let builtin_words = (
-    " abs assert ceil chr clamp clock_ms dir_list env error exit" +
-    " file_append file_delete file_exists file_open file_read" +
-    " file_rename file_write floor free key_read key_text len max" +
-    " min ord os_available_memory os_cpu_count os_total_memory" +
-    " parse_float parse_int parse_string print print_error range" +
-    " read_line sleep_ms sqrt term_clear term_cols term_flush" +
-    " term_move term_rows term_style term_write trap trunc "
-)
-
-# Whether `word` is one of the space-fenced words of `words`.
-#
-# The bounds are the constants' own: both tables open and close with a
-# space and hold no two spaces in a row, so a match can never start at
-# 0 and can never end at the last byte — `at - 1` and `at + len(word)`
-# are always inside the string, and neither needs a guard.  A hit that
-# is not fenced (`in` inside `int`) is skipped and the search goes on
-# from the byte after it.
-private func listed(words: string, word: string) -> bool:
-    var at = words.find(word)
-    while at >= 0:
-        if words.byte_at(at - 1) == 32 and words.byte_at(at + len(word)) == 32:
-            return true
-        at = words.find(word, at + 1)
-    return false
+private const builtin_words = {
+    "abs": true, "assert": true, "ceil": true, "chr": true,
+    "clamp": true, "clock_ms": true, "dir_list": true, "env": true,
+    "error": true, "exit": true, "file_append": true, "file_delete": true,
+    "file_exists": true, "file_open": true, "file_read": true,
+    "file_rename": true, "file_write": true, "floor": true, "free": true,
+    "key_read": true, "key_text": true, "len": true, "max": true,
+    "min": true, "ord": true, "os_available_memory": true,
+    "os_cpu_count": true, "os_total_memory": true, "parse_float": true,
+    "parse_int": true, "parse_string": true, "print": true,
+    "print_error": true, "range": true, "read_line": true,
+    "sleep_ms": true, "sqrt": true, "term_clear": true, "term_cols": true,
+    "term_flush": true, "term_move": true, "term_rows": true,
+    "term_style": true, "term_write": true, "trap": true, "trunc": true,
+}
 
 # What a word in a source line is, and the color that says so.
 #
@@ -253,11 +231,11 @@ private enum Word:
     # a capitalized name is a type before a builtin (no builtin is
     # capitalized, so the two never actually race).
     static func of(text: string) -> Word:
-        if listed(keyword_words, text):
+        if keyword_words.has(text):
             return Word.keyword
         if len(text) > 0 and Bytes.is_upper(text.byte_at(0)):
             return Word.type_name
-        if listed(builtin_words, text):
+        if builtin_words.has(text):
             return Word.builtin
         return Word.plain
 

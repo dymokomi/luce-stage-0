@@ -1,6 +1,6 @@
 # A tour of Luce
 
-Fourteen chapters, meant to be read in order. They assume you can
+Sixteen chapters, meant to be read in order. They assume you can
 program in something and nothing else. By the end you will have
 written a program that takes command-line arguments, builds a map,
 handles a file that would not open, and gives its memory back.

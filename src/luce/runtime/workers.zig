@@ -437,7 +437,7 @@ pub fn release(owner: *Runtime, worker: *Worker) void {
 
 /// Detach the worker a task owns, or trap if there is none left.
 fn take(joiner: *Runtime, task: Value) heap.Error!*Worker {
-    const object = try joiner.resolve(task);
+    const object = try joiner.resolveMutable(task);
     switch (object.data) {
         .task => |held| {
             const worker = held orelse return joiner.fail(.use_after_free);
@@ -493,7 +493,7 @@ fn finish(owner: *Runtime, worker: *Worker) void {
     // that ownership was going to release: what is left is what the
     // program leaked, and it is this program's leak however many
     // runtimes it used (D10).
-    owner.inherited_leaks += @as(i64, child.live) + child.inherited_leaks;
+    owner.inherited_leaks += child.leaked();
     worker.nursery.close.?(worker.nursery.context, child);
     worker.runtime = null;
     owner.objects.destroy(worker);
@@ -589,6 +589,51 @@ test "a channel and a nursery are available only when every slot is filled" {
     try std.testing.expect(!partial.available());
     const full: Nursery = .{ .open = Stubs.open, .close = Stubs.close, .run = Stubs.run };
     try std.testing.expect(full.available());
+}
+
+test "worker leak folding excludes the child runtime's program roots" {
+    const Close = struct {
+        fn close(_: ?*anyopaque, runtime: *Runtime) callconv(.c) void {
+            runtime.deinit();
+        }
+    };
+
+    var parent_arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer parent_arena.deinit();
+    var child_arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer child_arena.deinit();
+    var parent: Runtime = .init(.{
+        .arena = parent_arena.allocator(),
+        .objects = std.testing.allocator,
+    });
+    defer parent.deinit();
+    var child: Runtime = .init(.{
+        .arena = child_arena.allocator(),
+        .objects = std.testing.allocator,
+    });
+
+    try child.beginConstants(1);
+    const rooted = try child.newList(Value.ofLong(0));
+    try child.publishConstant(0, rooted);
+    child.finishConstants();
+    _ = try child.newList(Value.ofLong(0));
+    try std.testing.expectEqual(@as(i64, 1), child.leaked());
+
+    const arguments = try child.objects.alloc(Value, 1);
+    arguments[0] = .none;
+    const worker = try parent.objects.create(Worker);
+    worker.* = .{
+        .runtime = &child,
+        .nursery = .{ .close = Close.close },
+        .channel = .{},
+        .function = 0,
+        .depth = 0,
+        .arguments = arguments,
+    };
+    finish(&parent, worker);
+
+    try std.testing.expectEqual(@as(i64, 1), parent.inherited_leaks);
+    try std.testing.expectEqual(@as(i64, 1), parent.leaked());
 }
 
 test "the three outcome numbers are the ones generated code passes around" {

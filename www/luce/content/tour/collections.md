@@ -4,7 +4,7 @@ Everything so far has been a **value**: it copies on assignment and
 nobody frees it. The four collection types are **heap objects**.
 A variable holds a reference to one, they are created with `new` or a
 literal, and the scope that owns one frees it — which is
-[the next chapter](../ownership/). This one is about what they do.
+[the memory chapter](../ownership/). This one is about what they do.
 
 | Type | Shape |
 |---|---|
@@ -108,10 +108,7 @@ of entries with a hash index above it.
 
 ```luce run
 func main():
-    var stock = new map(string, long)
-    stock["fig"] = 3
-    stock["pear"] = 12
-    stock["plum"] = 0
+    var stock = {"fig": 3, "pear": 12, "plum": 0}
     stock["fig"] += 1
 
     for name, count in stock:
@@ -142,6 +139,12 @@ zero and then applies, because the operator says the statement is a
 write. `counts[word] += 1` is the whole of the counting idiom.
 `stock[k] = stock[k] + 1` still traps — the read is on the right of
 the `=` and declares nothing.
+
+`{key: value, ...}` is a fresh mutable map literal. Entries evaluate
+in order and a later equal key replaces the earlier value. Empty `{}`
+is refused because it supplies neither `K` nor `V`; write
+`new map(K, V)`. The same literal at file scope creates an immutable
+program-root table in the [constants chapter](../constants/).
 
 ## array
 

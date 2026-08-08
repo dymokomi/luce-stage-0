@@ -39,7 +39,7 @@ import std.files
 import std.paths
 import std.strings
 
-let usage = "usage: zipper list ARCHIVE.zip | zipper unzip ARCHIVE.zip [DIRECTORY] | zipper zip ARCHIVE.zip FILE [FILE ...]"
+const usage = "usage: zipper list ARCHIVE.zip | zipper unzip ARCHIVE.zip [DIRECTORY] | zipper zip ARCHIVE.zip FILE [FILE ...]"
 
 # How many, said the way a person says it.  "1 entries" is the kind of
 # small dishonesty that makes a tool feel machine-written.

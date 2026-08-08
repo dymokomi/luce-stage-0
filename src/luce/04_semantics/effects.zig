@@ -74,6 +74,12 @@ pub fn mayMutateContainers(expression: *const ast.Expression) bool {
             }
             break :blk false;
         },
+        .map_literal => |literal| blk: {
+            for (literal.entries) |entry| {
+                if (mayMutateContainers(entry.key) or mayMutateContainers(entry.value)) break :blk true;
+            }
+            break :blk false;
+        },
         .new_object => |new| blk: {
             for (new.dims) |dimension| {
                 if (mayMutateContainers(dimension)) break :blk true;

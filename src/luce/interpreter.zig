@@ -297,5 +297,6 @@ pub const KeyEvent = struct {
 pub const Memory = runtime.Memory;
 
 test {
+    _ = machine;
     _ = @import("interpreter/test.zig");
 }

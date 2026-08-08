@@ -236,8 +236,11 @@ const Nursery = struct {
         defer machine.stack.deinit(machine.arena);
         defer machine.frame_storage.deinit(machine.arena);
 
-        const outcome = machine.call(function, arguments) catch
-            return runtime.workers.raised_trap;
+        const outcome = if (machine.materializeConstants()) |failed|
+            failed
+        else
+            machine.call(function, arguments) catch
+                return runtime.workers.raised_trap;
         switch (outcome) {
             .value => |answered| {
                 out.* = answered;
@@ -365,6 +368,11 @@ pub const Machine = struct {
     /// initialized local and element (see zeroValue for why sharing
     /// is safe).  Allocated lazily, sized by program.structs.
     struct_zeros: []?RuntimeValue = &.{},
+    /// The declaration being materialized before a function may run.
+    /// It is a frame-shaped value because a failed worker must carry
+    /// the same located prelude through the ordinary unwind channel as
+    /// a trapped function.  Null on every instruction path.
+    constant_trace: ?runtime.trace.Frame = null,
 
     pub const EvalError = runtime.Error;
 
@@ -408,9 +416,14 @@ pub const Machine = struct {
     fn traceback(self: *Machine, reported: *interpreter.Trap) error{OutOfMemory}!void {
         const adopted = self.runtime.unwound.items;
         const depth = self.stack.items.len;
-        const room = max_trace_frames -| adopted.len;
+        var room = max_trace_frames -| adopted.len;
+        const kept_constant: usize = if (self.constant_trace != null and room != 0) 1 else 0;
+        room -= kept_constant;
         const kept = @min(depth, room);
-        const frames = try self.arena.alloc(interpreter.TraceFrame, adopted.len + kept);
+        const frames = try self.arena.alloc(
+            interpreter.TraceFrame,
+            adopted.len + kept_constant + kept,
+        );
         for (adopted, frames[0..adopted.len]) |carried, *slot| {
             slot.* = .{
                 .function = carried.function[0..@intCast(carried.function_length)],
@@ -419,7 +432,16 @@ pub const Machine = struct {
                 .column = carried.column,
             };
         }
-        for (frames[adopted.len..], 0..) |*slot, out_index| {
+        if (kept_constant != 0) {
+            const declared = self.constant_trace.?;
+            frames[adopted.len] = .{
+                .function = declared.function[0..@intCast(declared.function_length)],
+                .source = declared.source[0..@intCast(declared.source_length)],
+                .line = declared.line,
+                .column = declared.column,
+            };
+        }
+        for (frames[adopted.len + kept_constant ..], 0..) |*slot, out_index| {
             const frame = self.stack.items[depth - 1 - out_index];
             const function = &self.program.functions[frame.function];
             const items = function.blocks[frame.block].items;
@@ -439,7 +461,9 @@ pub const Machine = struct {
             };
         }
         reported.trace = frames;
-        reported.dropped = @as(u32, @intCast(depth - kept)) +| self.runtime.dropped_frames;
+        const dropped_constant: u32 = if (self.constant_trace != null and kept_constant == 0) 1 else 0;
+        reported.dropped = @as(u32, @intCast(depth - kept)) +|
+            dropped_constant +| self.runtime.dropped_frames;
     }
 
     /// Record this trap's frames where a **join** can read them
@@ -456,8 +480,18 @@ pub const Machine = struct {
     /// Best-effort, exactly as the compiled path's recorder is: a frame
     /// there is no memory for is counted as dropped rather than lost.
     fn recordUnwind(self: *Machine) void {
+        if (self.constant_trace) |declared| {
+            if (self.runtime.unwound.items.len >= max_trace_frames) {
+                self.runtime.dropped_frames +|= 1;
+            } else {
+                self.runtime.unwound.append(self.runtime.objects, declared) catch {
+                    self.runtime.dropped_frames +|= 1;
+                };
+            }
+        }
         const depth = self.stack.items.len;
-        const kept = @min(depth, max_trace_frames);
+        const room = max_trace_frames -| self.runtime.unwound.items.len;
+        const kept = @min(depth, room);
         self.runtime.dropped_frames +|= @intCast(depth - kept);
         for (0..kept) |out_index| {
             const frame = self.stack.items[depth - 1 - out_index];
@@ -572,6 +606,185 @@ pub const Machine = struct {
         return host.terminal orelse return self.runtime.fail(.host_unavailable);
     }
 
+    // -- constant-container prologue ------------------------------------
+
+    /// Materialize every reachable constant container into this
+    /// runtime's program root before any function executes
+    /// (CONSTANTS.md R-C).  The root run and every worker enter through
+    /// this one path, so no handle is shared between runtimes.
+    fn materializeConstants(self: *Machine) ?CallOutcome {
+        const declared = self.program.container_constants;
+        if (declared.len != 0) self.constant_trace = self.constantPlace(declared[0]);
+        self.runtime.beginConstants(@intCast(declared.len)) catch |mistake| {
+            return self.failedConstant(.none, false, mistake);
+        };
+
+        var current: RuntimeValue = .none;
+        for (declared, 0..) |constant, slot| {
+            self.constant_trace = self.constantPlace(constant);
+            current = self.materializeConstant(constant, &current) catch |mistake| {
+                return self.failedConstant(current, true, mistake);
+            };
+            self.runtime.publishConstant(@intCast(slot), current) catch |mistake| {
+                return self.failedConstant(current, true, mistake);
+            };
+            current = .none;
+        }
+        self.runtime.finishConstants();
+        self.constant_trace = null;
+        return null;
+    }
+
+    /// Build one pool row as an ordinary loose container.  `current`
+    /// receives its handle as soon as one exists, so the caller can
+    /// reclaim a partially filled object on every failing edge.
+    fn materializeConstant(
+        self: *Machine,
+        declared: mir.ContainerConstant,
+        current: *RuntimeValue,
+    ) EvalError!RuntimeValue {
+        switch (self.program.heap_types[declared.heap]) {
+            .list => |element| {
+                current.* = try self.runtime.newList(try self.zeroValue(element));
+                for (declared.payload.sequence) |encoded| {
+                    const held = try self.constantValue(encoded, element);
+                    try containers.append(&self.runtime, current.*, held);
+                }
+            },
+            .array => |shape| {
+                const encoded = declared.payload.sequence;
+                const dims = [_]i64{@intCast(encoded.len)};
+                current.* = try self.runtime.newArray(&dims, try self.zeroValue(shape.element));
+                for (encoded, 0..) |value, index| {
+                    const held = try self.constantValue(value, shape.element);
+                    try containers.indexSet(
+                        &self.runtime,
+                        current.*,
+                        &.{RuntimeValue.ofLong(@intCast(index))},
+                        held,
+                    );
+                }
+            },
+            .map => |pair| {
+                current.* = try self.runtime.newMap();
+                for (declared.payload.map) |entry| {
+                    const held = try self.constantValue(entry.value, pair.value);
+                    try containers.indexSet(
+                        &self.runtime,
+                        current.*,
+                        &.{self.constantKey(entry.key)},
+                        held,
+                    );
+                }
+            },
+            // The verifier refuses all three from this pool.  Keeping
+            // the switch total documents the trust boundary rather
+            // than inventing a second recovery for damaged MIR here.
+            .builder, .file, .task => unreachable,
+        }
+        return current.*;
+    }
+
+    /// Turn one encoded atom into storage the destination container may
+    /// consume.  Strings and struct field runs take their own storage;
+    /// scalars are already values.  The verifier has checked the
+    /// encoding against `wanted`, including enum membership and the
+    /// one legal optional position.
+    fn constantValue(
+        self: *Machine,
+        encoded: mir.ConstantValue,
+        wanted: types.Type,
+    ) EvalError!RuntimeValue {
+        if (encoded == .absent) return .none;
+        const landed = if (wanted == .optional) wanted.optional.asType() else wanted;
+        return switch (encoded) {
+            .boolean => |held| .ofBoolean(held),
+            .long => |held| switch (landed.storage()) {
+                .byte => .ofByte(@intCast(held)),
+                .short => .ofShort(@intCast(held)),
+                .int => .ofInt(@intCast(held)),
+                else => .ofLong(held),
+            },
+            .double => |held| switch (landed) {
+                .half => .ofHalf(@floatCast(held)),
+                .float => .ofFloat(@floatCast(held)),
+                else => .ofDouble(held),
+            },
+            .string => |index| self.runtime.ownValue(
+                .ofString(self.program.constants[index]),
+            ),
+            .strukt => |held| self.constantStruct(held),
+            .absent => .none,
+        };
+    }
+
+    /// Materialize one object-free value struct.  The staging slice is
+    /// run-lifetime scratch; `makeStruct` consumes every filled value
+    /// whether its own allocation succeeds or fails.
+    fn constantStruct(self: *Machine, encoded: mir.ConstantValue.Struct) EvalError!RuntimeValue {
+        const layout = self.program.structs[encoded.layout];
+        const fields = try self.arena.alloc(RuntimeValue, encoded.fields.len);
+        var filled: usize = 0;
+        errdefer for (fields[0..filled]) |field| self.runtime.dropStorage(field);
+        for (encoded.fields, layout.fields, fields) |field, declared, *slot| {
+            slot.* = try self.constantValue(field, declared.field_type);
+            filled += 1;
+        }
+        const made = self.runtime.makeStruct(fields) catch |mistake| {
+            // `makeStruct` consumes every field on both outcomes.
+            filled = 0;
+            return mistake;
+        };
+        filled = 0;
+        return made;
+    }
+
+    /// A map key is borrowed for `indexSet`, which takes its own copy
+    /// only when a new entry keeps it.  Constant keys are exactly long
+    /// or String, as verified by the MIR boundary.
+    fn constantKey(self: *const Machine, encoded: mir.ConstantValue) RuntimeValue {
+        return switch (encoded) {
+            .long => |held| .ofLong(held),
+            .string => |index| .ofString(self.program.constants[index]),
+            else => unreachable,
+        };
+    }
+
+    fn constantPlace(self: *const Machine, declared: mir.ContainerConstant) runtime.trace.Frame {
+        _ = self;
+        return .{
+            .function = declared.name.ptr,
+            .function_length = @intCast(declared.name.len),
+            .source = declared.source.ptr,
+            .source_length = @intCast(declared.source.len),
+            .line = declared.origin.line,
+            .column = declared.origin.column,
+        };
+    }
+
+    /// Close a failed prologue and return the trap already waiting in
+    /// the shared runtime channel.  Raw allocator failure from an
+    /// ordinary construction becomes the declaration's located
+    /// `allocation_failed` trap, just as the C export funnel does for
+    /// generated code.
+    fn failedConstant(
+        self: *Machine,
+        current: RuntimeValue,
+        began: bool,
+        mistake: EvalError,
+    ) CallOutcome {
+        if (mistake == error.OutOfMemory) {
+            const raised = self.runtime.fail(.allocation_failed);
+            std.debug.assert(raised == error.Trap);
+        }
+        if (began) {
+            self.runtime.discardLoose(current);
+            self.runtime.abortConstants();
+        }
+        const pending = self.runtime.pending.?;
+        return .{ .trap = .{ .code = pending.code, .message = pending.message } };
+    }
+
     fn pushFrame(
         self: *Machine,
         function_index: u32,
@@ -625,6 +838,7 @@ pub const Machine = struct {
     // -- the dispatch loop ----------------------------------------------
 
     pub fn execute(self: *Machine, entry: u32) error{OutOfMemory}!CallOutcome {
+        if (self.materializeConstants()) |failed| return failed;
         // `func main(args: list(string)):` receives the command line;
         // `func main():` receives nothing, and those are the only two
         // shapes stage 4 lets through (docs/METHODS.md).  The list is
@@ -686,6 +900,9 @@ pub const Machine = struct {
                     },
                     .const_string => |constant| {
                         registers[item] = .ofString(self.program.constants[constant]);
+                    },
+                    .const_container => |constant| {
+                        registers[item] = self.runtime.constant(constant);
                     },
                     // A function value is the index of the function it
                     // names, and an `int` underneath (docs/FUNCTIONS.md
@@ -1676,4 +1893,323 @@ fn namedBinding(
 ) ?runtime.OwnedBy {
     if (arguments.len != 2) return null;
     return .{ .serial = serial, .local = @intCast(registers[arguments[1]].asLong()) };
+}
+
+test "the constant prologue materializes every flat shape with declaration identity" {
+    const testing = std.testing;
+    const long_label = "a label whose bytes must belong to the constant container";
+    const long_key = "a map key whose bytes must belong to the constant container";
+
+    var fields = [_]types.StructField{
+        .{ .name = "enabled", .field_type = .boolean },
+        .{ .name = "count", .field_type = .int },
+        .{ .name = "ratio", .field_type = .float },
+        .{ .name = "label", .field_type = .string },
+        .{ .name = "missing", .field_type = .{ .optional = .string } },
+    };
+    var layouts = [_]types.StructLayout{.{ .name = "Entry", .fields = &fields }};
+    var heaps = [_]types.HeapType{
+        .{ .list = .{ .strukt = 0 } },
+        .{ .array = .{ .element = .byte, .rank = 1 } },
+        .{ .map = .{ .key = .string, .value = .double } },
+    };
+    const strings = [_][]const u8{ long_label, long_key };
+    var encoded_fields = [_]mir.ConstantValue{
+        .{ .boolean = true },
+        .{ .long = 7 },
+        .{ .double = 1.5 },
+        .{ .string = 0 },
+        .absent,
+    };
+    var list_values = [_]mir.ConstantValue{.{ .strukt = .{
+        .layout = 0,
+        .fields = &encoded_fields,
+    } }};
+    var byte_values = [_]mir.ConstantValue{ .{ .long = 1 }, .{ .long = 255 } };
+    var map_entries = [_]mir.ContainerConstant.MapEntry{.{
+        .key = .{ .string = 1 },
+        .value = .{ .double = 2.5 },
+    }};
+    var constants = [_]mir.ContainerConstant{
+        .{
+            .name = "entries",
+            .heap = 0,
+            .payload = .{ .sequence = &list_values },
+            .source = "tables.luc",
+            .origin = .{ .line = 3, .column = 1 },
+        },
+        .{
+            .name = "bytes",
+            .heap = 1,
+            .payload = .{ .sequence = &byte_values },
+            .source = "tables.luc",
+            .origin = .{ .line = 7, .column = 1 },
+        },
+        .{
+            .name = "weights",
+            .heap = 2,
+            .payload = .{ .map = &map_entries },
+            .source = "tables.luc",
+            .origin = .{ .line = 11, .column = 1 },
+        },
+        .{
+            .name = "same_entries",
+            .heap = 0,
+            .payload = .{ .sequence = &list_values },
+            .source = "tables.luc",
+            .origin = .{ .line = 15, .column = 1 },
+        },
+    };
+
+    var program: mir.Program = .{ .arena = .init(testing.allocator) };
+    defer program.deinit();
+    program.structs = &layouts;
+    program.heap_types = &heaps;
+    program.constants = &strings;
+    program.container_constants = &constants;
+
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var machine: Machine = .{
+        .arena = arena.allocator(),
+        .runtime = .init(.{ .arena = arena.allocator(), .objects = testing.allocator }),
+        .program = &program,
+        .max_depth = 1,
+        .host = null,
+    };
+    defer machine.runtime.deinit();
+
+    try testing.expect(machine.materializeConstants() == null);
+    try testing.expectEqual(@as(i64, 0), machine.runtime.leaked());
+
+    const entries = machine.runtime.constant(0);
+    const record = try containers.indexGet(&machine.runtime, entries, &.{RuntimeValue.ofLong(0)});
+    const stored = record.asStruct();
+    try testing.expect(stored[0].asBoolean());
+    try testing.expectEqual(@as(i32, 7), stored[1].asInt());
+    try testing.expectEqual(@as(f32, 1.5), stored[2].asFloat());
+    try testing.expectEqualStrings(long_label, stored[3].asString());
+    try testing.expect(stored[4].isNone());
+
+    const bytes = machine.runtime.constant(1);
+    const last = try containers.indexGet(&machine.runtime, bytes, &.{RuntimeValue.ofLong(1)});
+    try testing.expectEqual(@as(u8, 255), last.asByte());
+
+    const weights = machine.runtime.constant(2);
+    const weight = try containers.indexGet(
+        &machine.runtime,
+        weights,
+        &.{RuntimeValue.ofString(long_key)},
+    );
+    try testing.expectEqual(@as(f64, 2.5), weight.asDouble());
+
+    const same_entries = machine.runtime.constant(3);
+    try testing.expect(!entries.asObject().same(same_entries.asObject()));
+    try testing.expectEqual(runtime.Owner.Kind.program, (try machine.runtime.resolve(entries)).owner.kind);
+    try testing.expectEqual(runtime.Owner.Kind.program, (try machine.runtime.resolve(bytes)).owner.kind);
+    try testing.expectEqual(runtime.Owner.Kind.program, (try machine.runtime.resolve(weights)).owner.kind);
+}
+
+test "const_container loads the runtime root and mutation reaches the immutable backstop" {
+    const testing = std.testing;
+    var values = [_]mir.ConstantValue{.{ .long = 1 }};
+    var constants = [_]mir.ContainerConstant{.{
+        .name = "numbers",
+        .heap = 0,
+        .payload = .{ .sequence = &values },
+        .source = "numbers.luc",
+        .origin = .{ .line = 1, .column = 1 },
+    }};
+    var heaps = [_]types.HeapType{.{ .list = .long }};
+    var append_arguments = [_]Register{ 0, 1 };
+    var instructions = [_]mir.Instruction{
+        .{ .const_container = 0 },
+        .{ .const_long = 2 },
+        .{ .intrinsic = .{ .kind = .append_value, .arguments = &append_arguments } },
+        .{ .ret = null },
+    };
+    var result_types = [_]types.Type{ .{ .heap = 0 }, .long, .none, .none };
+    var items = [_]Register{ 0, 1, 2, 3 };
+    var blocks = [_]mir.Block{.{ .items = &items }};
+    var functions = [_]mir.Function{.{
+        .name = "main",
+        .parameter_count = 0,
+        .return_type = .none,
+        .locals = &.{},
+        .instructions = &instructions,
+        .result_types = &result_types,
+        .blocks = &blocks,
+    }};
+
+    var program: mir.Program = .{ .arena = .init(testing.allocator) };
+    defer program.deinit();
+    program.heap_types = &heaps;
+    program.functions = &functions;
+    program.container_constants = &constants;
+
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var machine: Machine = .{
+        .arena = arena.allocator(),
+        .runtime = .init(.{ .arena = arena.allocator(), .objects = testing.allocator }),
+        .program = &program,
+        .max_depth = 4,
+        .host = null,
+    };
+    defer machine.runtime.deinit();
+
+    const outcome = try machine.execute(0);
+    try testing.expectEqual(mir.TrapCode.immutable_object, outcome.trap.code);
+    try testing.expectEqual(@as(i64, 1), (try containers.length(
+        &machine.runtime,
+        machine.runtime.constant(0),
+    )).asLong());
+    try testing.expectEqual(@as(i64, 0), machine.runtime.leaked());
+}
+
+test "each interpreter worker materializes constants in its own runtime" {
+    const testing = std.testing;
+    var values = [_]mir.ConstantValue{ .{ .long = 4 }, .{ .long = 8 } };
+    var constants = [_]mir.ContainerConstant{.{
+        .name = "numbers",
+        .heap = 0,
+        .payload = .{ .sequence = &values },
+        .source = "worker.luc",
+        .origin = .{ .line = 2, .column = 1 },
+    }};
+    var heaps = [_]types.HeapType{.{ .list = .long }};
+    var len_arguments = [_]Register{0};
+    var instructions = [_]mir.Instruction{
+        .{ .const_container = 0 },
+        .{ .intrinsic = .{ .kind = .len, .arguments = &len_arguments } },
+        .{ .ret = 1 },
+    };
+    var result_types = [_]types.Type{ .{ .heap = 0 }, .long, .none };
+    var items = [_]Register{ 0, 1, 2 };
+    var blocks = [_]mir.Block{.{ .items = &items }};
+    var functions = [_]mir.Function{.{
+        .name = "measure",
+        .parameter_count = 0,
+        .return_type = .long,
+        .locals = &.{},
+        .instructions = &instructions,
+        .result_types = &result_types,
+        .blocks = &blocks,
+    }};
+
+    var program: mir.Program = .{ .arena = .init(testing.allocator) };
+    defer program.deinit();
+    program.heap_types = &heaps;
+    program.functions = &functions;
+    program.container_constants = &constants;
+
+    var nursery: Nursery = .{ .program = &program, .host = null, .base = testing.allocator };
+    const first = Nursery.open(&nursery).?;
+    defer Nursery.close(&nursery, first);
+    const second = Nursery.open(&nursery).?;
+    defer Nursery.close(&nursery, second);
+    const no_arguments = [_]RuntimeValue{.none};
+    var first_answer: RuntimeValue = .none;
+    var second_answer: RuntimeValue = .none;
+    try testing.expectEqual(
+        runtime.workers.survived,
+        Nursery.runWorker(&nursery, first, 0, &no_arguments, 0, &first_answer, 8),
+    );
+    try testing.expectEqual(
+        runtime.workers.survived,
+        Nursery.runWorker(&nursery, second, 0, &no_arguments, 0, &second_answer, 8),
+    );
+    try testing.expectEqual(@as(i64, 2), first_answer.asLong());
+    try testing.expectEqual(@as(i64, 2), second_answer.asLong());
+    try testing.expectEqual(@as(i64, 0), first.leaked());
+    try testing.expectEqual(@as(i64, 0), second.leaked());
+    try testing.expect(
+        (try first.resolve(first.constant(0))) != (try second.resolve(second.constant(0))),
+    );
+}
+
+test "a failed constant prologue cleans partial roots and reports the declaration" {
+    const testing = std.testing;
+    const long_text = "materialization owns these bytes, and cleanup must return every one";
+    const strings = [_][]const u8{long_text};
+    var values = [_]mir.ConstantValue{.{ .string = 0 }};
+    var constants = [_]mir.ContainerConstant{
+        .{
+            .name = "first",
+            .heap = 0,
+            .payload = .{ .sequence = &values },
+            .source = "failure.luc",
+            .origin = .{ .line = 4, .column = 1 },
+        },
+        .{
+            .name = "second",
+            .heap = 0,
+            .payload = .{ .sequence = &values },
+            .source = "failure.luc",
+            .origin = .{ .line = 9, .column = 1 },
+        },
+    };
+    var heaps = [_]types.HeapType{.{ .list = .string }};
+    var program: mir.Program = .{ .arena = .init(testing.allocator) };
+    defer program.deinit();
+    program.heap_types = &heaps;
+    program.constants = &strings;
+    program.container_constants = &constants;
+
+    var saw_second = false;
+    for (0..12) |fail_at| {
+        var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+        objects.fail_index = fail_at;
+        var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var machine: Machine = .{
+            .arena = arena.allocator(),
+            .runtime = .init(.{ .arena = arena.allocator(), .objects = objects.allocator() }),
+            .program = &program,
+            .max_depth = 1,
+            .host = null,
+        };
+
+        if (machine.materializeConstants()) |failed| {
+            try testing.expectEqual(mir.TrapCode.allocation_failed, failed.trap.code);
+            try testing.expectEqual(@as(i64, 0), machine.runtime.leaked());
+            // A second begin succeeds only if the failed prologue gave
+            // back both its root table and its materializing state.
+            try machine.runtime.beginConstants(0);
+            machine.runtime.finishConstants();
+
+            var reported = failed.trap;
+            try machine.traceback(&reported);
+            try testing.expectEqual(@as(usize, 1), reported.trace.len);
+            try testing.expectEqualStrings("failure.luc", reported.trace[0].source);
+            const name = reported.trace[0].function;
+            if (std.mem.eql(u8, name, "second")) {
+                saw_second = true;
+                try testing.expectEqual(@as(u32, 9), reported.trace[0].line);
+                try testing.expectEqual(@as(u32, 1), reported.trace[0].column);
+            }
+        }
+
+        machine.runtime.deinit();
+        arena.deinit();
+        try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
+    }
+    try testing.expect(saw_second);
+
+    // The public run boundary carries the same declaration-shaped
+    // frame, rather than replacing a pre-main failure with `main`.
+    var objects: std.testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 0 });
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    const result = try run(
+        .{ .arena = arena.allocator(), .objects = objects.allocator() },
+        &program,
+        .{},
+        null,
+    );
+    try testing.expectEqual(mir.TrapCode.allocation_failed, result.trap.code);
+    try testing.expectEqual(@as(usize, 1), result.trap.trace.len);
+    try testing.expectEqualStrings("first", result.trap.trace[0].function);
+    try testing.expectEqualStrings("failure.luc", result.trap.trace[0].source);
+    try testing.expectEqual(@as(u32, 4), result.trap.trace[0].line);
+    arena.deinit();
+    try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
 }

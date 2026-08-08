@@ -53,8 +53,12 @@
 //!   ownership.zig — delete `object_bind`s a later bind overwrites and
 //!                   `object_unbind`s that provably free nothing.
 //!   dead.zig      — sweep instructions nothing reads, then compact the
-//!                   instruction pool.  Must run last: the passes above
-//!                   leave orphans on purpose rather than renumber.
+//!                   instruction pool.  Must run after the instruction
+//!                   passes above: they leave orphans on purpose rather
+//!                   than renumber.
+//!   prune.zig     — after those three settle the surviving block
+//!                   items, compact constant-container rows and the
+//!                   shared strings they and `const_string` retain.
 //!
 //! Over the nine bundled programs and six benchmarks, the raw lowering
 //! against what the stage leaves (`luce ir --full` against `luce ir`):
@@ -147,8 +151,9 @@
 
 const std = @import("std");
 const mir = @import("06_mir.zig");
+const prune_pass = @import("07_optimize/prune.zig");
 
-pub const prune = @import("07_optimize/prune.zig").prune;
+pub const prune = prune_pass.prune;
 pub const ownership = @import("07_optimize/ownership.zig").ownership;
 pub const dead = @import("07_optimize/dead.zig").dead;
 
@@ -161,6 +166,8 @@ pub const effects = @import("07_optimize/effects.zig");
 /// others rely on, so turning it off leaves the pool full of orphaned
 /// instructions.  That is legal MIR — the verifier only checks what a
 /// block holds — and it is what makes the switches independent.
+/// Constant-pool compaction is the final half of `prune`, after the
+/// selected instruction passes have settled those block items.
 pub const Passes = struct {
     prune: bool = true,
     ownership: bool = true,
@@ -187,6 +194,10 @@ pub fn run(arena: std.mem.Allocator, program: *mir.Program, passes: Passes) std.
     if (passes.prune) try prune(arena, program);
     if (passes.ownership) try ownership(arena, program);
     if (passes.dead) try dead(arena, program);
+    // Pool reachability is defined by the final block items, so this
+    // is prune's last act and necessarily follows instruction
+    // compaction.  `--full` clears `prune` and retains the raw pools.
+    if (passes.prune) try prune_pass.compactConstants(arena, program);
 }
 
 test {

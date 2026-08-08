@@ -3,8 +3,8 @@
 This is the specification of Luce's memory model — every situation
 that defines the rules, numbered, with the decision and example
 code.  **Ratified 2026-07-30: S1–S43 approved as written and
-implemented the same day; S44 and S45 ratified since, and enforced —
-so the model is S1–S45** — the compiler and `libluce_rt` enforce
+implemented the same day; S44–S46 ratified since, and enforced —
+so the model is S1–S46** — the compiler and `libluce_rt` enforce
 every situation below, diagnostics quote the S-numbers, and
 `src/luce/specs/ownership_spec.zig` is the executable form of this
 document.  Optionals (`T?`) are Phase 3, designed together with
@@ -26,6 +26,10 @@ Vocabulary used throughout:
   free.
 - **poisoned** — a name the compiler refuses to evaluate after
   `give`/`free`, from that line to the end of its scope.
+- **program root** — the owner of each reachable file-scope constant
+  container.  It lives until runtime teardown, after every function
+  scope, and it is the one owner source code can read but never move
+  or write through.
 
 **On the numbering.**  The sections below are ordered by *topic*, and
 the numbers were assigned as situations were ratified, so the two do
@@ -34,7 +38,7 @@ That is deliberate — a situation belongs beside the ones it is about,
 and a number, once a compiler diagnostic quotes it (`[OWNERSHIP.md
 S21]`), is not something to renumber.  The site's
 [ownership reference](https://luce.luciaos.com/ref/ownership/)
-presents the same 45 in numeric order with a stable `#sNN` anchor
+presents the same 46 in numeric order with a stable `#sNN` anchor
 each, which is what those diagnostics point at.
 
 ---
@@ -752,11 +756,12 @@ first, and every runtime walk already no-ops on absence.
 
 ## H. Program edges
 
-**S33. Nothing can leak.**  Every object is owned by a binding, a
-container, or is a statement temporary; all three have defined death
-points.  loom's "leaked N objects" report becomes an internal
-assertion (it should never fire; if it does, the *runtime* has a bug,
-not the program).
+**S33. Nothing can leak.**  Every ordinary run-created object is owned
+by a binding, a container, or is a statement temporary; all three have
+defined death points.  S46's constant containers have the program root
+as their fourth owner and die at runtime teardown.  loom's "leaked N
+objects" report becomes an internal assertion (it should never fire;
+if it does, the *runtime* has a bug, not the program).
 
 **S34. The call-depth budget and traps still abort cleanly.**  On any
 trap, teardown reclaims everything regardless of ownership state:
@@ -779,21 +784,18 @@ run's, not the failing frame's — that is what `Runtime.raise` copying
 them buys — so nothing about the unwind has to keep anything alive for
 it (docs/FAILURE.md).
 
-**S35. File scope owns nothing, so a constant is a value.**  The three
-owner kinds in S33 are a binding, a container, and the statement
-temporary — every one of them lives inside a function.  A top-level
-`let` has no scope to die at, so it cannot own, and therefore cannot
-be or carry an object: `new`, list literals, slices and indexing are
-all refused there, as is a struct whose layout carries objects.  What
-  remains — scalars, string, enums, and object-free structs — folds at
-  compile time and inlines at its use sites, which is why an unused
-  constant costs nothing to ship.  A function value is also freely
-  copied and never owned, but a function declaration or lambda is not a
-  compile-time expression, so it is not a file-scope constant.
+**S35. File scope is not a runtime owner.**  The three run-scope owner
+kinds in S33 are a binding, a container, and the statement temporary;
+each lives inside a function.  File-scope `const` values — scalars,
+string, enums, and object-free structs — therefore fold and inline at
+their use sites rather than acquiring a hidden scope.  A function
+value is freely copied too, but a function declaration or lambda is
+not a compile-time expression and cannot initialize a `const`.
 
-This is the rule the analyzer already cites when it refuses a
-file-scope object; the restriction is ownership, not an arbitrary
-limit on what constants may say.
+Constant *containers* do not make the file a fourth owner.  S46 gives
+them the program root, whose death point is runtime teardown.  The
+distinction matters: a module may declare a container, but source code
+can neither move its ownership nor make it die.
 
 **S44. The entry's arguments are handed in, and `main`'s scope owns
 them.**
@@ -856,6 +858,44 @@ answer, left to right. A failing call with a `catch:` block reaches the
 handler before any of those replacement releases or stores. Ordinary
 side effects from evaluating the right side have already happened and
 are not rolled back.
+
+**S46. A constant container is owned by the program root.**  A flat
+`list`, `map`, or rank-1 `array` declared with file-scope `const` is
+folded into the module, materialized before any function executes, and
+held until that runtime is torn down.  The program root is a real
+owner and teardown is a real death point; the object is excluded from
+the user leak census because it is supposed to remain live for the
+whole run.  Every worker runtime materializes roots of its own, so no
+root is shared across runtimes.
+
+```luce
+const TABLE: list(long) = [3, 1, 2]
+const SAME = TABLE
+
+func first(values: list(long) = TABLE) -> long:
+    return values[0]             # ordinary borrow, same root
+
+func main():
+    assert(TABLE == SAME)        # aliases share the construction
+    var editable = copy TABLE    # fresh, owned, mutable
+    editable.sort()
+    assert(editable[0] == 1 and first() == 3)
+```
+
+Aliasing, importing, passing, and a borrowing parameter default keep
+the same root handle.  A separately written equal construction has a
+different identity.  `copy TABLE` is S31 and answers a fresh mutable
+object with an ordinary binding owner.
+
+The other ownership verbs cannot honestly apply.  `give` and `free`
+would move or end the program root; `return TABLE`, assigning it into
+an owning binding, or retaining it in a struct or container would
+invent a second owner that later frees the program.  All are compile
+errors naming the root and recommending `copy`.  Direct and aliased
+mutation is also refused statically.  A borrow through a parameter can
+hide the root's identity from the analyzer, so every runtime mutation
+path has the same backstop: it traps `immutable_object` before writing.
+Neither boundary silently copies or silently drops the write.
 
 ---
 

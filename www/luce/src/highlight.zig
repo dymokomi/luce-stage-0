@@ -33,11 +33,11 @@ const Buffer = @import("buffer.zig");
 
 /// Reserved words that read as control or declaration.
 pub const keywords = [_][]const u8{
-    "func",   "struct", "enum",     "match",   "let", "var",
-    "if",     "elif",   "else",     "while",   "for", "in",
-    "return", "break",  "continue", "and",     "or",  "not",
-    "true",   "false",  "import",   "none",    "try", "catch",
-    "self",   "static", "public",   "private",
+    "func",  "struct", "enum",   "match",    "const",   "let",
+    "var",   "if",     "elif",   "else",     "while",   "for",
+    "in",    "return", "break",  "continue", "and",     "or",
+    "not",   "true",   "false",  "import",   "none",    "try",
+    "catch", "self",   "static", "public",   "private",
 };
 
 /// The words that move ownership.  They get a class of their own
@@ -134,7 +134,10 @@ pub fn render(out: *Buffer, source: []const u8) !void {
             continue;
         }
 
-        // An f-string is one token: the `f` belongs to the literal.
+        // An f-string is presented as one string token: the `f`
+        // belongs to the literal.  The forgiving scanner does not yet
+        // skip a nested string inside a hole, so that legal shape is an
+        // editor-only approximation recorded in docs/MISSING.md.
         if (byte == 'f' and index + 1 < source.len and source[index + 1] == '"' and
             (index == 0 or !isWordByte(source[index - 1])))
         {
@@ -237,6 +240,16 @@ test "keywords, verbs, types, builtins and declared names each get their class" 
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"v\">give</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"t\">List</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"b\">len</span>") != null);
+}
+
+test "const and map braces survive highlighting" {
+    const gpa = std.testing.allocator;
+    const source = "const WORDS = {\"and\": true}";
+    const html = try highlighted(gpa, source);
+    defer gpa.free(html);
+    try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"k\">const</span>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "{<span class=\"s\">&quot;and&quot;</span>:") != null);
+    try std.testing.expect(std.mem.endsWith(u8, html, "</span>}"));
 }
 
 test "comments, strings, f-strings and numbers are one token each" {

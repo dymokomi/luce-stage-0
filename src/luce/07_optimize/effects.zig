@@ -69,7 +69,7 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
         // Values out of thin air, and reads of things nothing can
         // change: a local (invalidated by its own `local_set`, which
         // the caller tracks), a field of an immutable struct value.
-        .const_boolean, .const_long, .const_double, .const_string => .pure,
+        .const_boolean, .const_long, .const_double, .const_string, .const_container => .pure,
         // A function value is a name for a function: the same name
         // twice is the same value, and naming one runs nothing
         // (docs/FUNCTIONS.md D3).
@@ -335,6 +335,7 @@ pub fn viewStable(instruction: Instruction) bool {
         .const_long,
         .const_double,
         .const_string,
+        .const_container,
         .const_function,
         .local_get,
         .local_set,
@@ -513,6 +514,7 @@ pub fn ownershipTransparent(function: *const Function, instruction: Instruction)
         .const_long,
         .const_double,
         .const_string,
+        .const_container,
         .local_get,
         .local_set,
         .struct_get,

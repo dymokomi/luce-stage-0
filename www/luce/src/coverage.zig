@@ -405,7 +405,7 @@ fn enumMembers(repository: Repository, path: []const u8, declaration: []const u8
 }
 
 /// The declarations one standard-library module exports: `func` for
-/// the functions, top-level `let` for the constants.
+/// the functions, file-scope `const` for the constants.
 fn standardModule(repository: Repository, module: []const u8) !Names {
     var names: Names = .{ .gpa = repository.gpa };
     errdefer names.deinit();
@@ -417,7 +417,7 @@ fn standardModule(repository: Repository, module: []const u8) !Names {
 
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |line| {
-        for ([_][]const u8{ "func ", "let " }) |keyword| {
+        for ([_][]const u8{ "func ", "const " }) |keyword| {
             if (!std.mem.startsWith(u8, line, keyword)) continue;
             const rest = line[keyword.len..];
             var stop: usize = 0;
@@ -788,6 +788,48 @@ test "the reference keeps function value and lambda syntax visible" {
     }
 }
 
+test "the public site keeps constant containers and map literals visible" {
+    // Grammar generation proves the tokens exist. Pin the cross-page
+    // semantic boundary too: one file-scope word, runtime braces, the
+    // program root, list-only slicing, and the hidden-provenance trap.
+    const gpa = std.testing.allocator;
+    const repository = try open(gpa, std.testing.io);
+    defer gpa.free(repository.prefix);
+
+    const lexical = try repository.read("www/luce/content/ref/lexical.md");
+    defer gpa.free(lexical);
+    try std.testing.expect(std.mem.indexOf(u8, lexical, "`const` declares a file-scope") != null);
+    try std.testing.expect(std.mem.indexOf(u8, lexical, "map literals") != null);
+
+    const expressions = try repository.read("www/luce/content/ref/expressions.md");
+    defer gpa.free(expressions);
+    try std.testing.expect(std.mem.indexOf(u8, expressions, "{\"one\": 1, \"two\": 2}") != null);
+    try std.testing.expect(std.mem.indexOf(u8, expressions, "Empty `{}` is refused") != null);
+
+    const statements = try repository.read("www/luce/content/ref/statements.md");
+    defer gpa.free(statements);
+    for ([_][]const u8{
+        "program root",
+        "Arrays have indexing, iteration and `copy`",
+        "container may not expose a private element type",
+        "`give` parameter cannot have an object default",
+    }) |claim| {
+        try std.testing.expect(std.mem.indexOf(u8, statements, claim) != null);
+    }
+
+    const ownership = try repository.read("www/luce/content/ref/ownership.md");
+    defer gpa.free(ownership);
+    try std.testing.expect(std.mem.indexOf(u8, ownership, "### S46 — a constant container belongs to the program root") != null);
+
+    const failure = try repository.read("www/luce/content/ref/failure.md");
+    defer gpa.free(failure);
+    try std.testing.expect(std.mem.indexOf(u8, failure, "`immutable_object`") != null);
+
+    const zip = try repository.read("www/luce/content/std/zip.md");
+    defer gpa.free(zip);
+    try std.testing.expect(std.mem.indexOf(u8, zip, "All six are immutable") != null);
+}
+
 test "the reference keeps implied self and static visible" {
     // Keyword coverage proves `static` is coloured, not that the site
     // explains the call and mutation rules it creates. Pin the public
@@ -822,7 +864,7 @@ test "the reference keeps implied self and static visible" {
 
     const toolchain = try repository.read("www/luce/content/guide/toolchain.md");
     defer gpa.free(toolchain);
-    try std.testing.expect(std.mem.indexOf(u8, toolchain, "`format_version = 32`; `abi.version = 13`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, toolchain, "`format_version = 33`; `abi.version = 13`") != null);
 }
 
 test "the reference keeps existing-name multi-return assignment visible" {

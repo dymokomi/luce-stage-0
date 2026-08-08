@@ -1,9 +1,9 @@
 # The bundled programs
 
-`programs/` in the repository is Luce's userland. These pages show the
-real files, compiled and run from their own source when this site is
-built — so if one of them changes, this page changes with it, or the
-build stops.
+`programs/` in the repository is Luce's userland. These pages include
+the real files directly and compile and run each executable example
+from that source when the site is built — so if one changes, this page
+changes with it, or the build stops.
 
 ## sort
 
@@ -217,7 +217,7 @@ Two programs cannot be shown here, because they draw on a real screen.
 
 `programs/editor.luc` is the flagship: a full-screen editor with
 movement, editing, scrolling, line numbers, a status bar and per-line
-Luce syntax highlighting — 612 lines, written entirely in Luce. Its
+Luce syntax highlighting — 589 lines, written entirely in Luce. Its
 source ships embedded in the `loom` binary, so `loom edit` always
 works, and a test in the repository compiles the embedded copy so it
 can never rot, while another drives it through every key it handles
@@ -234,7 +234,7 @@ key handling as one `elif` chain of fifteen string comparisons with no
 final `else`, and keyword tables as forty-six `word == "…"`
 comparisons. Enums took the first two — a keystroke becomes an
 `Intent` once, at the edge, and a `match` with an arm for every member
-decides what it does — and the truth tables became two space-fenced
-string constants searched with `strings.find`. What is left is the
-last of it: that is a *search*, and a frozen set would make it a
-lookup. The [status page](/status/) says where that stands.
+decides what it does — and the truth tables became two immutable
+constant maps. Membership is now a hash lookup, while a future
+`set(string)` could express the same intent without the unused `bool`
+value. The [status page](/status/) says where that stands.

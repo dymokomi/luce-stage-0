@@ -1,5 +1,6 @@
-//! Every Luce sample on the site is compiled and run, and the output
-//! printed on the page is the output the program actually produced.
+//! Every Luce sample on the site is checked by the freshly built
+//! toolchain.  Runnable samples execute; expected traps, raises and
+//! refusals take the distinct paths named below.
 //!
 //! A fenced block whose info string starts with `luce` must say what
 //! is to become of it.  There is no unverified Luce on this site, by
@@ -25,7 +26,7 @@
 //! byte.  That is the whole point: the page cannot claim an output the
 //! program does not produce.
 //!
-//! **Every program is compiled and run by the freshly built
+//! **Every executable sample is compiled and run by the freshly built
 //! toolchain**, and the page's claimed output is compared with what the
 //! program actually printed.  There is one engine to run it on: `luce
 //! build` writes machine code and `loom run` calls it (docs/ENGINE.md).

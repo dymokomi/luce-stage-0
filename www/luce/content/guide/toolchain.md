@@ -17,12 +17,13 @@ front end's hand-over to the back end, not something to ship; that is
 how `loom` gets a program compiled without carrying a code generator,
 by running this binary over the module it already has.
 
-The current `.lcm` format is **32**. It moved for the internal
-`call_inout` edge used by writing methods. The published host ABI is
-**13** and did not move with it: no host service or runtime export was
-added.
+The current `.lcm` format is **33**. It moved for the program-root
+constant-container pool, its load instruction and `immutable_object`;
+the earlier `call_inout` edge used by writing methods first moved it to
+32. The published host ABI is **13** and did not move: neither feature
+added a host service.
 
-Current version pair: `format_version = 32`; `abi.version = 13`.
+Current version pair: `format_version = 33`; `abi.version = 13`.
 
 `FILE` may also be `-`, to read the program from standard input.
 Imports then resolve beside the current directory, and `build` needs
@@ -245,11 +246,12 @@ say what is to become of it — `run`, `trap`, `raise`, `fail` or
 `module` — and a bare one is a build error naming the page and the
 line. There is no unverified Luce here by construction.
 
-For each sample the generator writes the program to a scratch
-directory, compiles it with the freshly built `luce`, and runs the
-`.lc` with the freshly built `loom`. The output you see is then
-compared byte for byte against what the page claims, and a mismatch
-fails the build.
+For each sample the generator writes the files to a scratch directory.
+`run`, `trap` and `raise` samples compile with the freshly built `luce`
+and execute with the freshly built `loom`; `fail` samples go through
+`luce check`, while `module` fences supply another sample's source or
+data. Every claimed output or diagnostic is compared byte for byte, and
+a mismatch fails the build.
 
 Some samples do not carry their own source at all: the
 [bundled programs](/examples/programs/) are included from
@@ -259,6 +261,7 @@ page changes with it or the build stops.
 Finally every generated page is walked for links, and every `href`
 must resolve to a file in the output tree with the anchor it names.
 
-That is the whole build. It takes a few seconds and it is the reason
-these pages can be trusted to describe the compiler that is actually
-in the repository.
+That is the whole build. It takes a few seconds and keeps the samples,
+claimed outcomes and navigation tied to the compiler actually in the
+repository. The prose around those checked facts remains a review
+responsibility.

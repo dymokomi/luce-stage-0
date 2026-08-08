@@ -767,6 +767,10 @@ pub const Instruction = union(enum) {
     const_long: i64,
     const_double: f64,
     const_string: u32,
+    /// A program-root constant container: the index of the row whose
+    /// contents each runtime materializes before it executes a
+    /// function.  The register's heap type must be the row's `heap`.
+    const_container: u32,
     /// A **function value**: the index of the function it names
     /// (docs/FUNCTIONS.md D2).  The register's own type is the
     /// signature it is allowed to be called at — the index alone says
@@ -881,6 +885,49 @@ pub const Origin = struct {
     column: u32,
 };
 
+/// One flat value stored inside a constant-container row.
+///
+/// Strings name the program's shared byte pool.  Structs recurse only
+/// through value fields; the verifier rejects every heap-bearing field
+/// and accepts `absent` only for an optional field of such a struct.
+/// All slices and their contents are arena-owned by the program.
+pub const ConstantValue = union(enum) {
+    boolean: bool,
+    long: i64,
+    double: f64,
+    string: u32,
+    strukt: Struct,
+    absent,
+
+    pub const Struct = struct {
+        layout: u32,
+        fields: []ConstantValue,
+    };
+};
+
+/// One declared constant container, kept distinct even when another
+/// declaration has identical contents.  `source` and `origin` name
+/// allocation failures during the eager per-runtime materialization;
+/// release stripping clears them but keeps `name` for the row's
+/// identity.  All referenced memory is arena-owned by the program.
+pub const ContainerConstant = struct {
+    name: []const u8,
+    heap: u32,
+    payload: Payload,
+    source: []const u8 = "",
+    origin: Origin = .{ .line = 0, .column = 0 },
+
+    pub const MapEntry = struct {
+        key: ConstantValue,
+        value: ConstantValue,
+    };
+
+    pub const Payload = union(enum) {
+        sequence: []ConstantValue,
+        map: []MapEntry,
+    };
+};
+
 pub const Function = struct {
     name: []const u8,
     parameter_count: u32,
@@ -921,6 +968,10 @@ pub const Program = struct {
     signatures: []types.Signature = &.{},
     functions: []Function = &.{},
     constants: []const []const u8 = &.{},
+    /// Constant-container declarations after reachability pruning.
+    /// Rows deliberately retain declaration identity; equal contents
+    /// are not interned.
+    container_constants: []ContainerConstant = &.{},
     entry_function: u32 = 0,
 
     pub fn deinit(self: *Program) void {
@@ -937,5 +988,9 @@ pub fn strip(program: *Program) void {
     for (program.functions) |*function| {
         function.origins = &.{};
         function.source = "";
+    }
+    for (program.container_constants) |*constant| {
+        constant.source = "";
+        constant.origin = .{ .line = 0, .column = 0 };
     }
 }

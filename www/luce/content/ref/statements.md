@@ -2,7 +2,7 @@
 
 ## File structure
 
-A file holds, in any order: `import` lines, top-level `let`
+A file holds, in any order: `import` lines, file-scope `const`
 constants, `struct` declarations, `enum` declarations, and `func`
 declarations. There is no top-level executable code and no top-level
 `var`.
@@ -12,9 +12,18 @@ Each of the four declaration forms may carry a
 
 ## Entry
 
-A program requires exactly one `func main():`, and that is the whole
-of it — no parameters, no return type. It may declare `-> !`, in
-which case an uncaught error ends the run and is reported by the host.
+A program requires exactly one entry in one of four shapes:
+
+```
+func main():
+func main() -> !:
+func main(args: list(string)):
+func main(args: list(string)) -> !:
+```
+
+The optional `list(string)` parameter receives the command line. With
+`-> !`, an uncaught error ends the run and is reported by the host.
+Any other parameter list or any value result is refused.
 
 There is no second entry mode.
 
@@ -171,7 +180,7 @@ already the default is legal and inert.
 
 ```
 private func name(...)        public func name(...)
-private let name = expr       public let name = expr
+private const name = expr     public const name = expr
 private struct Name:          public struct Name:
 private field: Type           public field: Type
 ```
@@ -426,14 +435,16 @@ behind a call that cannot fail is `luce.sema.fallible`. See
 
 ## File-scope constants
 
-A top-level `let` declares a compile-time constant.
+File scope declares with `const`. `let` and `var` declare inside
+functions; top-level `let` is retired, and there is no top-level
+`var`.
 
 ```luce run
-let width = 80
-let margin = 4
-let usable = width - margin * 2
-let title = "loom"
-let banner = title + " console"
+const width = 80
+const margin = 4
+const usable = width - margin * 2
+const title = "loom"
+const banner = title + " console"
 
 func main():
     print(f"{banner}: {usable} columns")
@@ -443,20 +454,55 @@ func main():
 loom console: 72 columns
 ```
 
-Initializers fold at compile time. What may be folded is: literals,
+Initializers fold at compile time. Foldable forms include literals,
 other constants (including `module.constant` through an import),
-arithmetic, comparisons, `and`/`or`, string concatenation,
-`long()`/`double()`, and value-struct construction.
+numeric and bitwise expressions, comparisons and boolean logic, string
+concatenation, the eight conversion constructors and `ord()`, enum
+members and conversions from enums (`int(m)`, `string(m)`), and
+object-free value-struct construction.
+`none` also folds when a `T?` annotation supplies the absent type; bare
+`const x = none` is refused because it supplies no `T`.
 
-Calls are **not** constant. Heap objects are not constant either, and
-the reason is ownership rather than an arbitrary limit: a top-level
-binding has no scope to die at, so it cannot own an object, so `new`,
-list literals, slices and indexing are all refused there, as is a
-struct whose layout carries objects.
+Function values, general calls and ownership verbs are **not**
+constant.
 
 Constants may reference each other in any order but never in a cycle.
-Every use site inlines the folded value, so an unused constant costs
-nothing to ship, decode or compile.
+Every value use site inlines the fold. A `const` may also hold one flat
+container construction:
+
+```
+const ITEMS: list(long) = [3, 1, 2]
+const WORDS = {"and": true, "break": true}
+const ORDER: array(long, _) = [16, 17, 18, 0]
+```
+
+- Elements may be scalars, strings, enum values, or object-free value
+  structs. Such a struct may contain an optional field, but an optional
+  top-level element or map value is refused.
+- A bracket literal is a `list` unless an `array(T, _)` annotation
+  makes it rank 1. Empty list and array constants need an annotation.
+- Constant containers are flat: no nested container, builder,
+  object-carrying struct, or multidimensional array.
+- A constant map rejects duplicate folded keys and names both sites.
+  Empty `{}` is not a literal; use `new map(K, V)`.
+- One written construction is one identity. Aliases, imports and
+  borrowing parameter defaults share it; separately written equal
+  constructions do not.
+- A `give` parameter cannot have an object default; only a borrowing
+  parameter may share the program root this way.
+
+The reachable rows are eagerly materialized into each runtime's
+program root before user code; unreachable rows are pruned. The root
+lives until teardown. Reads and iteration are ordinary, a list slice
+and map `keys()`/`values()` are fresh owned objects, and `copy` makes a
+fresh mutable deep copy. Arrays have indexing, iteration and `copy`,
+but no slice expression. Direct or aliased mutation and ownership
+escape are compile errors. A parameter-hidden mutation traps
+`immutable_object` before writing.
+
+Constants share the module namespace and visibility rules. A public
+container may not expose a private element type, just as a public
+function signature may not expose one.
 
 ## Scope
 

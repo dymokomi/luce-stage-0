@@ -1,7 +1,7 @@
 //! Compile-time evaluation — the folder that turns a written
 //! expression into a `TypedConstant`, or reports why it is not one.
 //!
-//! Three clients, one evaluator: a file-scope `let` (folded eagerly, so
+//! Three clients, one evaluator: a file-scope `const` (folded eagerly, so
 //! a bad constant reports even when nothing reads it), an enum member's
 //! value, and a default — a parameter's or a field's.  Each arrives
 //! through `fold` with the type its place lands on, and the answer is a
@@ -25,11 +25,13 @@ const source_mod = @import("../01_source.zig");
 const helpers = @import("helpers.zig");
 const context = @import("context.zig");
 const ast = @import("../03_parse.zig").ast;
+const mir = @import("../06_mir.zig");
 const types = @import("../support/types.zig");
 // The fold answers what a run would answer, so where a judgment has
 // one implementation in `libluce_rt` this calls it rather than keeping
 // a second copy that could drift (docs/NUMERICS.md §5).
 const operators = @import("../runtime/operators.zig");
+const runtime_value = @import("../runtime/value.zig");
 
 const Analyzer = @import("declarations.zig").Analyzer;
 
@@ -112,7 +114,7 @@ fn evaluate(analyzer: *Analyzer, index: u32) Error!?TypedConstant {
         return null;
     }
     // The annotation is resolved *before* the fold, not after,
-    // because it is the landing type: `let x: double = 1` reads its
+    // because it is the landing type: `const x: double = 1` reads its
     // literal at a float rather than folding an integer and being
     // told the two disagree (docs/TYPES.md D3).
     var annotated: ?Type = null;
@@ -126,17 +128,29 @@ fn evaluate(analyzer: *Analyzer, index: u32) Error!?TypedConstant {
     // constant: its own refusals speak of constants, not of the
     // default that happened to read it.
     const previous_subject = analyzer.fold_subject;
+    const previous_name = analyzer.fold_container_name;
+    const previous_file = analyzer.fold_container_file;
+    const previous_origin = analyzer.fold_container_origin;
+    const previous_nesting = analyzer.folding_container;
     analyzer.fold_subject = null;
+    analyzer.fold_container_name = declaration.name;
+    analyzer.fold_container_file = analyzer.modules[module].file;
+    analyzer.fold_container_origin = @intCast(declaration.name_span.start);
+    analyzer.folding_container = false;
     const folded = try fold(analyzer, module, declaration.value, annotated);
     analyzer.fold_subject = previous_subject;
+    analyzer.fold_container_name = previous_name;
+    analyzer.fold_container_file = previous_file;
+    analyzer.fold_container_origin = previous_origin;
+    analyzer.folding_container = previous_nesting;
     // The map may have grown while folding dependencies; re-find.
     const settled = &analyzer.constant_infos.items[index];
-    const result = folded orelse {
+    var result = folded orelse {
         settled.state = .failed;
         return null;
     };
     if (annotated) |expected| {
-        if (!result.value_type.eql(expected)) {
+        result = fit(result, expected) orelse {
             try analyzer.fail("luce.sema.type", declaration.span, "{s} declared {s} but its value is {s}", .{
                 declaration.name,
                 try analyzer.typeName(expected),
@@ -144,7 +158,7 @@ fn evaluate(analyzer: *Analyzer, index: u32) Error!?TypedConstant {
             });
             settled.state = .failed;
             return null;
-        }
+        };
     }
     settled.value = result.value;
     settled.value_type = result.value_type;
@@ -154,7 +168,7 @@ fn evaluate(analyzer: *Analyzer, index: u32) Error!?TypedConstant {
 
 /// Fold an integer literal at the type it lands on — the constant
 /// folder's twin of the builder's `lowerIntLiteral`, and it has to
-/// be a twin, because a file-scope `let` is folded here and a local
+/// be a twin, because a file-scope `const` is folded here and a local
 /// one is lowered there and the two must agree on what `1` is.
 fn foldIntLiteral(
     analyzer: *Analyzer,
@@ -168,7 +182,7 @@ fn foldIntLiteral(
     // badly, it is a mismatch, and it has to reach the mismatch
     // message rather than be folded into a bool-typed 3.
     const lands: Type = if (wanted) |place|
-        (if (place.isNumeric()) place else .int)
+        (context.literalLandingType(place) orelse .int)
     else
         .int;
     if (lands.isFloating()) {
@@ -204,6 +218,21 @@ pub fn widen(held: TypedConstant, to: Type) TypedConstant {
     return .{ .value = .{ .double = asDouble(held) }, .value_type = to };
 }
 
+/// Make one folded value fit the type of its landing place.  This is
+/// the constant-folding twin of `FunctionBuilder.fit`: numeric values
+/// widen along the language lattice, and a present `T` may stand in a
+/// `T?` place.  Presence needs no extra `ConstantValue` tag --
+/// `.absent` is the exceptional encoding, while every other tag is a
+/// present payload whose optional type supplies the wrapper.
+pub fn fit(held: TypedConstant, wanted: Type) ?TypedConstant {
+    if (held.value_type.eql(wanted)) return held;
+    if (held.value_type.widensTo(wanted)) return widen(held, wanted);
+    const payload = wanted.held() orelse return null;
+    var inner = fit(held, payload) orelse return null;
+    inner.value_type = wanted;
+    return inner;
+}
+
 /// The six float operators at one width, so that folding a `float`
 /// expression rounds every step to binary32 exactly as a run
 /// would.  `%` is the runtime's own floor modulus and not Zig's
@@ -226,11 +255,301 @@ fn constantError(analyzer: *Analyzer, span: Span, comptime format: []const u8, a
     return null;
 }
 
-/// Fold a constant expression: literals, other constants
-/// (`pi`, `geo.pi`, struct-constant fields), arithmetic and
-/// comparisons, string concatenation, `long`/`double` conversions,
-/// and value-struct construction.  Objects and calls are not
-/// constants.
+/// Translate one already-checked flat element into the serialized
+/// constant-pool vocabulary.  String bytes join the ordinary text
+/// pool so pruning and both engines have one spelling for them.
+fn encodeValue(
+    analyzer: *Analyzer,
+    value: ConstantValue,
+) Error!mir.ConstantValue {
+    return switch (value) {
+        .long => |held| .{ .long = held },
+        .double => |held| .{ .double = held },
+        .boolean => |held| .{ .boolean = held },
+        .string => |held| .{ .string = try analyzer.pool.intern(held) },
+        .strukt => |held| blk: {
+            const fields = try analyzer.arena.alloc(mir.ConstantValue, held.fields.len);
+            for (held.fields, fields) |field, *encoded| {
+                encoded.* = try encodeValue(analyzer, field);
+            }
+            break :blk .{ .strukt = .{ .layout = held.layout, .fields = fields } };
+        },
+        .absent => .absent,
+        // A pool row inside another would be a nested constant
+        // container.  Its callers reject that before encoding (R-E).
+        .container => unreachable,
+    };
+}
+
+fn nestedContainerError(analyzer: *Analyzer, span: Span) Error!?TypedConstant {
+    return constantError(
+        analyzer,
+        span,
+        "constant containers are flat in this version; an element cannot itself carry a list, map, array, builder, file, or task [CONSTANTS.md R-E]",
+        .{},
+    );
+}
+
+fn containerContextError(analyzer: *Analyzer, span: Span) Error!?TypedConstant {
+    if (analyzer.fold_subject) |subject| {
+        return constantError(analyzer, span, "{s} is a constant, but this container has no program-root construction site", .{subject});
+    }
+    return constantError(analyzer, span, "a container literal is constant only in a file-scope const or a borrowed parameter default", .{});
+}
+
+/// Finish a folded numeric value at the element/key type its container
+/// chose.  `Type.widensTo` is the whole implicit numeric lattice; no
+/// other conversion happens here.
+fn fitElement(value: TypedConstant, wanted: Type) TypedConstant {
+    return if (value.value_type.widensTo(wanted)) widen(value, wanted) else value;
+}
+
+fn foldSequence(
+    analyzer: *Analyzer,
+    module: usize,
+    literal: ast.ListLiteral,
+    wanted: ?Type,
+) Error!?TypedConstant {
+    const name = analyzer.fold_container_name orelse
+        return containerContextError(analyzer, literal.span);
+    if (analyzer.folding_container) return nestedContainerError(analyzer, literal.span);
+    analyzer.folding_container = true;
+    defer analyzer.folding_container = false;
+
+    var wanted_element: ?Type = null;
+    var expected_container: ?Type = null;
+    if (wanted) |place| {
+        if (analyzer.heapOf(place)) |descriptor| switch (descriptor) {
+            .list => |element| {
+                wanted_element = element;
+                expected_container = place;
+            },
+            .array => |shape| {
+                if (shape.rank != 1) {
+                    return constantError(
+                        analyzer,
+                        literal.span,
+                        "a flat bracket constant builds a rank-1 array; {s} has rank {d}",
+                        .{ try analyzer.typeName(place), shape.rank },
+                    );
+                }
+                wanted_element = shape.element;
+                expected_container = place;
+            },
+            .map, .builder, .file, .task => {},
+        };
+    }
+    if (literal.elements.len == 0 and wanted_element == null) {
+        return constantError(
+            analyzer,
+            literal.span,
+            "an empty [] needs a list(T) or array(T, _) annotation",
+            .{},
+        );
+    }
+
+    const folded = try analyzer.temporary.alloc(TypedConstant, literal.elements.len);
+    defer analyzer.temporary.free(folded);
+    for (literal.elements, folded) |element, *slot| {
+        slot.* = (try fold(analyzer, module, element, wanted_element)) orelse return null;
+        if (slot.value_type == .optional) {
+            return constantError(
+                analyzer,
+                element.span(),
+                "constant container elements cannot be optional; choose a present value, or put the optional inside an object-free struct",
+                .{},
+            );
+        }
+        if (slot.value == .container or analyzer.carriesObjects(slot.value_type)) {
+            return nestedContainerError(analyzer, element.span());
+        }
+    }
+
+    const element_type = wanted_element orelse inferred: {
+        var meeting = folded[0].value_type;
+        for (folded[1..]) |element| {
+            meeting = Type.unified(meeting, element.value_type) orelse
+                break :inferred folded[0].value_type;
+        }
+        break :inferred meeting;
+    };
+    for (folded, literal.elements) |*element, written| {
+        element.* = fitElement(element.*, element_type);
+        if (!element.value_type.eql(element_type)) {
+            return constantError(analyzer, written.span(), "constant container elements are all {s}, got {s}", .{
+                try analyzer.typeName(element_type),
+                try analyzer.typeName(element.value_type),
+            });
+        }
+    }
+
+    const container_type = expected_container orelse
+        try analyzer.internHeapType(.{ .list = element_type });
+    const values = try analyzer.arena.alloc(mir.ConstantValue, folded.len);
+    for (folded, values) |element, *encoded| {
+        encoded.* = try encodeValue(analyzer, element.value);
+    }
+    const row = try analyzer.pool.addContainer(
+        name,
+        analyzer.fold_container_file,
+        analyzer.fold_container_origin,
+        container_type.heap,
+        .{ .sequence = values },
+    );
+    return .{ .value = .{ .container = row }, .value_type = container_type };
+}
+
+fn sameMapKey(left: TypedConstant, right: TypedConstant) bool {
+    if (!left.value_type.eql(right.value_type)) return false;
+    const left_value = switch (left.value) {
+        .long => |held| runtime_value.Value.ofLong(held),
+        .string => |held| runtime_value.Value.ofString(held),
+        else => return false,
+    };
+    const right_value = switch (right.value) {
+        .long => |held| runtime_value.Value.ofLong(held),
+        .string => |held| runtime_value.Value.ofString(held),
+        else => return false,
+    };
+    return runtime_value.keyEquals(&left_value, &right_value);
+}
+
+fn mapKeyName(analyzer: *Analyzer, key: TypedConstant) Error![]const u8 {
+    return switch (key.value) {
+        .long => |held| std.fmt.allocPrint(analyzer.arena, "{d}", .{held}),
+        .string => |held| std.fmt.allocPrint(analyzer.arena, "\"{s}\"", .{held}),
+        else => "this key",
+    };
+}
+
+fn foldMap(
+    analyzer: *Analyzer,
+    module: usize,
+    literal: ast.MapLiteral,
+    wanted: ?Type,
+) Error!?TypedConstant {
+    const name = analyzer.fold_container_name orelse
+        return containerContextError(analyzer, literal.span);
+    if (analyzer.folding_container) return nestedContainerError(analyzer, literal.span);
+    analyzer.folding_container = true;
+    defer analyzer.folding_container = false;
+
+    var wanted_key: ?Type = null;
+    var wanted_value: ?Type = null;
+    var expected_container: ?Type = null;
+    if (wanted) |place| {
+        if (analyzer.heapOf(place)) |descriptor| {
+            if (descriptor == .map) {
+                wanted_key = descriptor.map.key;
+                wanted_value = descriptor.map.value;
+                expected_container = place;
+            }
+        }
+    }
+
+    const keys = try analyzer.temporary.alloc(TypedConstant, literal.entries.len);
+    defer analyzer.temporary.free(keys);
+    const values = try analyzer.temporary.alloc(TypedConstant, literal.entries.len);
+    defer analyzer.temporary.free(values);
+    for (literal.entries, 0..) |entry, index| {
+        // An unannotated integer key lands directly on long, because
+        // map(int, V) is not a type Luce admits (C3).
+        const key_place = wanted_key orelse if (index == 0) Type.long else keys[0].value_type;
+        var key = (try fold(analyzer, module, entry.key, key_place)) orelse return null;
+        if (key.value_type.widensTo(key_place)) key = widen(key, key_place);
+        if (index == 0 and wanted_key == null) {
+            if (key.value_type == .string) {
+                wanted_key = .string;
+            } else if (key.value_type.isInteger()) {
+                key = fitElement(key, .long);
+                wanted_key = .long;
+            }
+        }
+        const key_type = wanted_key orelse key.value_type;
+        key = fitElement(key, key_type);
+        if (key_type != .long and key_type != .string) {
+            return constantError(analyzer, entry.key.span(), "map keys are long or string, got {s}", .{
+                try analyzer.typeName(key_type),
+            });
+        }
+        if (!key.value_type.eql(key_type)) {
+            return constantError(analyzer, entry.key.span(), "map keys are all {s}, got {s}", .{
+                try analyzer.typeName(key_type),
+                try analyzer.typeName(key.value_type),
+            });
+        }
+        keys[index] = key;
+        values[index] = (try fold(analyzer, module, entry.value, wanted_value)) orelse return null;
+        if (values[index].value_type == .optional) {
+            return constantError(
+                analyzer,
+                entry.value.span(),
+                "constant map values cannot be optional; choose a present value, or put the optional inside an object-free struct",
+                .{},
+            );
+        }
+        if (values[index].value == .container or analyzer.carriesObjects(values[index].value_type)) {
+            return nestedContainerError(analyzer, entry.value.span());
+        }
+    }
+
+    const value_type = wanted_value orelse inferred: {
+        var meeting = values[0].value_type;
+        for (values[1..]) |value| {
+            meeting = Type.unified(meeting, value.value_type) orelse
+                break :inferred values[0].value_type;
+        }
+        break :inferred meeting;
+    };
+    for (values, literal.entries) |*value, entry| {
+        value.* = fitElement(value.*, value_type);
+        if (!value.value_type.eql(value_type)) {
+            return constantError(analyzer, entry.value.span(), "map values are all {s}, got {s}", .{
+                try analyzer.typeName(value_type),
+                try analyzer.typeName(value.value_type),
+            });
+        }
+    }
+
+    for (keys, 0..) |key, index| {
+        for (keys[0..index], literal.entries[0..index]) |earlier, first| {
+            if (!sameMapKey(earlier, key)) continue;
+            const at = analyzer.diagnostics.sources.place(analyzer.modules[module].file, first.key.span().start);
+            return constantError(
+                analyzer,
+                literal.entries[index].key.span(),
+                "map key {s} is duplicated; it was first written on line {d}",
+                .{ try mapKeyName(analyzer, key), at.line },
+            );
+        }
+    }
+
+    const key_type = wanted_key.?;
+    const container_type = expected_container orelse
+        try analyzer.internHeapType(.{ .map = .{ .key = key_type, .value = value_type } });
+    const entries = try analyzer.arena.alloc(mir.ContainerConstant.MapEntry, literal.entries.len);
+    for (keys, values, entries) |key, value, *encoded| {
+        encoded.* = .{
+            .key = try encodeValue(analyzer, key.value),
+            .value = try encodeValue(analyzer, value.value),
+        };
+    }
+    const row = try analyzer.pool.addContainer(
+        name,
+        analyzer.fold_container_file,
+        analyzer.fold_container_origin,
+        container_type.heap,
+        .{ .map = entries },
+    );
+    return .{ .value = .{ .container = row }, .value_type = container_type };
+}
+
+/// Fold a constant expression.  The surface includes literals, other
+/// constants (`pi`, `geo.pi`, struct-constant fields), operators,
+/// conversion constructors, `ord`, enum members and conversions from
+/// enums, typed absence, object-free value structs, and flat literal
+/// list/map/rank-1-array constructions.  General calls, runtime object
+/// operations and ownership verbs do not fold.
 ///
 /// `wanted` is the type the constant lands on when the declaration
 /// wrote one down — a numeric literal has no type of its own and
@@ -245,10 +564,10 @@ pub fn fold(
     switch (expression.*) {
         .int_literal => |literal| return foldIntLiteral(analyzer, literal, literal.span, false, wanted),
         .float_literal => |literal| {
-            const lands: Type = if (wanted) |place|
-                (if (place.isFloating()) place else .float)
-            else
-                .float;
+            const lands: Type = if (wanted) |place| blk: {
+                const landed = context.literalLandingType(place) orelse break :blk .float;
+                break :blk if (landed.isFloating()) landed else .float;
+            } else .float;
             const parsed = helpers.parseFloatLiteral(literal.text, lands) orelse {
                 return constantError(analyzer, literal.span, "{s}", .{context.rangeMessage(lands)});
             };
@@ -262,7 +581,7 @@ pub fn fold(
         },
         // `none` has no type of its own — the place it is written
         // into supplies one.  An annotation is such a place, so
-        // `let x: long? = none` folds to the typed absence
+        // `const x: long? = none` folds to the typed absence
         // (docs/ARGS.md D9); with nothing saying what is absent,
         // the refusal stands.
         .none_literal => |literal| {
@@ -273,7 +592,7 @@ pub fn fold(
                     try analyzer.typeName(place),
                 });
             }
-            return constantError(analyzer, literal.span, "none needs a place that says what it is absent of; annotate it: let name: T? = none", .{});
+            return constantError(analyzer, literal.span, "none needs a place that says what it is absent of; annotate it: const name: T? = none", .{});
         },
         .name => |name| {
             const qualified = try analyzer.qualify(analyzer.modules[module].prefix, name.text);
@@ -349,12 +668,26 @@ pub fn fold(
             switch (unary.op) {
                 .negate => switch (operand.value) {
                     .long => |value| {
-                        if (value == std.math.minInt(i64)) {
+                        const arithmetic = operand.value_type.arithmeticType() orelse
+                            return constantError(analyzer, unary.span, "cannot negate {s}", .{try analyzer.typeName(operand.value_type)});
+                        const smallest: i64 = if (arithmetic == .int)
+                            std.math.minInt(i32)
+                        else
+                            std.math.minInt(i64);
+                        if (value == smallest) {
                             return constantError(analyzer, unary.span, "constant arithmetic overflows", .{});
                         }
-                        return .{ .value = .{ .long = -value }, .value_type = .long };
+                        return .{ .value = .{ .long = -value }, .value_type = arithmetic };
                     },
-                    .double => |value| return .{ .value = .{ .double = -value }, .value_type = .double },
+                    .double => |value| {
+                        const arithmetic = operand.value_type.arithmeticType() orelse
+                            return constantError(analyzer, unary.span, "cannot negate {s}", .{try analyzer.typeName(operand.value_type)});
+                        const folded: f64 = if (arithmetic == .float)
+                            @as(f32, @floatCast(-@as(f32, @floatCast(value))))
+                        else
+                            -value;
+                        return .{ .value = .{ .double = folded }, .value_type = arithmetic };
+                    },
                     else => return constantError(analyzer, unary.span, "cannot negate {s}", .{try analyzer.typeName(operand.value_type)}),
                 },
                 .logic_not => switch (operand.value) {
@@ -362,12 +695,21 @@ pub fn fold(
                     else => return constantError(analyzer, unary.span, "not needs a bool", .{}),
                 },
                 .bit_not => switch (operand.value) {
-                    .long => |value| return .{ .value = .{ .long = ~value }, .value_type = operand.value_type },
+                    .long => |value| {
+                        const arithmetic = operand.value_type.arithmeticType() orelse
+                            return constantError(analyzer, unary.span, "~ works on int and long; {s} has no bits a program may see", .{try analyzer.typeName(operand.value_type)});
+                        if (arithmetic.isFloating()) {
+                            return constantError(analyzer, unary.span, "~ works on int and long; {s} has no bits a program may see", .{try analyzer.typeName(operand.value_type)});
+                        }
+                        return .{ .value = .{ .long = ~value }, .value_type = arithmetic };
+                    },
                     else => return constantError(analyzer, unary.span, "~ works on int and long; {s} has no bits a program may see", .{try analyzer.typeName(operand.value_type)}),
                 },
             }
         },
         .binary => |binary| return foldBinary(analyzer, module, binary, wanted),
+        .list_literal => |literal| return foldSequence(analyzer, module, literal, wanted),
+        .map_literal => |literal| return foldMap(analyzer, module, literal, wanted),
         .call => |call| {
             if (types.conversionNamed(call.callee) != null) {
                 if (call.arguments.len != 1 or !helpers.argumentMayName(call.arguments[0], "value")) {
@@ -398,15 +740,15 @@ pub fn fold(
             if (analyzer.struct_names.get(qualified)) |layout_index| {
                 return foldConstruct(analyzer, module, call.arguments, call.span, layout_index);
             }
-            // `Method(8)` answers `Method?` (docs/ENUMS.md R2), and
-            // a constant is a value that is *there* — the same
-            // reason `else` and `catch` have nothing to do in one.
-            // The member is the constant the reader wanted.
+            // `Method(8)` is a runtime lookup that answers `Method?`
+            // (docs/ENUMS.md R2); it is not one of the call-shaped
+            // forms this folder evaluates.  An enum member itself is
+            // the constant form the reader can name.
             if (analyzer.enum_names.get(qualified)) |enum_index| {
                 return constantError(
                     analyzer,
                     call.span,
-                    "{s}(…) answers {s}?, and a constant is always there; name the member: {s}.{s}",
+                    "{s}(…) is a runtime lookup that answers {s}?; name the constant member: {s}.{s}",
                     .{
                         call.callee,
                         analyzer.enums.items[enum_index].name,
@@ -436,37 +778,36 @@ pub fn fold(
             }
             return constantError(analyzer, method.span, "constants fold at compile time; calls are not constant", .{});
         },
-        .new_object, .list_literal, .slice_range, .index => {
+        .new_object, .slice_range, .index => {
             if (analyzer.fold_subject) |subject| {
-                return constantError(analyzer, expression.span(), "{s} is a constant, and an object is not one", .{subject});
+                return constantError(analyzer, expression.span(), "{s} must fold at compile time; new, slicing, and indexing belong in a function", .{subject});
             }
-            return constantError(analyzer, expression.span(), "constants are values; objects cannot be file-scope [OWNERSHIP.md S35]", .{});
+            return constantError(analyzer, expression.span(), "file-scope const folds values or one flat literal container; new, slicing, and indexing belong in a function [CONSTANTS.md R-A, R-E]", .{});
         },
         .give, .copy => {
-            return constantError(analyzer, expression.span(), "constants are values and never take verbs [OWNERSHIP.md S32]", .{});
+            return constantError(analyzer, expression.span(), "a constant initializer cannot take an ownership verb; give and copy belong in a function [OWNERSHIP.md S32]", .{});
         },
         .try_call => {
             return constantError(analyzer, expression.span(), "a constant is folded at compile time and nothing can fail there; try belongs in a function", .{});
         },
-        // File scope owns nothing, so it cannot own a worker
-        // (OWNERSHIP.md S35): a task's death point is a join, and
-        // there is no scope here to arrive at one.
+        // The program root owns materialized constants, not running
+        // resources: a task's death point is a join, and only a
+        // function scope can arrive at one (OWNERSHIP.md S35, S46).
         .spawn => {
-            return constantError(analyzer, expression.span(), "a constant is folded at compile time and nothing runs there; spawn belongs in a function [OWNERSHIP.md S35]", .{});
+            return constantError(analyzer, expression.span(), "a constant is folded at compile time and nothing runs there; spawn belongs in a function [OWNERSHIP.md S35, S46]", .{});
         },
-        // A lambda becomes a function, and a function is not a value a
-        // top-level `let` may hold: constants are folded and inlined at
-        // their use sites, and there is nothing to fold here
+        // A lambda becomes a function value, which is deliberately not
+        // one of the initializer forms a file-scope `const` accepts
         // (docs/FUNCTIONS.md, As built).
         .lambda => {
-            return constantError(analyzer, expression.span(), "a top-level let is a folded constant, and a function is not one; declare it with func [FUNCTIONS.md]", .{});
+            return constantError(analyzer, expression.span(), "a function value is not a constant initializer; declare it with func [FUNCTIONS.md]", .{});
         },
     }
 }
 
 /// `Method.stored` in a constant position — the folder's twin of
 /// `builder.enumMemberAccess`, and it has to be a twin: a file-scope
-/// `let` is folded here and a local one is lowered there, and the
+/// `const` is folded here and a local value is lowered there, and the
 /// two must agree about what a member is (docs/ENUMS.md D8).
 ///
 /// Null when the dotted head names no enum this module can see,
@@ -636,7 +977,7 @@ fn foldConstruct(
         return null;
     }
     if (analyzer.carriesObjects(result_type)) {
-        return constantError(analyzer, span, "{s} carries objects; constants are values only [OWNERSHIP.md S35]", .{layout.name});
+        return constantError(analyzer, span, "{s} carries objects; only object-free structs fold in a constant [CONSTANTS.md R-E]", .{layout.name});
     }
     if (layout.fields.len == 0) {
         return constantError(analyzer, span, namespace_has_no_fields_message, .{layout.name});
@@ -669,18 +1010,17 @@ fn foldConstruct(
         // The field's type is the place, so a literal lands on it
         // rather than taking the default and then failing to be it.
         const wanted_field = layout.fields[field_index].field_type;
-        var value = (try fold(analyzer, module, argument.value, wanted_field)) orelse return null;
-        if (value.value_type.widensTo(wanted_field)) value = widen(value, wanted_field);
-        if (!value.value_type.eql(wanted_field)) {
+        const value = (try fold(analyzer, module, argument.value, wanted_field)) orelse return null;
+        const fitted = fit(value, wanted_field) orelse {
             return constantError(analyzer, argument.span, "{s}.{s} is {s}, got {s}", .{
                 layout.name,
                 name,
                 try analyzer.typeName(layout.fields[field_index].field_type),
                 try analyzer.typeName(value.value_type),
             });
-        }
+        };
         seen[field_index] = true;
-        fields[field_index] = value.value;
+        fields[field_index] = fitted.value;
     }
     // A field nobody wrote takes its default (docs/ARGS.md D8), so
     // only the required ones can be missing.
@@ -724,10 +1064,11 @@ fn foldConstruct(
 }
 
 fn foldBinary(analyzer: *Analyzer, module: usize, binary: ast.Binary, wanted: ?Type) Error!?TypedConstant {
-    // A constant is a value that is there, so there is nothing for
-    // a fallback to be a fallback *for*.
+    // Coalescing is deliberately not one of the operators this folder
+    // evaluates.  Optional values can be constants; selecting their
+    // payload remains a runtime expression.
     if (binary.op == .coalesce) {
-        return constantError(analyzer, binary.span, "else has nothing to do in a constant: a constant is always there", .{});
+        return constantError(analyzer, binary.span, "else is a runtime optional operation and does not fold in a constant initializer", .{});
     }
     // Nor is there anything for a catch to catch: a constant is
     // folded at compile time and no call is made at all.
@@ -736,7 +1077,7 @@ fn foldBinary(analyzer: *Analyzer, module: usize, binary: ast.Binary, wanted: ?T
     }
     // Where each side lands, by the two rules the lowering walk
     // uses (`builder.lowerBinaryOperands`), because a file-scope
-    // `let` and a local one must agree about what `2 * 0.1` is:
+    // `const` and a local expression must agree about what `2 * 0.1` is:
     // two untyped sides take the *place's* type, and otherwise the
     // typed side decides for the untyped one.
     const left_untyped = helpers.isUntypedNumber(binary.left);
@@ -973,6 +1314,11 @@ fn foldBinary(analyzer: *Analyzer, module: usize, binary: ast.Binary, wanted: ?T
                     break :blk if (binary.op == .equal) same else !same;
                 },
                 .strukt => return constantError(analyzer, binary.span, "struct constants have no comparison", .{}),
+                .container => |row| blk: {
+                    if (ordering) return constantError(analyzer, binary.span, "constant containers have identity but no ordering", .{});
+                    const same = row == right.value.container;
+                    break :blk if (binary.op == .equal) same else !same;
+                },
                 // An absent constant reaches an operator only through
                 // another constant's name; the test for absence is a
                 // function's `!= none`, and a fold has no narrowing

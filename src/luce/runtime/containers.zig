@@ -81,7 +81,7 @@ pub fn indexGet(runtime: *Runtime, target: Value, indices: []const Value) Error!
 pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: Value) Error!void {
     const stored = held;
     errdefer runtime.dropStorage(stored);
-    const object = try runtime.resolve(target);
+    const object = try runtime.resolveMutable(target);
     switch (object.data) {
         .list => {
             const index = indices[0].asLong();
@@ -153,14 +153,22 @@ pub fn listSlice(runtime: *Runtime, target: Value, start: i64, end: i64) Error!V
 /// not — it copies bytes into a buffer of its own and the text stays
 /// the caller's, which is what it always did.
 pub fn append(runtime: *Runtime, target: Value, held: Value) Error!void {
+    // A List consumes `held` even when the immutable backstop rejects
+    // the write; a Builder only borrows it.  Resolve once to learn
+    // which contract applies, then enter the one mutable gate in the
+    // matching arm.
     const object = try runtime.resolve(target);
     switch (object.data) {
         .list => {
             errdefer runtime.dropStorage(held);
+            try runtime.requireMutable(object);
             try object.elements.append(runtime.objects, held);
             runtime.adopt(held);
         },
-        .builder => |*builder| try builder.appendSlice(runtime.objects, held.asString()),
+        .builder => {
+            try runtime.requireMutable(object);
+            try object.data.builder.appendSlice(runtime.objects, held.asString());
+        },
         else => unreachable,
     }
 }
@@ -169,7 +177,7 @@ pub fn append(runtime: *Runtime, target: Value, held: Value) Error!void {
 /// String, and String is valid UTF-8.  Anything wider goes through
 /// chr(), which encodes the codepoint.
 pub fn appendAscii(runtime: *Runtime, target: Value, code: i64) Error!void {
-    const object = try runtime.resolve(target);
+    const object = try runtime.resolveMutable(target);
     if (code < 0 or code > 0x7F) return runtime.fail(.bad_codepoint);
     try object.data.builder.append(runtime.objects, @intCast(code));
 }
@@ -177,7 +185,7 @@ pub fn appendAscii(runtime: *Runtime, target: Value, code: i64) Error!void {
 /// `xs.pop()`.  pop hands the element out of the container (S22);
 /// whatever receives it owns it next.
 pub fn pop(runtime: *Runtime, target: Value) Error!Value {
-    const object = try runtime.resolve(target);
+    const object = try runtime.resolveMutable(target);
     const taken = object.elements.pop() orelse return runtime.fail(.empty_collection);
     runtime.loosen(taken);
     return taken;
@@ -188,7 +196,7 @@ pub fn pop(runtime: *Runtime, target: Value) Error!Value {
 /// without an owner.
 pub fn insert(runtime: *Runtime, target: Value, index: i64, held: Value) Error!void {
     errdefer runtime.dropStorage(held);
-    const object = try runtime.resolve(target);
+    const object = try runtime.resolveMutable(target);
     if (index < 0 or index > object.elements.count) return runtime.fail(.index_bounds);
     try object.elements.insert(runtime.objects, @intCast(index), held);
     runtime.adopt(held);
@@ -197,7 +205,7 @@ pub fn insert(runtime: *Runtime, target: Value, index: i64, held: Value) Error!v
 /// `xs.remove(i)` or `m.remove(key)`.  Removing an owned element frees
 /// it (S22); removing a key a map does not hold does nothing.
 pub fn remove(runtime: *Runtime, target: Value, which: Value) Error!void {
-    const object = try runtime.resolve(target);
+    const object = try runtime.resolveMutable(target);
     switch (object.data) {
         .list => {
             const index = which.asLong();
@@ -254,7 +262,7 @@ pub fn dimSize(runtime: *Runtime, target: Value, axis: i64) Error!Value {
 /// unstable order would be observable in a program's output.  It
 /// replaces an insertion sort that was stable too, and quadratic.
 pub fn sort(runtime: *Runtime, target: Value) Error!void {
-    const object = try runtime.resolve(target);
+    const object = try runtime.resolveMutable(target);
     switch (object.data) {
         // The cells are their own storage type, so the sort runs on
         // `f64`s or `i64`s directly; the ordering is still Luce's, read
@@ -270,7 +278,7 @@ pub fn sort(runtime: *Runtime, target: Value) Error!void {
 }
 
 pub fn reverse(runtime: *Runtime, target: Value) Error!void {
-    const object = try runtime.resolve(target);
+    const object = try runtime.resolveMutable(target);
     switch (object.data) {
         .list, .array => switch (object.elements.kind) {
             inline else => |kind| std.mem.reverse(
@@ -325,7 +333,7 @@ fn cellBefore(comptime kind: heap.Object.ElementKind) type {
 
 /// `xs.clear()` — clear frees all owned elements (S22).
 pub fn clear(runtime: *Runtime, target: Value) Error!void {
-    const object = try runtime.resolve(target);
+    const object = try runtime.resolveMutable(target);
     switch (object.data) {
         .list => {
             if (object.elements.kind == .value) {
@@ -524,7 +532,7 @@ pub fn mapGet(runtime: *Runtime, target: Value, key: Value, fallback: Value) Err
 /// value the map now holds, exactly as `indexGet` answers — the
 /// `index_set` that follows frees it and stores the combination.
 pub fn mapPlace(runtime: *Runtime, target: Value, key: Value, zero: Value) Error!Value {
-    const object = try runtime.resolve(target);
+    const object = try runtime.resolveMutable(target);
     switch (object.data) {
         .map => |*map| {
             if (map.find(&key)) |at| return map.entries.items[at].value;
@@ -543,7 +551,7 @@ pub fn mapPlace(runtime: *Runtime, target: Value, key: Value, zero: Value) Error
 /// `a.fill(v)` — every cell replaced.  A cell owns its storage, so the
 /// old contents go back and every new one is its own copy.
 pub fn arrayFill(runtime: *Runtime, target: Value, held: Value) Error!void {
-    const object = try runtime.resolve(target);
+    const object = try runtime.resolveMutable(target);
     if (object.elements.kind == .value) {
         for (object.elements.cells(Value)) |cell| runtime.dropStorage(cell);
     }

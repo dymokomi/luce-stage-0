@@ -1064,7 +1064,7 @@ test "S25: field assignment follows the verb rule and frees the old value" {
         \\
         \\func main():
         \\    var bag = Bag(items = [1])
-        \\    var loose = [2]
+        \\    var loose: list(long) = [2]
         \\    bag.items = loose
         \\
     );
@@ -1418,27 +1418,28 @@ test "S34: a trap mid-run aborts cleanly with objects in flight" {
     , .index_bounds);
 }
 
-test "S35: file scope owns nothing, so a constant is a value" {
-    // The three owner kinds S33 names — a binding, a container, the
-    // statement temporary — all live inside a function, and a
-    // top-level `let` has no scope to die at.  So what a constant may
-    // say is exactly what needs no owner: scalars, string, and a
-    // struct whose layout carries none.  Each folds at compile time
-    // and is inlined at its use sites, which is why the census this
-    // run ends on is zero without a single name having released
-    // anything.  The other half of the situation — that such a
-    // constant is importable as `module.name`, still owning nothing —
-    // is proven across files by modules_spec's "constants reach
-    // across modules through imports".
+test "S35: value constants inline without a runtime owner" {
+    // The three function-scope owner kinds S33 names — a binding, a
+    // container, the statement temporary — do not own these values.
+    // The value half of S35 therefore stays unchanged: scalars,
+    // strings, and a struct whose layout carries no object need no
+    // runtime owner.  Each folds
+    // at compile time and is inlined at its use sites, which is why the
+    // census this run ends on is zero without a single name having
+    // released anything.  Flat containers instead have the program
+    // root owner S46 and are proved in constants_spec.
+    // The other half here — that a value constant is importable as
+    // `module.name`, still owning nothing — is proven across files by
+    // modules_spec's "constants reach across modules through imports".
     try agreeClean(
         \\struct Size:
         \\    rows: long
         \\    cols: long
         \\
-        \\let rows = 24
-        \\let name = "loom"
-        \\let screen = Size(rows = rows, cols = 80)
-        \\let area = rows * screen.cols
+        \\const rows = 24
+        \\const name = "loom"
+        \\const screen = Size(rows = rows, cols = 80)
+        \\const area = rows * screen.cols
         \\
         \\func main():
         \\    assert(rows == 24)
@@ -1449,23 +1450,19 @@ test "S35: file scope owns nothing, so a constant is a value" {
     );
 }
 
-test "S35: an object cannot be file-scope, in any of the forms that make one" {
-    // The refusal is ownership's — there is no owner for the object to
-    // have — and the analyzer says so, quoting the situation.  It
-    // arrives under `luce.sema.const` rather than `luce.sema.own`
-    // because file scope is the constant folder's ground, so the
-    // sentence is checked here as well as the code: a reader who is
-    // sent to S35 must be told *why* the line cannot stand, not only
-    // that a constant was expected.
-    const objects = [_][]const u8{
-        "let bad = new list(long)",
-        "let bad = [1, 2]",
-        "let bad = new map(string, long)",
-        "let bad = new builder()",
-        "let bad = new array(long, 2, 2)",
-        "let bad = \"hello\"[0:2]",
+test "S35: a runtime-created object cannot be file-scope" {
+    // A literal flat list, map, or array is a program-root object,
+    // but a run-created object still has a death point and therefore
+    // needs a scope owner.  The analyzer refuses each spelling under
+    // `luce.sema.const`, before ownership could become ambiguous.
+    const runtime_objects = [_][]const u8{
+        "const bad = new list(long)",
+        "const bad = new map(string, long)",
+        "const bad = new builder()",
+        "const bad = new array(long, 2, 2)",
+        "const bad = \"hello\"[0:2]",
     };
-    for (objects) |declaration| {
+    for (runtime_objects) |declaration| {
         const source = try std.fmt.allocPrint(
             testing.allocator,
             "{s}\n\nfunc main():\n    return\n",
@@ -1481,7 +1478,7 @@ test "S35: an object cannot be file-scope, in any of the forms that make one" {
         const first = result.failure.at(0) orelse return error.TestUnexpectedResult;
         try testing.expectEqualStrings("luce.sema.const", first.code);
         try testing.expectEqualStrings(
-            "constants are values; objects cannot be file-scope [OWNERSHIP.md S35]",
+            "file-scope const folds values or one flat literal container; new, slicing, and indexing belong in a function [CONSTANTS.md R-A, R-E]",
             first.message,
         );
     }
@@ -1493,7 +1490,7 @@ test "S35: an object cannot be file-scope, in any of the forms that make one" {
         \\struct Bag:
         \\    items: list(long)
         \\
-        \\let bad = Bag(items = [1])
+        \\const bad = Bag(items = [1])
         \\
         \\func main():
         \\    return
@@ -1504,7 +1501,7 @@ test "S35: an object cannot be file-scope, in any of the forms that make one" {
     const said = carrier.failure.at(0) orelse return error.TestUnexpectedResult;
     try testing.expectEqualStrings("luce.sema.const", said.code);
     try testing.expectEqualStrings(
-        "Bag carries objects; constants are values only [OWNERSHIP.md S35]",
+        "Bag carries objects; only object-free structs fold in a constant [CONSTANTS.md R-E]",
         said.message,
     );
 }

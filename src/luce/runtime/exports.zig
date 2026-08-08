@@ -26,11 +26,14 @@
 //!   and it reports the whole trap rather than half of it — the trace
 //!   does not exist until unwinding is over (trace.zig).
 //!
-//! Allocation failure is not a Luce trap: no program can cause it
-//! deliberately and none can catch it.  It sets `Runtime.exhausted`,
-//! reports itself as a trapped call, and `luce_rt_status` turns it into
-//! a status of its own so a host can tell "the program failed" from
-//! "the machine ran out".
+//! Allocation failure is normally not a Luce trap: no running program
+//! can cause it deliberately and none can catch it.  It sets
+//! `Runtime.exhausted`, reports itself as a trapped call, and
+//! `luce_rt_status` turns it into a status of its own so a host can tell
+//! "the program failed" from "the machine ran out".  Eager constant
+//! materialization is the one named allocation in front of `main`, so
+//! failure there is the located `allocation_failed` trap its declaration
+//! promised (CONSTANTS.md R-C).
 //!
 //! ## Who owns what
 //!
@@ -753,10 +756,75 @@ pub export fn luce_rt_file_write_text(
 /// escapes into C as a silent success.
 fn failed(runtime: *Runtime, mistake: heap.Error) i32 {
     switch (mistake) {
-        error.OutOfMemory => runtime.exhausted = true,
+        error.OutOfMemory => if (runtime.materializing_constants) {
+            // A constant container is an eager allocation the program
+            // requested in its declaration.  RAM saying no is the
+            // located `allocation_failed` trap promised before main,
+            // not an exhausted run with no source location.
+            runtime.exhausted = false;
+            _ = runtime.fail(.allocation_failed) catch {};
+        } else {
+            runtime.exhausted = true;
+        },
         error.Trap => {},
     }
     return raised_trap;
+}
+
+// ---------------------------------------------------------------------------
+// Constant-container materialization (CONSTANTS.md R-C, R-D)
+// ---------------------------------------------------------------------------
+//
+// A generated prologue builds ordinary loose containers through the
+// exports below this section, then publishes each completed handle into
+// one runtime-local program-root slot.  `begin` owns the table;
+// `publish` consumes the loose object's lifetime (the Value itself is a
+// borrow); `load` returns a borrowed handle; `finish` keeps the roots for
+// the run.  On a trapped prologue, generated cleanup discards the one
+// unpublished construction, then aborts every already-published root.
+
+/// Allocate `count` root slots and enter materialization.  Nothing is
+/// returned or retained on failure; the trap waits in `runtime.pending`.
+pub export fn luce_rt_constants_begin(runtime: *Runtime, count: u32) callconv(.c) i32 {
+    runtime.beginConstants(count) catch |mistake| return failed(runtime, mistake);
+    return survived;
+}
+
+/// Publish a completed loose object at `slot`.  On failure the object
+/// remains loose and the caller must pass it to `luce_rt_discard_loose`.
+pub export fn luce_rt_constant_publish(
+    runtime: *Runtime,
+    slot: u32,
+    held: *const Value,
+) callconv(.c) i32 {
+    runtime.publishConstant(slot, held.*) catch |mistake| return failed(runtime, mistake);
+    return survived;
+}
+
+/// Load the borrowed program-root handle at a verified pool slot.
+pub export fn luce_rt_constant_load(
+    runtime: *const Runtime,
+    slot: u32,
+    out: *Value,
+) callconv(.c) void {
+    out.* = runtime.constant(slot);
+}
+
+/// Leave materialization successfully; every published root now lives
+/// until this runtime closes.
+pub export fn luce_rt_constants_finish(runtime: *Runtime) callconv(.c) void {
+    runtime.finishConstants();
+}
+
+/// Tear down all roots already published by a failed materialization.
+pub export fn luce_rt_constants_abort(runtime: *Runtime) callconv(.c) void {
+    runtime.abortConstants();
+}
+
+/// Tear down the unpublished loose container a failed prologue was
+/// filling.  Stale or non-loose values are harmless no-ops.
+pub export fn luce_rt_discard_loose(runtime: *Runtime, held: *const Value) callconv(.c) void {
+    runtime.discardLoose(held.*);
 }
 
 // ---------------------------------------------------------------------------

@@ -32,7 +32,7 @@ import journal
 import std.strings
 
 # Where `save` and `load` with no name of their own go.
-let save_file = "adventure.sav"
+const save_file = "adventure.sav"
 
 # The player: where they are, how long they have been at it, and
 # whether the story is over.  A turn writes those value fields through

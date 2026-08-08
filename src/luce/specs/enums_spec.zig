@@ -59,7 +59,7 @@ test "members: sequential from zero, explicit where written, and both at once" {
 
 test "members: a value folds like any constant expression" {
     try agree.ok(
-        \\let base = 4
+        \\const base = 4
         \\
         \\enum Flag:
         \\    none_set = 0
@@ -494,10 +494,10 @@ test "folding: a member is a top-level constant, and reads as one" {
         \\    stored = 0
         \\    deflated = 8
         \\
-        \\let default_method = Method.deflated
-        \\let default_number = int(Method.deflated)
-        \\let default_name = string(Method.deflated)
-        \\let is_stored = Method.deflated == Method.stored
+        \\const default_method = Method.deflated
+        \\const default_number = int(Method.deflated)
+        \\const default_name = string(Method.deflated)
+        \\const is_stored = Method.deflated == Method.stored
         \\
         \\func main():
         \\    assert(default_method == Method.deflated)

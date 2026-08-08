@@ -75,9 +75,11 @@ héllo
 |---|---|
 | `zip.crc32(data: list(byte)) -> long` | the reflected CRC-32 every entry carries (APPNOTE 4.4.7) |
 
-The table is built per call, because a top-level `let` is a value
-constant and a table is a list: 256 rows of eight steps in front of one
-pass over the data.
+The 256-entry CRC table is one private file-scope constant, materialized
+once per runtime rather than rebuilt in every call. Five more private
+constants hold DEFLATE's length bases, length extras, distance bases,
+distance extras and code-length order. All six are immutable program
+roots; every worker runtime materializes its own copies.
 
 ```luce run
 import std.zip

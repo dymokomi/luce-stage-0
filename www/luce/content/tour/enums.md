@@ -57,7 +57,7 @@ other type uses, named for what they produce. An f-string hole is a
 name.
 
 A member is a **constant**, so it folds like any other: it may be a
-top-level `let`, a parameter's default, or a struct field's.
+file-scope `const`, a parameter's default, or a struct field's.
 
 ```luce run
 enum Method:

@@ -30,15 +30,18 @@ Two kinds of data, with a deliberate line between them:
   What they are for is `array(byte, n)` at one byte an element
   (docs/TYPES.md D5).
 - **Heap objects** — `list(T)`, `map(K, V)`, `array(T, ...)`, and
-  `builder`.  Variables hold *references*.  Objects are created with
-  `new ...` or a literal and freed automatically by **scope
-  ownership** (next section).  Copying a struct that contains a list
-  copies the *reference* — both structs see the same list.
+  `builder`.  Variables hold *references*.  Runtime objects are
+  created with `new ...` or a literal and freed automatically by
+  **scope ownership** (next section).  A flat list, map, or rank-1
+  array declared with file-scope `const` is instead materialized once
+  into the program root and remains there until that runtime ends
+  (S46).  Copying a struct that contains a list copies the *reference*
+  — both structs see the same list.
 
 ## Ownership
 
 The memory model, in one paragraph (the full ratified specification —
-45 numbered situations — is `docs/OWNERSHIP.md`; the compiler quotes
+46 numbered situations — is `docs/OWNERSHIP.md`; the compiler quotes
 its numbers in diagnostics and `src/luce/specs/ownership_spec.zig` executes
 it):
 
@@ -479,7 +482,9 @@ A function type may annotate a parameter or local and may be a
 function's result.  It may nest inside another function signature.
 It is not yet a container element, struct field or optional payload,
 and a late `var` cannot use it because there is no zero function.
-Top-level `let` remains a compile-time constant and cannot hold one.
+File-scope `const` is a compile-time fold, and neither a function
+declaration nor a lambda is a constant expression, so a `const` cannot
+hold a function value.
 
 ```luce
 func ascending(a: long, b: long) -> bool:
@@ -548,13 +553,17 @@ Every parameter has a name, and a call site may use it — never must
 to right; **the first named argument ends the positional run**, and
 everything after it is named.  Named arguments may be written in any
 order.  A parameter may declare a default, `= EXPRESSION` after its
-type: the default is a **compile-time constant**, folded once at the
-declaration by the same folder that folds file-scope `let`, and
-materialised at each call site — the lowered program is byte-identical
-to the one with the argument written out.  Defaults are trailing: a
-parameter with one may be followed only by parameters with one.
-Struct fields take the same clause, under the same rules, and a struct
-every one of whose fields has a default constructs bare: `Options()`.
+type.  A value default is folded once at the declaration by the same
+folder that folds file-scope `const`, then inlined at each call site;
+the lowered program is byte-identical to one with that value argument
+written out.  A flat container default is different: it is one
+program-root construction per runtime, and every omitted call borrows
+that same object.  Writing a literal at the call instead creates an
+ordinary fresh runtime object.  Defaults are trailing: a parameter
+with one may be followed only by parameters with one.  Struct fields
+take the same clause for value defaults, and a struct every one of
+whose fields has one constructs bare: `Options()`; object-valued field
+defaults remain refused.
 
 ```luce
 func grown(base: long, step: long = 5, twice: bool = false) -> long:
@@ -592,16 +601,17 @@ func main():
 ```
 
 The boundaries, each one sentence: `self` is the receiver, not a
-nameable argument, and takes no default; a `give` parameter cannot
-have a default, because it takes ownership of an object and an object
-is never a constant; a default cannot read another parameter, because
-it is folded before any call is made; and objects (`new list(long)`,
-`[1, 2, 3]`) are not defaults, because a default with no owner would
-need a second lifetime model.  Free builtins take names and defaults
-from the table that is their signature — `term_style(fg, bg = -1,
-bold = false)` — while **builtin value methods** (`xs.append`,
-`m.get`) stay positional: their tables hold types computed from the
-receiver, and no names.
+nameable argument, and takes no default; a default cannot read another
+parameter, because it is folded before any call is made; and an object
+default on a plain borrowing parameter may be a flat literal or a
+file-scope constant container, with every omitted call borrowing the
+same per-runtime program root.  A `give` parameter cannot have that
+object default because there is no ownership to transfer, and an
+object-valued struct field default remains refused.  Free builtins take
+names and defaults from the table that is their signature —
+`term_style(fg, bg = -1, bold = false)` — while **builtin value
+methods** (`xs.append`, `m.get`) stay positional: their tables hold
+types computed from the receiver, and no names.
 
 Two pieces of guidance the compiler cannot check (docs/ARGS.md §7).
 A default belongs on a slot whose omission cannot violate an
@@ -694,7 +704,7 @@ func main():
 
 Members are **namespaced always** — `Method.stored`, never a bare
 `stored` — and each is a compile-time constant, so a member stands in
-a top-level `let`, a parameter default and a field default.  An enum
+a file-scope `const`, a parameter default and a field default.  An enum
 is a value: it copies, it takes no ownership word, and a `list(Method)`
 or an `array(Method, n)` holds it at the backing width.
 
@@ -750,7 +760,8 @@ second statement.
 ```luce fragment
 var xs = [1, 2, 3]                 # list(int), inferred from elements
 var ys: list(string) = []          # empty literal needs an annotation
-var m = new map(string, long)       # insertion-ordered dictionary
+var m = {"one": 1, "two": 2}       # insertion-ordered dictionary
+var empty = new map(string, long)   # {} is deliberately not a literal
 var grid = new array(long, 5, 5)    # fixed 5x5, zero-initialized
 var b = new builder()              # string builder
 
@@ -791,6 +802,11 @@ sugar for a plain function with the receiver first, not dispatch):
   `clear()`, `len`.  Iteration order is insertion order, and the
   lookups (index, `has`, `get`, index-set) are O(1): the entries
   stay a dense array in arrival order with a hash index over it.
+  `{key: value, ...}` constructs a fresh mutable map and evaluates
+  entries in written order; a later equal key replaces the earlier
+  value without changing its position.  An unannotated integer key
+  lands on `long`.  `{}` is refused because neither `K` nor `V` can be
+  inferred; write `new map(K, V)`.
 - `builder`: `append(text)`, `append_ascii(code)`, `clear()`, `len`,
   `b.build()`.  `append_ascii` puts one ASCII byte in without the string
   a `chr()` would allocate; it traps `bad_codepoint` outside 0..127,
@@ -1340,7 +1356,7 @@ keeps `key_missing`.
 
 ## Scope
 
-One scope per **file** (top-level constants, structs, and functions),
+One scope per **file** (file-scope constants, structs, and functions),
 per **struct** (its implied-self methods and static namespace functions), and per
 **function** (parameters and every indented block; `if`/`while`/`for`
 bodies open nested scopes).  No shadowing anywhere; `let` is
@@ -1391,36 +1407,89 @@ func floor_at_zero(n: long) -> long:
 
 ### File-scope constants
 
-`let` at the top level declares a **compile-time constant**:
+`const` is the file-scope declaration word.  Local `let` and `var`
+keep their existing jobs, top-level `let` is retired with a diagnostic
+that teaches `const`, and there is no top-level `var`.
 
 ```luce
 struct Theme:
     keyword: long
     comment: long
 
-let width = 80
-let tau = 2.0 * pi          # constants may reference each other,
-let pi = 3.14159            # in any order — never in a cycle
-let version = "2"
-let banner = "loom " + version
-let theme = Theme(keyword = 176, comment = 244)   # value structs too
-let missing: long? = none   # a typed absence: the annotation says
-                            # what is absent (docs/ARGS.md D9)
+const width = 80
+const tau = 2.0 * pi          # constants may reference each other,
+const pi = 3.14159            # in any order — never in a cycle
+const version = "2"
+const banner = "loom " + version
+const theme = Theme(keyword = 176, comment = 244)  # value structs too
+const missing: long? = none   # a typed absence: the annotation says
+                              # what is absent (docs/ARGS.md D9)
 ```
 
-Initializers fold at compile time: literals, other constants
-(including `module.constant` through imports), arithmetic,
-comparisons, `and`/`or`, string concatenation, `long()`/`double()`,
-value-struct construction — and `none`, when a `T?` annotation says
-what it is absent of; a bare `let x = none` is still refused, because
-nothing does.  Calls, objects (`list`, `map`,
-`array`, `builder`, object-carrying structs), and verbs are not
-constant — constants are values, so ownership never applies to them.
-Constants share the file's one namespace with structs and functions,
-are reachable as `module.name` through imports, and cannot be
-assigned or shadowed.  Every use site inlines the folded value.
-Top-level `var` does not exist (whether mutable file scope ever
-arrives is a separate decision — docs/V2.md).
+Initializers fold at compile time.  Foldable forms include literals,
+other constants (including `module.constant` through imports), numeric
+and bitwise expressions, comparisons and boolean logic, string
+concatenation, the eight conversion constructors and `ord()`, enum
+members and conversions from enums (`int(m)`, `string(m)`), and
+object-free value-struct construction.
+`none` also folds when a `T?` annotation says what it is absent of; a
+bare `const x = none` is still refused, because nothing says which `T`
+is absent.  Function values, general calls, and ownership verbs are not
+constant.
+
+A `const` may also construct one **flat constant container**:
+
+```luce
+struct Entry:
+    name: string
+    fallback: long?
+
+const NUMBERS: list(long) = [3, 1, 2]
+const AGES = {"ada": 36, "alan": 41}
+const ORDER: array(long, _) = [16, 17, 18, 0]
+const ENTRIES = [Entry(name = "first", fallback = none)]
+const ALIAS = NUMBERS
+```
+
+The element may be a scalar, string, enum, or object-free value struct;
+such a struct may contain an optional field.  A container may not hold
+another container, and a top-level optional element or map value is
+refused.  A bracket literal is a `list` unless an `array(T, _)`
+annotation makes it a rank-1 array.  An empty list or array therefore
+needs an annotation.  A map uses `{key: value}`; duplicate folded keys
+are a compile error naming both sites, and `{}` is refused in favour of
+`new map(K, V)`.  `builder`, object-carrying structs, and
+multi-dimensional arrays cannot be constant containers.
+
+Each written construction has one identity.  Repeated uses, aliases,
+imports, lambdas, and a borrowing parameter default all read that same
+program-root handle; a separately written equal declaration is a
+different object.  A `give` parameter cannot have an object default.
+The reachable pool is materialized eagerly once per
+runtime before a function executes, so every worker gets its own roots
+and no object crosses between runtimes.  An unused row is pruned and
+costs nothing to ship or start.
+
+The program root owns these objects until runtime teardown (S46).
+Reads and iteration work normally.  Slicing a constant list returns a
+fresh owned list, as map `keys()` and `values()` return fresh owned
+lists; arrays have indexing, iteration and `copy`, but no slice
+expression.  `copy TABLE` answers a fresh mutable deep copy.  Stage 4
+refuses every visible mutation (`append`, `sort_by`, indexed and nested
+stores, `file.read` into an array) and every attempt to move or retain
+the root (`give`, `free`, return, assignment into an owner, or a
+container/struct store).
+A borrow through a parameter hides the root from static analysis, so
+every runtime mutation path also checks and traps `immutable_object`
+before writing.  A constant is never silently copied and a forbidden
+write is never silently dropped.
+
+Constants share the file's namespace with structs and functions, are
+reachable as `module.name` through imports, and cannot be assigned or
+shadowed.  A public constant container cannot expose a private element
+type, just as a public function signature cannot expose one.  Folded
+values inline at each use; container constructions load their one
+program-root handle.
 
 ## Workers: `spawn` and `task`
 
@@ -1528,7 +1597,7 @@ import, and using a namespace you didn't import is a compile error
 
 **Visibility** (docs/VISIBILITY.md, ratified): a declaration is
 public unless it says `private` — written in full, before `func`,
-before a top-level `let`, before `struct`, and on a struct field;
+before a file-scope `const`, before `struct`, and on a struct field;
 `public` is legal anywhere `private` is and inert where it restates
 the default.  Inside a struct — and only there — `private:` and
 `public:` open an indented region of members.  The unit is the file,
@@ -1608,7 +1677,7 @@ Closures, **tuples** (a return shape is not a type — see "Answering
 more than one thing"), exceptions (traps are
 final), implicit *narrowing* of a `double` to a `long`, shadowing,
 mutable file-scope `var`
-(top-level `let` constants exist; mutable globals are a separate
+(file-scope `const` exists; mutable globals are a separate
 decision), `errdefer` and error return traces (docs/FAILURE.md
 refuses both, with reasons), typed error sets and error payloads
 beyond the message, garbage collection and reference counting (scope

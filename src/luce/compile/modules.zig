@@ -18,7 +18,7 @@
 //! code at import time, and nothing runs at import time here.  What
 //! *can* be circular is checked at the granularity where circularity
 //! actually means something, one stage later and one level down: a
-//! top-level `let` that depends on itself through any number of
+//! top-level `const` that depends on itself through any number of
 //! modules is `luce.sema.const`, and a struct that contains itself is
 //! `luce.sema.struct`.  Refusing whole files instead would be coarser,
 //! would ban working programs, and would catch nothing the finer

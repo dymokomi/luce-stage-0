@@ -18,11 +18,11 @@ colliding.
 
 ## Two constraints, deliberate for now
 
-**No module state.** A top-level `let` is a compile-time constant, so
-a module cannot hold a mutable global. Where state is genuinely needed
-the idiom is to hand it to the caller: `strings.split(s, ",")` returns a
-`list(string)` the caller owns, and mutation through a borrow is
-ordinary Luce.
+**No mutable module state.** File-scope `const` holds a folded value or
+an immutable program-root table, never a mutable global. Where state is
+genuinely needed the idiom is to hand it to the caller:
+`strings.split(s, ",")` returns a `list(string)` the caller owns, and
+mutation through a borrow is ordinary Luce.
 
 **Absence and failure are told apart.** A function that may find
 nothing answers `T?`; one that may *fail* says `!`. `files` is written

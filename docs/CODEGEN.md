@@ -442,6 +442,59 @@ Otherwise an apparently unreachable comparator could be deleted while
 the integer that names it survived, turning a valid value into an
 out-of-range indirect call.
 
+### Program-root constant containers
+
+Verified MIR has two constant pools.  `constants` holds text bytes;
+`container_constants` holds one row per written flat list, map, or
+rank-1 array construction, including its heap type, folded values,
+declaration name and debug origin.  Equal rows are deliberately not
+content-interned because object equality is identity.  `const_container K`
+loads the handle in runtime root slot K, so aliases and defaults of
+one construction share while separately written equal constructions do
+not.
+
+`prune` follows surviving `const_container` instructions after dead
+instruction removal, compacts the pool, and remaps the indices.  An
+unused table therefore emits neither data nor startup work.  The pool,
+the instruction, their wire tags, and `immutable_object` moved the
+serialized module to **format 33**; none is a host service, so
+`abi.version` remains **13**.
+
+Every generated entry path calls one private `luce.constants`
+materializer before user code.  It constructs rows through the same
+stable runtime operations ordinary containers use, publishes each
+finished handle into the program root, then freezes the root table.
+Failure discards the unpublished row and every root already published;
+in debug mode the synthetic trace frame names the declaration.  A
+worker creates a runtime of its own and calls the same materializer, so
+roots never cross the worker boundary.  The interpreter performs the
+same eager prologue against `libluce_rt`, which is why the executable
+specification compares one ownership representation rather than two.
+
+The static analyzer rejects a write while it can still see the root.
+Generated code carries the dynamic half for a parameter-hidden root:
+runtime mutators resolve through `resolveMutable`, and inline list or
+array stores compare the row owner against `.program` before touching
+the element.  The check stays next to the existing null, generation and
+bounds checks and traps `immutable_object`.
+
+`08_llvm/roots.zig` derives the one case where that owner check may be
+omitted from the final verified MIR rather than trusting a bit a decoded
+module could forge.  Its fixed-point plan is deliberately conservative:
+parameters, inout slots, calls, `const_container`, and every other
+heap-producing instruction may name a root; only `heap_new` values that
+remain provably fresh while flowing through non-parameter locals do not.
+Thus fresh inline mutations recover the branch-free path, while aliases,
+parameters, calls and hostile MIR retain the runtime backstop.  This is
+compiler-internal analysis and changes neither the serialized format nor
+the host ABI.  An interleaved A/B against `ae0f39f` after the complete
+constants closeout found no benchmark regression; raw/compute deltas
+were loops -0.7/-0.8%, math +0.2/+0.2%, strings -1.2/-1.3%, arrays
+-0.2/-0.3%, arrays32 +0.4/+0.4%, matmul -0.6/-1.1%, matmul32
++0.3/-0.0%, stats -0.0/-0.1%, and lists +0.0/-0.2%.  Program roots are
+omitted from the user leak census while live and released last at
+runtime teardown.
+
 Locals are entry-block `alloca`s that mem2reg promotes.  Every
 `alloca`, including scratch slots created deep in the walk, is emitted
 in the entry block, so nothing accumulates inside a loop.
@@ -468,9 +521,10 @@ same three fields in its frame.
 This is genuinely in-place, not the retired copy-in/copy-out result
 convention: a store performed before an error remains visible while
 the error unwinds.  It is also entirely internal.  `call_inout` and
-the local flag moved the serialized module to **format 32**; no
-`LuceHost` slot or runtime export moved, so the published host ABI
-remains **13**.
+the local flag first moved the serialized module to format 32;
+program-root constants have since moved the current format to **33**.
+Neither changed a `LuceHost` slot, so the published host ABI remains
+**13**.
 
 ## Call depth, and the trace a trap carries
 
@@ -916,10 +970,19 @@ statement freed a pointer into the frame (docs/STRINGS.md).
 `src/luce/runtime.zig` plus
 `runtime/{value,heap,containers,text,operators,trace,exports}.zig`.  Luce's
 semantics below the instruction level live here: the object heap,
-ownership and serials (docs/OWNERSHIP.md), `list`/`map`/`array`/
+binding/container/temporary/program-root ownership and serials
+(docs/OWNERSHIP.md), `list`/`map`/`array`/
 `builder`, string storage and the string primitives,
 `str`/`parse_int`/`parse_float`/`chr`/`ord`, checked arithmetic, and
 the trap channel they all report through.
+
+The constant materialization exports (`constants_begin`,
+`constant_publish`, `constant_load`, `constants_finish`,
+`constants_abort`, and `discard_loose`) are runtime services, not
+host effects.  They install ordinary container rows under the program
+owner and make every mutator's existing resolution seam the immutable
+backstop.  Adding them changed no `LuceHost` field and therefore did
+not move the published ABI.
 
 It builds as a real `libluce_rt.a`, installs beside the binaries, and
 `cc` links it into every artifact.  **The oracle calls it too** —

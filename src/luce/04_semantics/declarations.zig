@@ -158,12 +158,24 @@ pub const Analyzer = struct {
     constant_names: std.StringHashMapUnmanaged(u32) = .empty,
 
     /// What the fold underway is *for*, when it is not a file-scope
-    /// `let`: "a default" while a parameter or field default folds
+    /// `const`: "a default" while a parameter or field default folds
     /// (docs/ARGS.md D2), null otherwise.  The folder's answer never
     /// changes with it — only the sentence a refusal opens with, so a
     /// reader who wrote `start: long = g()` is told about defaults and
     /// not about a `let` they never wrote.
     fold_subject: ?[]const u8 = null,
+    /// The written construction whose container row a fold may append.
+    /// Null for enum members and object-free field defaults.  A
+    /// dependency temporarily installs its own construction, so a
+    /// separately declared constant keeps its own identity even when
+    /// another constant names it (docs/CONSTANTS.md C5).
+    fold_container_name: ?[]const u8 = null,
+    fold_container_file: source_mod.FileId = source_mod.root_file,
+    fold_container_origin: u32 = 0,
+    /// True only while the elements of one container construction are
+    /// folding.  A literal reached recursively is a nested constant
+    /// container and is refused in this run (R-E).
+    folding_container: bool = false,
 
     fn deinitScratch(self: *Analyzer) void {
         self.struct_decls.deinit(self.temporary);
@@ -238,6 +250,7 @@ pub const Analyzer = struct {
             .enums = try self.enums.toOwnedSlice(self.arena),
             .functions = try lowered.toOwnedSlice(self.arena),
             .constants = try self.pool.items.toOwnedSlice(self.arena),
+            .container_constants = try self.pool.containers.toOwnedSlice(self.arena),
             .entry_function = entry_index,
         };
     }
@@ -1489,7 +1502,7 @@ pub const Analyzer = struct {
     // and `run` calls it right after this so an error in a constant
     // nothing reads still reports.
 
-    /// Register every module's top-level `let` constants under their
+    /// Register every module's top-level `const` declarations under their
     /// qualified names, refusing a reserved or duplicate one.  Nothing
     /// is evaluated yet: an enum member's value may name a constant and
     /// a constant may name an enum member, so every name has to exist
@@ -1708,6 +1721,13 @@ pub const Analyzer = struct {
             .list_literal => |literal| blk: {
                 for (literal.elements) |element| {
                     if (self.expressionWritesReceiver(info, element)) break :blk true;
+                }
+                break :blk false;
+            },
+            .map_literal => |literal| blk: {
+                for (literal.entries) |entry| {
+                    if (self.expressionWritesReceiver(info, entry.key) or
+                        self.expressionWritesReceiver(info, entry.value)) break :blk true;
                 }
                 break :blk false;
             },
@@ -2104,11 +2124,10 @@ pub const Analyzer = struct {
     }
 
     /// Fold one parameter default at the parameter's own type
-    /// (docs/ARGS.md D2): evaluated once, at the declaration, by the
-    /// folder that already folds file-scope `let` — and materialised
-    /// at each call site as the constant register the same literal
-    /// would have produced written out, so the lowered program is
-    /// byte-identical to the one with the argument written.  Null
+    /// (docs/ARGS.md D2), using the same folder as file-scope `const`.
+    /// A value default is materialized at each call as the register its
+    /// written expression would have produced; a container default
+    /// names one program-root row shared by every omitted call.  Null
     /// after reporting.
     fn foldDefault(
         self: *Analyzer,
@@ -2118,20 +2137,18 @@ pub const Analyzer = struct {
         resolved: Type,
         written: *const ast.Expression,
     ) Error!?TypedConstant {
-        // A give parameter takes ownership of an object and an object
-        // is never a constant — two rules that already refuse this,
-        // handed the one sentence they imply (docs/ARGS.md §5, D12).
+        // A give parameter takes ownership, while a program-root
+        // container has no ownership to transfer.  Borrowed defaults
+        // may be container constants: every omitted call then borrows
+        // the same per-runtime root (docs/CONSTANTS.md, Surface
+        // interactions).
         if (parameter.mode == .give) {
             try self.fail(
                 "luce.sema.own",
                 parameter.span,
-                "a give parameter takes ownership of an object, and an object is never a default [OWNERSHIP.md S13, S32]",
+                "a give parameter takes ownership, so its default cannot be a shared constant container [OWNERSHIP.md S13, S32, S46]",
                 .{},
             );
-            return null;
-        }
-        if (self.carriesObjects(resolved)) {
-            try self.fail("luce.sema.const", parameter.span, "a default is a constant, and an object is not one", .{});
             return null;
         }
         if (helpers.deeperThan(written, helpers.max_expression_depth)) {
@@ -2157,19 +2174,36 @@ pub const Analyzer = struct {
             return null;
         }
         const previous_subject = self.fold_subject;
+        const previous_name = self.fold_container_name;
+        const previous_file = self.fold_container_file;
+        const previous_origin = self.fold_container_origin;
+        const previous_nesting = self.folding_container;
         self.fold_subject = "a default";
-        defer self.fold_subject = previous_subject;
-        var folded = (try constants.fold(self, module, written, resolved)) orelse return null;
-        if (folded.value_type.widensTo(resolved)) folded = constants.widen(folded, resolved);
-        if (!folded.value_type.eql(resolved)) {
+        self.fold_container_name = try std.fmt.allocPrint(
+            self.arena,
+            "{s}.{s} default",
+            .{ declaration.name, parameter.name },
+        );
+        self.fold_container_file = self.modules[module].file;
+        self.fold_container_origin = @intCast(parameter.name_span.start);
+        self.folding_container = false;
+        defer {
+            self.fold_subject = previous_subject;
+            self.fold_container_name = previous_name;
+            self.fold_container_file = previous_file;
+            self.fold_container_origin = previous_origin;
+            self.folding_container = previous_nesting;
+        }
+        const folded = (try constants.fold(self, module, written, resolved)) orelse return null;
+        const fitted = constants.fit(folded, resolved) orelse {
             try self.fail("luce.sema.type", parameter.span, "{s} is {s} and its default is {s}", .{
                 parameter.name,
                 try self.typeName(resolved),
                 try self.typeName(folded.value_type),
             });
             return null;
-        }
-        return folded;
+        };
+        return fitted;
     }
 
     /// Fold every field default, eagerly (docs/ARGS.md D2): a default
@@ -2266,7 +2300,7 @@ pub const Analyzer = struct {
             try self.fail(
                 "luce.sema.own",
                 written.span(),
-                "{s}.{s} keeps its object, and an object is never a default [OWNERSHIP.md S21, S24]",
+                "{s}.{s} keeps its object, so its default cannot be a shared object [OWNERSHIP.md S21, S24, S46]",
                 .{ layout.name, field.name },
             );
             return null;
@@ -2283,9 +2317,8 @@ pub const Analyzer = struct {
         const previous_subject = self.fold_subject;
         self.fold_subject = "a default";
         defer self.fold_subject = previous_subject;
-        var folded = (try constants.fold(self, module, written, field.field_type)) orelse return null;
-        if (folded.value_type.widensTo(field.field_type)) folded = constants.widen(folded, field.field_type);
-        if (!folded.value_type.eql(field.field_type)) {
+        const folded = (try constants.fold(self, module, written, field.field_type)) orelse return null;
+        const fitted = constants.fit(folded, field.field_type) orelse {
             try self.fail("luce.sema.type", written.span(), "{s}.{s} is {s} and its default is {s}", .{
                 layout.name,
                 field.name,
@@ -2293,8 +2326,8 @@ pub const Analyzer = struct {
                 try self.typeName(folded.value_type),
             });
             return null;
-        }
-        return folded;
+        };
+        return fitted;
     }
 
     /// The first of the declaration's parameter names `expression`
@@ -2341,6 +2374,13 @@ pub const Analyzer = struct {
             .list_literal => |list| {
                 for (list.elements) |element| {
                     if (parameterRead(declaration, element)) |read| return read;
+                }
+                return null;
+            },
+            .map_literal => |map| {
+                for (map.entries) |entry| {
+                    if (parameterRead(declaration, entry.key)) |read| return read;
+                    if (parameterRead(declaration, entry.value)) |read| return read;
                 }
                 return null;
             },
@@ -2665,6 +2705,7 @@ pub const Analyzer = struct {
                 .borrows,
                 parameter.name_span,
             )) orelse continue;
+            builder.setRoot(local, if (owns) .mutable else .unknown);
             // An owning parameter is an owned binding like any other
             // (S15): take the object over from the caller on entry.
             if (owns) {

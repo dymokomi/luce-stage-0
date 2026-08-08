@@ -365,9 +365,249 @@ test "every runtime declaration carries what the compiler knows about it" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "cold") != null);
 }
 
+const flat_constants_source =
+    \\struct Label:
+    \\    text: string
+    \\    rank: long
+    \\
+    \\const labels: list(Label) = [Label(text = "first", rank = 1)]
+    \\const axis: array(long, _) = [3, 5, 8]
+    \\const lookup: map(string, long) = {"one": 1, "two": 2}
+    \\
+    \\func main():
+    \\    assert(labels[0].text == "first")
+    \\    assert(labels[0].rank == lookup["one"])
+    \\    assert(axis[2] == 8)
+    \\
+;
+
+test "constant containers materialize once and load from the program root" {
+    const gpa = std.testing.allocator;
+    const rendered = (try render(flat_constants_source)).?;
+    defer gpa.free(rendered);
+    errdefer std.debug.print("rendered IR:\n{s}\n", .{rendered});
+
+    for ([_][]const u8{
+        "define internal i32 @luce.constants(ptr",
+        "call i32 @luce_rt_constants_begin",
+        "call i32 @luce_rt_new_list",
+        "call i32 @luce_rt_new_array",
+        "call i32 @luce_rt_new_map",
+        "call i32 @luce_rt_own_storage",
+        "call i32 @luce_rt_constant_publish",
+        "call void @luce_rt_constants_finish",
+        "call void @luce_rt_constant_load",
+        "call void @luce_rt_discard_loose",
+        "call void @luce_rt_constants_abort",
+    }) |wanted| {
+        if (std.mem.indexOf(u8, rendered, wanted) == null) return error.NotGenerated;
+    }
+    // One runtime and no workers: the prologue invokes the helper
+    // exactly once, however many declarations it materializes.
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        std.mem.count(u8, rendered, "call i32 @luce.constants(ptr"),
+    );
+    // The one failure tail owns teardown in this order: the current
+    // loose construction, then already-published roots, then the
+    // synthetic declaration frame.  Keeping this structural makes an
+    // allocator-failure path testable without asking the process
+    // allocator to fail at a particular byte.
+    const discard = std.mem.indexOf(u8, rendered, "call void @luce_rt_discard_loose").?;
+    const abort = std.mem.indexOfPos(u8, rendered, discard, "call void @luce_rt_constants_abort").?;
+    const origin = std.mem.indexOfPos(u8, rendered, abort, "call void @luce_rt_unwound").?;
+    try std.testing.expect(discard < abort and abort < origin);
+    // One main function plus three declaration descriptors are handed
+    // to the runtime; `unwound(function_count + slot, 0)` resolves the
+    // latter through the same table as an ordinary frame.
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        rendered,
+        "call ptr @luce_rt_open(ptr @luce.functions, i64 4)",
+    ) != null);
+}
+
+test "an unused constant container leaves no pool or prologue behind" {
+    const gpa = std.testing.allocator;
+    const rendered = (try render(
+        \\const unused: list(long) = [1, 2, 3]
+        \\
+        \\func main():
+        \\    assert(2 + 2 == 4)
+        \\
+    )).?;
+    defer gpa.free(rendered);
+
+    // Stage 7 pruned the unreachable pool row.  Stage 8 responds by
+    // emitting neither the helper nor even declarations for its
+    // runtime surface: laziness is observable as absent code.
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "@luce.constants") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "luce_rt_constants_begin") == null);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "luce_rt_constant_load") == null);
+}
+
+const worker_constants_source =
+    \\const seeds: list(long) = [13, 21]
+    \\
+    \\func first() -> long:
+    \\    return seeds[0]
+    \\
+    \\func main():
+    \\    let task = spawn first()
+    \\    assert(task.wait() == 13)
+    \\
+;
+
+test "every worker runtime materializes its own constant roots" {
+    const gpa = std.testing.allocator;
+    const rendered = (try render(worker_constants_source)).?;
+    defer gpa.free(rendered);
+    errdefer std.debug.print("rendered IR:\n{s}\n", .{rendered});
+
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "define internal i32 @luce.worker") != null);
+    // The root wrapper and the generated worker trampoline each call
+    // the same helper on their own Runtime.  A declaration is never
+    // shared across that boundary.
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        std.mem.count(u8, rendered, "call i32 @luce.constants(ptr"),
+    );
+}
+
+test "inline scalar mutations through an unknown alias retain the constant owner guard" {
+    const gpa = std.testing.allocator;
+    const rendered = (try render(
+        \\func mutate(values: list(long)):
+        \\    values[0] = 9
+        \\    values.append(10)
+        \\
+        \\func main():
+        \\    var values: list(long) = [1]
+        \\    mutate(values)
+        \\
+    )).?;
+    defer gpa.free(rendered);
+    errdefer std.debug.print("rendered IR:\n{s}\n", .{rendered});
+
+    // Both operations are scalar fast paths, so neither reaches the
+    // runtime mutator that normally calls resolveMutable.  A parameter
+    // can hide a program root, so each must load Object.owner.kind and
+    // keep the immutable trap.
+    const owner_offset = try std.fmt.allocPrint(
+        gpa,
+        "i64 {d}",
+        .{luce.runtime.layout.owner_kind},
+    );
+    defer gpa.free(owner_offset);
+    try std.testing.expect(std.mem.count(u8, rendered, owner_offset) >= 2);
+    const immutable_code = try std.fmt.allocPrint(
+        gpa,
+        "i32 {d}",
+        .{@intFromEnum(mir.TrapCode.immutable_object)},
+    );
+    defer gpa.free(immutable_code);
+    try std.testing.expect(std.mem.count(u8, rendered, immutable_code) >= 2);
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "constant container is immutable") != null);
+}
+
+test "inline scalar mutations of proven fresh locals omit the constant owner guard" {
+    const gpa = std.testing.allocator;
+    const source =
+        \\func main():
+        \\    var values: list(long) = [1]
+        \\    values[0] = 9
+        \\    values.append(10)
+        \\    var grid = new array(double, 2)
+        \\    grid[0] = 1.5
+        \\
+    ;
+
+    // `roots.zig` derives this from the final MIR rather than trusting
+    // a front-end flag: both locals originate at heap_new and every
+    // assignment to them stays non-root.  The fast paths therefore
+    // retain their null/generation/bounds checks but need no owner walk
+    // or immutable trap.  Release stripping changes no semantic check.
+    for ([_]spec.Mode{ .debug, .release }) |mode| {
+        const rendered = (try spec.renderBuilt(source, mode)).?;
+        defer gpa.free(rendered);
+        errdefer std.debug.print("rendered IR:\n{s}\n", .{rendered});
+
+        try std.testing.expect(std.mem.indexOf(u8, rendered, "owner.at") == null);
+        try std.testing.expect(
+            std.mem.indexOf(u8, rendered, "constant container is immutable") == null,
+        );
+    }
+}
+
+test "constant declaration origins survive only in debug artifacts" {
+    const gpa = std.testing.allocator;
+    const source =
+        \\const seeds: list(long) = [3, 1, 2]
+        \\
+        \\func main():
+        \\    assert(seeds[0] == 3)
+        \\
+    ;
+    const debug = (try spec.renderBuilt(source, .debug)).?;
+    defer gpa.free(debug);
+    const release = (try spec.renderBuilt(source, .release)).?;
+    defer gpa.free(release);
+
+    try std.testing.expect(std.mem.indexOf(u8, debug, "@luce.origins.constant.0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, release, "@luce.origins.constant.0") == null);
+    // The declaration name is trace structure and survives stripping;
+    // its source and single origin are debug data and do not.
+    try std.testing.expect(std.mem.indexOf(u8, debug, "c\"seeds\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, release, "c\"seeds\"") != null);
+}
+
 // ---------------------------------------------------------------------------
 // Running the machine code
 // ---------------------------------------------------------------------------
+
+test "a constant passed through a parameter still traps an inline mutation" {
+    try agree(
+        \\const seeds: list(long) = [3, 1, 2]
+        \\
+        \\func overwrite(values: list(long)):
+        \\    values[0] = 9
+        \\
+        \\func main():
+        \\    overwrite(seeds)
+        \\
+    );
+}
+
+test "compiled constant materialization preserves every flat container shape" {
+    try agree(flat_constants_source);
+}
+
+test "a compiled worker reads its runtime-local constant root" {
+    try agree(worker_constants_source);
+}
+
+test "compiled inline constant mutations guard list growth and array cells" {
+    try agree(
+        \\const TABLE: list(long) = [1, 2]
+        \\
+        \\func grow(values: list(long)):
+        \\    values.append(3)
+        \\
+        \\func main():
+        \\    grow(TABLE)
+        \\
+    );
+    try agree(
+        \\const TABLE: array(long, _) = [1, 2]
+        \\
+        \\func overwrite(values: array(long, _)):
+        \\    values[0] = 9
+        \\
+        \\func main():
+        \\    overwrite(TABLE)
+        \\
+    );
+}
 
 test "inout calls mutate the caller on return, error, and nested forwarding" {
     try agree(

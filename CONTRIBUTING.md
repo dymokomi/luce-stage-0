@@ -70,24 +70,24 @@ file splits only where a subproblem has a one-to-three-function
 interface — never because a file got long.
 
 ```sh
-zig fmt src/ build.zig www/luce/src/
+zig fmt src/ build.zig www/luce/src/ tools/
 ```
 
 Run it before every commit.
 
 ## Documentation
 
-[docs/README.md](docs/README.md) indexes the thirteen documents and
+[docs/README.md](docs/README.md) indexes the documents and
 says which are current and which are frozen decision records.
 
 User-facing prose lives on the site, **[luce.luciaos.com](https://luce.luciaos.com)**,
 built from [`www/luce/`](www/luce/) — see [www/luce/README.md](www/luce/README.md).
-**Every Luce sample on it is compiled and run by the freshly built
-toolchain**, and the output printed under a sample is the output that
-run produced.  A wrong claim, a dead link or a dead anchor fails the
+**Every Luce sample on it is checked by the freshly built toolchain.**
+Runnable samples execute and their output is compared byte for byte;
+expected traps, raises and refusals are checked as such.  A broken
+sample, mismatched claimed result, dead link or dead anchor fails the
 build, and a fenced `luce` block that does not say what becomes of it
-is a build error.  There is no unverified code on the site by
-construction.
+is a build error.  The surrounding prose remains human-reviewed.
 
 The site also holds the compiler's lists to its own reference pages
 (`www/luce/src/coverage.zig`): a builtin, method, trap code, std function
@@ -115,10 +115,11 @@ it — is a ```` ```text ```` fence and no business of the checker's.
 `historical` is the only exemption there is, and it belongs to
 decision records alone: `grep -rn 'luce historical' docs/` lists every
 use of it in one line each, and the living documents carry none.
-Which documents are which is written down twice, in `doccheck.zig` and
-in `tools/spelling.zig` — the second refuses a retired TitleCase type
-name in a living document's *prose* as well as its code, because a
-sentence in a reference page is as normative as a sample in one.
+`tools/documents.zig` is the one catalogue both `doccheck.zig` and
+`tools/spelling.zig` read, and a test pins it to `docs/README.md`'s two
+tables. The spelling guard refuses a retired TitleCase type name in a
+living document's *prose* as well as its code, because a sentence in a
+reference page is as normative as a sample in one.
 
 ## Committing
 

@@ -20,8 +20,12 @@ says `give` — takes a word from you, `give` (transfer) or `copy`
 `long`, `double`, `bool`, `string`, and object-free structs — never take
 a word at all.
 
+File-scope constant containers have one additional owner: the program
+root holds them until that runtime is torn down, so a shared immutable
+table has a real death point without belonging to a function scope.
+
 That is the whole thing. It is ratified as
-[45 numbered situations](/ref/ownership/), the compiler quotes their
+[46 numbered situations](/ref/ownership/), the compiler quotes their
 numbers in its diagnostics, and an executable specification in the
 repository runs every one of them.
 

@@ -10,7 +10,7 @@
 # negative number of milliseconds.  That is not a bug and does not
 # trap: there is no time left to wait, so the wait returns.
 
-let frame_ms = 80
+const frame_ms = 80
 
 struct World:
     static func rows() -> long:

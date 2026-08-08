@@ -20,9 +20,10 @@
 //! rebuilt with only the instructions some block still holds, in their
 //! original order, and every register renumbered.
 //!
-//! This pass must run last, and it must run: the passes before it
-//! leave orphans behind on purpose, so that none of them has to
-//! renumber.
+//! This pass must be the last instruction pass, and it must run: the
+//! passes before it leave orphans behind on purpose, so that none of
+//! them has to renumber.  Constant-pool compaction follows it and
+//! reads the settled block items without changing instruction shape.
 //!
 //! **The local table is deliberately not compacted, and cannot be.**
 //! Each local is another slot in every frame, so dropping the hidden

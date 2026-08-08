@@ -38,7 +38,7 @@ from, with the source line and a caret.
 ## Visibility
 
 A declaration is **public** unless it says `private` — written in
-full, before `func`, before a top-level `let`, before `struct`, and on
+full, before `func`, before a file-scope `const`, before `struct`, and on
 a struct field. `public` may be written anywhere `private` may; where
 it restates the default it is legal and inert. Inside a struct — and
 only there — `private:` and `public:` open an indented **region** of
@@ -79,8 +79,8 @@ private func helper() -> long:
 func visible() -> long:
     return helper() + 1
 
-private let seed = 41
-let answer = seed + 1
+private const seed = 41
+const answer = seed + 1
 ```
 
 ```luce fail
@@ -167,6 +167,11 @@ edits that would restore honesty. The check follows containers and
 every nested parameter and result of a function type. A private
 field's type is not part of the public surface and may be private —
 which is what lets a struct hide an implementation type entirely.
+
+A public constant container is a public surface too: its element or
+map-value type may not be private. A private constant may use the
+private type, and a public folded value may still be computed from a
+private constant because that exposes the value rather than its name.
 
 ```luce fail
 private struct Inner:
@@ -272,7 +277,7 @@ The modules are [`math`](/std/math/), [`strings`](/std/strings/),
 ## Multi-file programs
 
 ```luce module file=shapes.luc
-let unit = 1.0
+const unit = 1.0
 
 struct Rect:
     width: double

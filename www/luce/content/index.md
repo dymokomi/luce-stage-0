@@ -27,8 +27,10 @@ pear appeared 1 time(s)
 ```
 
 That program was compiled and run to produce the output above it when
-this page was built. So was every other
-sample on this site — see [how that works](/guide/toolchain/#how-this-site-is-built).
+this page was built. Every other Luce sample is checked too: runnable
+ones execute, while expected traps, raises and refusals must produce
+the outcome their page claims. See
+[how that works](/guide/toolchain/#how-this-site-is-built).
 
 ## Three things that are unusual
 

@@ -129,6 +129,13 @@ pub const Binary = struct { op: BinaryOp, left: *Expression, right: *Expression,
 pub const Unary = struct { op: UnaryOp, operand: *Expression, span: Span };
 pub const NewObject = struct { type_name: TypeName, dims: []*Expression, span: Span };
 pub const ListLiteral = struct { elements: []*Expression, span: Span };
+/// One `key: value` pair in a map literal.  Both expressions and the
+/// pair itself are arena-owned with the program.
+pub const MapEntry = struct { key: *Expression, value: *Expression, span: Span };
+/// `{key: value, ...}` — a non-empty map literal.  Empty maps are
+/// constructed with `new map(K, V)`, where their types have somewhere
+/// to be written (docs/CONSTANTS.md R-B).
+pub const MapLiteral = struct { entries: []MapEntry, span: Span };
 pub const Index = struct { target: *Expression, indices: []*Expression, span: Span };
 pub const SliceRange = struct { target: *Expression, start: ?*Expression, end: ?*Expression, span: Span };
 pub const Method = struct { target: *Expression, name: []const u8, arguments: []Argument, span: Span };
@@ -172,6 +179,8 @@ pub const Expression = union(enum) {
     new_object: NewObject,
     /// [1, 2, 3] — a list literal typed by its elements.
     list_literal: ListLiteral,
+    /// {key: value, ...} — a map literal typed by its entries.
+    map_literal: MapLiteral,
     /// target[i] or target[r, c].
     index: Index,
     /// target[a:b]; either bound may be omitted.
@@ -513,8 +522,8 @@ pub const Import = struct {
     span: Span,
 };
 
-/// let name = expression at file scope: a compile-time constant of a
-/// value type, usable anywhere in the module and through imports.
+/// const name = expression at file scope: a compile-time value or
+/// frozen container, usable anywhere in the module and through imports.
 pub const ConstDecl = struct {
     name: []const u8,
     name_span: Span,

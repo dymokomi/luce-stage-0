@@ -1,5 +1,6 @@
 //! The documentation site generator: Markdown in, a static tree out,
-//! and every Luce sample compiled and run on the way through.
+//! and every Luce sample checked on the way through: runnable samples
+//! execute, while expected traps, raises and refusals take their named path.
 //!
 //!   lucedoc --content DIR --assets DIR --out DIR --toolchain DIR --work DIR
 //!

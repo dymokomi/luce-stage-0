@@ -27,15 +27,19 @@ you want to know what is *not* here, [MISSING.md](MISSING.md).
 The prose that faces users lives on the documentation site instead —
 **[luce.luciaos.com](https://luce.luciaos.com)**, built from
 [`www/luce/`](../www/luce/) in this repository, where every Luce sample is
-compiled and run by the freshly built toolchain and a wrong claim
-fails the build.  These files are the reasoning behind it.
+checked by the freshly built toolchain.  Runnable samples execute and
+their claimed output is compared byte for byte; expected traps, raises
+and refusals are checked as such.  Broken samples and mismatched claimed
+results fail the build, as do dead links and anchors and selected
+compiler-to-reference vocabulary gaps.  The surrounding prose remains
+human-reviewed.  These files are the reasoning behind it.
 
 ## Current — describes the tree as it is
 
 | File | What it is |
 |---|---|
 | [LANGUAGE.md](LANGUAGE.md) | The language specification: types, values, statements, expressions, the entry point. |
-| [OWNERSHIP.md](OWNERSHIP.md) | Scope ownership as 45 ratified situations, S1–S45. The compiler's diagnostics quote these by number. |
+| [OWNERSHIP.md](OWNERSHIP.md) | Scope ownership as 46 ratified situations, S1–S46. The compiler's diagnostics quote these by number. |
 | [PIPELINE.md](PIPELINE.md) | The status table: one row per compiler stage, what it does, and how finished it is. |
 | [CODEGEN.md](CODEGEN.md) | The LLVM backend, the published host ABI, and the benchmark snapshot. The one place a benchmark ratio is written down. |
 | [MODES.md](MODES.md) | Debug and release, which differ in exactly one thing: what a trap can tell you. |
@@ -73,7 +77,7 @@ and each says so in its own preamble.
 | [THREADS.md](THREADS.md) | Workers own their world: `spawn f(give x)` onto a second runtime, `task(T)` as a scope-owned resource whose scope-end joins, races unrepresentable because the ownership model is the concurrency model. Ratified and built. |
 | [FUNCTIONS.md](FUNCTIONS.md) | Functions as values, divided at the capture line: named functions and one-expression lambdas whose types come from where they land — and no closures, because state that travels with behavior is a struct with a method. Ratified and built, including stable `std.lists.sort_by` as D6's proving customer. |
 | [SELF.md](SELF.md) | Self implied, `static` for the functions without one, and a call site that cannot lie: `f(x)` never mutates a value, `x.advance(8)` may — and reads like it. `var self` and `var` parameters retired. Ratified and built. |
-| [CONSTANTS.md](CONSTANTS.md) | Constant containers: the object that is the program, not the run — an eternal object with no owner because it has no death point, a `{k: v}` map literal, and immutability enforced statically with one trap behind it. Drafted for ratification. |
+| [CONSTANTS.md](CONSTANTS.md) | Constant containers: file-scope `const`, the program root, `{k: v}` maps, flat lists and rank-1 arrays, and the static line with one runtime trap behind it. Ratified and built; the EOF appendix records where the implementation superseded the proposal prose. |
 
 ## History
 

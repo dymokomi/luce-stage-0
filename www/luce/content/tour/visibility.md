@@ -187,7 +187,7 @@ default it is inert: it asserts, quietly, what was already true. A
 module that wants its surface spelled out may spell it.
 
 ```luce run
-public let width = 40
+public const width = 40
 
 public func banner(title: string) -> string:
     return title
@@ -240,7 +240,7 @@ file living one level deep:
 
 ```luce fail
 private:
-    let limit = 10
+    const limit = 10
 
 func main():
     print(string(limit))

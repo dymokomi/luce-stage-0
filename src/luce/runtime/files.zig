@@ -148,7 +148,7 @@ pub fn read(runtime: *Runtime, held: Value, buffer: Value) Error!?i64 {
     const handle = try handleOf(runtime, held);
     // Re-resolved after the handle, because both resolves can trap and
     // neither allocates: the pointer stays good across the pair.
-    const into = (try runtime.resolve(buffer)).elements;
+    const into = (try runtime.resolveMutable(buffer)).elements;
     var filled: i64 = 0;
     const cells = into.cells(u8);
     switch (service(

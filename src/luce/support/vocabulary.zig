@@ -198,6 +198,10 @@ pub const TrapCode = enum {
     /// process, and this trap is honest about what it does catch: a
     /// refusal the allocator reported.
     allocation_failed,
+    /// A program-root constant container reached a mutating operation
+    /// through a borrow whose static provenance was no longer visible.
+    /// Appended so every earlier trap keeps its wire ordinal.
+    immutable_object,
 
     /// A static string; the caller owns nothing.
     pub fn message(self: TrapCode) []const u8 {
@@ -221,6 +225,7 @@ pub const TrapCode = enum {
             .not_owned => "object is owned by a container",
             .shift_out_of_range => "shift count out of range",
             .allocation_failed => "not enough memory for this container",
+            .immutable_object => "constant container is immutable",
         };
     }
 };

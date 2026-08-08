@@ -37,7 +37,8 @@ hello, loom
 
 Blocks are introduced by `:` and marked by indentation, which is four
 spaces and nothing else — a tab or a three-space indent is a compile
-error naming the reason. There are no semicolons and no braces.
+error naming the reason. There are no semicolons, and braces are map
+literals rather than block delimiters.
 
 ## Compiling and running it
 

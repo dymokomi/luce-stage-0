@@ -1,6 +1,6 @@
 # Ownership
 
-The memory model, as ratified: forty-five numbered situations, each
+The memory model, as ratified: forty-six numbered situations, each
 with a fixed anchor. The compiler quotes these numbers in its
 diagnostics — a message ending `[OWNERSHIP.md S21]` points at
 [S21](#s21) below — and an executable specification in the repository
@@ -441,10 +441,12 @@ main.luc:3:17: give applies to objects (list, map, array, builder, object-carryi
 
 ### S33 — nothing can leak {#s33}
 
-Every object is owned by a binding, a container, or a statement
-temporary, and all three have defined death points. The runtime's
-leak census is an internal assertion: if it fires, the *runtime* has a
-bug, not the program.
+Every ordinary run-created object is owned by a binding, a container,
+or a statement temporary, and all three have defined death points.
+[S46](#s46)'s constant containers have the program root as their
+fourth owner and die at runtime teardown. The runtime's leak census is
+an internal assertion: if it fires, the *runtime* has a bug, not the
+program.
 
 ### S34 — traps and the depth budget abort cleanly {#s34}
 
@@ -457,13 +459,12 @@ So error propagation releases precisely, the way `return` does
 ([S4](#s4)), and never the way a trap does. The leak census is what
 proves it.
 
-### S35 — file scope owns nothing, so a constant is a value {#s35}
+### S35 — folded file-scope constants are values {#s35}
 
-The three owner kinds in [S33](#s33) all live inside a function. A
-top-level `let` has no scope to die at, so it cannot own, and
-therefore cannot be or carry an object: `new`, list literals, slices
-and indexing are all refused there, as is a struct whose layout
-carries objects.
+The three user owner kinds in [S33](#s33) live inside a function.
+Folded file-scope values therefore inline and own nothing. The program
+root introduced by [S46](#s46) is the separate owner for the flat
+constant containers that deliberately live for the whole runtime.
 
 ---
 
@@ -626,6 +627,45 @@ main.luc:2:16: xs is returned twice; one object cannot be owned twice [OWNERSHIP
 
 A call whose values nobody binds is a statement temporary per
 [S3](#s3)/[S19](#s19), released whole at the end of its statement.
+
+### S46 — a constant container belongs to the program root {#s46}
+
+A flat list, map or rank-1 array declared with file-scope `const` is
+folded into the module, materialized before any function executes and
+held until that runtime is torn down. The program root is a real owner
+with a real death point. Its rows are excluded from the user leak
+census while deliberately live. Every worker runtime materializes its
+own roots, so roots never cross between runtimes.
+
+```luce run
+const TABLE: list(long) = [3, 1, 2]
+const SAME = TABLE
+
+func first(values: list(long) = TABLE) -> long:
+    return values[0]
+
+func main():
+    assert(TABLE == SAME)
+    var editable = copy TABLE
+    editable.sort()
+    print(f"{editable[0]} {first()}")
+```
+
+```output
+1 3
+```
+
+Aliasing, importing, passing and a borrowing parameter default keep
+the same root handle. A separately written equal construction has a
+different identity. `copy TABLE` answers a fresh mutable object with
+an ordinary binding owner.
+
+`give`, `free`, returning the root or retaining it in another owner
+would move or end the program root, so each is a compile error that
+recommends `copy`. Direct and aliased mutation is refused too. A
+borrow through a parameter can hide the root's identity from the
+analyzer, so every runtime mutation path traps `immutable_object`
+before writing. Neither boundary silently copies or drops the write.
 
 ---
 

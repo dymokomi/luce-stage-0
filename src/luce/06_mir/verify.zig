@@ -37,8 +37,21 @@ pub const VerifyError = error{
 // The whole program
 // ---------------------------------------------------------------------------
 
+fn traceSiteCountFits(functions: usize, constants: usize) bool {
+    const limit: usize = std.math.maxInt(u32);
+    return functions <= limit and constants <= limit - functions;
+}
+
 /// Check every structural and type invariant of a program.
 pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
+    // Runtime trace frames address real functions first and synthetic
+    // constant-declaration sites after them through one u32 index.
+    // Each table can fit independently while their concatenation does
+    // not, so state the combined wire/runtime invariant before either
+    // slice is walked.
+    if (!traceSiteCountFits(program.functions.len, program.container_constants.len)) {
+        return error.BadConstant;
+    }
     // A signature is a type table in its own right.  Check every row,
     // including rows no instruction happens to consume: a decoded
     // module may carry an unused row, and a later type-name or lowering
@@ -68,6 +81,13 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
         .function => error.BadFunction,
     };
     if (try anyStructContainsItself(allocator, program)) return error.BadStruct;
+    // Pool rows are declarations, not merely instruction operands.
+    // Verify every one, including rows reachability pruning will later
+    // discard, so a decoded module cannot hide damaged constants in an
+    // unused slot.
+    for (program.container_constants) |constant| {
+        try verifyContainerConstant(allocator, program, constant);
+    }
 
     // Every signature is checked before any body is.  A `call` types
     // its arguments against `callee.locals[0..parameter_count]`, and
@@ -98,6 +118,13 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     if (entry.parameter_count == 1 and !isCommandLine(program, entry.locals[0].local_type)) {
         return error.BadFunction;
     }
+}
+
+test "function and constant trace sites share one u32 index" {
+    const limit: usize = std.math.maxInt(u32);
+    try std.testing.expect(traceSiteCountFits(limit, 0));
+    try std.testing.expect(traceSiteCountFits(limit - 4, 4));
+    try std.testing.expect(!traceSiteCountFits(limit - 4, 5));
 }
 
 /// `list(string)` — the one type the entry's parameter may have.
@@ -405,6 +432,153 @@ fn fitsFloat(held: f64, at: Type) bool {
     };
 }
 
+// ---------------------------------------------------------------------------
+// Constant-container rows
+// ---------------------------------------------------------------------------
+
+/// The source checker bounds the expression that made a value to this
+/// depth.  Mirror that limit here so a forged recursive struct value
+/// cannot turn verification into native-stack exhaustion.
+const max_constant_depth: u32 = 400;
+
+fn verifyContainerConstant(
+    allocator: Allocator,
+    program: *const Program,
+    constant: defs.ContainerConstant,
+) VerifyError!void {
+    if (constant.name.len == 0) return error.BadConstant;
+    const stripped = constant.source.len == 0;
+    const zero_origin = constant.origin.line == 0 and constant.origin.column == 0;
+    if (stripped) {
+        if (!zero_origin) return error.BadConstant;
+    } else if (constant.origin.line == 0 or constant.origin.column == 0) {
+        return error.BadConstant;
+    }
+
+    if (constant.heap >= program.heap_types.len) return error.BadConstant;
+    switch (program.heap_types[constant.heap]) {
+        .list => |element| switch (constant.payload) {
+            .sequence => |values| for (values) |value| {
+                try verifyConstantValue(program, value, element, false, 0);
+            },
+            .map => return error.BadConstant,
+        },
+        .array => |shape| {
+            // Constant arrays are flat rank-one literals.  Their sole
+            // dimension is exactly the number of encoded elements;
+            // no redundant length exists to disagree with it.
+            if (shape.rank != 1) return error.BadConstant;
+            switch (constant.payload) {
+                .sequence => |values| for (values) |value| {
+                    try verifyConstantValue(program, value, shape.element, false, 0);
+                },
+                .map => return error.BadConstant,
+            }
+        },
+        .map => |pair| switch (constant.payload) {
+            .sequence => return error.BadConstant,
+            .map => |entries| {
+                for (entries) |entry| {
+                    try verifyConstantValue(program, entry.key, pair.key, false, 0);
+                    try verifyConstantValue(program, entry.value, pair.value, false, 0);
+                }
+                try verifyDistinctKeys(allocator, program, entries, pair.key);
+            },
+        },
+        .builder, .file, .task => return error.BadConstant,
+    }
+}
+
+/// A map row preserves written order but may not carry the same key
+/// twice.  String identity is its bytes, not the shared-pool index, so
+/// two separate slots holding equal text are duplicates too.
+fn verifyDistinctKeys(
+    allocator: Allocator,
+    program: *const Program,
+    entries: []const defs.ContainerConstant.MapEntry,
+    key_type: Type,
+) VerifyError!void {
+    switch (key_type) {
+        .long => {
+            var seen: std.AutoHashMapUnmanaged(i64, void) = .empty;
+            defer seen.deinit(allocator);
+            for (entries) |entry| {
+                const key = switch (entry.key) {
+                    .long => |value| value,
+                    else => unreachable, // verified against the map shape above
+                };
+                const result = try seen.getOrPut(allocator, key);
+                if (result.found_existing) return error.BadConstant;
+            }
+        },
+        .string => {
+            var seen: std.StringHashMapUnmanaged(void) = .empty;
+            defer seen.deinit(allocator);
+            for (entries) |entry| {
+                const index = switch (entry.key) {
+                    .string => |value| value,
+                    else => unreachable, // verified against the map shape above
+                };
+                const bytes = program.constants[index];
+                const result = try seen.getOrPut(allocator, bytes);
+                if (result.found_existing) return error.BadConstant;
+            }
+        },
+        else => return error.BadConstant,
+    }
+}
+
+/// Check one flat constant atom against the type of the place it
+/// materializes into.  Only a struct field may be optional, which is
+/// also the only place `absent` may stand.
+fn verifyConstantValue(
+    program: *const Program,
+    constant: defs.ConstantValue,
+    wanted: Type,
+    struct_field: bool,
+    depth: u32,
+) VerifyError!void {
+    if (depth > max_constant_depth) return error.BadConstant;
+
+    var expected = wanted;
+    if (expected == .optional) {
+        if (!struct_field) return error.BadConstant;
+        expected = expected.optional.asType();
+        // A struct with even an absent optional object field is still
+        // object-carrying, so it is outside the flat value set.
+        if (expected == .heap or expected == .function) return error.BadConstant;
+        if (constant == .absent) return;
+    } else if (constant == .absent) {
+        return error.BadConstant;
+    }
+
+    switch (constant) {
+        .boolean => if (expected != .boolean) return error.BadConstant,
+        .long => |held| {
+            if (expected == .enumeration) {
+                if (!fitsInteger(held, expected.storage())) return error.BadConstant;
+                if (!isMember(program, held, expected)) return error.BadConstant;
+            } else {
+                if (!fitsInteger(held, expected)) return error.BadConstant;
+            }
+        },
+        .double => |held| if (!fitsFloat(held, expected)) return error.BadConstant,
+        .string => |index| {
+            if (expected != .string or index >= program.constants.len) return error.BadConstant;
+        },
+        .strukt => |held| {
+            if (expected != .strukt or held.layout != expected.strukt) return error.BadConstant;
+            if (held.layout >= program.structs.len) return error.BadConstant;
+            const layout = program.structs[held.layout];
+            if (held.fields.len != layout.fields.len) return error.BadConstant;
+            for (held.fields, layout.fields) |field, declared| {
+                try verifyConstantValue(program, field, declared.field_type, true, depth + 1);
+            }
+        },
+        .absent => unreachable, // answered with the optional place above
+    }
+}
+
 /// Whether an integer constant is a **member** of the enum it lands in.
 ///
 /// The one promise an enum makes is that every value of it is a member
@@ -481,6 +655,10 @@ fn verifyInstruction(
         .const_string => |constant| {
             if (constant >= program.constants.len) return error.BadConstant;
             try expectType(result, .string);
+        },
+        .const_container => |constant| {
+            if (constant >= program.container_constants.len) return error.BadConstant;
+            try expectType(result, .{ .heap = program.container_constants[constant].heap });
         },
         // A function value names a function and wears a signature, and
         // the two have to agree: the named function's parameters and

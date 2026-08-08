@@ -5,14 +5,17 @@ reference, and the status page that says out loud what the language
 cannot yet do.
 
 It lives in this repository so that it changes with the language, and
-it is generated rather than hand-published so that it cannot quietly
-stop being true.
+it is generated rather than hand-published so that broken samples,
+claimed outcomes, links and selected surface rosters cannot drift
+quietly.
 
 ## The contract
 
-**Every Luce sample on this site is compiled and run by the freshly
-built toolchain, and the output printed under it is the output that
-run produced.**  Not an output somebody typed once.
+**Every Luce sample on this site is checked by the freshly built
+toolchain.** Runnable examples execute and their output is compared
+byte for byte; expected traps, raises and refusals are checked through
+their corresponding toolchain paths. Not an outcome somebody typed
+once and stopped testing.
 
 - A fenced ` ```luce ` block must say what is to become of it — `run`,
   `trap`, `raise`, `fail` or `module`.  A bare ` ```luce ` fence is a
@@ -39,8 +42,9 @@ compiler's own lists — every builtin, every receiver method, every
 trap and error code, every std function and constant, every
 command-line option — read out of `src/` at test time.  A name the
 compiler has that the reference does not is a failed build, on the
-commit that added it.  Samples prove the code runs; that proves the
-prose around it is still true.
+commit that added it.  These checks establish sample behavior and
+selected named-surface coverage; they do not mechanically prove the
+surrounding prose, which remains human-reviewed.
 
 ## Build
 

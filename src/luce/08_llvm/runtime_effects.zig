@@ -115,6 +115,14 @@ pub const Service = enum {
     luce_rt_serial,
     luce_rt_exhaust,
 
+    // -- constant-container roots (docs/CONSTANTS.md R-C) -----------
+    luce_rt_constants_begin,
+    luce_rt_constant_publish,
+    luce_rt_constant_load,
+    luce_rt_constants_finish,
+    luce_rt_constants_abort,
+    luce_rt_discard_loose,
+
     // -- traps and the trace they carry -------------------------------
     luce_rt_raise,
     luce_rt_unwound,
@@ -387,6 +395,40 @@ pub fn describe(service: Service) Effect {
         .luce_rt_exhaust => .{
             .memory = .{ .argmem = .write },
             .parameters = &.{.run},
+            .cold = true,
+        },
+
+        // -- constant-container roots -------------------------------
+        // `begin` allocates the runtime-local root table.  `publish`
+        // resolves one loose object and makes that row program-owned;
+        // `load` borrows the stored handle.  A failed prologue calls
+        // `discard_loose` for its unfinished row and `abort` for the
+        // rows already published, so those two may release any part of
+        // the object heap.  `finish` only leaves materialization mode.
+        .luce_rt_constants_begin => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .plain },
+        },
+        .luce_rt_constant_publish => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .plain, .value_in },
+        },
+        .luce_rt_constant_load => .{
+            .memory = reads_heap,
+            .parameters = &.{ .run, .plain, .value_out },
+        },
+        .luce_rt_constants_finish => .{
+            .memory = touches_run,
+            .parameters = &.{.run},
+        },
+        .luce_rt_constants_abort => .{
+            .memory = touches_heap,
+            .parameters = &.{.run},
+            .cold = true,
+        },
+        .luce_rt_discard_loose => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in },
             .cold = true,
         },
 

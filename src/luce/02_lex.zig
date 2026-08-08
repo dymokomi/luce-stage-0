@@ -23,7 +23,7 @@
 //!   a Unicode look-alike is named with the ASCII to write instead.
 //!
 //! Blank and comment-only lines produce no layout, and inside
-//! parentheses newlines are plain spacing.  The lexer never fails
+//! parentheses or map-literal braces newlines are plain spacing.  The lexer never fails
 //! hard: malformed input becomes a `luce.lex.*` diagnostic plus the
 //! closest reasonable token stream — including a recovery token where
 //! a value was clearly meant — so one bad construct does not silence

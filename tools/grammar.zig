@@ -17,7 +17,7 @@
 //! deliberately: the site generator drives the *built binaries* as
 //! subprocesses so it can verify what the toolchain really does, and
 //! linking the language in would undercut that.  This generator
-//! verifies nothing about a running program — it turns five word
+//! verifies nothing about a running program — it turns the language's
 //! tables into one JSON file — so the import is free, and a copy would
 //! only be one more thing to keep honest.
 //!
@@ -26,10 +26,10 @@
 //!   keywords  `02_lex/token.zig`'s `keywords`, by kind
 //!   verbs     the same table's `new`/`give`/`copy`, plus `free`
 //!   symbols   `02_lex/token.zig`'s `Kind`, one row per punctuation
-//!             and operator token — the bit set included
+//!             and operator token — map braces and the bit set included
 //!   types     `support/types.zig`'s `builtin_names`, plus `None`
 //!   builtins  `04_semantics/builtins.zig`'s `builtins`
-//!   methods   the same file's five method tables
+//!   methods   the same file's receiver-method tables
 //!
 //! A keyword the language gains reaches the grammar by itself; a
 //! keyword whose colour nobody has decided stops the generator by
@@ -69,7 +69,8 @@ const Class = enum {
     control,
     /// `and`, `or`, `not` — operators spelled as words.
     word_operator,
-    /// `func`, `struct`, `let`, `var` — what a declaration opens with.
+    /// `func`, `struct`, `const`, `let`, `var` — what a declaration
+    /// opens with.
     storage,
     /// `private`, `public`, `static` — declaration modifiers.
     /// `storage.modifier` is the scope existing grammars give this
@@ -144,6 +145,7 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
         .keyword_struct,
         // `enum` declares a type beside `struct`, and wears its class.
         .keyword_enum,
+        .keyword_const,
         .keyword_let,
         .keyword_var,
         => .storage,
@@ -235,6 +237,8 @@ const Role = enum {
     group_end,
     brackets_begin,
     brackets_end,
+    braces_begin,
+    braces_end,
     separator_comma,
     separator_colon,
     accessor,
@@ -252,6 +256,8 @@ const Role = enum {
             .group_end => "punctuation.section.group.end.luce",
             .brackets_begin => "punctuation.section.brackets.begin.luce",
             .brackets_end => "punctuation.section.brackets.end.luce",
+            .braces_begin => "punctuation.section.braces.begin.luce",
+            .braces_end => "punctuation.section.braces.end.luce",
             .separator_comma => "punctuation.separator.comma.luce",
             .separator_colon => "punctuation.separator.colon.luce",
             .accessor => "punctuation.accessor.luce",
@@ -267,6 +273,8 @@ const Role = enum {
             .group_end,
             .brackets_begin,
             .brackets_end,
+            .braces_begin,
+            .braces_end,
             .separator_comma,
             .separator_colon,
             .accessor,
@@ -333,6 +341,8 @@ const symbols = [_]Symbol{
     .{ .kind = .right_paren, .text = ")", .role = .group_end },
     .{ .kind = .left_bracket, .text = "[", .role = .brackets_begin },
     .{ .kind = .right_bracket, .text = "]", .role = .brackets_end },
+    .{ .kind = .left_brace, .text = "{", .role = .braces_begin },
+    .{ .kind = .right_brace, .text = "}", .role = .braces_end },
     .{ .kind = .comma, .text = ",", .role = .separator_comma },
     .{ .kind = .colon, .text = ":", .role = .separator_colon },
     .{ .kind = .dot, .text = ".", .role = .accessor },
@@ -658,8 +668,13 @@ pub fn emit(gpa: Allocator) Error![]u8 {
     );
     const binding_pattern = try std.fmt.allocPrint(
         arena,
-        "\\b({s}|{s})\\s+({s})",
-        .{ spelling(.keyword_let), spelling(.keyword_var), name },
+        "\\b({s}|{s}|{s})\\s+({s})",
+        .{
+            spelling(.keyword_const),
+            spelling(.keyword_let),
+            spelling(.keyword_var),
+            name,
+        },
     );
     // `import std.zip` and `import geometry` alike: the module path is
     // one name or several joined by dots, and the `std.` namespace is
@@ -681,11 +696,11 @@ pub fn emit(gpa: Allocator) Error![]u8 {
     };
 
     // -- f-string holes ----------------------------------------------------
-    // A hole is one expression.  Its patterns are `#code` and not
-    // `$self`: the lexer scans an f-string as a single token that ends
-    // at the first unescaped `"`, so a hole can contain neither a
-    // string nor a comment, and offering them would colour text the
-    // language cannot hold.
+    // A hole is one expression.  The TextMate approximation reuses
+    // `#code`; unlike the compiler, it does not yet enter nested string
+    // regions or balance nested map braces inside the hole.  Keep that
+    // editor limitation explicit rather than attributing it to the
+    // lexer, which accepts both shapes (docs/MISSING.md).
     const escape_rules = [_]Rule{
         .{ .match = .{
             .scope = "constant.character.escape.luce",

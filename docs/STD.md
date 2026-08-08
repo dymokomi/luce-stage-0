@@ -396,6 +396,13 @@ fixed codes, §3.2.7 the dynamic ones.  A member's method-8 data is a
 CRC-32 is zlib's reflected 0xEDB88320, preconditioned with ones and
 complemented at the end, exactly as APPNOTE 4.4.7 says.
 
+The six printed tables are written as what they are: one program-root
+CRC array, four length/distance base and extra lists, and the
+code-length order array, all `private const`.  Each runtime
+materializes them once before the module's code runs; `crc32`,
+`inflate` and `deflate` borrow the shared rows instead of rebuilding
+them per call or block.
+
 ```text
 import std.zip
 
@@ -579,8 +586,9 @@ and it is the same one call.
 4. Document it here.
 
 Deliberate constraints, until the language grows the features:
-no module state (top-level `let` is constant — the RNG's list-state
-pattern is the idiom for mutable state), and a function that may find
+no mutable module state (top-level `const` may hold a folded value or a
+program-root immutable table — the RNG's returned `Rng` is the idiom
+for mutable state), and a function that may find
 nothing answers a `T?` while one that may *fail* says `!`
 (docs/LANGUAGE.md) — `files` is written that way throughout. `math` has been revisited too: the five
 reductions over an array — `mean`, `vmin`, `vmax`, `variance`,

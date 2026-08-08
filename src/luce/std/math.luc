@@ -24,12 +24,12 @@
 # default is not this one; at binary32 the epsilon is 1.19e-7 and
 # every sentence at the top of this file becomes false (docs/TYPES.md,
 # the unannotated-site audit).
-let pi: double = 3.14159265358979323846
-let tau: double = 6.28318530717958647692
-let e: double = 2.71828182845904523536
+const pi: double = 3.14159265358979323846
+const tau: double = 6.28318530717958647692
+const e: double = 2.71828182845904523536
 
-private let ln2: double = 0.69314718055994530942
-private let ln10: double = 2.30258509299404568402
+private const ln2: double = 0.69314718055994530942
+private const ln10: double = 2.30258509299404568402
 
 # Round half away from zero: round(2.5) == 3.0, round(-2.5) == -3.0.
 # The same rounding long(x) does, which is the point — a language with
