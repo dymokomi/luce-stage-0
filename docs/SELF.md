@@ -47,3 +47,40 @@ with the receiver as the hidden first operand — the *language* stops
 spelling it, the IR never did differently).  Both engines by
 construction.  Sequenced **after** threads → lambdas → polish, on a
 quiet tree, as the final surface change before the lock.
+
+## As built — 2026-08-08
+
+The surface landed exactly as D1–D7: every plain struct or enum member
+has implied `self`, and `static func` is the member with none.  One
+detail was deliberately narrowed at implementation time: a writing
+method accepts a **bare mutable binding**, not every nested place.
+Reading methods still accept lets and temporaries.  An object-carrying
+receiver may be replaced only through the binding that owns its
+objects; mutating an object's contents through a borrowed field remains
+a reading method under D6.
+
+The write effect is inferred to a fixed point.  A direct store to
+`self`, a store to one of its value fields, or a call to another writer
+on `self` makes a method a writer, even through forward declarations
+and several wrappers.  An object-content call such as
+`self.items.append(value)` does not.  Writers may declare zero, one, or
+several ordinary results; the receiver is not one of them.
+
+The call surface stays honest in both directions.  A method is called
+only as `value.method(...)`: it cannot be called through its type, made
+into a function value, or spawned.  A static member is called through
+its type and may be both a value and a worker target.
+
+The prediction that MIR would not change was the one part that did not
+survive implementation.  A writing call needs the caller's slot and
+owner identity, not merely its current value, so MIR gained
+`call_inout` and an `inout` local zero.  The interpreter aliases that
+slot; LLVM passes an internal pointer/owner descriptor and forwards it
+through nested writers.  Cleanup remains the caller's, and replacing an
+object-carrying receiver does not invent a second owner.  This moved the
+serialized module to **format 32**.  It added no host service and no
+runtime export, so the published host ABI remains **13**.
+
+That representation also fixes the failure rule: mutation is in place,
+so every write completed before an error remains visible while the
+error unwinds.  There is no returning-edge copy-out to roll it back.

@@ -87,10 +87,10 @@ struct Gauge:
         reading: long
         scale: long
 
-    func show(self) -> string:
+    func show() -> string:
         return f"{self.label}: {self.reading * self.scale}"
 
-    func add(var self, amount: long):
+    func add(amount: long):
         self.reading = self.reading + amount
 
 func open(label: string, scale: long) -> Gauge:
@@ -198,7 +198,7 @@ public struct Line:
     private:
         marker: long
 
-    func mark(var self):
+    func mark():
         self.marker = self.marker + 1
 
 public func main():

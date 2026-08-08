@@ -788,6 +788,43 @@ test "the reference keeps function value and lambda syntax visible" {
     }
 }
 
+test "the reference keeps implied self and static visible" {
+    // Keyword coverage proves `static` is coloured, not that the site
+    // explains the call and mutation rules it creates. Pin the public
+    // pages that carry the surface and the version split SELF added.
+    const gpa = std.testing.allocator;
+    const repository = try open(gpa, std.testing.io);
+    defer gpa.free(repository.prefix);
+
+    const statements = try repository.read("www/luce/content/ref/statements.md");
+    defer gpa.free(statements);
+    for ([_][]const u8{
+        "**method** with an implied `self`",
+        "static func name(param: Type)",
+        "bare mutable binding",
+        "Writes completed before an",
+    }) |claim| {
+        try std.testing.expect(std.mem.indexOf(u8, statements, claim) != null);
+    }
+
+    const expressions = try repository.read("www/luce/content/ref/expressions.md");
+    defer gpa.free(expressions);
+    try std.testing.expect(std.mem.indexOf(u8, expressions, "`Point.length(p)` is refused") != null);
+
+    const types = try repository.read("www/luce/content/ref/types.md");
+    defer gpa.free(types);
+    try std.testing.expect(std.mem.indexOf(u8, types, "inside a struct is a method with implied") != null);
+    try std.testing.expect(std.mem.indexOf(u8, types, "A `static func` has no receiver") != null);
+
+    const lexical = try repository.read("www/luce/content/ref/lexical.md");
+    defer gpa.free(lexical);
+    try std.testing.expect(std.mem.indexOf(u8, lexical, "`static` belongs immediately before `func`") != null);
+
+    const toolchain = try repository.read("www/luce/content/guide/toolchain.md");
+    defer gpa.free(toolchain);
+    try std.testing.expect(std.mem.indexOf(u8, toolchain, "`format_version = 32`; `abi.version = 13`") != null);
+}
+
 test "the reference keeps existing-name multi-return assignment visible" {
     // The implementation can be correct while the prose still says
     // the old refusal. Pin both the receiving syntax and the guarded

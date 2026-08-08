@@ -390,12 +390,12 @@ test "the entry is exactly func main(), and nothing else will do" {
 test "struct namespaces collect functions and reject invalid members" {
     var program = try expectCompiles(
         \\struct Math:
-        \\    func twice(value: long) -> long:
+        \\    static func twice(value: long) -> long:
         \\        return value * 2
         \\
         \\struct Pair:
         \\    left: long
-        \\    func sum(left: long, right: long) -> long:
+        \\    static func sum(left: long, right: long) -> long:
         \\        return left + right
         \\
         \\func main():
@@ -408,7 +408,7 @@ test "struct namespaces collect functions and reject invalid members" {
     try expectRejected(
         \\struct Bad:
         \\    value: long
-        \\    func value() -> long:
+        \\    static func value() -> long:
         \\        return 1
         \\
         \\func main():
@@ -417,7 +417,7 @@ test "struct namespaces collect functions and reject invalid members" {
     , "luce.sema.duplicate");
     try expectRejected(
         \\struct Helpers:
-        \\    func one() -> long:
+        \\    static func one() -> long:
         \\        return 1
         \\
         \\func main():
@@ -426,7 +426,7 @@ test "struct namespaces collect functions and reject invalid members" {
     , "luce.sema.call");
     try expectRejected(
         \\struct Helpers:
-        \\    func one() -> long:
+        \\    static func one() -> long:
         \\        return 1
         \\
         \\func main():
@@ -532,6 +532,10 @@ test "functions unreachable from the entry are pruned from the artifact" {
             for (function.instructions) |instruction| {
                 switch (instruction) {
                     .call => |call| if (!reached[call.function]) {
+                        reached[call.function] = true;
+                        scan = true;
+                    },
+                    .call_inout => |call| if (!reached[call.function]) {
                         reached[call.function] = true;
                         scan = true;
                     },
@@ -1061,7 +1065,7 @@ const geo_module: TestModule = .{ .name = "geo", .source =
     \\    y: double
     \\
     \\struct Text:
-    \\    func twice(value: long) -> long:
+    \\    static func twice(value: long) -> long:
     \\        return value * 2
     \\
     \\func make(x: double, y: double) -> Point:
@@ -1186,7 +1190,7 @@ const vault_module: TestModule = .{ .name = "vault", .source =
     \\private struct Inner:
     \\    n: long
     \\
-    \\    func make() -> Inner:
+    \\    static func make() -> Inner:
     \\        return Inner(n = 1)
     \\
     \\struct Handle:
@@ -1202,13 +1206,13 @@ const vault_module: TestModule = .{ .name = "vault", .source =
     \\    private id: long
     \\    private token: long = 0
     \\
-    \\    func title(self) -> string:
+    \\    func title() -> string:
     \\        return self.name
     \\
-    \\    private func stamp(self) -> long:
+    \\    private func stamp() -> long:
     \\        return self.id
     \\
-    \\    private func widest() -> long:
+    \\    private static func widest() -> long:
     \\        return 64
     \\
     \\func open(name: string) -> Session:
@@ -1221,12 +1225,15 @@ const vault_module: TestModule = .{ .name = "vault", .source =
     \\    first
     \\    second
     \\
-    \\    func lead() -> Hidden:
+    \\    static func lead() -> Hidden:
     \\        return Hidden.first
     \\
     \\enum Shown(byte):
     \\    open = 0
     \\    shut = 1
+    \\
+    \\    private static func sealed() -> long:
+    \\        return 7
     \\
     \\func opened() -> Shown:
     \\    return Shown.open
@@ -1437,9 +1444,10 @@ test "luce.sema.private: a private enum is withheld by name, and every door says
 
 test "every spelling of touching a private member gets the same useful sentence" {
     // The §1 funnel has more than one door, and a reader will try all
-    // of them: the static method spelling, the namespace function of a
-    // public struct, the nested place, the compound assignment.  One
-    // declaration, one sentence, whichever door (VISIBILITY.md D2).
+    // of them: the retired type-qualified method spelling, a private
+    // static member of a public struct, the nested place, the compound
+    // assignment.  One declaration, one sentence, whichever door
+    // (VISIBILITY.md D2).
     try expectPrivateSaying(
         \\import vault
         \\
@@ -1455,6 +1463,16 @@ test "every spelling of touching a private member gets the same useful sentence"
         \\    print(string(vault.Session.widest()))
         \\
     , &.{vault_module}, "widest is private to vault");
+    // Enum function visibility used to be parsed and then discarded;
+    // SELF's static member split carries the same mark all the way to
+    // the cross-module gate.
+    try expectPrivateSaying(
+        \\import vault
+        \\
+        \\func main():
+        \\    print(string(vault.Shown.sealed()))
+        \\
+    , &.{vault_module}, "sealed is private to vault");
     // A nested place: the write walks the chain, and the gate stands
     // at the field it finally names.
     try expectPrivateSaying(
@@ -1657,7 +1675,7 @@ test "a private region and a per-declaration marker produce the same stage-4 fac
         \\    private:
         \\        state: long
         \\
-        \\    func next(var self) -> long:
+        \\    func next() -> long:
         \\        self.state = self.state * 48271 % 2147483647
         \\        return self.state
         \\
@@ -1669,7 +1687,7 @@ test "a private region and a per-declaration marker produce the same stage-4 fac
         \\struct Rng:
         \\    private state: long
         \\
-        \\    func next(var self) -> long:
+        \\    func next() -> long:
         \\        self.state = self.state * 48271 % 2147483647
         \\        return self.state
         \\

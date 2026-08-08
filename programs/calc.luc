@@ -41,13 +41,13 @@
 # the value differed between the arms (docs/RETURNS.md §6).
 
 struct Scan:
-    func skip_spaces(text: string, at: long) -> long:
+    static func skip_spaces(text: string, at: long) -> long:
         var here = at
         while here < len(text) and text.byte_at(here) == 32:
             here = here + 1
         return here
 
-    func number(text: string, at: long) -> (double, long)!:
+    static func number(text: string, at: long) -> (double, long)!:
         var stop = at
         while stop < len(text) and text.byte_at(stop) >= 48 and text.byte_at(stop) <= 57:
             stop = stop + 1
@@ -58,7 +58,7 @@ struct Scan:
 
 struct Parse:
     # expression = term (("+" | "-") term)*
-    func expression(text: string, at: long) -> (double, long)!:
+    static func expression(text: string, at: long) -> (double, long)!:
         var value, stopped = try Parse.term(text, at)
         var here = Scan.skip_spaces(text, stopped)
         while here < len(text) and (text.byte_at(here) == 43 or text.byte_at(here) == 45):
@@ -80,7 +80,7 @@ struct Parse:
     # trap, because these are Floats — which is the right answer for a
     # calculator: a user who divides by zero has asked a question, not
     # broken the program.
-    func term(text: string, at: long) -> (double, long)!:
+    static func term(text: string, at: long) -> (double, long)!:
         var value, stopped = try Parse.factor(text, at)
         var here = Scan.skip_spaces(text, stopped)
         while here < len(text) and (text.byte_at(here) == 42 or text.byte_at(here) == 47 or text.byte_at(here) == 37):
@@ -97,7 +97,7 @@ struct Parse:
         return value, stopped
 
     # factor = number | "(" expression ")" | "-" factor
-    func factor(text: string, at: long) -> (double, long)!:
+    static func factor(text: string, at: long) -> (double, long)!:
         let here = Scan.skip_spaces(text, at)
         if here < len(text) and text.byte_at(here) == 45:
             let inner_value, inner_at = try Parse.factor(text, here + 1)

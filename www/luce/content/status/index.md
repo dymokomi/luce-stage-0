@@ -11,7 +11,7 @@ prediction was too optimistic, this page says so too.
 ## The short version
 
 **The language surface is done as designed.** Ten conceptual pipeline
-stages, eleven executable specifications, and a front end whose
+stages, seventeen executable specifications, and a front end whose
 diagnostics name the fix rather than the parser's predicament.
 Optionals closed the absence half of the last semantic hole and errors
 closed the failure half; nothing that was designed is now unbuilt.
@@ -39,6 +39,9 @@ language question, and one benchmark row.**
 | File-scope constants, folded and inlined | shipped |
 | Modules, and a reserved `std.` namespace | shipped |
 | Function values and capture-free expression lambdas | shipped |
+| Implied-self methods and `static` namespace functions | shipped |
+| Multiple returns into new or existing bindings | shipped |
+| Structured workers with owned `task` joins | shipped |
 | Eight standard modules: `math`, `files`, `strings`, `lists`, `paths`, `os`, `zip`, `json` | shipped |
 | The bit set: `&` `\|` `^` `~` `<<` `>>` at Go's precedence, hex and binary literals, `_` digit separators | shipped |
 | Visibility: public until a declaration says `private` | shipped |
@@ -47,6 +50,10 @@ language question, and one benchmark row.**
 | Trap locations and call traces in debug builds | shipped |
 | Two build modes that differ only in what a trap can say | shipped |
 | map lookups O(1); sort O(n log n) and stable by guarantee | shipped |
+
+The compiler-internal serialized module is format **32**. The
+published host ABI is **13**; implied-self writers changed the former
+by adding MIR `call_inout`, but changed no host slot in the latter.
 
 ## What is measured
 
@@ -173,9 +180,12 @@ warts standing: item 1.
    word. Nothing is blocked on it.
 2. **No character classes in the library.** `is_digit`/`is_alpha`
    re-derived by hand three times. Five functions would fix it.
-3. ~~**No receivers on user structs.**~~ **Shipped.** A function is a
-   method exactly when its first parameter is `self`; `var self`
-   writes the receiver back. The 88 namespaced calls turned out **not**
+3. ~~**No receivers on user structs.**~~ **Shipped.** Every plain
+   member has implied `self`; a namespace member says `static func`.
+   Receiver writing is inferred transitively and aliases one bare
+   owning `var` in place, while reads accept lets and temporaries and
+   borrowed object contents keep their old mutation rule. The 88
+   namespaced calls turned out **not**
    to be 88 waiting method calls — they are calls on folders, and not
    one function in the corpus took its own struct first. What the
    feature bought was the restructuring it permits.

@@ -14,7 +14,7 @@ xs.sort_by(before: func(T, T) -> bool)
 should define a consistent strict order. Two elements are equivalent
 when neither precedes the other, and stability preserves their original
 order. The comparator is borrowed and positional. It may be a named
-top-level or namespace function, or a capture-free lambda whose
+top-level or static namespace function, or a capture-free lambda whose
 parameter and result types come from the list.
 
 ```luce run

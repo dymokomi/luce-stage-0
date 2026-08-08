@@ -126,6 +126,7 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
 
         .local_set,
         .call,
+        .call_inout,
         // A call through a value runs a function this pass cannot see,
         // exactly as a direct call does.
         .call_indirect,
@@ -355,7 +356,7 @@ pub fn viewStable(instruction: Instruction) bool {
         .heap_new => false,
         // A callee may do any of the three, whether it was named at the
         // call or reached through a value.
-        .call, .call_indirect => false,
+        .call, .call_inout, .call_indirect => false,
         // A spawn attaches the task's row, moves every object argument
         // out of this runtime, and hands the table to a second thread.
         // Nothing resolved before it can be believed after it

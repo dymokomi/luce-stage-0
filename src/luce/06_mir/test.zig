@@ -584,6 +584,110 @@ test "a call agrees with the callee it names, argument for argument" {
     try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &program));
 }
 
+test "an inout call aliases exactly local zero and cannot use another call lane" {
+    var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    defer program.deinit();
+    const arena = program.arena.allocator();
+    const one_argument = try arena.dupe(Register, &.{0});
+
+    const functions = try arena.alloc(Function, 2);
+    functions[0] = .{
+        .name = "main",
+        .parameter_count = 0,
+        .return_type = .none,
+        .locals = try arena.dupe(Local, &.{.{ .name = "value", .local_type = .long }}),
+        .instructions = try arena.dupe(Instruction, &.{
+            .{ .const_long = 4 },
+            .{ .local_set = .{ .local = 0, .value = 0 } },
+            .{ .call_inout = .{ .function = 1, .receiver = 0, .arguments = &.{} } },
+            .{ .ret = null },
+        }),
+        .result_types = try arena.dupe(types.Type, &.{ .long, .none, .none, .none }),
+        .blocks = try arena.dupe(Block, &.{
+            .{ .items = try arena.dupe(Register, &.{ 0, 1, 2, 3 }) },
+        }),
+    };
+    functions[1] = .{
+        .name = "bump",
+        .parameter_count = 1,
+        .return_type = .none,
+        .locals = try arena.dupe(Local, &.{.{
+            .name = "self",
+            .local_type = .long,
+            .inout = true,
+        }}),
+        .instructions = try arena.dupe(Instruction, &.{
+            .{ .local_get = 0 },
+            .{ .const_long = 1 },
+            .{ .binary = .{ .op = .add, .operand_type = .long, .left = 0, .right = 1 } },
+            .{ .local_set = .{ .local = 0, .value = 2 } },
+            .{ .ret = null },
+        }),
+        .result_types = try arena.dupe(types.Type, &.{ .long, .long, .long, .none, .none }),
+        .blocks = try arena.dupe(Block, &.{
+            .{ .items = try arena.dupe(Register, &.{ 0, 1, 2, 3, 4 }) },
+        }),
+    };
+    program.functions = functions;
+    try verify_mod.verify(testing.allocator, &program);
+
+    // The callee, not the call site's spelling, declares the lane.
+    functions[1].locals[0].inout = false;
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    functions[1].locals[0].inout = true;
+
+    // A plain call cannot copy an inout receiver in as an argument.
+    functions[0].instructions[2] = .{ .call = .{ .function = 1, .arguments = one_argument } };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    functions[0].instructions[2] = .{ .call_inout = .{
+        .function = 1,
+        .receiver = 0,
+        .arguments = &.{},
+    } };
+
+    // Nor may the method cross a thread boundary.
+    program.heap_types = try arena.dupe(types.HeapType, &.{.{
+        .task = .{ .result = .none, .fallible = false },
+    }});
+    functions[0].instructions[2] = .{ .spawn = .{ .function = 1, .arguments = one_argument } };
+    functions[0].result_types[2] = .{ .heap = 0 };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    functions[0].result_types[2] = .none;
+
+    // A function value is the indirect-call door. Naming an inout
+    // function is refused before that door can be opened.
+    program.signatures = try arena.dupe(types.Signature, &.{.{
+        .parameters = try arena.dupe(types.Signature.Parameter, &.{.{ .value_type = .long }}),
+        .result = .none,
+    }});
+    functions[0].instructions[2] = .{ .const_function = 1 };
+    functions[0].result_types[2] = .{ .function = 0 };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    functions[0].result_types[2] = .none;
+    functions[0].instructions[2] = .{ .call_inout = .{
+        .function = 1,
+        .receiver = 0,
+        .arguments = &.{},
+    } };
+
+    // The pointer representation on both sides must agree: owning
+    // struct slots hold a boxed Value, while ordinary slots hold their
+    // register shape directly.
+    functions[1].locals[0].owns_storage = true;
+    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &program));
+    functions[1].locals[0].owns_storage = false;
+
+    // Inout is parameter zero or it is malformed frame metadata.
+    const original_locals = functions[1].locals;
+    functions[1].locals = try arena.dupe(Local, &.{
+        original_locals[0],
+        .{ .name = "other", .local_type = .long, .inout = true },
+    });
+    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &program));
+    functions[1].locals = original_locals;
+    try verify_mod.verify(testing.allocator, &program);
+}
+
 test "the heap type table is checked before anything indexes it" {
     var program = try programOf(.{
         .instructions = &.{

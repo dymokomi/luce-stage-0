@@ -43,6 +43,7 @@ pub fn prune(arena: Allocator, program: *Program) Allocator.Error!void {
         for (program.functions[index].instructions) |instruction| {
             const called = switch (instruction) {
                 .call, .spawn => |call| call.function,
+                .call_inout => |call| call.function,
                 // **Naming a function reaches it.**  A function value
                 // is a call that has not happened yet, and the call
                 // that will happen is a `call_indirect` naming no
@@ -75,6 +76,7 @@ pub fn prune(arena: Allocator, program: *Program) Allocator.Error!void {
         for (function.instructions) |*instruction| {
             switch (instruction.*) {
                 .call, .spawn => |*call| call.function = renumbered[call.function],
+                .call_inout => |*call| call.function = renumbered[call.function],
                 .const_function => |*named| named.* = renumbered[named.*],
                 else => {},
             }
@@ -113,8 +115,22 @@ test "unreachable functions are pruned and call targets renumbered" {
         };
     }
     functions[1].name = try arena.dupe(u8, "main");
-    functions[1].instructions[0] = .{ .call = .{ .function = 3, .arguments = &.{} } };
+    functions[1].locals = try arena.dupe(defs.Local, &.{.{
+        .name = "receiver",
+        .local_type = .long,
+    }});
+    functions[1].instructions[0] = .{ .call_inout = .{
+        .function = 3,
+        .receiver = 0,
+        .arguments = &.{},
+    } };
     functions[3].name = try arena.dupe(u8, "mid");
+    functions[3].parameter_count = 1;
+    functions[3].locals = try arena.dupe(defs.Local, &.{.{
+        .name = "self",
+        .local_type = .long,
+        .inout = true,
+    }});
     functions[3].instructions[0] = .{ .call = .{ .function = 4, .arguments = &.{} } };
     functions[4].name = try arena.dupe(u8, "leaf");
     program.functions = functions;
@@ -127,7 +143,7 @@ test "unreachable functions are pruned and call targets renumbered" {
     try testing.expectEqualStrings("main", program.functions[0].name);
     try testing.expectEqualStrings("mid", program.functions[1].name);
     try testing.expectEqualStrings("leaf", program.functions[2].name);
-    try testing.expectEqual(@as(u32, 1), program.functions[0].instructions[0].call.function);
+    try testing.expectEqual(@as(u32, 1), program.functions[0].instructions[0].call_inout.function);
     try testing.expectEqual(@as(u32, 2), program.functions[1].instructions[0].call.function);
     try @import("../06_mir/verify.zig").verify(testing.allocator, &program);
 

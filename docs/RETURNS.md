@@ -1368,3 +1368,13 @@ keeps the outcome channel, `try` and `catch` keep their grammar, and
 no signature in this memo answers `(T, Error)`. That multiple returns
 now exist is precisely why the sentence has to be said again: the
 premise changed and the conclusion did not.
+
+## SELF supersession — 2026-08-08
+
+`docs/SELF.md` retired this record's hidden receiver-at-result-zero
+convention before lock.  A writing method now mutates one bare owning
+`var` binding in place through MIR `call_inout`; its declared zero, one,
+or many results are exactly the results the caller receives.  If the
+method errors, receiver writes already performed remain visible.  The
+multiple-return surface and its parallel existing-binding assignment
+are otherwise unchanged.

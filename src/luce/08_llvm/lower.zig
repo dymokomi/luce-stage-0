@@ -256,6 +256,10 @@ const Module = struct {
     /// `libluce_rt`.  The layout is asserted against the Zig struct in
     /// `runtime/value.zig`.
     value_type: Builder.Type = .none,
+    /// `{ ptr, i64, i32 }` — the aliased receiver slot and the owner
+    /// identity of the binding behind it.  Internal calling convention
+    /// only; it never crosses the published host ABI.
+    inout_type: Builder.Type = .none,
 
     /// The two alias scopes generated code distinguishes, built on
     /// first use (task #45): **rows** — the object table's rows, an
@@ -897,6 +901,7 @@ const Module = struct {
             .i64, // bits
             .i64, // length
         });
+        self.inout_type = try self.builder.structType(.normal, &.{ .ptr, .i64, .i32 });
         self.host_type = try self.builder.structType(
             .normal,
             &([_]Builder.Type{.ptr} ** abi.Slot.count),
@@ -1277,7 +1282,10 @@ const Module = struct {
         try parameters.append(self.gpa, .ptr);
         try parameters.append(self.gpa, .i64);
         for (function.locals[0..function.parameter_count]) |parameter| {
-            try parameters.append(self.gpa, try self.valueType(parameter.local_type));
+            try parameters.append(
+                self.gpa,
+                if (parameter.inout) self.inout_type else try self.valueType(parameter.local_type),
+            );
         }
         if (function.return_type != .none) {
             _ = try self.valueType(function.return_type); // reject before use
@@ -1330,6 +1338,10 @@ const Module = struct {
         // It is *not* `nocapture`: returning a struct stores the pointer
         // through `%out`.
         for (function.locals[0..function.parameter_count], 0..) |parameter, index| {
+            if (parameter.inout) {
+                try wip.addParamAttr(index + 3, .noundef, self.builder);
+                continue;
+            }
             if (parameter.local_type != .strukt) continue;
             const at = index + 3;
             try wip.addParamAttr(at, .readonly, self.builder);
@@ -1962,6 +1974,11 @@ const Body = struct {
     /// first time a binding needs one.  `.none` until then: a function
     /// that owns nothing never asks for one.
     serial: Builder.Value = .none,
+    /// The descriptor logical local zero arrived in with, and its
+    /// inherited owner pair.  `.none` in an ordinary function.
+    inout: Builder.Value = .none,
+    inout_serial: Builder.Value = .none,
+    inout_local: Builder.Value = .none,
 
     /// What each IR register produced.  Registers never cross blocks
     /// (the verifier enforces it), so one array per function is enough.
@@ -2108,6 +2125,7 @@ const Body = struct {
                 .struct_get,
                 .struct_set,
                 .call,
+                .call_inout,
                 .intrinsic,
                 .heap_new,
                 .object_bind,
@@ -2142,7 +2160,14 @@ const Body = struct {
     /// every other local zeroed the way the interpreter zeroes it.
     fn emitFrame(self: *Body) Error!void {
         const function = self.function;
-        for (function.locals, self.local_slots) |local, *slot| {
+        for (function.locals, self.local_slots, 0..) |local, *slot, index| {
+            if (local.inout) {
+                self.inout = self.wip.arg(@intCast(index + 3));
+                slot.* = try self.wip.extractValue(self.inout, &.{0}, "inout.slot");
+                self.inout_serial = try self.wip.extractValue(self.inout, &.{1}, "inout.serial");
+                self.inout_local = try self.wip.extractValue(self.inout, &.{2}, "inout.local");
+                continue;
+            }
             slot.* = try self.wip.alloca(
                 .normal,
                 try self.slotType(local),
@@ -2153,6 +2178,7 @@ const Body = struct {
             );
         }
         for (function.locals, self.local_slots, 0..) |local, slot, index| {
+            if (local.inout) continue;
             const stored = if (index < function.parameter_count)
                 self.wip.arg(@intCast(index + 3))
             else if (local.owns_storage)
@@ -4381,6 +4407,7 @@ const Body = struct {
                 try self.storageOf(set.value),
             }),
             .call => |called| try self.emitCall(register, called),
+            .call_inout => |called| try self.emitInoutCall(register, called),
             .spawn => |called| try self.emitSpawn(register, called),
             .intrinsic => |called| try self.emitIntrinsic(register, called),
             .heap_new => |new| try self.emitHeapNew(register, new),
@@ -5196,8 +5223,34 @@ const Body = struct {
     // -- calls -----------------------------------------------------------
 
     fn emitCall(self: *Body, register: mir.Register, called: mir.Instruction.Call) Error!void {
+        try self.emitDirectCall(register, called.function, .none, called.arguments);
+    }
+
+    fn emitInoutCall(
+        self: *Body,
+        register: mir.Register,
+        called: mir.Instruction.InoutCall,
+    ) Error!void {
+        try self.emitDirectCall(
+            register,
+            called.function,
+            try self.inoutDescriptor(called.receiver),
+            called.arguments,
+        );
+    }
+
+    /// The common direct-call convention.  `receiver` is `.none` for
+    /// an ordinary call and the one aggregate occupying logical
+    /// parameter zero for an inout call.
+    fn emitDirectCall(
+        self: *Body,
+        register: mir.Register,
+        function: u32,
+        receiver: Builder.Value,
+        explicit_arguments: []const mir.Register,
+    ) Error!void {
         const gpa = self.module.gpa;
-        const target = self.module.functions[called.function];
+        const target = self.module.functions[function];
         const result = self.function.result_types[register];
 
         // The callee gets one frame less than this one has, and a call
@@ -5220,7 +5273,8 @@ const Body = struct {
         try arguments.append(gpa, self.host);
         try arguments.append(gpa, self.runtime);
         try arguments.append(gpa, callee_depth);
-        for (called.arguments) |argument| {
+        if (receiver != .none) try arguments.append(gpa, receiver);
+        for (explicit_arguments) |argument| {
             try arguments.append(gpa, self.produced[argument].value);
         }
         var result_slot: Builder.Value = .none;
@@ -5242,7 +5296,7 @@ const Body = struct {
             arguments.items,
             "outcome",
         );
-        if (self.module.program.functions[called.function].fallible) {
+        if (self.module.program.functions[function].fallible) {
             try self.propagateTrapOnly(outcome);
             self.produced[register].outcome = outcome;
         } else {
@@ -5263,6 +5317,21 @@ const Body = struct {
                 "call.value",
             );
         }
+    }
+
+    /// Descriptor for a writing receiver.  Calling another writing
+    /// method on `self` forwards the descriptor unchanged; calling one
+    /// on an ordinary local names that slot and this frame's owner.
+    fn inoutDescriptor(self: *Body, local: mir.LocalId) Error!Builder.Value {
+        if (self.function.locals[local].inout) {
+            std.debug.assert(self.inout != .none);
+            return self.inout;
+        }
+        return self.wip.buildAggregate(self.module.inout_type, &.{
+            self.local_slots[local],
+            try self.frameSerial(),
+            try self.module.builder.intValue(.i32, local),
+        }, "inout");
     }
 
     /// A call **through a function value** (docs/FUNCTIONS.md D2).
@@ -6450,12 +6519,27 @@ const Body = struct {
         value: mir.Register,
         local: mir.LocalId,
     ) Error!void {
+        const owner = try self.ownerOf(local);
         _ = try self.callRuntime(which, .void, &.{
             self.runtime,
             try self.boxedRegister(value, "bound"),
-            try self.frameSerial(),
-            try self.module.builder.intValue(.i32, local),
+            owner.serial,
+            owner.local,
         }, "");
+    }
+
+    fn ownerOf(self: *Body, local: mir.LocalId) Error!struct {
+        serial: Builder.Value,
+        local: Builder.Value,
+    } {
+        if (self.function.locals[local].inout) {
+            std.debug.assert(self.inout_serial != .none and self.inout_local != .none);
+            return .{ .serial = self.inout_serial, .local = self.inout_local };
+        }
+        return .{
+            .serial = try self.frameSerial(),
+            .local = try self.module.builder.intValue(.i32, local),
+        };
     }
 
     /// The binding `free`/`give` must verify against.  A second

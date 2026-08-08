@@ -278,7 +278,7 @@ struct Rect:
     width: double
     height: double
 
-    func area(r: Rect) -> double:
+    static func area(r: Rect) -> double:
         return r.width * r.height
 
 func square(side: double) -> Rect:

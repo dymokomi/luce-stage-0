@@ -431,30 +431,29 @@ test "match: it frees what its arms own, on the arm that runs and the ones that 
 // Methods and namespace functions (D7)
 // ---------------------------------------------------------------------------
 
-test "methods: a method on an enum, called both ways" {
+test "methods: implied-self methods and a static enum function" {
     try agree.ok(
         \\enum Method:
         \\    stored = 0
         \\    deflated = 8
         \\
-        \\    func compressed(self) -> bool:
+        \\    func compressed() -> bool:
         \\        return self != Method.stored
         \\
-        \\    func spelled(self) -> string:
+        \\    func spelled() -> string:
         \\        match self:
         \\            stored:
         \\                return "stored"
         \\            deflated:
         \\                return "deflated"
         \\
-        \\    func of(raw: long) -> Method:
+        \\    static func of(raw: long) -> Method:
         \\        return Method(raw) else Method.stored
         \\
         \\func main():
         \\    let m = Method.deflated
         \\    assert(m.compressed())
         \\    assert(not Method.stored.compressed())
-        \\    assert(Method.compressed(m))
         \\    assert(m.spelled() == "deflated")
         \\    assert(Method.of(8) == Method.deflated)
         \\    assert(Method.of(99) == Method.stored)
@@ -462,13 +461,13 @@ test "methods: a method on an enum, called both ways" {
     );
 }
 
-test "methods: var self writes the receiver back" {
+test "methods: a whole-self enum write is inferred" {
     try agree.ok(
         \\enum Light:
         \\    red
         \\    green
         \\
-        \\    func flip(var self):
+        \\    func flip():
         \\        match self:
         \\            red:
         \\                self = Light.green

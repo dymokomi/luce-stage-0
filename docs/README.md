@@ -56,7 +56,7 @@ and each says so in its own preamble.
 | [MEMORY.md](MEMORY.md) | Why scope ownership won over reference counting, tracing GC, arenas and borrow checking. |
 | [TYPES.md](TYPES.md) | The seven-number ladder: Java sizing, lowercase names, `byte` as bits, storage-only narrow types. D1–D8 ratified and built. |
 | [NUMERICS.md](NUMERICS.md) | Promotion, true division, the floor pair, `int(x)`-style conversions. Ratified and built. |
-| [METHODS.md](METHODS.md) | `main(args)`, `self`, `var self` as copy-in/copy-out. Ratified and built. |
+| [METHODS.md](METHODS.md) | `main(args)` and the original explicit-receiver design. The entry half shipped; the receiver half was superseded by SELF before lock. |
 | [RETURNS.md](RETURNS.md) | Multiple returns without first-class tuples. Ratified and built. |
 | [ARGS.md](ARGS.md) | Named and default arguments: names optional everywhere, defaults as trailing folded constants, struct fields on the same clause, nothing below stage 4 moving. D1–D12 ratified and built. |
 | [VECTOR.md](VECTOR.md) | Vectorizing checked reductions without weakening a single trap: prove, or speculate-and-replay. All three layers ratified. |
@@ -72,7 +72,7 @@ and each says so in its own preamble.
 | [UNION.md](UNION.md) | **Drafted, not scheduled.** The tagged-union design distilled from the research — eighteen decisions, three questions held — written so union's own moment finds the thinking done. `std.json` proceeds without it (a closed six-kind domain is a struct with an enum tag). |
 | [THREADS.md](THREADS.md) | Workers own their world: `spawn f(give x)` onto a second runtime, `task(T)` as a scope-owned resource whose scope-end joins, races unrepresentable because the ownership model is the concurrency model. Ratified and built. |
 | [FUNCTIONS.md](FUNCTIONS.md) | Functions as values, divided at the capture line: named functions and one-expression lambdas whose types come from where they land — and no closures, because state that travels with behavior is a struct with a method. Ratified and built, including stable `std.lists.sort_by` as D6's proving customer. |
-| [SELF.md](SELF.md) | Self implied, `static` for the functions without one, and a call site that cannot lie: `f(x)` never mutates a value, `x.advance(8)` may — and reads like it. `var self` and `var` parameters retired. Ratified; queued behind the lock-run sequence. |
+| [SELF.md](SELF.md) | Self implied, `static` for the functions without one, and a call site that cannot lie: `f(x)` never mutates a value, `x.advance(8)` may — and reads like it. `var self` and `var` parameters retired. Ratified and built. |
 | [CONSTANTS.md](CONSTANTS.md) | Constant containers: the object that is the program, not the run — an eternal object with no owner because it has no death point, a `{k: v}` map literal, and immutability enforced statically with one trap behind it. Drafted for ratification. |
 
 ## History

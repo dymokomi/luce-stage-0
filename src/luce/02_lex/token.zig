@@ -25,6 +25,9 @@ pub const Kind = enum {
     /// kinds, so an identifier is never a keyword.
     identifier,
     keyword_func,
+    /// `static func` inside a struct or enum declares a namespace
+    /// function rather than a method with an implied `self`.
+    keyword_static,
     keyword_struct,
     /// `enum Name:` — a set of named constants at one integer width
     /// (docs/ENUMS.md D1).  A declaration keyword beside `struct`,
@@ -67,13 +70,10 @@ pub const Kind = enum {
     /// `try CALL` — propagate what a fallible call raised
     /// (docs/FAILURE.md).
     keyword_try,
-    /// The receiver of a method: the first parameter of a function
-    /// declared inside a struct, whose type is the enclosing struct
-    /// and is never written (docs/METHODS.md).  A keyword rather than
-    /// a name, so nothing can shadow it and no declaration can call
-    /// something else `self` — the word means one thing wherever it
-    /// appears, which is what makes `p.length()` readable as a call on
-    /// `p` and nothing else.
+    /// The implied receiver available in the body of every non-static
+    /// function declared inside a struct or enum (docs/SELF.md).  A
+    /// keyword rather than a name, so nothing can shadow it and no
+    /// declaration can call something else `self`.
     keyword_self,
     /// `a catch b`, and `EXPR catch:` opening a handler block.  A
     /// keyword rather than a reuse of `else`, because the two are
@@ -166,6 +166,7 @@ pub const Token = struct {
 /// as a declaration, it sees two keywords.
 pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "func", .kind = .keyword_func },
+    .{ .word = "static", .kind = .keyword_static },
     .{ .word = "struct", .kind = .keyword_struct },
     .{ .word = "enum", .kind = .keyword_enum },
     .{ .word = "match", .kind = .keyword_match },
@@ -202,7 +203,7 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
 /// declaration — one row per reserved word, readable and testable —
 /// and this is derived from it at compile time, so the two can never
 /// disagree.  It matters: every name in the file is looked up here,
-/// and a linear walk of twenty-two `memcmp`s per identifier is the
+/// and a linear walk of the whole keyword table per identifier is the
 /// hottest avoidable cost in the front end (Zig's own tokenizer keeps
 /// its keywords in exactly this structure, for exactly this reason).
 pub const keyword_map = std.StaticStringMap(Kind).initComptime(entries: {
@@ -236,4 +237,9 @@ test "the lookup map holds exactly the declared table, and nothing else" {
     for ([_][]const u8{ "", "fun", "funcs", "Func", "_let", "x", "returns" }) |word| {
         try std.testing.expect(keyword_map.get(word) == null);
     }
+}
+
+test "static is a reserved member-function word" {
+    try std.testing.expectEqual(Kind.keyword_static, keyword_map.get("static").?);
+    try std.testing.expect(keyword_map.get("statics") == null);
 }

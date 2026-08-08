@@ -494,7 +494,7 @@ func chosen() -> func(long, long) -> bool:
     return ascending
 ```
 
-A named top-level or namespace function is a value where a function
+A named top-level or `static` namespace function is a value where a function
 type is expected: `ascending`, `Scale.twice`, `math.round`.  The place
 supplies the signature, just as a numeric place supplies a literal's
 width.  With no such place, `let f = ascending` is refused and the
@@ -614,65 +614,64 @@ double figures, the right answer is a struct, not another default.
 
 ## Methods
 
-A function declared inside a struct — or inside an enum, which takes
-the same functions under the same rules (docs/ENUMS.md D7) — is a
-**method** exactly when its first parameter is `self`.  Everything
-else in the declaration is the namespace function it has always been.
+Every plain function declared inside a struct — or inside an enum,
+which takes the same functions under the same rules — is a **method**.
+Its receiver is the implied binding `self`; the declaration lists only
+the arguments written between the caller's parentheses.  A member with
+no receiver says `static func` and is a namespace function instead.
 
 ```luce
 struct Point:
     x: double
     y: double
 
-    func length(self) -> double:              # a method: reads self
+    func length() -> double:                  # reads implied self
         return sqrt(self.x * self.x + self.y * self.y)
 
-    func scale(var self, factor: double):     # a method: writes self back
+    func scale(factor: double):               # writes implied self
         self.x = self.x * factor
         self.y = self.y * factor
 
-    func origin() -> Point:                  # a namespace function
+    static func origin() -> Point:            # no self
         return Point(x = 0.0, y = 0.0)
 ```
 
-`self` is a keyword, bare, and its type is the enclosing struct;
-`self: Point` is refused, because inside `struct Point` it can be
-nothing else.  `p.length()` **means** `Point.length(p)` — the same
-call, resolved at compile time.  There is no dynamic dispatch or
-reference type.  Both `p.length` and `Point.length` are refused as
-method references because either would carry a receiver; the namespace
-function `Point.origin` is a value wherever `func() -> Point` is
-expected.
+`self` is a keyword whose type is the enclosing struct or enum.  It is
+available only inside a method and cannot be written as a parameter.
+`p.length()` is resolved statically from `p`'s type; there is no
+dynamic dispatch or reference type.  `Point.length(p)` is refused:
+methods are called through their receiver, while `Point.origin()` is
+the namespace call its `static` declaration promises.
 
-**The difference between a namespace and a method is visible in
-exactly one place**, and it is worth saying plainly because a struct
-in Luce is used for both:
+That distinction reaches function values and workers too.  A method
+reference such as `p.length` or `Point.length` would carry a receiver,
+so it is not a value and cannot be spawned.  `Point.origin`, like any
+top-level or other static function, is a value where
+`func() -> Point` is expected and may be a worker target.
 
-> `Struct.func(x)` is a **namespace** call — the struct is a folder
-> and `x` is an ordinary first argument.  `x.foo()` is a **method**
-> call — the struct is a type and `x` is its receiver.  Luce has both,
-> they share a syntax, and the only thing that tells them apart is
-> whether the declaration's first parameter is the word `self`.
+**Whether a method writes `self` is inferred, not declared.**  A
+store to `self` or one of its value fields makes it a writer, as does
+calling another writing method on `self`; that fact is found to a
+fixed point, so declaration order and a chain of wrappers do not
+matter.  Calling an object method through a field —
+`self.items.append(value)` — mutates the borrowed object's contents,
+not the struct value, and therefore remains a read of `self`.
 
-`Point.length(p)` stays callable and means what `p.length()` means,
-which is what lets a struct convert one function at a time.
+A reading method accepts any value of its receiver type: a `let`, a
+mutable binding, or a temporary.  A writing method requires an exact,
+bare mutable binding such as `p`; a `let`, a call result, a field, an
+index, or a narrowed optional is refused.  If the value carries
+objects, that binding must own them.  The callee aliases the caller's
+slot and owner identity in place, so it may replace one field or the
+whole object-carrying value without a second owner appearing.
 
-**`var self` writes the receiver back.**  `p.scale(2.0)` means
-`p = Point.scale(p, 2.0)`: copy in, copy out, with no reference
-anywhere.  The receiver must be a place whose root is a mutable local
-— the rule an assignment target already keeps — so a `let` receiver
-and a call result are both refused, and `Point.scale(p, 2.0)` is
-refused too, because the static form has no place to write back to.
-A `var self` struct must carry no objects, which is where S17 and S28
-already put such code; a struct that does carry objects mutates
-through its fields from a plain `self` (S38) and needs no write-back.
-
-A `var self` method may answer values of its own, and then **its
-receiver is result zero**: `let roll = rng.next()` means
-`rng, roll = Rng.next(rng)` internally, and the two travel in one
-return shape.  There is no receiver mechanism separate from the return
-mechanism.  A method that raises leaves its receiver as it was — the
-write-back stands on the returning edge only.
+In-place also decides failure: writes performed before a method raises
+an error remain visible to its caller.  A writer's declared results
+are otherwise ordinary results — zero, one, or several — and the
+receiver is never hidden in the return shape.  There is no `var self`
+and no `var` parameter; passing a value to `f(x)` cannot mutate the
+caller's value, while `x.advance()` visibly names the only surface
+that can.
 
 ## Enums, and the match that checks them
 
@@ -686,7 +685,7 @@ enum Method(byte):        # the width is int unless one is written
     shrunk                # 1, the one before it plus one
     deflated = 8          # a constant integer expression, folded
 
-    func compressed(self) -> bool:
+    func compressed() -> bool:
         return self != Method.stored
 
 func main():
@@ -1342,7 +1341,7 @@ keeps `key_missing`.
 ## Scope
 
 One scope per **file** (top-level constants, structs, and functions),
-per **struct** (its namespaced functions: `Text.width(...)`), and per
+per **struct** (its implied-self methods and static namespace functions), and per
 **function** (parameters and every indented block; `if`/`while`/`for`
 bodies open nested scopes).  No shadowing anywhere; `let` is
 immutable; `var` is mutable; loop variables are immutable inside the
@@ -1355,12 +1354,13 @@ name: the store lands in the heap object, which is shared and mutable
 whoever holds it (S8).  That is what lets every function that takes a
 container fill it — a parameter is a `let`-bound name.  What `let`
 refuses is a store that lands in the binding's own storage: `p = q`,
-`p.x = 3` and `p.inner.y = 3` on a struct **value**, at any depth,
-because a value lives in the name.
+`p.x = 3`, `p.inner.y = 3`, and a writing `p.advance()` on a struct
+**value**, because a value lives in the name.  A reading method and a
+method that mutates only an object reached through `self` still work
+through a `let` for the same reason the direct object calls above do.
 
-Structs contain namespace functions and methods
-(docs/METHODS.md); there is no inheritance and no dispatch —
-`Struct.func(...)` is a name.
+Structs contain implied-self methods and `static` namespace functions
+(docs/SELF.md); there is no inheritance and no dispatch.
 
 ### Unreachable code is refused
 

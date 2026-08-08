@@ -715,7 +715,7 @@ Inside a struct body, at member position, `private:` or `public:`
 opens an **indented block** of members — fields and funcs alike — and
 every member in the block takes the label's visibility:
 
-```luce
+```luce historical
 struct Rng:
     private:
         state: long
@@ -1401,3 +1401,24 @@ law's spelling of it.
 default flipped; D15 rode as recommendations and is built as
 recommended.  `Order` executed; the record above is step by step, the
 way ARGS.md's was.*
+
+## SELF syntax update — 2026-08-08
+
+Visibility did not change when explicit receivers were superseded.
+The current spelling of the region example above is:
+
+```luce
+struct Rng:
+    private:
+        state: long
+
+    func next() -> long:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+    func real() -> double:
+        return double(self.next()) / 2147483647.0
+```
+
+Both members are public because they sit outside the private region;
+their implied receiver is independent of that visibility decision.

@@ -169,7 +169,7 @@ container element, struct field or optional payload. A top-level
 `let` cannot hold one, and `var f: func(long)` without an initializer
 is refused because there is no zero function.
 
-A top-level or namespace function becomes a value where a function
+A top-level or static namespace function becomes a value where a function
 type is expected. The expected signature supplies the landing shape,
 so an unannotated `let f = named_function` is refused. Function values
 copy freely, compare with `==` and `!=`, have no ordering, and
@@ -218,9 +218,10 @@ func main():
 3 false 9
 ```
 
-A struct may declare functions in its own namespace. They are plain
-functions reached as `Struct.name(...)` — no receiver, no dispatch, no
-inheritance.
+A plain function declared inside a struct is a method with implied
+`self`, called as `value.name(...)`.  A `static func` has no receiver
+and is the namespace form reached as `Struct.name(...)`.  Neither form
+adds dynamic dispatch or inheritance.
 
 A struct type is **object-carrying** if it transitively contains a
 field of object type. Object-carrying structs follow the object

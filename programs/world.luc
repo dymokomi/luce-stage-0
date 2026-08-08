@@ -49,11 +49,11 @@ struct Room:
         description: string
         visited: bool = false
 
-    func make(name: string, description: string) -> Room:
+    static func make(name: string, description: string) -> Room:
         return Room(name = name, description = description)
 
     # The full arrival, or the one line a room already seen gets.
-    func told(self, brief: bool = false) -> string:
+    func told(brief: bool = false) -> string:
         if brief:
             return self.name
         return self.name + "\n" + self.description
@@ -73,7 +73,7 @@ struct Way:
     # story should be able to write: `Realm.link` below makes both
     # halves out of one line, and two halves written separately can
     # disagree about which of them is locked.
-    private func make(
+    private static func make(
         from: long,
         direction: string,
         to: long,
@@ -82,25 +82,25 @@ struct Way:
     ) -> Way:
         return Way(from = from, direction = direction, to = to, locked = locked, needs = needs)
 
-    func leaves(self, from: long, direction: string) -> bool:
+    func leaves(from: long, direction: string) -> bool:
         return self.from == from and self.direction == direction
 
-    func starts_at(self, from: long) -> bool:
+    func starts_at(from: long) -> bool:
         return self.from == from
 
     # True for both halves of one door, whichever way it was written.
-    func joins(self, one: long, other: long) -> bool:
+    func joins(one: long, other: long) -> bool:
         if self.from == one and self.to == other:
             return true
         return self.from == other and self.to == one
 
-    func shut(self) -> bool:
+    func shut() -> bool:
         return self.locked
 
-    func opens_with(self) -> string:
+    func opens_with() -> string:
         return self.needs
 
-    func beyond(self) -> long:
+    func beyond() -> long:
         return self.to
 
 # Something to pick up, or something too heavy to.
@@ -117,7 +117,7 @@ struct Thing:
     # is private and this is the only way to make a Thing: `forget`
     # below puts everything back where the story left it, and a caller
     # that could name the two separately could make that a lie.
-    func make(name: string, description: string, at: long, portable: bool = true) -> Thing:
+    static func make(name: string, description: string, at: long, portable: bool = true) -> Thing:
         return Thing(
             name = name,
             description = description,
@@ -126,30 +126,30 @@ struct Thing:
             portable = portable,
         )
 
-    func described(self) -> string:
+    func described() -> string:
         return self.description
 
-    func lying_in(self, at: long) -> bool:
+    func lying_in(at: long) -> bool:
         return self.at == at
 
-    func held(self) -> bool:
+    func held() -> bool:
         return self.at == carried
 
-    func liftable(self) -> bool:
+    func liftable() -> bool:
         return self.portable
 
 # The three tables, and every question and change the game makes of
-# them.  `Realm` carries objects, so its methods take a plain `self`
-# and work through the lists rather than writing the receiver back
-# (docs/METHODS.md); the lists are the state, and a borrow may edit
-# what it may not keep (OWNERSHIP.md S38).
+# them.  `Realm` carries objects, so its methods use their implied
+# receiver to work through the lists rather than replacing the Realm
+# value; the lists are the state, and a borrow may edit what it may not
+# keep (OWNERSHIP.md S38).
 struct Realm:
     private:
         rooms: list(Room)
         ways: list(Way)
         things: list(Thing)
 
-    func empty() -> Realm:
+    static func empty() -> Realm:
         return Realm(
             rooms = new list(Room),
             ways = new list(Way),
@@ -158,17 +158,16 @@ struct Realm:
 
     # -- building, which is story.luc's half ---------------------------
 
-    func add_room(self, made: Room) -> long:
+    func add_room(made: Room) -> long:
         self.rooms.append(made)
         return len(self.rooms) - 1
 
-    private func add_way(self, made: Way):
+    private func add_way(made: Way):
         self.ways.append(made)
 
     # A door: the way there and the way back, so a story writes one
     # line per passage instead of two that can disagree.
     func link(
-        self,
         from: long,
         direction: string,
         to: long,
@@ -191,28 +190,28 @@ struct Realm:
             needs = needs,
         ))
 
-    func add_thing(self, made: Thing):
+    func add_thing(made: Thing):
         self.things.append(made)
 
     # -- questions -----------------------------------------------------
 
-    func name_at(self, at: long) -> string:
+    func name_at(at: long) -> string:
         return self.rooms[at].name
 
     # The index of the room with this name, or none — which is what
     # a save file's word has to be turned into before it is a place.
-    func where(self, name: string) -> long?:
+    func where(name: string) -> long?:
         for i, place in self.rooms:
             if place.name == name:
                 return i
         return none
 
-    func seen(self, at: long) -> bool:
+    func seen(at: long) -> bool:
         return self.rooms[at].visited
 
     # Everything a player sees on looking: the room, what is lying in
     # it, and the ways out.  `brief` is the second visit's version.
-    func look(self, at: long, brief: bool = false) -> string:
+    func look(at: long, brief: bool = false) -> string:
         var said = new builder()
         said.append(self.rooms[at].told(brief = brief))
         let lying = self.things_in(at)
@@ -227,14 +226,14 @@ struct Realm:
 
     # The directions that leave this room, in the order the story
     # wrote them.  A fresh list, so the caller owns it (S28).
-    func ways_out(self, at: long) -> list(string):
+    func ways_out(at: long) -> list(string):
         var names: list(string) = []
         for way in self.ways:
             if way.starts_at(at):
                 names.append(way.direction)
         return names
 
-    func way_out(self, at: long, direction: string) -> Way?:
+    func way_out(at: long, direction: string) -> Way?:
         for way in self.ways:
             if way.leaves(at, direction):
                 return way
@@ -242,20 +241,20 @@ struct Realm:
 
     # Everything lying in one room, as a list of the caller's own —
     # the things table stays this realm's (OWNERSHIP.md S28).
-    func things_in(self, at: long) -> list(Thing):
+    func things_in(at: long) -> list(Thing):
         var found = new list(Thing)
         for thing in self.things:
             if thing.lying_in(at):
                 found.append(thing)
         return found
 
-    func thing_in(self, at: long, name: string) -> Thing?:
+    func thing_in(at: long, name: string) -> Thing?:
         for thing in self.things:
             if thing.lying_in(at) and thing.name == name:
                 return thing
         return none
 
-    func holding(self, name: string) -> bool:
+    func holding(name: string) -> bool:
         for thing in self.things:
             if thing.held() and thing.name == name:
                 return true
@@ -264,14 +263,14 @@ struct Realm:
     # What is in the player's hands, and what rooms they have walked
     # into: two fresh lists the caller owns, and what `journal.luc`
     # writes into a save file.
-    func carrying(self) -> list(string):
+    func carrying() -> list(string):
         var names: list(string) = []
         for thing in self.things:
             if thing.held():
                 names.append(thing.name)
         return names
 
-    func visited(self) -> list(string):
+    func visited() -> list(string):
         var names: list(string) = []
         for place in self.rooms:
             if place.visited:
@@ -281,7 +280,7 @@ struct Realm:
     # Rooms seen and things held, in one traversal of each table —
     # two answers that are always read together, so they travel
     # together (docs/RETURNS.md).
-    func tally(self) -> (long, long):
+    func tally() -> (long, long):
         var places = 0
         for place in self.rooms:
             if place.visited:
@@ -294,7 +293,7 @@ struct Realm:
 
     # What a thing here or in hand looks like up close, or none when
     # there is no such thing within reach.
-    func describe(self, at: long, name: string) -> string?:
+    func describe(at: long, name: string) -> string?:
         for thing in self.things:
             if thing.name == name and (thing.held() or thing.lying_in(at)):
                 return thing.described()
@@ -304,19 +303,19 @@ struct Realm:
     #
     # Each of these opens with `var slots = self.<table>`.  The alias
     # is not decoration: assigning to a field of an element needs a
-    # place whose root binding is a `var`, and `self` is let-bound, so
-    # `self.things[i].at = …` is refused where `slots[i].at = …` is
-    # the same write through the same list.  It is the one place this
-    # program has to say something to the compiler rather than to the
-    # reader.
+    # place whose root binding is a `var`; the implied receiver is not
+    # such a local place, so `self.things[i].at = …` is refused where
+    # `slots[i].at = …` is the same write through the same list.  It is
+    # the one place this program has to say something to the compiler
+    # rather than to the reader.
 
-    func visit(self, at: long):
+    func visit(at: long):
         var slots = self.rooms
         slots[at].visited = true
 
     # Pick a thing up if it is here and can be lifted; the answer says
     # which of the three happened, and the caller has the words.
-    func pick_up(self, at: long, name: string) -> bool:
+    func pick_up(at: long, name: string) -> bool:
         var slots = self.things
         for i, thing in slots:
             if thing.lying_in(at) and thing.name == name and thing.liftable():
@@ -324,7 +323,7 @@ struct Realm:
                 return true
         return false
 
-    func put_down(self, at: long, name: string) -> bool:
+    func put_down(at: long, name: string) -> bool:
         var slots = self.things
         for i, thing in slots:
             if thing.held() and thing.name == name:
@@ -334,7 +333,7 @@ struct Realm:
 
     # Open a locked way, and the way back with it: a door unlocked
     # from one side is unlocked from the other.
-    func unlock(self, at: long, direction: string) -> bool:
+    func unlock(at: long, direction: string) -> bool:
         let way = self.way_out(at, direction)
         if way == none:
             return false
@@ -354,7 +353,7 @@ struct Realm:
     # that skipped it would add a save's carried things to whatever
     # the player was already holding.
 
-    func forget(self):
+    func forget():
         var places = self.rooms
         for i, place in places:
             places[i].visited = false
@@ -366,7 +365,7 @@ struct Realm:
     # a save file is text off a disk, so a name in it may be a name
     # this realm has never heard of, and that is news for whoever
     # asked to load it (docs/FAILURE.md).
-    func hold(self, name: string) -> !:
+    func hold(name: string) -> !:
         var slots = self.things
         for i, thing in slots:
             if thing.name == name:
@@ -374,7 +373,7 @@ struct Realm:
                 return
         error("the save carries a " + name + ", which this story has none of")
 
-    func mark_seen(self, name: string) -> !:
+    func mark_seen(name: string) -> !:
         let at = self.where(name)
         if at == none:
             error("the save has been in " + name + ", which this story has no room called")

@@ -280,19 +280,18 @@ main.luc:8:12: Priority is a set of names and has no order; write int(a) < int(b
 ## Methods
 
 An enum takes the methods and namespace functions a
-[struct](../functions/) takes, under the same rules — a first
-parameter of `self` makes a method, and no `self` makes a namespace
-function.
+[struct](../functions/) takes, under the same rules — a plain member
+has implied `self`, while a namespace member says `static func`.
 
 ```luce run
 enum Light:
     red
     green
 
-    func go(self) -> bool:
+    func go() -> bool:
         return self == Light.green
 
-    func flip(var self):
+    func flip():
         match self:
             red:
                 self = Light.green

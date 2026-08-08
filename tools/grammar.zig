@@ -71,11 +71,11 @@ const Class = enum {
     word_operator,
     /// `func`, `struct`, `let`, `var` — what a declaration opens with.
     storage,
-    /// `private`, `public` — who may reach the declaration they stand
-    /// in front of (docs/VISIBILITY.md).  `storage.modifier` is the
-    /// scope every grammar gives Java's and C#'s pair, so a theme
-    /// already tells them apart from the `func` they precede.
-    visibility,
+    /// `private`, `public`, `static` — declaration modifiers.
+    /// `storage.modifier` is the scope existing grammars give this
+    /// class, so themes already distinguish them from the `func` they
+    /// precede (docs/VISIBILITY.md, docs/SELF.md).
+    modifier,
     /// `import`.
     import,
     /// `try`, `catch` (docs/FAILURE.md).
@@ -98,7 +98,7 @@ const Class = enum {
             .control => "keyword.control.luce",
             .word_operator => "keyword.operator.word.luce",
             .storage => "storage.type.luce",
-            .visibility => "storage.modifier.luce",
+            .modifier => "storage.modifier.luce",
             .import => "keyword.control.import.luce",
             .exception => "keyword.control.exception.luce",
             .constant => "constant.language.luce",
@@ -111,7 +111,7 @@ const Class = enum {
 /// Every class, in the order their rules are written.  Iterated rather
 /// than listed twice, so a new class cannot be added without a rule.
 const classes = [_]Class{
-    .control,  .word_operator, .storage,  .visibility,
+    .control,  .word_operator, .storage,  .modifier,
     .import,   .exception,     .constant, .ownership,
     .receiver,
 };
@@ -148,7 +148,7 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
         .keyword_var,
         => .storage,
 
-        .keyword_public, .keyword_private => .visibility,
+        .keyword_public, .keyword_private, .keyword_static => .modifier,
 
         .keyword_import => .import,
 

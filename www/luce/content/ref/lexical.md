@@ -104,7 +104,7 @@ and      break    catch    continue copy     elif     else
 enum     false    for      func     give     if       import
 in       let      match    new      none     not      or
 private  public   return   self     spawn    struct   true
-try      var      while
+static   try      var      while
 ```
 
 `spawn` runs a call on a [worker](/tour/threads/) instead of making
@@ -120,6 +120,10 @@ stand as the region labels `private:` and `public:`.
 keyword rather than a convention so that nothing can shadow it and no
 declaration can call something else by that name — which is what makes
 `p.length()` readable as a call on `p` and nothing else.
+
+`static` belongs immediately before `func` inside a struct or enum. It
+marks the namespace member that has no implied `self`; a file-scope
+function is already a namespace function and does not say it.
 
 ## Reserved names
 

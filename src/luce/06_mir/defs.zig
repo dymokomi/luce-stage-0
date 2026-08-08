@@ -795,6 +795,12 @@ pub const Instruction = union(enum) {
     struct_get: struct { target: Register, layout: u32, field: u32 },
     struct_set: struct { target: Register, layout: u32, field: u32, value: Register },
     call: Call,
+    /// A direct call whose implied receiver is a mutable local in the
+    /// caller. `receiver` is logical parameter zero; `arguments` are
+    /// only the parameters the source call writes. The callee's local
+    /// zero is marked `inout` and aliases this local on both the normal
+    /// and errored edges.
+    call_inout: InoutCall,
     /// `spawn f(args)` — hand `f` and its arguments to a worker with a
     /// runtime of its own, and answer the `task` that owns it
     /// (docs/THREADS.md D2, D3).  The same shape as `call` because it
@@ -833,6 +839,7 @@ pub const Instruction = union(enum) {
     pub const Binary = struct { op: BinaryOp, operand_type: Type, left: Register, right: Register };
     pub const Unary = struct { op: UnaryOp, operand: Register };
     pub const Call = struct { function: u32, arguments: []Register };
+    pub const InoutCall = struct { function: u32, receiver: LocalId, arguments: []Register };
     pub const IndirectCall = struct { callee: Register, signature: u32, arguments: []Register };
     pub const IntrinsicCall = struct { kind: Intrinsic, arguments: []Register };
     pub const HeapNew = struct { heap: u32, dims: []Register };
@@ -858,6 +865,11 @@ pub const Local = struct {
     /// starts *empty* rather than at a shared zero, and that a trap
     /// unwinding past every release can still give the storage back.
     owns_storage: bool = false,
+    /// Logical parameter zero of a writing method. Reads and writes
+    /// alias the caller's receiver slot, and ownership operations use
+    /// that binding's identity. This frame neither initializes nor
+    /// releases the external slot.
+    inout: bool = false,
 };
 
 pub const Block = struct {

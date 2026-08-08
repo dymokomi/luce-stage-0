@@ -6,7 +6,7 @@
 //! restructuring needs, and `docs/METHODS.md` named the line where its
 //! absence would have cost something — `editor.luc`'s backspace branch
 //! deliberately measures against the content *before* the erase, and
-//! under `var self` there is no second name to measure against.  A
+//! an implied writing `self` has no second copy to measure against.  A
 //! conversion that missed it would move the cursor by the wrong number
 //! of bytes and nothing would have noticed.
 //!

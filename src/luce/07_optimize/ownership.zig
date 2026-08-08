@@ -67,11 +67,11 @@
 //! and it is here rather than in a pass of its own because it is the
 //! *only* place left that needs it: general value numbering existed
 //! for the interpreter, measured at nothing on the compiled path, and
-//! went with the interpreter (docs/ENGINE.md step 7).  Nothing else in
-//! MIR writes a local — there is no address-of, and a call gets copies
-//! of its arguments — so the invalidation rule is exactly "another
-//! store to the same local", and a slot that owns its storage is never
-//! forwarded at all (docs/STRINGS.md).
+//! went with the interpreter (docs/ENGINE.md step 7).  An ordinary
+//! call still gets copies of its arguments; SELF's `call_inout` is the
+//! one additional local writer, and explicitly invalidates the aliased
+//! receiver below.  A slot that owns its storage is never forwarded at
+//! all (docs/STRINGS.md).
 
 const std = @import("std");
 const defs = @import("../06_mir/defs.zig");
@@ -132,6 +132,14 @@ fn walkFunction(arena: Allocator, function: *Function) Allocator.Error!void {
                 .local_get => |local| {
                     if (held[local]) |value| same[item] = value else held[local] = item;
                 },
+                .call_inout => |call| {
+                    // The callee aliases this slot and may replace it,
+                    // including on its errored edge.  Nothing learned
+                    // from a store before the call can be forwarded
+                    // through it.
+                    held[call.receiver] = null;
+                    claims.clearRetainingCapacity();
+                },
                 .object_bind => |bind| {
                     const value = same[bind.value];
                     if (claims.get(value)) |earlier| {
@@ -173,4 +181,63 @@ fn walkFunction(arena: Allocator, function: *Function) Allocator.Error!void {
         }
         block.items = block.items[0..kept];
     }
+}
+
+const testing = std.testing;
+const types = @import("../support/types.zig");
+
+test "an inout call invalidates receiver store-to-load forwarding" {
+    var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    defer program.deinit();
+    const arena = program.arena.allocator();
+    const functions = try arena.alloc(Function, 2);
+    program.heap_types = try arena.dupe(types.HeapType, &.{.{ .list = .long }});
+    functions[0] = .{
+        .name = "caller",
+        .parameter_count = 0,
+        .return_type = .none,
+        .locals = try arena.dupe(defs.Local, &.{
+            .{ .name = "receiver", .local_type = .{ .heap = 0 } },
+            .{ .name = "owner", .local_type = .{ .heap = 0 } },
+            .{ .name = "other", .local_type = .{ .heap = 0 } },
+        }),
+        .instructions = try arena.dupe(defs.Instruction, &.{
+            .{ .heap_new = .{ .heap = 0, .dims = &.{} } }, // r0
+            .{ .local_set = .{ .local = 0, .value = 0 } }, // r1
+            .{ .call_inout = .{ .function = 1, .receiver = 0, .arguments = &.{} } }, // r2
+            .{ .object_bind = .{ .local = 1, .value = 0 } }, // r3
+            .{ .local_get = 0 }, // r4: may no longer be r0
+            .{ .object_unbind = .{ .local = 2, .value = 4 } }, // r5
+            .{ .ret = null }, // r6
+        }),
+        .result_types = try arena.dupe(types.Type, &.{
+            .{ .heap = 0 }, .none, .none, .none, .{ .heap = 0 }, .none, .none,
+        }),
+        .blocks = try arena.dupe(defs.Block, &.{.{
+            .items = try arena.dupe(Register, &.{ 0, 1, 2, 3, 4, 5, 6 }),
+        }}),
+    };
+    functions[1] = .{
+        .name = "writer",
+        .parameter_count = 1,
+        .return_type = .none,
+        .locals = try arena.dupe(defs.Local, &.{.{
+            .name = "self",
+            .local_type = .{ .heap = 0 },
+            .inout = true,
+        }}),
+        .instructions = try arena.dupe(defs.Instruction, &.{.{ .ret = null }}),
+        .result_types = try arena.dupe(types.Type, &.{.none}),
+        .blocks = try arena.dupe(defs.Block, &.{.{
+            .items = try arena.dupe(Register, &.{0}),
+        }}),
+    };
+    program.functions = functions;
+
+    try ownership(arena, &program);
+    // If the pre-call local_set were forwarded through the call, r4
+    // would be mistaken for r0 and this unbind would be deleted as a
+    // known owner mismatch.
+    try testing.expectEqual(@as(usize, 7), functions[0].blocks[0].items.len);
+    try testing.expect(functions[0].instructions[5] == .object_unbind);
 }

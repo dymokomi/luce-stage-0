@@ -135,3 +135,11 @@ where they were:
 moves an object between workers — build on exactly the machinery this
 run wrote: `Runtime.copyFrom`'s two-runtime walk, the effect lock, and
 the host's two thread slots.  Nothing about a channel needs a third.
+
+## SELF clarification — 2026-08-08
+
+T9's conclusion survives the receiver redesign: a method cannot be
+spawned because its receiver is a place in the caller's frame.  What
+changed is the spelling and the positive counterpart.  Methods have
+implied self and no `var self`; a `static func` member has no receiver
+and is an ordinary function value and worker target.

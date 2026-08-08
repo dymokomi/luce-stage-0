@@ -598,3 +598,14 @@ run, and nothing else in the memo moves if it goes.
   is a memo of its own, written after this one is ratified.
 - **The inline representation** for small all-scalar unions.  Scheduled,
   backend-only, and to be measured before it is built.
+
+## SELF amendment — 2026-08-08
+
+D17's receiver spelling is superseded before union is implemented.
+Union members will follow the built struct/enum rule from
+`docs/SELF.md`: plain member functions have implied self, namespace
+members say `static func`, and receiver writing is inferred.  A writer
+is not categorically forbidden on an object-carrying value; it may
+replace one bare mutable binding that owns its objects in place.  The
+union work must apply that same ownership test rather than revive the
+old `var self` restriction.

@@ -234,10 +234,10 @@ test "a save file that is not one is refused before anything is restored" {
 test "a save the world refuses mid-game is said and played past" {
     // The same failure, arriving at the other decision.  A player
     // typing `save` is still standing in a room, so the loop catches
-    // the reason with `catch reason:`, says it, and asks again — and
-    // the turn that raised left the move count where it was, because a
-    // `var self` method writes its receiver back on the returning edge
-    // only (docs/METHODS.md).
+    // the reason with `catch reason:`, says it, and asks again.  The
+    // attempted turn has already incremented the in-place receiver;
+    // SELF deliberately does not roll a write back when a later disk
+    // operation raises (docs/SELF.md D4).
     var world = fresh();
     world.refuse_writes = true;
     var session = try play(&.{ "north", "save", "i", "quit" }, world);
@@ -245,7 +245,8 @@ test "a save the world refuses mid-game is said and played past" {
 
     try testing.expectEqual(agree.End{ .exited = 0 }, session.end);
     try expectSaid(session.printed(), "The world says no: cannot write adventure.sav");
-    // Three turns were asked for and two of them happened.
+    // The room tally counts the successful travel, independently of
+    // the attempted save's move counter.
     try expectSaid(session.printed(), "You walked into 2 rooms and are carrying 0 things.");
     // Nothing was written.
     try testing.expectEqual(@as(?@TypeOf(session.file().?), null), session.file());

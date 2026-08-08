@@ -989,14 +989,13 @@ test "luce.sema.return: the return's arity is the signature's" {
         \\
     , "luce.sema.return", "minmax answers 2 values, got 3");
 
-    // And the same count inside a `var self` method, where the
-    // receiver rides in front and the *declared* arity is what a
-    // `return` is measured against.
+    // And the same count inside a writing method: the implicit
+    // receiver is separate from the declared return arity.
     try expectSaying(
         \\struct Rng:
         \\    state: long
         \\
-        \\    func next(var self) -> long:
+        \\    func next() -> long:
         \\        return self.state, 1
         \\
         \\func main():
@@ -1077,58 +1076,93 @@ test "luce.sema.own: one object cannot be owned twice, and only a comma can writ
 }
 
 // ---------------------------------------------------------------------------
-// Methods: `self`
+// Methods: implied `self`
 // ---------------------------------------------------------------------------
-//
-// The whole family, each sentence pinned (docs/METHODS.md).  The two
-// structural refusals — `self` anywhere but first, and `self` with a
-// type — are stage 3's and live in `03_parse/test.zig`.
 
-test "luce.sema.self: self is only a parameter of a function inside a struct" {
-    try expectOnlySayingAt(
+test "luce.parse.self: an explicit receiver parameter is retired everywhere" {
+    try expectSaying(
         \\func loose(self) -> long:
         \\    return 1
         \\
         \\func main():
         \\    return
         \\
-    ,
-        "luce.sema.self",
-        "self is only a parameter of a function declared inside a struct or an enum",
-        1,
-        12,
-    );
-}
+    , "luce.parse.self", "self is implied; remove the parameter");
 
-test "luce.sema.self: a namespace function called as a method says which it is" {
-    // The one sentence that would have prevented this memo's own
-    // commissioning error: `Struct.func(x)` is a folder and an
-    // ordinary first argument; `x.foo()` is a type and a receiver.
     try expectSaying(
         \\struct Point:
         \\    x: long
         \\
-        \\    func doubled(p: Point) -> long:
-        \\        return p.x * 2
+        \\    func grow(var self):
+        \\        self.x += 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.self", "self is implied; remove the parameter");
+}
+
+test "luce.parse.static: self: static is only a struct or enum member modifier" {
+    try expectSaying(
+        \\static func helper() -> long:
+        \\    return 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.static", "static belongs before func inside a struct or enum");
+}
+
+test "luce.sema.self: a static member cannot read self" {
+    try expectSaying(
+        \\struct Point:
+        \\    x: long
+        \\
+        \\    static func read() -> long:
+        \\        return self.x
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.self", "self is unavailable in a static function; remove static to make this a method");
+}
+
+test "luce.sema.self: a static member is not callable through a value" {
+    try expectSaying(
+        \\struct Point:
+        \\    x: long
+        \\
+        \\    static func origin() -> Point:
+        \\        return Point(x = 0)
         \\
         \\func main():
         \\    let p = Point(x = 1)
-        \\    assert(p.doubled() == 2)
+        \\    let q = p.origin()
         \\
-    ,
-        "luce.sema.self",
-        "Point.doubled is a namespace function, not a method; it takes no self — call it as Point.doubled(p, …)",
-    );
+    , "luce.sema.self", "origin is static and has no self; call it as Point.origin(");
 }
 
-test "luce.sema.method: a struct has no method by that name, and the closest one is offered" {
-    // This replaces "Point has no methods", which was true until a
-    // struct could have one, and matches the list/map/builder family.
+test "luce.sema.self: a method is not callable through its type" {
     try expectSaying(
         \\struct Point:
         \\    x: long
         \\
-        \\    func length(self) -> long:
+        \\    func read() -> long:
+        \\        return self.x
+        \\
+        \\func main():
+        \\    let p = Point(x = 1)
+        \\    let value = Point.read(p)
+        \\
+    , "luce.sema.self", "read is a method with implicit self; call it as p.read(");
+}
+
+test "luce.sema.method: a struct has no method by that name, and the closest one is offered" {
+    try expectSaying(
+        \\struct Point:
+        \\    x: long
+        \\
+        \\    func length() -> long:
         \\        return self.x
         \\
         \\func main():
@@ -1155,14 +1189,11 @@ test "luce.sema.method: a struct has no method by that name, and the closest one
 }
 
 test "luce.sema.name: there are no bound method values" {
-    // `let f = p.length` is a closure over `p` by another name, and
-    // first among the things docs/LANGUAGE.md deliberately refuses.
-    // The sentence is the one `let f = Point.length` already gets.
     try expectSaying(
         \\struct Point:
         \\    x: long
         \\
-        \\    func length(self) -> long:
+        \\    func length() -> long:
         \\        return self.x
         \\
         \\func main():
@@ -1177,86 +1208,85 @@ test "luce.sema.name: there are no bound method values" {
     );
 }
 
-test "luce.sema.self: a var self receiver must be a writable place" {
-    // The rule is the one `lowerAssignChain` already enforces for
-    // `cells[0].value = 3` — a place whose root is a mutable local —
-    // so a receiver is legal in precisely the positions an assignment
-    // target is, and the two can never drift (docs/METHODS.md).
+test "luce.sema.self: a writer needs a bare var receiver" {
     try expectSaying(
         \\struct Point:
         \\    x: long
         \\
-        \\    func grow(var self):
+        \\    func grow():
         \\        self.x = self.x + 1
         \\
         \\func main():
         \\    let q = Point(x = 1)
         \\    q.grow()
         \\
-    , "luce.sema.let", "q is let-bound; grow takes var self and writes back to its receiver — use var");
+    , "luce.sema.let", "q is let-bound; grow writes its implicit self — use var");
 
     try expectSaying(
         \\struct Point:
         \\    x: long
         \\
-        \\    func origin() -> Point:
+        \\    static func origin() -> Point:
         \\        return Point(x = 0)
         \\
-        \\    func grow(var self):
+        \\    func grow():
         \\        self.x = self.x + 1
         \\
         \\func main():
         \\    Point.origin().grow()
         \\
-    , "luce.sema.self", "grow takes var self, so its receiver must be a variable — not a call result or a temporary");
+    , "luce.sema.self", "grow writes its implicit self, so its receiver must be a var binding — not a call result or temporary");
+
+    for ([_][]const u8{
+        "holder.point.grow()",
+        "points[0].grow()",
+    }) |call| {
+        const source = try std.fmt.allocPrint(std.testing.allocator,
+            \\struct Point:
+            \\    x: long
+            \\
+            \\    func grow():
+            \\        self.x += 1
+            \\
+            \\struct Holder:
+            \\    point: Point
+            \\
+            \\func main():
+            \\    var holder = Holder(point = Point(x = 1))
+            \\    var points = [Point(x = 1)]
+            \\    {s}
+            \\
+        , .{call});
+        defer std.testing.allocator.free(source);
+        try expectSaying(source, "luce.sema.self", "grow writes its implicit self, so its receiver must be a var binding");
+    }
 }
 
-test "luce.sema.self: the static form of a var self method is refused" {
-    // It would take a copy, mutate it, and discard it, in silence —
-    // the one shape where allowing both spellings would mean two
-    // semantics rather than one.
+test "luce.sema.self: an optional narrowing is not a receiver place" {
     try expectSaying(
         \\struct Point:
         \\    x: long
         \\
-        \\    func grow(var self):
-        \\        self.x = self.x + 1
+        \\    func grow():
+        \\        self.x += 1
+        \\
+        \\func chosen() -> Point?:
+        \\    return Point(x = 1)
         \\
         \\func main():
-        \\    var p = Point(x = 1)
-        \\    Point.grow(p)
+        \\    var maybe = chosen()
+        \\    if maybe != none:
+        \\        maybe.grow()
         \\
-    , "luce.sema.self", "grow takes var self and writes back to its receiver; call it as p.grow(…)");
+    , "luce.sema.self", "narrowed value is not a writable receiver — bind a var Point first");
 }
 
-test "luce.sema.self: var self needs a struct that carries no objects" {
-    // Not a restriction invented for the feature: it is where S17 and
-    // S28 already put the corpus, and the diagnostic cites them.
-    try expectSaying(
-        \\struct Bag:
-        \\    items: list(long)
-        \\
-        \\    func stash(var self, n: long):
-        \\        self.items.append(n)
-        \\
-        \\func main():
-        \\    return
-        \\
-    ,
-        "luce.sema.self",
-        "Bag carries objects, so it cannot be written back; take self and mutate through the field, or write a namespace function [OWNERSHIP.md S17, S28]",
-    );
-}
-
-test "luce.sema.self: the receiver is written back, not returned" {
-    // The declared arity is the arity at the call site.  If the
-    // receiver were nameable there it would be a second way to spell
-    // `rng`, which is what `Point.scale(p, 2.0)` was refused for.
+test "luce.sema.self: the receiver is separate from declared return values" {
     try expectSaying(
         \\struct Rng:
         \\    state: long
         \\
-        \\    func next(var self) -> long:
+        \\    func next() -> long:
         \\        self.state = self.state + 1
         \\        return self.state
         \\
@@ -1268,14 +1298,11 @@ test "luce.sema.self: the receiver is written back, not returned" {
 }
 
 test "luce.sema.method: a missing method argument is named, without the receiver" {
-    // Too few arguments names the slots left open (docs/ARGS.md §8),
-    // and `self` is never among them — the receiver is not a slot the
-    // call site fills.
     try expectSaying(
         \\struct Point:
         \\    x: long
         \\
-        \\    func moved(self, dx: long, dy: long) -> long:
+        \\    func moved(dx: long, dy: long) -> long:
         \\        return self.x + dx + dy
         \\
         \\func main():
@@ -1288,12 +1315,12 @@ test "luce.sema.method: a missing method argument is named, without the receiver
     );
 }
 
-test "luce.sema.method: a method checks its arity against the declaration minus the receiver" {
+test "luce.sema.method: a method checks its arity against its written parameters" {
     try expectSaying(
         \\struct Point:
         \\    x: long
         \\
-        \\    func moved(self, dx: long, dy: long) -> long:
+        \\    func moved(dx: long, dy: long) -> long:
         \\        return self.x + dx + dy
         \\
         \\func main():
@@ -1304,6 +1331,95 @@ test "luce.sema.method: a method checks its arity against the declaration minus 
         "luce.sema.method",
         "moved takes 2 arguments, got 3",
     );
+}
+
+test "luce.sema.own: self: an object-carrying writer cannot be given or moved out" {
+    try expectSaying(
+        \\struct Box:
+        \\    items: list(long)
+        \\
+        \\    func lose():
+        \\        let moved = give self
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.own",
+        "self is the caller's receiver and cannot be given away; pass it to a borrowing parameter, or use copy self [SELF.md D4, OWNERSHIP.md S12]",
+    );
+
+    try expectSaying(
+        \\struct Box:
+        \\    items: list(long)
+        \\
+        \\    func moved() -> Box:
+        \\        self.items = [2]
+        \\        return self
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.own", "self is the caller's receiver and cannot be moved out; return copy self");
+}
+
+test "luce.sema.own: self: an object-carrying writer cannot be freed" {
+    try expectSaying(
+        \\struct Box:
+        \\    items: list(long)
+        \\
+        \\    func release():
+        \\        free(self)
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.own",
+        "self is the caller's receiver and cannot be freed; replace its fields or let the caller's scope release it [SELF.md D4]",
+    );
+}
+
+test "luce.sema.call: self: reader and writer methods are not function values" {
+    try expectSaying(
+        \\struct Point:
+        \\    x: long
+        \\
+        \\    func read() -> long:
+        \\        return self.x
+        \\
+        \\func main():
+        \\    let f: func(Point) -> long = Point.read
+        \\
+    , "luce.sema.call", "a method reference would carry its receiver; write a lambda that takes the receiver");
+
+    try expectSaying(
+        \\struct Point:
+        \\    x: long
+        \\
+        \\    func grow() -> long:
+        \\        self.x += 1
+        \\        return self.x
+        \\
+        \\func main():
+        \\    let f: func(Point) -> long = Point.grow
+        \\
+    , "luce.sema.call", "writes its implicit self and is not a function value; move the operation into a top-level or static function");
+}
+
+test "luce.sema.name: self: a lambda cannot capture the implicit receiver" {
+    try expectSaying(
+        \\struct Point:
+        \\    x: long
+        \\
+        \\    func read() -> long:
+        \\        let f: func() -> long = () -> self.x
+        \\        return f()
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.name", "a lambda carries no environment, and self belongs to the scope around it");
 }
 
 // ---------------------------------------------------------------------------
@@ -1559,7 +1675,7 @@ test "luce.sema.name: a struct namespace answers for its own members" {
         \\struct Words:
         \\    count: long
         \\
-        \\    func classify() -> long:
+        \\    static func classify() -> long:
         \\        return 1
         \\
         \\func main():
@@ -1578,7 +1694,7 @@ test "luce.sema.name: a struct namespace with no such member says so" {
         \\struct Words:
         \\    count: long
         \\
-        \\    func classify() -> long:
+        \\    static func classify() -> long:
         \\        return 1
         \\
         \\func main():
@@ -3141,19 +3257,19 @@ test "luce.sema.call: every missing argument is named at once" {
     , "luce.sema.call", "volume is missing height and depth");
 }
 
-test "luce.sema.self: self is not a nameable argument on the static spelling" {
+test "luce.sema.self: the type spelling cannot name a method receiver" {
     try expectSaying(
         \\struct Point:
         \\    x: long
         \\
-        \\    func read(self) -> long:
+        \\    func read() -> long:
         \\        return self.x
         \\
         \\func main():
         \\    let p = Point(x = 1)
-        \\    let a = Point.read(self = p)
+        \\    let a = Point.read(p)
         \\
-    , "luce.sema.self", "self is the receiver, not a parameter: write Point.read(p, ");
+    , "luce.sema.self", "read is a method with implicit self; call it as p.read(");
 }
 
 test "luce.sema.self: self is not a nameable argument on the method form" {
@@ -3161,7 +3277,7 @@ test "luce.sema.self: self is not a nameable argument on the method form" {
         \\struct Point:
         \\    x: long
         \\
-        \\    func plus(self, other: long) -> long:
+        \\    func plus(other: long) -> long:
         \\        return self.x + other
         \\
         \\func main():
@@ -3256,7 +3372,7 @@ test "luce.sema.const: a default folds once, at the declaration, called or not" 
     , "luce.sema.const", "constant division by zero");
 }
 
-test "luce.parse.self: self takes no default" {
+test "luce.parse.self: an explicit self with a default gets the retirement diagnostic" {
     try expectSaying(
         \\struct Point:
         \\    x: long
@@ -3267,7 +3383,7 @@ test "luce.parse.self: self takes no default" {
         \\func main():
         \\    return
         \\
-    , "luce.parse.self", "self is the receiver and takes no default");
+    , "luce.parse.self", "self is implied; remove the parameter");
 }
 
 test "luce.sema.call: the count sentence names the defaults" {
@@ -3579,7 +3695,7 @@ test "luce.sema.construct: fields are named, not positional" {
 test "luce.sema.construct: a function-namespace struct has no value fields" {
     try expectRejected(
         \\struct Util:
-        \\    func helper() -> long:
+        \\    static func helper() -> long:
         \\        return 1
         \\
         \\func main():
@@ -5818,7 +5934,7 @@ test "luce.sema.enum: the backing type is one of the four integer widths" {
 test "luce.sema.enum: an enum with no members is not a set of anything" {
     try expectRejected(
         \\enum Method:
-        \\    func none_of_them() -> long:
+        \\    static func none_of_them() -> long:
         \\        return 0
         \\
         \\func main():
@@ -6053,7 +6169,7 @@ test "luce.sema.duplicate: an enum shares the type-name space, and its members t
         \\enum Method:
         \\    stored
         \\
-        \\    func stored() -> long:
+        \\    static func stored() -> long:
         \\        return 0
         \\
         \\func main():
@@ -6105,7 +6221,7 @@ test "private on an enum gates nothing inside its own file" {
         \\    stored
         \\    deflated
         \\
-        \\    func first() -> Method:
+        \\    static func first() -> Method:
         \\        return Method.stored
         \\
         \\func main():
@@ -6230,7 +6346,7 @@ test "luce.sema.self: a method cannot be spawned" {
         \\struct Point:
         \\    x: long
         \\
-        \\    func doubled(self) -> long:
+        \\    func doubled() -> long:
         \\        return self.x * 2
         \\
         \\func main():
@@ -6341,7 +6457,7 @@ test "luce.sema.call: a method reference is refused, and taught" {
         \\struct Point:
         \\    x: long
         \\
-        \\    func length(self) -> long:
+        \\    func length() -> long:
         \\        return self.x
         \\
         \\func apply(f: func(Point) -> long, p: Point) -> long:

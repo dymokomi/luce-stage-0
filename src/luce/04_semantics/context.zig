@@ -273,6 +273,11 @@ pub const EnclosingLocal = struct {
     declared_at: Span,
 };
 
+/// The semantic receiver effect inferred for a member.  Source no
+/// longer writes a receiver parameter; plain members begin as readers
+/// and the declaration fixed point promotes the ones that write self.
+pub const Receiver = enum { not, reads, writes };
+
 /// A collected function signature: everything a call site has to know
 /// before the body it belongs to has been walked.
 pub const FunctionDeclInfo = struct {
@@ -288,16 +293,15 @@ pub const FunctionDeclInfo = struct {
     /// missing argument from here as the constant register the same
     /// literal would have produced written out — nothing reaches MIR.
     parameter_defaults: []?TypedConstant,
-    /// Whether this function's first parameter is `self`, and whether
-    /// it writes it back (docs/METHODS.md).  `.not` for every one of
-    /// the namespace functions a struct has always been able to hold —
-    /// which is the rule that keeps them all compiling untouched.
+    /// Whether this member has the implicit `self`, and whether its
+    /// body (directly or transitively) writes that receiver
+    /// (docs/SELF.md).  `.not` for top-level and `static` functions.
     ///
-    /// A method is a plain call with the receiver first, and the
-    /// receiver's *type* is `parameter_types[0]` like any other
-    /// parameter's; this field is what says the call site may spell it
-    /// `x.f(…)`.
-    receiver: ast.Receiver = .not,
+    /// The receiver's *type* is `parameter_types[0]`: readers pass its
+    /// value as an ordinary first argument, while writers carry its
+    /// caller place over `call_inout`.  This field is what says the
+    /// call site may spell either one as `x.f(…)`.
+    receiver: Receiver = .not,
     /// The declaration this function was written inside, or null at top
     /// level.  Set for namespace functions too — `self` outside one is
     /// refused by asking this, not by asking the receiver.
@@ -306,14 +310,9 @@ pub const FunctionDeclInfo = struct {
     /// answers nothing, one entry for `-> T`, two or more for a return
     /// shape (docs/RETURNS.md).  This is the arity a call site sees.
     results: []Type = &.{},
-    /// What actually travels in the value channel, in order: the
-    /// receiver first when the method writes it back, then `results`.
-    ///
-    /// **A `var self` method's receiver is result zero** — there is no
-    /// receiver mechanism separate from the return mechanism, which is
-    /// the sense in which `self` was always waiting for multiple
-    /// returns (docs/RETURNS.md §5).  For everything else this is
-    /// `results` exactly.
+    /// What actually travels in the value channel.  SELF retired the
+    /// old hidden receiver-at-result-zero convention, so this is now
+    /// `results` exactly for every function.
     channel: []Type = &.{},
     /// The one type that travels in the value channel.  For a return
     /// shape it is the compiler-synthesized struct the values ride in
@@ -437,8 +436,11 @@ pub const ConstantInfo = struct {
 /// parameter — their scope frees the object; `alias` bindings are just
 /// another name (S8); `borrow_param` marks a borrowed parameter, which
 /// may never keep, give, free, or return its object (S12, S17).
+/// `inout_receiver` is the caller's owning binding seen through an
+/// implicit writing `self`: it may replace/rebind that place, but the
+/// callee may neither move it nor release it at scope exit.
 /// Bindings of value types are all `.alias` — the class never matters.
-pub const OwnershipClass = enum { owned, alias, borrow_param };
+pub const OwnershipClass = enum { owned, alias, borrow_param, inout_receiver };
 
 pub const Poison = enum { given, freed };
 

@@ -23,15 +23,15 @@ struct Order:
         # one message that has to quote it back.
         typed: string = ""
 
-    func make(verb: string, noun: string = "", typed: string = "") -> Order:
+    static func make(verb: string, noun: string = "", typed: string = "") -> Order:
         return Order(verb = verb, noun = noun, typed = typed)
 
     # Nothing was typed but the return key.
-    func empty(self) -> bool:
+    func empty() -> bool:
         return len(self.verb) == 0
 
     # The line as it was written, for "I do not know how to …".
-    func said(self) -> string:
+    func said() -> string:
         return self.typed
 
 # Read one line of typing.  The verb comes back canonical, the noun

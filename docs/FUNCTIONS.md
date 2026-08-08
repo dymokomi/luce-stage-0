@@ -139,3 +139,11 @@ and both engines dispatch through the same program table.  D6 shipped
 at the ratified minimum: `std.lists` provides stable O(n log n)
 `xs.sort_by(before)` for every list element type, routed through method
 syntax after `import std.lists`; `keep` and `find_by` remain deferred.
+
+## SELF clarification — 2026-08-08
+
+D1 is unchanged under implied self: methods still cannot be function
+values because doing so would carry a receiver.  The namespace members
+that can become values now say `static func`; static members, like
+top-level functions, may also be spawned.  A method may be called only
+through its value receiver, never through the enclosing type.

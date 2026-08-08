@@ -8,13 +8,13 @@ struct Rect:
     width: double
     height: double
 
-    func area(self) -> double:
+    func area() -> double:
         return self.width * self.height
 
-    func scaled(self, factor: double) -> Rect:
+    func scaled(factor: double) -> Rect:
         return Rect(width = self.width * factor, height = self.height * factor)
 
-    func grow(var self, factor: double):
+    func grow(factor: double):
         self.width = self.width * factor
         self.height = self.height * factor
 
@@ -38,17 +38,15 @@ scaled 6x9 area 54
 grown 4x4
 ```
 
-A function declared inside a struct is a **method** when its first
-parameter is `self`, and a **namespace function** when it is not.
-`unit.area()` *means* `Rect.area(unit)` — the same call, resolved at
-compile time, with no dispatch and no inheritance. The long form stays
-callable, which is what lets a struct convert one function at a time.
+A plain function inside a struct is a **method** with implied `self`.
+A namespace function says `static func` and has none. Methods are
+called only through a value — `unit.area()` — with no dispatch or
+inheritance and no type-qualified `Rect.area(unit)` form.
 
-`var self` marks a method that writes its receiver back: `growing.grow(4.0)`
-means `growing = Rect.grow(growing, 4.0)`, copy in and copy out. Its
-receiver has to be a `var`, and its struct has to carry no objects —
-which is the same rule that already governs assignment and ownership,
-not a new one.
+The compiler infers that `grow` writes its receiver from the field
+stores in its body. `growing.grow(4.0)` therefore requires `growing`
+to be a bare `var` binding and changes that slot in place. A reading
+method such as `area` or `scaled` accepts a `let` or a temporary.
 
 ## Nested places
 
@@ -134,10 +132,10 @@ struct Account:
     private:
         cents: long
 
-    func balance(self) -> double:
+    func balance() -> double:
         return double(self.cents) / 100.0
 
-    func deposit(var self, amount: double):
+    func deposit(amount: double):
         self.cents = self.cents + long(amount * 100.0)
 
 func open(owner: string) -> Account:

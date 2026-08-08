@@ -270,8 +270,8 @@ func axpy(xs: array(double, _), factor: double, ys: array(double, _)):
 # and kept alive for the life of `main`, whose entire purpose was to
 # give a `long` reference semantics so the *state* could go out
 # through a borrow while the *draw* went out through `return`.  Two
-# values, two channels, one allocation.  `var self` and a second
-# return position between them delete all three (docs/RETURNS.md).
+# values, two channels, one allocation.  An implied receiver updated
+# in place and the ordinary return between them delete all three.
 struct Rng:
     # The generator's whole state.  Any seed works: one out of range
     # is brought into range on first use.  Marked, because reaching
@@ -280,7 +280,7 @@ struct Rng:
     private state: long
 
     # The next raw state value in [1, 2^31 - 2].
-    func next(var self) -> long:
+    func next() -> long:
         # A Lehmer generator has no zero state and none at or past its
         # modulus, so a seed of either shape would stick or wrap.  In
         # range this is the identity — which is the property that
@@ -295,13 +295,13 @@ struct Rng:
         return self.state
 
     # A double uniform in (0, 1).
-    func real(var self) -> double:
+    func real() -> double:
         return double(self.next()) / 2147483647.0
 
     # A long uniform in [low, high) — high is exclusive, like range.
     # (Slight modulo bias; fine for games, meaningless for spans that
     # small anyway.)
-    func in_range(var self, low: long, high: long) -> long:
+    func in_range(low: long, high: long) -> long:
         if high <= low:
             trap("in_range needs low < high")
         return low + self.next() % (high - low)
@@ -310,4 +310,3 @@ struct Rng:
 # state stays the module's own (docs/VISIBILITY.md §6).
 func rng(seed: long) -> Rng:
     return Rng(state = seed)
-

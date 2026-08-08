@@ -169,20 +169,20 @@ struct Entry:
 
     # The entry's name inside the archive, exactly as it is stored:
     # "/" separated, never absolute in an archive worth trusting.
-    func name(self) -> string:
+    func name() -> string:
         return self.path
 
     # How many bytes the contents are.
-    func size(self) -> long:
+    func size() -> long:
         return self.plain_size
 
     # How many bytes the contents take up in the archive.
-    func packed(self) -> long:
+    func packed() -> long:
         return self.packed_size
 
     # The CRC-32 the archive records for the contents.  `extract`
     # checks it, so this is for reporting rather than for deciding.
-    func crc(self) -> long:
+    func crc() -> long:
         return self.checksum
 
     # True when the entry is deflated rather than stored whole.
@@ -190,7 +190,7 @@ struct Entry:
     # The field holds the archive's own number, because a method zip
     # cannot read still has to be named in a message; the comparison
     # says which number by name.
-    func deflated(self) -> bool:
+    func deflated() -> bool:
         return self.method == int(Method.deflated)
 
 # The offset of the end-of-central-directory record (APPNOTE 4.3.16),
@@ -318,7 +318,7 @@ struct Writer:
 
     # Store one entry.  `compress` deflates it and keeps whichever of
     # the two is smaller, so an entry never grows by being compressed.
-    func add(self, name: string, data: list(byte), compress: bool = false) -> !:
+    func add(name: string, data: list(byte), compress: bool = false) -> !:
         if len(name) == 0:
             error("zip: an entry needs a name")
         if len(name) > 65535:
@@ -336,7 +336,7 @@ struct Writer:
         self.put_entry(name, Method.stored, checksum, len(data), data)
 
     # The local file header, APPNOTE 4.3.7, field for field.
-    private func put_entry(self, name: string, method: Method, checksum: long, plain_size: long, packed: list(byte)):
+    private func put_entry(name: string, method: Method, checksum: long, plain_size: long, packed: list(byte)):
         let header = len(self.out)
         put_u32(self.out, 0x0403_4B50)
         put_u16(self.out, version_for(method))
@@ -356,7 +356,7 @@ struct Writer:
 
     # The whole archive: everything added, then the central directory
     # over it.  A fresh list every time, so the writer stays usable.
-    func finish(self) -> list(byte):
+    func finish() -> list(byte):
         var archive = new list(byte)
         for value in self.out:
             archive.append(value)
@@ -502,8 +502,8 @@ private enum Block(byte):
     dynamic = 2
 
 # The decoder's cursor: one bit position into the compressed bytes.
-# It carries no objects, which is what lets every method write the
-# advanced cursor back through `var self` (docs/METHODS.md).
+# Its methods advance that cursor directly through their implied
+# receiver; callers need only supply a mutable Stream place.
 struct Stream:
     private position: long
 
@@ -513,7 +513,7 @@ struct Stream:
     # its own least significant bit — so this is the order for
     # BFINAL, BTYPE, LEN, HLIT and every extra-bits field, and
     # `decode` assembles a Huffman code the other way round.
-    private func take(var self, data: list(byte), count: long) -> long!:
+    private func take(data: list(byte), count: long) -> long!:
         var value: long = 0
         var taken: long = 0
         while taken < count:
@@ -532,7 +532,7 @@ struct Stream:
     # so far is compared against the run of codes of that length,
     # which is what §3.2.2's "shorter codes lexicographically precede
     # longer codes" means when you read rather than write.
-    private func decode(var self, data: list(byte), counts: list(long), symbols: list(long)) -> long!:
+    private func decode(data: list(byte), counts: list(long), symbols: list(long)) -> long!:
         var code: long = 0
         var first: long = 0
         var index: long = 0
@@ -550,7 +550,7 @@ struct Stream:
     # A stored block, RFC 1951 §3.2.4: "any bits of input up to the
     # next byte boundary are ignored", then LEN, then NLEN — the
     # one's complement of LEN — then LEN bytes as they are.
-    private func stored(var self, data: list(byte), out: list(byte)) -> !:
+    private func stored(data: list(byte), out: list(byte)) -> !:
         self.position = (self.position + 7) >> 3 << 3
         let at = self.position >> 3
         if at + 4 > len(data):
@@ -572,7 +572,7 @@ struct Stream:
     # §3.2.3's <length 5, distance 2> over X,Y giving X,Y,X,Y,X — so
     # the copy reads the output one byte at a time rather than
     # slicing it.
-    private func codes(var self, data: list(byte), out: list(byte), lit_counts: list(long), lit_symbols: list(long), dist_counts: list(long), dist_symbols: list(long)) -> !:
+    private func codes(data: list(byte), out: list(byte), lit_counts: list(long), lit_symbols: list(long), dist_counts: list(long), dist_symbols: list(long)) -> !:
         let lengths = length_bases()
         let length_bits = length_extras()
         let distances = distance_bases()
@@ -605,7 +605,7 @@ struct Stream:
     # 286-287 and distance codes 30-31 never occur in a stream and are
     # built anyway, because the RFC says they "participate in the code
     # construction" — leaving them out would shift every code.
-    private func fixed(var self, data: list(byte), out: list(byte)) -> !:
+    private func fixed(data: list(byte), out: list(byte)) -> !:
         var lengths: list(long) = []
         for symbol in range(0, 144):
             lengths.append(8)
@@ -634,7 +634,7 @@ struct Stream:
     # repeat; 16 repeats the previous length, and because the two
     # alphabets are "a single sequence of HLIT + HDIST + 258 values"
     # a repeat may cross from one into the other.
-    private func dynamic(var self, data: list(byte), out: list(byte)) -> !:
+    private func dynamic(data: list(byte), out: list(byte)) -> !:
         let literal_bits = try self.take(data, 5)
         let distance_count_bits = try self.take(data, 5)
         let table_bits = try self.take(data, 4)
@@ -722,7 +722,7 @@ struct Packer:
     private held: long
     private count: long
 
-    private func put(var self, out: list(byte), value: long, count: long):
+    private func put(out: list(byte), value: long, count: long):
         var bits = self.held | value << self.count
         var have = self.count + count
         while have >= 8:
@@ -732,13 +732,13 @@ struct Packer:
         self.held = bits
         self.count = have
 
-    private func put_code(var self, out: list(byte), code: long, count: long):
+    private func put_code(out: list(byte), code: long, count: long):
         var reversed: long = 0
         for step in range(0, count):
             reversed = reversed << 1 | code >> step & 1
         self.put(out, reversed, count)
 
-    private func flush(var self, out: list(byte)):
+    private func flush(out: list(byte)):
         if self.count > 0:
             out.append(byte(self.held & 0xFF))
             self.held = 0

@@ -219,6 +219,25 @@ pub const Lowering = struct {
         return local;
     }
 
+    /// The implied receiver slot of a writing method. It is always
+    /// logical parameter zero and aliases a mutable local in the
+    /// caller; stage 4 keeps it out of the callee scope's release list.
+    pub fn addInoutLocal(
+        self: *Lowering,
+        name: []const u8,
+        local_type: Type,
+        owns_storage: bool,
+    ) Error!LocalId {
+        std.debug.assert(self.locals.items.len == 0);
+        try self.locals.append(self.arena, .{
+            .name = try self.arena.dupe(u8, name),
+            .local_type = local_type,
+            .owns_storage = owns_storage,
+            .inout = true,
+        });
+        return 0;
+    }
+
     /// Every hidden local shares one name: it is never written to, and
     /// a fresh copy per spill is a copy per operator in a large
     /// function.

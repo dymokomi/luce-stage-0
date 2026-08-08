@@ -70,7 +70,8 @@ A lambda carries no environment. It may use its parameters, functions
 and file-scope constants, but not a local from the function around it;
 behavior plus state is a struct with a method. A method reference is
 refused for the same reason — it would carry its receiver — while a
-namespace function such as `Scale.twice` is an ordinary function value.
+static namespace function such as `Scale.twice` is an ordinary function
+value.
 
 Calls through values are positional because a function type has no
 parameter names or defaults. Function values copy freely, compare with
@@ -119,31 +120,28 @@ it.
 A struct may hold functions, and they come in two kinds — told apart
 by one word.
 
-A function whose first parameter is `self` is a **method**: the struct
-is a type and the receiver is the thing in front of the dot. A
-function without one is a **namespace function**: the struct is a
-folder and its first argument is an ordinary argument. Luce has both,
-they share a syntax, and `self` is the only thing that distinguishes
-them. There is still no dispatch and no inheritance — `p.length()`
-*means* `Point.length(p)`, resolved at compile time.
+A plain member is a **method**: the struct is a type, `self` is implied,
+and the receiver is the thing in front of the dot. A member written
+`static func` is a **namespace function**: the struct is a folder and
+there is no `self`. There is still no dispatch and no inheritance.
 
 ```luce run
 struct Point:
     x: double
     y: double
 
-    func length(p: Point) -> double:
-        return sqrt(p.x * p.x + p.y * p.y)
+    func length() -> double:
+        return sqrt(self.x * self.x + self.y * self.y)
 
-    func plus(a: Point, b: Point) -> Point:
+    static func plus(a: Point, b: Point) -> Point:
         return Point(x = a.x + b.x, y = a.y + b.y)
 
 func main():
     let a = Point(x = 3.0, y = 4.0)
     let b = Point(x = 1.0, y = 2.0)
-    print(string(Point.length(a)))
+    print(string(a.length()))
     let sum = Point.plus(a, b)
-    print(f"({sum.x}, {sum.y}) has length {Point.length(sum)}")
+    print(f"({sum.x}, {sum.y}) has length {sum.length()}")
 ```
 
 ```output
@@ -152,9 +150,10 @@ func main():
 ```
 
 Some structs in real Luce programs have no fields at all and exist
-only to group functions — that is a legitimate use, and the
-[status page](/status/) is honest that it is also a sign that
-user-defined receivers are missing.
+only to group static functions. That is a legitimate namespace. A
+method is called only through a value and cannot become a function
+value or worker target; a static member is called through its type and
+can do both.
 
 ## Nested places
 

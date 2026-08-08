@@ -79,6 +79,10 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     // what `decode` exists to refuse.
     for (program.functions) |*function| {
         if (function.parameter_count > function.locals.len) return error.BadLocal;
+        for (function.locals, 0..) |local, index| {
+            if (!local.inout) continue;
+            if (index != 0 or function.parameter_count == 0) return error.BadLocal;
+        }
     }
     for (program.functions) |*function| {
         try verifyFunction(allocator, program, function);
@@ -90,6 +94,7 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     // here because a decoded module is not to be trusted about them
     // (docs/METHODS.md, OWNERSHIP.md S44).
     if (entry.parameter_count > 1) return error.BadFunction;
+    if (entry.parameter_count != 0 and entry.locals[0].inout) return error.BadFunction;
     if (entry.parameter_count == 1 and !isCommandLine(program, entry.locals[0].local_type)) {
         return error.BadFunction;
     }
@@ -428,6 +433,7 @@ fn expectSignature(
 ) VerifyError!void {
     const callee = program.functions[named];
     if (callee.fallible) return error.TypeMismatch;
+    if (callee.parameter_count != 0 and callee.locals[0].inout) return error.BadFunction;
     if (signature.parameters.len != callee.parameter_count) return error.BadFunction;
     if (callee.locals.len < callee.parameter_count) return error.BadLocal;
     for (signature.parameters, 0..) |parameter, index| {
@@ -617,8 +623,25 @@ fn verifyInstruction(
         .call => |call| {
             if (call.function >= program.functions.len) return error.BadFunction;
             const callee = program.functions[call.function];
+            if (callee.parameter_count != 0 and callee.locals[0].inout) return error.BadFunction;
             if (call.arguments.len != callee.parameter_count) return error.BadFunction;
             for (call.arguments, 0..) |argument, index| {
+                const value = try operandType(function, defined, argument);
+                try expectType(value, callee.locals[index].local_type);
+            }
+            if (!result.eql(callee.return_type)) return error.TypeMismatch;
+        },
+        .call_inout => |call| {
+            if (call.function >= program.functions.len) return error.BadFunction;
+            if (call.receiver >= function.locals.len) return error.BadLocal;
+            const callee = program.functions[call.function];
+            if (callee.parameter_count == 0 or !callee.locals[0].inout) return error.BadFunction;
+            if (call.arguments.len + 1 != callee.parameter_count) return error.BadFunction;
+            try expectType(function.locals[call.receiver].local_type, callee.locals[0].local_type);
+            if (function.locals[call.receiver].owns_storage != callee.locals[0].owns_storage) {
+                return error.BadLocal;
+            }
+            for (call.arguments, 1..) |argument, index| {
                 const value = try operandType(function, defined, argument);
                 try expectType(value, callee.locals[index].local_type);
             }
@@ -632,6 +655,7 @@ fn verifyInstruction(
         .spawn => |call| {
             if (call.function >= program.functions.len) return error.BadFunction;
             const callee = program.functions[call.function];
+            if (callee.parameter_count != 0 and callee.locals[0].inout) return error.BadFunction;
             if (call.arguments.len != callee.parameter_count) return error.BadFunction;
             for (call.arguments, 0..) |argument, index| {
                 const value = try operandType(function, defined, argument);
@@ -719,6 +743,8 @@ fn verifyInstruction(
 fn raisesError(program: *const Program, function: *const Function, register: Register) bool {
     return switch (function.instructions[register]) {
         .call => |call| call.function < program.functions.len and
+            program.functions[call.function].fallible,
+        .call_inout => |call| call.function < program.functions.len and
             program.functions[call.function].fallible,
         .intrinsic => |intrinsic| switch (intrinsic.kind) {
             // The one intrinsic whose fallibility is not a fact about

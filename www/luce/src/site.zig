@@ -67,7 +67,7 @@ pub const sections = [_]Section{
             .{ .slug = "maps", .title = "Maps", .blurb = "Insertion-ordered dictionaries with O(1) lookup." },
             .{ .slug = "arrays", .title = "Arrays and grids", .blurb = "Fixed-shape numeric storage, up to four dimensions." },
             .{ .slug = "text", .title = "Text processing", .blurb = "Splitting, joining, trimming and counting with std.strings." },
-            .{ .slug = "structs", .title = "Structs", .blurb = "Value aggregates, namespaced functions, and structs that carry objects." },
+            .{ .slug = "structs", .title = "Structs", .blurb = "Value aggregates, implied-self methods, static functions, and structs that carry objects." },
             .{ .slug = "ownership", .title = "give, copy and free", .blurb = "The four situations where memory needs a word from you." },
             .{ .slug = "optionals", .title = "Optionals", .blurb = "parse_int, none, narrowing, and the else fallback." },
             .{ .slug = "errors", .title = "Errors", .blurb = "A fallible function, try, catch, and an uncaught error's one-line report." },

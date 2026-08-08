@@ -54,6 +54,7 @@ pub fn mapOperands(
             set.value = map[set.value];
         },
         .call, .spawn => |*call| call.arguments = try mapSlice(arena, call.arguments, map),
+        .call_inout => |*call| call.arguments = try mapSlice(arena, call.arguments, map),
         .call_indirect => |*call| {
             call.callee = map[call.callee];
             call.arguments = try mapSlice(arena, call.arguments, map);
@@ -114,6 +115,9 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
         .call, .spawn => |call| for (call.arguments) |argument| {
             used[argument] = true;
         },
+        .call_inout => |call| for (call.arguments) |argument| {
+            used[argument] = true;
+        },
         .intrinsic => |call| for (call.arguments) |argument| {
             used[argument] = true;
         },
@@ -130,15 +134,18 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
 }
 
 /// Which local an instruction names, and how it touches it.  `read`
-/// means the slot's *value* is read: only `local_get` does that, which
-/// is what makes a store to a never-read local dead.  `object_bind`
-/// and `object_unbind` name a local without reading its slot — they
-/// pass the id to the runtime as half of an owner's identity — so they
-/// keep the local alive but do not keep stores to it alive.
+/// means the slot's *value* is read: `local_get` does that directly,
+/// and `call_inout` reads then may replace its receiver.  That is what
+/// makes a store to an otherwise never-read receiver live across the
+/// call.  `object_bind` and `object_unbind` name a local without
+/// reading its slot — they pass the id to the runtime as half of an
+/// owner's identity — so they keep the local alive but do not keep
+/// stores to it alive.
 pub const LocalUse = union(enum) {
     none,
     read: defs.LocalId,
     write: defs.LocalId,
+    read_write: defs.LocalId,
     name: defs.LocalId,
 };
 
@@ -146,6 +153,7 @@ pub fn localUse(instruction: Instruction) LocalUse {
     return switch (instruction) {
         .local_get => |local| .{ .read = local },
         .local_set => |set| .{ .write = set.local },
+        .call_inout => |call| .{ .read_write = call.receiver },
         .object_bind => |bind| .{ .name = bind.local },
         .object_unbind => |unbind| .{ .name = unbind.local },
         else => .none,
@@ -176,6 +184,7 @@ test "every operand of every instruction shape is rewritten" {
         .{ .struct_get = .{ .target = 6, .layout = 0, .field = 0 } },
         .{ .struct_set = .{ .target = 0, .layout = 0, .field = 0, .value = 1 } },
         .{ .call = .{ .function = 0, .arguments = &arguments } },
+        .{ .call_inout = .{ .function = 0, .receiver = 7, .arguments = &arguments } },
         .{ .intrinsic = .{ .kind = .len, .arguments = &arguments } },
         .{ .heap_new = .{ .heap = 0, .dims = &dims } },
         .{ .object_bind = .{ .local = 0, .value = 2 } },
@@ -197,12 +206,14 @@ test "every operand of every instruction shape is rewritten" {
     try testing.expectEqual(@as(Register, 1), shapes[6].struct_set.target);
     try testing.expectEqual(@as(Register, 2), shapes[6].struct_set.value);
     try testing.expectEqualSlices(Register, &.{ 3, 4 }, shapes[7].call.arguments);
-    try testing.expectEqualSlices(Register, &.{ 3, 4 }, shapes[8].intrinsic.arguments);
-    try testing.expectEqualSlices(Register, &.{5}, shapes[9].heap_new.dims);
-    try testing.expectEqual(@as(Register, 3), shapes[10].object_bind.value);
-    try testing.expectEqual(@as(Register, 4), shapes[11].object_unbind.value);
-    try testing.expectEqual(@as(Register, 5), shapes[12].branch.condition);
-    try testing.expectEqual(@as(Register, 6), shapes[13].ret.?);
+    try testing.expectEqualSlices(Register, &.{ 3, 4 }, shapes[8].call_inout.arguments);
+    try testing.expectEqual(@as(defs.LocalId, 7), shapes[8].call_inout.receiver);
+    try testing.expectEqualSlices(Register, &.{ 3, 4 }, shapes[9].intrinsic.arguments);
+    try testing.expectEqualSlices(Register, &.{5}, shapes[10].heap_new.dims);
+    try testing.expectEqual(@as(Register, 3), shapes[11].object_bind.value);
+    try testing.expectEqual(@as(Register, 4), shapes[12].object_unbind.value);
+    try testing.expectEqual(@as(Register, 5), shapes[13].branch.condition);
+    try testing.expectEqual(@as(Register, 6), shapes[14].ret.?);
     // Rewriting hands each instruction its own slice, so the two that
     // shared `arguments` above did not map it twice.
     try testing.expectEqualSlices(Register, &.{ 2, 3 }, &arguments);

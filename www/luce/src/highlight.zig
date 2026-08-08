@@ -33,11 +33,11 @@ const Buffer = @import("buffer.zig");
 
 /// Reserved words that read as control or declaration.
 pub const keywords = [_][]const u8{
-    "func",   "struct", "enum",     "match", "let", "var",
-    "if",     "elif",   "else",     "while", "for", "in",
-    "return", "break",  "continue", "and",   "or",  "not",
-    "true",   "false",  "import",   "none",  "try", "catch",
-    "self",   "public", "private",
+    "func",   "struct", "enum",     "match",   "let", "var",
+    "if",     "elif",   "else",     "while",   "for", "in",
+    "return", "break",  "continue", "and",     "or",  "not",
+    "true",   "false",  "import",   "none",    "try", "catch",
+    "self",   "static", "public",   "private",
 };
 
 /// The words that move ownership.  They get a class of their own
@@ -229,8 +229,9 @@ fn highlighted(gpa: std.mem.Allocator, source: []const u8) ![]u8 {
 
 test "keywords, verbs, types, builtins and declared names each get their class" {
     const gpa = std.testing.allocator;
-    const html = try highlighted(gpa, "func total(xs: give List(Int)) -> Int:\n    return len(xs)");
+    const html = try highlighted(gpa, "static func total(xs: give List(Int)) -> Int:\n    return len(xs)");
     defer gpa.free(html);
+    try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"k\">static</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"k\">func</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"d\">total</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"v\">give</span>") != null);

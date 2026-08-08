@@ -546,6 +546,15 @@ pub const Parser = struct {
                         self.recover();
                     }
                 },
+                .keyword_static => {
+                    try self.report(
+                        "luce.parse.static",
+                        self.peek().span,
+                        "static belongs before func inside a struct or enum; a file-scope function is already a namespace function",
+                        .{},
+                    );
+                    self.recover();
+                },
                 .keyword_let => {
                     if (try self.constDecl()) |declaration| {
                         try constants.append(self.arena, declaration);
@@ -650,6 +659,15 @@ pub const Parser = struct {
                 } else {
                     self.recover();
                 }
+            },
+            .keyword_static => {
+                try self.report(
+                    "luce.parse.static",
+                    self.peek().span,
+                    "static belongs before func inside a struct or enum; a file-scope function is already a namespace function",
+                    .{},
+                );
+                self.recover();
             },
             .keyword_let => {
                 if (try self.constDecl()) |declaration| {
@@ -1024,9 +1042,13 @@ pub const Parser = struct {
         functions: *std.ArrayList(ast.FuncDecl),
         visibility: ast.Visibility,
     ) Error!void {
-        if (self.peekKind() == .keyword_func) {
-            if (try self.funcDecl()) |declaration| {
-                var marked = declaration;
+        if (self.peekKind() == .keyword_func or self.peekKind() == .keyword_static) {
+            const declaration = if (self.peekKind() == .keyword_static)
+                try self.staticFuncDecl()
+            else
+                try self.funcDecl();
+            if (declaration) |parsed| {
+                var marked = parsed;
                 marked.visibility = visibility;
                 try functions.append(self.arena, marked);
             } else {
@@ -1106,7 +1128,10 @@ pub const Parser = struct {
             }
             if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
                 try self.markerInRegion(word);
-                if (self.peekKind() == .keyword_func or self.peekKind() == .identifier) {
+                if (self.peekKind() == .keyword_func or
+                    self.peekKind() == .keyword_static or
+                    self.peekKind() == .identifier)
+                {
                     try self.structMember(fields, functions, visibility);
                 }
                 continue;
@@ -1139,6 +1164,8 @@ pub const Parser = struct {
         // method, at hand for a field.
         const named: ?Token = switch (self.peekKind()) {
             .keyword_func => if (self.peekAhead(1) == .identifier) self.tokenAhead(1) else null,
+            .keyword_static => if (self.peekAhead(1) == .keyword_func and
+                self.peekAhead(2) == .identifier) self.tokenAhead(2) else null,
             .identifier => self.peek(),
             else => null,
         };
@@ -1195,12 +1222,19 @@ pub const Parser = struct {
                 try self.unexpectedIndent();
                 continue;
             }
+            var visibility: ast.Visibility = .none;
             if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
-                if (!try self.enumMarker()) continue;
+                visibility = (try self.enumMarker()) orelse continue;
             }
-            if (self.peekKind() == .keyword_func) {
-                if (try self.funcDecl()) |declaration| {
-                    try functions.append(self.arena, declaration);
+            if (self.peekKind() == .keyword_func or self.peekKind() == .keyword_static) {
+                const declaration = if (self.peekKind() == .keyword_static)
+                    try self.staticFuncDecl()
+                else
+                    try self.funcDecl();
+                if (declaration) |parsed| {
+                    var marked = parsed;
+                    marked.visibility = visibility;
+                    try functions.append(self.arena, marked);
                 } else {
                     self.recover();
                 }
@@ -1229,13 +1263,10 @@ pub const Parser = struct {
     /// and a match arm cannot name one the file it stands in cannot
     /// see.  A region label is the same refusal wearing a colon.
     ///
-    /// True when the marker was consumed and the declaration behind it
-    /// still parses under it; false when the line was reported and
-    /// recovered.  The marker itself is dropped either way — a private
-    /// function of an enum is one stage 4 never sees marked, and
-    /// carrying it would need a visibility field the enum's functions
-    /// do not have yet.
-    fn enumMarker(self: *Parser) Error!bool {
+    /// The visibility carried by a function behind the marker.  A
+    /// marker on an enum value is reported and dissolved to `.none` so
+    /// the value still parses; null means recovery consumed the line.
+    fn enumMarker(self: *Parser) Error!?ast.Visibility {
         const marker = self.advance();
         const word = keywordWord(marker.kind).?;
         if (self.peekKind() == .colon) {
@@ -1247,16 +1278,28 @@ pub const Parser = struct {
             );
             _ = self.advance(); // the colon
             self.recover();
-            return false;
+            return null;
         }
-        if (self.peekKind() == .keyword_func) return true;
+        if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
+            try self.report(
+                "luce.parse.expected",
+                self.peek().span,
+                "one visibility word per declaration",
+                .{},
+            );
+            self.recover();
+            return null;
+        }
+        if (self.peekKind() == .keyword_func or self.peekKind() == .keyword_static) {
+            return if (marker.kind == .keyword_private) .private else .public;
+        }
         try self.report(
             "luce.parse.expected",
             marker.span,
             "an enum member is part of the type and is always visible; write '{s} enum' to withhold the whole set",
             .{word},
         );
-        return true;
+        return .none;
     }
 
     /// One member line: `stored`, or `stored = 8`.
@@ -1293,58 +1336,40 @@ pub const Parser = struct {
 
     // -- declarations: functions ------------------------------------------
 
-    /// `self` or `var self` in a parameter list.  `already` is how many
-    /// parameters stand in front of it, which is the one thing about a
-    /// receiver this stage can decide: a receiver is parameter zero or
-    /// it is a mistake.
-    ///
-    /// The type is deliberately not written and not accepted.  Inside
-    /// `struct Point` a receiver can be nothing but a `Point`, so
-    /// `self: Point` says something the compiler already knows — and
-    /// allowing it would mean allowing someone to write a different
-    /// one (docs/METHODS.md).
-    fn receiverParameter(self: *Parser, already: usize) Error!?ast.Parameter {
-        const start = self.peek();
-        const writes = self.accept(.keyword_var) != null;
-        const word = self.advance(); // self
-        if (already != 0) {
-            try self.report(
-                "luce.parse.self",
-                .{ .start = start.span.start, .end = word.span.end },
-                "self is the receiver, so it comes first in the parameter list",
-                .{},
-            );
+    /// `static func` is a member-only declaration.  Visibility has
+    /// already been dissolved by the surrounding struct/enum parser,
+    /// so this function owns only the modifier and its ordering.
+    fn staticFuncDecl(self: *Parser) Error!?ast.FuncDecl {
+        const marker = self.advance(); // static
+        if (self.peekKind() != .keyword_func) {
+            if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
+                try self.report(
+                    "luce.parse.static",
+                    self.peek().span,
+                    "visibility comes before static: write 'private static func', not 'static private func'",
+                    .{},
+                );
+            } else if (self.peekKind() == .keyword_static) {
+                try self.report(
+                    "luce.parse.static",
+                    self.peek().span,
+                    "write static once, immediately before func",
+                    .{},
+                );
+            } else {
+                try self.report(
+                    "luce.parse.static",
+                    marker.span,
+                    "static marks a member function: write 'static func name(...)'",
+                    .{},
+                );
+            }
             return null;
         }
-        if (self.peekKind() == .colon) {
-            try self.report(
-                "luce.parse.self",
-                self.peek().span,
-                "self takes no type annotation: inside a struct it is that struct",
-                .{},
-            );
-            return null;
-        }
-        if (self.peekKind() == .assign) {
-            // The receiver is not an argument a caller supplies, so
-            // there is nothing for a default to fill (docs/ARGS.md D7).
-            try self.report(
-                "luce.parse.self",
-                self.peek().span,
-                "self is the receiver and takes no default",
-                .{},
-            );
-            return null;
-        }
-        return .{
-            .name = "self",
-            .name_span = word.span,
-            .receiver = if (writes) .writes else .reads,
-            // Never resolved: stage 4 reads `receiver` first and fills
-            // the type in from the enclosing struct.
-            .type_name = .{ .name = "self", .span = word.span },
-            .span = .{ .start = start.span.start, .end = word.span.end },
-        };
+        var declaration = (try self.funcDecl()) orelse return null;
+        declaration.is_static = true;
+        declaration.span.start = marker.span.start;
+        return declaration;
     }
 
     fn funcDecl(self: *Parser) Error!?ast.FuncDecl {
@@ -1358,18 +1383,32 @@ pub const Parser = struct {
         defer parameters.deinit(self.arena);
         var previous_end = opener.span.end;
         while (!expr.endsList(self.peekKind(), .right_paren)) {
-            // `self` and `var self` — the receiver, bare and untyped.
-            // Position is checked here because "first" is a fact about
-            // the list the parser is holding; everything else about a
-            // receiver is stage 4's (docs/METHODS.md).
+            // Every non-static member has an implied receiver.  Refuse
+            // both retired spellings wherever they appear, including a
+            // top-level or static function, with the migration itself.
             if (self.peekKind() == .keyword_self or
                 (self.peekKind() == .keyword_var and self.peekAhead(1) == .keyword_self))
             {
-                const receiver = (try self.receiverParameter(parameters.items.len)) orelse return null;
-                try parameters.append(self.arena, receiver);
-                previous_end = receiver.span.end;
-                if (self.accept(.comma) == null) break;
-                continue;
+                const receiver_start = self.peek();
+                _ = self.accept(.keyword_var);
+                const receiver = self.advance(); // self
+                try self.report(
+                    "luce.parse.self",
+                    .{ .start = receiver_start.span.start, .end = receiver.span.end },
+                    "self is implied; remove the parameter",
+                    .{},
+                );
+                return null;
+            }
+            if (self.peekKind() == .keyword_var) {
+                const marker = self.advance();
+                try self.report(
+                    "luce.parse.self",
+                    marker.span,
+                    "parameters are values and never var; use a local var or return the updated value",
+                    .{},
+                );
+                return null;
             }
             // A marker on a parameter is the locals' mistake in a
             // parameter list (docs/VISIBILITY.md §5).
@@ -1581,6 +1620,15 @@ pub const Parser = struct {
                     self.peek().span,
                     "'{s}' has no matching 'if' at this indentation",
                     .{word},
+                );
+                return null;
+            },
+            .keyword_static => {
+                try self.report(
+                    "luce.parse.static",
+                    self.peek().span,
+                    "static belongs before func inside a struct or enum, not inside a function body",
+                    .{},
                 );
                 return null;
             },
@@ -2420,6 +2468,7 @@ pub fn describe(kind: Kind) []const u8 {
 
         .identifier => "a name",
         .keyword_func => "the keyword 'func'",
+        .keyword_static => "the keyword 'static'",
         .keyword_struct => "the keyword 'struct'",
         .keyword_enum => "the keyword 'enum'",
         .keyword_match => "the keyword 'match'",

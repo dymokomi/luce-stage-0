@@ -21,7 +21,7 @@ const geo: agree.File = .{ .name = "geo", .source =
     \\    y: double
     \\
     \\struct Text:
-    \\    func twice(value: long) -> long:
+    \\    static func twice(value: long) -> long:
     \\        return value * 2
     \\
     \\func make(x: double, y: double) -> Point:

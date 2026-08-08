@@ -752,3 +752,17 @@ harvest of the feature.
 **Bound method values (`let f = p.dist`).** A closure over `p` by
 another name, and first among the things `docs/LANGUAGE.md`
 deliberately does not have.
+
+## Superseded receiver design — 2026-08-08
+
+This record's `main(args)` decision shipped and remains current.  Its
+receiver design did not lock: `docs/SELF.md` superseded explicit
+`self`/`var self`, copy-in/copy-out, and type-qualified method calls.
+The implemented language gives every plain struct or enum member an
+implied `self`; a namespace member says `static func`.  Writer status
+is inferred transitively, and a writer aliases one bare owning `var`
+binding in place.  Reads accept lets and temporaries, pre-error writes
+remain, and borrowed object-content mutation remains a read.  Methods
+are neither values nor worker targets and cannot be called through the
+type; static members can do all three.  `docs/SELF.md`'s as-built
+appendix records the format-32 / ABI-13 implementation seam.

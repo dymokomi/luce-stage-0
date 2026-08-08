@@ -79,7 +79,11 @@ pub const magic = "LUCE";
 /// beside the other constants and `call_indirect` beside `call`, both in
 /// the middle of the union rather than on the end.  Safe for the reason
 /// 22's note gives and no other: the version moved with them.
-pub const format_version: u32 = 31;
+///
+/// 32 — implied writing receivers arrive (docs/SELF.md). `call_inout`
+/// joins the instruction set and a local gains the `inout` bit that
+/// makes logical parameter zero alias its caller's mutable binding.
+pub const format_version: u32 = 32;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -222,6 +226,7 @@ const Writer = struct {
             try self.blob(local.name);
             try self.valueType(local.local_type);
             try self.int(u8, @intFromBool(local.owns_storage));
+            try self.int(u8, @intFromBool(local.inout));
         }
 
         try self.int(u32, @intCast(of.instructions.len));
@@ -284,6 +289,11 @@ const Writer = struct {
             },
             .call, .spawn => |call| {
                 try self.int(u32, call.function);
+                try self.registers(call.arguments);
+            },
+            .call_inout => |call| {
+                try self.int(u32, call.function);
+                try self.int(u32, call.receiver);
                 try self.registers(call.arguments);
             },
             .call_indirect => |call| {
@@ -516,6 +526,7 @@ const Reader = struct {
             local.name = try arena.dupe(u8, try self.blob());
             local.local_type = try self.valueType();
             local.owns_storage = (try self.int(u8)) != 0;
+            local.inout = (try self.int(u8)) != 0;
         }
         out.locals = locals;
 
@@ -588,6 +599,11 @@ const Reader = struct {
             } },
             .call => .{ .call = .{
                 .function = try self.int(u32),
+                .arguments = try self.registers(arena),
+            } },
+            .call_inout => .{ .call_inout = .{
+                .function = try self.int(u32),
+                .receiver = try self.int(u32),
                 .arguments = try self.registers(arena),
             } },
             .spawn => .{ .spawn = .{
@@ -710,6 +726,50 @@ test "a compiled program round-trips through the module format" {
 
     // Encoding the decoded program is byte-identical: the format is a
     // fixed point.
+    const again = try encode(testing.allocator, &loaded);
+    defer testing.allocator.free(again);
+    try testing.expectEqualSlices(u8, encoded, again);
+}
+
+test "an inout receiver and call round-trip through format 32" {
+    var program = try compileScript(
+        \\struct Counter:
+        \\    value: long
+        \\
+        \\    func add(amount: long):
+        \\        self.value = self.value + amount
+        \\
+        \\func main():
+        \\    var counter = Counter(value = 1)
+        \\    counter.add(2)
+        \\    assert(counter.value == 3)
+        \\
+    );
+    defer program.deinit();
+
+    const encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+    var loaded = try decode(testing.allocator, encoded);
+    defer loaded.deinit();
+
+    var saw_inout = false;
+    var saw_call = false;
+    for (loaded.functions) |function| {
+        if (function.parameter_count != 0 and function.locals[0].inout) {
+            saw_inout = true;
+            try testing.expectEqualStrings("self", function.locals[0].name);
+        }
+        for (function.instructions) |instruction| switch (instruction) {
+            .call_inout => |call| {
+                saw_call = true;
+                try testing.expectEqual(@as(usize, 1), call.arguments.len);
+            },
+            else => {},
+        };
+    }
+    try testing.expect(saw_inout);
+    try testing.expect(saw_call);
+
     const again = try encode(testing.allocator, &loaded);
     defer testing.allocator.free(again);
     try testing.expectEqualSlices(u8, encoded, again);
@@ -1219,6 +1279,9 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // added to `Signature.Parameter` moves the wire (docs/FUNCTIONS.md).
     inline for (comptime std.meta.fieldNames(types.Signature)) |name| hasher.update(name);
     inline for (comptime std.meta.fieldNames(types.Signature.Parameter)) |name| hasher.update(name);
+    // Local flags are wire surface too: `inout` changes how both
+    // engines interpret local zero without changing its type.
+    inline for (comptime std.meta.fieldNames(mir.Local)) |name| hasher.update(name);
     // If this fails you changed the instruction set, the intrinsics,
     // or the trap or error codes: bump format_version and update BOTH
     // numbers.
@@ -1229,8 +1292,8 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // moved this number and left the hash alone.  A version bump is
     // still required for that, and this test is not what will remind
     // you.
-    try testing.expectEqual(@as(u32, 31), format_version);
-    try testing.expectEqual(@as(u64, 12968420805031615277), hasher.final());
+    try testing.expectEqual(@as(u32, 32), format_version);
+    try testing.expectEqual(@as(u64, 6448615045475647724), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

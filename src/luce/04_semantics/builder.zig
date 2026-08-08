@@ -169,13 +169,10 @@ pub const FunctionBuilder = struct {
     /// channel carries, which for two or more is the synthesized
     /// layout they ride in (docs/RETURNS.md).
     results: []const Type = &.{},
-    /// What actually leaves: `[self] ++ results` in a `var self`
-    /// method, `results` in everything else.
-    channel: []const Type = &.{},
-    /// True in a `var self` method, where every `return` carries the
-    /// receiver out in front of whatever the reader wrote — its
-    /// receiver *is* result zero (docs/RETURNS.md §5).
-    writes_receiver: bool = false,
+    /// This declaration sits inside a struct/enum but said `static`,
+    /// so a use of `self` gets the teaching sentence rather than an
+    /// ordinary unknown-name report.
+    static_member: bool = false,
     scopes: std.ArrayList(Scope) = .empty,
     loops: std.ArrayList(LoopFrame) = .empty,
     /// Statement temporaries (S3): every fresh, unowned object is
@@ -630,6 +627,24 @@ pub const FunctionBuilder = struct {
     fn failUnknownName(self: *FunctionBuilder, name: []const u8, span: Span) Error!void {
         if (self.undeclared.contains(name)) return;
         if (try self.failCapturedName(name, span)) return;
+        if (std.mem.eql(u8, name, "self")) {
+            if (self.static_member) {
+                try self.fail(
+                    "luce.sema.self",
+                    span,
+                    "self is unavailable in a static function; remove static to make this a method",
+                    .{},
+                );
+            } else {
+                try self.fail(
+                    "luce.sema.self",
+                    span,
+                    "self exists only inside a non-static struct or enum member",
+                    .{},
+                );
+            }
+            return;
+        }
         const qualified = try self.analyzer.qualify(self.prefix, name);
         if (try self.failNotAValue(name, qualified, span)) return;
         var suggestion = helpers.Suggestion.init(name);
@@ -1075,6 +1090,45 @@ pub const FunctionBuilder = struct {
         return local;
     }
 
+    /// Install the implicit receiver as logical parameter zero.
+    ///
+    /// A reader borrows an ordinary value parameter.  A writer is an
+    /// alias of the caller's mutable binding: its MIR slot owns the
+    /// *representation* needed to drop replaced strings/struct runs,
+    /// but its lifetime and object-owner identity remain the caller's,
+    /// so this scope must never release it (docs/SELF.md D3-D6).
+    pub fn declareReceiver(
+        self: *FunctionBuilder,
+        receiver_type: Type,
+        writes: bool,
+        span: Span,
+    ) Error!?LocalId {
+        if (self.findLocal("self") != null) {
+            try self.fail("luce.sema.duplicate", span, "self is already declared", .{});
+            return null;
+        }
+        const owns_storage = writes and self.analyzer.ownsStorage(receiver_type);
+        const local = if (writes)
+            try self.code.addInoutLocal("self", receiver_type, owns_storage)
+        else
+            try self.code.addLocal("self", receiver_type, false);
+        const carries = self.analyzer.carriesObjects(receiver_type);
+        const scope = &self.scopes.items[self.scopes.items.len - 1];
+        try scope.names.put(self.temporary(), "self", .{
+            .local = local,
+            .mutable = writes,
+            .declared_at = span,
+            .class = if (!carries)
+                .alias
+            else if (writes)
+                .inout_receiver
+            else
+                .borrow_param,
+            .carries = carries,
+        });
+        return local;
+    }
+
     // Value storage --------------------------------------------------------
     //
     // A string's bytes and a struct's field run have exactly one owner
@@ -1099,7 +1153,7 @@ pub const FunctionBuilder = struct {
             // hands out a copy rather than a view of the callee's
             // frame — whichever way the callee was named
             // (docs/FUNCTIONS.md D2).
-            .call, .call_indirect => true,
+            .call, .call_inout, .call_indirect => true,
             .intrinsic => |call| call.kind.makesFreshStorage(),
             else => false,
         };
@@ -1201,14 +1255,20 @@ pub const FunctionBuilder = struct {
         try self.code.store(local, register);
     }
 
-    /// True when `register` holds a view of storage a container or a
-    /// struct is holding, rather than storage of its own.  Those are
-    /// the reads the hazard rule above has to protect; a local, a
-    /// parameter, a constant and a fresh value are all safe, the
-    /// first three because nothing in one statement can free them and
-    /// the last because it has no other owner.
+    /// True when `register` holds a view of storage something else is
+    /// holding, rather than storage of its own.  Field and element
+    /// reads have always needed the hazard rule below.  An owning
+    /// local does too now that a later writing method can replace that
+    /// very local in place in the same operand run — `f(s,
+    /// s.change())` must preserve the first argument's old storage.
+    /// Every local reload is conservative here, including the hidden
+    /// borrowing slot an optional fallback crosses: its bytes may
+    /// still be a view of a field the later writer replaces.  The
+    /// caller has already restricted this question to storage-owning
+    /// result types, so scalar spills cost nothing.
     fn borrowsStoredValue(self: *const FunctionBuilder, register: Register) bool {
         return switch (self.code.instructions.items[register]) {
+            .local_get => true,
             .struct_get => true,
             .intrinsic => |call| switch (call.kind) {
                 .index_get, .map_get, .key_at, .value_at => true,
@@ -1451,6 +1511,15 @@ pub const FunctionBuilder = struct {
                         span,
                         "{s}; {s} is a borrowed parameter and can never be given away — store copy {s}, or take {s} as give in the signature [OWNERSHIP.md S12, {s}]",
                         .{ subject, name, name, name, situations },
+                    );
+                    return;
+                }
+                if (found.info.class == .inout_receiver) {
+                    try self.fail(
+                        "luce.sema.own",
+                        span,
+                        "{s}; self is the caller's receiver and cannot be moved out — store copy self [SELF.md D4, OWNERSHIP.md S12, {s}]",
+                        .{ subject, situations },
                     );
                     return;
                 }
@@ -1812,13 +1881,33 @@ pub const FunctionBuilder = struct {
         // honest form, which re-receives the receiver as a parameter
         // and therefore carries nothing.
         if (info.receiver != .not) {
-            try self.fail(
-                "luce.sema.call",
-                span,
-                "{s} is a method, and a method reference would carry its receiver; " ++
-                    "write a lambda that takes the receiver — (x) -> x.{s}() [FUNCTIONS.md D1]",
-                .{ written, info.declaration.name },
-            );
+            if (info.receiver == .writes) {
+                try self.fail(
+                    "luce.sema.call",
+                    span,
+                    "{s} writes its implicit self and is not a function value; " ++
+                        "move the operation into a top-level or static function that receives and returns the value [SELF.md D3, FUNCTIONS.md D1]",
+                    .{written},
+                );
+            } else {
+                if (info.declaration.parameters.len == 0) {
+                    try self.fail(
+                        "luce.sema.call",
+                        span,
+                        "{s} is a method, and a method reference would carry its receiver; " ++
+                            "write a lambda that takes the receiver — (x) -> x.{s}() [FUNCTIONS.md D1]",
+                        .{ written, info.declaration.name },
+                    );
+                } else {
+                    try self.fail(
+                        "luce.sema.call",
+                        span,
+                        "{s} is a method, and a method reference would carry its receiver; " ++
+                            "write a lambda whose first parameter receives the value and whose remaining parameters forward the method arguments [FUNCTIONS.md D1]",
+                        .{written},
+                    );
+                }
+            }
             return null;
         }
         // A fallible function's `!` is an obligation its call sites
@@ -1976,8 +2065,9 @@ pub const FunctionBuilder = struct {
                     const function_index = (try self.structMethod(values[0].value_type, method.name)) orelse
                         return null;
                     const info = self.analyzer.functions.items[function_index];
-                    if (info.declaration.parameters.len != info.parameter_types.len) return null;
-                    const surface = try self.declarationSlots(info.declaration.parameters, info.parameter_defaults);
+                    const hidden: usize = if (info.receiver == .not) 0 else 1;
+                    if (info.declaration.parameters.len + hidden != info.parameter_types.len) return null;
+                    const surface = try self.declarationSlots(info);
                     const slot = argumentSlot(surface, 1, method.arguments, index - 1) orelse
                         return null;
                     return info.parameter_types[slot];
@@ -2717,7 +2807,7 @@ pub const FunctionBuilder = struct {
             );
             return null;
         }
-        if (info.carries and info.class != .owned) {
+        if (info.carries and info.class != .owned and info.class != .inout_receiver) {
             try self.fail(
                 "luce.sema.own",
                 name.span,
@@ -3298,7 +3388,8 @@ pub const FunctionBuilder = struct {
             // then owns nothing (S5, S43).
             const yields = assign.value.* == .none_literal or
                 try self.yieldsOwnership(assign.value);
-            if (class == .owned and !yields) {
+            const owns_place = class == .owned or class == .inout_receiver;
+            if (owns_place and !yields) {
                 try self.fail(
                     "luce.sema.own",
                     assign.span,
@@ -3307,7 +3398,7 @@ pub const FunctionBuilder = struct {
                 );
                 return;
             }
-            if (class != .owned and yields) {
+            if (!owns_place and yields) {
                 try self.fail(
                     "luce.sema.own",
                     assign.span,
@@ -3357,7 +3448,8 @@ pub const FunctionBuilder = struct {
         // Reassigning an owning var frees the old object immediately
         // (S5); the very first assignment finds only the null object.
         // Compound assignment is value-only, so `carries` is false.
-        const owns_objects = info.carries and class == .owned;
+        const owns_objects = info.carries and
+            (class == .owned or class == .inout_receiver);
         try self.code.release(local, owns_objects, owns_storage);
         try self.code.store(local, store);
         if (owns_objects) {
@@ -3397,7 +3489,7 @@ pub const FunctionBuilder = struct {
         // the old value (S25); only the owning binding can restock it.
         const field_carries = self.analyzer.carriesObjects(expected);
         if (field_carries) {
-            if (info.class != .owned) {
+            if (info.class != .owned and info.class != .inout_receiver) {
                 try self.fail(
                     "luce.sema.own",
                     target.span,
@@ -3882,11 +3974,6 @@ pub const FunctionBuilder = struct {
     }
 
     fn lowerReturn(self: *FunctionBuilder, returned: ast.Return) Error!void {
-        // A `var self` method's receiver rides out in front of
-        // whatever the reader wrote, so every `return` in one is a
-        // shape however many values it names — including a bare one
-        // (docs/RETURNS.md §5).
-        if (self.writes_receiver) return self.lowerReturnShape(returned);
         if (returned.values.len >= 2) return self.lowerReturnShape(returned);
         if (returned.values.len == 1) {
             const expression = returned.values[0];
@@ -3963,6 +4050,15 @@ pub const FunctionBuilder = struct {
                                     returned.span,
                                     "{s} aliases an object it does not own; return copy {s} or return the owning name [OWNERSHIP.md S16, S17]",
                                     .{ name.text, name.text },
+                                );
+                                return;
+                            },
+                            .inout_receiver => {
+                                try self.fail(
+                                    "luce.sema.own",
+                                    returned.span,
+                                    "self is the caller's receiver and cannot be moved out; return copy self [OWNERSHIP.md S17, SELF.md D4]",
+                                    .{},
                                 );
                                 return;
                             },
@@ -4045,7 +4141,6 @@ pub const FunctionBuilder = struct {
     /// bindings owning it and free it twice.  That is the only
     /// genuinely new check here, and it is where `moved` already is.
     fn lowerReturnShape(self: *FunctionBuilder, returned: ast.Return) Error!void {
-        if (self.writes_receiver) return self.lowerReceiverReturn(returned);
         if (self.results.len < 2) {
             for (returned.values) |expression| _ = try self.lowerExpression(expression, false);
             if (self.results.len == 0) {
@@ -4110,115 +4205,6 @@ pub const FunctionBuilder = struct {
         try self.code.ret(handed_out);
     }
 
-    /// The implicit `return self` a `var self` method with no declared
-    /// result ends on.  Written here rather than in stage 6 because it
-    /// is a fact about the language, not about the tape.
-    pub fn returnReceiver(self: *FunctionBuilder) Error!void {
-        try self.lowerReceiverReturn(.{ .values = &.{}, .span = self.currentSpan() });
-    }
-
-    fn currentSpan(self: *const FunctionBuilder) Span {
-        return .{ .start = self.code.origin, .end = self.code.origin };
-    }
-
-    /// `return` inside a `var self` method: the receiver goes out in
-    /// front of whatever the reader wrote (docs/RETURNS.md §5).
-    ///
-    /// `func step(var self):` answers arity one — the receiver alone —
-    /// and lowers exactly as `docs/METHODS.md` said it would.
-    /// `func next(var self) -> long:` answers `(Rng, long)`, and the call
-    /// site takes result zero back to the receiver's place and result
-    /// one to the name.  There is one mechanism, not two.
-    ///
-    /// The receiver is a value struct that carries no objects — that is
-    /// what `var self` requires — so the write-back is a pure value
-    /// store and none of the ownership walk above applies to it.
-    fn lowerReceiverReturn(self: *FunctionBuilder, returned: ast.Return) Error!void {
-        if (returned.values.len != self.results.len) {
-            for (returned.values) |expression| _ = try self.lowerExpression(expression, false);
-            try self.fail("luce.sema.return", returned.span, "{s} answers {d} value{s}, got {d}", .{
-                self.code.name,
-                self.results.len,
-                helpers.plural(self.results.len),
-                returned.values.len,
-            });
-            return;
-        }
-        const receiver = self.findLocal("self") orelse return;
-
-        // Arity one: the receiver alone, and the channel is the plain
-        // single return the language already had.
-        if (self.results.len == 0) {
-            // Exported **before** the releases, not after: `self` owns
-            // its run and the scope is about to give it back, so a
-            // value read out afterwards would be a view of freed
-            // storage.  This is the order the single-value return has
-            // always kept (docs/STRINGS.md).
-            const alone = try self.code.load(receiver.info.local);
-            const handed_out = try self.code.exportStorage(try self.ownedForStore(.{
-                .register = alone,
-                .value_type = self.code.return_type,
-            }));
-            try self.emitTempReleases(0);
-            try self.emitScopeReleases(0, &.{});
-            try self.code.ret(handed_out);
-            return;
-        }
-
-        // **The values first, and the receiver after them.**  A
-        // returned expression may call another `var self` method on
-        // `self` — `return low + self.next() % span` is the shape —
-        // and reading the receiver before that runs would hand the
-        // caller back the state the method started with.
-        const values = (try self.lowerOperandsInto(returned.values, .{ .places = self.results })) orelse return;
-        const registers = try self.arena().alloc(Register, values.len + 1);
-        // The receiver goes into the shape as a *store*, so it takes
-        // its storage first: `ownValue` deep-copies a struct's run, and
-        // without that the shape would carry a view of the slot this
-        // frame is about to release (docs/STRINGS.md).
-        registers[0] = try self.ownedForStore(.{
-            .register = try self.code.load(receiver.info.local),
-            .value_type = self.channel[0],
-        });
-        var moved: std.ArrayList(LocalId) = .empty;
-        defer moved.deinit(self.temporary());
-        for (values, returned.values, 0..) |lowered, expression, position| {
-            const value = (try self.fit(lowered, self.results[position])) orelse {
-                try self.fail(
-                    "luce.sema.type",
-                    expression.span(),
-                    "value {d} of this return is {s}, and {s} answers {s} there{s}",
-                    .{
-                        position + 1,
-                        try self.analyzer.typeName(lowered.value_type),
-                        self.code.name,
-                        try self.analyzer.typeName(self.results[position]),
-                        try self.absenceAdvice(lowered.value_type, expression),
-                    },
-                );
-                return;
-            };
-            // The *declared* results may carry objects freely and move
-            // under S16/S28 like any other return: a method may answer
-            // a fresh list while writing back a value-only receiver,
-            // and the two facts do not interact.
-            if (try self.movesOut(expression, value, &moved)) |register| {
-                registers[position + 1] = register;
-            } else return;
-        }
-        const shape = try self.code.emit(
-            .{ .struct_make = .{ .layout = self.code.return_type.strukt, .fields = registers } },
-            self.code.return_type,
-        );
-        // Exported before the releases: the shape's field run and
-        // whatever text rides in it have to be able to leave a frame
-        // whose slots are about to go (docs/STRINGS.md).
-        const handed_out = try self.code.exportStorage(shape);
-        try self.emitTempReleases(0);
-        try self.emitScopeReleases(0, moved.items);
-        try self.code.ret(handed_out);
-    }
-
     /// One position of a `return a, b`: check that this value may
     /// leave, record the binding whose object it takes with it, and
     /// answer the register to put in the shape.  Null after reporting.
@@ -4267,6 +4253,15 @@ pub const FunctionBuilder = struct {
                             expression.span(),
                             "{s} aliases an object it does not own; return copy {s} or return the owning name [OWNERSHIP.md S16, S17]",
                             .{ name.text, name.text },
+                        );
+                        return null;
+                    },
+                    .inout_receiver => {
+                        try self.fail(
+                            "luce.sema.own",
+                            expression.span(),
+                            "self is the caller's receiver and cannot be moved out; return copy self [OWNERSHIP.md S17, SELF.md D4]",
+                            .{},
                         );
                         return null;
                     },
@@ -5005,6 +5000,15 @@ pub const FunctionBuilder = struct {
             );
             return null;
         }
+        if (info.class == .inout_receiver) {
+            try self.fail(
+                "luce.sema.own",
+                give.span,
+                "self is the caller's receiver and cannot be given away; pass it to a borrowing parameter, or use copy self [SELF.md D4, OWNERSHIP.md S12]",
+                .{},
+            );
+            return null;
+        }
         // An alias owns nothing, so it has nothing to hand over (S8).
         // This used to be left to the runtime, which trapped
         // `not_owned` at the give; the class is known right here, so
@@ -5525,8 +5529,8 @@ pub const FunctionBuilder = struct {
             // `let f = p.length` — a *bound method value*, which is a
             // closure over `p` by another name and first among the
             // things docs/LANGUAGE.md deliberately does not have.  The
-            // sentence is the one `let f = Point.length` already gets,
-            // reached through the same helper (docs/METHODS.md).
+            // sentence is the same implicit-self rule a typed
+            // `Point.length` reference gets through `functionValue`.
             const member = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ layout.name, field.name });
             // Spelled the way the reader wrote it where the receiver
             // has a name, and by its struct where it does not:
@@ -6167,14 +6171,16 @@ pub const FunctionBuilder = struct {
     /// with a folded default says so.  Arena-owned.
     fn declarationSlots(
         self: *FunctionBuilder,
-        parameters: []const ast.Parameter,
-        defaults: []const ?context.TypedConstant,
+        info: context.FunctionDeclInfo,
     ) Error![]CallSlot {
-        const surface = try self.arena().alloc(CallSlot, parameters.len);
-        for (parameters, defaults, surface) |parameter, default, *slot| {
+        const surface = try self.arena().alloc(CallSlot, info.parameter_types.len);
+        const hidden: usize = if (info.receiver == .not) 0 else 1;
+        if (hidden == 1) {
+            surface[0] = .{ .name = "self", .nameable = false };
+        }
+        for (info.declaration.parameters, surface[hidden..], info.parameter_defaults[hidden..]) |parameter, *slot, default| {
             slot.* = .{
                 .name = parameter.name,
-                .nameable = parameter.receiver == .not,
                 .defaulted = default != null,
             };
         }
@@ -6597,10 +6603,10 @@ pub const FunctionBuilder = struct {
                         },
                         else => {},
                     }
-                    // A method's receiver is a place in *this* frame —
-                    // and `var self` writes back into it — so there is
-                    // nothing a worker could be given that would still
-                    // be the receiver when it finished.
+                    // A writing method aliases its receiver place in
+                    // *this* frame, so there is nothing a worker could
+                    // be given that would still be that place when it
+                    // finished.
                     try self.fail(
                         "luce.sema.self",
                         method.span,
@@ -6648,22 +6654,15 @@ pub const FunctionBuilder = struct {
             try self.fail("luce.sema.call", span, "entry function {s} cannot be called", .{name});
             return null;
         }
-        // `Point.length(p)` stays callable and means exactly what
-        // `p.length()` means: the method form is sugar with one
-        // semantics under it, which is what makes converting a struct
-        // one function at a time possible (docs/METHODS.md).
-        //
-        // `Point.scale(p, 2.0)` is the one exception, and it is why
-        // this check exists: a `var self` method writes back to its
-        // receiver's place, and the static form has no place to write
-        // to.  It would take a copy, mutate it and discard it, in
-        // silence — which is the one shape where allowing both
-        // spellings would mean two semantics instead of one.
-        if (info.receiver == .writes) {
+        // A member is one of two things now: an implicit-self method,
+        // called through a receiver, or `static`, called through its
+        // type.  Keeping `Point.length(p)` would erase that distinction
+        // and recreate the call-site ambiguity SELF removes.
+        if (info.receiver != .not) {
             try self.fail(
                 "luce.sema.self",
                 span,
-                "{s} takes var self and writes back to its receiver; call it as {s}.{s}(…)",
+                "{s} is a method with implicit self; call it as {s}.{s}(…)",
                 .{
                     info.declaration.name,
                     if (call_arguments.len != 0)
@@ -6729,7 +6728,7 @@ pub const FunctionBuilder = struct {
             // signature left to check a call against.
             return null;
         }
-        const surface = try self.declarationSlots(parameters, info.parameter_defaults);
+        const surface = try self.declarationSlots(info);
         const seen = try self.temporary().alloc(bool, parameters.len);
         defer self.temporary().free(seen);
         @memset(seen, false);
@@ -7032,9 +7031,11 @@ pub const FunctionBuilder = struct {
                 }
                 return null;
             }
-            // A struct value: `p.length()` *is* `Point.length(p)`, the
-            // same MIR call resolved here rather than a second
-            // semantics (docs/METHODS.md).
+            // A declared value: `p.length()` resolves the non-static
+            // member belonging to `p`'s type.  SELF deliberately
+            // reserves `Point.length(...)` for static members; readers
+            // lower to an ordinary direct call and writers to the
+            // inout call that aliases `p`'s binding.
             //
             // It can never race a built-in method, and by construction
             // rather than by ordering: `types.StructLayout` has no
@@ -7042,8 +7043,8 @@ pub const FunctionBuilder = struct {
             // so the two arms above are unreachable for one.
             // An enum answers here too, and by the same rule: its
             // functions are declared inside it and named `Method.f`, so
-            // `m.compressed()` *is* `Method.compressed(m)`
-            // (docs/ENUMS.md D7).
+            // `m.compressed()` resolves its non-static member by the
+            // same lookup (docs/ENUMS.md D7, docs/SELF.md D1-D2).
             if (self.declaredName(receiver.value_type) != null) {
                 return self.lowerReceiverCall(method, values, as_statement, fallible_allowed, shape_position);
             }
@@ -7144,10 +7145,9 @@ pub const FunctionBuilder = struct {
 
     // Methods on a struct value ---------------------------------------------
     //
-    // `p.length()` means `Point.length(p)` — not "is compiled like",
-    // *means*: the same call, resolved in this stage.  There is no
-    // dispatch, no reference, and no second semantics
-    // (docs/METHODS.md).
+    // `p.length()` resolves a non-static member from `p`'s declared
+    // type.  There is no dispatch or bound reference: stage 4 emits a
+    // direct read call or an inout writing call (docs/SELF.md).
 
     /// The declaration behind `x.f(…)` on a struct value, silently:
     /// the function `Struct.f` when it is a *method*, null when there
@@ -7155,13 +7155,10 @@ pub const FunctionBuilder = struct {
     /// receiver is not parameter zero, and whose method-form call
     /// `lowerReceiverCall` refuses with the sentence that says so.
     ///
-    /// This is what makes the method form land its arguments where the
-    /// static form lands them: `landsOn` asks it mid-batch, before an
-    /// argument is lowered, because a struct receiver used to answer
-    /// nothing there — so `p.f(none)` was refused while
-    /// `Point.f(p, none)` compiled, and a `0.1` read its text at
-    /// binary32 on one spelling and binary64 on the other
-    /// (docs/ARGS.md §4).
+    /// `landsOn` asks this mid-batch, before an argument is lowered, so
+    /// every explicit argument lands on the declared slot after hidden
+    /// self.  Literals and `none` therefore receive the same context as
+    /// an ordinary declared-function argument (docs/ARGS.md §4).
     fn structMethod(self: *FunctionBuilder, receiver: Type, name: []const u8) Error!?u32 {
         const declared = self.declaredName(receiver) orelse return null;
         const qualified = try std.fmt.allocPrint(self.temporary(), "{s}.{s}", .{ declared, name });
@@ -7209,16 +7206,15 @@ pub const FunctionBuilder = struct {
         };
         if (!try self.functionReachable(function_index, method.span)) return null;
         const info = self.analyzer.functions.items[function_index];
-        // The whole difference between a namespace and a method is
-        // whether the declaration's first parameter is the word `self`,
-        // and this is where a reader who has not learned that finds out
-        // (docs/METHODS.md).
+        // `static` is the whole difference between a namespace member
+        // and a method, and this is where the wrong call spelling
+        // teaches it (docs/SELF.md D1-D2).
         if (info.receiver == .not) {
             try self.fail(
                 "luce.sema.self",
                 method.span,
-                "{s}.{s} is a namespace function, not a method; it takes no self — call it as {s}({s}, …)",
-                .{ declared, method.name, qualified, try self.writtenReceiver(method) },
+                "{s} is static and has no self; call it as {s}(…)",
+                .{ method.name, qualified },
             );
             return null;
         }
@@ -7243,13 +7239,13 @@ pub const FunctionBuilder = struct {
         // slots one up — the `hidden = 1` case of the one resolver
         // every user-call spelling shares (docs/ARGS.md §4).
         const parameters = info.declaration.parameters;
-        if (parameters.len != info.parameter_types.len) {
+        if (parameters.len + 1 != info.parameter_types.len) {
             // A parameter of this declaration failed to resolve, and
             // the declaration carries the diagnostic.
             return null;
         }
-        const surface = try self.declarationSlots(parameters, info.parameter_defaults);
-        const seen = try self.temporary().alloc(bool, parameters.len);
+        const surface = try self.declarationSlots(info);
+        const seen = try self.temporary().alloc(bool, info.parameter_types.len);
         defer self.temporary().free(seen);
         @memset(seen, false);
         seen[0] = true; // the receiver, already in hand
@@ -7287,8 +7283,11 @@ pub const FunctionBuilder = struct {
             }
         }
 
-        const registers = try self.arena().alloc(Register, info.parameter_types.len);
-        registers[0] = values[0].register;
+        // The inout call carries the receiver's *place* separately;
+        // its argument run contains only the values written between
+        // parentheses.  A read method remains an ordinary call with
+        // the receiver value at logical parameter zero.
+        const explicit = try self.arena().alloc(Register, info.parameter_types.len - 1);
         for (method.arguments, slots, 0..) |argument, slot, index| {
             const value = values[index + 1];
             const want = info.parameter_types[slot];
@@ -7312,7 +7311,24 @@ pub const FunctionBuilder = struct {
                 }
                 return null;
             };
-            registers[slot] = fitted.register;
+            // A writing method may replace its receiver while this
+            // ordinary argument is still live in the callee.  If the
+            // argument borrows string or struct storage from that
+            // receiver (`s.change(s)` or `s.change(s.text)`), passing
+            // the view would leave the parameter pointing at freed
+            // bytes.  Keep a caller-owned storage copy through the
+            // call.  Objects inside a copied struct intentionally stay
+            // aliases: D6 keeps ordinary object borrowing unchanged.
+            if (info.receiver == .writes and self.analyzer.ownsStorage(want)) {
+                const kept: Typed = .{
+                    .register = try self.code.ownStorage(fitted.register),
+                    .value_type = want,
+                };
+                try self.parkFreshStorage(kept);
+                explicit[slot - 1] = kept.register;
+            } else {
+                explicit[slot - 1] = fitted.register;
+            }
         }
         // A slot nobody filled takes its default (docs/ARGS.md D2),
         // parked like the written construction it stands in for (S3).
@@ -7324,7 +7340,7 @@ pub const FunctionBuilder = struct {
                 .value_type = filled.value_type,
             };
             try self.parkFreshStorage(made);
-            registers[slot] = made.register;
+            if (slot != 0) explicit[slot - 1] = made.register;
         }
         if (info.results.len == 0 and !as_statement) {
             try self.fail("luce.sema.call", method.span, "{s} returns nothing", .{method.name});
@@ -7343,115 +7359,40 @@ pub const FunctionBuilder = struct {
             );
             return null;
         }
-        const call = try self.code.emit(
-            .{ .call = .{ .function = function_index, .arguments = registers } },
-            info.return_type,
-        );
+        const call = if (info.receiver == .writes) blk: {
+            const receiver = (try self.receiverPlace(method, info.parameter_types[0])) orelse return null;
+            break :blk try self.code.emit(
+                .{ .call_inout = .{
+                    .function = function_index,
+                    .receiver = receiver,
+                    .arguments = explicit,
+                } },
+                info.return_type,
+            );
+        } else blk: {
+            const arguments = try self.arena().alloc(Register, info.parameter_types.len);
+            arguments[0] = values[0].register;
+            @memcpy(arguments[1..], explicit);
+            break :blk try self.code.emit(
+                .{ .call = .{ .function = function_index, .arguments = arguments } },
+                info.return_type,
+            );
+        };
         const answered: Typed = if (info.fallible)
             try self.openFallible(call, info.return_type)
         else
             .{ .register = call, .value_type = info.return_type };
-        if (info.receiver != .writes) return answered;
-        return self.writeReceiverBack(method, info, answered, as_statement);
+        return answered;
     }
 
-    /// `p.scale(2.0)` means `p = Point.scale(p, 2.0)` — copy in, copy
-    /// out (docs/METHODS.md).
-    ///
-    /// Not a new mechanism: it is transcribed from what the corpus
-    /// writes by hand at every mutation site it has, `var moved =
-    /// state` on one side and `state = Handle.…(state, …)` on the
-    /// other.  The compiler writes the two halves the programmer was
-    /// writing already.
-    ///
-    /// **It is not observably by-reference.**  Inside a method the only
-    /// inputs are its parameters; struct values copy on every store;
-    /// there are no globals, no references, no closures and no threads.
-    /// No expression inside the callee can name the receiver's place,
-    /// so copy-in/copy-out and by-reference give the same answers on
-    /// every program that can be written here.
-    ///
-    /// **The store stands on the returning edge only.**  A method that
-    /// raises leaves its receiver as it was, all or nothing, and for
-    /// free: `openFallible` has already branched, and this runs on the
-    /// side where the call came back.
-    fn writeReceiverBack(
-        self: *FunctionBuilder,
-        method: ast.Method,
-        info: context.FunctionDeclInfo,
-        answered: Typed,
-        as_statement: bool,
-    ) Error!?Typed {
-        const place = (try self.receiverPlace(method, info)) orelse return null;
-        // The channel value is a statement temporary like any other
-        // fresh struct: its field run, and the receiver copy inside it,
-        // go back at the end of the statement (S3, docs/STRINGS.md).
-        // The caller of this walk never sees it — what it hands back is
-        // a *field* of it — so nothing else would park it.
-        try self.parkFreshStorage(.{
-            .register = answered.register,
-            .value_type = info.return_type,
-        });
-        // Arity one — `func step(var self):` — is the plain single
-        // return the language already had: the whole answer is the
-        // receiver.
-        if (info.results.len == 0) {
-            // A store into a place that outlives the statement takes
-            // its storage first: the struct's field run belongs to the
-            // value the call answered, and that value is a statement
-            // temporary (docs/STRINGS.md).
-            try self.code.rebuild(place.root, place.accessors, try self.ownedForStore(answered));
-            return .{ .register = answered.register, .value_type = .none };
-        }
-        const shape = info.return_type.strukt;
-        const layout = self.analyzer.structs.items[shape];
-        const back = try self.code.emit(.{ .struct_get = .{
-            .target = answered.register,
-            .layout = shape,
-            .field = 0,
-        } }, layout.fields[0].field_type);
-        try self.code.rebuild(place.root, place.accessors, try self.ownedForStore(.{
-            .register = back,
-            .value_type = layout.fields[0].field_type,
-        }));
-
-        // One declared result is the ordinary single value a reader
-        // binds with `let roll = rng.next()`; two or more is a shape,
-        // and the receiver is not part of it — the declared arity is
-        // the arity at the call site.
-        if (info.results.len == 1) {
-            return .{
-                .register = try self.code.emit(.{ .struct_get = .{
-                    .target = answered.register,
-                    .layout = shape,
-                    .field = 1,
-                } }, layout.fields[1].field_type),
-                .value_type = layout.fields[1].field_type,
-            };
-        }
-        _ = as_statement;
-        try self.fail(
-            "luce.sema.self",
-            method.span,
-            "{s} writes its receiver back and answers {d} values; a method may do one or the other",
-            .{ method.name, info.results.len },
-        );
-        return null;
-    }
-
-    /// Where a `var self` method writes its receiver back to.
-    ///
-    /// The rule is not one invented for the feature: it is the rule
-    /// `lowerAssignChain` already enforces for `cells[0].value = 3` — a
-    /// place whose root is a mutable local.  Reusing it exactly means a
-    /// receiver is legal in precisely the positions an assignment
-    /// target is, and the two can never drift.
+    /// The caller-owned slot a writing method receives in place.  The
+    /// current SELF surface deliberately admits bare mutable bindings;
+    /// read methods still accept arbitrary values and temporaries.
     fn receiverPlace(
         self: *FunctionBuilder,
         method: ast.Method,
-        info: context.FunctionDeclInfo,
-    ) Error!?struct { root: LocalId, accessors: []const mir.build.Lowering.Step } {
-        _ = info;
+        receiver_type: Type,
+    ) Error!?LocalId {
         switch (method.target.*) {
             .name => |name| {
                 const found = self.findLocal(name.text) orelse return null;
@@ -7459,18 +7400,55 @@ pub const FunctionBuilder = struct {
                     try self.fail(
                         "luce.sema.let",
                         name.span,
-                        "{s} is let-bound; {s} takes var self and writes back to its receiver — use var",
+                        "{s} is let-bound; {s} writes its implicit self — use var",
                         .{ name.text, method.name },
                     );
                     return null;
                 }
-                return .{ .root = found.info.local, .accessors = &.{} };
+                if (try self.checkPoisoned(found.info, name.text, name.span)) return null;
+                const place_type = self.code.localType(found.info.local);
+                if (!place_type.eql(receiver_type)) {
+                    try self.fail(
+                        "luce.sema.self",
+                        name.span,
+                        "{s} is {s}; {s} writes a {s} in place, so a narrowed value is not a writable receiver — bind a var {s} first",
+                        .{
+                            name.text,
+                            try self.analyzer.typeName(place_type),
+                            method.name,
+                            try self.analyzer.typeName(receiver_type),
+                            try self.analyzer.typeName(receiver_type),
+                        },
+                    );
+                    return null;
+                }
+                if (found.info.iterating) {
+                    try self.fail(
+                        "luce.sema.own",
+                        name.span,
+                        "{s} is being iterated; a writing method would change it under the loop [OWNERSHIP.md S5, S9]",
+                        .{name.text},
+                    );
+                    return null;
+                }
+                if (found.info.carries and found.info.class != .owned and
+                    found.info.class != .inout_receiver)
+                {
+                    try self.fail(
+                        "luce.sema.own",
+                        name.span,
+                        "{s} does not own its objects, so a writing method cannot replace its receiver; call it on the owning var [OWNERSHIP.md S8, S25]",
+                        .{name.text},
+                    );
+                    return null;
+                }
+                return found.info.local;
             },
             else => {
                 try self.fail(
                     "luce.sema.self",
                     method.span,
-                    "{s} takes var self, so its receiver must be a variable — not a call result or a temporary",
+                    "{s} writes its implicit self, so its receiver must be a var binding — not a call result or temporary",
                     .{method.name},
                 );
                 return null;
@@ -7478,9 +7456,9 @@ pub const FunctionBuilder = struct {
         }
     }
 
-    /// How the reader spelled the receiver, for a message that has to
-    /// hand back the static form: the bare name where there is one,
-    /// and the struct's own word where the receiver is an expression.
+    /// How the reader spelled the receiver for a method diagnostic:
+    /// the bare name where there is one, and a neutral phrase for an
+    /// expression nobody named.
     fn writtenReceiver(self: *FunctionBuilder, method: ast.Method) Error![]const u8 {
         return self.writtenTarget(method.target);
     }
@@ -8859,6 +8837,25 @@ pub const FunctionBuilder = struct {
                 result = .long;
             },
             .free_object => {
+                // `self` is a caller-owned place even when its value is
+                // a struct rather than a heap handle.  Diagnose that
+                // ownership boundary before free's ordinary type gate,
+                // or the dedicated inout-receiver rule below would be
+                // unreachable for the only spelling that can name it.
+                const operand = call.arguments[0].value;
+                if (operand.* == .name) {
+                    if (self.findLocal(operand.name.text)) |found| {
+                        if (found.info.class == .inout_receiver) {
+                            try self.fail(
+                                "luce.sema.own",
+                                call.span,
+                                "self is the caller's receiver and cannot be freed; replace its fields or let the caller's scope release it [SELF.md D4]",
+                                .{},
+                            );
+                            return .failed;
+                        }
+                    }
+                }
                 if (arguments[0].value_type != .heap) {
                     if (arguments[0].value_type == .optional) {
                         try self.failAbsence(call.span, "free", arguments[0].value_type, call.arguments[0].value);
@@ -8868,7 +8865,6 @@ pub const FunctionBuilder = struct {
                 }
                 // free is deliberate early release of an owned name,
                 // and poisons the name like give does (S6).
-                const operand = call.arguments[0].value;
                 if (operand.* != .name) {
                     try self.fail(
                         "luce.sema.own",
@@ -8898,6 +8894,10 @@ pub const FunctionBuilder = struct {
                         );
                         return .failed;
                     },
+                    // Handled before free's heap-type gate above.  Keep
+                    // this exhaustive arm as a compiler assertion that
+                    // the early check remains the sole route.
+                    .inout_receiver => unreachable,
                     .owned => {},
                 }
                 if (self.loops.items.len > 0 and

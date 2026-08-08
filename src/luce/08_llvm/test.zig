@@ -56,6 +56,47 @@ test "the entry point is exported and every Luce function is internal" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "define internal i32 @luce.") != null);
 }
 
+test "inout calls lower as an internal slot and owner descriptor" {
+    const gpa = std.testing.allocator;
+    const rendered = (try render(
+        \\struct Counter:
+        \\    value: long
+        \\
+        \\    func step():
+        \\        self.value += 1
+        \\
+        \\    func twice():
+        \\        self.step()
+        \\        self.step()
+        \\
+        \\func main():
+        \\    var counter = Counter(value = 0)
+        \\    counter.twice()
+        \\    assert(counter.value == 2)
+        \\
+    )).?;
+    defer gpa.free(rendered);
+
+    // The descriptor is one internal logical parameter. Its pointer
+    // becomes local zero's slot, and the two owner fields follow it;
+    // the nested writer forwards that same aggregate.
+    for ([_][]const u8{
+        "{ ptr, i64, i32 }",
+        "extractvalue { ptr, i64, i32 }",
+        "insertvalue { ptr, i64, i32 }",
+    }) |wanted| {
+        if (std.mem.indexOf(u8, rendered, wanted) == null) {
+            std.debug.print("missing {s} in:\n{s}\n", .{ wanted, rendered });
+            return error.NotGenerated;
+        }
+    }
+    try std.testing.expect(std.mem.count(
+        u8,
+        rendered,
+        "extractvalue { ptr, i64, i32 }",
+    ) >= 3);
+}
+
 test "checked integer arithmetic lowers to the overflow intrinsics" {
     const gpa = std.testing.allocator;
     const rendered = (try render(
@@ -327,6 +368,43 @@ test "every runtime declaration carries what the compiler knows about it" {
 // ---------------------------------------------------------------------------
 // Running the machine code
 // ---------------------------------------------------------------------------
+
+test "inout calls mutate the caller on return, error, and nested forwarding" {
+    try agree(
+        \\struct Counter:
+        \\    value: long
+        \\
+        \\    func step():
+        \\        self.value += 1
+        \\
+        \\    func twice():
+        \\        self.step()
+        \\        self.step()
+        \\
+        \\    func reject(value: long) -> !:
+        \\        self.value = value
+        \\        error("failed")
+        \\
+        \\struct Holder:
+        \\    values: list(long)
+        \\
+        \\    func replace():
+        \\        self = Holder(values = [9])
+        \\
+        \\func main():
+        \\    var counter = Counter(value = 1)
+        \\    counter.twice()
+        \\    assert(counter.value == 3)
+        \\    counter.reject(8) catch:
+        \\        assert(counter.value == 8)
+        \\    assert(counter.value == 8)
+        \\
+        \\    var holder = Holder(values = [1])
+        \\    holder.replace()
+        \\    assert(holder.values[0] == 9)
+        \\
+    );
+}
 
 test "a compiled program prints through the host table" {
     var capture: Capture = .{};

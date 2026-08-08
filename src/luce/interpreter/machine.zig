@@ -306,9 +306,25 @@ pub const Frame = struct {
     /// Unique per call; minted by the runtime so ownership bindings
     /// from two frames of the same function never collide.
     serial: u64 = 0,
+    /// The caller slot aliased by logical local zero.  The slot is an
+    /// index because `frame_storage` may move while calls deepen; the
+    /// owner pair is inherited so bind/unbind still name the binding
+    /// that actually owns the receiver.
+    inout: ?Inout = null,
 };
 
 const Register = mir.Register;
+
+const Inout = struct {
+    slot: usize,
+    serial: u64,
+    local: mir.LocalId,
+};
+
+const Owner = struct {
+    serial: u64,
+    local: mir.LocalId,
+};
 
 // ---------------------------------------------------------------------------
 // The machine
@@ -478,12 +494,37 @@ pub const Machine = struct {
 
     fn releaseSlots(self: *Machine, frame: Frame) void {
         const function = &self.program.functions[frame.function];
-        const locals = self.frame_storage.items[frame.slots_at + frame.register_count ..];
+        const locals = self.frame_storage.items[frame.slots_at + frame.register_count ..][0..frame.local_count];
         for (function.locals, 0..) |local, index| {
-            if (!local.owns_storage) continue;
+            if (!local.owns_storage or local.inout) continue;
             self.runtime.dropStorage(locals[index]);
             locals[index] = runtime.Runtime.emptied(locals[index]);
         }
+    }
+
+    fn localSlot(self: *Machine, frame: *const Frame, local: mir.LocalId) *RuntimeValue {
+        if (local == 0) {
+            if (frame.inout) |inout| return &self.frame_storage.items[inout.slot];
+        }
+        return &self.frame_storage.items[frame.slots_at + frame.register_count + local];
+    }
+
+    fn localOwner(frame: *const Frame, local: mir.LocalId) Owner {
+        if (local == 0) {
+            if (frame.inout) |inout| return .{ .serial = inout.serial, .local = inout.local };
+        }
+        return .{ .serial = frame.serial, .local = local };
+    }
+
+    fn inoutFrom(frame: *const Frame, receiver: mir.LocalId) Inout {
+        if (receiver == 0) {
+            if (frame.inout) |inout| return inout;
+        }
+        return .{
+            .slot = frame.slots_at + frame.register_count + receiver,
+            .serial = frame.serial,
+            .local = receiver,
+        };
     }
 
     /// The same, for every frame a trap left standing.
@@ -536,6 +577,7 @@ pub const Machine = struct {
         function_index: u32,
         arguments: []const RuntimeValue,
         destination: Register,
+        inout: ?Inout,
     ) error{OutOfMemory}!?CallOutcome {
         if (self.stack.items.len >= self.max_depth) return self.trap(.call_depth_exceeded);
         const function = &self.program.functions[function_index];
@@ -546,7 +588,8 @@ pub const Machine = struct {
         // Safe to hold across zeroValue: it allocates struct fields
         // from the arena and never touches frame_storage.
         const locals = self.frame_storage.items[slots_at + register_count ..][0..local_count];
-        @memcpy(locals[0..arguments.len], arguments);
+        const argument_start: usize = if (inout == null) 0 else 1;
+        @memcpy(locals[argument_start..][0..arguments.len], arguments);
         // Every non-parameter local starts at its type's zero value,
         // not a bare .none: a well-formed function sets locals before
         // reading them, but a hand-forged or bit-flipped module may
@@ -557,7 +600,7 @@ pub const Machine = struct {
         // boundary.  Parameter slots are copied over whole, so zeroing
         // them first would only buy per-call allocations for struct
         // parameters.
-        for (locals[arguments.len..], function.locals[arguments.len..]) |*slot, local| {
+        for (locals[function.parameter_count..], function.locals[function.parameter_count..]) |*slot, local| {
             // A slot that owns its storage starts *empty* rather than
             // at the shared zero: the zero template is one value per
             // layout, and the release this slot will get must never
@@ -574,6 +617,7 @@ pub const Machine = struct {
             .local_count = @intCast(local_count),
             .destination = destination,
             .serial = self.runtime.takeSerial(),
+            .inout = inout,
         });
         return null;
     }
@@ -605,7 +649,7 @@ pub const Machine = struct {
         entry: u32,
         arguments: []const RuntimeValue,
     ) error{OutOfMemory}!CallOutcome {
-        if (try self.pushFrame(entry, arguments, 0)) |failed| return failed;
+        if (try self.pushFrame(entry, arguments, 0, null)) |failed| return failed;
 
         dispatch: while (true) {
             // Re-derived every time round the dispatch loop: pushing a
@@ -615,7 +659,6 @@ pub const Machine = struct {
             const function = &self.program.functions[frame.function];
             const slots = self.frame_storage.items[frame.slots_at..];
             const registers = slots[0..frame.register_count];
-            const locals = slots[frame.register_count..][0..frame.local_count];
             const items = function.blocks[frame.block].items;
 
             while (frame.position < items.len) {
@@ -649,8 +692,8 @@ pub const Machine = struct {
                     // D2) — the same value the compiled path holds, so
                     // the two engines compare and print alike.
                     .const_function => |named| registers[item] = .ofInt(@intCast(named)),
-                    .local_get => |local| registers[item] = locals[local],
-                    .local_set => |set| locals[set.local] = registers[set.value],
+                    .local_get => |local| registers[item] = self.localSlot(frame, local).*,
+                    .local_set => |set| self.localSlot(frame, set.local).* = registers[set.value],
                     .binary => |operation| {
                         registers[item] = operators.binary(
                             &self.runtime,
@@ -700,10 +743,12 @@ pub const Machine = struct {
                             return self.caught(mistake);
                     },
                     .object_bind => |bind| {
-                        self.runtime.bind(registers[bind.value], frame.serial, bind.local);
+                        const owner = localOwner(frame, bind.local);
+                        self.runtime.bind(registers[bind.value], owner.serial, owner.local);
                     },
                     .object_unbind => |unbind| {
-                        self.runtime.unbind(registers[unbind.value], frame.serial, unbind.local);
+                        const owner = localOwner(frame, unbind.local);
+                        self.runtime.unbind(registers[unbind.value], owner.serial, owner.local);
                     },
                     .call => |called| {
                         // Reused scratch, not a fresh arena slice per
@@ -714,9 +759,24 @@ pub const Machine = struct {
                         for (called.arguments) |argument| {
                             self.argument_scratch.appendAssumeCapacity(registers[argument]);
                         }
-                        if (try self.pushFrame(called.function, self.argument_scratch.items, item)) |failed| {
+                        if (try self.pushFrame(called.function, self.argument_scratch.items, item, null)) |failed| {
                             return failed;
                         }
+                        continue :dispatch;
+                    },
+                    .call_inout => |called| {
+                        self.argument_scratch.clearRetainingCapacity();
+                        try self.argument_scratch.ensureTotalCapacity(self.arena, called.arguments.len);
+                        for (called.arguments) |argument| {
+                            self.argument_scratch.appendAssumeCapacity(registers[argument]);
+                        }
+                        const inout = inoutFrom(frame, called.receiver);
+                        if (try self.pushFrame(
+                            called.function,
+                            self.argument_scratch.items,
+                            item,
+                            inout,
+                        )) |failed| return failed;
                         continue :dispatch;
                     },
                     // A call through a function value: the callee's
@@ -741,6 +801,7 @@ pub const Machine = struct {
                             @intCast(named),
                             self.argument_scratch.items,
                             item,
+                            null,
                         )) |failed| return failed;
                         continue :dispatch;
                     },

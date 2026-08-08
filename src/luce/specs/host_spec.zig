@@ -393,7 +393,7 @@ test "a call site that raised after it returned gives nothing back twice" {
         \\    at: long = 0
         \\    note: string = "start"
         \\
-        \\    func act(var self, order: string) -> !:
+        \\    func act(order: string) -> !:
         \\        if order == "no":
         \\            error("cannot " + order)
         \\        self.at += 1

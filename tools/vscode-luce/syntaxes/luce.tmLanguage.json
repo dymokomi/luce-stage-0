@@ -160,7 +160,7 @@
         },
         {
           "name": "storage.modifier.luce",
-          "match": "\\b(?:public|private)\\b"
+          "match": "\\b(?:static|public|private)\\b"
         },
         {
           "name": "keyword.control.import.luce",

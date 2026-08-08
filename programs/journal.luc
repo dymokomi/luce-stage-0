@@ -47,14 +47,14 @@ struct Save:
         held: list(string)
         seen: list(string)
 
-    func make(room: string, moves: long, held: give list(string), seen: give list(string)) -> Save:
+    static func make(room: string, moves: long, held: give list(string), seen: give list(string)) -> Save:
         return Save(room = room, moves = moves, held = give held, seen = give seen)
 
     # What a realm would save as, right now.  `carrying()` and
     # `visited()` hand over lists they have just built, so they fill
     # the `give` slots above with no verb at the call site: there is
     # no other name for either of them to poison (OWNERSHIP.md S27).
-    func of(realm: world.Realm, at: long, moves: long) -> Save:
+    static func of(realm: world.Realm, at: long, moves: long) -> Save:
         return Save.make(
             room = realm.name_at(at),
             moves = moves,
@@ -63,7 +63,7 @@ struct Save:
         )
 
     # The five lines, which `read` below is the inverse of.
-    func text(self) -> string:
+    func text() -> string:
         var out = new builder()
         out.append(tag + "\n")
         out.append("room " + self.room + "\n")
@@ -77,14 +77,14 @@ struct Save:
     # (OWNERSHIP.md S17) — the list belongs to the save, and a caller
     # holding the same one could outlive it.  `copy` is the answer,
     # and it is written where its cost is (S31).
-    func carried(self) -> list(string):
+    func carried() -> list(string):
         return copy self.held
 
     # Put this save back into a realm and answer the room it left the
     # player in.  Everything the realm was is forgotten first: a
     # restore that only added would hand the player a second brass key
     # for every load.
-    func into(self, realm: world.Realm) -> long!:
+    func into(realm: world.Realm) -> long!:
         realm.forget()
         for name in self.held:
             try realm.hold(name)

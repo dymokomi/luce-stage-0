@@ -1761,7 +1761,7 @@ test "structs: namespaced functions and nested structs" {
         \\    x: long
         \\    y: long
         \\
-        \\    func add(a: Vec, b: Vec) -> Vec:
+        \\    static func add(a: Vec, b: Vec) -> Vec:
         \\        return Vec(x = a.x + b.x, y = a.y + b.y)
         \\
         \\struct Line:
@@ -1931,14 +1931,14 @@ test "returns: a shape crosses a loop as two vars, and the body gets shorter" {
 test "returns: existing vars receive one snapshot through every call surface" {
     try agreeOk(
         \\struct Pairs:
-        \\    func swapped(left: long, right: long) -> (long, long):
+        \\    static func swapped(left: long, right: long) -> (long, long):
         \\        return right, left
         \\
         \\struct PairSource:
         \\    left: long
         \\    right: long
         \\
-        \\    func values(self) -> (long, long):
+        \\    func values() -> (long, long):
         \\        return self.left, self.right
         \\
         \\func advanced(value: long, at: long) -> (long, long):
@@ -2017,7 +2017,7 @@ test "returns: a failed assignment keeps RHS side effects but commits no replace
         \\struct Counter:
         \\    value: long
         \\
-        \\    func bump(var self) -> long:
+        \\    func bump() -> long:
         \\        self.value += 1
         \\        return self.value
         \\
@@ -2072,38 +2072,33 @@ test "returns: guarded assignment joins optional facts from both continuing path
 }
 
 // ---------------------------------------------------------------------------
-// Methods: `self`
+// Methods: implied `self`
 // ---------------------------------------------------------------------------
 //
-// `p.length()` **is** `Point.length(p)` — the same MIR call, resolved
-// in stage 4 (docs/METHODS.md).  Nothing below is a second semantics,
-// which is why the oracle needed no edit for any of it and is
-// therefore the arm that proves the sugar resolved right.
+// A plain member is a method and receives `self` implicitly; a
+// namespace function is marked `static` and called through the type.
 
-test "methods: a receiver reads its struct, and the static form is the same call" {
+test "methods: a receiver reads its struct beside a static namespace function" {
     try agreeOk(
         \\struct Point:
         \\    x: double
         \\    y: double
         \\
-        \\    func length(self) -> double:
+        \\    func length() -> double:
         \\        return sqrt(self.x * self.x + self.y * self.y)
         \\
-        \\    func plus(self, other: Point) -> Point:
+        \\    func plus(other: Point) -> Point:
         \\        return Point(x = self.x + other.x, y = self.y + other.y)
         \\
-        \\    func origin() -> Point:
+        \\    static func origin() -> Point:
         \\        return Point(x = 0.0, y = 0.0)
         \\
         \\func main():
         \\    let p = Point(x = 3.0, y = 4.0)
         \\    assert(p.length() == 5.0)
-        \\    # The long way round means exactly the same thing, which is
-        \\    # what lets a struct convert one function at a time.
-        \\    assert(Point.length(p) == 5.0)
         \\    let q = p.plus(Point(x = 1.0, y = 1.0))
         \\    assert(q.x == 4.0 and q.y == 5.0)
-        \\    # A namespace function beside the methods, untouched.
+        \\    # An explicitly static namespace function beside methods.
         \\    assert(Point.origin().length() == 0.0)
         \\    # And a method on a call result, which needs no place.
         \\    assert(Point.origin().plus(p).length() == 5.0)
@@ -2111,12 +2106,12 @@ test "methods: a receiver reads its struct, and the static form is the same call
     );
 }
 
-test "methods: a receiver is a value, so the method sees a copy" {
+test "methods: a reader sees the receiver value without changing it" {
     try agreeOk(
         \\struct Counter:
         \\    count: long
         \\
-        \\    func bumped(self) -> Counter:
+        \\    func bumped() -> Counter:
         \\        var next = self
         \\        next.count = next.count + 1
         \\        return next
@@ -2125,7 +2120,7 @@ test "methods: a receiver is a value, so the method sees a copy" {
         \\    let one = Counter(count = 1)
         \\    let two = one.bumped()
         \\    assert(two.count == 2)
-        \\    # `self` was a copy: nothing about `one` moved.
+        \\    # A reader does not change `one`.
         \\    assert(one.count == 1)
         \\
     );
@@ -2136,7 +2131,7 @@ test "methods: a receiver may be a field, an element, or a chain of both" {
         \\struct Point:
         \\    x: long
         \\
-        \\    func doubled(self) -> long:
+        \\    func doubled() -> long:
         \\        return self.x * 2
         \\
         \\struct Box:
@@ -2157,13 +2152,13 @@ test "methods: a method may take and answer objects, and ownership is the plain-
         \\struct Tally:
         \\    total: long
         \\
-        \\    func over(self, values: list(long)) -> long:
+        \\    func over(values: list(long)) -> long:
         \\        var sum = self.total
         \\        for value in values:
         \\            sum = sum + value
         \\        return sum
         \\
-        \\    func spread(self) -> list(long):
+        \\    func spread() -> list(long):
         \\        var made = [self.total, self.total]
         \\        return made
         \\
@@ -2179,44 +2174,32 @@ test "methods: a method may take and answer objects, and ownership is the plain-
     );
 }
 
-test "methods: the method form lands its arguments where the static form lands them" {
-    // The assertion behind docs/METHODS.md's "the same call": both
-    // spellings give an argument the same landing type.  A struct
-    // receiver used to answer nothing to `lowerOperandsInto`, so
-    // `p.pick(none)` was refused while `Point.pick(p, none)` compiled
-    // — the wart docs/ARGS.md §4 files, fixed by `methodParameters`
-    // answering for struct receivers.
+test "methods: method arguments land at their declared types" {
     try agreeOk(
         \\struct Point:
         \\    x: long
         \\
-        \\    func pick(self, fallback: long?) -> long:
+        \\    func pick(fallback: long?) -> long:
         \\        return fallback else self.x
         \\
         \\func main():
         \\    let p = Point(x = 7)
-        \\    assert(Point.pick(p, none) == 7)
         \\    assert(p.pick(none) == 7)
         \\    assert(p.pick(3) == 3)
         \\
     );
 }
 
-test "methods: a literal argument lands at the parameter's width on both spellings" {
-    // `0.1` has no type until it lands (docs/TYPES.md D3).  Through
-    // the method form it used to land at binary32 and widen — a
-    // different number than the binary64 `0.1` the static form reads,
-    // so the two spellings of one call computed different answers.
+test "methods: a literal argument lands at the parameter's width" {
     try agreeOk(
         \\struct Gauge:
         \\    reading: double
         \\
-        \\    func matches(self, level: double) -> bool:
+        \\    func matches(level: double) -> bool:
         \\        return self.reading == level
         \\
         \\func main():
         \\    let gauge = Gauge(reading = 0.1)
-        \\    assert(Gauge.matches(gauge, 0.1))
         \\    assert(gauge.matches(0.1))
         \\
     );
@@ -2283,16 +2266,23 @@ test "named arguments: all four spellings of a user call take them" {
         \\struct Point:
         \\    x: long
         \\
-        \\    func plus(self, other: long, twice: bool) -> long:
+        \\    func plus(other: long, twice: bool) -> long:
         \\        if twice:
         \\            return self.x + other * 2
         \\        return self.x + other
+        \\
+        \\    static func added(left: long, right: long) -> long:
+        \\        return left + right
+        \\
+        \\func multiplied(left: long, right: long) -> long:
+        \\    return left * right
         \\
         \\func main():
         \\    let p = Point(x = 10)
         \\    assert(p.plus(other = 5, twice = false) == 15)
         \\    assert(p.plus(twice = true, other = 5) == 20)
-        \\    assert(Point.plus(p, twice = true, other = 5) == 20)
+        \\    assert(Point.added(right = 5, left = 10) == 15)
+        \\    assert(multiplied(right = 4, left = 3) == 12)
         \\    assert(strings.find(s = "abcb", needle = "b") == 1)
         \\    assert(strings.find(needle = "b", s = "abcb") == 1)
         \\
@@ -2376,20 +2366,19 @@ test "defaults: a constant, a string, a struct value, and none all serve" {
     );
 }
 
-test "defaults: both method spellings fill the same slots" {
+test "defaults: methods fill omitted slots after the implicit receiver" {
     try agreeOk(
         \\struct Counter:
         \\    count: long
         \\
-        \\    func bumped(self, step: long = 1) -> long:
+        \\    func bumped(step: long = 1) -> long:
         \\        return self.count + step
         \\
         \\func main():
         \\    let counter = Counter(count = 10)
         \\    assert(counter.bumped() == 11)
         \\    assert(counter.bumped(5) == 15)
-        \\    assert(Counter.bumped(counter) == 11)
-        \\    assert(Counter.bumped(counter, step = 3) == 13)
+        \\    assert(counter.bumped(step = 3) == 13)
         \\
     );
 }
@@ -2479,7 +2468,7 @@ test "methods: a method can fail, and try and catch reach it through the receive
         \\struct Reader:
         \\    limit: long
         \\
-        \\    func check(self, n: long) -> long!:
+        \\    func check(n: long) -> long!:
         \\        if n > self.limit:
         \\            error("over the limit")
         \\        return n
@@ -2497,28 +2486,25 @@ test "methods: a method can fail, and try and catch reach it through the receive
 }
 
 // ---------------------------------------------------------------------------
-// `var self`: the receiver is result zero
+// Writing methods: inferred implied `self`
 // ---------------------------------------------------------------------------
 //
-// `p.scale(2.0)` means `p = Point.scale(p, 2.0)` — copy in, copy out,
-// with no reference anywhere.  With a declared result beside it,
-// `let roll = rng.next()` means `rng, roll = Rng.next(rng)`, and under
-// the lowering that is not a second channel at all: the method's
-// results are `[receiver] ++ declared` and they travel in one
-// synthesized layout (docs/METHODS.md, docs/RETURNS.md §5).
+// A plain member that writes `self` is inferred as a writer. Its
+// receiver is an in-place mutable binding, separate from its declared
+// return values.
 
-test "var self: the receiver is written back, and nothing about it is a reference" {
+test "methods: direct field and whole-self writes are inferred" {
     try agreeOk(
         \\struct Point:
         \\    x: double
         \\    y: double
         \\
-        \\    func scale(var self, factor: double):
+        \\    func scale(factor: double):
         \\        self.x = self.x * factor
         \\        self.y = self.y * factor
         \\
-        \\    func reset(var self):
-        \\        # `self` is the one parameter a method may reassign.
+        \\    func reset():
+        \\        # A writing method may replace its whole receiver.
         \\        self = Point(x = 0.0, y = 0.0)
         \\
         \\func main():
@@ -2535,19 +2521,16 @@ test "var self: the receiver is written back, and nothing about it is a referenc
     );
 }
 
-test "var self: the motivating case, end to end" {
-    // The RNG of docs/RETURNS.md §5.  One call where the workaround
-    // had a one-element `list(long)` allocated to give an `long`
-    // reference semantics.
+test "methods: an inferred writer may return a value and call another writer" {
     try agreeOk(
         \\struct Rng:
         \\    state: long
         \\
-        \\    func next(var self) -> long:
+        \\    func next() -> long:
         \\        self.state = self.state * 48271 % 2147483647
         \\        return self.state
         \\
-        \\    func in_range(var self, low: long, high: long) -> long:
+        \\    func in_range(low: long, high: long) -> long:
         \\        if high <= low:
         \\            trap("in_range needs low < high")
         \\        return low + self.next() % (high - low)
@@ -2556,14 +2539,13 @@ test "var self: the motivating case, end to end" {
         \\    var rng = Rng(state = 42)
         \\    let roll = rng.in_range(1, 7)
         \\    assert(roll >= 1 and roll < 7)
-        \\    # The write-back is invisible at the call site, and it
-        \\    # happened: 42 * 48271 is where the state went.
+        \\    # The receiver write happened in place.
         \\    assert(rng.state == 2027382)
         \\    let second = rng.next()
         \\    assert(second == rng.state)
         \\    assert(second != 2027382)
         \\    # At statement position the declared value is discarded
-        \\    # and result zero is still stored.
+        \\    # while the receiver write still happens.
         \\    let third = rng.state
         \\    rng.next()
         \\    assert(rng.state != third)
@@ -2571,12 +2553,12 @@ test "var self: the motivating case, end to end" {
     );
 }
 
-test "var self: a receiver may be a field or an element of a var root" {
+test "methods: a writer accepts a bare var receiver" {
     try agreeOk(
         \\struct Counter:
         \\    n: long
         \\
-        \\    func bump(var self):
+        \\    func bump():
         \\        self.n = self.n + 1
         \\
         \\func main():
@@ -2588,15 +2570,12 @@ test "var self: a receiver may be a field or an element of a var root" {
     );
 }
 
-test "var self: a method that raises leaves its receiver as it was" {
-    // All or nothing, and for free: the write-back stands on the
-    // returning edge only, which is what `catch`'s branch already
-    // gives (docs/FAILURE.md, docs/METHODS.md).
+test "methods: an error before a receiver write leaves it unchanged" {
     try agreeOk(
         \\struct Meter:
         \\    reading: long
         \\
-        \\    func take(var self, n: long) -> long!:
+        \\    func take(n: long) -> long!:
         \\        if n < 0:
         \\            error("negative")
         \\        self.reading = self.reading + n
@@ -2608,27 +2587,26 @@ test "var self: a method that raises leaves its receiver as it was" {
         \\    assert(ok == 15 and meter.reading == 15)
         \\    let bad = meter.take(-1) catch -1
         \\    assert(bad == -1)
-        \\    # Nothing about the receiver moved on the errored edge.
+        \\    # The error happened before the write.
         \\    assert(meter.reading == 15)
         \\
     );
 }
 
-test "var self: the read-only static form of a plain method is still the same call" {
+test "methods: readers and writers share the method call surface" {
     try agreeOk(
         \\struct Point:
         \\    x: long
         \\
-        \\    func doubled(self) -> long:
+        \\    func doubled() -> long:
         \\        return self.x * 2
         \\
-        \\    func grow(var self):
+        \\    func grow():
         \\        self.x = self.x + 1
         \\
         \\func main():
         \\    var p = Point(x = 3)
         \\    assert(p.doubled() == 6)
-        \\    assert(Point.doubled(p) == 6)
         \\    p.grow()
         \\    assert(p.x == 4)
         \\
@@ -3736,10 +3714,10 @@ test "structs: namespaced functions can recurse and call peers" {
         \\struct Math:
         \\    dummy: long
         \\
-        \\    func square(n: long) -> long:
+        \\    static func square(n: long) -> long:
         \\        return n * n
         \\
-        \\    func hypot_sq(a: long, b: long) -> long:
+        \\    static func hypot_sq(a: long, b: long) -> long:
         \\        return Math.square(a) + Math.square(b)
         \\
         \\func main():
@@ -4733,10 +4711,10 @@ test "structs: a smooth pointer transform computes exactly" {
 test "structs: namespaced functions execute through qualified calls" {
     try agreeOk(
         \\struct Math:
-        \\    func twice(value: long) -> long:
+        \\    static func twice(value: long) -> long:
         \\        return value * 2
         \\
-        \\    func plus(left: long, right: long) -> long:
+        \\    static func plus(left: long, right: long) -> long:
         \\        return left + right
         \\
         \\func main():
@@ -5715,14 +5693,14 @@ test "failure: a call that raises leaves nothing where its value would have gone
         \\struct Cursor:
         \\    private position: long
         \\
-        \\    func take(var self, data: list(long)) -> long!:
+        \\    func take(data: list(long)) -> long!:
         \\        if self.position >= len(data):
         \\            error("out of bits")
         \\        let value = data[self.position]
         \\        self.position += 1
         \\        return value
         \\
-        \\    func drain(var self, data: list(long), out: list(long)) -> !:
+        \\    func drain(data: list(long), out: list(long)) -> !:
         \\        while true:
         \\            let value = try self.take(data)
         \\            if value == 0:

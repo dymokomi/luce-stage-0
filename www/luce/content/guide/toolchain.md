@@ -17,6 +17,13 @@ front end's hand-over to the back end, not something to ship; that is
 how `loom` gets a program compiled without carrying a code generator,
 by running this binary over the module it already has.
 
+The current `.lcm` format is **32**. It moved for the internal
+`call_inout` edge used by writing methods. The published host ABI is
+**13** and did not move with it: no host service or runtime export was
+added.
+
+Current version pair: `format_version = 32`; `abi.version = 13`.
+
 `FILE` may also be `-`, to read the program from standard input.
 Imports then resolve beside the current directory, and `build` needs
 `-o` to say where to write.

@@ -212,6 +212,7 @@ pub const Analyzer = struct {
         try constants.foldAll(self);
         try self.settleFieldDefaults();
         try self.collectFunctions();
+        try self.inferReceiverWrites();
         try self.synthesizeShapes();
         if (self.diagnostics.hasErrors()) return null;
 
@@ -1575,6 +1576,229 @@ pub const Analyzer = struct {
         try self.checkEntry();
     }
 
+    /// Infer the one receiver fact source no longer spells: whether a
+    /// method writes its implicit `self` (docs/SELF.md D3).
+    ///
+    /// The walk is a fixed point because a read-looking wrapper may
+    /// call a writer declared later, and recursion must not make the
+    /// answer depend on declaration order.  Only `self.m()` propagates
+    /// a value-receiver write.  `self.items.append()` mutates the
+    /// borrowed object's contents and deliberately does not: the
+    /// value/object line is unchanged (D6).
+    fn inferReceiverWrites(self: *Analyzer) Error!void {
+        var changed = true;
+        while (changed) {
+            changed = false;
+            for (self.functions.items) |*info| {
+                if (info.receiver != .reads) continue;
+                if (!self.blockWritesReceiver(info, info.declaration.body)) continue;
+                info.receiver = .writes;
+                changed = true;
+            }
+        }
+    }
+
+    fn blockWritesReceiver(
+        self: *const Analyzer,
+        info: *const FunctionDeclInfo,
+        block: ast.Block,
+    ) bool {
+        for (block.statements) |statement| {
+            if (self.statementWritesReceiver(info, statement)) return true;
+        }
+        return false;
+    }
+
+    fn statementWritesReceiver(
+        self: *const Analyzer,
+        info: *const FunctionDeclInfo,
+        statement: ast.Statement,
+    ) bool {
+        return switch (statement) {
+            .assign => |assign| selfTarget(assign.target) or
+                self.targetEvaluationWritesReceiver(info, assign.target) or
+                self.expressionWritesReceiver(info, assign.value),
+            .assign_many => |assign| blk: {
+                for (assign.names) |name| {
+                    if (std.mem.eql(u8, name.text, "self")) break :blk true;
+                }
+                break :blk self.expressionWritesReceiver(info, assign.value);
+            },
+            .let => |binding| self.expressionWritesReceiver(info, binding.value),
+            .variable => |binding| binding.value != null and
+                self.expressionWritesReceiver(info, binding.value.?),
+            .destructure => |binding| self.expressionWritesReceiver(info, binding.value),
+            .expression => |written| self.expressionWritesReceiver(info, written.value),
+            .return_statement => |returned| blk: {
+                for (returned.values) |value| {
+                    if (self.expressionWritesReceiver(info, value)) break :blk true;
+                }
+                break :blk false;
+            },
+            .conditional => |conditional| self.expressionWritesReceiver(info, conditional.condition) or
+                self.blockWritesReceiver(info, conditional.then_block) or
+                (conditional.else_block != null and
+                    self.blockWritesReceiver(info, conditional.else_block.?)),
+            .while_loop => |loop| self.expressionWritesReceiver(info, loop.condition) or
+                self.blockWritesReceiver(info, loop.body),
+            .for_range => |loop| self.expressionWritesReceiver(info, loop.start) or
+                self.expressionWritesReceiver(info, loop.end) or
+                self.blockWritesReceiver(info, loop.body),
+            .for_each => |loop| self.expressionWritesReceiver(info, loop.iterable) or
+                self.blockWritesReceiver(info, loop.body),
+            .guarded => |guarded| self.statementWritesReceiver(info, guarded.attempt.*) or
+                self.blockWritesReceiver(info, guarded.handler),
+            .match => |matched| blk: {
+                if (self.expressionWritesReceiver(info, matched.scrutinee)) break :blk true;
+                for (matched.arms) |arm| {
+                    if (self.blockWritesReceiver(info, arm.body)) break :blk true;
+                }
+                break :blk matched.else_block != null and
+                    self.blockWritesReceiver(info, matched.else_block.?);
+            },
+            .break_statement, .continue_statement => false,
+        };
+    }
+
+    fn expressionWritesReceiver(
+        self: *const Analyzer,
+        info: *const FunctionDeclInfo,
+        expression: *const ast.Expression,
+    ) bool {
+        return switch (expression.*) {
+            .method => |method| blk: {
+                if (method.target.* == .name and
+                    std.mem.eql(u8, method.target.name.text, "self") and
+                    self.memberWritesReceiver(info, method.name))
+                {
+                    break :blk true;
+                }
+                if (self.expressionWritesReceiver(info, method.target)) break :blk true;
+                for (method.arguments) |argument| {
+                    if (self.expressionWritesReceiver(info, argument.value)) break :blk true;
+                }
+                break :blk false;
+            },
+            .call => |call| blk: {
+                if (std.mem.eql(u8, call.callee, "free") and
+                    call.arguments.len == 1 and
+                    expressionIsSelf(call.arguments[0].value))
+                {
+                    break :blk true;
+                }
+                for (call.arguments) |argument| {
+                    if (self.expressionWritesReceiver(info, argument.value)) break :blk true;
+                }
+                break :blk false;
+            },
+            .binary => |binary| self.expressionWritesReceiver(info, binary.left) or
+                self.expressionWritesReceiver(info, binary.right),
+            .unary => |unary| self.expressionWritesReceiver(info, unary.operand),
+            .field => |field| self.expressionWritesReceiver(info, field.target),
+            .index => |index| blk: {
+                if (self.expressionWritesReceiver(info, index.target)) break :blk true;
+                for (index.indices) |subscript| {
+                    if (self.expressionWritesReceiver(info, subscript)) break :blk true;
+                }
+                break :blk false;
+            },
+            .slice_range => |slice| self.expressionWritesReceiver(info, slice.target) or
+                (slice.start != null and self.expressionWritesReceiver(info, slice.start.?)) or
+                (slice.end != null and self.expressionWritesReceiver(info, slice.end.?)),
+            .list_literal => |literal| blk: {
+                for (literal.elements) |element| {
+                    if (self.expressionWritesReceiver(info, element)) break :blk true;
+                }
+                break :blk false;
+            },
+            .new_object => |new| blk: {
+                for (new.dims) |dimension| {
+                    if (self.expressionWritesReceiver(info, dimension)) break :blk true;
+                }
+                break :blk false;
+            },
+            .give => |give| expressionIsSelf(give.operand) or
+                self.expressionWritesReceiver(info, give.operand),
+            .copy => |copy| self.expressionWritesReceiver(info, copy.operand),
+            .try_call => |attempt| self.expressionWritesReceiver(info, attempt.operand),
+            .spawn => |spawn| self.expressionWritesReceiver(info, spawn.call),
+            // A lambda cannot carry self.  Its body is checked in its
+            // synthesized function and must not change the enclosing
+            // method's receiver classification.
+            .lambda => false,
+            .name,
+            .int_literal,
+            .float_literal,
+            .string_literal,
+            .bool_literal,
+            .none_literal,
+            => false,
+        };
+    }
+
+    fn memberWritesReceiver(
+        self: *const Analyzer,
+        caller: *const FunctionDeclInfo,
+        name: []const u8,
+    ) bool {
+        const owner = caller.enclosing orelse return false;
+        for (self.functions.items) |candidate| {
+            if (candidate.receiver != .writes) continue;
+            const candidate_owner = candidate.enclosing orelse continue;
+            if (!candidate_owner.asType().eql(owner.asType())) continue;
+            if (candidate.module != caller.module) continue;
+            if (std.mem.eql(u8, candidate.declaration.name, name)) return true;
+        }
+        return false;
+    }
+
+    fn selfTarget(target: ast.Target) bool {
+        return switch (target) {
+            .name => |name| std.mem.eql(u8, name.text, "self"),
+            .field => |field| std.mem.eql(u8, field.base, "self"),
+            .chain => |chain| expressionRootIsSelf(chain.place),
+            // Index assignment mutates an object's contents, not the
+            // value holding that reference (SELF D6).
+            .index => false,
+        };
+    }
+
+    /// A store's place is evaluated before it is written.  That
+    /// evaluation can itself call a writing method —
+    /// `items[self.bump()] = value` — even when the eventual store is
+    /// into an object's contents and is therefore not a self-value
+    /// write.  Keep that question separate from `selfTarget` so D6's
+    /// value/object line stays visible.
+    fn targetEvaluationWritesReceiver(
+        self: *const Analyzer,
+        info: *const FunctionDeclInfo,
+        target: ast.Target,
+    ) bool {
+        return switch (target) {
+            .name, .field => false,
+            .index => |index| blk: {
+                if (self.expressionWritesReceiver(info, index.base)) break :blk true;
+                for (index.indices) |subscript| {
+                    if (self.expressionWritesReceiver(info, subscript)) break :blk true;
+                }
+                break :blk false;
+            },
+            .chain => |chain| self.expressionWritesReceiver(info, chain.place),
+        };
+    }
+
+    fn expressionRootIsSelf(expression: *const ast.Expression) bool {
+        return switch (expression.*) {
+            .name => |name| std.mem.eql(u8, name.text, "self"),
+            .field => |field| expressionRootIsSelf(field.target),
+            else => false,
+        };
+    }
+
+    fn expressionIsSelf(expression: *const ast.Expression) bool {
+        return expression.* == .name and std.mem.eql(u8, expression.name.text, "self");
+    }
+
     fn collectFunction(
         self: *Analyzer,
         declaration: *const ast.FuncDecl,
@@ -1633,50 +1857,22 @@ pub const Analyzer = struct {
         // The first parameter that declared a default, for D3's
         // sentence when a required one follows it.
         var first_defaulted: ?[]const u8 = null;
-        // The entry's parameter is collected like every other one: it
-        // is the command line, it has a type, and `checkEntry` below
-        // is what says which type it has to be (OWNERSHIP.md S44).
-        var receiver: ast.Receiver = .not;
+        // A plain function inside a struct or enum has one implicit
+        // leading receiver.  `static` is the explicit exception.  The
+        // source parameter list contains only what the caller writes;
+        // MIR still keeps self as logical parameter zero so every
+        // existing method lookup keeps one shape (docs/SELF.md D1-D2).
+        var receiver: context.Receiver = .not;
+        if (enclosing != null and !declaration.is_static) {
+            receiver = .reads;
+            try parameter_types.append(self.arena, enclosing.?.asType());
+            try parameter_modes.append(self.arena, .borrow);
+            try parameter_defaults.append(self.arena, null);
+        }
+        // The entry's written parameter is collected like every other
+        // one: it is the command line, it has a type, and `checkEntry`
+        // below is what says which type it has to be (S44).
         for (declaration.parameters) |parameter| {
-            // `self` is parameter zero of a method, and its type is the
-            // struct around it — there is nothing written to resolve.
-            // Stage 3 has already refused one anywhere but first and
-            // one with an annotation, so a receiver reaching here is in
-            // the only place it can be (docs/METHODS.md).
-            if (parameter.receiver != .not) {
-                const owner = enclosing orelse {
-                    try self.fail(
-                        "luce.sema.self",
-                        parameter.span,
-                        "self is only a parameter of a function declared inside a struct or an enum",
-                        .{},
-                    );
-                    continue;
-                };
-                const receiver_type = owner.asType();
-                // A `var self` method writes its receiver back to
-                // the receiver's place, and that write is a pure value
-                // store — which it can only be if the struct carries
-                // no object handles.  Not a restriction invented for
-                // the feature: it is where S17 and S28 already put the
-                // corpus, and a struct that *does* carry objects
-                // mutates through its fields from a plain `self` (S38),
-                // which needs no write-back at all (docs/METHODS.md).
-                if (parameter.receiver == .writes and self.carriesObjects(receiver_type)) {
-                    try self.fail(
-                        "luce.sema.self",
-                        parameter.span,
-                        "{s} carries objects, so it cannot be written back; take self and mutate through the field, or write a namespace function [OWNERSHIP.md S17, S28]",
-                        .{try self.typeName(receiver_type)},
-                    );
-                    continue;
-                }
-                receiver = parameter.receiver;
-                try parameter_types.append(self.arena, receiver_type);
-                try parameter_modes.append(self.arena, .borrow);
-                try parameter_defaults.append(self.arena, null);
-                continue;
-            }
             const resolved = (try self.resolveType(module, parameter.type_name)) orelse continue;
             // D4: a public surface names public types.  Only the
             // author of the marks can trip this, and the refusal names
@@ -1745,13 +1941,11 @@ pub const Analyzer = struct {
             }
             try results.append(self.arena, resolved);
         }
-        // A `var self` method's receiver is result zero: its results
-        // are `[receiver] ++ declared`, and they travel in one
-        // synthesized layout, so there is no receiver mechanism
-        // separate from the return mechanism (docs/RETURNS.md §5).
+        // SELF retired the old receiver-at-result-zero channel.  A
+        // writing receiver now travels through MIR's inout call edge;
+        // the ordinary answer is exactly what the declaration says.
         var channel: std.ArrayList(Type) = .empty;
         defer channel.deinit(self.arena);
-        if (receiver == .writes) try channel.append(self.arena, enclosing.?.asType());
         try channel.appendSlice(self.arena, results.items);
         // The synthesized layout a return shape rides in is settled
         // after every signature is collected — `synthesizeShapes`
@@ -2420,8 +2614,7 @@ pub const Analyzer = struct {
             .module = info.module,
             .prefix = self.modules[info.module].prefix,
             .results = info.results,
-            .channel = info.channel,
-            .writes_receiver = info.receiver == .writes,
+            .static_member = info.enclosing != null and info.receiver == .not,
             .enclosing_locals = info.enclosing_locals,
             .code = .{
                 .arena = self.arena,
@@ -2441,7 +2634,17 @@ pub const Analyzer = struct {
         try builder.code.openBlock();
         try builder.pushScope();
 
-        for (info.declaration.parameters, 0..) |parameter, index| {
+        const hidden: usize = if (info.receiver == .not) 0 else 1;
+        if (info.receiver != .not) {
+            _ = try builder.declareReceiver(
+                info.parameter_types[0],
+                info.receiver == .writes,
+                info.declaration.name_span,
+            );
+        }
+
+        for (info.declaration.parameters, 0..) |parameter, written_index| {
+            const index = written_index + hidden;
             if (index >= info.parameter_types.len) break;
             const parameter_type = info.parameter_types[index];
             // The entry's `args` arrived owning its list: the runtime
@@ -2454,33 +2657,14 @@ pub const Analyzer = struct {
             // way the object goes: the caller's binding outlives
             // the call and gives the bytes back itself
             // (docs/STRINGS.md).
-            // Parameters are immutable, with one exception: `var self`
-            // says the method may reassign its receiver, and `self =
-            // Point(x = 0.0, y = 0.0)` inside one means what it says
-            // (docs/METHODS.md).
-            const writes_back = parameter.receiver == .writes;
-            // And that exception decides the *storage* too.  Every
-            // other parameter borrows its caller's — the caller's
-            // binding outlives the call and gives the bytes back
-            // itself (docs/STRINGS.md).  A `var self` receiver is
-            // written to, and every write frees what it replaced, so
-            // the slot has to own what it holds or the first
-            // `self.x = …` would give the caller's run back.  It takes
-            // a copy on entry, which is exactly the `var moved =
-            // state` the corpus writes by hand at every mutation site
-            // it has (docs/METHODS.md).
             const local = (try builder.declareLocalAs(
                 parameter.name,
                 parameter_type,
-                writes_back,
+                false,
                 class,
-                if (writes_back) .owns else .borrows,
+                .borrows,
                 parameter.name_span,
             )) orelse continue;
-            if (writes_back) {
-                const arrived = try builder.code.load(local);
-                try builder.code.store(local, try builder.code.ownStorage(arrived));
-            }
             // An owning parameter is an owned binding like any other
             // (S15): take the object over from the caller on entry.
             if (owns) {
@@ -2490,13 +2674,6 @@ pub const Analyzer = struct {
         }
 
         try builder.lowerBlock(info.declaration.body);
-        // `func step(var self):` names no result, so its body ends
-        // without a `return` — but its receiver still has to leave.
-        // One implicit `return self` at the end, which is the same
-        // instruction an explicit one emits (docs/RETURNS.md §5).
-        if (info.receiver == .writes and info.results.len == 0) {
-            try builder.returnReceiver();
-        }
         try builder.emitScopeEnd();
         builder.popScope();
 

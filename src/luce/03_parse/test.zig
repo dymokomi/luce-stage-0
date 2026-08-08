@@ -165,7 +165,7 @@ test "every declaration form at file scope parses into its own list" {
         \\    keyword: long
         \\    comment: long
         \\
-        \\    func default() -> long:
+        \\    static func default() -> long:
         \\        return 176
         \\
         \\func main():
@@ -205,11 +205,11 @@ test "parameter modes, return types, and dotted type names parse" {
     try testing.expectEqualStrings("long", stash.returns[0].arguments[0].name);
 }
 
-test "struct bodies parse fields and namespaced functions" {
+test "struct bodies parse fields and static namespace functions" {
     var parsed = try expectClean(
         \\struct Helpers:
         \\    value: long
-        \\    func double(value: long) -> long:
+        \\    static func double(value: long) -> long:
         \\        return value * 2
         \\
         \\func main():
@@ -219,6 +219,7 @@ test "struct bodies parse fields and namespaced functions" {
     defer parsed.deinit();
     try testing.expectEqual(@as(usize, 1), parsed.program.structs[0].fields.len);
     try testing.expectEqual(@as(usize, 1), parsed.program.structs[0].functions.len);
+    try testing.expect(parsed.program.structs[0].functions[0].is_static);
     // Dotted calls parse as method nodes; the analyzer decides whether
     // the chain names a namespace or a value.
     const dotted = parsed.program.functions[0].body.statements[0].let.value.method;
@@ -260,9 +261,9 @@ test "visibility markers parse onto every declaration form, and unmarked stays n
         \\struct Session:
         \\    name: string
         \\    private token: long = 0
-        \\    public func label(self) -> string:
+        \\    public func label() -> string:
         \\        return self.name
-        \\    private func stamp(self) -> long:
+        \\    private func stamp() -> long:
         \\        return self.token
         \\
         \\private func helper() -> long:
@@ -296,7 +297,7 @@ test "a region dissolves onto its members, and equals the per-declaration marker
         \\    private:
         \\        state: long
         \\
-        \\    func next(var self) -> long:
+        \\    func next() -> long:
         \\        return self.state
         \\
         \\func main():
@@ -317,7 +318,7 @@ test "a region dissolves onto its members, and equals the per-declaration marker
         \\        label: string
         \\    private:
         \\        generation: long
-        \\        func raw(self) -> long:
+        \\        func raw() -> long:
         \\            return self.slot
         \\
         \\func main():
@@ -363,7 +364,7 @@ test "the visibility refusals land where the memo puts them" {
         }},
     );
     try expectDiagnostics(
-        "struct Rng:\n    private:\n        public func raw(self) -> long:\n            return 1\n\nfunc main():\n    return\n",
+        "struct Rng:\n    private:\n        public func raw() -> long:\n            return 1\n\nfunc main():\n    return\n",
         &.{.{
             .code = "luce.parse.expected",
             .line = 3,
@@ -1684,6 +1685,10 @@ test "truncated input at every prefix terminates and stays inside the source" {
         \\
         \\struct Point:
         \\    x: double
+        \\    func length() -> double:
+        \\        return self.x
+        \\    private static func origin() -> Point:
+        \\        return Point(x = 0.0)
         \\
         \\func main():
         \\    var xs = [1, 2]
@@ -1716,17 +1721,17 @@ test "truncated input at every prefix terminates and stays inside the source" {
 /// the lexer and the outermost recovery; this exercises the grammar
 /// itself, which is where the recovery bugs live.
 const fragments = [_][]const u8{
-    "func main():", "func f(a: long) -> long:", "struct P:",    "import math",
-    "let x = ",     "var y: long",              "return ",      "if ",
-    "elif ",        "else:",                    "while ",       "for i in range(0, 3):",
-    "for x in xs:", "break",                    "continue",     "print(x)",
-    "xs.append(",   "new map(string, long)",    "new list(",    "new array(long, 2, 2)",
-    "give ",        "copy ",                    "not ",         "and ",
-    "or ",          "==",                       "<",            "+",
-    "(",            ")",                        "[",            "]",
-    ",",            ":",                        ".",            "=",
-    "f\"{x}\"",     "\"text\"",                 "1",            "2.5",
-    "true",         "xs",                       "Point(x = 1)",
+    "func main():",          "func f(a: long) -> long:", "static func make():",   "struct P:",
+    "import math",           "let x = ",                 "var y: long",           "return ",
+    "if ",                   "elif ",                    "else:",                 "while ",
+    "for i in range(0, 3):", "for x in xs:",             "break",                 "continue",
+    "print(x)",              "xs.append(",               "new map(string, long)", "new list(",
+    "new array(long, 2, 2)", "give ",                    "copy ",                 "not ",
+    "and ",                  "or ",                      "==",                    "<",
+    "+",                     "(",                        ")",                     "[",
+    "]",                     ",",                        ":",                     ".",
+    "=",                     "f\"{x}\"",                 "\"text\"",              "1",
+    "2.5",                   "true",                     "xs",                    "Point(x = 1)",
 };
 
 /// The indentation a generated line may carry — the layout dimension
@@ -1737,7 +1742,8 @@ test "fuzz: parsing any bytes terminates with spans inside the source" {
     try testing.fuzz({}, parseAnything, .{ .corpus = &.{
         "func main():\n    let x = 1 + 2\n",
         "func f(a: give list(long)) -> long:\n    return len(a)\n",
-        "struct P:\n    x: double\n",
+        "struct P:\n    x: double\n    static func zero() -> P:\n        return P(x = 0.0)\n",
+        "enum Method:\n    stored\n    func compressed() -> bool:\n        return self != Method.stored\n",
         "let k = 3\n",
         "func main():\n    if x = 1:\n        for i in range(0, 2):\n            m[f\"{i}\"] += 1\n",
         "func main()\n    let y = (1 + [2, 3\n",
@@ -1915,27 +1921,22 @@ test "an else block still reads as a block, not as a fallback" {
 }
 
 // ---------------------------------------------------------------------------
-// The receiver
+// Implied self and static members (docs/SELF.md)
 // ---------------------------------------------------------------------------
-//
-// Two facts about `self` are the parser's, because both are facts
-// about the *shape* of a parameter list and neither needs a struct to
-// be resolved: it comes first, and it carries no type.  Everything
-// else about a method is stage 4's (docs/METHODS.md).
 
-test "self and var self are parameter zero, bare and untyped" {
+test "plain members imply self and static is an AST distinction" {
     var parsed = try expectClean(
         \\struct Point:
         \\    x: double
         \\
-        \\    func length(self) -> double:
+        \\    func length() -> double:
         \\        return self.x
         \\
-        \\    func scale(var self, factor: double):
+        \\    func scale(factor: double):
         \\        self.x = self.x * factor
         \\
-        \\    func origin() -> Point:
-        \\        return Point(x = 0.0)
+        \\    static func origin(offset: double = 0.0) -> Point:
+        \\        return Point(x = offset)
         \\
         \\func main():
         \\    return
@@ -1946,22 +1947,90 @@ test "self and var self are parameter zero, bare and untyped" {
     const functions = parsed.program.structs[0].functions;
     try testing.expectEqual(@as(usize, 3), functions.len);
 
-    try testing.expectEqual(ast.Receiver.reads, functions[0].parameters[0].receiver);
-    try testing.expectEqualStrings("self", functions[0].parameters[0].name);
-    try testing.expectEqual(@as(usize, 1), functions[0].parameters.len);
+    try testing.expect(!functions[0].is_static);
+    try testing.expectEqual(@as(usize, 0), functions[0].parameters.len);
+    try testing.expect(functions[0].body.statements[0].return_statement.values[0].* == .field);
 
-    try testing.expectEqual(ast.Receiver.writes, functions[1].parameters[0].receiver);
-    try testing.expectEqual(@as(usize, 2), functions[1].parameters.len);
-    // The parameter beside it is an ordinary one and says so.
-    try testing.expectEqual(ast.Receiver.not, functions[1].parameters[1].receiver);
+    try testing.expect(!functions[1].is_static);
+    try testing.expectEqual(@as(usize, 1), functions[1].parameters.len);
+    try testing.expectEqualStrings("factor", functions[1].parameters[0].name);
 
-    // A function with no `self` is a namespace function, unchanged —
-    // which is the rule that keeps every existing declaration
-    // compiling.
-    try testing.expectEqual(@as(usize, 0), functions[2].parameters.len);
+    try testing.expect(functions[2].is_static);
+    try testing.expectEqual(@as(usize, 1), functions[2].parameters.len);
+    try testing.expectEqualStrings("offset", functions[2].parameters[0].name);
+    try testing.expect(std.mem.startsWith(
+        u8,
+        parsed.source[functions[2].span.start..],
+        "static func origin",
+    ));
+    // File-scope functions are never marked static in the AST.
+    try testing.expect(!parsed.program.functions[0].is_static);
 }
 
-test "self comes first, and takes no type" {
+test "static composes with direct visibility, regions, and enums" {
+    var parsed = try expectClean(
+        \\struct Tools:
+        \\    private static func hidden(value: long) -> long:
+        \\        return value
+        \\    public:
+        \\        static func shown() -> long:
+        \\            return 1
+        \\        func read() -> long:
+        \\            return 2
+        \\
+        \\enum Method:
+        \\    stored
+        \\    private static func of(value: long) -> Method:
+        \\        return Method.stored
+        \\    public func compressed() -> bool:
+        \\        return self != Method.stored
+        \\
+        \\func main():
+        \\    return
+        \\
+    );
+    defer parsed.deinit();
+
+    const tools = parsed.program.structs[0].functions;
+    try testing.expect(tools[0].is_static);
+    try testing.expectEqual(ast.Visibility.private, tools[0].visibility);
+    try testing.expect(tools[1].is_static);
+    try testing.expectEqual(ast.Visibility.public, tools[1].visibility);
+    try testing.expect(!tools[2].is_static);
+    try testing.expectEqual(ast.Visibility.public, tools[2].visibility);
+
+    const methods = parsed.program.enums[0].functions;
+    try testing.expect(methods[0].is_static);
+    try testing.expectEqual(ast.Visibility.private, methods[0].visibility);
+    try testing.expect(!methods[1].is_static);
+    try testing.expectEqual(ast.Visibility.public, methods[1].visibility);
+}
+
+test "written self parameters are refused with the migration" {
+    const teaching = "self is implied; remove the parameter";
+    try expectDiagnostics(
+        \\func f(self):
+        \\    return
+        \\
+    , &.{.{
+        .code = "luce.parse.self",
+        .line = 1,
+        .column = 8,
+        .contains = teaching,
+    }});
+
+    try expectDiagnostics(
+        \\struct Point:
+        \\    func f(var self):
+        \\        return
+        \\
+    , &.{.{
+        .code = "luce.parse.self",
+        .line = 2,
+        .column = 12,
+        .contains = teaching,
+    }});
+
     try expectDiagnostics(
         \\struct Point:
         \\    func f(a: long, self):
@@ -1971,39 +2040,126 @@ test "self comes first, and takes no type" {
         .code = "luce.parse.self",
         .line = 2,
         .column = 21,
-        .contains = "self is the receiver, so it comes first in the parameter list",
+        .contains = teaching,
     }});
 
     try expectDiagnostics(
-        \\struct Point:
-        \\    func f(self: Point):
+        \\enum Method:
+        \\    stored
+        \\    static func f(self: Method):
         \\        return
         \\
     , &.{.{
         .code = "luce.parse.self",
-        .line = 2,
-        .column = 16,
-        .contains = "self takes no type annotation: inside a struct it is that struct",
+        .line = 3,
+        .column = 19,
+        .contains = teaching,
     }});
 
-    // `var self` is refused in the same place and for the same reason.
     try expectDiagnostics(
-        \\struct Point:
-        \\    func f(a: long, var self):
-        \\        return
+        \\func adjust(var value: long):
+        \\    return
         \\
     , &.{.{
         .code = "luce.parse.self",
-        .line = 2,
-        .column = 21,
-        .contains = "comes first",
+        .line = 1,
+        .column = 13,
+        .contains = "parameters are values and never var",
     }});
 }
 
+test "static is member-only, ordered, and recovers at the next declaration" {
+    try expectDiagnostics(
+        "static func helper():\n    return\n\nfunc main():\n    return\n",
+        &.{.{
+            .code = "luce.parse.static",
+            .line = 1,
+            .column = 1,
+            .contains = "inside a struct or enum",
+        }},
+    );
+    try expectDiagnostics(
+        "private static func helper():\n    return\n",
+        &.{.{
+            .code = "luce.parse.static",
+            .line = 1,
+            .column = 9,
+            .contains = "file-scope function is already a namespace function",
+        }},
+    );
+    try expectDiagnostics(
+        "struct Tools:\n    static value: long\n",
+        &.{.{
+            .code = "luce.parse.static",
+            .line = 2,
+            .column = 5,
+            .contains = "static func name",
+        }},
+    );
+    try expectDiagnostics(
+        "struct Tools:\n    static private func hidden():\n        return\n",
+        &.{.{
+            .code = "luce.parse.static",
+            .line = 2,
+            .column = 12,
+            .contains = "visibility comes before static",
+        }},
+    );
+    try expectDiagnostics(
+        "struct Tools:\n    static static func hidden():\n        return\n",
+        &.{.{
+            .code = "luce.parse.static",
+            .line = 2,
+            .column = 12,
+            .contains = "write static once",
+        }},
+    );
+    try expectDiagnostics(
+        "func main():\n    static func local():\n        return\n",
+        &.{.{
+            .code = "luce.parse.static",
+            .line = 2,
+            .column = 5,
+            .contains = "not inside a function body",
+        }},
+    );
+
+    var recovered = try parseText(
+        "struct Tools:\n    static value: long\n    static func okay():\n        return\n\nfunc main():\n    return\n",
+    );
+    defer recovered.deinit();
+    try testing.expectEqual(@as(usize, 1), recovered.diagnostics.count());
+    try testing.expectEqual(@as(usize, 1), recovered.program.structs[0].functions.len);
+    try testing.expectEqualStrings("okay", recovered.program.structs[0].functions[0].name);
+    try testing.expect(recovered.program.structs[0].functions[0].is_static);
+    try testing.expectEqualStrings("main", recovered.program.functions[0].name);
+
+    var redundant = try parseText(
+        "struct Tools:\n    private:\n        public static func shown():\n            return\n",
+    );
+    defer redundant.deinit();
+    try testing.expectEqual(@as(usize, 1), redundant.diagnostics.count());
+    try testing.expectEqualStrings("luce.parse.expected", redundant.diagnostics.at(0).?.code);
+    try testing.expectEqual(@as(usize, 1), redundant.program.structs[0].functions.len);
+    try testing.expect(redundant.program.structs[0].functions[0].is_static);
+    try testing.expectEqual(ast.Visibility.private, redundant.program.structs[0].functions[0].visibility);
+
+    var enum_recovered = try parseText(
+        "enum Method:\n    stored\n    static value\n    static func okay() -> Method:\n        return Method.stored\n\nfunc main():\n    return\n",
+    );
+    defer enum_recovered.deinit();
+    try testing.expectEqual(@as(usize, 1), enum_recovered.diagnostics.count());
+    try testing.expectEqualStrings("luce.parse.static", enum_recovered.diagnostics.at(0).?.code);
+    try testing.expectEqual(@as(usize, 1), enum_recovered.program.enums[0].functions.len);
+    try testing.expectEqualStrings("okay", enum_recovered.program.enums[0].functions[0].name);
+    try testing.expect(enum_recovered.program.enums[0].functions[0].is_static);
+    try testing.expectEqualStrings("main", enum_recovered.program.functions[0].name);
+}
+
 test "self is a keyword, so nothing else may be called one" {
-    // Reserving the word costs the corpus nothing — `grep -rniw self`
-    // over every `.luc` in the tree finds none — and it is what makes
-    // `p.length()` readable as a call on `p` and nothing else.
+    // The word is reserved for the implied receiver in a method body;
+    // no declaration or binding can give it another meaning.  That is
+    // what makes `p.length()` readable as a call on `p` and nothing else.
     try expectDiagnostics(
         \\func main():
         \\    let self = 3
@@ -2033,7 +2189,7 @@ test "an enum declares members, a width, and the functions a struct declares" {
         \\    stored
         \\    deflated = 8
         \\
-        \\    func compressed(self) -> bool:
+        \\    func compressed() -> bool:
         \\        return self != Method.stored
         \\
         \\func main():

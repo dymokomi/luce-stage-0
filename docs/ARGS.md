@@ -1939,3 +1939,12 @@ is the one answer the memo said the pair owed.
 The tripwires of §7 went into `docs/LANGUAGE.md`'s new "Calls"
 section as guidance, beside the evaluation-order clause and D9's
 `none` under "File-scope constants".
+
+## SELF syntax update — 2026-08-08
+
+The argument rules did not change, but `docs/SELF.md` retired this
+record's type-qualified method form.  A method declaration lists only
+the caller-written parameters because `self` is implied, and a call
+names them only after the receiver: `p.f(value = 1)`.  `Point.f(p, …)`
+is refused.  A namespace member says `static func` and follows the
+ordinary named/default argument rules as `Point.f(value = 1)`.

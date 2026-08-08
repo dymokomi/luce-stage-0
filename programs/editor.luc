@@ -50,27 +50,27 @@ private let theme = Theme(
 # What a single byte is, before anything has decided what it means.
 # Every predicate here answers about one byte and reaches nothing.
 private struct Bytes:
-    func continuation(byte: byte) -> bool:
+    static func continuation(byte: byte) -> bool:
         return byte >= 128 and byte < 192
 
-    func is_digit(byte: byte) -> bool:
+    static func is_digit(byte: byte) -> bool:
         return byte >= 48 and byte <= 57
 
-    func is_upper(byte: byte) -> bool:
+    static func is_upper(byte: byte) -> bool:
         return byte >= 65 and byte <= 90
 
-    func is_alpha(byte: byte) -> bool:
+    static func is_alpha(byte: byte) -> bool:
         return Bytes.is_upper(byte) or (byte >= 97 and byte <= 122)
 
-    func is_word_start(byte: byte) -> bool:
+    static func is_word_start(byte: byte) -> bool:
         return Bytes.is_alpha(byte) or byte == 95 or byte >= 194
 
-    func is_word(byte: byte) -> bool:
+    static func is_word(byte: byte) -> bool:
         return Bytes.is_word_start(byte) or Bytes.is_digit(byte) or Bytes.continuation(byte)
 
 # UTF-8 boundaries, lines and columns over a whole buffer.
 private struct Text:
-    func previous_boundary(value: string, cursor: long) -> long:
+    static func previous_boundary(value: string, cursor: long) -> long:
         if cursor <= 0:
             return 0
         var at = cursor - 1
@@ -78,7 +78,7 @@ private struct Text:
             at = at - 1
         return at
 
-    func next_boundary(value: string, cursor: long) -> long:
+    static func next_boundary(value: string, cursor: long) -> long:
         if cursor >= len(value):
             return len(value)
         var at = cursor + 1
@@ -86,29 +86,29 @@ private struct Text:
             at = at + 1
         return at
 
-    func line_start(value: string, cursor: long) -> long:
+    static func line_start(value: string, cursor: long) -> long:
         var at = cursor
         while at > 0 and value.byte_at(at - 1) != 10:
             at = at - 1
         return at
 
-    func line_end(value: string, cursor: long) -> long:
+    static func line_end(value: string, cursor: long) -> long:
         var at = cursor
         while at < len(value) and value.byte_at(at) != 10:
             at = at + 1
         return at
 
-    func line_of(value: string, cursor: long) -> long:
+    static func line_of(value: string, cursor: long) -> long:
         var line = 0
         for at in range(0, cursor):
             if value.byte_at(at) == 10:
                 line = line + 1
         return line
 
-    func count_lines(value: string) -> long:
+    static func count_lines(value: string) -> long:
         return Text.line_of(value, len(value)) + 1
 
-    func column_of(value: string, cursor: long) -> long:
+    static func column_of(value: string, cursor: long) -> long:
         var at = Text.line_start(value, cursor)
         var column = 0
         while at < cursor:
@@ -116,7 +116,7 @@ private struct Text:
             column = column + 1
         return column
 
-    func line_at(value: string, wanted: long) -> long:
+    static func line_at(value: string, wanted: long) -> long:
         var at = 0
         var line = 0
         while line < wanted and at < len(value):
@@ -125,7 +125,7 @@ private struct Text:
             at = at + 1
         return at
 
-    func at_column(value: string, start: long, column: long) -> long:
+    static func at_column(value: string, start: long, column: long) -> long:
         var at = start
         var current = 0
         let finish = Text.line_end(value, start)
@@ -134,7 +134,7 @@ private struct Text:
             current = current + 1
         return at
 
-    func width(value: string) -> long:
+    static func width(value: string) -> long:
         var at: long = 0
         var columns = 0
         while at < len(value):
@@ -143,14 +143,14 @@ private struct Text:
         return columns
 
 private struct Editing:
-    func splice(value: string, cursor: long, extra: string) -> string:
+    static func splice(value: string, cursor: long, extra: string) -> string:
         return value[0:cursor] + extra + value[cursor:len(value)]
 
-    func erase_before(value: string, cursor: long) -> string:
+    static func erase_before(value: string, cursor: long) -> string:
         let before = Text.previous_boundary(value, cursor)
         return value[0:before] + value[cursor:len(value)]
 
-    func erase_at(value: string, cursor: long) -> string:
+    static func erase_at(value: string, cursor: long) -> string:
         let after = Text.next_boundary(value, cursor)
         return value[0:cursor] + value[after:len(value)]
 
@@ -160,10 +160,11 @@ private struct Editing:
 # forty-six `word == "…"` comparisons — a hash set written as a truth
 # table — and they had drifted eight language generations out of date:
 # `enum`, `match`, `new`, `import`, `give`, `copy`, `none`, `try`,
-# `catch` and `self` were all missing, and so were twenty-one builtins
-# the language has gained since.  Ground truth is the compiler's own
-# tables, which `tools/grammar.zig` reads for the VS Code grammar:
-# `02_lex/token.zig`'s `keywords` (thirty words) and
+# `catch`, `self`, `spawn` and `static` were all missing, and so were
+# twenty-one builtins the language has gained since.  Ground truth is
+# the compiler's own tables, which `tools/grammar.zig` reads for the
+# VS Code grammar:
+# `02_lex/token.zig`'s `keywords` (thirty-two words) and
 # `04_semantics/builtins.zig`'s `builtins` (forty-five), plus `range`,
 # which is syntax the parser recognises only inside a `for`.
 #
@@ -200,7 +201,7 @@ private struct Editing:
 private let keyword_words = (
     " and break catch continue copy elif else enum false for func give" +
     " if import in let match new none not or private public return" +
-    " self struct true try var while "
+    " self spawn static struct true try var while "
 )
 
 private let builtin_words = (
@@ -251,7 +252,7 @@ private enum Word:
     # reserved word is a keyword before it could be anything else, and
     # a capitalized name is a type before a builtin (no builtin is
     # capitalized, so the two never actually race).
-    func of(text: string) -> Word:
+    static func of(text: string) -> Word:
         if listed(keyword_words, text):
             return Word.keyword
         if len(text) > 0 and Bytes.is_upper(text.byte_at(0)):
@@ -260,7 +261,7 @@ private enum Word:
             return Word.builtin
         return Word.plain
 
-    func style(self):
+    func style():
         match self:
             keyword:
                 term_style(theme.keyword, bold = true)
@@ -311,7 +312,7 @@ private enum Intent:
     # The whole of the translation, and the only place in the editor
     # a key name is a string.  A name this does not know is `ignored`
     # by the last line rather than by falling off the end of a chain.
-    func of(name: string) -> Intent:
+    static func of(name: string) -> Intent:
         if name == "left":
             return Intent.move_left
         if name == "right":
@@ -350,13 +351,11 @@ private enum Intent:
 # functions that all took `state: State`, opened with `var next =
 # state` and ended with `return next`; every call site wrote `state =
 # Handle.key(state, …)`.  Those were the two halves of a write-back
-# spelled by hand at seven sites (docs/METHODS.md), and `var self`
-# writes them: `state.key(…)` means `state = State.key(state, …)`.
+# spelled by hand at seven sites.  The methods below update their
+# implied receiver directly, so every call site says only `state.key(…)`.
 #
-# `State` carries only string, long and bool — all values — which is
-# what `var self` requires and where S17 and S28 had already put this
-# code: had it carried a `list`, `return next` would already have been
-# refused.
+# `State` happens to carry only string, long and bool; receiver syntax
+# does not expose that representation fact at the call site.
 private struct State:
     path: string
     content: string
@@ -367,7 +366,7 @@ private struct State:
     quit_pending: bool = false
     quit: bool = false
 
-    func vertical(var self, target_line: long):
+    func vertical(target_line: long):
         let total = Text.count_lines(self.content)
         let wanted = Text.column_of(self.content, self.cursor)
         let landing = clamp(target_line, 0, total - 1)
@@ -381,14 +380,14 @@ private struct State:
     # The status line used to say "cannot write " and the path, which
     # was the program *guessing* the sentence the runtime had already
     # written and happening to agree.  `catch reason:` reads it instead.
-    func save(var self):
+    func save():
         files.write(self.path, self.content) catch reason:
             self.message = reason
             return
         self.dirty = false
         self.message = f"saved {self.path}"
 
-    func key(var self, intent: Intent, inserted: string, visible: long):
+    func key(intent: Intent, inserted: string, visible: long):
         let line = Text.line_of(self.content, self.cursor)
         if intent != Intent.quit:
             self.quit_pending = false
@@ -418,8 +417,9 @@ private struct State:
                     # against the content as it was *before* the erase,
                     # and the copy-and-return shape gave that snapshot
                     # away for free: `state` was still the old one while
-                    # `next` was the new.  Under `var self` there is one
-                    # name, so the snapshot has to be taken out loud —
+                    # `next` was the new.  With one in-place receiver
+                    # there is one name, so the snapshot has to be
+                    # taken out loud —
                     # and a conversion that missed it would move the
                     # cursor by the wrong number of bytes with nothing
                     # to catch it, which is why the editor got a
@@ -455,19 +455,18 @@ private struct State:
             ignored:
                 return
 
-    func adjust(var self, visible: long):
+    func adjust(visible: long):
         let cursor_line = Text.line_of(self.content, self.cursor)
         if cursor_line < self.scroll:
             self.scroll = cursor_line
         elif cursor_line >= self.scroll + visible:
             self.scroll = cursor_line - visible + 1
 
-    # The two `Draw` functions that took a `State`: they read it and
-    # answer nothing, so they take a plain `self` and write nothing
-    # back.  Everything else in `Draw` operates on text and columns
-    # rather than on the editor, and stays the namespace function it
-    # is — which is the whole rule, said once.
-    func status(self, rows: long, cols: long, line: long, column: long):
+    # The two `Draw` functions that took a `State`: they read their
+    # implied receiver and perform no receiver writes.  Everything else
+    # in `Draw` operates on text and columns rather than on the editor,
+    # and remains a static namespace function.
+    func status(rows: long, cols: long, line: long, column: long):
         term_move(rows - 1, 0)
         var flag = ""
         if self.dirty:
@@ -483,7 +482,7 @@ private struct State:
         term_style(theme.status_fg, theme.status_bg)
         let ignored = Draw.emit(bar, from = 0, to = len(bar), remaining = cols)
 
-    func frame(self):
+    func frame():
         let rows = max(term_rows(), 2)
         let cols = max(term_cols(), 10)
         let visible = rows - 1
@@ -516,7 +515,7 @@ private struct State:
 private struct Draw:
     # Write [from, to) clipped to `remaining` display columns; returns
     # the columns actually used.
-    func emit(value: string, from: long, to: long, remaining: long) -> long:
+    static func emit(value: string, from: long, to: long, remaining: long) -> long:
         var at = from
         var used = 0
         while at < to and used < remaining:
@@ -527,7 +526,7 @@ private struct Draw:
         return used
 
     # One source line with Luce highlighting, clipped to `width`.
-    func line(content: string, from: long, to: long, width: long):
+    static func line(content: string, from: long, to: long, width: long):
         var at = from
         var used: long = 0
         while at < to and used < width:
@@ -574,7 +573,7 @@ private struct Draw:
                 used = used + Draw.emit(content, from = at, to = stop, remaining = width - used)
                 at = stop
 
-    func gutter(number: long, current: bool):
+    static func gutter(number: long, current: bool):
         if current:
             term_style(theme.gutter_current)
         else:

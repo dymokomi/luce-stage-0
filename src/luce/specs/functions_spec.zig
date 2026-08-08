@@ -13,7 +13,7 @@
 //! What is proved, in the order the design states it:
 //!
 //!   * **S1** — a named top-level function is a value where a function
-//!     type is expected, and so is a namespace function and one
+//!     type is expected, and so is a static member function and one
 //!     reached through an import.
 //!   * **S2** — the type is `func(T, ...) -> R`, and the shape a call
 //!     through it takes is the shape the type wrote down.
@@ -74,12 +74,12 @@ test "a let of function type holds a function and calls it" {
     , "42\n");
 }
 
-test "a namespace function is a value, and so is one from another module" {
+test "a static member function is a value, and so is one from another module" {
     try agree.prints(
         \\import std.math
         \\
         \\struct Scale:
-        \\    func twice(n: long) -> long:
+        \\    static func twice(n: long) -> long:
         \\        return n * 2
         \\
         \\func apply(f: func(long) -> long, x: long) -> long:
@@ -270,7 +270,7 @@ test "function values compare as the same function or a different one" {
 test "string of a function value is the function's name" {
     try agree.prints(
         \\struct Scale:
-        \\    func twice(n: long) -> long:
+        \\    static func twice(n: long) -> long:
         \\        return n * 2
         \\
         \\func half(n: long) -> long:

@@ -180,3 +180,12 @@ four-way `elif` chain over BTYPE — whose last arm existed only to say
 "unknown kind" — became three arms and no else.  Both enums are
 private to the module, so zip's published surface did not move and
 every zip spec passed untouched.
+
+## SELF syntax update — 2026-08-08
+
+D7 now follows `docs/SELF.md`: every plain enum member function is a
+method with implied self, and a namespace member says `static func`.
+Whether a method writes the enum receiver is inferred; a writer needs a
+bare mutable binding and replaces that enum value in place.  Methods
+cannot be values, spawned, or called through the enum type; static
+members can.

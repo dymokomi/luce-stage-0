@@ -40,11 +40,13 @@ arguments (see [calls](../expressions/#calls)). Every path through a
 function that declares a value return type must return; the compiler
 checks it.
 
-A function declared inside a struct whose first parameter is the word
-`self` is a [method](#methods), called on a receiver. There are no
-variadics. Named functions can be used as values, returned and called
-indirectly through a [`func(...)` type](../types/#function), and
-capture-free lambdas are expressions rather than declarations.
+A plain function member of a struct or enum is a [method](#methods):
+its receiver is the implied local `self`. A member written `static
+func` is instead a namespace function and has no receiver. There are
+no variadics. Top-level and static namespace functions can be used as
+values, returned and called indirectly through a [`func(...)`
+type](../types/#function); methods cannot. Capture-free lambdas are
+expressions rather than declarations.
 
 ## struct
 
@@ -56,14 +58,16 @@ struct Name:
 
     private:
         field: Type
-        func member(...):
+        static func member(...):
             ...
 
-    func member(...):
+    func method(...):
+        ...
+    static func member(...):
         ...
 ```
 
-Fields and namespaced functions, in one indented block. Construction
+Fields, implied-self methods and static namespace functions, in one indented block. Construction
 names every field. A member may carry a [visibility](#visibility) word
 of its own, or sit in a region that carries one for the group; without
 either it is public.
@@ -76,7 +80,9 @@ enum Name:
     member = constant
     ...
 
-    func member(...):
+    func method(...):
+        ...
+    static func member(...):
         ...
 
 enum Name(byte):
@@ -94,8 +100,8 @@ is a constant integer expression, folded like every other constant.
   refused (`luce.sema.enum`).
 - Members are reached only through the type: `Method.stored`, and
   `module.Method.stored` across an import.
-- An enum takes the same methods and namespace functions a `struct`
-  takes, under the [same rules](#methods), `var self` included. A
+- An enum takes the same methods and static namespace functions a
+  `struct` takes, under the [same rules](#methods). A
   function may not wear a member's name.
 - The declaration may carry a [visibility](#visibility) word; a member
   may not — an enum's members are what the type is.
@@ -129,32 +135,33 @@ and comes last.
 
 ## Methods {#methods}
 
-A function declared inside a `struct` or an `enum` is a **method**
-exactly when its first parameter is the keyword `self`.
+A plain function declared inside a `struct` or an `enum` is a
+**method** with an implied `self`. A namespace member says `static`.
 
 ```
-func name(self) -> Type:              # reads the receiver
-func name(var self, param: Type):     # writes it back
-func name(param: Type):               # a namespace function
+func name() -> Type:                  # may read implied self
+func name(param: Type):               # may write implied self
+static func name(param: Type):        # has no self
 ```
 
-`self` is bare and untyped — inside `struct Point` it can be nothing
-but a `Point`, so `self: Point` is refused, and it must come first.
+`self` has the enclosing type and is available only in a method body;
+writing it as a parameter is refused. `p.length()` resolves from `p`'s
+type. There is no dispatch, no bound method value, and no
+`Point.length(p)` type-qualified form. A static member is called as
+`Point.origin()` and may be a function value or worker target; a method
+may not.
 
-`p.length()` **means** `Point.length(p)`: the same call, resolved at
-compile time. There is no dispatch and no bound method value.
-`Point.length(p)` stays callable and means the same thing.
+The compiler infers whether a method writes its receiver. A store to
+`self` or a value field, or a transitive call to another writer on
+`self`, makes it a writer. Mutating an object through a field remains
+a borrow and does not. A reader accepts a let or temporary. A writer
+requires an exact bare mutable binding that owns any objects it carries;
+fields, indexes, narrowed values, lets and temporaries are refused.
 
-`var self` writes the receiver back — `p.scale(2.0)` means
-`p = Point.scale(p, 2.0)`. Its receiver must be a place whose root is
-a mutable local, so a `let` receiver and a call result are both
-refused, and the static form `Point.scale(p, 2.0)` is refused because
-it has no place to write to. The struct must carry no objects; one
-that does mutates through its fields from a plain `self`.
-
-A `var self` method may answer values of its own, and then its
-receiver is result zero: `let roll = rng.next()` writes `rng` back and
-binds `roll`, and the declared arity is what the call site sees.
+The writer aliases that caller slot and owner identity in place, so it
+may replace an object-carrying receiver. Writes completed before an
+error remain visible. Its declared return values are ordinary results;
+the receiver is not hidden in the result shape.
 
 ## Visibility {#visibility}
 

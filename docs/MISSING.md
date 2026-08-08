@@ -13,7 +13,7 @@ every `file:line` here was re-derived rather than carried forward.
 ## Scorecard
 
 The **language surface is done.**  Ten conceptual stages, seven
-folders, eleven executable specs, stages 1 and 2 marked *Locked*, and a
+folders, seventeen executable specs, stages 1 and 2 marked *Locked*, and a
 front end whose diagnostics mostly name the fix rather than the
 parser's predicament — mostly, because the ownership, optional and
 failure families set a standard that fifteen other places do not yet
@@ -279,16 +279,27 @@ it still hits.
    blocked on it.
 2. **No character classes in std.**  `is_digit`/`is_alpha` re-derived by
    hand three times.  Trivial — five functions.
-3. ~~**No receivers on user structs.**~~ **Done** (docs/METHODS.md).
-   A function is a method exactly when its first parameter is `self`,
-   and `var self` writes the receiver back by copy-in/copy-out.  The
+3. ~~**No receivers on user structs.**~~ **Done** (docs/SELF.md,
+   superseding the receiver design in docs/METHODS.md).  Every plain
+   member has implied `self`; a namespace member says `static func`.
+   Whether a method writes the receiver is inferred transitively, and
+   a writer aliases one bare owning `var` binding in place.  Readers
+   accept lets and temporaries; object contents still mutate through
+   an ordinary borrow.  The
    88 namespaced calls were **not** 88 waiting method calls — they are
    calls on *folders*, and a folder has no receiver; not one function
    in the corpus had the enclosing struct as its first parameter.  The
    harvest was the restructuring the feature permits: `Handle`'s four
    functions and two of `Draw`'s merged into `struct State`, and
    `std/math.luc`'s `list(long)`-as-a-cell workaround became
-   `struct Rng`.
+   `struct Rng`.  **One deliberate boundary remains:** a writing
+   method requires one bare owning `var` binding.  Readers accept
+   nested places, but `holder.counter.grow()` and `items[i].grow()`
+   are refused when `grow` writes `self`.  Supporting those calls
+   needs a real place descriptor that evaluates every base and index
+   once and carries the resulting slot and owner identity through
+   `call_inout`; rebuilding or reevaluating the place would be an
+   incorrect shortcut.
 4. ~~**No multiple returns.**~~ **Done** (docs/RETURNS.md).
    `-> (A, B)`, `return a, b`, `let low, high = f()`, and the later
    polish `low, high = f()` into existing mutable bare names, lowered
@@ -529,6 +540,14 @@ it still hits.
   they are internals; they were *reachable* anyway until item 10's
   visibility run marked them `private`, and now the documentation and
   the compiler say the same thing.
+- **The editor still mirrors the compiler's word vocabulary by hand.**
+  `programs/editor.luc` carries its own space-delimited keyword and
+  builtin tables for syntax highlighting.  The SELF migration found
+  that `spawn` had been omitted and added it alongside `static`, but
+  nothing derives or checks that in-language copy against the compiler
+  tables.  Generating or otherwise deriving the editor vocabulary is
+  the remaining maintenance improvement; the generated VS Code grammar
+  above does not solve it.
 
 ---
 
@@ -794,9 +813,9 @@ multi-user — all deferred by design in `docs/V2.md`.
 9. **Share one `libluce_rt` between artifacts** instead of copying it
    into each.  The other one from `docs/CODEGEN.md`, and the reason a
    `.lc` is mostly runtime by size.
-10. ~~**Decide receivers and multiple returns**~~ — **done**, one
-    memo each and one implementation between them
-    (docs/METHODS.md, docs/RETURNS.md).
+10. ~~**Decide receivers and multiple returns**~~ — **done**.  The
+    original receiver memo was superseded before lock by implied self
+    and `static` (docs/SELF.md); multiple returns are docs/RETURNS.md.
     Integer-division spelling is decided and shipped
     (docs/NUMERICS.md).
 11. **Sum types**, if the `T?` experience says the hole is still there.

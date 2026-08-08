@@ -191,7 +191,7 @@ Forms:
 ```
 name(args)                  a function in this file
 module.name(args)           a function in an imported module
-Struct.name(args)           a function in a struct's namespace
+Struct.name(args)           a static function in a struct's namespace
 module.Struct.name(args)    both
 value(args)                 a local or parameter of function type
 receiver.method(args)       sugar; see below
@@ -199,7 +199,7 @@ receiver.method(args)       sugar; see below
 
 ## Function values and lambdas {#function-values-and-lambdas}
 
-A top-level or namespace function name is a value where a
+A top-level or static namespace function name is a value where a
 [function type](../types/#function) is expected. A method reference is
 not: `point.length` would carry its receiver and therefore cross the
 capture line. A value is called with ordinary parentheses, and its
@@ -255,14 +255,12 @@ handler. `catch VALUE` supplies one value and cannot supply a shape.
 
 ## Method sugar
 
-`receiver.method(args)` is resolved by the receiver's type into a
-plain function with the receiver first. It is sugar, not dispatch.
-
-That is true of a **user** method too: `p.length()` *means*
-`Point.length(p)`, resolved at compile time, and `Point.length(p)`
-stays callable. A function declared inside a struct is a method
-exactly when its first parameter is `self`
-([statements](../statements/#methods)).
+`receiver.method(args)` is resolved by the receiver's type. It is a
+static choice, not dynamic dispatch. A plain member has implied `self`;
+a namespace member says `static func`
+([statements](../statements/#methods)). `p.length()` is the method
+form, and `Point.length(p)` is refused because a method is not a
+namespace function.
 
 A namespaced `Struct.func` or `module.func` call shares the syntax and
 wins when the head names a declaration. The two are worth telling
@@ -271,8 +269,8 @@ apart out loud, because a struct in Luce is used for both:
 > `Struct.func(x)` is a **namespace** call — the struct is a folder
 > and `x` is an ordinary first argument. `x.foo()` is a **method**
 > call — the struct is a type and `x` is its receiver. The only thing
-> that distinguishes them is whether the declaration's first parameter
-> is the word `self`.
+> that distinguishes them is the declaration: a plain member has
+> implied self, and a namespace member says `static`.
 
 Methods on a `string` other than `byte_at` and `find_byte` route to the
 `strings` standard module: `s.split(",")` *is* `strings.split(s, ",")`

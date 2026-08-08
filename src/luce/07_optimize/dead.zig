@@ -78,6 +78,7 @@ fn sweep(arena: Allocator, function: *Function) Allocator.Error!void {
                 registers.markOperands(instruction, used);
                 switch (registers.localUse(instruction)) {
                     .read => |local| read[local] = true,
+                    .read_write => |local| read[local] = true,
                     else => {},
                 }
             }
@@ -114,7 +115,9 @@ fn isDead(function: *const Function, used: []const bool, read: []const bool, ite
         // read by something no block mentions: delete the store and
         // the bytes leak, delete the store-back after a release and
         // they are freed twice.
-        .local_set => |set| !read[set.local] and !function.locals[set.local].owns_storage,
+        .local_set => |set| !read[set.local] and
+            !function.locals[set.local].owns_storage and
+            !function.locals[set.local].inout,
         else => !used[item] and effects.classify(function, item) == .pure,
     };
 }
@@ -161,4 +164,59 @@ fn compactPool(arena: Allocator, function: *Function) Allocator.Error!void {
     function.instructions = instructions;
     function.result_types = result_types;
     function.origins = origins;
+}
+
+const testing = std.testing;
+
+test "inout stores and the receiver value reaching a call survive dead-code elimination" {
+    var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    defer program.deinit();
+    const arena = program.arena.allocator();
+    const functions = try arena.alloc(Function, 2);
+
+    functions[0] = .{
+        .name = "caller",
+        .parameter_count = 0,
+        .return_type = .none,
+        .locals = try arena.dupe(defs.Local, &.{.{ .name = "receiver", .local_type = .long }}),
+        .instructions = try arena.dupe(Instruction, &.{
+            .{ .const_long = 4 },
+            .{ .local_set = .{ .local = 0, .value = 0 } },
+            .{ .call_inout = .{ .function = 1, .receiver = 0, .arguments = &.{} } },
+            .{ .ret = null },
+        }),
+        .result_types = try arena.dupe(types.Type, &.{ .long, .none, .none, .none }),
+        .blocks = try arena.dupe(defs.Block, &.{.{
+            .items = try arena.dupe(Register, &.{ 0, 1, 2, 3 }),
+        }}),
+    };
+    functions[1] = .{
+        .name = "writer",
+        .parameter_count = 1,
+        .return_type = .none,
+        .locals = try arena.dupe(defs.Local, &.{.{
+            .name = "self",
+            .local_type = .long,
+            .inout = true,
+        }}),
+        .instructions = try arena.dupe(Instruction, &.{
+            .{ .const_long = 9 },
+            .{ .local_set = .{ .local = 0, .value = 0 } },
+            .{ .ret = null },
+        }),
+        .result_types = try arena.dupe(types.Type, &.{ .long, .none, .none }),
+        .blocks = try arena.dupe(defs.Block, &.{.{
+            .items = try arena.dupe(Register, &.{ 0, 1, 2 }),
+        }}),
+    };
+    program.functions = functions;
+
+    try dead(arena, &program);
+    for (program.functions) |function| {
+        var saw_store = false;
+        for (function.instructions) |instruction| {
+            if (instruction == .local_set) saw_store = true;
+        }
+        try testing.expect(saw_store);
+    }
 }

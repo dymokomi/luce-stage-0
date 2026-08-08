@@ -175,26 +175,26 @@ struct Node:
 
     # Which of the six kinds this is.  Worth a `match`: without an
     # `else` the compiler checks all six are handled.
-    func kind(self) -> Kind:
+    func kind() -> Kind:
         return self.tag
 
     # The value's text exactly as it was written — the escapes still
     # escaped, the number still in its own notation.  A container
     # answers "": its text is its children, and `doc.write(node)` is
     # what puts that back together.
-    func raw(self) -> string:
+    func raw() -> string:
         return self.source
 
     # How many members an object has, or elements an array has.  A
     # leaf answers 0.  Members are counted as written, so a document
     # that names one twice counts it twice.
-    func count(self) -> long:
+    func count() -> long:
         return self.size
 
     # This value's member name, decoded, when it is a member of an
     # object; "" when it is not one.  The decoding happens here rather
     # than at parse time, like every other unpacking in this module.
-    func key(self) -> string:
+    func key() -> string:
         if len(self.label) == 0:
             return ""
         return unescape(self.label)
@@ -202,11 +202,11 @@ struct Node:
     # True for JSON's `null` and nothing else — which is a different
     # question from "is this value missing", and that is the point of
     # having both (`doc.get` answers absence).
-    func is_null(self) -> bool:
+    func is_null() -> bool:
         return self.tag == Kind.null
 
     # `true` or `false`; absent for every other kind.
-    func as_bool(self) -> bool?:
+    func as_bool() -> bool?:
         if self.tag != Kind.boolean:
             return none
         return self.source == "true"
@@ -214,7 +214,7 @@ struct Node:
     # The number as a whole number — absent when the value is not a
     # number, when it was written with a fraction or an exponent, or
     # when it does not fit a `long`.
-    func as_long(self) -> long?:
+    func as_long() -> long?:
         if self.tag != Kind.number:
             return none
         if not written_whole(self.source):
@@ -223,7 +223,7 @@ struct Node:
 
     # The number as a double — absent when the value is not a number,
     # and when the magnitude is past what a double can hold.
-    func as_double(self) -> double?:
+    func as_double() -> double?:
         if self.tag != Kind.number:
             return none
         return parse_float(self.source)
@@ -231,7 +231,7 @@ struct Node:
     # The string with its escapes decoded (RFC 8259 §7); absent for
     # every other kind.  This is where a `\n` becomes a newline and a
     # `𝄞` becomes 𝄞.
-    func as_text(self) -> string?:
+    func as_text() -> string?:
         if self.tag != Kind.text:
             return none
         return unescape(self.source)
@@ -245,7 +245,7 @@ struct Document:
     private nodes: list(Node)
 
     # The one top-level value (RFC 8259 §2: a document is one value).
-    func root(self) -> Node:
+    func root() -> Node:
         return self.nodes[0]
 
     # The member of an object named `name`, or absent — for a name
@@ -262,7 +262,7 @@ struct Document:
     # `has` would be the other half of this pair, and it is a reserved
     # name (it is `m.has(k)`, the map method); `doc.get(node, name) !=
     # none` is the question, and it is the same one call.
-    func get(self, node: Node, name: string) -> Node?:
+    func get(node: Node, name: string) -> Node?:
         if node.tag != Kind.object:
             return none
         var found: long = -1
@@ -283,7 +283,7 @@ struct Document:
     #
     # Reaching element `i` walks `i` siblings, so a loop that wants
     # every element should ask `items` for them once instead.
-    func at(self, node: Node, index: long) -> Node:
+    func at(node: Node, index: long) -> Node:
         if index < 0 or index >= node.size:
             trap(f"json: no element {index} in a value of {node.size}")
         var found = node.position + 1
@@ -293,7 +293,7 @@ struct Document:
 
     # Every member or element, in the order written; a fresh list the
     # caller owns.  A leaf answers an empty one.
-    func items(self, node: Node) -> list(Node):
+    func items(node: Node) -> list(Node):
         var out: list(Node) = []
         var at = node.position + 1
         for i in range(0, node.size):
@@ -305,7 +305,7 @@ struct Document:
     # Every member name of an object, decoded, in the order written —
     # duplicates included, because they are in the document.  Anything
     # that is not an object answers an empty list.
-    func keys(self, node: Node) -> list(string):
+    func keys(node: Node) -> list(string):
         var out: list(string) = []
         if node.tag != Kind.object:
             return out
@@ -322,13 +322,13 @@ struct Document:
     # arrived with is not kept — but every *token* is the one that was
     # read, escapes and number notation and all, so parsing the answer
     # gives the same document and writing that gives the same bytes.
-    func write(self, node: Node) -> string:
+    func write(node: Node) -> string:
         return render(self, node, 0)
 
     # The same, indented: every member and element on its own line,
     # `spaces` further in than its container.  `spaces` of 0 is
     # `write`.
-    func pretty(self, node: Node, spaces: long) -> string:
+    func pretty(node: Node, spaces: long) -> string:
         if spaces < 0:
             trap("json: pretty needs spaces >= 0")
         return render(self, node, spaces)

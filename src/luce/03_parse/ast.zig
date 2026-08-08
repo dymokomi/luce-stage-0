@@ -457,24 +457,10 @@ pub const EnumDecl = struct {
 /// pass something fresh).  See OWNERSHIP.md S11-S15.
 pub const ParameterMode = enum { borrow, give };
 
-/// Whether a parameter is the method's receiver, and if so whether the
-/// method writes it back (docs/METHODS.md).
-///
-/// `self` and `var self` carry no type: inside `struct Point` the
-/// receiver can be nothing but a `Point`, so there is nothing to
-/// resolve and `type_name` below is not read for one.  Stage 4 fills
-/// the type in from the enclosing struct.
-pub const Receiver = enum { not, reads, writes };
-
 pub const Parameter = struct {
     name: []const u8,
     name_span: Span,
     mode: ParameterMode = .borrow,
-    /// `.not` for every ordinary parameter; `.reads` for `self` and
-    /// `.writes` for `var self`.  When it is not `.not`, `type_name`
-    /// is a placeholder nothing reads — the enclosing struct is the
-    /// type, and stage 4 is where that is known.
-    receiver: Receiver = .not,
     type_name: TypeName,
     /// `= EXPRESSION` after the type: the parameter's default, folded
     /// to a compile-time constant by stage 4 (docs/ARGS.md D2).  Null
@@ -487,6 +473,10 @@ pub const FuncDecl = struct {
     name: []const u8,
     name_span: Span,
     parameters: []Parameter,
+    /// Written `static func` inside a struct or enum.  A plain member
+    /// function is a method whose `self` is implied; the parser does
+    /// not synthesize that receiver into `parameters` (docs/SELF.md).
+    is_static: bool = false,
     /// What the function answers, in order.  Empty answers nothing;
     /// one is `-> T`; two or more is a **return shape**, `-> (A, B)`
     /// — which is a shape a signature has and not a type a program

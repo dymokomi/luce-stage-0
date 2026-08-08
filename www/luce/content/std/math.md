@@ -140,10 +140,9 @@ mean of nothing: -1
 ## Randomness
 
 A Lehmer/MINSTD generator whose state is one `long` in a struct. Every
-draw is a `var self` method, so the state
-is *written back* rather than mutated through a reference: there are
-no hidden globals, no allocation, and every stream is deterministic
-from its seed.
+draw is an implied-self writing method, so a bare mutable receiver is
+updated in place: there are no hidden globals, no allocation, and every
+stream is deterministic from its seed.
 
 | Signature | Notes |
 |---|---|

@@ -42,7 +42,11 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
             if (index != 0) try text.appendSlice(allocator, ", ");
             const parameter_type_name = try typeName(allocator, program, local.local_type);
             defer allocator.free(parameter_type_name);
-            try appendPrint(&text, allocator, "{s}: {s}", .{ local.name, parameter_type_name });
+            try appendPrint(&text, allocator, "{s}{s}: {s}", .{
+                if (local.inout) "inout " else "",
+                local.name,
+                parameter_type_name,
+            });
         }
         const return_type_name = try typeName(allocator, program, function.return_type);
         defer allocator.free(return_type_name);
@@ -135,6 +139,13 @@ fn printInstruction(
         }),
         .call => |call| {
             try appendPrint(text, allocator, "call {s}", .{program.functions[call.function].name});
+            for (call.arguments) |argument| try appendPrint(text, allocator, ", r{d}", .{argument});
+        },
+        .call_inout => |call| {
+            try appendPrint(text, allocator, "call_inout {s}, &%{d}", .{
+                program.functions[call.function].name,
+                call.receiver,
+            });
             for (call.arguments) |argument| try appendPrint(text, allocator, ", r{d}", .{argument});
         },
         .spawn => |call| {

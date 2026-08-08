@@ -446,6 +446,32 @@ Locals are entry-block `alloca`s that mem2reg promotes.  Every
 `alloca`, including scratch slots created deep in the walk, is emitted
 in the entry block, so nothing accumulates inside a loop.
 
+### Writing methods and the inout receiver
+
+A reading method is an ordinary direct call whose logical first
+argument is the receiver value.  A writing method is different in the
+one place that matters: MIR uses `call_inout { function, receiver,
+arguments }`, where `receiver` is a caller local and `arguments`
+contains only what the source wrote between parentheses.  The callee's
+logical parameter zero is an `inout` local rather than storage owned by
+its frame.
+
+LLVM carries that edge as one internal descriptor: a pointer to the
+caller's slot plus the owning frame's serial and local number.  The
+callee aliases the pointer, uses the inherited identity for object
+binds and unbinds, and does not clean the slot up when its frame ends.
+A writing method that calls another writing method on `self` forwards
+the same descriptor, which is what keeps an object-carrying receiver's
+owner unchanged through nested calls.  The interpreter mirrors the
+same three fields in its frame.
+
+This is genuinely in-place, not the retired copy-in/copy-out result
+convention: a store performed before an error remains visible while
+the error unwinds.  It is also entirely internal.  `call_inout` and
+the local flag moved the serialized module to **format 32**; no
+`LuceHost` slot or runtime export moved, so the published host ABI
+remains **13**.
+
 ## Call depth, and the trace a trap carries
 
 Luce promises that runaway recursion **traps** — a stable code, a
@@ -933,7 +959,7 @@ fits; generated code only ever *writes* the other form, and reads both
 ## The published host ABI
 
 `src/luce/08_llvm/abi.zig` is the contract and the only authority on
-it; `abi.version` is the number a loader checks.  A compiled artifact
+it; `abi.version` is the number a loader checks, currently **13**.  A compiled artifact
 exports one symbol:
 
 ```c
