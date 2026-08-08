@@ -39,6 +39,10 @@ pub fn boxTag(of: Type) ?value.Tag {
         // runtime is handed a value and never a program's type table,
         // and what it has to know about one is its width.
         .enumeration => |reference| boxTag(reference.backing.asType()),
+        // A function value boxes as the `int` it is
+        // (docs/FUNCTIONS.md D2) — the same sentence the enum arm above
+        // says, one type later.
+        .function => .int,
         .optional => null,
     };
 }
@@ -146,6 +150,13 @@ pub const Intrinsic = enum {
     map_place,
     array_fill,
     str_value,
+    /// `string(f)` — the **name** of the function a function value
+    /// names (docs/FUNCTIONS.md D3).  An intrinsic of its own rather
+    /// than a case inside `str_value`, because it is a different act:
+    /// `str_value` renders a number and this reads a name out of the
+    /// program's own function table, which is a table only an engine
+    /// holds.  Nothing about it reaches `libluce_rt`.
+    function_name,
     parse_int,
     parse_float,
     /// `parse_string(xs)` — a `list(byte)` as text, or absent when the
@@ -381,6 +392,7 @@ pub const Intrinsic = enum {
             .map_place,
             .array_fill,
             .str_value,
+            .function_name,
             .parse_int,
             .parse_float,
             .parse_string,
@@ -473,6 +485,7 @@ pub const Intrinsic = enum {
             .map_place,
             .array_fill,
             .str_value,
+            .function_name,
             .parse_int,
             .parse_float,
             .parse_string,
@@ -546,6 +559,10 @@ pub const Intrinsic = enum {
             .trunc,
             .compare_long_double,
             .len,
+            // The name of a function is a constant of the program's
+            // own, not bytes anybody has to give back
+            // (docs/FUNCTIONS.md D3).
+            .function_name,
             .string_slice,
             .string_byte,
             .string_find_byte,
@@ -680,6 +697,7 @@ pub const Intrinsic = enum {
             .map_place,
             .array_fill,
             .str_value,
+            .function_name,
             .parse_int,
             .parse_float,
             .parse_string,
@@ -749,6 +767,15 @@ pub const Instruction = union(enum) {
     const_long: i64,
     const_double: f64,
     const_string: u32,
+    /// A **function value**: the index of the function it names
+    /// (docs/FUNCTIONS.md D2).  The register's own type is the
+    /// signature it is allowed to be called at — the index alone says
+    /// which function, and the type says what shape it wears.
+    ///
+    /// A constant beside the others because that is what it is: a
+    /// lambda has already become a top-level function by the time this
+    /// is emitted, so there is nothing left here but a name.
+    const_function: u32,
     local_get: LocalId,
     local_set: struct { local: LocalId, value: Register },
     binary: Binary,
@@ -777,6 +804,17 @@ pub const Instruction = union(enum) {
     /// name, and every object argument reaching this instruction is one
     /// this frame owned and no longer does.
     spawn: Call,
+    /// A call **through a function value** (docs/FUNCTIONS.md D2).  The
+    /// same shape as `call` with the callee in a register instead of a
+    /// table index; `signature` is the type the callee wears, which is
+    /// what says the argument types, the result type, and which
+    /// arguments were given rather than lent.
+    ///
+    /// **Both engines dispatch through the program's function table**:
+    /// the value is an index, so the interpreter looks the function up
+    /// and the compiled path loads a pointer out of a table it emitted.
+    /// There is no second calling convention and no thunk.
+    call_indirect: IndirectCall,
     intrinsic: IntrinsicCall,
     heap_new: HeapNew,
     object_bind: struct { local: LocalId, value: Register },
@@ -795,6 +833,7 @@ pub const Instruction = union(enum) {
     pub const Binary = struct { op: BinaryOp, operand_type: Type, left: Register, right: Register };
     pub const Unary = struct { op: UnaryOp, operand: Register };
     pub const Call = struct { function: u32, arguments: []Register };
+    pub const IndirectCall = struct { callee: Register, signature: u32, arguments: []Register };
     pub const IntrinsicCall = struct { kind: Intrinsic, arguments: []Register };
     pub const HeapNew = struct { heap: u32, dims: []Register };
 
@@ -861,6 +900,13 @@ pub const Program = struct {
     /// an enum-typed slot, `luce ir`, a diagnostic — and never on the
     /// execution path, where an enum is the integer it is stored as.
     enums: []types.EnumType = &.{},
+    /// One row per distinct function type the program writes
+    /// (docs/FUNCTIONS.md S2): what a call through it takes, with the
+    /// verb each object parameter receives by, and what it answers.
+    /// Read where a call through a value is checked and emitted, and by
+    /// `luce ir`; never on the execution path, where a function value is
+    /// the `int` it is stored as.
+    signatures: []types.Signature = &.{},
     functions: []Function = &.{},
     constants: []const []const u8 = &.{},
     entry_function: u32 = 0,

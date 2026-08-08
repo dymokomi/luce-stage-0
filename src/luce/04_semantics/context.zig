@@ -79,7 +79,7 @@ pub fn rangeMessage(landed: Type) []const u8 {
         .half => half_range_message,
         .float => float_range_message,
         .double => double_range_message,
-        .none, .boolean, .string, .strukt, .heap, .enumeration, .optional => long_range_message,
+        .none, .boolean, .string, .strukt, .heap, .enumeration, .function, .optional => long_range_message,
     };
 }
 

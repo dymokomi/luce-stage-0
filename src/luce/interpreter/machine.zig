@@ -644,6 +644,11 @@ pub const Machine = struct {
                     .const_string => |constant| {
                         registers[item] = .ofString(self.program.constants[constant]);
                     },
+                    // A function value is the index of the function it
+                    // names, and an `int` underneath (docs/FUNCTIONS.md
+                    // D2) — the same value the compiled path holds, so
+                    // the two engines compare and print alike.
+                    .const_function => |named| registers[item] = .ofInt(@intCast(named)),
                     .local_get => |local| registers[item] = locals[local],
                     .local_set => |set| locals[set.local] = registers[set.value],
                     .binary => |operation| {
@@ -712,6 +717,31 @@ pub const Machine = struct {
                         if (try self.pushFrame(called.function, self.argument_scratch.items, item)) |failed| {
                             return failed;
                         }
+                        continue :dispatch;
+                    },
+                    // A call through a function value: the callee's
+                    // index is in a register instead of the
+                    // instruction, and everything after that is the
+                    // call above, unchanged (docs/FUNCTIONS.md D2).
+                    .call_indirect => |called| {
+                        self.argument_scratch.clearRetainingCapacity();
+                        try self.argument_scratch.ensureTotalCapacity(self.arena, called.arguments.len);
+                        for (called.arguments) |argument| {
+                            self.argument_scratch.appendAssumeCapacity(registers[argument]);
+                        }
+                        // The value names a function or it names
+                        // nothing, and nothing is what an unwritten slot
+                        // holds; the compiled path makes the same
+                        // refusal at the same call.
+                        const named = registers[called.callee].asInt();
+                        if (named < 0 or named >= self.program.functions.len) {
+                            return self.trap(.null_object);
+                        }
+                        if (try self.pushFrame(
+                            @intCast(named),
+                            self.argument_scratch.items,
+                            item,
+                        )) |failed| return failed;
                         continue :dispatch;
                     },
                     // `spawn f(args)` — the arguments are gathered the
@@ -914,6 +944,13 @@ pub const Machine = struct {
             // The zero of a `T?` is absence, which owns nothing (S43).
             .optional => .none,
             .enumeration => unreachable, // answered above
+            // The slot fill of a function-typed local, which nothing a
+            // program can write ever reads: stage 4 refuses the one
+            // declaration that would ask for a function value's zero,
+            // and a `call_indirect` through this index refuses at the
+            // call, exactly as the compiled path does
+            // (docs/FUNCTIONS.md, As built).
+            .function => .ofInt(-1),
             .strukt => |layout_index| blk: {
                 // One shared zero template per layout, built on first
                 // use.  Sharing the fields slice across every
@@ -1206,6 +1243,15 @@ pub const Machine = struct {
                 return .none;
             },
             .str_value => return text.str(&self.runtime, registers[arguments[0]]),
+            // `string(f)` — the name out of the program's own function
+            // table (docs/FUNCTIONS.md D3).  Borrowed, not allocated:
+            // the name lives as long as the program does, which is what
+            // the compiled path's constant table is too.
+            .function_name => {
+                const named = registers[arguments[0]].asInt();
+                if (named < 0 or named >= self.program.functions.len) return error.Trap;
+                return .ofString(self.program.functions[@intCast(named)].name);
+            },
             .parse_int => return text.parseInt(&self.runtime, registers[arguments[0]]),
             .parse_float => return text.parseFloat(&self.runtime, registers[arguments[0]]),
             .parse_string => return files.parseString(&self.runtime, registers[arguments[0]]),

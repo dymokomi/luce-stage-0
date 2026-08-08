@@ -70,7 +70,16 @@ pub const magic = "LUCE";
 /// and its fallibility) — all appended, and the version moves with
 /// them because `Instruction` is written by tag ordinal and `spawn`
 /// lands in the middle of the union rather than on the end.
-pub const format_version: u32 = 30;
+///
+/// 31 — function values arrive (docs/FUNCTIONS.md).  A table of
+/// signatures joins the program between the enums and the functions,
+/// `types.Type` grows a tag for one — placed beside `enumeration`,
+/// which is the other type that indexes a table, so `optional`
+/// renumbers — and two instructions join `Instruction`: `const_function`
+/// beside the other constants and `call_indirect` beside `call`, both in
+/// the middle of the union rather than on the end.  Safe for the reason
+/// 22's note gives and no other: the version moved with them.
+pub const format_version: u32 = 31;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -124,6 +133,16 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
         }
     }
 
+    try writer.int(u32, @intCast(program.signatures.len));
+    for (program.signatures) |signature| {
+        try writer.int(u32, @intCast(signature.parameters.len));
+        for (signature.parameters) |parameter| {
+            try writer.valueType(parameter.value_type);
+            try writer.int(u8, @intFromBool(parameter.gives));
+        }
+        try writer.valueType(signature.result);
+    }
+
     try writer.int(u32, @intCast(program.functions.len));
     for (program.functions) |*function| try writer.function(function);
     try writer.int(u32, program.entry_function);
@@ -154,6 +173,7 @@ const Writer = struct {
         try self.int(u8, @intFromEnum(std.meta.activeTag(of)));
         if (of == .strukt) try self.int(u32, of.strukt);
         if (of == .heap) try self.int(u32, of.heap);
+        if (of == .function) try self.int(u32, of.function);
         // The width travels with the index, as it does in memory: the
         // decoder rebuilds the whole reference without reaching into
         // the enum table, which is read later in the stream.
@@ -230,6 +250,7 @@ const Writer = struct {
             .const_long => |value| try self.int(i64, value),
             .const_double => |value| try self.int(u64, @bitCast(value)),
             .const_string => |constant| try self.int(u32, constant),
+            .const_function => |named| try self.int(u32, named),
             .local_get => |local| try self.int(u32, local),
             .local_set => |set| {
                 try self.int(u32, set.local);
@@ -263,6 +284,11 @@ const Writer = struct {
             },
             .call, .spawn => |call| {
                 try self.int(u32, call.function);
+                try self.registers(call.arguments);
+            },
+            .call_indirect => |call| {
+                try self.int(u32, call.callee);
+                try self.int(u32, call.signature);
                 try self.registers(call.arguments);
             },
             .intrinsic => |intrinsic| {
@@ -354,6 +380,20 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
     }
     program.enums = enums;
 
+    const signature_count = try reader.count();
+    const signatures = try arena.alloc(types.Signature, signature_count);
+    for (signatures) |*signature| {
+        const parameter_count = try reader.count();
+        const parameters = try arena.alloc(types.Signature.Parameter, parameter_count);
+        for (parameters) |*parameter| {
+            parameter.value_type = try reader.valueType();
+            parameter.gives = (try reader.int(u8)) != 0;
+        }
+        signature.parameters = parameters;
+        signature.result = try reader.valueType();
+    }
+    program.signatures = signatures;
+
     const function_count = try reader.count();
     const functions = try arena.alloc(mir.Function, function_count);
     for (functions) |*function| try reader.function(arena, function);
@@ -424,6 +464,7 @@ const Reader = struct {
             .string => .string,
             .strukt => .{ .strukt = try self.int(u32) },
             .heap => .{ .heap = try self.int(u32) },
+            .function => .{ .function = try self.int(u32) },
             .enumeration => .{ .enumeration = .{
                 .index = try self.int(u32),
                 .backing = try self.enumTag(types.Type.EnumRef.Backing),
@@ -513,6 +554,7 @@ const Reader = struct {
             .const_long => .{ .const_long = try self.int(i64) },
             .const_double => .{ .const_double = @bitCast(try self.int(u64)) },
             .const_string => .{ .const_string = try self.int(u32) },
+            .const_function => .{ .const_function = try self.int(u32) },
             .local_get => .{ .local_get = try self.int(u32) },
             .local_set => .{ .local_set = .{
                 .local = try self.int(u32),
@@ -550,6 +592,11 @@ const Reader = struct {
             } },
             .spawn => .{ .spawn = .{
                 .function = try self.int(u32),
+                .arguments = try self.registers(arena),
+            } },
+            .call_indirect => .{ .call_indirect = .{
+                .callee = try self.int(u32),
+                .signature = try self.int(u32),
                 .arguments = try self.registers(arena),
             } },
             .intrinsic => .{ .intrinsic = .{
@@ -1018,6 +1065,11 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // not move an inch and the wire did.
     inline for (comptime std.meta.fieldNames(types.Type)) |name| hasher.update(name);
     inline for (comptime std.meta.fieldNames(types.HeapType)) |name| hasher.update(name);
+    // And the signature table's own shape, for the same reason: a
+    // parameter's verb travels as a byte beside its type, so a field
+    // added to `Signature.Parameter` moves the wire (docs/FUNCTIONS.md).
+    inline for (comptime std.meta.fieldNames(types.Signature)) |name| hasher.update(name);
+    inline for (comptime std.meta.fieldNames(types.Signature.Parameter)) |name| hasher.update(name);
     // If this fails you changed the instruction set, the intrinsics,
     // or the trap or error codes: bump format_version and update BOTH
     // numbers.
@@ -1028,8 +1080,8 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // moved this number and left the hash alone.  A version bump is
     // still required for that, and this test is not what will remind
     // you.
-    try testing.expectEqual(@as(u32, 30), format_version);
-    try testing.expectEqual(@as(u64, 15562439270010485387), hasher.final());
+    try testing.expectEqual(@as(u32, 31), format_version);
+    try testing.expectEqual(@as(u64, 12968420805031615277), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

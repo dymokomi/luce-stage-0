@@ -70,7 +70,7 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
 }
 
 fn typeName(allocator: Allocator, program: *const Program, of: Type) error{OutOfMemory}![]u8 {
-    return types.typeName(allocator, program.structs, program.heap_types, program.enums, of);
+    return types.typeName(allocator, program.structs, program.heap_types, program.enums, program.signatures, of);
 }
 
 fn appendPrint(
@@ -103,6 +103,7 @@ fn printInstruction(
         .const_long => |value| try appendPrint(text, allocator, "const {d}", .{value}),
         .const_double => |value| try appendPrint(text, allocator, "const {d}", .{value}),
         .const_string => |constant| try appendPrint(text, allocator, "const data#{d}", .{constant}),
+        .const_function => |named| try appendPrint(text, allocator, "const_function {s}", .{program.functions[named].name}),
         .local_get => |local| try appendPrint(text, allocator, "local_get %{d}", .{local}),
         .local_set => |set| try appendPrint(text, allocator, "local_set %{d}, r{d}", .{ set.local, set.value }),
         .binary => |binary| {
@@ -138,6 +139,12 @@ fn printInstruction(
         },
         .spawn => |call| {
             try appendPrint(text, allocator, "spawn {s}", .{program.functions[call.function].name});
+            for (call.arguments) |argument| try appendPrint(text, allocator, ", r{d}", .{argument});
+        },
+        .call_indirect => |call| {
+            const signature_name = try typeName(allocator, program, .{ .function = call.signature });
+            defer allocator.free(signature_name);
+            try appendPrint(text, allocator, "call_indirect r{d} : {s}", .{ call.callee, signature_name });
             for (call.arguments) |argument| try appendPrint(text, allocator, ", r{d}", .{argument});
         },
         .intrinsic => |intrinsic| {

@@ -125,6 +125,10 @@ pub const Analyzer = struct {
     /// dependency order, they are array reads.
     struct_shapes: std.ArrayList(StructShape) = .empty,
     heap_types: std.ArrayList(types.HeapType) = .empty,
+    /// One row per distinct function type the program writes
+    /// (docs/FUNCTIONS.md S2), interned exactly as heap shapes are, so
+    /// two identically written signatures are one type.
+    signatures: std.ArrayList(types.Signature) = .empty,
     struct_names: std.StringHashMapUnmanaged(u32) = .empty,
     /// The declared enums, in declaration order (docs/ENUMS.md).  They
     /// share the type-name space with structs — a program that declares
@@ -212,6 +216,7 @@ pub const Analyzer = struct {
         return .{
             .structs = try self.structs.toOwnedSlice(self.arena),
             .heap_types = try self.heap_types.toOwnedSlice(self.arena),
+            .signatures = try self.signatures.toOwnedSlice(self.arena),
             .enums = try self.enums.toOwnedSlice(self.arena),
             .functions = try lowered.toOwnedSlice(self.arena),
             .constants = try self.pool.items.toOwnedSlice(self.arena),
@@ -324,6 +329,15 @@ pub const Analyzer = struct {
     pub fn resolveType(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Type {
         const base = (try self.resolveBase(module, written)) orelse return null;
         if (!written.optional) return base;
+        if (base == .function) {
+            try self.fail(
+                "luce.sema.type",
+                written.span,
+                "a function value has no absent form yet: drop the '?' [FUNCTIONS.md]",
+                .{},
+            );
+            return null;
+        }
         return Type.optionalOf(base) orelse {
             try self.fail("luce.sema.type", written.span, "None? is not a type: there is nothing there to be absent", .{});
             return null;
@@ -363,6 +377,13 @@ pub const Analyzer = struct {
                 .{ written.name, now },
             );
             return null;
+        }
+        // `func(T, ...) -> R`.  Not in the builtin table because it is
+        // not a name a program could have written for something else:
+        // `func` is a keyword, so this shape reaches here from the
+        // parser and from nowhere a reader could collide with.
+        if (written.result != null or std.mem.eql(u8, written.name, "func")) {
+            return self.resolveSignature(module, written);
         }
         if (types.builtinNamed(written.name)) |builtin| switch (builtin) {
             .boolean, .byte, .short, .int, .long, .half, .float, .double, .string => {
@@ -520,6 +541,56 @@ pub const Analyzer = struct {
         return null;
     }
 
+    /// `func(T, ...) -> R` — the written function type, interned
+    /// (docs/FUNCTIONS.md S2).
+    ///
+    /// **Where a function type may stand is a short list in this run**:
+    /// a parameter and a `let`.  A container element and a struct field
+    /// are refused by the two callers that ask for one, because each is
+    /// a real question of its own — a struct carrying behaviour is
+    /// dispatch — and neither is needed by the customers.  The sentence
+    /// says "not yet", because that is what it is.
+    fn resolveSignature(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Type {
+        const parameters = try self.arena.alloc(types.Signature.Parameter, written.arguments.len);
+        for (written.arguments, parameters) |part, *parameter| {
+            const resolved = (try self.resolveType(module, part)) orelse return null;
+            if (part.gives and !self.carriesObjects(resolved)) {
+                try self.fail(
+                    "luce.sema.own",
+                    part.span,
+                    "give applies to objects (list, map, array, builder, object-carrying structs), not values [OWNERSHIP.md S32]",
+                    .{},
+                );
+                return null;
+            }
+            parameter.* = .{ .value_type = resolved, .gives = part.gives };
+        }
+        var result: Type = .none;
+        if (written.result) |answered| {
+            result = (try self.resolveType(module, answered.*)) orelse return null;
+        }
+        return try self.internSignature(.{ .parameters = parameters, .result = result });
+    }
+
+    /// The "not yet" a function type is told where it may not stand.
+    /// One sentence, said by every position that defers it, so a reader
+    /// meets the same words wherever they meet the wall.
+    pub fn refuseFunctionPart(
+        self: *Analyzer,
+        part: Type,
+        span: Span,
+        role: []const u8,
+    ) Error!bool {
+        if (part != .function) return false;
+        try self.fail(
+            "luce.sema.type",
+            span,
+            "a {s} cannot be a function yet: a function type stands on a parameter or a let [FUNCTIONS.md]",
+            .{role},
+        );
+        return true;
+    }
+
     /// Report a written type name that names nothing, offering the
     /// closest of the builtin types and the structs this module can
     /// see.  A misremembered `Str` or `Bolean` is the commonest of all
@@ -570,6 +641,20 @@ pub const Analyzer = struct {
         }
         try self.heap_types.append(self.arena, descriptor);
         return .{ .heap = @intCast(self.heap_types.items.len - 1) };
+    }
+
+    /// Intern one function signature and answer the type that names it.
+    pub fn internSignature(self: *Analyzer, signature: types.Signature) Error!Type {
+        for (self.signatures.items, 0..) |existing, index| {
+            if (existing.eql(signature)) return .{ .function = @intCast(index) };
+        }
+        try self.signatures.append(self.arena, signature);
+        return .{ .function = @intCast(self.signatures.items.len - 1) };
+    }
+
+    pub fn signatureOf(self: *const Analyzer, of: Type) ?types.Signature {
+        if (of != .function) return null;
+        return self.signatures.items[of.function];
     }
 
     pub fn heapOf(self: *const Analyzer, of: Type) ?types.HeapType {
@@ -2094,6 +2179,7 @@ pub const Analyzer = struct {
             self.structs.items,
             self.heap_types.items,
             self.enums.items,
+            self.signatures.items,
             of,
         );
     }

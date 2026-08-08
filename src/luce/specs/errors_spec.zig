@@ -1034,7 +1034,7 @@ test "luce.sema.name: there are no bound method values" {
         \\
     ,
         "luce.sema.name",
-        "is a function, and Luce has no function values",
+        "is a function; write",
     );
 }
 
@@ -1345,11 +1345,13 @@ test "luce.sema.name: an unknown name is rejected" {
 }
 
 // A name in value position that names a *declaration* is not unknown.
-// Luce has no function values, so these are all mistakes — but the
-// compiler checked the declaration moments earlier, and answering
-// "unknown name math" about an import on line 1 sends the reader to
-// look for a missing import that is right there.  Every one of these
-// used to do exactly that.
+// A function **is** a value where a function type is expected
+// (docs/FUNCTIONS.md S1), so what is left here is a bare name where
+// nothing said which shape it should wear — and the compiler checked
+// the declaration moments earlier, so answering "unknown name math"
+// about an import on line 1 sends the reader to look for a missing
+// import that is right there.  Every one of these used to do exactly
+// that.
 
 test "luce.sema.name: a function used as a value is named, not denied" {
     try expectOnlySayingAt(
@@ -1361,7 +1363,7 @@ test "luce.sema.name: a function used as a value is named, not denied" {
         \\
     ,
         "luce.sema.name",
-        "helper is a function, and Luce has no function values; write helper(...) to call it",
+        "helper is a function; write helper(...) to call it, or annotate the place it goes with the function type it should wear [FUNCTIONS.md]",
         5,
         13,
     );
@@ -1392,7 +1394,7 @@ test "luce.sema.name: a std function reached without a call keeps its namespace"
         \\
     ,
         "luce.sema.name",
-        "math.round is a function, and Luce has no function values; write math.round(...) to call it",
+        "math.round is a function; write math.round(...) to call it, or annotate the place it goes with the function type it should wear [FUNCTIONS.md]",
         4,
         13,
     );
@@ -1426,7 +1428,7 @@ test "luce.sema.name: a struct namespace answers for its own members" {
         \\
     ,
         "luce.sema.name",
-        "Words.classify is a function, and Luce has no function values; write Words.classify(...) to call it",
+        "Words.classify is a function; write Words.classify(...) to call it, or annotate the place it goes with the function type it should wear [FUNCTIONS.md]",
         8,
         13,
     );

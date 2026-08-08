@@ -265,6 +265,7 @@ fn writesPlainElement(
         => true,
         .none, .strukt, .heap, .optional => false,
         .enumeration => unreachable, // answered by storage() above
+        .function => unreachable, // answered by storage() above
     };
 }
 

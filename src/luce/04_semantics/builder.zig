@@ -251,6 +251,18 @@ pub const FunctionBuilder = struct {
     /// that has a landing width of its own.  Inference where nothing is
     /// expected is untouched — `let n = 1` still takes the default.
     wanted: ?Type = null,
+    /// The signature the next expression lands on, when the place it is
+    /// going into names one — `xs.sort_by(by_score)`, `let before:
+    /// func(long, long) -> bool = ascending` (docs/FUNCTIONS.md).
+    ///
+    /// **A function value and a lambda are literals**, in exactly the
+    /// sense a number is: a bare declaration name is not a value until
+    /// something says which shape it must wear, and a lambda has no
+    /// parameter types at all until it lands.  So this is `wanted` for
+    /// functions, set and cleared for exactly one hop the same way — and
+    /// a lambda that reaches `lowerExpressionInner` with it unset is the
+    /// refusal "a lambda needs a place that expects a function".
+    wanted_function: ?u32 = null,
     /// What a fallible call left for the `try` or `catch` in front of
     /// it to finish.  Set by `openFallible` and consumed once.
     opened: ?Opened = null,
@@ -615,9 +627,11 @@ pub const FunctionBuilder = struct {
     }
 
     /// A name in value position that names a declaration rather than a
-    /// value.  Luce has no function values, so `let f = helper` and
-    /// `let x = math.seed` are mistakes — but they are not *unknown
-    /// names*, and saying so denies a declaration the compiler has
+    /// value.  A function *is* a value where a function type is
+    /// expected (docs/FUNCTIONS.md S1), so what is left here is a bare
+    /// name where nothing said which shape it should wear — `let f =
+    /// helper`, `let x = math.seed` — and those are not *unknown
+    /// names*: saying so would deny a declaration the compiler has
     /// already checked.  Answers what the name is and how to use it;
     /// true when it reported.
     fn failNotAValue(
@@ -630,7 +644,7 @@ pub const FunctionBuilder = struct {
             try self.fail(
                 "luce.sema.name",
                 span,
-                "{s} is a function, and Luce has no function values; write {s}(...) to call it",
+                "{s} is a function; write {s}(...) to call it, or annotate the place it goes with the function type it should wear [FUNCTIONS.md]",
                 .{ written, written },
             );
             return true;
@@ -1620,8 +1634,23 @@ pub const FunctionBuilder = struct {
                 // names and `Method(8)` is the only way in (D4, R2).
                 .boolean, .string, .strukt, .heap, .enumeration => null,
             },
-            .none, .boolean, .string, .strukt, .heap, .enumeration => null,
+            .none, .boolean, .string, .strukt, .heap, .enumeration, .function => null,
         };
+    }
+
+    /// Raise every landing signal the place `expected` names, for the
+    /// one expression about to be lowered into it: the scalar width a
+    /// literal takes, the element type a list literal is built at, and
+    /// the signature a bare function name or a lambda lands on.
+    ///
+    /// One call rather than three assignments, because they are one
+    /// act: *this is the place, tell the literal about it*.  A place
+    /// that names none of the three raises none, and inference where
+    /// nothing is expected stays untouched.
+    fn wantPlace(self: *FunctionBuilder, expected: Type) void {
+        self.wanted = landingType(expected);
+        self.wanted_element = self.elementOf(expected);
+        self.wanted_function = if (expected == .function) expected.function else null;
     }
 
     /// A number at the type an operator computes it at — `int` for a
@@ -1686,8 +1715,7 @@ pub const FunctionBuilder = struct {
                 .present = false,
             };
         }
-        self.wanted_element = self.elementOf(expected);
-        self.wanted = landingType(expected);
+        self.wantPlace(expected);
         const value = (try self.lowerExpression(expression, false)) orelse return null;
         const fitted = (try self.fit(value, expected)) orelse {
             try self.fail("luce.sema.type", span, "{s} is {s} but the value is {s}{s}", .{
@@ -1699,6 +1727,126 @@ pub const FunctionBuilder = struct {
             return null;
         };
         return .{ .value = fitted, .present = !value.value_type.eql(expected) };
+    }
+
+    /// A **named function as a value**, where a function type is what
+    /// the place expects (docs/FUNCTIONS.md S1).
+    ///
+    /// `written` is what the reader wrote — a bare name, or one dotted
+    /// level for `Struct.helper` and `module.helper` — and `signature`
+    /// is the shape the place demands.  Everything a call site checks
+    /// about a declaration is checked here too, because this *is* the
+    /// call site's check moved earlier: visibility, the entry, the
+    /// method rule, and now the shape.
+    fn functionValue(
+        self: *FunctionBuilder,
+        written: []const u8,
+        span: Span,
+        signature: u32,
+    ) Error!?Typed {
+        const resolved = (try self.resolveDeclared(written, span, .written)) orelse return null;
+        const index = self.analyzer.function_names.get(resolved) orelse {
+            try self.failUnknownFunction(written, span);
+            return null;
+        };
+        if (!try self.functionReachable(index, span)) return null;
+        const info = self.analyzer.functions.items[index];
+        if (info.is_entry) {
+            try self.fail("luce.sema.call", span, "entry function {s} cannot be called", .{written});
+            return null;
+        }
+        // **A method is not a value** (docs/FUNCTIONS.md D1).  A
+        // reference to one is a closure over its receiver, which is the
+        // far side of the capture line — so the refusal shows the
+        // honest form, which re-receives the receiver as a parameter
+        // and therefore carries nothing.
+        if (info.receiver != .not) {
+            try self.fail(
+                "luce.sema.call",
+                span,
+                "{s} is a method, and a method reference would carry its receiver; " ++
+                    "write a lambda that takes the receiver — (x) -> x.{s}() [FUNCTIONS.md D1]",
+                .{ written, info.declaration.name },
+            );
+            return null;
+        }
+        // A fallible function's `!` is an obligation its call sites
+        // carry, and a function type has nowhere to write one, so
+        // letting one become a value would drop the obligation in
+        // silence (docs/FUNCTIONS.md, As built).
+        if (info.fallible) {
+            try self.fail(
+                "luce.sema.fallible",
+                span,
+                "{s} can fail, and a function type carries no '!'; a fallible function is not a value yet [FUNCTIONS.md]",
+                .{written},
+            );
+            return null;
+        }
+        const wants = self.analyzer.signatures.items[signature];
+        if (!self.matchesSignature(info, wants)) {
+            try self.fail(
+                "luce.sema.type",
+                span,
+                "this place is {s}, and {s} is {s}",
+                .{
+                    try self.analyzer.typeName(.{ .function = signature }),
+                    written,
+                    try self.writtenSignature(info),
+                },
+            );
+            return null;
+        }
+        const value: Type = .{ .function = signature };
+        return .{
+            .register = try self.code.emit(.{ .const_function = index }, value),
+            .value_type = value,
+        };
+    }
+
+    /// Whether a declared function really has the shape a function type
+    /// demands: the same parameter types in the same order, the same
+    /// verb on each, and the same answer.
+    ///
+    /// **No widening anywhere.**  A `func(long)` place does not accept a
+    /// `func(double)` even though a `long` reaches a `double` on its
+    /// own: the widening happens at the *argument*, and a value that
+    /// stands in for the function has no argument yet to widen.  This is
+    /// the same reason a `list(int)` does not fit a `list(long)`.
+    fn matchesSignature(
+        self: *FunctionBuilder,
+        info: context.FunctionDeclInfo,
+        wants: types.Signature,
+    ) bool {
+        _ = self;
+        if (info.results.len >= 2) return false;
+        if (info.parameter_types.len != wants.parameters.len) return false;
+        if (!info.return_type.eql(wants.result)) return false;
+        for (info.parameter_types, info.parameter_modes, wants.parameters) |held, mode, parameter| {
+            if ((mode == .give) != parameter.gives) return false;
+            if (!held.eql(parameter.value_type)) return false;
+        }
+        return true;
+    }
+
+    /// A declared function's shape, written as a function type — what a
+    /// mismatch puts on the other side of the sentence.
+    fn writtenSignature(
+        self: *FunctionBuilder,
+        info: context.FunctionDeclInfo,
+    ) Error![]const u8 {
+        const parameters = try self.arena().alloc(types.Signature.Parameter, info.parameter_types.len);
+        for (info.parameter_types, info.parameter_modes, parameters) |held, mode, *parameter| {
+            parameter.* = .{ .value_type = held, .gives = mode == .give };
+        }
+        const shape = try self.analyzer.internSignature(.{
+            .parameters = parameters,
+            .result = if (info.results.len >= 2) .none else info.return_type,
+        });
+        if (info.results.len >= 2) {
+            return std.fmt.allocPrint(self.arena(), "a function answering {d} values", .{info.results.len});
+        }
+        return self.analyzer.typeName(shape);
     }
 
     /// Report a use of a poisoned name (S10, S29); true when poisoned.
@@ -1919,10 +2067,7 @@ pub const FunctionBuilder = struct {
             // already has a type and D6 says no list converts to
             // another.
             const place = try self.landsOn(landing, values, index, expressions.len);
-            if (place) |landed| {
-                self.wanted = landingType(landed);
-                self.wanted_element = self.elementOf(landed);
-            }
+            if (place) |landed| self.wantPlace(landed);
             // A bare `none` has no type of its own; the place it lands
             // on supplies one, whichever way the batch knows the place
             // — written down up front (`.places`) or answered by the
@@ -2329,8 +2474,7 @@ pub const FunctionBuilder = struct {
                 value = ((try self.lowerTyped(value_expression, expected, span, name)) orelse
                     return self.forgetName(name)).value;
             } else {
-                self.wanted_element = self.elementOf(expected);
-                self.wanted = landingType(expected);
+                self.wantPlace(expected);
                 const initializer = (try self.lowerExpression(value_expression, false)) orelse
                     return self.forgetName(name);
                 value = (try self.fit(initializer, expected)) orelse {
@@ -2500,6 +2644,19 @@ pub const FunctionBuilder = struct {
     ) Error!void {
         const declared = (try self.analyzer.resolveType(self.module, written)) orelse
             return self.forgetName(name);
+        // A function value has no zero: every value of the type names a
+        // function, and there is no function to name here.  So the one
+        // shape a function-typed binding takes is the one that says
+        // which function it is (docs/FUNCTIONS.md, As built).
+        if (declared == .function) {
+            try self.fail(
+                "luce.sema.type",
+                written.span,
+                "a function value has no zero: write {s} = the function it names [FUNCTIONS.md]",
+                .{name},
+            );
+            return self.forgetName(name);
+        }
         const zero = try self.code.zeroOf(declared);
         // The declaration establishes the binding and its scope; the
         // scope owns whatever a later assignment fills in (S36, S40).
@@ -4029,6 +4186,8 @@ pub const FunctionBuilder = struct {
         self.wanted_element = null;
         const wanted = self.wanted;
         self.wanted = null;
+        const wanted_function = self.wanted_function;
+        self.wanted_function = null;
         switch (expression.*) {
             .int_literal => |literal| return self.lowerIntLiteral(literal, literal.span, false, wanted),
             .float_literal => |literal| {
@@ -4061,6 +4220,12 @@ pub const FunctionBuilder = struct {
                     const qualified = try self.analyzer.qualify(self.prefix, name.text);
                     if (self.analyzer.constant_names.get(qualified)) |constant| {
                         return self.emitConstant(constant);
+                    }
+                    // Or a function, where a function is what the place
+                    // wants (docs/FUNCTIONS.md S1).  A local wins, and
+                    // there is no local of this name.
+                    if (wanted_function) |signature| {
+                        return self.functionValue(name.text, name.span, signature);
                     }
                     try self.failUnknownName(name.text, name.span);
                     return null;
@@ -4098,7 +4263,23 @@ pub const FunctionBuilder = struct {
                 );
                 return null;
             },
-            .field => |field| return self.lowerField(field),
+            .field => |field| {
+                // `Struct.helper` and `module.helper` where a function
+                // is wanted: the same head-names-a-declaration path a
+                // call takes, one dot earlier (docs/FUNCTIONS.md S1).
+                if (wanted_function) |signature| {
+                    if (helpers.dottedChain(field.target)) |chain| {
+                        if (chain.count == 1 and self.findLocal(chain.head()) == null) {
+                            const written = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{
+                                chain.head(),
+                                field.name,
+                            });
+                            return self.functionValue(written, field.span, signature);
+                        }
+                    }
+                }
+                return self.lowerField(field);
+            },
             .call => |call| return self.lowerCall(call, as_statement, fallible_allowed, shape_position, wanted),
             .binary => |binary| {
                 if (binary.op == .catch_error) return self.lowerCatch(binary, as_statement);
@@ -5019,18 +5200,55 @@ pub const FunctionBuilder = struct {
     /// `04_semantics/declarations.zig` folds a file-scope `let` by the
     /// same two rules, because the two must agree about what `2 * 0.1`
     /// is.
+    /// Whether this expression is a **bare declaration name** that a
+    /// function type would give a meaning to: `ascending`,
+    /// `Struct.helper`, `module.helper`.  A local of the same name is
+    /// not one — a local is a value already — and neither is anything
+    /// with parentheses after it.
+    ///
+    /// Asked only where one operand can supply the other's type; it
+    /// answers *maybe*, and `functionValue` is what decides.
+    fn namesAFunction(self: *FunctionBuilder, expression: *const ast.Expression) bool {
+        switch (expression.*) {
+            .name => |name| {
+                if (self.findLocal(name.text) != null) return false;
+                const qualified = self.analyzer.qualify(self.prefix, name.text) catch return false;
+                return self.analyzer.function_names.contains(qualified);
+            },
+            .field => |field| {
+                const chain = helpers.dottedChain(field.target) orelse return false;
+                if (chain.count != 1) return false;
+                if (self.findLocal(chain.head()) != null) return false;
+                const written = std.fmt.allocPrint(self.arena(), "{s}.{s}", .{
+                    chain.head(),
+                    field.name,
+                }) catch return false;
+                const local = self.analyzer.qualify(self.prefix, written) catch return false;
+                return self.analyzer.function_names.contains(local) or
+                    self.analyzer.function_names.contains(written);
+            },
+            else => return false,
+        }
+    }
+
     fn lowerBinaryOperands(
         self: *FunctionBuilder,
         binary: ast.Binary,
         wanted: ?Type,
     ) Error!?[]Typed {
-        const left_untyped = helpers.isUntypedNumber(binary.left);
-        const right_untyped = helpers.isUntypedNumber(binary.right);
+        // **An operand with no type of its own takes the other's.**
+        // Two kinds have none: a numeric literal (docs/TYPES.md D3) and
+        // a bare function name, which is not a value until something
+        // says which shape it wears (docs/FUNCTIONS.md S1).  Both are
+        // answered the same way and always have been — lower the side
+        // that knows, then land the side that does not on it.
+        const left_untyped = helpers.isUntypedNumber(binary.left) or self.namesAFunction(binary.left);
+        const right_untyped = helpers.isUntypedNumber(binary.right) or self.namesAFunction(binary.right);
         if (left_untyped and right_untyped) {
             const values = try self.arena().alloc(Typed, 2);
             const expressions = [_]*ast.Expression{ binary.left, binary.right };
             for (expressions, 0..) |expression, index| {
-                if (wanted) |place| self.wanted = landingType(place);
+                if (wanted) |place| self.wantPlace(place);
                 values[index] = (try self.lowerExpression(expression, false)) orelse return null;
             }
             return values;
@@ -5044,7 +5262,7 @@ pub const FunctionBuilder = struct {
         const expressions = [_]*ast.Expression{ binary.left, binary.right };
         values[written_first] =
             (try self.lowerExpression(expressions[written_first], false)) orelse return null;
-        if (landingType(values[written_first].value_type)) |place| self.wanted = place;
+        self.wantPlace(values[written_first].value_type);
         values[written_second] =
             (try self.lowerExpression(expressions[written_second], false)) orelse return null;
         return values;
@@ -5223,6 +5441,18 @@ pub const FunctionBuilder = struct {
                         context.operatorText(binary.op),
                         try self.writtenTarget(binary.right),
                     },
+                );
+                return null;
+            }
+            // **A function value has no order** (docs/FUNCTIONS.md D3):
+            // it is a name for a function, and there is no sense in
+            // which one function is before another.
+            if (operand_type == .function) {
+                try self.fail(
+                    "luce.sema.type",
+                    binary.span,
+                    "a function value is the same function or a different one; there is no order between two [FUNCTIONS.md D3]",
+                    .{},
                 );
                 return null;
             }
@@ -5782,6 +6012,15 @@ pub const FunctionBuilder = struct {
         shape_position: ShapePosition,
         wanted: ?Type,
     ) Error!?Typed {
+        // A local of function type is called through
+        // (docs/FUNCTIONS.md D2).  First, because a local is what the
+        // name means wherever one exists — and no local can be called
+        // one of the reserved names the builtins below answer to.
+        if (std.mem.indexOfScalar(u8, call.callee, '.') == null) {
+            if (self.findLocal(call.callee)) |found| {
+                return self.lowerIndirectCall(found, call, as_statement);
+            }
+        }
         // Builtins and conversions are bare names and take priority;
         // reserved names keep user declarations out of their way.
         if (std.mem.indexOfScalar(u8, call.callee, '.') == null) {
@@ -5815,6 +6054,123 @@ pub const FunctionBuilder = struct {
             shape_position,
             null,
         );
+    }
+
+    /// `before(a, b)` — a call **through a function value**
+    /// (docs/FUNCTIONS.md D2, D5).
+    ///
+    /// The signature is what a direct call's declaration is: it says
+    /// the arity, the argument types and the verb each object argument
+    /// travels by, and those are checked here exactly as `lowerUserCall`
+    /// checks them against a declaration.  What it does *not* carry is
+    /// names and defaults, because a type has neither — so a named
+    /// argument is refused where it is written rather than matched
+    /// against a parameter name that does not exist.
+    fn lowerIndirectCall(
+        self: *FunctionBuilder,
+        found: context.FoundLocal,
+        call: ast.Call,
+        as_statement: bool,
+    ) Error!?Typed {
+        const local_type = self.code.localType(found.info.local);
+        if (local_type != .function) {
+            try self.fail(
+                "luce.sema.call",
+                call.span,
+                "{s} is {s}, which is not a function; only a func(...) value can be called",
+                .{ call.callee, try self.analyzer.typeName(local_type) },
+            );
+            return null;
+        }
+        if (try self.checkPoisoned(found.info, call.callee, call.span)) return null;
+        const signature = self.analyzer.signatures.items[local_type.function];
+        for (call.arguments) |argument| {
+            if (argument.name) |named| {
+                try self.fail(
+                    "luce.sema.call",
+                    argument.span,
+                    "a function type has no parameter names, so {s} cannot be named here [FUNCTIONS.md S2]",
+                    .{named},
+                );
+                return null;
+            }
+        }
+        if (call.arguments.len != signature.parameters.len) {
+            try self.fail(
+                "luce.sema.call",
+                call.span,
+                "{s} is {s} and takes {d} argument{s}, got {d}",
+                .{
+                    call.callee,
+                    try self.analyzer.typeName(local_type),
+                    signature.parameters.len,
+                    if (signature.parameters.len == 1) "" else "s",
+                    call.arguments.len,
+                },
+            );
+            return null;
+        }
+        // The verbs, exactly as a direct call checks them (D5): a give
+        // parameter needs `give NAME`, `copy NAME` or something fresh,
+        // and a borrowing one refuses a give.
+        for (call.arguments, signature.parameters) |argument, parameter| {
+            if (parameter.gives) {
+                if (!(try self.yieldsOwnership(argument.value))) {
+                    try self.failNeedsOwnership(
+                        argument.span,
+                        try std.fmt.allocPrint(self.arena(), "this argument of {s} takes ownership", .{call.callee}),
+                        argument.value,
+                        "S13, S14",
+                    );
+                    return null;
+                }
+            } else if (argument.value.* == .give) {
+                try self.fail(
+                    "luce.sema.own",
+                    argument.span,
+                    "{s} only borrows this argument; give needs a give parameter in the signature [OWNERSHIP.md S11, S13]",
+                    .{call.callee},
+                );
+                return null;
+            }
+        }
+        const expressions = try self.arena().alloc(*ast.Expression, call.arguments.len);
+        const places = try self.arena().alloc(Type, call.arguments.len);
+        for (call.arguments, expressions, places, signature.parameters) |argument, *expression, *place, parameter| {
+            expression.* = argument.value;
+            place.* = parameter.value_type;
+        }
+        const values = (try self.lowerOperandsInto(expressions, .{ .places = places })) orelse return null;
+        const registers = try self.arena().alloc(Register, values.len);
+        for (values, signature.parameters, registers, 0..) |value, parameter, *slot, index| {
+            const fitted = (try self.fit(value, parameter.value_type)) orelse {
+                try self.fail("luce.sema.type", call.arguments[index].span, "argument {d} of {s} is {s}, got {s}{s}", .{
+                    index + 1,
+                    call.callee,
+                    try self.analyzer.typeName(parameter.value_type),
+                    try self.analyzer.typeName(value.value_type),
+                    try self.mismatchAdvice(parameter.value_type, value.value_type, expressions[index]),
+                });
+                return null;
+            };
+            slot.* = fitted.register;
+        }
+        if (signature.result == .none and !as_statement) {
+            try self.fail("luce.sema.call", call.span, "{s} returns nothing", .{call.callee});
+            return null;
+        }
+        // The callee is read *after* the arguments, so an argument that
+        // frees or reassigns is already done with when the value is
+        // loaded — the same order a direct call's arguments run in.
+        const callee = try self.code.load(found.info.local);
+        return .{
+            .register = try self.code.emit(.{ .call_indirect = .{
+                .callee = callee,
+                .signature = local_type.function,
+                .arguments = registers,
+            } }, signature.result),
+            .value_type = signature.result,
+        };
     }
 
     /// `spawn f(args)` — the same call, made on a worker
@@ -7695,6 +8051,21 @@ pub const FunctionBuilder = struct {
             if (produces == .string) return self.lowerEnumName(value);
             return self.lowerEnumToNumber(call, value, produces);
         }
+        // `string(f)` is the function's **name** (docs/FUNCTIONS.md
+        // D3) — the enum arm above, one type later, and the same act:
+        // a value that is a number underneath answers with the word it
+        // stands for.
+        if (value.value_type == .function and produces == .string) {
+            const arguments = try self.arena().alloc(Register, 1);
+            arguments[0] = value.register;
+            return .{
+                .register = try self.code.emit(
+                    .{ .intrinsic = .{ .kind = .function_name, .arguments = arguments } },
+                    .string,
+                ),
+                .value_type = .string,
+            };
+        }
         if (produces == .string) {
             switch (value.value_type) {
                 .string => return value,
@@ -8122,6 +8493,9 @@ pub const FunctionBuilder = struct {
             // Emitted by `string(x)` and by `builder.build()`, both of
             // which are resolved before this table is consulted.
             .str_value,
+            // The same, one type later: `string(f)` on a function value
+            // (docs/FUNCTIONS.md D3).
+            .function_name,
             .none_value,
             .is_none,
             .optional_wrap,

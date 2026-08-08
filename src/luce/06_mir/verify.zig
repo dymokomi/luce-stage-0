@@ -281,7 +281,7 @@ fn fitsFloat(held: f64, at: Type) bool {
         .double => true,
         .float => std.math.isNan(held) or @as(f64, @as(f32, @floatCast(held))) == held,
         .half => std.math.isNan(held) or @as(f64, @as(f16, @floatCast(held))) == held,
-        .none, .boolean, .byte, .short, .int, .long, .string, .strukt, .heap, .enumeration, .optional => false,
+        .none, .boolean, .byte, .short, .int, .long, .string, .strukt, .heap, .enumeration, .function, .optional => false,
     };
 }
 
@@ -295,6 +295,30 @@ fn fitsFloat(held: f64, at: Type) bool {
 fn isMember(program: *const Program, held: i64, of: Type) bool {
     if (of.enumeration.index >= program.enums.len) return false;
     return program.enums[of.enumeration.index].memberOfValue(held) != null;
+}
+
+/// Whether the function `named` really has the shape `signature`
+/// claims: the same parameter types in the same order, and the same
+/// answer.  The *verbs* are not checked here — a verb is a rule about
+/// call sites, which stage 4 enforces and MIR does not carry — but a
+/// mismatched type or arity is a module that would call one function
+/// through another's spelling.
+///
+/// A fallible function is never a value (docs/FUNCTIONS.md, As built),
+/// so one arriving here is a module stage 4 could not have written.
+fn expectSignature(
+    program: *const Program,
+    signature: types.Signature,
+    named: u32,
+) VerifyError!void {
+    const callee = program.functions[named];
+    if (callee.fallible) return error.TypeMismatch;
+    if (signature.parameters.len != callee.parameter_count) return error.BadFunction;
+    if (callee.locals.len < callee.parameter_count) return error.BadLocal;
+    for (signature.parameters, 0..) |parameter, index| {
+        try expectType(callee.locals[index].local_type, parameter.value_type);
+    }
+    try expectType(callee.return_type, signature.result);
 }
 
 fn expectType(actual: Type, expected: Type) VerifyError!void {
@@ -336,6 +360,16 @@ fn verifyInstruction(
         .const_string => |constant| {
             if (constant >= program.constants.len) return error.BadConstant;
             try expectType(result, .string);
+        },
+        // A function value names a function and wears a signature, and
+        // the two have to agree: the named function's parameters and
+        // result are what the signature says, or the module could call
+        // one shape through another's spelling (docs/FUNCTIONS.md D2).
+        .const_function => |named| {
+            if (named >= program.functions.len) return error.BadFunction;
+            if (result != .function) return error.TypeMismatch;
+            if (result.function >= program.signatures.len) return error.BadFunction;
+            try expectSignature(program, program.signatures[result.function], named);
         },
         .local_get => |local| {
             if (local >= function.locals.len) return error.BadLocal;
@@ -489,6 +523,22 @@ fn verifyInstruction(
             if (shape != .task) return error.TypeMismatch;
             if (!shape.task.result.eql(callee.return_type)) return error.TypeMismatch;
             if (shape.task.fallible != callee.fallible) return error.TypeMismatch;
+        },
+        // A call through a value is a call whose callee is a register:
+        // the callee wears the signature the arguments are checked
+        // against, and the result is what that signature answers
+        // (docs/FUNCTIONS.md D2).
+        .call_indirect => |call| {
+            if (call.signature >= program.signatures.len) return error.BadFunction;
+            const callee = try operandType(function, defined, call.callee);
+            try expectType(callee, .{ .function = call.signature });
+            const signature = program.signatures[call.signature];
+            if (call.arguments.len != signature.parameters.len) return error.BadFunction;
+            for (call.arguments, signature.parameters) |argument, parameter| {
+                const value = try operandType(function, defined, argument);
+                try expectType(value, parameter.value_type);
+            }
+            if (!result.eql(signature.result)) return error.TypeMismatch;
         },
         .intrinsic => |intrinsic| try verifyIntrinsic(program, function, defined, register, intrinsic),
         .object_bind => |bind| {
@@ -964,6 +1014,13 @@ fn verifyIntrinsic(
                 else => false,
             };
             if (!stringable) return error.BadIntrinsic;
+            try expectType(result, .string);
+        },
+        // `string(f)` reads a name out of the program's function
+        // table: a function value in, text out (docs/FUNCTIONS.md D3).
+        .function_name => {
+            try exactly(arguments, 1);
+            if (arguments[0] != .function) return error.BadIntrinsic;
             try expectType(result, .string);
         },
         .parse_int, .parse_float => {

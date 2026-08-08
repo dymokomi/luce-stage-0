@@ -43,6 +43,14 @@ pub fn prune(arena: Allocator, program: *Program) Allocator.Error!void {
         for (program.functions[index].instructions) |instruction| {
             const called = switch (instruction) {
                 .call, .spawn => |call| call.function,
+                // **Naming a function reaches it.**  A function value
+                // is a call that has not happened yet, and the call
+                // that will happen is a `call_indirect` naming no
+                // function at all — so if this arm were missing, a
+                // comparator passed to `sort_by` would be pruned out
+                // from under the value that names it
+                // (docs/FUNCTIONS.md D2).
+                .const_function => |named| named,
                 else => continue,
             };
             if (reachable[called]) continue;
@@ -67,6 +75,7 @@ pub fn prune(arena: Allocator, program: *Program) Allocator.Error!void {
         for (function.instructions) |*instruction| {
             switch (instruction.*) {
                 .call, .spawn => |*call| call.function = renumbered[call.function],
+                .const_function => |*named| named.* = renumbered[named.*],
                 else => {},
             }
         }

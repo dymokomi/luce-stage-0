@@ -28,6 +28,18 @@ pub const TypeName = struct {
     /// (docs/THREADS.md).  Only `task` takes one; it is not the `!`
     /// after a return type, which the declaration parser reads.
     fallible: bool = false,
+    /// What a `func(...) -> R` answers, null when it answers nothing
+    /// (docs/FUNCTIONS.md S2).  Set only on a function type, whose
+    /// `name` is the keyword `func` — a word no declaration can take,
+    /// so nothing else can wear this shape.  Its parameter types are
+    /// `arguments`, because that is what they are.
+    result: ?*TypeName = null,
+    /// `give T` in a function type's parameter list: the callee takes
+    /// ownership.  A verb, not a name — two signatures that differ in
+    /// one are two types, because who owns the object afterwards
+    /// differs (docs/FUNCTIONS.md D5).  Read only of a function type's
+    /// arguments.
+    gives: bool = false,
     span: Span,
 };
 

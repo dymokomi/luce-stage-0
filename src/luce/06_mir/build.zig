@@ -377,6 +377,13 @@ pub const Lowering = struct {
                 of,
             ),
             .string => try self.emit(.{ .const_string = try self.pool.intern("") }, .string),
+            // A function value has no zero: every value of the type
+            // names a function, and a slot with no function in it names
+            // none.  Stage 4 refuses the one declaration that would ask
+            // for one (docs/FUNCTIONS.md, As built), and a function type
+            // stands nowhere a zero is filled in — not an element, not a
+            // field.
+            .function => unreachable, // refused by lowerLateDeclaration
             .heap => try self.emit(
                 .{ .intrinsic = .{ .kind = .null_object, .arguments = &.{} } },
                 of,
@@ -827,6 +834,9 @@ pub const Lowered = struct {
     structs: []StructLayout,
     heap_types: []types.HeapType,
     enums: []types.EnumType = &.{},
+    /// One row per distinct function type the program writes
+    /// (docs/FUNCTIONS.md S2).
+    signatures: []types.Signature = &.{},
     /// The constant pool, in the order the checker interned it.
     constants: []const []const u8,
     entry_function: u32,
@@ -872,6 +882,7 @@ pub fn build(
     program.structs = lowered.structs;
     program.heap_types = lowered.heap_types;
     program.enums = lowered.enums;
+    program.signatures = lowered.signatures;
     program.functions = functions;
     program.constants = lowered.constants;
     program.entry_function = lowered.entry_function;

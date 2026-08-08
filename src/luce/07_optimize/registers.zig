@@ -34,6 +34,7 @@ pub fn mapOperands(
         .const_long,
         .const_double,
         .const_string,
+        .const_function,
         .local_get,
         .jump,
         .trap,
@@ -53,6 +54,10 @@ pub fn mapOperands(
             set.value = map[set.value];
         },
         .call, .spawn => |*call| call.arguments = try mapSlice(arena, call.arguments, map),
+        .call_indirect => |*call| {
+            call.callee = map[call.callee];
+            call.arguments = try mapSlice(arena, call.arguments, map);
+        },
         .intrinsic => |*call| call.arguments = try mapSlice(arena, call.arguments, map),
         .heap_new => |*new| new.dims = try mapSlice(arena, new.dims, map),
         .object_bind => |*bind| bind.value = map[bind.value],
@@ -81,6 +86,7 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
         .const_long,
         .const_double,
         .const_string,
+        .const_function,
         .local_get,
         .jump,
         .trap,
@@ -100,6 +106,10 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
         .struct_set => |set| {
             used[set.target] = true;
             used[set.value] = true;
+        },
+        .call_indirect => |call| {
+            used[call.callee] = true;
+            for (call.arguments) |argument| used[argument] = true;
         },
         .call, .spawn => |call| for (call.arguments) |argument| {
             used[argument] = true;

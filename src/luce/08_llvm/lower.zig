@@ -274,6 +274,12 @@ const Module = struct {
     /// One LLVM function per Luce function, parallel to
     /// `program.functions`.
     functions: []Builder.Function.Index = &.{},
+    /// The pointer table a call through a function value dispatches
+    /// through, and the name table `string(f)` reads — both built on
+    /// first use and null in a program that makes no function value
+    /// (docs/FUNCTIONS.md D2, D3).
+    function_table: ?Builder.Variable.Index = null,
+    function_names: ?Builder.Variable.Index = null,
 
     /// The zero value of each struct layout, as a pointer to a private
     /// constant run of `Value`s.  Built on first use, shared by every
@@ -397,6 +403,7 @@ const Module = struct {
                 &.{ try self.valueType(payload.asType()), .i1 },
             ),
             .enumeration => unreachable, // answered by storage() above
+            .function => unreachable, // answered by storage() above
         };
     }
 
@@ -580,6 +587,7 @@ const Module = struct {
             .optional,
             => Builder.Alignment.fromByteUnits(8),
             .enumeration => unreachable, // answered by storage() above
+            .function => unreachable, // answered by storage() above
         };
     }
 
@@ -852,6 +860,7 @@ const Module = struct {
             // parks in the same field (S43).
             .optional => .{ .none, try self.builder.intConst(.i64, 0) },
             .enumeration => unreachable, // answered by storage() above
+            .function => unreachable, // answered by storage() above
         };
         const length: u64 = switch (of) {
             .strukt => |nested| self.program.structs[nested].fields.len,
@@ -1184,6 +1193,83 @@ const Module = struct {
 
     /// `i1 (ptr host, ptr rt, i64 depth, params..., ptr out?)` — see the
     /// file header.
+    /// The same shape as `signature`, built from a **written function
+    /// type** rather than from a declared function: what a call through
+    /// a value is emitted against (docs/FUNCTIONS.md D2).  The two must
+    /// agree, and the verifier is what says they do.
+    fn indirectSignature(self: *Module, written: types.Signature) Error!Builder.Type {
+        var parameters: std.ArrayList(Builder.Type) = .empty;
+        defer parameters.deinit(self.gpa);
+        try parameters.append(self.gpa, .ptr);
+        try parameters.append(self.gpa, .ptr);
+        try parameters.append(self.gpa, .i64);
+        for (written.parameters) |parameter| {
+            try parameters.append(self.gpa, try self.valueType(parameter.value_type));
+        }
+        if (written.result != .none) {
+            _ = try self.valueType(written.result);
+            try parameters.append(self.gpa, .ptr);
+        }
+        return self.builder.fnType(.i32, parameters.items, .normal);
+    }
+
+    /// The program's function table: one pointer per Luce function, in
+    /// program order, so a function value — which is an index — becomes
+    /// something callable with one `getelementptr` and one load
+    /// (docs/FUNCTIONS.md D2).
+    ///
+    /// Built once and only where something asks: a program that never
+    /// makes a function value emits none of it, exactly as a program
+    /// that never spawns emits no worker entry.
+    fn functionTable(self: *Module) Error!Builder.Variable.Index {
+        if (self.function_table) |built| return built;
+        var entries: std.ArrayList(Builder.Constant) = .empty;
+        defer entries.deinit(self.gpa);
+        for (self.functions) |declared| {
+            try entries.append(self.gpa, declared.toConst(self.builder));
+        }
+        const table_type = try self.builder.arrayType(entries.items.len, .ptr);
+        const variable = try self.builder.addVariable(
+            try self.builder.strtabString("luce.function_table"),
+            table_type,
+            .default,
+        );
+        try variable.setInitializer(
+            try self.builder.arrayConst(table_type, entries.items),
+            self.builder,
+        );
+        variable.setMutability(.constant, self.builder);
+        variable.ptrConst(self.builder).global.setLinkage(.private, self.builder);
+        self.function_table = variable;
+        return variable;
+    }
+
+    /// The program's function *names*, one `{ptr, i64}` per function in
+    /// program order: what `string(f)` reads (docs/FUNCTIONS.md D3).
+    /// Built lazily beside the table above, for the same reason.
+    fn functionNames(self: *Module) Error!Builder.Variable.Index {
+        if (self.function_names) |built| return built;
+        var entries: std.ArrayList(Builder.Constant) = .empty;
+        defer entries.deinit(self.gpa);
+        for (self.program.functions) |*function| {
+            try entries.append(self.gpa, try self.textConstant(function.name));
+        }
+        const table_type = try self.builder.arrayType(entries.items.len, self.string_type);
+        const variable = try self.builder.addVariable(
+            try self.builder.strtabString("luce.function_names"),
+            table_type,
+            .default,
+        );
+        try variable.setInitializer(
+            try self.builder.arrayConst(table_type, entries.items),
+            self.builder,
+        );
+        variable.setMutability(.constant, self.builder);
+        variable.ptrConst(self.builder).global.setLinkage(.private, self.builder);
+        self.function_names = variable;
+        return variable;
+    }
+
     fn signature(self: *Module, function: *const mir.Function) Error!Builder.Type {
         var parameters: std.ArrayList(Builder.Type) = .empty;
         defer parameters.deinit(self.gpa);
@@ -1300,11 +1386,12 @@ const Module = struct {
                 .int, .float => 8,
                 .long, .double, .strukt, .heap => 16,
                 .string => 24,
-                .none, .enumeration, .optional => unreachable, // a payload is a value of a width
+                .none, .enumeration, .function, .optional => unreachable, // a payload is a value of a width
             },
             // Never reached: a function returning nothing has no slot.
             .none => 0,
             .enumeration => unreachable, // answered by storage() above
+            .function => unreachable, // answered by storage() above
         };
     }
 
@@ -2009,9 +2096,11 @@ const Body = struct {
                 .const_long,
                 .const_double,
                 .const_string,
+                .const_function,
                 .local_get,
                 .local_set,
                 .spawn,
+                .call_indirect,
                 .binary,
                 .unary,
                 .convert,
@@ -2169,6 +2258,17 @@ const Body = struct {
             .heap => try self.module.builder.intValue(.i64, runtime.null_index),
             .strukt => |layout| (try self.module.structZero(layout)).toValue(),
             .none => self.fail("a local of type None"),
+            // **A slot's fill, not a value of the type.**  A function
+            // value has no zero — every value of the type names a
+            // function — and stage 4 refuses the one declaration that
+            // would ask a program for one (docs/FUNCTIONS.md, As
+            // built).  What is left is the frame slot a function-typed
+            // local lives in before its first store, which nothing a
+            // program can write ever reads.  It is filled with an index
+            // no function has, and `emitIndirectCall` range-checks
+            // before it dispatches, so a hand-made module that reads it
+            // anyway traps rather than jumping somewhere.
+            .function => try self.module.builder.intValue(.i32, -1),
             // The zero of a `T?` is absence: the payload's own zero,
             // beside a bit saying it is not there.  Giving the unused
             // half a defined value rather than `poison` is what makes
@@ -2361,6 +2461,7 @@ const Body = struct {
             ),
             .optional => self.fail("the bits of a T? read from its type"),
             .enumeration => unreachable, // answered by storage() above
+            .function => unreachable, // answered by storage() above
         };
     }
 
@@ -2389,6 +2490,7 @@ const Body = struct {
             .string => try self.wip.extractValue(held, &.{1}, "box.length"),
             .optional => self.fail("the length of a T? read from its type"),
             .enumeration => unreachable, // answered by storage() above
+            .function => unreachable, // answered by storage() above
         };
     }
 
@@ -2545,6 +2647,7 @@ const Body = struct {
             .strukt => try self.wip.cast(.inttoptr, bits, .ptr, name),
             .none, .optional => unreachable, // answered above
             .enumeration => unreachable, // answered by storage() above
+            .function => unreachable, // answered by storage() above
         };
     }
 
@@ -2820,6 +2923,7 @@ const Body = struct {
             .boolean, .byte, .short, .int, .long, .half, .float, .double => true,
             .none, .string, .strukt, .heap, .optional => false,
             .enumeration => unreachable, // answered by storage() above
+            .function => unreachable, // answered by storage() above
         };
     }
 
@@ -3065,6 +3169,7 @@ const Body = struct {
             // type keeps the 24-byte slot.
             .none, .string, .strukt, .heap, .optional => self.module.value_type,
             .enumeration => unreachable, // answered by storage() above
+            .function => unreachable, // answered by storage() above
         };
     }
 
@@ -3082,6 +3187,7 @@ const Body = struct {
             .optional,
             => Builder.Alignment.fromByteUnits(8),
             .enumeration => unreachable, // answered by storage() above
+            .function => unreachable, // answered by storage() above
         };
     }
 
@@ -3104,6 +3210,7 @@ const Body = struct {
             // asserted against it by `runtime/test.zig`.
             .none, .string, .strukt, .heap, .optional => @sizeOf(runtime.Value),
             .enumeration => unreachable, // answered by storage() above
+            .function => unreachable, // answered by storage() above
         };
     }
 
@@ -3374,6 +3481,7 @@ const Body = struct {
                 "element",
             ),
             .enumeration => unreachable, // answered by storage() above
+            .function => unreachable, // answered by storage() above
         };
     }
 
@@ -3404,6 +3512,7 @@ const Body = struct {
                 held,
             ),
             .enumeration => unreachable, // answered by storage() above
+            .function => unreachable, // answered by storage() above
         }
     }
 
@@ -4212,6 +4321,18 @@ const Body = struct {
                 const text = self.module.program.constants[constant];
                 self.produced[register].value = (try self.module.textConstant(text)).toValue();
             },
+            // A function value is the index of the function it names,
+            // held as the `i32` a `.function` register is
+            // (docs/FUNCTIONS.md D2).  Nothing is emitted for the
+            // function itself: the table below is what turns the index
+            // back into something callable, and it is emitted once.
+            .const_function => |named| {
+                self.produced[register].value = try self.module.builder.intValue(
+                    .i32,
+                    named,
+                );
+            },
+            .call_indirect => |called| try self.emitIndirectCall(register, called),
             .local_get => |local| {
                 const held = self.function.locals[local];
                 const slot = self.local_slots[local];
@@ -4619,6 +4740,11 @@ const Body = struct {
             // analyzer refuses `m + 1` and the verifier refuses the IR
             // that would say it.
             .enumeration,
+            // A function value is a name for a function and nothing a
+            // program may add to (docs/FUNCTIONS.md D3): the only
+            // operators it takes are `==` and `!=`, which arrive at
+            // `int` because that is what one is underneath.
+            .function,
             .optional,
             => return self.fail("arithmetic on a type that has none"),
         }
@@ -4904,7 +5030,11 @@ const Body = struct {
         // because that switch's narrow arms are about *numbers*, where
         // promotion has already run and a storage width is a lowering
         // bug; here a `byte` backing is the ordinary case.
-        if (operation.operand_type == .enumeration) {
+        // A function value compares as the `int` it is: same function
+        // or not, and no ordering (docs/FUNCTIONS.md D3).  The enum arm
+        // below, one type earlier, and for the same reason it stands
+        // outside the numeric switch.
+        if (operation.operand_type == .function or operation.operand_type == .enumeration) {
             const same: Builder.IntegerCondition = switch (operation.op) {
                 .equal => .eq,
                 .not_equal => .ne,
@@ -4912,7 +5042,7 @@ const Body = struct {
                 .less_equal,
                 .greater,
                 .greater_equal,
-                => return self.fail("an ordering comparison on an enum"),
+                => return self.fail("an ordering comparison on an enum or a function value"),
                 .bit_and,
                 .bit_or,
                 .bit_xor,
@@ -4994,7 +5124,7 @@ const Body = struct {
                 .modulo,
                 => return self.fail("arithmetic on the comparison path"),
             },
-            .float, .double, .string, .strukt, .enumeration => unreachable, // answered above
+            .float, .double, .string, .strukt, .enumeration, .function => unreachable, // answered above
             // As in `emitBinary`: a comparison unifies its operands
             // first, and no storage width survives that (D5).
             .byte,
@@ -5056,6 +5186,7 @@ const Body = struct {
                 .strukt,
                 .heap,
                 .enumeration,
+                .function,
                 .optional,
                 => return self.fail("negation of a type that has none"),
             },
@@ -5122,6 +5253,111 @@ const Body = struct {
                 "trapped",
             ));
         }
+
+        if (result != .none) {
+            self.produced[register].value = try self.wip.load(
+                .normal,
+                try self.module.valueType(result),
+                result_slot,
+                Module.valueAlignment(result),
+                "call.value",
+            );
+        }
+    }
+
+    /// A call **through a function value** (docs/FUNCTIONS.md D2).
+    ///
+    /// The value is an index, so the callee is one load out of the
+    /// module's function table — the same table both engines dispatch
+    /// through, one holding pointers and one holding `mir.Function`s.
+    /// Everything else is `emitCall` exactly: the same three hidden
+    /// arguments, the same depth check, the same out-parameter, the
+    /// same unwind edge.  A fallible function is never a value, so
+    /// there is no error edge here to get wrong.
+    fn emitIndirectCall(
+        self: *Body,
+        register: mir.Register,
+        called: mir.Instruction.IndirectCall,
+    ) Error!void {
+        const gpa = self.module.gpa;
+        const signature = self.module.program.signatures[called.signature];
+        const result = self.function.result_types[register];
+
+        const callee_depth = try self.calleeDepth();
+        try self.check(
+            try self.wip.icmp(
+                .slt,
+                callee_depth,
+                try self.module.builder.intValue(.i64, 1),
+                "too.deep",
+            ),
+            .call_depth_exceeded,
+        );
+
+        // The value names a function or it names nothing, and nothing
+        // is what an unwritten slot holds.  One unsigned compare, and
+        // the same refusal the interpreter makes at the same call.
+        try self.check(
+            try self.wip.icmp(
+                .uge,
+                self.produced[called.callee].value,
+                try self.module.builder.intValue(
+                    .i32,
+                    @as(i64, @intCast(self.module.program.functions.len)),
+                ),
+                "no.such.function",
+            ),
+            .null_object,
+        );
+        const table = try self.module.functionTable();
+        const slot = try self.wip.gep(
+            .inbounds,
+            .ptr,
+            table.toValue(self.module.builder),
+            &.{try self.wip.cast(.zext, self.produced[called.callee].value, .i64, "callee.at")},
+            "callee.slot",
+        );
+        const target = try self.wip.load(
+            .normal,
+            .ptr,
+            slot,
+            .fromByteUnits(8),
+            "callee",
+        );
+
+        var arguments: std.ArrayList(Builder.Value) = .empty;
+        defer arguments.deinit(gpa);
+        try arguments.append(gpa, self.host);
+        try arguments.append(gpa, self.runtime);
+        try arguments.append(gpa, callee_depth);
+        for (called.arguments) |argument| {
+            try arguments.append(gpa, self.produced[argument].value);
+        }
+        var result_slot: Builder.Value = .none;
+        if (result != .none) {
+            result_slot = try self.scratch(
+                try self.module.valueType(result),
+                Module.valueAlignment(result),
+                "call.result",
+            );
+            try arguments.append(gpa, result_slot);
+        }
+
+        const outcome = try self.wip.call(
+            .normal,
+            Builder.CallConv.default,
+            .none,
+            try self.module.indirectSignature(signature),
+            target,
+            arguments.items,
+            "outcome",
+        );
+        try self.propagate(try self.wip.icmp(
+            .ne,
+            outcome,
+            try self.module.builder.intValue(.i32, outcome_ok),
+            "trapped",
+        ));
 
         if (result != .none) {
             self.produced[register].value = try self.wip.load(
@@ -5272,6 +5508,7 @@ const Body = struct {
             .strukt,
             .heap,
             .enumeration,
+            .function,
             => false,
         };
     }
@@ -5708,6 +5945,26 @@ const Body = struct {
                 rt,
                 try self.boxedRegister(of[0], "held"),
             }),
+            // `string(f)` — one `getelementptr` into the name table and
+            // one load; the bytes are the module's own constants and
+            // nobody frees them (docs/FUNCTIONS.md D3).
+            .function_name => {
+                const names = try self.module.functionNames();
+                const slot = try self.wip.gep(
+                    .inbounds,
+                    self.module.string_type,
+                    names.toValue(self.module.builder),
+                    &.{try self.wip.cast(.zext, self.produced[of[0]].value, .i64, "name.at")},
+                    "name.slot",
+                );
+                self.produced[register].value = try self.wip.load(
+                    .normal,
+                    self.module.string_type,
+                    slot,
+                    .fromByteUnits(8),
+                    "function.name",
+                );
+            },
             .parse_int => try self.callAnswering(register, .luce_rt_parse_int, &.{
                 rt,
                 try self.boxedRegister(of[0], "text"),
@@ -6006,6 +6263,7 @@ const Body = struct {
             .strukt,
             .heap,
             .enumeration,
+            .function,
             .optional,
             => self.fail("a math builtin on a type that has none"),
         };

@@ -799,6 +799,7 @@ pub const Parser = struct {
             );
             return null;
         }
+        if (self.peekKind() == .keyword_func) return self.functionTypeName();
         const item = (try self.expect(.identifier, "a type name")) orelse return null;
         var written: ast.TypeName = .{ .name = self.text(item), .span = item.span };
         // module.Struct — one dotted level reaches an imported type.
@@ -873,6 +874,70 @@ pub const Parser = struct {
         written.arguments = try arguments.toOwnedSlice(self.arena);
         written.wildcards = wildcards;
         written.span = .{ .start = item.span.start, .end = closing.span.end };
+        return self.optionalSuffix(written);
+    }
+
+    /// `func(T, ...) -> R` — a function type, spelled the way a
+    /// signature already reads (docs/FUNCTIONS.md S2).
+    ///
+    /// **Parameter types, and no parameter names.**  A name in a
+    /// declaration is documentation the call site can use; in a type it
+    /// is documentation nothing reads, and a grammar that admits it has
+    /// to say what `func(long)` means — the type `long` or a parameter
+    /// called `long`.  The one word that may stand in front of a
+    /// parameter type is `give`, which is not documentation: it says who
+    /// owns the object afterwards (D5).
+    fn functionTypeName(self: *Parser) Error!?ast.TypeName {
+        const start = self.advance(); // func
+        const opener = (try self.expect(.left_paren, "'(' with the parameter types")) orelse return null;
+        var parameters: std.ArrayList(ast.TypeName) = .empty;
+        defer parameters.deinit(self.arena);
+        var previous_end = opener.span.end;
+        while (!expr.endsList(self.peekKind(), .right_paren)) {
+            const gives = self.accept(.keyword_give) != null;
+            var parameter = (try self.typeName()) orelse return null;
+            parameter.gives = gives;
+            try parameters.append(self.arena, parameter);
+            previous_end = parameter.span.end;
+            if (self.accept(.comma) == null) break;
+        }
+        if (try self.missingSeparator(previous_end)) return null;
+        const closing = (try self.expectClose(.right_paren, opener)) orelse return null;
+        var written: ast.TypeName = .{
+            .name = "func",
+            .arguments = try parameters.toOwnedSlice(self.arena),
+            .span = .{ .start = start.span.start, .end = closing.span.end },
+        };
+        if (self.accept(.arrow) != null) {
+            // `-> !` and `-> T!` say a function may fail, and a function
+            // type has nowhere to put that: the obligation `try` and
+            // `catch` carry belongs to a call site, and this is a type.
+            // Refused where it is written rather than dropped
+            // (docs/FUNCTIONS.md, As built).
+            if (self.peekKind() == .bang) {
+                try self.report(
+                    "luce.parse.type",
+                    self.peek().span,
+                    "a function type carries no '!': a fallible function is not a value yet",
+                    .{},
+                );
+                return null;
+            }
+            const answered = (try self.typeName()) orelse return null;
+            if (self.peekKind() == .bang) {
+                try self.report(
+                    "luce.parse.type",
+                    self.peek().span,
+                    "a function type carries no '!': a fallible function is not a value yet",
+                    .{},
+                );
+                return null;
+            }
+            const held = try self.arena.create(ast.TypeName);
+            held.* = answered;
+            written.result = held;
+            written.span = .{ .start = start.span.start, .end = answered.span.end };
+        }
         return self.optionalSuffix(written);
     }
 

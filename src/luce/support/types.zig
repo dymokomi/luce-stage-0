@@ -62,6 +62,18 @@ pub const Type = union(enum) {
     /// its members — and the width travels beside it, for the reason
     /// `EnumRef` gives.
     enumeration: EnumRef,
+    /// `func(T, ...) -> R` — a **function value** (docs/FUNCTIONS.md).
+    /// The index reaches the program's signature table, interned the
+    /// way heap shapes are, so two identically written function types
+    /// share one index and equality is an index comparison.
+    ///
+    /// **Underneath it is a number.**  A function value is the index of
+    /// the function it names in the program's function table — which is
+    /// why `storage()` answers `.int` for one and why nothing in
+    /// `libluce_rt` learns a thing (docs/FUNCTIONS.md D2): to a machine
+    /// it is an `int`, and only the type table knows which signature the
+    /// int is allowed to be called at.
+    function: u32,
     /// `T?` — a `T` that may be absent (docs/FAILURE.md).  `?` means
     /// nullable and only nullable; it never carries a reason.
     optional: Payload,
@@ -171,6 +183,7 @@ pub const Type = union(enum) {
             .heap => |index| other == .heap and other.heap == index,
             .enumeration => |reference| other == .enumeration and
                 other.enumeration.index == reference.index,
+            .function => |index| other == .function and other.function == index,
             .optional => |payload| other == .optional and payload.eql(other.optional),
             else => std.meta.activeTag(self) == std.meta.activeTag(other),
         };
@@ -190,6 +203,10 @@ pub const Type = union(enum) {
     pub fn storage(self: Type) Type {
         return switch (self) {
             .enumeration => |reference| reference.backing.asType(),
+            // A function value is the index of the function it names
+            // (docs/FUNCTIONS.md D2).  One sentence here is what keeps
+            // every engine-side switch from growing an arm for it.
+            .function => .int,
             else => self,
         };
     }
@@ -229,7 +246,7 @@ pub const Type = union(enum) {
             .long, .double => 64,
             // An enum is not a number (D6): asking how wide one is is
             // asking about `int(m)`, which is a different type.
-            .none, .boolean, .string, .strukt, .heap, .enumeration, .optional => 0,
+            .none, .boolean, .string, .strukt, .heap, .enumeration, .function, .optional => 0,
         };
     }
 
@@ -248,7 +265,7 @@ pub const Type = union(enum) {
                 .low = std.math.minInt(i64),
                 .high = std.math.maxInt(i64),
             },
-            .none, .boolean, .half, .float, .double, .string, .strukt, .heap, .enumeration, .optional => unreachable,
+            .none, .boolean, .half, .float, .double, .string, .strukt, .heap, .enumeration, .function, .optional => unreachable,
         };
     }
 
@@ -268,7 +285,7 @@ pub const Type = union(enum) {
             .long => .long,
             .half, .float => .float,
             .double => .double,
-            .none, .boolean, .string, .strukt, .heap, .enumeration, .optional => null,
+            .none, .boolean, .string, .strukt, .heap, .enumeration, .function, .optional => null,
         };
     }
 
@@ -301,7 +318,7 @@ pub const Type = union(enum) {
             // An enum reaches no number with nothing written down (D4):
             // it is a set of names, and `int(m)` is how a program says
             // it means the number.
-            .double, .none, .boolean, .string, .strukt, .heap, .enumeration, .optional => false,
+            .double, .none, .boolean, .string, .strukt, .heap, .enumeration, .function, .optional => false,
         };
     }
 
@@ -366,7 +383,11 @@ pub const Type = union(enum) {
     /// has no value to be absent, and `T??` does not exist.
     pub fn optionalOf(base: Type) ?Type {
         return switch (base) {
-            .none, .optional => null,
+            // A function value has no absent form in this run: `Payload`
+            // has no `.function`, so `func(long) -> bool?` is
+            // unrepresentable rather than merely refused, exactly as
+            // `T??` is (docs/FUNCTIONS.md, As built).
+            .none, .function, .optional => null,
             .boolean => .{ .optional = .boolean },
             .byte => .{ .optional = .byte },
             .short => .{ .optional = .short },
@@ -441,6 +462,46 @@ pub const HeapType = union(enum) {
             .task => |work| other == .task and
                 work.result.eql(other.task.result) and work.fallible == other.task.fallible,
         };
+    }
+};
+
+/// The shape of one function type: what it takes and what it answers
+/// (docs/FUNCTIONS.md S2).
+///
+/// **Parameter types, and the verb each one receives objects with** —
+/// no names, because a name is documentation of a declaration and a
+/// type is not a declaration.  The verb is here because it is not
+/// documentation: `func(give list(long))` and `func(list(long))` differ
+/// in who owns the list afterwards, and a call through a value checks
+/// its arguments' verbs exactly as a direct call does (D5).  Two
+/// signatures that differ only in a verb are two types.
+///
+/// A function type carries no `!`: there is no spelling for one in this
+/// run, so a fallible function is refused where a value is wanted
+/// rather than silently losing its obligation (docs/FUNCTIONS.md, As
+/// built).
+pub const Signature = struct {
+    parameters: []Parameter,
+    /// What a call through this type answers; `.none` for a function
+    /// that answers nothing.  A return *shape* is not a type, so a
+    /// multi-valued function is not a function value either.
+    result: Type,
+
+    pub const Parameter = struct {
+        value_type: Type,
+        /// Written `give T`: the callee takes ownership (OWNERSHIP.md
+        /// S13).
+        gives: bool = false,
+    };
+
+    pub fn eql(self: Signature, other: Signature) bool {
+        if (self.parameters.len != other.parameters.len) return false;
+        if (!self.result.eql(other.result)) return false;
+        for (self.parameters, other.parameters) |mine, theirs| {
+            if (mine.gives != theirs.gives) return false;
+            if (!mine.value_type.eql(theirs.value_type)) return false;
+        }
+        return true;
     }
 };
 
@@ -642,11 +703,12 @@ pub fn typeName(
     layouts: []const StructLayout,
     heap_types: []const HeapType,
     enums: []const EnumType,
+    signatures: []const Signature,
     of: Type,
 ) error{OutOfMemory}![]u8 {
     var written: std.ArrayList(u8) = .empty;
     errdefer written.deinit(allocator);
-    try writeTypeName(&written, allocator, layouts, heap_types, enums, of);
+    try writeTypeName(&written, allocator, layouts, heap_types, enums, signatures, of);
     return written.toOwnedSlice(allocator);
 }
 
@@ -656,6 +718,7 @@ fn writeTypeName(
     layouts: []const StructLayout,
     heap_types: []const HeapType,
     enums: []const EnumType,
+    signatures: []const Signature,
     of: Type,
 ) error{OutOfMemory}!void {
     switch (of) {
@@ -674,19 +737,19 @@ fn writeTypeName(
         .heap => |index| switch (heap_types[index]) {
             .list => |element| {
                 try written.appendSlice(allocator, "list(");
-                try writeTypeName(written, allocator, layouts, heap_types, enums, element);
+                try writeTypeName(written, allocator, layouts, heap_types, enums, signatures, element);
                 try written.appendSlice(allocator, ")");
             },
             .map => |pair| {
                 try written.appendSlice(allocator, "map(");
-                try writeTypeName(written, allocator, layouts, heap_types, enums, pair.key);
+                try writeTypeName(written, allocator, layouts, heap_types, enums, signatures, pair.key);
                 try written.appendSlice(allocator, ", ");
-                try writeTypeName(written, allocator, layouts, heap_types, enums, pair.value);
+                try writeTypeName(written, allocator, layouts, heap_types, enums, signatures, pair.value);
                 try written.appendSlice(allocator, ")");
             },
             .array => |shape| {
                 try written.appendSlice(allocator, "array(");
-                try writeTypeName(written, allocator, layouts, heap_types, enums, shape.element);
+                try writeTypeName(written, allocator, layouts, heap_types, enums, signatures, shape.element);
                 for (0..shape.rank) |_| try written.appendSlice(allocator, ", _");
                 try written.appendSlice(allocator, ")");
             },
@@ -696,14 +759,28 @@ fn writeTypeName(
                 try written.appendSlice(allocator, "task");
                 if (work.result != .none) {
                     try written.appendSlice(allocator, "(");
-                    try writeTypeName(written, allocator, layouts, heap_types, enums, work.result);
+                    try writeTypeName(written, allocator, layouts, heap_types, enums, signatures, work.result);
                     if (work.fallible) try written.appendSlice(allocator, "!");
                     try written.appendSlice(allocator, ")");
                 } else if (work.fallible) try written.appendSlice(allocator, "!");
             },
         },
+        .function => |index| {
+            const signature = signatures[index];
+            try written.appendSlice(allocator, "func(");
+            for (signature.parameters, 0..) |parameter, at| {
+                if (at != 0) try written.appendSlice(allocator, ", ");
+                if (parameter.gives) try written.appendSlice(allocator, "give ");
+                try writeTypeName(written, allocator, layouts, heap_types, enums, signatures, parameter.value_type);
+            }
+            try written.appendSlice(allocator, ")");
+            if (signature.result != .none) {
+                try written.appendSlice(allocator, " -> ");
+                try writeTypeName(written, allocator, layouts, heap_types, enums, signatures, signature.result);
+            }
+        },
         .optional => |payload| {
-            try writeTypeName(written, allocator, layouts, heap_types, enums, payload.asType());
+            try writeTypeName(written, allocator, layouts, heap_types, enums, signatures, payload.asType());
             try written.appendSlice(allocator, "?");
         },
     }
@@ -738,7 +815,7 @@ test "an optional is its payload plus one level, and never two" {
 }
 
 test "an optional type writes the ? it was written with" {
-    const written = try typeName(std.testing.allocator, &.{}, &.{.{ .list = .long }}, &.{}, .{ .optional = .{ .heap = 0 } });
+    const written = try typeName(std.testing.allocator, &.{}, &.{.{ .list = .long }}, &.{}, &.{}, .{ .optional = .{ .heap = 0 } });
     defer std.testing.allocator.free(written);
     try std.testing.expectEqualStrings("list(long)?", written);
 }
@@ -775,7 +852,7 @@ test "an enum is its own type, its own name, and its backing width underneath" {
         .{ .name = "Method", .backing = .byte, .members = &.{} },
         .{ .name = "Kind", .backing = .byte, .members = &.{} },
     };
-    const written = try typeName(std.testing.allocator, &.{}, &.{.{ .list = method }}, &enums, .{ .heap = 0 });
+    const written = try typeName(std.testing.allocator, &.{}, &.{.{ .list = method }}, &enums, &.{}, .{ .heap = 0 });
     defer std.testing.allocator.free(written);
     try std.testing.expectEqualStrings("list(Method)", written);
 }

@@ -70,6 +70,10 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
         // change: a local (invalidated by its own `local_set`, which
         // the caller tracks), a field of an immutable struct value.
         .const_boolean, .const_long, .const_double, .const_string => .pure,
+        // A function value is a name for a function: the same name
+        // twice is the same value, and naming one runs nothing
+        // (docs/FUNCTIONS.md D3).
+        .const_function => .pure,
         .local_get, .struct_get => .pure,
 
         .unary => |unary| switch (unary.op) {
@@ -122,6 +126,9 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
 
         .local_set,
         .call,
+        // A call through a value runs a function this pass cannot see,
+        // exactly as a direct call does.
+        .call_indirect,
         // A spawn makes a task nothing else is, and hands a thread
         // everything it was given (docs/THREADS.md D2).
         .spawn,
@@ -156,6 +163,9 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         else
             .stable,
         .null_object => .pure,
+        // Reading a function's name reads a constant table
+        // (docs/FUNCTIONS.md D3).
+        .function_name => .pure,
 
         // Optionals move no bits and touch no heap: absence is a tag.
         .none_value, .is_none, .optional_wrap, .optional_unwrap => .pure,
@@ -321,6 +331,7 @@ pub fn viewStable(instruction: Instruction) bool {
         .const_long,
         .const_double,
         .const_string,
+        .const_function,
         .local_get,
         .local_set,
         .struct_get,
@@ -339,8 +350,9 @@ pub fn viewStable(instruction: Instruction) bool {
         // A fresh object appends a row, and the table moves when it
         // grows.
         .heap_new => false,
-        // A callee may do any of the three.
-        .call => false,
+        // A callee may do any of the three, whether it was named at the
+        // call or reached through a value.
+        .call, .call_indirect => false,
         // A spawn attaches the task's row, moves every object argument
         // out of this runtime, and hands the table to a second thread.
         // Nothing resolved before it can be believed after it
@@ -356,6 +368,7 @@ pub fn viewStable(instruction: Instruction) bool {
             // attached, nothing is freed.  `str` of a builder reads a
             // row, which is a read.
             .abs,
+            .function_name,
             .min,
             .max,
             .clamp,
