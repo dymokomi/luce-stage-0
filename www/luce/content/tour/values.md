@@ -215,6 +215,33 @@ main.luc:3:5: limit is let-bound; use var for reassignment [luce.sema.let]
         ^~~~~
 ```
 
+Two or more existing `var` names can receive one function's return
+shape. The right side is evaluated and all new values are prepared
+before any replacement store, so loop-carried state does not need
+temporary names.
+
+```luce run
+func step(value: long, at: long) -> (long, long):
+    return value + at, at + 1
+
+func main():
+    var value: long = 0
+    var at: long = 0
+    while at < 5:
+        value, at = step(value, at)
+    print(f"{value} {at}")
+```
+
+```output
+10 5
+```
+
+The targets are distinct mutable bare names: fields, indexes,
+compound assignment and `_` are not this form. A fallible call may be
+preceded by `try` or followed by a `catch:` block; failure enters the
+handler before any replacement store, while ordinary side effects of
+evaluating the right side remain.
+
 There is **no shadowing** anywhere in the language: a name declared in
 an enclosing scope cannot be re-declared in an inner one. A loop
 variable is immutable inside the loop body.

@@ -590,6 +590,17 @@ value moves independently, a borrowed parameter or an alias in any
 position is [S17](#s17) exactly, and a destructuring bind creates one
 owning binding per name ([S1](#s1)).
 
+The existing-name form `a, b = f()` adds [S5](#s5) on the receiving
+side. Every object-carrying target must still be a live owning `var`;
+an alias is refused by [S8](#s8), and a target already `give`n or
+`free`d — including one consumed by the call on the right — remains
+poisoned by [S10](#s10). All answers are extracted, fitted and made
+safe to store before any old target is released. Only then does S5
+release each old owner and adopt each new answer, left to right. If a
+guarded call fails, none of those replacement releases or stores runs.
+Ordinary side effects from evaluating the right side have already
+happened and are not rolled back.
+
 The one fact the single-value channel never had to state is that **the
 values must be distinct objects**: two moves of one handle would leave
 two bindings owning it and free it twice, which [S23](#s23) forbids and

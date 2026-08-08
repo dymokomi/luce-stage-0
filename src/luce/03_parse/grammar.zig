@@ -1615,9 +1615,8 @@ pub const Parser = struct {
         const start = self.advance(); // let or var
         const name = (try self.expect(.identifier, "a binding name")) orelse return null;
         try self.refuseWildcardName(name);
-        // `let low, high = minmax(xs)` — a destructuring bind, and one
-        // of exactly two places a multi-valued call may stand
-        // (docs/RETURNS.md).
+        // `let low, high = minmax(xs)` — a destructuring bind.  An
+        // existing-name assignment uses its own statement path below.
         if (self.peekKind() == .comma) return self.destructure(start, name, mutable);
         var annotation: ?ast.TypeName = null;
         if (self.accept(.colon) != null) {
@@ -2060,21 +2059,11 @@ pub const Parser = struct {
     // one dotted field on a name, or an indexed expression.
     fn assignOrExpression(self: *Parser) Error!?ast.Statement {
         const left = (try self.expression()) orelse return null;
-        // `low, high = minmax(xs)` — plain multi-assignment, which is
-        // refused: what Go needs it for is `v, err = f()`, and Luce
-        // has no `err` (docs/FAILURE.md put the error in its own
-        // channel on purpose).  A destructuring bind declares its
-        // names, and saying so is more use than "cannot assign to this
-        // expression" (docs/RETURNS.md).
-        if (self.peekKind() == .comma) {
-            try self.report(
-                "luce.parse.assign",
-                self.peek().span,
-                "a destructuring bind declares its names: write let or var in front",
-                .{},
-            );
-            return null;
-        }
+        // `low, high = minmax(xs)` — the later SELF polish ruling
+        // reopened RETURNS.md's provisional refusal for state that
+        // travels through existing bindings.  It is its own narrow
+        // statement: bare names only, and no compound form.
+        if (self.peekKind() == .comma) return self.assignMany(left);
         // `call catch:` — the handler form, for a recovery that is more
         // than one expression.  The Pratt loop declined the `catch` on
         // seeing the colon behind it, so it is still here.
@@ -2147,6 +2136,93 @@ pub const Parser = struct {
             }
             return self.guarded(assigned);
         }
+        if (try self.handlerOnOneLine(value)) return null;
+        try self.endOfStatement("end of line after the assignment");
+        return assigned;
+    }
+
+    /// `a, b = f()` from the first comma onward.  Every target is a
+    /// bare existing name; stage 4 decides whether each one is a
+    /// mutable binding and whether the returned value fits it.
+    fn assignMany(self: *Parser, first: *ast.Expression) Error!?ast.Statement {
+        var names: std.ArrayList(ast.Name) = .empty;
+        defer names.deinit(self.arena);
+
+        const first_name = switch (first.*) {
+            .name => |name| name,
+            else => {
+                try self.report(
+                    "luce.parse.assign",
+                    first.span(),
+                    "multi-return assignment targets bare var names, not fields or indexes",
+                    .{},
+                );
+                return null;
+            },
+        };
+        if (std.mem.eql(u8, first_name.text, "_")) {
+            try self.report(
+                "luce.parse.assign",
+                first_name.span,
+                "_ is the array-shape wildcard, not an assignment target",
+                .{},
+            );
+            return null;
+        }
+        try names.append(self.arena, .{ .text = first_name.text, .span = first_name.span });
+
+        while (self.accept(.comma) != null) {
+            const written = (try self.expression()) orelse return null;
+            const name = switch (written.*) {
+                .name => |name| name,
+                else => {
+                    try self.report(
+                        "luce.parse.assign",
+                        written.span(),
+                        "multi-return assignment targets bare var names, not fields or indexes",
+                        .{},
+                    );
+                    return null;
+                },
+            };
+            if (std.mem.eql(u8, name.text, "_")) {
+                try self.report(
+                    "luce.parse.assign",
+                    name.span,
+                    "_ is the array-shape wildcard, not an assignment target",
+                    .{},
+                );
+                return null;
+            }
+            try names.append(self.arena, .{ .text = name.text, .span = name.span });
+        }
+
+        if (compoundOp(self.peekKind()) != null) {
+            try self.report(
+                "luce.parse.assign",
+                self.peek().span,
+                "multi-return assignment has no compound form; use one '=' with the call whose values replace the names",
+                .{},
+            );
+            return null;
+        }
+        if ((try self.expect(.assign, "'=' after the assignment targets")) == null) return null;
+        const value = (try self.expression()) orelse return null;
+        if (self.peekKind() == .comma) {
+            try self.report(
+                "luce.parse.assign",
+                self.peek().span,
+                "multi-return assignment takes one call on the right; there are no tuple or comma-list expressions",
+                .{},
+            );
+            return null;
+        }
+        const assigned: ast.Statement = .{ .assign_many = .{
+            .names = try names.toOwnedSlice(self.arena),
+            .value = value,
+            .span = .{ .start = first.span().start, .end = value.span().end },
+        } };
+        if (self.peekKind() == .keyword_catch) return self.guarded(assigned);
         if (try self.handlerOnOneLine(value)) return null;
         try self.endOfStatement("end of line after the assignment");
         return assigned;

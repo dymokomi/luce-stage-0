@@ -119,6 +119,7 @@ fn statementMayMutateContainers(statement: ast.Statement) bool {
         // store, and that frees what it replaced (S22, S25).
         .assign => |assign| assign.target != .name or
             mayMutateContainers(assign.value),
+        .assign_many => |assign| mayMutateContainers(assign.value),
         .let => |binding| mayMutateContainers(binding.value),
         .destructure => |bind| mayMutateContainers(bind.value),
         .variable => |binding| binding.value != null and

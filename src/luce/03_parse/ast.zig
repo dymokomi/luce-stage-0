@@ -258,6 +258,11 @@ pub const Variable = struct {
 /// the place is evaluated once).  Compound forms are value-only
 /// arithmetic; OP is add/subtract/multiply/divide/floor_divide/modulo.
 pub const Assign = struct { target: Target, compound: ?BinaryOp = null, value: *Expression, span: Span };
+/// `low, high = minmax(xs)` — a multi-return assignment into existing
+/// mutable names.  It is deliberately narrower than `Assign`: every
+/// target is a bare name, there are at least two, and there is no
+/// compound form.
+pub const AssignMany = struct { names: []Name, value: *Expression, span: Span };
 pub const Conditional = struct {
     condition: *Expression,
     then_block: Block,
@@ -289,9 +294,8 @@ pub const Return = struct { values: []*Expression, span: Span };
 /// `let low, high = minmax(xs)` — a destructuring bind.
 ///
 /// Two or more names, **one** keyword governing all of them, and a
-/// call on the right whose arity matches.  It is one of exactly two
-/// places a multi-valued call may stand; the other is a statement of
-/// its own (docs/RETURNS.md).
+/// call on the right whose arity matches.  A multi-valued call may
+/// also be discarded as a statement or assigned to existing vars.
 pub const Destructure = struct {
     names: []Name,
     mutable: bool,
@@ -302,13 +306,13 @@ pub const Destructure = struct {
 /// in it raised — the statement form of `catch`, for a recovery that
 /// is more than one expression.
 ///
-/// Two shapes reach here and no others: a call written as a
-/// statement, and a plain assignment whose value is a call.  Both
-/// guard exactly *one* call, so "which statement failed" has one
-/// answer — which is what separates this from the Python
-/// `try:`/`except:` block docs/FAILURE.md refuses.  A `let` is not
-/// among them: the handler would have to supply the value the name
-/// binds, and only `catch EXPR` can say that.
+/// Three shapes reach here: a call written as a statement, a plain
+/// assignment whose value is a call, and an existing-name
+/// multi-return assignment.  Each guards exactly *one* call, so
+/// "which statement failed" has one answer — which is what separates
+/// this from the Python `try:`/`except:` block docs/FAILURE.md refuses.
+/// A `let` is not among them: the handler would have to supply the
+/// value the name binds, and only `catch EXPR` can say that.
 ///
 /// `binding` is the name `catch reason:` gives the handler to read the
 /// error's words through — null for the plain `catch:` (`docs/FAILURE
@@ -357,6 +361,8 @@ pub const Statement = union(enum) {
     /// names, one call.
     destructure: Destructure,
     assign: Assign,
+    /// a, b = f() — one call replacing two or more existing vars.
+    assign_many: AssignMany,
     conditional: Conditional,
     while_loop: While,
     for_range: ForRange,

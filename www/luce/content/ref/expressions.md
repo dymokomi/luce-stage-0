@@ -228,21 +228,30 @@ qualified name or a lambda's distinct compiler-generated name.
 ## Calls that answer more than one value
 
 A call whose signature is a [return shape](../types/#return-shapes)
-may stand in exactly two places:
+may be received by a destructuring bind or existing-name assignment,
+or discarded as a statement:
 
 ```
 let low, high = minmax(xs)      # the right of a destructuring bind
-rng.next()                      # a statement, all values discarded
+low, high = minmax(xs)          # existing mutable bare names
+low, high = Bounds.read(xs)     # a namespace call
+low, high = source.read()       # a method call
+rng.next()                      # all values discarded
 ```
 
-Everywhere else is `luce.sema.call`, including `return minmax(xs)`
-from a function with the same shape. Go allows that pass-through and
-pays for it with a rule saying a multi-valued call used as arguments
-must be the only arguments; refusing it is what leaves this rule with
-no exceptions. Bind the values, then return them.
+The direct, namespace and method call surfaces behave alike. Existing
+assignment takes two or more distinct mutable names and one call. It
+is parallel: the right side is evaluated, every answer is prepared,
+and only then are all names replaced. Ordinary side effects while
+evaluating that call happen before the replacement stores. Fields,
+indexes, compound forms, `_`, tuple/comma-list expressions, arguments,
+operands and direct `return minmax(xs)` pass-through are refused.
 
-`catch` supplies one value and so cannot supply a shape: a fallible
-multi-return is propagated with `try`, or discarded as a statement.
+A fallible shape may be assigned with `low, high = try read_bounds()`
+or guarded with `low, high = read_bounds() catch:`. The guarded call
+performs either every replacement store or none. Side effects already
+performed while evaluating its right side remain visible to the
+handler. `catch VALUE` supplies one value and cannot supply a shape.
 
 ## Method sugar
 
@@ -404,9 +413,12 @@ CALL catch NAME:           the same block, with the error's message bound
     ...
 ```
 
-The block form attaches to a call written as a statement and to a
-plain assignment, and to nothing else. `NAME` is an immutable `string`
-scoped to the handler; the expression form takes no binding.
+The block form attaches to a call written as a statement, a
+single-place assignment, or an existing-name multi-return assignment,
+and to nothing else. `NAME` is an immutable `string` scoped to the
+handler; the expression form takes no binding. A failed multi-return
+call performs none of its assignment's replacement stores before
+entering the handler; evaluating the right side is not rolled back.
 
 A fallible call whose outcome is neither tried nor caught is
 `luce.sema.fallible`.

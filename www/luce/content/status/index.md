@@ -180,10 +180,11 @@ warts standing: item 1.
    one function in the corpus took its own struct first. What the
    feature bought was the restructuring it permits.
 4. ~~**No multiple returns.**~~ **Shipped.** `-> (A, B)`,
-   `return a, b`, `let low, high = f()`. The struct that existed
-   solely to carry a return — constructed at 8 sites and taken apart
-   by 25 field reads, not the 15 this page used to claim — is
-   deleted.
+   `return a, b`, `let low, high = f()`, and `low, high = f()` for
+   existing mutable bare names. The assignment prepares one whole
+   answer before replacing any name. The struct that existed solely
+   to carry a return — constructed at 8 sites and taken apart by 25
+   field reads, not the 15 this page used to claim — is deleted.
 5. ~~**No sort with a comparator.**~~ **Shipped.** After `import
    std.lists`, `xs.sort_by(before)` takes a named function or a
    capture-free lambda. The in-place sort is stable, O(n log n), and

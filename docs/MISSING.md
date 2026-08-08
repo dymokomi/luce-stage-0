@@ -290,8 +290,10 @@ it still hits.
    `std/math.luc`'s `list(long)`-as-a-cell workaround became
    `struct Rng`.
 4. ~~**No multiple returns.**~~ **Done** (docs/RETURNS.md).
-   `-> (A, B)`, `return a, b`, `let low, high = f()`, lowered as a
-   compiler-synthesized struct.  `calc.luc`'s `struct Step` is
+   `-> (A, B)`, `return a, b`, `let low, high = f()`, and the later
+   polish `low, high = f()` into existing mutable bare names, lowered
+   as a compiler-synthesized struct. The assignment prepares the whole
+   answer before replacing any name. `calc.luc`'s `struct Step` is
    deleted, and with it four more disguises of the same missing
    sentence: a heap object as a mutable cell, a second value dropped
    and guessed, a second value thrown away and fetched again, and two

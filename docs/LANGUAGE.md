@@ -301,17 +301,20 @@ func handle_both(path: string):
 
     var greeting = "old file"
     var opening = ""
-    opening = files.read(path) catch:           # …after a plain assignment
+    opening = files.read(path) catch:           # …after an assignment
         greeting = "new file"
     print(greeting + opening)
 ```
 
 The block form guards exactly one call, which is what separates it
 from an exception block: there is never a question about which
-statement failed. It attaches to a call written as a statement and to
-a plain assignment, and to nothing else — a `let` would need the
-handler to supply the value the name binds, and only `catch EXPR` can
-say that.
+statement failed. It attaches to a call written as a statement, a
+plain assignment, or an existing-name multi-return assignment, and to
+nothing else — a `let` would need the handler to supply the value the
+name binds, and only `catch EXPR` can say that. On multi-return failure
+none of the assignment's replacement stores has happened when the
+handler begins. Ordinary side effects from evaluating the call and its
+arguments have happened normally.
 
 `catch NAME:` binds the error's **message** — a `string`, immutable,
 scoped to the handler block and released with it like any other local.
@@ -384,14 +387,22 @@ parameter or a field, stand inside a container, nest inside itself, or
 take a `?`, and there is no expression that produces one.  A pair that
 travels together is a struct.
 
-A call that answers more than one value may stand in **exactly two
-places** — the right of a destructuring bind, and a statement of its
-own — and nowhere else.  `print(minmax(xs))`, `minmax(xs) + 1`,
-`return minmax(xs)` and `low, high = minmax(xs)` are all refused.  Go
-allows the pass-through and pays for it with a rule in its
-specification saying that a multi-valued call used as arguments must
-be the *only* arguments; refusing it is what makes this rule one a
-reader can hold, because it has no exceptions.  The cost is one line:
+A call that answers more than one value has three statement roles: the
+right of a destructuring `let`/`var`, the right of an existing-name
+assignment, or a statement of its own with every value discarded.
+Direct calls, namespace calls and method calls all have the same
+surface:
+
+```text
+let low, high = minmax(xs)
+low, high = Bounds.minmax(xs)
+low, high = source.minmax()
+rng.next()
+```
+
+It is still not an ordinary value. `print(minmax(xs))`,
+`minmax(xs) + 1` and `return minmax(xs)` are refused; bind or assign
+the values and then use or return the names.
 
 ```luce
 func minmax(xs: array(double, _)) -> (double, double):
@@ -415,18 +426,37 @@ refused.  A bind takes its types from the call, so it carries no
 annotations.  There is no `_`: Luce has no unused-binding diagnostic,
 so a name costs nothing and tells the next reader what was ignored.
 
-`-> (A, B)!` is legal and composes with `try`; `catch` supplies one
-value and so cannot supply a shape, which leaves a fallible
-multi-return propagatable or discardable and not handleable with
-values.  An element may be a `T?` — absence is an ordinary value — but
+`a, b = f()` is narrower than ordinary assignment. It takes two or
+more **distinct, existing, mutable bare names** and one call on the
+right. Fields and indexes are not targets, there is no compound form,
+and `_` is still only the array-shape wildcard. The number of names
+must be the call's arity, and every returned value must fit its target.
+
+The assignment is parallel and two-phase. Every target is checked;
+then the right side is evaluated and every returned value is extracted
+and prepared for storage; only then are the old values replaced, left
+to right. Thus `a, b = swapped(a, b)` is a swap rather than two
+sequential assignments, and no storage-owning value is released before
+every replacement is ready. Ordinary side effects while evaluating the
+right side still happen before that commit.
+
+`-> (A, B)!` is legal and composes with `try`:
+`a, b = try read_pair()`. A block handler also composes:
+`a, b = read_pair() catch:`. If the call fails, neither replacement
+store occurs; side effects already performed while evaluating the
+right side remain visible to the handler. A successful call replaces
+both. `catch VALUE` still supplies one value and cannot supply a return
+shape. An element may be a `T?` — absence is an ordinary value — but
 `-> (long, long)?` is refused, because there the `?` would be marking
 the shape.
 
 Ownership is `docs/OWNERSHIP.md` S45: each value moves independently
-(S16 per value), each name owns what it received (S1 per name), a
-borrow or an alias in any position is S17 exactly, and **no object may
-travel twice** — `return xs, xs` is a compile error, because two moves
-of one handle would free it twice.
+(S16 per value), each new binding owns what it received (S1 per name),
+and each existing owning `var` releases its old object and adopts its
+answer only after the whole shape is ready (S5). A borrow or alias in
+any position is S17 exactly, a poisoned target cannot be revived, and
+**no object may travel twice** — `return xs, xs` is a compile error,
+because two moves of one handle would free it twice.
 
 ## Function values and lambdas
 

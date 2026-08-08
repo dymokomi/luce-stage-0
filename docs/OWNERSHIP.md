@@ -845,6 +845,18 @@ to poison what it moved — with one value there was nothing after it.  A
 call whose values nobody binds is a statement temporary per S3/S19,
 released whole at the end of its statement.
 
+The later existing-name form `a, b = f()` adds S5 on the receiving
+side. Every object-carrying target must still be a live owning `var`;
+an alias is refused by S8, and a target already `give`n or `free`d —
+including one consumed by the call on the right — remains poisoned by
+S10 rather than being revived by assignment. The call's answers are
+all extracted, fitted and made safe to store before any old target is
+released. Only then does S5 release each old owner and adopt each new
+answer, left to right. A failing call with a `catch:` block reaches the
+handler before any of those replacement releases or stores. Ordinary
+side effects from evaluating the right side have already happened and
+are not rolled back.
+
 ---
 
 ## Deliberately excluded from v1

@@ -763,18 +763,7 @@ test "luce.parse.expression: there are still no tuples, and the parser already s
     );
 }
 
-test "luce.parse.assign: a destructuring bind declares its names, and one keyword governs it" {
-    try expectSaying(
-        \\func minmax() -> (long, long):
-        \\    return 1, 2
-        \\
-        \\func main():
-        \\    var low = 0
-        \\    var high = 0
-        \\    low, high = minmax()
-        \\
-    , "luce.parse.assign", "a destructuring bind declares its names: write let or var in front");
-
+test "luce.parse.assign: one keyword governs a bind, and catch cannot invent a tuple" {
     try expectSaying(
         \\func minmax() -> (long, long):
         \\    return 1, 2
@@ -792,6 +781,47 @@ test "luce.parse.assign: a destructuring bind declares its names, and one keywor
         \\    let a, b = minmax() catch 0, 0
         \\
     , "luce.parse.assign", "catch can supply only one value: write try, or handle it as a statement");
+}
+
+test "luce.parse.assign: multi-return assignment has bare names, one equals, and one call" {
+    try expectSaying(
+        \\func main():
+        \\    var point = Point(x = 1)
+        \\    var other = 0
+        \\    point.x, other = pair()
+        \\
+    , "luce.parse.assign", "multi-return assignment targets bare var names, not fields or indexes");
+
+    try expectSaying(
+        \\func main():
+        \\    var xs = [1]
+        \\    var other = 0
+        \\    other, xs[0] = pair()
+        \\
+    , "luce.parse.assign", "multi-return assignment targets bare var names, not fields or indexes");
+
+    try expectSaying(
+        \\func main():
+        \\    var left = 1
+        \\    var right = 2
+        \\    left, right += pair()
+        \\
+    , "luce.parse.assign", "multi-return assignment has no compound form");
+
+    try expectSaying(
+        \\func main():
+        \\    var left = 1
+        \\    var right = 2
+        \\    left, right = 3, 4
+        \\
+    , "luce.parse.assign", "multi-return assignment takes one call on the right");
+
+    try expectSaying(
+        \\func main():
+        \\    var left = 1
+        \\    left, _ = pair()
+        \\
+    , "luce.parse.assign", "_ is the array-shape wildcard, not an assignment target");
 }
 
 test "luce.parse.type: a destructuring bind takes its types from the call" {
@@ -825,6 +855,97 @@ test "luce.sema.shape: the bind's arity is the call's" {
         \\    let a, b = one()
         \\
     , "luce.sema.shape", "one answers 1 value, got 2 names");
+
+    try expectSaying(
+        \\func pair() -> (long, long):
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    var a = 0
+        \\    var b = 0
+        \\    var c = 0
+        \\    a, b, c = pair()
+        \\
+    , "luce.sema.shape", "pair answers 2 values, got 3 names");
+
+    try expectSaying(
+        \\func one() -> long:
+        \\    return 1
+        \\
+        \\func main():
+        \\    var a = 0
+        \\    var b = 0
+        \\    a, b = one()
+        \\
+    , "luce.sema.shape", "one answers 1 value, got 2 names");
+}
+
+test "existing-name destructuring checks every target before replacing any" {
+    try expectSaying(
+        \\func pair() -> (long, long):
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    let fixed = 0
+        \\    var other = 0
+        \\    fixed, other = pair()
+        \\
+    , "luce.sema.let", "fixed is let-bound; use var for reassignment");
+
+    try expectSaying(
+        \\func pair() -> (long, long):
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    var other = 0
+        \\    missing, other = pair()
+        \\
+    , "luce.sema.name", "unknown name missing");
+
+    try expectSaying(
+        \\func pair() -> (long, long):
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    var value = 0
+        \\    value, value = pair()
+        \\
+    , "luce.sema.duplicate", "value is assigned twice in this statement");
+
+    try expectSaying(
+        \\func pair() -> (long, string):
+        \\    return 1, "two"
+        \\
+        \\func main():
+        \\    var number: long = 0
+        \\    var other = 0
+        \\    number, other = pair()
+        \\
+    , "luce.sema.type", "other is int, but value 2 from pair is string");
+
+    try expectSaying(
+        \\func pair() -> (long, long)!:
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    var left: long = 0
+        \\    var right: long = 0
+        \\    left, right = pair()
+        \\
+    , "luce.sema.fallible", "pair can fail: write 'try pair(");
+
+    // The expression form of catch still supplies one value.  It
+    // cannot synthesize a return shape; use the statement handler.
+    try expectSaying(
+        \\func pair() -> (long, long)!:
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    var left: long = 0
+        \\    var right: long = 0
+        \\    left, right = pair() catch 0
+        \\
+    , "luce.sema.call", "only a destructuring let, var, or assignment can receive them");
 }
 
 test "luce.sema.return: the return's arity is the signature's" {
@@ -884,7 +1005,7 @@ test "luce.sema.return: the return's arity is the signature's" {
     , "luce.sema.return", "next answers 1 value, got 2");
 }
 
-test "luce.sema.call: two places, and no exceptions" {
+test "luce.sema.call: a return shape is never an ordinary tuple value" {
     // An argument, an operand, a container element — and the
     // pass-through, which Go allows and this language does not,
     // because refusing it is what makes the rule have no exceptions.
@@ -896,7 +1017,7 @@ test "luce.sema.call: two places, and no exceptions" {
         try expectSaying(
             source,
             "luce.sema.call",
-            "minmax answers 2 values, and only a let or a var can receive them",
+            "minmax answers 2 values, and only a destructuring let, var, or assignment can receive them",
         );
     }
 
@@ -912,7 +1033,7 @@ test "luce.sema.call: two places, and no exceptions" {
         \\
     ,
         "luce.sema.call",
-        "minmax answers 2 values, and only a let or a var can receive them — bind them, then return them",
+        "minmax answers 2 values, and only a destructuring let, var, or assignment can receive them — bind them, then return them",
     );
 }
 
@@ -3899,6 +4020,35 @@ test "luce.sema.absent: narrowing does not survive what could undo it" {
         \\        let doubled = n * 2
         \\
     , "luce.sema.type");
+
+    // A guarded assignment only runs on the successful side of the
+    // call.  Its catch handler begins with the entry facts, and the
+    // merge cannot retain a presence proof that only success made.
+    try expectSaying(
+        \\func maybe() -> long!:
+        \\    error("missing")
+        \\
+        \\func main():
+        \\    var n: long? = none
+        \\    n = maybe() catch:
+        \\        assert(true)
+        \\    let result = n + 1
+        \\
+    , "luce.sema.type", "operands of + are long? and long");
+
+    try expectSaying(
+        \\func maybe() -> (long?, long)!:
+        \\    error("missing")
+        \\
+        \\func main():
+        \\    var n: long? = 1
+        \\    var count = 0
+        \\    while count < 1:
+        \\        let result = n + 1
+        \\        n, count = maybe() catch:
+        \\            count = count + 1
+        \\
+    , "luce.sema.type", "operands of + are long? and long");
 }
 
 test "luce.parse.type: T?? is refused where it is written" {

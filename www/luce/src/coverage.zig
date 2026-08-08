@@ -788,6 +788,35 @@ test "the reference keeps function value and lambda syntax visible" {
     }
 }
 
+test "the reference keeps existing-name multi-return assignment visible" {
+    // The implementation can be correct while the prose still says
+    // the old refusal. Pin both the receiving syntax and the guarded
+    // all-or-nothing form, then reject the exact claims they retired.
+    const gpa = std.testing.allocator;
+    const repository = try open(gpa, std.testing.io);
+    defer gpa.free(repository.prefix);
+
+    for ([_][]const u8{ "ref/statements.md", "ref/expressions.md" }) |page| {
+        const code = try describedCode(repository, page);
+        defer gpa.free(code);
+        try std.testing.expect(std.mem.indexOf(u8, code, "low, high = minmax(xs)") != null);
+    }
+
+    const failure = try describedCode(repository, "ref/failure.md");
+    defer gpa.free(failure);
+    try std.testing.expect(std.mem.indexOf(u8, failure, "left, right = read_pair() catch reason:") != null);
+
+    for ([_][]const u8{ "ref/statements.md", "ref/expressions.md" }) |page| {
+        const path = try std.fmt.allocPrint(gpa, "www/luce/content/{s}", .{page});
+        defer gpa.free(path);
+        const source = try repository.read(path);
+        defer gpa.free(source);
+        try std.testing.expect(std.mem.indexOf(u8, source, "Plain multi-assignment is **not** a statement") == null);
+        try std.testing.expect(std.mem.indexOf(u8, source, "may stand in exactly two places") == null);
+        try std.testing.expect(std.mem.indexOf(u8, source, "propagated with `try`, or discarded as a statement") == null);
+    }
+}
+
 test "the toolchain page names every option and command word the binaries take" {
     const gpa = std.testing.allocator;
     const repository = try open(gpa, std.testing.io);

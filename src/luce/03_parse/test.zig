@@ -529,6 +529,30 @@ test "every assignment place parses, nested and compound" {
     try testing.expect(body.statements[9].assign.value.* == .int_literal);
 }
 
+test "multi-return assignment has its own node, guarded or plain" {
+    var parsed = try expectClean(
+        \\func main():
+        \\    var low = 0
+        \\    var high = 0
+        \\    low, high = minmax()
+        \\    low, high = risky() catch reason:
+        \\        print(reason)
+        \\
+    );
+    defer parsed.deinit();
+    const body = parsed.program.functions[0].body;
+    const plain = body.statements[2].assign_many;
+    try testing.expectEqual(@as(usize, 2), plain.names.len);
+    try testing.expectEqualStrings("low", plain.names[0].text);
+    try testing.expectEqualStrings("high", plain.names[1].text);
+    try testing.expect(plain.value.* == .call);
+
+    const guarded = body.statements[3].guarded;
+    try testing.expectEqualStrings("reason", guarded.binding.?.text);
+    try testing.expect(guarded.attempt.* == .assign_many);
+    try testing.expectEqual(@as(usize, 2), guarded.attempt.assign_many.names.len);
+}
+
 test "every for form parses into the node its lowering needs" {
     var parsed = try expectClean(
         \\func main():

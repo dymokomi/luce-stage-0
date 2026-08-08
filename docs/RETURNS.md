@@ -9,6 +9,19 @@
 > `luce historical` is shown as it was written and is not compiled;
 > every other one in this file is (`tools/doccheck.zig`).
 
+> **Later-polish amendment (as built).** Owner-ratified evidence after
+> this memo reopened one deliberately provisional refusal:
+> `a, b = f()` now receives one return shape into two or more distinct
+> existing mutable bare names. The right side may be a direct,
+> namespace or method call and may use `try` or a `catch:` block. Every
+> target is checked and every answer prepared before any replacement
+> store; on failure, the catch handler runs with none of those stores
+> performed. Ordinary side effects from evaluating the right side are
+> not rolled back. Fields, indexes, compound forms, `_`, tuple values,
+> `catch VALUE`, and direct return pass-through remain refused. The
+> original boundary and its rationale below remain as the frozen
+> decision record rather than being rewritten after the fact.
+
 > **The rule.** A function may answer more than one value —
 > `-> (Float, Float)`, `return low, high`, `let low, high = minmax(xs)`.
 > **There is no tuple.** `(Float, Float)` is a shape a *signature* has,

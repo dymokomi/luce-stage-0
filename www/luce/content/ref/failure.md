@@ -105,10 +105,23 @@ value belongs.
 ([S4](../ownership/#s4)). It requires the enclosing function to
 declare `!`.
 
-`catch` handles. `EXPR catch FALLBACK` supplies a value; `CALL catch:`
-opens a handler block guarding exactly one call, attached to a call
-written as a statement or to a plain assignment; `CALL catch NAME:` is
-the same block with the error's message bound to `NAME`.
+`catch` handles. `EXPR catch FALLBACK` supplies one value. The block
+forms `CALL catch:` and `CALL catch NAME:` guard exactly one call and
+attach to a call statement, a single-place assignment, or an
+existing-name multi-return assignment.
+
+```
+left, right = try read_pair()
+left, right = read_pair() catch reason:
+    print(reason)
+```
+
+On success the multi-return assignment performs both replacement
+stores; on failure it performs neither. Ordinary side effects from
+evaluating the right side have already happened and remain visible in
+the handler. `catch VALUE` cannot supply a return shape because it
+supplies only one value; there are still no tuple or comma-list
+expressions.
 
 `NAME` is an immutable `string` scoped to the handler block, released
 with it, and subject to the no-shadowing rule. It carries the message

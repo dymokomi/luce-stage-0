@@ -196,6 +196,101 @@ test "S5: the life.luc pattern — reassign in a loop, no free dance" {
     );
 }
 
+test "S5/S45: multi-return assignment releases both old owners and adopts both answers" {
+    try agreeClean(
+        \\func fresh(value: long) -> (list(long), list(long)):
+        \\    var left = [value]
+        \\    var right = [value + 1]
+        \\    return left, right
+        \\
+        \\func main():
+        \\    var left: list(long) = [1]
+        \\    var right: list(long) = [2]
+        \\    for value in range(3, 20):
+        \\        left, right = fresh(value)
+        \\    assert(left[0] == 19 and right[0] == 20)
+        \\
+    );
+
+    // Replacing an owner is still S5: an alias to either old object
+    // observes that it was freed immediately, not at scope end.
+    try agreeTrap(
+        \\func fresh() -> (list(long), list(long)):
+        \\    var left: list(long) = [3]
+        \\    var right: list(long) = [4]
+        \\    return left, right
+        \\
+        \\func main():
+        \\    var left: list(long) = [1]
+        \\    var right: list(long) = [2]
+        \\    let old_left = left
+        \\    left, right = fresh()
+        \\    print(string(old_left[0]))
+        \\
+    , .use_after_free);
+}
+
+test "S5/S45: a failed multi-return call performs no replacement release" {
+    try agreeClean(
+        \\func risky(ok: bool) -> (list(string), string)!:
+        \\    if not ok:
+        \\        error("failed")
+        \\    var values: list(string) = ["new"]
+        \\    return values, "new words long enough to own outside bytes"
+        \\
+        \\func main():
+        \\    var values: list(string) = ["old"]
+        \\    var text = "old words long enough to own outside bytes"
+        \\    values, text = risky(false) catch:
+        \\        assert(values[0] == "old")
+        \\        assert(text == "old words long enough to own outside bytes")
+        \\    assert(values[0] == "old")
+        \\    assert(text == "old words long enough to own outside bytes")
+        \\
+    );
+}
+
+test "S8/S10: every multi-return target must still be a live owner when the call returns" {
+    try expectRejected(
+        \\func fresh() -> (list(long), list(long)):
+        \\    var left: list(long) = [3]
+        \\    var right: list(long) = [4]
+        \\    return left, right
+        \\
+        \\func main():
+        \\    var owner: list(long) = [1]
+        \\    var alias = owner
+        \\    var other: list(long) = [2]
+        \\    alias, other = fresh()
+        \\
+    );
+
+    try expectRejected(
+        \\func returned(xs: give list(long)) -> (list(long), long):
+        \\    let count = len(xs)
+        \\    return xs, count
+        \\
+        \\func main():
+        \\    var xs: list(long) = [1]
+        \\    var count: long = 0
+        \\    xs, count = returned(give xs)
+        \\
+    );
+
+    try expectRejected(
+        \\func fresh() -> (list(long), long):
+        \\    var values: list(long) = [3]
+        \\    return values, 1
+        \\
+        \\func main():
+        \\    var values: list(long) = [1, 2]
+        \\    var count: long = 0
+        \\    for value in values:
+        \\        values, count = fresh()
+        \\
+    );
+}
+
 test "S5: assigning a bare name into an owning var is a compile error" {
     try expectRejected(
         \\func main():

@@ -1781,10 +1781,10 @@ test "structs: namespaced functions and nested structs" {
 // Answering more than one thing
 // ---------------------------------------------------------------------------
 //
-// `-> (A, B)`, `return a, b`, `let low, high = f()`.  **There is no
-// tuple**: the values exist only in flight, produced by a `return` and
-// consumed by a bind, with no moment in between at which a program can
-// hold them (docs/RETURNS.md).
+// `-> (A, B)`, `return a, b`, `let low, high = f()`, and the later
+// polish form `low, high = f()`.  **There is no tuple**: the values
+// exist only in flight, produced by a return and consumed by one
+// destructuring statement (docs/RETURNS.md, docs/SELF.md).
 //
 // Underneath they are one compiler-synthesized struct, which is why
 // the oracle needed no edit for any of this either.
@@ -1921,11 +1921,152 @@ test "returns: a shape crosses a loop as two vars, and the body gets shorter" {
         \\func main():
         \\    var value, at = step(0, 0)
         \\    while at < 5:
-        \\        let next_value, next_at = step(value, at)
-        \\        value = next_value
-        \\        at = next_at
+        \\        value, at = step(value, at)
         \\    assert(at == 5)
         \\    assert(value == 10)
+        \\
+    );
+}
+
+test "returns: existing vars receive one snapshot through every call surface" {
+    try agreeOk(
+        \\struct Pairs:
+        \\    func swapped(left: long, right: long) -> (long, long):
+        \\        return right, left
+        \\
+        \\struct PairSource:
+        \\    left: long
+        \\    right: long
+        \\
+        \\    func values(self) -> (long, long):
+        \\        return self.left, self.right
+        \\
+        \\func advanced(value: long, at: long) -> (long, long):
+        \\    return value + at, at + 1
+        \\
+        \\func main():
+        \\    var left: long = 10
+        \\    var right: long = 20
+        \\    left, right = Pairs.swapped(left, right)
+        \\    assert(left == 20 and right == 10)
+        \\    left, right = advanced(left, right)
+        \\    assert(left == 30 and right == 11)
+        \\    let source = PairSource(left = 7, right = 8)
+        \\    left, right = source.values()
+        \\    assert(left == 7 and right == 8)
+        \\
+    );
+}
+
+test "returns: assignment fits each value and prepares all string storage before replacement" {
+    try agreeOk(
+        \\func mixed() -> (int, long, long?):
+        \\    return 7, 9, none
+        \\
+        \\func flipped(left: string, right: string) -> (string, string):
+        \\    return right, left
+        \\
+        \\func main():
+        \\    var wide: double = 0.0
+        \\    var present: long? = none
+        \\    var missing: long? = 1
+        \\    wide, present, missing = mixed()
+        \\    assert(wide == 7.0)
+        \\    assert(present + 1 == 10)
+        \\    assert((missing else 0) == 0)
+        \\    var short = "left"
+        \\    var outside = "a string long enough to own outside bytes"
+        \\    short, outside = flipped(short, outside)
+        \\    assert(short == "a string long enough to own outside bytes")
+        \\    assert(outside == "left")
+        \\
+    );
+}
+
+test "returns: try and catch commit both replacement stores or neither" {
+    try agreeOk(
+        \\func pair(value: long) -> (long, long)!:
+        \\    if value < 0:
+        \\        error("negative")
+        \\    return value, value * 2
+        \\
+        \\func forwarded(value: long) -> (long, long)!:
+        \\    var left: long = 100
+        \\    var right: long = 200
+        \\    left, right = try pair(value)
+        \\    return left, right
+        \\
+        \\func main() -> !:
+        \\    var left: long = 10
+        \\    var right: long = 20
+        \\    left, right = pair(3) catch:
+        \\        assert(false)
+        \\    assert(left == 3 and right == 6)
+        \\    left, right = pair(-1) catch reason:
+        \\        assert(reason == "negative")
+        \\        assert(left == 3 and right == 6)
+        \\    assert(left == 3 and right == 6)
+        \\    left, right = try forwarded(4)
+        \\    assert(left == 4 and right == 8)
+        \\
+    );
+}
+
+test "returns: a failed assignment keeps RHS side effects but commits no replacements" {
+    try agreeOk(
+        \\struct Counter:
+        \\    value: long
+        \\
+        \\    func bump(var self) -> long:
+        \\        self.value += 1
+        \\        return self.value
+        \\
+        \\func risky(value: long) -> (Counter, long)!:
+        \\    if value >= 0:
+        \\        error("failed")
+        \\    return Counter(value = value), value
+        \\
+        \\func main():
+        \\    var counter = Counter(value = 0)
+        \\    var result: long = 7
+        \\    counter, result = risky(counter.bump()) catch:
+        \\        assert(counter.value == 1)
+        \\        assert(result == 7)
+        \\    assert(counter.value == 1)
+        \\    assert(result == 7)
+        \\
+    );
+}
+
+test "returns: guarded assignment joins optional facts from both continuing paths" {
+    try agreeOk(
+        \\func risky(ok: bool) -> (long, long)!:
+        \\    if not ok:
+        \\        error("no value")
+        \\    return 4, 5
+        \\
+        \\func fallback() -> (long, long):
+        \\    return 10, 20
+        \\
+        \\func resolved(ok: bool) -> long:
+        \\    var left: long? = none
+        \\    var right: long = 0
+        \\    left, right = risky(ok) catch:
+        \\        left, right = fallback()
+        \\    return left + right
+        \\
+        \\func returned_handler(ok: bool) -> long:
+        \\    var left: long? = none
+        \\    var right: long = 0
+        \\    left, right = risky(ok) catch:
+        \\        return -1
+        \\    return left + right
+        \\
+        \\func main():
+        \\    assert(resolved(true) == 9)
+        \\    assert(resolved(false) == 30)
+        \\    assert(returned_handler(true) == 9)
+        \\    assert(returned_handler(false) == -1)
         \\
     );
 }

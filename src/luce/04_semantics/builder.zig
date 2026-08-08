@@ -93,9 +93,10 @@ const Typed = struct {
     value_type: Type,
 };
 
-/// The two places a call answering a return shape may stand, and the
-/// one that is worth a longer sentence (docs/RETURNS.md).
-const ShapePosition = enum { refused, bind, returning };
+/// Whether a call answering a return shape is being received by a
+/// destructuring statement, refused in an ordinary value position, or
+/// returned directly (docs/RETURNS.md and the SELF polish ruling).
+const ShapePosition = enum { refused, receive, returning };
 
 /// One slot of a callable surface, as name resolution sees it
 /// (docs/ARGS.md): what the slot is called, whether a call site may
@@ -216,11 +217,10 @@ pub const FunctionBuilder = struct {
     allow_fallible: bool = false,
     /// Where a multi-valued call currently stands.
     ///
-    /// A call that answers a return shape may stand in exactly two
-    /// places — the right of a destructuring bind, and a statement of
-    /// its own — and nowhere else (docs/RETURNS.md).  Statement
-    /// position is `as_statement`, which this walk already carries;
-    /// this is the other one.
+    /// A call that answers a return shape may be received by a
+    /// destructuring let/var or existing-name assignment, or discarded
+    /// as a statement.  Statement position is `as_statement`, which
+    /// this walk already carries; this is the receiving position.
     ///
     /// Set for exactly one hop the way `allow_fallible` is, so the
     /// permission reaches the call it was raised in front of and
@@ -427,25 +427,34 @@ pub const FunctionBuilder = struct {
     /// name — and a narrowing established *by* the body has to survive
     /// its own last statement to be worth anything, which it does not.
     fn widenAssignedIn(self: *FunctionBuilder, block: ast.Block) void {
-        for (block.statements) |statement| {
-            switch (statement) {
-                .assign => |assign| switch (assign.target) {
-                    .name => |name| if (self.findLocal(name.text)) |found| self.widen(found.info.local),
-                    .field, .index, .chain => {},
-                },
-                .conditional => |conditional| {
-                    self.widenAssignedIn(conditional.then_block);
-                    if (conditional.else_block) |arm| self.widenAssignedIn(arm);
-                },
-                .while_loop => |loop| self.widenAssignedIn(loop.body),
-                .for_range => |loop| self.widenAssignedIn(loop.body),
-                .for_each => |loop| self.widenAssignedIn(loop.body),
-                .match => |matched| {
-                    for (matched.arms) |arm| self.widenAssignedIn(arm.body);
-                    if (matched.else_block) |arm| self.widenAssignedIn(arm);
-                },
-                else => {},
-            }
+        for (block.statements) |statement| self.widenAssignedBy(statement);
+    }
+
+    fn widenAssignedBy(self: *FunctionBuilder, statement: ast.Statement) void {
+        switch (statement) {
+            .assign => |assign| switch (assign.target) {
+                .name => |name| if (self.findLocal(name.text)) |found| self.widen(found.info.local),
+                .field, .index, .chain => {},
+            },
+            .assign_many => |assign| for (assign.names) |name| {
+                if (self.findLocal(name.text)) |found| self.widen(found.info.local);
+            },
+            .conditional => |conditional| {
+                self.widenAssignedIn(conditional.then_block);
+                if (conditional.else_block) |arm| self.widenAssignedIn(arm);
+            },
+            .while_loop => |loop| self.widenAssignedIn(loop.body),
+            .for_range => |loop| self.widenAssignedIn(loop.body),
+            .for_each => |loop| self.widenAssignedIn(loop.body),
+            .guarded => |guarded| {
+                self.widenAssignedBy(guarded.attempt.*);
+                self.widenAssignedIn(guarded.handler);
+            },
+            .match => |matched| {
+                for (matched.arms) |arm| self.widenAssignedIn(arm.body);
+                if (matched.else_block) |arm| self.widenAssignedIn(arm);
+            },
+            else => {},
         }
     }
 
@@ -2237,6 +2246,7 @@ pub const FunctionBuilder = struct {
             },
             .destructure => |bind| try self.lowerDestructure(bind),
             .assign => |assign| try self.lowerAssign(assign),
+            .assign_many => |assign| try self.lowerAssignMany(assign),
             .conditional => |conditional| try self.lowerConditional(conditional),
             .while_loop => |loop| try self.lowerWhile(loop),
             .for_range => |loop| try self.lowerForRange(loop),
@@ -2583,54 +2593,68 @@ pub const FunctionBuilder = struct {
         if (widened) try self.narrow(local);
     }
 
-    /// `let low, high = minmax(xs)` — the one place a call answering a
-    /// return shape hands its values to names (docs/RETURNS.md).
-    ///
-    /// Under the lowering the shape is one struct, so this is one
-    /// `call` and one `struct_get` per name: S1 per name, as it says.
-    fn lowerDestructure(self: *FunctionBuilder, bind: ast.Destructure) Error!void {
-        self.shape_position = .bind;
-        const value = (try self.lowerExpression(bind.value, false)) orelse {
-            for (bind.names) |name| try self.forgetName(name.text);
-            return;
-        };
+    const ReceivedShape = struct { value: Typed, layout: StructLayout };
+
+    /// Lower one expression where a destructuring statement can
+    /// receive a return shape, and check that its arity is the number
+    /// of names written on the left.  Both a declaring bind and an
+    /// existing-name assignment use this one call boundary.
+    fn lowerReceivedShape(
+        self: *FunctionBuilder,
+        expression: *ast.Expression,
+        span: Span,
+        count: usize,
+    ) Error!?ReceivedShape {
+        self.shape_position = .receive;
+        const value = (try self.lowerExpression(expression, false)) orelse return null;
         const shape = self.analyzer.returnShapeOf(value.value_type) orelse {
             // One value, two names.  Naming the call is what makes the
             // sentence actionable, and the call is right there.
             try self.fail(
                 "luce.sema.shape",
-                bind.span,
+                span,
                 "{s} answers 1 value, got {d} names",
-                .{ try self.calledName(bind.value), bind.names.len },
+                .{ try self.calledName(expression), count },
             );
+            return null;
+        };
+        if (shape.fields.len != count) {
+            try self.fail(
+                "luce.sema.shape",
+                span,
+                "{s} answers {d} values, got {d} name{s}",
+                .{
+                    try self.calledName(expression),
+                    shape.fields.len,
+                    count,
+                    helpers.plural(count),
+                },
+            );
+            return null;
+        }
+        return .{ .value = value, .layout = shape };
+    }
+
+    /// `let low, high = minmax(xs)` — a call answering a return shape
+    /// declares one name for each value (docs/RETURNS.md).
+    ///
+    /// Under the lowering the shape is one struct, so this is one
+    /// `call` and one `struct_get` per name: S1 per name, as it says.
+    fn lowerDestructure(self: *FunctionBuilder, bind: ast.Destructure) Error!void {
+        const received = (try self.lowerReceivedShape(bind.value, bind.span, bind.names.len)) orelse {
             for (bind.names) |name| try self.forgetName(name.text);
             return;
         };
-        if (shape.fields.len != bind.names.len) {
-            try self.fail(
-                "luce.sema.shape",
-                bind.span,
-                "{s} answers {d} values, got {d} name{s}",
-                .{
-                    try self.calledName(bind.value),
-                    shape.fields.len,
-                    bind.names.len,
-                    helpers.plural(bind.names.len),
-                },
-            );
-            for (bind.names) |name| try self.forgetName(name.text);
-            return;
-        }
 
         // Each value moves independently to its own binding, and each
         // binding owns what it received and is freed by its scope
         // (S16 per value, S1 per name, S45).  The struct the values
         // rode in is a statement temporary and dies with the
         // statement; it owns nothing once the fields are out.
-        for (bind.names, shape.fields, 0..) |name, field, position| {
+        for (bind.names, received.layout.fields, 0..) |name, field, position| {
             const held = try self.code.emit(.{ .struct_get = .{
-                .target = value.register,
-                .layout = value.value_type.strukt,
+                .target = received.value.register,
+                .layout = received.value.value_type.strukt,
                 .field = @intCast(position),
             } }, field.field_type);
             const carried = self.analyzer.carriesObjects(field.field_type);
@@ -2648,7 +2672,148 @@ pub const FunctionBuilder = struct {
         // The shape itself never owned the objects its fields carried —
         // each name did, from the moment it was bound — so the
         // temporary must not release them a second time.
-        try self.disownShape(value.register);
+        try self.disownShape(received.value.register);
+    }
+
+    const ExistingTarget = struct {
+        name: ast.Name,
+        local: LocalId,
+        value_type: Type,
+        owns_objects: bool,
+        owns_storage: bool,
+    };
+
+    const PreparedTarget = struct {
+        target: ExistingTarget,
+        register: Register,
+        present: bool,
+    };
+
+    /// Validate one target of an existing-name destructuring
+    /// assignment before its call runs.  A returned object is fresh
+    /// (S16/S45), so only an owning var can receive one.
+    fn existingTarget(self: *FunctionBuilder, name: ast.Name) Error!?ExistingTarget {
+        const found = self.findLocal(name.text) orelse {
+            const qualified = try self.analyzer.qualify(self.prefix, name.text);
+            if (self.analyzer.constant_names.contains(qualified)) {
+                try self.fail("luce.sema.let", name.span, "{s} is a file-scope constant and cannot be assigned", .{name.text});
+            } else {
+                try self.failUnknownName(name.text, name.span);
+            }
+            return null;
+        };
+        const info = found.info;
+        if (!info.mutable) {
+            try self.fail("luce.sema.let", name.span, "{s} is let-bound; use var for reassignment", .{name.text});
+            return null;
+        }
+        if (try self.checkPoisoned(info, name.text, name.span)) return null;
+        if (info.iterating) {
+            try self.fail(
+                "luce.sema.own",
+                name.span,
+                "{s} is being iterated; reassigning it would free the collection under the loop [OWNERSHIP.md S5, S9]",
+                .{name.text},
+            );
+            return null;
+        }
+        if (info.carries and info.class != .owned) {
+            try self.fail(
+                "luce.sema.own",
+                name.span,
+                "{s} does not own its object and cannot receive a returned one; assign into an owning var [OWNERSHIP.md S8, S12, S45]",
+                .{name.text},
+            );
+            return null;
+        }
+        return .{
+            .name = name,
+            .local = info.local,
+            .value_type = self.code.localType(info.local),
+            .owns_objects = info.carries,
+            .owns_storage = self.code.localOwnsStorage(info.local),
+        };
+    }
+
+    /// `low, high = minmax(xs)` — replace two or more existing vars
+    /// from one return shape.  Every target is checked first, then
+    /// every result is extracted, fitted, and made safe to store
+    /// before any old value is released.  That is the parallel/swap
+    /// semantics and the all-or-none replacement-store boundary a
+    /// failed call needs.  Ordinary side effects of evaluating the
+    /// right side have already happened when that call fails.
+    fn lowerAssignMany(self: *FunctionBuilder, assign: ast.AssignMany) Error!void {
+        const targets = try self.temporary().alloc(ExistingTarget, assign.names.len);
+        defer self.temporary().free(targets);
+        for (assign.names, 0..) |name, index| {
+            for (assign.names[0..index]) |earlier| {
+                if (!std.mem.eql(u8, name.text, earlier.text)) continue;
+                try self.fail(
+                    "luce.sema.duplicate",
+                    name.span,
+                    "{s} is assigned twice in this statement",
+                    .{name.text},
+                );
+                return;
+            }
+            targets[index] = (try self.existingTarget(name)) orelse return;
+        }
+
+        const received = (try self.lowerReceivedShape(assign.value, assign.span, assign.names.len)) orelse return;
+
+        // The right side may itself give/free one of the targets.  A
+        // preflight alone must not let assignment revive that poisoned
+        // name after the call has consumed it (S10/S29).
+        for (targets) |target| {
+            const current = self.findLocal(target.name.text).?.info;
+            if (try self.checkPoisoned(current, target.name.text, target.name.span)) return;
+        }
+
+        const prepared = try self.temporary().alloc(PreparedTarget, targets.len);
+        defer self.temporary().free(prepared);
+        for (targets, received.layout.fields, 0..) |target, field, position| {
+            const held = try self.code.emit(.{ .struct_get = .{
+                .target = received.value.register,
+                .layout = received.value.value_type.strukt,
+                .field = @intCast(position),
+            } }, field.field_type);
+            const fitted = (try self.fit(.{ .register = held, .value_type = field.field_type }, target.value_type)) orelse {
+                try self.fail(
+                    "luce.sema.type",
+                    target.name.span,
+                    "{s} is {s}, but value {d} from {s} is {s}",
+                    .{
+                        target.name.text,
+                        try self.analyzer.typeName(target.value_type),
+                        position + 1,
+                        try self.calledName(assign.value),
+                        try self.analyzer.typeName(field.field_type),
+                    },
+                );
+                return;
+            };
+            const register = if (target.owns_storage)
+                try self.ownedForStore(fitted)
+            else
+                fitted.register;
+            prepared[position] = .{
+                .target = target,
+                .register = register,
+                .present = target.value_type == .optional and field.field_type != .optional,
+            };
+        }
+
+        for (prepared) |item| {
+            try self.code.release(item.target.local, item.target.owns_objects, item.target.owns_storage);
+            try self.code.store(item.target.local, item.register);
+            if (item.target.owns_objects) try self.code.bind(item.target.local, item.register);
+            if (item.target.value_type == .optional) {
+                if (item.present) try self.narrow(item.target.local) else self.widen(item.target.local);
+            }
+        }
+        // The targets now own every object the return shape carried;
+        // its statement temporary keeps only its own field storage.
+        try self.disownShape(received.value.register);
     }
 
     /// A destructured call's struct temporary hands its objects to the
@@ -4709,6 +4874,13 @@ pub const FunctionBuilder = struct {
     /// a recovery that is more than one expression — and `CALL catch
     /// NAME:`, which hands that handler the error's own words.
     fn lowerGuarded(self: *FunctionBuilder, guarded: ast.Guarded) Error!void {
+        // The successful statement may change optional-presence facts,
+        // but the failing path reaches the handler with the facts from
+        // before the call.  Keep both so the merge can retain only
+        // what every continuing path proves.
+        const entry = try self.narrowSave();
+        defer self.temporary().free(entry);
+
         // The permission reaches the *value* of the statement, which
         // is the first expression either shape lowers: the call
         // itself, or the value side of `place = call()`.
@@ -4740,9 +4912,13 @@ pub const FunctionBuilder = struct {
         };
         self.opened = null;
 
+        const succeeded = try self.narrowSave();
+        defer self.temporary().free(succeeded);
+
         const merge = try self.code.reserveBlock();
         try self.code.jump(merge);
         self.code.switchTo(opened.handler);
+        try self.narrowRestore(entry);
 
         // The binding lives in a scope of its own, wrapped around the
         // handler's: it is not one of the handler's statements, and a
@@ -4756,24 +4932,31 @@ pub const FunctionBuilder = struct {
         // nulls a pointer and the arena holding them goes with the run
         // — writing it this way means nothing here depends on that.
         // The channel is read, copied, and only then emptied.
-        const binding = guarded.binding orelse {
+        if (guarded.binding) |binding| {
+            try self.pushScope();
+            const words = try self.code.errorMessage();
+            if (try self.declareLocal(binding.text, .string, false, .alias, binding.span)) |local| {
+                try self.storeOwned(local, .{ .register = words, .value_type = .string });
+            }
             try self.code.forget();
             try self.lowerBlock(guarded.handler);
-            try self.code.jump(merge);
-            self.code.switchTo(merge);
-            return;
-        };
-        try self.pushScope();
-        const words = try self.code.errorMessage();
-        if (try self.declareLocal(binding.text, .string, false, .alias, binding.span)) |local| {
-            try self.storeOwned(local, .{ .register = words, .value_type = .string });
+            try self.emitScopeEnd();
+            self.popScope();
+        } else {
+            try self.code.forget();
+            try self.lowerBlock(guarded.handler);
         }
-        try self.code.forget();
-        try self.lowerBlock(guarded.handler);
-        try self.emitScopeEnd();
-        self.popScope();
         try self.code.jump(merge);
         self.code.switchTo(merge);
+
+        if (helpers.alwaysExits(guarded.handler)) {
+            // Only the successful call reaches the merge.
+            try self.narrowRestore(succeeded);
+        } else {
+            // Current is the handler's state; retain only the facts it
+            // shares with the successful assignment/call.
+            self.narrowIntersect(succeeded);
+        }
     }
 
     // Expressions: one form at a time ---------------------------------------
@@ -6646,16 +6829,15 @@ pub const FunctionBuilder = struct {
             );
             return .{ .register = started, .value_type = carried };
         }
-        // A call that answers a return shape may stand in exactly two
-        // places: the right of a destructuring bind, and a statement
-        // of its own (docs/RETURNS.md).  Everything else — an
-        // argument, an operand, a `return` — is refused, which is what
-        // keeps the rule one a reader can hold: it has no exceptions.
-        if (info.results.len >= 2 and !as_statement and shape_position != .bind) {
+        // A return shape is received by a destructuring let/var or
+        // existing-name assignment, or discarded as a statement.  It
+        // is not a tuple value that can stand in an argument, operand,
+        // or direct return.
+        if (info.results.len >= 2 and !as_statement and shape_position != .receive) {
             try self.fail(
                 "luce.sema.call",
                 span,
-                "{s} answers {d} values, and only a let or a var can receive them{s}",
+                "{s} answers {d} values, and only a destructuring let, var, or assignment can receive them{s}",
                 .{
                     name,
                     info.results.len,
@@ -7148,11 +7330,11 @@ pub const FunctionBuilder = struct {
             try self.fail("luce.sema.call", method.span, "{s} returns nothing", .{method.name});
             return null;
         }
-        if (info.results.len >= 2 and !as_statement and shape_position != .bind) {
+        if (info.results.len >= 2 and !as_statement and shape_position != .receive) {
             try self.fail(
                 "luce.sema.call",
                 method.span,
-                "{s} answers {d} values, and only a let or a var can receive them{s}",
+                "{s} answers {d} values, and only a destructuring let, var, or assignment can receive them{s}",
                 .{
                     method.name,
                     info.results.len,

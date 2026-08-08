@@ -232,12 +232,13 @@ let low, high = minmax(xs)
 var row, column = grid.find(target)
 ```
 
-Two or more names is a **destructuring bind**, and the only place a
+Two or more names is a **destructuring bind**, one of the two ways a
 call answering a [return shape](../types/#return-shapes) may hand its
 values to names. One keyword governs the whole bind — `let a, var b`
 is refused — and the names take their types from the call, so they
-carry no annotations. There is no `_`: an unused name costs nothing
-and says what was ignored.
+carry no annotations. The other way assigns existing `var` names.
+There is no `_`: an unused name costs nothing and says what was
+ignored.
 
 Neither freezes what the name points at: `let xs = [1, 2]` still
 permits `xs.append(3)`, and refuses `xs = [9]`. This is JavaScript's
@@ -275,9 +276,24 @@ immutable inside its body.
 
 ## Assignment
 
-Plain multi-assignment is **not** a statement: `low, high = f()` is
-refused, because a destructuring bind declares its names. What Go
-needs multi-assignment for is `v, err = f()`, and Luce has no `err`.
+Two or more existing mutable names may receive one return shape:
+
+```
+low, high = minmax(xs)
+```
+
+Every target must be a distinct bare `var` name already in scope. The
+right side is one call, whether direct, namespaced or a method, and its
+arity must match the names. Fields and indexes are not multi-return
+targets, and there is no compound form, comma-list right side, or `_`
+target. A destructuring `let`/`var` remains the form that declares new
+names.
+
+This assignment is parallel and two-phase. It checks every target,
+evaluates the right side, and extracts and prepares the whole answer
+before any replacement. Only then are the old values replaced, left
+to right, so `left, right = swapped(left, right)` is a swap and an
+owning target is not released before every answer is safe to store.
 
 The target is a **place**: a name, a field, or an index, nested
 freely.
@@ -374,9 +390,9 @@ the end of the statement.
 
 ## Guarded statements
 
-Two statement shapes take an indented `catch` handler, and no others:
-a call written as a statement, and a plain assignment whose value is a
-call.
+Three written statement shapes take an indented `catch` handler, and
+no others: a call written as a statement, a single-place assignment
+whose value is a call, and an existing-name multi-return assignment.
 
 ```
 CALL catch:                       CALL catch NAME:
@@ -384,14 +400,20 @@ CALL catch:                       CALL catch NAME:
 
 PLACE = CALL catch:               PLACE = CALL catch NAME:
     ...                               ...
+
+NAMES = CALL catch:               NAMES = CALL catch NAME:
+    ...                               ...
 ```
 
 The handler guards exactly one call, so which statement failed has one
 answer. `NAME` binds the error's message — an immutable `string`
-scoped to the handler block. A `let` takes no handler (the handler
-supplies no value) and neither does a compound assignment (it reads
-its place before the call, so two things stand in front of the word
-and only one can fail). Both are `luce.parse.expected`. A handler
+scoped to the handler block. For a multi-return assignment, success
+performs every replacement store and failure performs none; ordinary
+side effects from evaluating the right side remain visible in the
+handler. A `let` takes no handler (the handler supplies no value) and
+neither does a compound assignment (it reads its place before the call,
+so two things stand in front of the word and only one can fail). Both
+are `luce.parse.expected`. A handler
 behind a call that cannot fail is `luce.sema.fallible`. See
 [failure](../failure/).
 
