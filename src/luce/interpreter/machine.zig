@@ -1235,11 +1235,14 @@ pub const Machine = struct {
                 return .none;
             },
             .trap_message => {
-                // The words outlive every release the unwind skips
-                // and are read once the run has stopped, so they go
-                // in the arena rather than in owned storage.
-                const words = try self.arena.dupe(u8, registers[arguments[0]].asString());
-                return self.runtime.failMessage(.explicit_trap, words);
+                // The borrow ends at this call: `asString()` of short
+                // text points into the register itself, and the frame
+                // holding it is about to unwind.  `failMessage` takes
+                // the copy that outlives it, for both engines at once.
+                return self.runtime.failMessage(
+                    .explicit_trap,
+                    registers[arguments[0]].asString(),
+                );
             },
             .exit_program => {
                 // The host records the number at the site, while the

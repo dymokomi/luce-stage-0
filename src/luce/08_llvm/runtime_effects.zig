@@ -79,10 +79,12 @@
 //! call site — that is the bar, because these attributes sit on one
 //! shared declaration.  Two consequences worth naming:
 //!
-//!   * A pointer the runtime *keeps* is not `nocapture`.  There are
-//!     exactly two: `luce_rt_raise`'s message, which is stored in the
-//!     pending trap, and `luce_rt_open`'s function table, which the run
-//!     reads back when it unwinds.
+//!   * A pointer the runtime *keeps* is not `nocapture`.  There is
+//!     exactly one: `luce_rt_open`'s function table, which the run
+//!     reads back when it unwinds.  A trap's message is not among them
+//!     — the trap channel copies its words rather than keeping the
+//!     caller's, because a short String lives in the frame that raised
+//!     the trap (`heap.failMessage`).
 //!   * A pointer that came from a *host* service gets no `nonnull`, no
 //!     `dereferenceable`, and no `noundef`.  The host fills those slots,
 //!     and a host is not ours to promise for.
@@ -248,8 +250,8 @@ pub const Parameter = enum {
     /// in.  Read, not kept, and nothing else is promised, because the
     /// host end of the pair is not ours to promise for.
     bytes_in,
-    /// Borrowed bytes the run *keeps*: a trap's words, the function
-    /// table.  Read but not `nocapture`.
+    /// Borrowed bytes the run *keeps*: the function table.  Read but
+    /// not `nocapture`.
     bytes_kept,
     /// A pointer with nothing to promise — a host context, a host
     /// callback.
@@ -390,11 +392,15 @@ pub fn describe(service: Service) Effect {
 
         // -- traps and the trace they carry ---------------------------
         //
-        // `raise` records the pending trap and keeps the words: the
-        // message outlives the call, so it is read but not `nocapture`.
+        // `raise` records the pending trap and **copies** the words
+        // into the run's own storage, because short text lives in the
+        // caller's frame and the frame goes as this returns
+        // (`heap.failMessage`).  So the pointer is read and released —
+        // `nocapture` — and the copy is a write to memory generated
+        // code cannot see.
         .luce_rt_raise => .{
-            .memory = touches_run,
-            .parameters = &.{ .run, .plain, .bytes_kept, .plain },
+            .memory = touches_text,
+            .parameters = &.{ .run, .plain, .bytes_in, .plain },
             .cold = true,
         },
         // Appends one frame to the trace, which allocates.  It reads

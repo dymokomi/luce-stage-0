@@ -36,8 +36,9 @@ const Value = value.Value;
 pub const Error = error{ OutOfMemory, Trap };
 
 /// A Luce trap: a stable code (`vocabulary.TrapCode`) and the words reported
-/// with it.  The message is either static — `code.message()` — or
-/// arena-owned, so it outlives the operation that raised it.
+/// with it.  The message is arena-owned — `failMessage` copies whatever
+/// it is handed — so it outlives the frame that raised it as well as
+/// every release the unwind skips.
 pub const Trap = struct {
     code: vocabulary.TrapCode,
     message: []const u8,
@@ -1089,7 +1090,31 @@ pub const Runtime = struct {
     }
 
     /// Record `code` with words of the program's own (`trap("...")`).
-    /// `message` must outlive the run: static text or arena storage.
+    ///
+    /// **The words are copied here, and that is not optional.**  The
+    /// channel used to store the borrow, on the argument that a trap
+    /// unwinds *past* every release, so nothing gives the bytes back
+    /// before the report reads them.  That argument was about the wrong
+    /// hazard.  Nothing frees a trap message and the words still go: a
+    /// String short enough to live *inside* its value (`value.zig`) has
+    /// no allocation at all, and the value it lives in is a slot in the
+    /// frame that raised the trap — an `alloca` on the compiled path, a
+    /// register on the interpreter's.  The trap edge returns out of that
+    /// frame immediately and the report is only read once the whole run
+    /// has stopped, so the words handed over are read after the storage
+    /// holding them has gone: `trap("not a number: " + text)` reported
+    /// stack litter (GitHub #28).  A frame ending is not a release, and
+    /// no rule about releases could have covered it.  So the trap
+    /// channel owns its words exactly as the error channel does, and
+    /// takes them here, while the frame that raised the trap is still
+    /// standing.  The copy goes in the values arena, which nothing
+    /// releases and the run drops whole after the report; an arena that
+    /// cannot hold it falls back to the code's own static words rather
+    /// than to a borrow that may already be gone.
+    ///
+    /// Standard traps pay the copy too, for their static text, because
+    /// two doors with two contracts is what let one of them be wrong —
+    /// and a trap is a run's last act, so it is one `dupe` per run.
     ///
     /// Nothing is announced here.  Both engines read the trap back out
     /// once the program has stopped — the interpreter from `pending`
@@ -1097,7 +1122,8 @@ pub const Runtime = struct {
     /// a trap's call trace does not exist until unwinding is over
     /// (trace.zig).
     pub fn failMessage(self: *Runtime, code: vocabulary.TrapCode, message: []const u8) Error {
-        self.pending = .{ .code = code, .message = message };
+        const words = self.arena.dupe(u8, message) catch code.message();
+        self.pending = .{ .code = code, .message = words };
         return error.Trap;
     }
 

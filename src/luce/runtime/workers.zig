@@ -502,11 +502,12 @@ fn finish(owner: *Runtime, worker: *Worker) void {
 /// Carry the worker's trap across the join, with its frames in front
 /// of this frame's (D6).
 ///
-/// The words are copied into the joiner's run-lifetime storage,
-/// because a standard trap's message is static but a `trap("…")`'s is
-/// the worker's own and dies with its runtime.  The frames are not
-/// copied and do not need to be: a frame names a function and a file
-/// out of the *program*, which outlives every runtime in it.
+/// The words cross by copy — `joiner.failMessage` takes it, while the
+/// child's arena is still open, because `finish` has not run yet —
+/// since a `trap("…")`'s message is the worker's own and dies with its
+/// runtime.  The frames are not copied and do not need to be: a frame
+/// names a function and a file out of the *program*, which outlives
+/// every runtime in it.
 fn adoptTrap(joiner: *Runtime, child: *Runtime) heap.Error {
     const pending = child.pending orelse
         return joiner.fail(.host_unavailable); // a trapped worker with no trap
@@ -514,8 +515,7 @@ fn adoptTrap(joiner: *Runtime, child: *Runtime) heap.Error {
         joiner.dropped_frames +|= @intCast(child.unwound.items.len);
     };
     joiner.dropped_frames +|= child.dropped_frames;
-    const words = joiner.arena.dupe(u8, pending.message) catch pending.code.message();
-    return joiner.failMessage(pending.code, words);
+    return joiner.failMessage(pending.code, pending.message);
 }
 
 /// Carry the worker's raised error across the join, whole: the code,

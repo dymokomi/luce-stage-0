@@ -198,8 +198,11 @@ pub export fn luce_rt_exit(runtime: *Runtime, status: i64) callconv(.c) void {
 /// `trap("...")`.  It lands in the same place as a trap raised inside
 /// this library, so the host hears about both the same way.
 ///
-/// `message` must outlive the run: either static text in the artifact
-/// or a Luce String, both of which do.  `code` is `vocabulary.TrapCode` from
+/// `message` is borrowed for the length of this call and no longer:
+/// the trap channel copies it (`heap.failMessage`), because a Luce
+/// String short enough to live inside its value points into the
+/// caller's own frame, and that frame goes as soon as this returns.
+/// `code` is `vocabulary.TrapCode` from
 /// the build that generated the code, which is this one — an artifact
 /// carrying anything else is corrupt, and the conversion says so
 /// loudly rather than inventing a trap.

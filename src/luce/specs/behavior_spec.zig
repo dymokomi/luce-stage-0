@@ -4186,6 +4186,41 @@ test "trap: an explicit trap call" {
     , .explicit_trap);
 }
 
+test "a built trap message survives the frame that built it" {
+    // GitHub #28.  The words are a String built at the trap site, so
+    // they live in the trapping frame — short enough to sit *inside*
+    // the value, which on the compiled path is an `alloca`.  The trap
+    // channel used to keep that borrow, and the report is only read
+    // once the whole run has stopped, so what it printed was whatever
+    // the abandoned frame had been overwritten with.  The successful
+    // call in front is what guarantees there is overwriting: the same
+    // program without it read the same dead slot and found it
+    // untouched.
+    try agree.trapSays(
+        \\func want(text: string) -> long:
+        \\    return parse_int(text) else trap("not a number: " + text)
+        \\
+        \\func main():
+        \\    print(string(want("41")))
+        \\    print(string(want("oops")))
+        \\
+    , .explicit_trap, "not a number: oops");
+}
+
+test "a built trap message survives at every length" {
+    // The short one lives in the value; the long one is an allocation
+    // the trap unwinds past.  Both are the frame's, and both have to
+    // reach the report — one door, two forms of storage behind it.
+    try agree.trapSays(
+        \\func stop(name: string):
+        \\    trap("stopped by " + name)
+        \\
+        \\func main():
+        \\    stop("a name long enough that its message cannot live inside a value")
+        \\
+    , .explicit_trap, "stopped by a name long enough that its message cannot live inside a value");
+}
+
 test "trap: list index out of bounds" {
     try agreeTrap(
         \\func main():

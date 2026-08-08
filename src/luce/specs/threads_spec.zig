@@ -379,6 +379,23 @@ test "a trap in a worker is a trap at the join" {
     , .divide_by_zero);
 }
 
+test "a worker's own words cross the join whole" {
+    // The message is built in the worker, out of the worker's own
+    // storage, in a frame of a runtime that is closed before the joiner
+    // reports anything.  The copy that carries it across is the same
+    // one every trap takes (`heap.failMessage`), taken while the child
+    // is still open.
+    try agree.trapSays(
+        \\func risky(name: string):
+        \\    trap("worker " + name + " gave up")
+        \\
+        \\func main():
+        \\    let t = spawn risky("two")
+        \\    t.wait()
+        \\
+    , .explicit_trap, "worker two gave up");
+}
+
 test "a trapped worker's trace names the worker's own frames first" {
     var session = try agree.compare(
         \\func inner(n: long) -> long:

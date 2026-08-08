@@ -873,7 +873,7 @@ Warm, the figure was always ~2 MB. Measure a compiled artifact twice.
 
 ### Where the design met the code
 
-Five things the SSO section did not have quite right.
+Six things the SSO section did not have quite right.
 
 1. **A String register cannot leave the frame that made it, so `ret`
    needed a third storage intrinsic.** The memo treated SSO as a change
@@ -933,6 +933,25 @@ Five things the SSO section did not have quite right.
    engines take visibly different routes to the same answer — the
    compiled path slices in registers, since its source is already a
    `{ptr, i64}` — and the boundary tests are what say they agree.
+
+6. **`ret` is not the only way out of a frame — a trap's words leave
+   too.** Rule 1 named `ret` and stopped there, and for two years that
+   was the whole list. It was not: `trap("not a number: " + text)` hands
+   its String to the trap channel, which stored the *borrow* on the
+   argument that a trap unwinds past every release, so nothing gives the
+   bytes back before the report is read. True, and beside the point —
+   the words were never freed, the **frame** they lived in ended, and a
+   frame ending is not a release. Short text has no allocation at all;
+   it is the frame slot. The report is read once the whole run has
+   stopped, so the sentence printed was whatever later stack traffic had
+   left in the abandoned slot, and the program only looked correct when
+   nothing had run in between (GitHub #28). The answer is not a fourth
+   storage intrinsic at the trap site: the interpreter had the same hole
+   and had patched it with a copy of its own, and `workers.adoptTrap` a
+   third. One channel, one copy — `heap.failMessage` owns its words the
+   way `raise` does, taken while the trapping frame is still standing,
+   and the three hand-copies are gone. A trap is a run's last act, so
+   the `dupe` is once per run.
 
 Two smaller ones. `String(Int)` and `chr` now *never* allocate: twenty
 digits and a sign is the longest an `i64` gets and a codepoint is four

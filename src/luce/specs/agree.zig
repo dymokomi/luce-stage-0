@@ -489,6 +489,22 @@ pub fn trapProgram(compiled: *const mir.Program, provided: Provided, code: mir.T
     return expectTrapped(&session, code);
 }
 
+/// The run aborts with `code`, on both engines, carrying exactly these
+/// words.
+///
+/// `trap` proves the code; this proves the **sentence**, which is the
+/// whole point of a `trap("… " + x)` and was the one thing nothing
+/// pinned while the compiled path reported whatever the frame it had
+/// already left behind happened to hold (GitHub #28).  The differential
+/// alone is not enough here: two arms can agree on a message that is
+/// wrong, and dead stack can hold the right bytes by luck.
+pub fn trapSays(source: []const u8, code: mir.TrapCode, message: []const u8) !void {
+    var session = try compare(source, .{});
+    defer session.deinit();
+    try expectTrapped(&session, code);
+    try testing.expectEqualStrings(message, session.message());
+}
+
 fn expectTrapped(session: *const Session, code: mir.TrapCode) !void {
     switch (session.end) {
         .trapped => |raised| {
