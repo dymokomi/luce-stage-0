@@ -49,6 +49,9 @@ pub const json = @import("specs/json_spec.zig");
 /// (docs/BYTES.md).
 pub const bytes = @import("specs/bytes_spec.zig");
 
+/// Functions as values: named functions, lambdas, and the call through
+/// one (docs/FUNCTIONS.md).
+pub const functions = @import("specs/functions_spec.zig");
 /// Threads: a worker owns its world, and the ownership model is the
 /// concurrency model (docs/THREADS.md).
 pub const threads = @import("specs/threads_spec.zig");
@@ -77,6 +80,7 @@ test {
     _ = zip;
     _ = json;
     _ = bytes;
+    _ = functions;
     _ = threads;
     _ = host;
     _ = modules;

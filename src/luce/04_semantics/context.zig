@@ -316,6 +316,17 @@ pub const FunctionDeclInfo = struct {
     /// (docs/FAILURE.md).
     fallible: bool,
     is_entry: bool,
+    /// Set only on the function a **lambda** became (docs/FUNCTIONS.md
+    /// D2): every local name in scope where the lambda was written.
+    ///
+    /// A lambda carries no environment, so its body is checked in a
+    /// scope holding its parameters and nothing else — which makes a
+    /// reach into the enclosing frame an *unknown name*, and that is
+    /// true and useless.  This is what lets the refusal say the thing
+    /// the reader needs instead: the name is right there, and it is not
+    /// reachable from here.  Null for every declared function, which
+    /// has no enclosing frame to speak of.
+    enclosing_locals: ?[]const []const u8 = null,
 };
 
 /// A collected enum declaration with its module (docs/ENUMS.md).  The

@@ -619,6 +619,14 @@ fn primaryExpression(self: *Parser) Error!?*ast.Expression {
             return make(self, .{ .name = .{ .text = self.text(item), .span = item.span } });
         },
         .left_paren => {
+            // `(a, b) -> expr` — a lambda (docs/FUNCTIONS.md S3).  The
+            // decision is made *before* anything is parsed, by looking
+            // one token past the matching `)`: `(a, b)` can open nothing
+            // else, because there are no tuples, and the
+            // single-parameter case resolves at the arrow, one token
+            // after the close.  So the lookahead is bounded by the
+            // parenthesis it is already sitting on.
+            if (arrowFollowsGroup(self)) return lambda(self);
             const opener = self.advance();
             const inner = (try expression(self)) orelse return null;
             // `(1, 2)` — there are no tuples, and "expected ')' to
@@ -753,6 +761,65 @@ fn namedCallExpression(self: *Parser, callee: []const u8, start: usize) Error!?*
         .callee = callee,
         .arguments = list.arguments,
         .span = .{ .start = start, .end = list.closing.span.end },
+    } });
+}
+
+/// Whether the `(` under the cursor closes on a `->`, which is what
+/// makes it a lambda's parameter list rather than a grouping.  Nesting
+/// is counted so `((a))` and `(f(x))` answer honestly; a run that ends
+/// at end of input answers no and lets the ordinary parse report the
+/// unclosed paren.
+fn arrowFollowsGroup(self: *Parser) bool {
+    var depth: usize = 0;
+    var ahead: usize = 0;
+    while (true) : (ahead += 1) {
+        switch (self.peekAhead(ahead)) {
+            .left_paren => depth += 1,
+            .right_paren => {
+                depth -= 1;
+                if (depth == 0) return self.peekAhead(ahead + 1) == .arrow;
+            },
+            .end_of_file => return false,
+            else => {},
+        }
+    }
+}
+
+/// `(a, b) -> expr`.  The parameters are bare names — a type written
+/// here would be a second spelling of a signature the landing site
+/// already carries — and the body is one expression, which is what
+/// keeps the form honest: an expression cannot secretly grow state.
+fn lambda(self: *Parser) Error!?*ast.Expression {
+    const opener = self.advance(); // (
+    var parameters: std.ArrayList(ast.Name) = .empty;
+    defer parameters.deinit(self.arena);
+    while (!endsList(self.peekKind(), .right_paren)) {
+        const name = (try self.expect(.identifier, "a parameter name")) orelse return null;
+        try self.refuseWildcardName(name);
+        try parameters.append(self.arena, .{ .text = self.text(name), .span = name.span });
+        if (self.accept(.comma) == null) break;
+    }
+    if ((try self.expectClose(.right_paren, opener)) == null) return null;
+    _ = self.advance(); // ->
+    // A block after the arrow is the one shape this grammar cannot
+    // take: an indentation language cannot put statements inside a
+    // call's parentheses, which is why Python's lambda is one
+    // expression too (docs/FUNCTIONS.md).  Said here, where the reader
+    // wrote the colon, rather than as "expected an expression".
+    if (self.peekKind() == .colon) {
+        try self.report(
+            "luce.parse.expression",
+            self.peek().span,
+            "a lambda is one expression, not a block; a body that wants statements is a function wanting a name [FUNCTIONS.md]",
+            .{},
+        );
+        return null;
+    }
+    const body = (try expression(self)) orelse return null;
+    return make(self, .{ .lambda = .{
+        .parameters = try parameters.toOwnedSlice(self.arena),
+        .body = body,
+        .span = .{ .start = opener.span.start, .end = body.span().end },
     } });
 }
 

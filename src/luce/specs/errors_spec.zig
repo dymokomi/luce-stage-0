@@ -6120,3 +6120,215 @@ test "spawn is gated by nothing, because threads are the language" {
         \\
     );
 }
+
+// ---------------------------------------------------------------------------
+// Functions as values, and the line at capture
+// ---------------------------------------------------------------------------
+//
+// Every refusal docs/FUNCTIONS.md names, and each one says the thing
+// that would fix it.  The two halves the design divides at are here
+// together on purpose: what is *in* is proved in
+// `specs/functions_spec.zig`, and what is out is proved here, so the
+// line itself is readable in one place.
+
+test "luce.sema.call: a method reference is refused, and taught" {
+    // D1: a method reference is a closure over `self`, which is the far
+    // side of the capture line — so the sentence shows the honest form,
+    // which re-receives the receiver and therefore carries nothing.
+    try expectHostSaying(
+        \\struct Point:
+        \\    x: long
+        \\
+        \\    func length(self) -> long:
+        \\        return self.x
+        \\
+        \\func apply(f: func(Point) -> long, p: Point) -> long:
+        \\    return f(p)
+        \\
+        \\func main():
+        \\    let p = Point(x = 5)
+        \\    print(string(apply(Point.length, p)))
+        \\
+    , "luce.sema.call", "a method reference would carry its receiver");
+}
+
+test "luce.sema.name: a lambda reaching an enclosing local is refused, and taught" {
+    try expectHostSaying(
+        \\func apply(f: func(long) -> long, x: long) -> long:
+        \\    return f(x)
+        \\
+        \\func main():
+        \\    let scale = 3
+        \\    print(string(apply((n) -> n * scale, 2)))
+        \\
+    , "luce.sema.name", "a lambda carries no environment");
+}
+
+test "luce.sema.type: a lambda needs a place that expects a function" {
+    try expectHostSaying(
+        \\func main():
+        \\    let f = (x) -> x + 1
+        \\    print(string(f(1)))
+        \\
+    , "luce.sema.type", "a lambda needs a place that expects a function");
+}
+
+test "luce.parse.expression: a lambda is one expression, not a block" {
+    try expectHostSaying(
+        \\func apply(f: func(long) -> long, x: long) -> long:
+        \\    return f(x)
+        \\
+        \\func main():
+        \\    print(string(apply((x) ->:
+        \\        return x, 1)))
+        \\
+    , "luce.parse.expression", "a lambda is one expression, not a block");
+}
+
+test "luce.sema.type: a lambda's parameter count must be the place's" {
+    try expectHostSaying(
+        \\func apply(f: func(long) -> long, x: long) -> long:
+        \\    return f(x)
+        \\
+        \\func main():
+        \\    print(string(apply((a, b) -> a + b, 2)))
+        \\
+    , "luce.sema.type", "this lambda writes 2");
+}
+
+test "luce.sema.type: a named function of the wrong shape is refused by shape" {
+    try expectHostSaying(
+        \\func wide(a: long, b: long) -> bool:
+        \\    return a < b
+        \\
+        \\func apply(f: func(long) -> long, x: long) -> long:
+        \\    return f(x)
+        \\
+        \\func main():
+        \\    print(string(apply(wide, 2)))
+        \\
+    , "luce.sema.type", "func(long) -> long");
+}
+
+test "luce.sema.fallible: a fallible function is not a value yet" {
+    // Its `!` is an obligation its call sites carry, and a function
+    // type has nowhere to write one — so letting one become a value
+    // would drop the obligation in silence.
+    try expectHostSaying(
+        \\func risky(path: string) -> string!:
+        \\    return try file_read(path)
+        \\
+        \\func apply(f: func(string) -> string, x: string) -> string:
+        \\    return f(x)
+        \\
+        \\func main():
+        \\    print(apply(risky, "a.txt"))
+        \\
+    , "luce.sema.fallible", "a function type carries no '!'");
+}
+
+test "luce.parse.type: a function type carries no bang" {
+    try expectHostSaying(
+        \\func apply(f: func(string) -> string!, x: string) -> string:
+        \\    return f(x)
+        \\
+        \\func main():
+        \\    print("hi")
+        \\
+    , "luce.parse.type", "a function type carries no '!'");
+}
+
+test "luce.sema.type: a container element cannot be a function yet" {
+    // Deferred, not refused: a container of behaviour is a real
+    // question of its own, and no customer needs it in this run.
+    try expectHostSaying(
+        \\func main():
+        \\    var fs = new list(func(long) -> long)
+        \\    print(string(len(fs)))
+        \\
+    , "luce.sema.type", "a list element cannot be a function yet");
+}
+
+test "luce.sema.type: a struct field cannot be a function yet" {
+    try expectHostSaying(
+        \\struct Handler:
+        \\    run: func(long) -> long
+        \\
+        \\func main():
+        \\    print("hi")
+        \\
+    , "luce.sema.type", "a struct field cannot be a function yet");
+}
+
+test "luce.sema.type: a function value has no absent form" {
+    try expectHostSaying(
+        \\func apply(f: func(long)?, x: long) -> long:
+        \\    return x
+        \\
+        \\func main():
+        \\    print("hi")
+        \\
+    , "luce.sema.type", "no absent form yet");
+}
+
+test "luce.sema.type: a function value has no zero, so a late var is refused" {
+    try expectHostSaying(
+        \\func main():
+        \\    var f: func(long) -> long
+        \\    print(string(f(1)))
+        \\
+    , "luce.sema.type", "a function value has no zero");
+}
+
+test "luce.sema.call: a value that is not a function cannot be called" {
+    try expectHostSaying(
+        \\func main():
+        \\    let n = 3
+        \\    print(string(n(1)))
+        \\
+    , "luce.sema.call", "which is not a function");
+}
+
+test "luce.sema.call: a call through a value takes the arity its type wrote" {
+    try expectHostSaying(
+        \\func apply(f: func(long, long) -> long, x: long) -> long:
+        \\    return f(x)
+        \\
+        \\func main():
+        \\    print("hi")
+        \\
+    , "luce.sema.call", "takes 2 arguments, got 1");
+}
+
+test "luce.sema.call: a function type has no parameter names to call by" {
+    try expectHostSaying(
+        \\func apply(f: func(long) -> long, x: long) -> long:
+        \\    return f(n = x)
+        \\
+        \\func main():
+        \\    print("hi")
+        \\
+    , "luce.sema.call", "a function type has no parameter names");
+}
+
+test "luce.sema.own: a give through a function value still needs the verb" {
+    try expectHostSaying(
+        \\func run(f: func(give list(long)) -> long, xs: give list(long)) -> long:
+        \\    return f(xs)
+        \\
+        \\func main():
+        \\    var xs: list(long) = [1]
+        \\    print(string(run((ys) -> len(ys), give xs)))
+        \\
+    , "luce.sema.own", "takes ownership");
+}
+
+test "luce.sema.const: a top-level let is not a place for a lambda" {
+    try expectRejectedOptions(
+        \\let f = (x) -> x + 1
+        \\
+        \\func main():
+        \\    print("hi")
+        \\
+    , hosted, "luce.sema.const");
+}

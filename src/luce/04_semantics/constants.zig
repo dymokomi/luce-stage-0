@@ -454,6 +454,13 @@ pub fn fold(
         .spawn => {
             return constantError(analyzer, expression.span(), "a constant is folded at compile time and nothing runs there; spawn belongs in a function [OWNERSHIP.md S35]", .{});
         },
+        // A lambda becomes a function, and a function is not a value a
+        // top-level `let` may hold: constants are folded and inlined at
+        // their use sites, and there is nothing to fold here
+        // (docs/FUNCTIONS.md, As built).
+        .lambda => {
+            return constantError(analyzer, expression.span(), "a top-level let is a folded constant, and a function is not one; declare it with func [FUNCTIONS.md]", .{});
+        },
     }
 }
 

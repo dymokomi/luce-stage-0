@@ -203,6 +203,11 @@ pub const FunctionBuilder = struct {
     /// each branch, and cleared for anything a loop body assigns.
     /// Short enough that a linear scan is the whole lookup.
     narrowed: std.ArrayList(LocalId) = .empty,
+    /// Every local name in scope where this function's **lambda** was
+    /// written, or null for a function somebody declared
+    /// (`context.FunctionDeclInfo.enclosing_locals`).  Read by one
+    /// diagnostic: the capture refusal.
+    enclosing_locals: ?[]const []const u8 = null,
     /// Set for exactly one hop.  `try` and `catch` raise it, and the
     /// very next `lowerExpressionInner` reads and clears it, so the
     /// permission reaches the call they are written in front of and
@@ -614,6 +619,25 @@ pub const FunctionBuilder = struct {
     /// only noise.
     fn failUnknownName(self: *FunctionBuilder, name: []const u8, span: Span) Error!void {
         if (self.undeclared.contains(name)) return;
+        // **A lambda carries no environment** (docs/FUNCTIONS.md S3).
+        // Inside the function a lambda became, a name that was a local
+        // where the lambda was written is not unknown — it is out of
+        // reach, and those are different sentences.  The one that says
+        // "unknown" sends a reader to look for a typo in a name they can
+        // see two lines up.
+        if (self.enclosing_locals) |visible| {
+            for (visible) |held| {
+                if (!std.mem.eql(u8, held, name)) continue;
+                try self.fail(
+                    "luce.sema.name",
+                    span,
+                    "a lambda carries no environment, and {s} belongs to the scope around it; " ++
+                        "pass it as a parameter, or write a struct with a method — state that travels with behavior is a struct [FUNCTIONS.md S3]",
+                    .{name},
+                );
+                return;
+            }
+        }
         const qualified = try self.analyzer.qualify(self.prefix, name);
         if (try self.failNotAValue(name, qualified, span)) return;
         var suggestion = helpers.Suggestion.init(name);
@@ -1048,8 +1072,9 @@ pub const FunctionBuilder = struct {
             .struct_make, .struct_set => true,
             // A function's result is the caller's (S16), and `ret`
             // hands out a copy rather than a view of the callee's
-            // frame.
-            .call => true,
+            // frame — whichever way the callee was named
+            // (docs/FUNCTIONS.md D2).
+            .call, .call_indirect => true,
             .intrinsic => |call| call.kind.makesFreshStorage(),
             else => false,
         };
@@ -3705,8 +3730,7 @@ pub const FunctionBuilder = struct {
                 });
                 return;
             }
-            self.wanted = landingType(self.code.return_type);
-            self.wanted_element = self.elementOf(self.code.return_type);
+            self.wantPlace(self.code.return_type);
             const lowered = (try self.lowerExpression(expression, false)) orelse return;
             const value = (try self.fit(lowered, self.code.return_type)) orelse {
                 try self.fail("luce.sema.type", returned.span, "returning {s} from a function returning {s}{s}", .{
@@ -4295,7 +4319,119 @@ pub const FunctionBuilder = struct {
             .copy => |copied| return self.lowerCopy(copied),
             .try_call => |attempt| return self.lowerTry(attempt, as_statement, shape_position),
             .spawn => |worker| return self.lowerSpawn(worker, as_statement),
+            .lambda => |written| return self.lowerLambda(expression, written, wanted_function),
         }
+    }
+
+    /// `(a, b) -> expr` — a lambda (docs/FUNCTIONS.md S3, D2).
+    ///
+    /// **It becomes a top-level function here, and is a function value
+    /// from then on.**  Nothing downstream of this method knows a lambda
+    /// existed: the analyzer synthesizes a declaration whose body is the
+    /// one expression, registers it, and emits the `const_function` a
+    /// written name would have emitted.  So both engines dispatch
+    /// through the same table for both spellings, and every rule about
+    /// function values — the verbs, the visibility, the comparison —
+    /// holds for a lambda because it *is* the named case.
+    ///
+    /// The parameters take their types from the signature the lambda
+    /// lands on, which is the whole of the literal rule: a lambda in a
+    /// place that expects no function type has no types to take, and is
+    /// refused saying so.
+    fn lowerLambda(
+        self: *FunctionBuilder,
+        expression: *ast.Expression,
+        written: ast.Lambda,
+        wanted_function: ?u32,
+    ) Error!?Typed {
+        const index = wanted_function orelse {
+            try self.fail(
+                "luce.sema.type",
+                written.span,
+                "a lambda needs a place that expects a function: annotate the binding, or pass it where a func(...) parameter is declared [FUNCTIONS.md S3]",
+                .{},
+            );
+            return null;
+        };
+        const signature = self.analyzer.signatures.items[index];
+        if (written.parameters.len != signature.parameters.len) {
+            try self.fail(
+                "luce.sema.type",
+                written.span,
+                "this place is {s} and takes {d} parameter{s}; this lambda writes {d}",
+                .{
+                    try self.analyzer.typeName(.{ .function = index }),
+                    signature.parameters.len,
+                    if (signature.parameters.len == 1) "" else "s",
+                    written.parameters.len,
+                },
+            );
+            return null;
+        }
+        // The synthesized declaration.  Its parameters carry names and
+        // no written types — the signature is where the types are, and
+        // `registerLambda` hands them over resolved — and its body is
+        // the one expression, as the statement that leaves with it.
+        const parameters = try self.arena().alloc(ast.Parameter, written.parameters.len);
+        for (written.parameters, signature.parameters, parameters) |name, parameter, *slot| {
+            slot.* = .{
+                .name = name.text,
+                .name_span = name.span,
+                .mode = if (parameter.gives) .give else .borrow,
+                .type_name = .{ .name = "func", .span = name.span },
+                .span = name.span,
+            };
+        }
+        const statements = try self.arena().alloc(ast.Statement, 1);
+        if (signature.result == .none) {
+            statements[0] = .{ .expression = .{ .value = written.body, .span = written.body.span() } };
+        } else {
+            const values = try self.arena().alloc(*ast.Expression, 1);
+            values[0] = written.body;
+            statements[0] = .{ .return_statement = .{ .values = values, .span = written.body.span() } };
+        }
+        const returns = try self.arena().alloc(ast.TypeName, if (signature.result == .none) 0 else 1);
+        if (returns.len == 1) returns[0] = .{ .name = "func", .span = written.span };
+        const declaration = try self.arena().create(ast.FuncDecl);
+        declaration.* = .{
+            // Unforgeable from source, and readable in a trace: no
+            // identifier holds a parenthesis, so this collides with
+            // nothing a program can declare — the same trick the
+            // synthesized return-shape layouts use.
+            .name = try std.fmt.allocPrint(self.arena(), "{s}.(lambda)", .{self.code.name}),
+            .name_span = written.span,
+            .parameters = parameters,
+            .returns = returns,
+            .body = .{ .statements = statements, .span = written.span },
+            .span = written.span,
+        };
+        const named = try self.analyzer.registerLambda(
+            declaration,
+            self.module,
+            signature,
+            try self.visibleLocals(),
+        );
+        _ = expression;
+        const value: Type = .{ .function = index };
+        return .{
+            .register = try self.code.emit(.{ .const_function = named }, value),
+            .value_type = value,
+        };
+    }
+
+    /// Every local name a body can see right now, innermost scope
+    /// first.  Read by one diagnostic, and built only where a lambda is
+    /// (`FunctionDeclInfo.enclosing_locals`).
+    fn visibleLocals(self: *FunctionBuilder) Error![]const []const u8 {
+        var names: std.ArrayList([]const u8) = .empty;
+        errdefer names.deinit(self.arena());
+        var depth = self.scopes.items.len;
+        while (depth > 0) {
+            depth -= 1;
+            var keys = self.scopes.items[depth].names.keyIterator();
+            while (keys.next()) |key| try names.append(self.arena(), key.*);
+        }
+        return names.toOwnedSlice(self.arena());
     }
 
     // Errors ---------------------------------------------------------------

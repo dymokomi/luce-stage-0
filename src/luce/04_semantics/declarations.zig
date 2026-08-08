@@ -206,8 +206,14 @@ pub const Analyzer = struct {
 
         var lowered: std.ArrayList(mir.build.Lowering) = .empty;
         defer lowered.deinit(self.arena);
-        for (self.functions.items) |info| {
-            try lowered.append(self.arena, try self.lowerFunction(info));
+        // **By index, because the list grows while it is walked.**  A
+        // lambda becomes a top-level function the moment its landing
+        // site is checked (docs/FUNCTIONS.md D2), so lowering function
+        // K can append function K+n — and that one is lowered in its
+        // turn, by this loop, with no second pass and no fix-up.
+        var at: usize = 0;
+        while (at < self.functions.items.len) : (at += 1) {
+            try lowered.append(self.arena, try self.lowerFunction(self.functions.items[at]));
         }
         if (self.diagnostics.hasErrors()) return null;
 
@@ -411,6 +417,7 @@ pub const Analyzer = struct {
                 }
                 const element = (try self.resolveType(module, written.arguments[0])) orelse return null;
                 if (try self.refuseOptionalPart(element, written.arguments[0], "list element")) return null;
+                if (try self.refuseFunctionPart(element, written.arguments[0].span, "list element")) return null;
                 return try self.internHeapType(.{ .list = element });
             },
             .map => {
@@ -440,6 +447,7 @@ pub const Analyzer = struct {
                 }
                 const value = (try self.resolveType(module, written.arguments[1])) orelse return null;
                 if (try self.refuseOptionalPart(value, written.arguments[1], "map value")) return null;
+                if (try self.refuseFunctionPart(value, written.arguments[1].span, "map value")) return null;
                 return try self.internHeapType(.{ .map = .{ .key = key, .value = value } });
             },
             .array => {
@@ -454,6 +462,7 @@ pub const Analyzer = struct {
                 }
                 const element = (try self.resolveType(module, written.arguments[0])) orelse return null;
                 if (try self.refuseOptionalPart(element, written.arguments[0], "array element")) return null;
+                if (try self.refuseFunctionPart(element, written.arguments[0].span, "array element")) return null;
                 return try self.internHeapType(.{ .array = .{ .element = element, .rank = written.wildcards } });
             },
             .builder => {
@@ -1051,6 +1060,10 @@ pub const Analyzer = struct {
                     continue;
                 }
                 const field_type = (try self.resolveType(info.module, field.type_name)) orelse continue;
+                // A struct that carries behaviour is dispatch, and
+                // dispatch is a question of its own — deferred rather
+                // than refused (docs/FUNCTIONS.md S2).
+                if (try self.refuseFunctionPart(field_type, field.type_name.span, "struct field")) continue;
                 // D4, for a field: a reachable field may not publish a
                 // hidden type.  Only the author of the marks can trip
                 // this — nothing is private until someone writes it —
@@ -1724,6 +1737,55 @@ pub const Analyzer = struct {
         });
     }
 
+    /// Register the top-level function a lambda becomes
+    /// (docs/FUNCTIONS.md D2), and answer its index.
+    ///
+    /// Not `collectFunction`: there is no written signature to resolve
+    /// — the landing site's is the signature — no name to check for
+    /// collisions, because the name is unforgeable, and no visibility to
+    /// read, because nothing can name this function but the value that
+    /// was just made of it.  What it shares with a declared function is
+    /// everything after that: it is lowered by the same loop, checked by
+    /// the same walk, and called through the same instruction.
+    pub fn registerLambda(
+        self: *Analyzer,
+        declaration: *const ast.FuncDecl,
+        module: usize,
+        signature: types.Signature,
+        /// Every local name in scope where the lambda was written.  Read
+        /// by exactly one diagnostic: a body that reaches an enclosing
+        /// local is refused with the sentence about capture rather than
+        /// with "unknown name", which would be true and useless.
+        enclosing_locals: []const []const u8,
+    ) Error!u32 {
+        const parameter_types = try self.arena.alloc(Type, signature.parameters.len);
+        const parameter_modes = try self.arena.alloc(ast.ParameterMode, signature.parameters.len);
+        const parameter_defaults = try self.arena.alloc(?TypedConstant, signature.parameters.len);
+        for (signature.parameters, parameter_types, parameter_modes, parameter_defaults) |parameter, *held, *mode, *default| {
+            held.* = parameter.value_type;
+            mode.* = if (parameter.gives) .give else .borrow;
+            default.* = null;
+        }
+        const results = try self.arena.alloc(Type, if (signature.result == .none) 0 else 1);
+        if (results.len == 1) results[0] = signature.result;
+        const index: u32 = @intCast(self.functions.items.len);
+        try self.functions.append(self.arena, .{
+            .declaration = declaration,
+            .name = declaration.name,
+            .module = module,
+            .parameter_types = parameter_types,
+            .parameter_modes = parameter_modes,
+            .parameter_defaults = parameter_defaults,
+            .results = results,
+            .channel = results,
+            .return_type = signature.result,
+            .fallible = false,
+            .is_entry = false,
+            .enclosing_locals = enclosing_locals,
+        });
+        return index;
+    }
+
     /// Fold one parameter default at the parameter's own type
     /// (docs/ARGS.md D2): evaluated once, at the declaration, by the
     /// folder that already folds file-scope `let` — and materialised
@@ -1934,6 +1996,7 @@ pub const Analyzer = struct {
             },
             .field => |field| return parameterRead(declaration, field.target),
             .spawn => |worker| return parameterRead(declaration, worker.call),
+            .lambda => |written| return parameterRead(declaration, written.body),
             .call => |call| {
                 for (call.arguments) |argument| {
                     if (parameterRead(declaration, argument.value)) |read| return read;
@@ -2236,6 +2299,7 @@ pub const Analyzer = struct {
             .results = info.results,
             .channel = info.channel,
             .writes_receiver = info.receiver == .writes,
+            .enclosing_locals = info.enclosing_locals,
             .code = .{
                 .arena = self.arena,
                 .pool = self.pool,

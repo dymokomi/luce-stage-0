@@ -747,7 +747,7 @@ pub const Parser = struct {
     /// type parser recognises it — and the sentence teaches that one
     /// place.  The declaration still parses under the refused name, so
     /// the rest of the line gets its say and one mistake is one message.
-    fn refuseWildcardName(self: *Parser, item: Token) Error!void {
+    pub fn refuseWildcardName(self: *Parser, item: Token) Error!void {
         if (!std.mem.eql(u8, self.text(item), "_")) return;
         try self.report(
             "luce.parse.expected",

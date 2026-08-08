@@ -35,6 +35,10 @@ pub fn mayMutateContainers(expression: *const ast.Expression) bool {
         // A spawn moves every object argument out of this runtime,
         // which is the largest disturbance there is (docs/THREADS.md).
         .spawn => true,
+        // A lambda runs nothing where it is written: it becomes a
+        // top-level function, and the value here is its name
+        // (docs/FUNCTIONS.md D2).
+        .lambda => false,
         .try_call => true,
         .call => |call| blk: {
             if (!builtins.isPure(call.callee)) break :blk true;

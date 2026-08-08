@@ -143,6 +143,15 @@ pub const Try = struct { operand: *Expression, span: Span };
 /// 4's question, since only stage 4 can tell `Struct.helper(x)` from
 /// `value.method(x)`.
 pub const Spawn = struct { call: *Expression, span: Span };
+/// `(a, b) -> expr` — a **lambda** (docs/FUNCTIONS.md S3): a
+/// parenthesized parameter list, an arrow, one expression.
+///
+/// The parameters are bare names and carry no types: a lambda has none
+/// of its own, and takes them from the function type it lands on — the
+/// rule the language already lives by for numbers, applied to one more
+/// literal.  The body is one expression because a body with room for
+/// statements immediately wants the enclosing scope, which is capture.
+pub const Lambda = struct { parameters: []Name, body: *Expression, span: Span };
 
 pub const Expression = union(enum) {
     int_literal: Literal,
@@ -181,6 +190,9 @@ pub const Expression = union(enum) {
     /// spawn CALL — run the call on a worker and answer the `task`
     /// that owns it (docs/THREADS.md D3).
     spawn: Spawn,
+    /// (a, b) -> expr — a lambda, which stage 4 turns into a
+    /// compiler-named top-level function (docs/FUNCTIONS.md D2).
+    lambda: Lambda,
 
     pub fn span(self: *const Expression) Span {
         return switch (self.*) {
