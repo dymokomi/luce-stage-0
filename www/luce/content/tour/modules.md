@@ -106,14 +106,15 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:1:1: there is no standard module std.nope; the standard library is std.math, std.files, std.strings, std.paths, std.os, std.zip, std.json [luce.import.standard]
+main.luc:1:1: there is no standard module std.nope; the standard library is std.math, std.files, std.strings, std.lists, std.paths, std.os, std.zip, std.json [luce.import.standard]
     import std.nope
     ^~~~~~~~~~~~~~~
 ```
 
-There are five standard modules today: [`math`](/std/math/),
+There are eight standard modules today: [`math`](/std/math/),
 [`strings`](/std/strings/), [`files`](/std/files/),
-[`paths`](/std/paths/) and [`os`](/std/os/). They are ordinary Luce
+[`lists`](/std/lists/), [`paths`](/std/paths/), [`os`](/std/os/),
+[`zip`](/std/zip/) and [`json`](/std/json/). They are ordinary Luce
 source and they obey
 every language rule, including the host gate — `import std.files`
 inside a host-less program is a compile error, because file access

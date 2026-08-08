@@ -188,6 +188,8 @@ test "a lambda with no parameters, and one answering nothing" {
 
 test "a lambda's body may name a constant and call a visible function" {
     try agree.prints(
+        \\import std.math
+        \\
         \\let step = 4
         \\
         \\func triple(n: long) -> long:
@@ -196,9 +198,17 @@ test "a lambda's body may name a constant and call a visible function" {
         \\func apply(f: func(long) -> long, x: long) -> long:
         \\    return f(x)
         \\
+        \\func read(f: func() -> double) -> double:
+        \\    return f()
+        \\
+        \\func apply_double(f: func(double) -> double, x: double) -> double:
+        \\    return f(x)
+        \\
         \\func main():
         \\    print(string(apply((n) -> n + step, 1)))
         \\    print(string(apply((n) -> triple(n) + step, 2)))
+        \\    assert(read(() -> math.pi) > 3.0)
+        \\    assert(apply_double((x) -> math.round(x), 2.75) == 3.0)
         \\
     , "5\n10\n");
 }
@@ -276,6 +286,17 @@ test "string of a function value is the function's name" {
     , "half\nScale.twice\n");
 }
 
+test "string gives sibling lambdas distinct compiler function names" {
+    try agree.prints(
+        \\func main():
+        \\    let twice: func(long) -> long = (n) -> n * 2
+        \\    let thrice: func(long) -> long = (n) -> n * 3
+        \\    print(string(string(twice) != string(thrice)))
+        \\    print(string(twice != thrice))
+        \\
+    , "true\ntrue\n");
+}
+
 test "a function value copies freely, into a local, a parameter and back out" {
     try agree.prints(
         \\func twice(n: long) -> long:
@@ -339,6 +360,100 @@ test "a borrowing function value leaves its argument with its owner" {
 }
 
 // ---------------------------------------------------------------------------
+// The proving standard-library customer (D6)
+// ---------------------------------------------------------------------------
+
+test "std lists sort_by specializes for a struct and accepts a lambda" {
+    try agree.ok(
+        \\import std.lists
+        \\
+        \\struct Player:
+        \\    score: long
+        \\    order: long
+        \\
+        \\func by_score(a: Player, b: Player) -> bool:
+        \\    return a.score < b.score
+        \\
+        \\func main():
+        \\    var empty = new list(Player)
+        \\    empty.sort_by(by_score)
+        \\    assert(len(empty) == 0)
+        \\    var one = [Player(score = 7, order = 9)]
+        \\    one.sort_by(by_score)
+        \\    assert(one[0].order == 9)
+        \\    var players = [
+        \\        Player(score = 20, order = 0),
+        \\        Player(score = 10, order = 1),
+        \\        Player(score = 20, order = 2),
+        \\        Player(score = 30, order = 3),
+        \\    ]
+        \\    players.sort_by(by_score)
+        \\    assert(players[0].score == 10)
+        \\    assert(players[1].score == 20)
+        \\    assert(players[1].order == 0)
+        \\    assert(players[2].score == 20)
+        \\    assert(players[2].order == 2)
+        \\    assert(players[3].score == 30)
+        \\    players.sort_by((a, b) -> a.score > b.score)
+        \\    assert(players[0].score == 30)
+        \\    assert(players[1].score == 20)
+        \\    assert(players[1].order == 0)
+        \\    assert(players[2].score == 20)
+        \\    assert(players[2].order == 2)
+        \\    assert(players[3].score == 10)
+        \\    var numbers: list(long) = [3, 1, 2]
+        \\    numbers.sort_by((a, b) -> a < b)
+        \\    assert(numbers[0] == 1)
+        \\    assert(numbers[1] == 2)
+        \\    assert(numbers[2] == 3)
+        \\
+    );
+}
+
+test "std lists sort_by moves object elements without copying them" {
+    try agree.ok(
+        \\import std.lists
+        \\
+        \\func row_before(a: list(long), b: list(long)) -> bool:
+        \\    return a[0] < b[0]
+        \\
+        \\func main():
+        \\    var rows = new list(list(long))
+        \\    rows.append([3])
+        \\    rows.append([1])
+        \\    rows.append([2])
+        \\    rows.sort_by(row_before)
+        \\    assert(rows[0][0] == 1)
+        \\    assert(rows[1][0] == 2)
+        \\    assert(rows[2][0] == 3)
+        \\
+    );
+}
+
+test "std lists sort_by moves task resources and keeps equivalent elements stable" {
+    try agree.prints(
+        \\import std.lists
+        \\
+        \\func answer(n: long) -> long:
+        \\    return n
+        \\
+        \\func equivalent(a: task(long), b: task(long)) -> bool:
+        \\    return false
+        \\
+        \\func main():
+        \\    var tasks = new list(task(long))
+        \\    tasks.append(spawn answer(1))
+        \\    tasks.append(spawn answer(2))
+        \\    tasks.sort_by(equivalent)
+        \\    var joined: long = 0
+        \\    for work in tasks:
+        \\        joined = joined * 10 + work.wait()
+        \\    print(string(joined))
+        \\
+    , "12\n");
+}
+
+// ---------------------------------------------------------------------------
 // A function value is a call in flight: everything a call promises
 // ---------------------------------------------------------------------------
 
@@ -395,4 +510,39 @@ test "a function value chosen by a branch dispatches to whichever was chosen" {
         \\        seen = seen + 1
         \\
     , "true\nfalse\n");
+}
+
+test "a give-taking function value crosses into a worker and calls there" {
+    try agree.prints(
+        \\func consume(values: give list(long)) -> long:
+        \\    var total: long = 0
+        \\    for value in values:
+        \\        total += value
+        \\    return total
+        \\
+        \\func run(f: func(give list(long)) -> long, values: give list(long)) -> long:
+        \\    return f(give values)
+        \\
+        \\func main():
+        \\    var values: list(long) = [1, 2, 3, 4]
+        \\    let work = spawn run(consume, give values)
+        \\    print(string(work.wait()))
+        \\
+    , "10\n");
+}
+
+test "a worker can return a function value and the joiner can call it" {
+    try agree.prints(
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\func choose() -> func(long) -> long:
+        \\    return twice
+        \\
+        \\func main():
+        \\    let work = spawn choose()
+        \\    let chosen = work.wait()
+        \\    print(string(chosen(21)))
+        \\
+    , "42\n");
 }

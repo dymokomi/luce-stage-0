@@ -163,9 +163,10 @@ constructs from outside exactly as it always did.
 A public declaration's surface may name only public types: a public
 function whose parameter or result mentions a private struct is
 refused at the declaration, on the line that can fix it, naming both
-edits that would restore honesty. A private field's type is not part
-of the public surface and may be private — which is what lets a struct
-hide an implementation type entirely.
+edits that would restore honesty. The check follows containers and
+every nested parameter and result of a function type. A private
+field's type is not part of the public surface and may be private —
+which is what lets a struct hide an implementation type entirely.
 
 ```luce fail
 private struct Inner:
@@ -252,7 +253,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:1:1: there is no standard module std.nope; the standard library is std.math, std.files, std.strings, std.paths, std.os, std.zip, std.json [luce.import.standard]
+main.luc:1:1: there is no standard module std.nope; the standard library is std.math, std.files, std.strings, std.lists, std.paths, std.os, std.zip, std.json [luce.import.standard]
     import std.nope
     ^~~~~~~~~~~~~~~
 ```
@@ -263,8 +264,10 @@ std.files` inside a program compiled without host access is a compile
 error, because file access genuinely does not exist there.
 
 The modules are [`math`](/std/math/), [`strings`](/std/strings/),
-[`files`](/std/files/), [`paths`](/std/paths/), [`os`](/std/os/),
-[`zip`](/std/zip/) and [`json`](/std/json/).
+[`files`](/std/files/), [`lists`](/std/lists/),
+[`paths`](/std/paths/), [`os`](/std/os/), [`zip`](/std/zip/) and
+[`json`](/std/json/). `std.lists` currently contributes the routed
+`xs.sort_by(before)` method rather than a namespace function.
 
 ## Multi-file programs
 

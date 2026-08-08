@@ -25,7 +25,7 @@
     "accessors": {
       "patterns": [
         {
-          "match": "(\\.)(append|insert|remove|pop|clear|sort|reverse|find|contains|dim|fill|has|get|keys|values|append_ascii|build|read|write|flush|wait|byte_at|find_byte)\\b",
+          "match": "(\\.)(append|insert|remove|pop|clear|sort|sort_by|reverse|find|contains|dim|fill|has|get|keys|values|append_ascii|build|read|write|flush|wait|byte_at|find_byte)\\b",
           "captures": {
             "1": { "name": "punctuation.accessor.luce" },
             "2": { "name": "support.function.method.luce" }

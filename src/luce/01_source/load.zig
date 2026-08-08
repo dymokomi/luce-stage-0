@@ -147,6 +147,7 @@ const standard_modules = [_]struct { name: []const u8, source: []const u8 }{
     .{ .name = "math", .source = @embedFile("../std/math.luc") },
     .{ .name = "files", .source = @embedFile("../std/files.luc") },
     .{ .name = "strings", .source = @embedFile("../std/strings.luc") },
+    .{ .name = "lists", .source = @embedFile("../std/lists.luc") },
     .{ .name = "paths", .source = @embedFile("../std/paths.luc") },
     .{ .name = "os", .source = @embedFile("../std/os.luc") },
     .{ .name = "zip", .source = @embedFile("../std/zip.luc") },
@@ -585,7 +586,7 @@ test "the two namespaces are disjoint: std.math is embedded, math is the file" {
     // library can be mistaken for one in a file called math.luc.
     try testing.expectEqualStrings("std/math.luc", diagnostics.sources.pathOf(math));
     try testing.expect(std.mem.indexOf(u8, diagnostics.sources.textOf(math), "func local") == null);
-    try testing.expect(isStandard("math") and !isStandard("geo"));
+    try testing.expect(isStandard("math") and isStandard("lists") and !isStandard("geo"));
 
     const geo = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo", .sibling, nowhere)).?;
     try testing.expectEqual(sources_mod.Kind.imported, diagnostics.sources.at(geo).?.kind);

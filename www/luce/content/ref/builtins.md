@@ -26,7 +26,7 @@ receiver first, resolved by the receiver's type, not dispatched.
 | `ord(text: string) -> long` | first codepoint; traps on empty |
 | `parse_int(text: string) -> long?` | `none` when the text is not an integer |
 | `parse_float(text: string) -> double?` | `none` when the text is not a number |
-| `byte(x)`, `short(x)`, `int(x)`, `long(x)`, `half(x)`, `float(x)`, `double(x)`, `string(x)` | the conversion constructors, each named for what it produces. Float to integer rounds half away from zero and traps outside the target's range; integer to a narrower integer traps outside it; float to a narrower float rounds to nearest and reaches `inf` rather than trapping; `string(x)` takes a scalar and prints it at its own width |
+| `byte(x)`, `short(x)`, `int(x)`, `long(x)`, `half(x)`, `float(x)`, `double(x)`, `string(x)` | the conversion constructors, each named for what it produces. Float to integer rounds half away from zero and traps outside the target's range; integer to a narrower integer traps outside it; float to a narrower float rounds to nearest and reaches `inf` rather than trapping; `string(x)` accepts numbers, `bool`, strings, enums and function values, and refuses heap objects and structs |
 
 The four numeric builtins that answer their operand's own type land
 their arguments where the whole call lands, so `let x: double =
@@ -234,6 +234,7 @@ and a larger file answers the same failure as an unreadable one.
 | `remove(index)` | frees an owned element |
 | `pop() -> T` | ownership moves out; traps `empty_collection` when empty |
 | `sort()` | in place, **stable**, O(n log n); `long`, `double` or `string` elements |
+| `sort_by(before: func(T, T) -> bool)` | in place, **stable**, O(n log n); every element type; requires `import std.lists` |
 | `reverse()` | in place |
 | `find(value) -> long` | `-1` when absent |
 | `contains(value) -> bool` | |
@@ -241,6 +242,8 @@ and a larger file answers the same failure as an unreadable one.
 
 Plus `len`, `xs[i]`, `xs[i] = v`, and `xs[a:b]` — which allocates a
 new list the receiver owns, deeply when the elements are objects.
+`sort_by` borrows a named function or capture-free lambda; when the
+elements are heap objects the merge moves them rather than copying.
 
 ## map(K, V)
 
@@ -291,9 +294,9 @@ func main():
 | `build() -> string` | the bytes so far, as a string; the builder stays usable |
 | `clear()` | |
 
-Plus `len`.  A `builder` is a heap object, so its text comes out
-through `build()` rather than through `string(...)`, which takes a
-scalar.
+Plus `len`. A `builder` is a heap object, so its text comes out through
+`build()` rather than through `string(...)`, which accepts only the
+explicit value families listed in the conversions table.
 
 ## file
 

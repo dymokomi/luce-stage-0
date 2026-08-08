@@ -568,6 +568,79 @@ test "prune keeps everything the entry can reach, however it reaches it" {
     try testing.expectEqualStrings(before, after);
 }
 
+test "std sort_by is an ordinary call whose indirect comparator survives prune" {
+    var program = try compileRaw(
+        \\import std.lists
+        \\
+        \\struct Row:
+        \\    value: long
+        \\
+        \\func before(a: long, b: long) -> bool:
+        \\    return a < b
+        \\
+        \\func row_before(a: Row, b: Row) -> bool:
+        \\    return a.value < b.value
+        \\
+        \\func main():
+        \\    var values: list(long) = [3, 1, 2]
+        \\    values.sort_by(before)
+        \\    values.sort_by(before)
+        \\    var rows = [Row(value = 3), Row(value = 1)]
+        \\    rows.sort_by(row_before)
+        \\
+    );
+    defer program.deinit();
+
+    var long_helper: ?u32 = null;
+    var row_helper: ?u32 = null;
+    var helpers: usize = 0;
+    for (program.functions, 0..) |function, index| {
+        if (!std.mem.startsWith(u8, function.name, "lists.sort_by(")) continue;
+        helpers += 1;
+        if (std.mem.eql(u8, function.name, "lists.sort_by(long)")) long_helper = @intCast(index);
+        if (std.mem.eql(u8, function.name, "lists.sort_by(Row)")) row_helper = @intCast(index);
+    }
+    // Two calls at one T reuse one specialization; a second T gets a
+    // distinct checked body.  The private source template is not one
+    // of these helpers and is pruned when nothing calls it.
+    try testing.expectEqual(@as(usize, 2), helpers);
+    try testing.expect(long_helper != null);
+    try testing.expect(row_helper != null);
+    var long_calls: usize = 0;
+    var row_calls: usize = 0;
+    for (program.functions[program.entry_function].instructions) |instruction| switch (instruction) {
+        .call => |call| {
+            if (call.function == long_helper.?) long_calls += 1;
+            if (call.function == row_helper.?) row_calls += 1;
+        },
+        else => {},
+    };
+    try testing.expectEqual(@as(usize, 2), long_calls);
+    try testing.expectEqual(@as(usize, 1), row_calls);
+    for ([_]u32{ long_helper.?, row_helper.? }) |helper| {
+        var calls_indirect = false;
+        for (program.functions[helper].instructions) |instruction| switch (instruction) {
+            .call_indirect => calls_indirect = true,
+            else => {},
+        };
+        try testing.expect(calls_indirect);
+    }
+
+    try optimize.prune(program.arena.allocator(), &program);
+    try mir.verify(testing.allocator, &program);
+    var kept_before = false;
+    var kept_row_before = false;
+    var kept_helpers: usize = 0;
+    for (program.functions) |function| {
+        kept_before = kept_before or std.mem.eql(u8, function.name, "before");
+        kept_row_before = kept_row_before or std.mem.eql(u8, function.name, "row_before");
+        if (std.mem.startsWith(u8, function.name, "lists.sort_by(")) kept_helpers += 1;
+    }
+    try testing.expect(kept_before);
+    try testing.expect(kept_row_before);
+    try testing.expectEqual(@as(usize, 2), kept_helpers);
+}
+
 test "dead keeps an unread instruction that can trap" {
     // The sweep deletes only `pure` instructions.  Integer `//` is
     // `stable` — it answers the same thing every time but can trap —
@@ -596,6 +669,73 @@ test "dead keeps an unread instruction that can trap" {
         }
     }
     try testing.expectEqual(@as(usize, 1), divisions);
+}
+
+test "dead keeps an unread function-name lookup that can trap" {
+    var program = try compileRaw(
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\func main():
+        \\    let chosen: func(long) -> long = twice
+        \\    print(string(chosen))
+        \\
+    );
+    defer program.deinit();
+    const arena = program.arena.allocator();
+    const entry = &program.functions[program.entry_function];
+
+    var function_value: ?Register = null;
+    var name_value: ?Register = null;
+    var print_value: ?Register = null;
+    for (entry.instructions, 0..) |instruction, register| switch (instruction) {
+        .const_function => function_value = @intCast(register),
+        .intrinsic => |call| switch (call.kind) {
+            .function_name => name_value = @intCast(register),
+            .print => print_value = @intCast(register),
+            else => {},
+        },
+        else => {},
+    };
+    try testing.expect(function_value != null);
+    try testing.expect(name_value != null);
+    try testing.expect(print_value != null);
+
+    // A verified local may be read before a store; function locals use
+    // -1 for that zero.  Feed it through the source program's existing
+    // store/load pair, then remove the print so the name result is
+    // unread.  Dead-code elimination must retain the lookup and its
+    // `null_object` trap.
+    const original_locals = entry.locals;
+    const locals = try arena.alloc(Local, original_locals.len + 1);
+    @memcpy(locals[0..original_locals.len], original_locals);
+    locals[original_locals.len] = .{
+        .name = "unwritten",
+        .local_type = entry.result_types[function_value.?],
+    };
+    entry.locals = locals;
+    entry.instructions[function_value.?] = .{ .local_get = @intCast(original_locals.len) };
+    entry.instructions[print_value.?] = .{ .const_long = 0 };
+    entry.result_types[print_value.?] = .long;
+
+    try mir.verify(testing.allocator, &program);
+    try testing.expectEqual(
+        optimize.effects.Effect.stable,
+        optimize.effects.classify(entry, name_value.?),
+    );
+    try optimize.dead(arena, &program);
+    try mir.verify(testing.allocator, &program);
+
+    var names: usize = 0;
+    for (entry.blocks) |block| {
+        for (block.items) |item| switch (entry.instructions[item]) {
+            .intrinsic => |call| if (call.kind == .function_name) {
+                names += 1;
+            },
+            else => {},
+        };
+    }
+    try testing.expectEqual(@as(usize, 1), names);
 }
 
 test "dead keeps a store into a slot that owns its storage" {

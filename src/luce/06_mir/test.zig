@@ -624,6 +624,127 @@ test "the heap type table is checked before anything indexes it" {
     try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
 }
 
+test "every function signature and function type index is bounded" {
+    var program = try programOf(.{
+        .instructions = &.{.{ .ret = null }},
+        .result_types = &.{.none},
+        .blocks = &.{&.{0}},
+    });
+    defer program.deinit();
+    const arena = program.arena.allocator();
+
+    // The second row is deliberately unused.  It is still part of the
+    // decoded type table, so its parameter and result must be safe to
+    // inspect independently of whether an instruction names the row.
+    const nested_parameters = try arena.dupe(types.Signature.Parameter, &.{.{
+        .value_type = .{ .function = 0 },
+    }});
+    const signatures = try arena.dupe(types.Signature, &.{
+        .{ .parameters = &.{}, .result = .none },
+        .{ .parameters = nested_parameters, .result = .{ .function = 0 } },
+    });
+    program.signatures = signatures;
+    try verify_mod.verify(testing.allocator, &program);
+
+    nested_parameters[0].value_type = .{ .function = 2 };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    nested_parameters[0].value_type = .{ .function = 0 };
+
+    signatures[1].result = .{ .function = 2 };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    signatures[1].result = .{ .function = 0 };
+
+    // Types outside the signature table use the same bound.  This local
+    // is never read, which is exactly why an instruction-local check is
+    // not sufficient.
+    program.functions[0].locals = try arena.dupe(Local, &.{.{
+        .name = "unused",
+        .local_type = .{ .function = 2 },
+    }});
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+}
+
+test "recursive heap and function type tables are rejected before names render" {
+    var program = try programOf(.{
+        .instructions = &.{.{ .ret = null }},
+        .result_types = &.{.none},
+        .blocks = &.{&.{0}},
+    });
+    defer program.deinit();
+    const arena = program.arena.allocator();
+
+    // A signature directly naming itself has no finite spelling.
+    program.signatures = try arena.dupe(types.Signature, &.{.{
+        .parameters = try arena.dupe(types.Signature.Parameter, &.{.{
+            .value_type = .{ .function = 0 },
+        }}),
+        .result = .none,
+    }});
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+
+    // Nor do two otherwise-bounded signature rows naming each other.
+    program.signatures = try arena.dupe(types.Signature, &.{
+        .{ .parameters = &.{}, .result = .{ .function = 1 } },
+        .{ .parameters = &.{}, .result = .{ .function = 0 } },
+    });
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+
+    // Heap rows render recursively too, both alone and through a
+    // function signature, so they belong to the same graph.
+    program.signatures = &.{};
+    program.heap_types = try arena.dupe(types.HeapType, &.{.{ .list = .{ .heap = 0 } }});
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
+
+    // Optional heap payloads render the same anonymous row after the
+    // question mark, so they cannot hide the cycle either.
+    program.heap_types[0] = .{ .list = .{ .optional = .{ .heap = 0 } } };
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
+
+    program.heap_types = try arena.dupe(types.HeapType, &.{.{ .list = .{ .function = 0 } }});
+    program.signatures = try arena.dupe(types.Signature, &.{.{
+        .parameters = &.{},
+        .result = .{ .heap = 0 },
+    }});
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+
+    // A named struct is a printed leaf.  The legal recursive-data
+    // spelling `Node` through `list(Node)` must not be mistaken for a
+    // recursively expanded anonymous type.
+    program.signatures = &.{};
+    program.heap_types = try arena.dupe(types.HeapType, &.{.{ .list = .{ .strukt = 0 } }});
+    program.structs = try arena.dupe(types.StructLayout, &.{.{
+        .name = "Node",
+        .fields = try arena.dupe(types.StructField, &.{.{
+            .name = "children",
+            .field_type = .{ .heap = 0 },
+        }}),
+    }});
+    try verify_mod.verify(testing.allocator, &program);
+}
+
+test "a function's integer storage is not a numeric conversion" {
+    var program = try programOf(.{
+        .instructions = &.{
+            .{ .const_function = 0 }, // r0
+            .{ .const_long = 0 }, // r1, made a convert below
+            .{ .ret = null }, // r2
+        },
+        .result_types = &.{ .{ .function = 0 }, .int, .none },
+        .blocks = &.{&.{ 0, 1, 2 }},
+    });
+    defer program.deinit();
+    program.signatures = try program.arena.allocator().dupe(types.Signature, &.{.{
+        .parameters = &.{},
+        .result = .none,
+    }});
+
+    // The function constant and signature are otherwise a valid module:
+    // main itself has the `func()` shape the constant claims.
+    try verify_mod.verify(testing.allocator, &program);
+    program.functions[0].instructions[1] = .{ .convert = 0 };
+    try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &program));
+}
+
 test "an intrinsic is checked for its own arity and operand types" {
     var of = [_]Register{0};
     var seven = [_]Register{ 0, 0, 0, 0, 0, 0, 0 };

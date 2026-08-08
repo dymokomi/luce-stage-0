@@ -42,7 +42,9 @@ checks it.
 
 A function declared inside a struct whose first parameter is the word
 `self` is a [method](#methods), called on a receiver. There are no
-variadics and no first-class functions.
+variadics. Named functions can be used as values, returned and called
+indirectly through a [`func(...)` type](../types/#function), and
+capture-free lambdas are expressions rather than declarations.
 
 ## struct
 

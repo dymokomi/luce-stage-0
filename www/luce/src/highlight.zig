@@ -90,11 +90,11 @@ pub const builtins = [_][]const u8{
 /// `map_methods` and `builder_methods` in `04_semantics/builtins.zig`,
 /// plus the two String primitives beside them.
 pub const methods = [_][]const u8{
-    "byte_at", "find_byte", "append",   "append_ascii", "build",
-    "insert",  "remove",    "pop",      "clear",        "sort",
-    "reverse", "find",      "contains", "dim",          "fill",
-    "has",     "get",       "keys",     "values",       "read",
-    "write",   "flush",
+    "byte_at", "find_byte", "append", "append_ascii", "build",
+    "insert",  "remove",    "pop",    "clear",        "sort",
+    "sort_by", "reverse",   "find",   "contains",     "dim",
+    "fill",    "has",       "get",    "keys",         "values",
+    "read",    "write",     "flush",
 };
 
 pub fn inTable(table: []const []const u8, word: []const u8) bool {

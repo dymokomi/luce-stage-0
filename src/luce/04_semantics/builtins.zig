@@ -197,8 +197,8 @@ pub const string_methods = [_]struct {
 /// dispatch turns on them, and a "did you mean" needs the same list to
 /// measure against.
 pub const list_methods = [_][]const u8{
-    "append", "insert",  "remove", "pop",      "clear",
-    "sort",   "reverse", "find",   "contains",
+    "append", "insert",  "remove",  "pop",  "clear",
+    "sort",   "sort_by", "reverse", "find", "contains",
 };
 pub const array_methods = [_][]const u8{ "dim", "fill", "sort", "reverse", "find", "contains" };
 pub const map_methods = [_][]const u8{ "has", "get", "remove", "keys", "values", "clear" };

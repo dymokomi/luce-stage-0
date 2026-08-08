@@ -1965,6 +1965,30 @@ test "std is a namespace, not a reserved name: a sibling module may be called ma
     try testing.expect(std.mem.indexOf(u8, collision.failure.at(0).?.message, "math.luc") != null);
 }
 
+test "the routed list comparator requires std lists, not a sibling named lists" {
+    var files: TestLoader = .{ .modules = &.{.{
+        .name = "lists",
+        .source = "func marker():\n    return\n",
+    }} };
+    var result = try compile_mod.compileProject(testing.allocator,
+        \\import lists
+        \\
+        \\func before(a: long, b: long) -> bool:
+        \\    return a < b
+        \\
+        \\func main():
+        \\    var values: list(long) = [3, 1, 2]
+        \\    values.sort_by(before)
+        \\
+    , files.loader(), .{});
+    defer result.deinit();
+
+    try testing.expect(result == .failure);
+    const first = result.failure.at(0).?;
+    try testing.expectEqualStrings("luce.sema.import", first.code);
+    try testing.expect(std.mem.indexOf(u8, first.message, "import std.lists") != null);
+}
+
 test "a missing import is spelled the way the author would have to write it" {
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{

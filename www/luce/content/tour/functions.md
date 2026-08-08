@@ -35,9 +35,48 @@ it, so `func pad(s: string, width: long = 8)` answers both `pad(s)`
 and `pad(s, 12)`. Every path through a function that declares a
 return type must return, and the compiler checks that.
 
-Functions are not values: there are no first-class functions, no
-closures and no function pointers. A name in call position is a
-function, statically.
+## Functions are values
+
+A function type is its signature without parameter names:
+`func(long) -> long`, `func(string)`, or
+`func(give list(long)) -> long` when the call takes ownership. A named
+function is a value wherever that type is expected, and a local holding
+one is called like any other function.
+
+```luce run
+func twice(n: long) -> long:
+    return n * 2
+
+func apply(f: func(long) -> long, value: long) -> long:
+    return f(value)
+
+func main():
+    let chosen: func(long) -> long = twice
+    print(string(chosen(21)))
+    print(string(apply((n) -> n + 1, 41)))
+```
+
+```output
+42
+42
+```
+
+`(n) -> n + 1` is a **lambda**: parenthesized parameter names, an
+arrow, and one expression. Its parameter and answer types come from
+the function type at the place it lands. With no such place the
+compiler asks for an annotation.
+
+A lambda carries no environment. It may use its parameters, functions
+and file-scope constants, but not a local from the function around it;
+behavior plus state is a struct with a method. A method reference is
+refused for the same reason — it would carry its receiver — while a
+namespace function such as `Scale.twice` is an ordinary function value.
+
+Calls through values are positional because a function type has no
+parameter names or defaults. Function values copy freely, compare with
+`==` and `!=`, have no ordering, and `string(f)` gives the function's
+name. There are first-class functions and capture-free lambdas, but no
+closures.
 
 ## Structs
 

@@ -62,6 +62,7 @@ const context = @import("context.zig");
 const Analyzed = context.Analyzed;
 const ModuleTree = context.ModuleTree;
 const FunctionDeclInfo = context.FunctionDeclInfo;
+const EnclosingLocal = context.EnclosingLocal;
 const ConstantValue = context.ConstantValue;
 const OwnershipClass = context.OwnershipClass;
 const Poison = context.Poison;
@@ -205,9 +206,9 @@ pub const FunctionBuilder = struct {
     narrowed: std.ArrayList(LocalId) = .empty,
     /// Every local name in scope where this function's **lambda** was
     /// written, or null for a function somebody declared
-    /// (`context.FunctionDeclInfo.enclosing_locals`).  Read by one
-    /// diagnostic: the capture refusal.
-    enclosing_locals: ?[]const []const u8 = null,
+    /// (`context.FunctionDeclInfo.enclosing_locals`).  Read by the
+    /// capture refusal and by lambda-parameter no-shadowing checks.
+    enclosing_locals: ?[]const EnclosingLocal = null,
     /// Set for exactly one hop.  `try` and `catch` raise it, and the
     /// very next `lowerExpressionInner` reads and clears it, so the
     /// permission reaches the call they are written in front of and
@@ -619,25 +620,7 @@ pub const FunctionBuilder = struct {
     /// only noise.
     fn failUnknownName(self: *FunctionBuilder, name: []const u8, span: Span) Error!void {
         if (self.undeclared.contains(name)) return;
-        // **A lambda carries no environment** (docs/FUNCTIONS.md S3).
-        // Inside the function a lambda became, a name that was a local
-        // where the lambda was written is not unknown — it is out of
-        // reach, and those are different sentences.  The one that says
-        // "unknown" sends a reader to look for a typo in a name they can
-        // see two lines up.
-        if (self.enclosing_locals) |visible| {
-            for (visible) |held| {
-                if (!std.mem.eql(u8, held, name)) continue;
-                try self.fail(
-                    "luce.sema.name",
-                    span,
-                    "a lambda carries no environment, and {s} belongs to the scope around it; " ++
-                        "pass it as a parameter, or write a struct with a method — state that travels with behavior is a struct [FUNCTIONS.md S3]",
-                    .{name},
-                );
-                return;
-            }
-        }
+        if (try self.failCapturedName(name, span)) return;
         const qualified = try self.analyzer.qualify(self.prefix, name);
         if (try self.failNotAValue(name, qualified, span)) return;
         var suggestion = helpers.Suggestion.init(name);
@@ -648,6 +631,38 @@ pub const FunctionBuilder = struct {
             return;
         }
         try self.fail("luce.sema.name", span, "unknown name {s}", .{name});
+    }
+
+    /// **A lambda carries no environment** (docs/FUNCTIONS.md S3).
+    /// Inside the function a lambda became, a name that was a local
+    /// where the lambda was written is not unknown — it is out of
+    /// reach, and those are different sentences.  Both value position
+    /// (`n * scale`) and callee position (`predicate(n)`) ask this one
+    /// question, so neither falls through to a misleading unknown-name
+    /// diagnostic.
+    fn capturesName(self: *FunctionBuilder, name: []const u8) bool {
+        // A lambda parameter or one of its own locals wins normally;
+        // only a name that would have to come from the writing scope
+        // is a capture.
+        if (self.findLocal(name) != null) return false;
+        if (self.enclosing_locals) |visible| {
+            for (visible) |held| {
+                if (std.mem.eql(u8, held.name, name)) return true;
+            }
+        }
+        return false;
+    }
+
+    fn failCapturedName(self: *FunctionBuilder, name: []const u8, span: Span) Error!bool {
+        if (!self.capturesName(name)) return false;
+        try self.fail(
+            "luce.sema.name",
+            span,
+            "a lambda carries no environment, and {s} belongs to the scope around it; " ++
+                "pass it as a parameter, or write a struct with a method — state that travels with behavior is a struct [FUNCTIONS.md S3]",
+            .{name},
+        );
+        return true;
     }
 
     /// A name in value position that names a declaration rather than a
@@ -766,6 +781,7 @@ pub const FunctionBuilder = struct {
     /// Report a call whose callee names no declaration, offering the
     /// closest function or struct the reader could have meant.
     fn failUnknownFunction(self: *FunctionBuilder, written: []const u8, span: Span) Error!void {
+        if (try self.failCapturedName(written, span)) return;
         // A name the language used to spell is not a typo, and the
         // reader is owed the replacement rather than a guess at what
         // they might have meant.  Reached only once nothing else
@@ -1394,6 +1410,7 @@ pub const FunctionBuilder = struct {
         const chain = helpers.dottedChain(method.target) orelse return false;
         const head = chain.head();
         if (self.findLocal(head) != null) return false;
+        if (self.capturesName(head)) return false;
         const head_qualified = try self.analyzer.qualify(self.prefix, head);
         if (self.analyzer.struct_names.contains(head_qualified)) return true;
         return self.analyzer.importsModule(self.module, head);
@@ -1956,13 +1973,18 @@ pub const FunctionBuilder = struct {
                         return null;
                     return info.parameter_types[slot];
                 }
-                // A builtin method's arguments are positional (D10); a
-                // named one gets no landing here and its refusal after
-                // the batch.
-                if (method.arguments[index - 1].name != null) return null;
                 const wanted = (try self.methodParameters(values[0].value_type, method.name)) orelse
                     return null;
-                return if (index - 1 < wanted.len) wanted[index - 1] else null;
+                const slot = index - 1;
+                if (slot >= wanted.len) return null;
+                // A builtin method's arguments are positional (D10),
+                // so a named one is refused after the batch.  A bare
+                // function or lambda still needs its positional type
+                // while being lowered, however; without that landing
+                // its "needs a function place" error would hide the
+                // more fundamental named-argument refusal.
+                if (method.arguments[slot].name != null and wanted[slot] != .function) return null;
+                return wanted[slot];
             },
             .stored_element => {
                 if (index == 0) return null;
@@ -4288,6 +4310,14 @@ pub const FunctionBuilder = struct {
                 return null;
             },
             .field => |field| {
+                // A dotted head still obeys lexical shadowing.  In a
+                // synthesized lambda the enclosing local is absent
+                // from this top-level function's scope, so check it
+                // before `math.pi` can be mistaken for an imported
+                // namespace (FUNCTIONS.md S3).
+                if (helpers.dottedChain(field.target)) |chain| {
+                    if (try self.failCapturedName(chain.head(), field.span)) return null;
+                }
                 // `Struct.helper` and `module.helper` where a function
                 // is wanted: the same head-names-a-declaration path a
                 // call takes, one dot earlier (docs/FUNCTIONS.md S1).
@@ -4368,6 +4398,20 @@ pub const FunctionBuilder = struct {
             );
             return null;
         }
+        const enclosing = try self.visibleLocals();
+        for (written.parameters) |parameter| {
+            for (enclosing) |held| {
+                if (!std.mem.eql(u8, parameter.text, held.name)) continue;
+                try self.fail("luce.sema.duplicate", parameter.span, "{s} is already declared{s}", .{
+                    parameter.text,
+                    try self.analyzer.declaredAt(
+                        self.analyzer.modules[self.module].file,
+                        held.declared_at,
+                    ),
+                });
+                return null;
+            }
+        }
         // The synthesized declaration.  Its parameters carry names and
         // no written types — the signature is where the types are, and
         // `registerLambda` hands them over resolved — and its body is
@@ -4393,12 +4437,20 @@ pub const FunctionBuilder = struct {
         const returns = try self.arena().alloc(ast.TypeName, if (signature.result == .none) 0 else 1);
         if (returns.len == 1) returns[0] = .{ .name = "func", .span = written.span };
         const declaration = try self.arena().create(ast.FuncDecl);
+        const at = self.analyzer.diagnostics.sources.place(
+            self.analyzer.modules[self.module].file,
+            written.span.start,
+        );
         declaration.* = .{
             // Unforgeable from source, and readable in a trace: no
-            // identifier holds a parenthesis, so this collides with
-            // nothing a program can declare — the same trick the
-            // synthesized return-shape layouts use.
-            .name = try std.fmt.allocPrint(self.arena(), "{s}.(lambda)", .{self.code.name}),
+            // identifier holds a parenthesis.  The source place makes
+            // sibling lambdas distinct too, so `string(f)` never gives
+            // two unequal functions the same compiler name.
+            .name = try std.fmt.allocPrint(
+                self.arena(),
+                "{s}.(lambda@{d}.{d})",
+                .{ self.code.name, at.line, at.column },
+            ),
             .name_span = written.span,
             .parameters = parameters,
             .returns = returns,
@@ -4409,7 +4461,7 @@ pub const FunctionBuilder = struct {
             declaration,
             self.module,
             signature,
-            try self.visibleLocals(),
+            enclosing,
         );
         _ = expression;
         const value: Type = .{ .function = index };
@@ -4420,17 +4472,24 @@ pub const FunctionBuilder = struct {
     }
 
     /// Every local name a body can see right now, innermost scope
-    /// first.  Read by one diagnostic, and built only where a lambda is
+    /// first.  A synthesized lambda carries the names it was already
+    /// forbidden to capture too: without that inherited tail, a lambda
+    /// nested inside it could mistake a grandparent local for a module
+    /// or top-level declaration.  Built only where a lambda is
     /// (`FunctionDeclInfo.enclosing_locals`).
-    fn visibleLocals(self: *FunctionBuilder) Error![]const []const u8 {
-        var names: std.ArrayList([]const u8) = .empty;
+    fn visibleLocals(self: *FunctionBuilder) Error![]const EnclosingLocal {
+        var names: std.ArrayList(EnclosingLocal) = .empty;
         errdefer names.deinit(self.arena());
         var depth = self.scopes.items.len;
         while (depth > 0) {
             depth -= 1;
-            var keys = self.scopes.items[depth].names.keyIterator();
-            while (keys.next()) |key| try names.append(self.arena(), key.*);
+            var entries = self.scopes.items[depth].names.iterator();
+            while (entries.next()) |entry| try names.append(self.arena(), .{
+                .name = entry.key_ptr.*,
+                .declared_at = entry.value_ptr.declared_at,
+            });
         }
+        if (self.enclosing_locals) |inherited| try names.appendSlice(self.arena(), inherited);
         return names.toOwnedSlice(self.arena());
     }
 
@@ -6669,6 +6728,7 @@ pub const FunctionBuilder = struct {
         const count = chain.count;
         const head = chain.head();
         if (self.findLocal(head) != null) return .value;
+        if (try self.failCapturedName(head, method.span)) return .reported;
 
         var written: std.ArrayList(u8) = .empty;
         defer written.deinit(self.temporary());
@@ -6777,6 +6837,12 @@ pub const FunctionBuilder = struct {
                     std.mem.eql(u8, method.name, "join"))
                 {
                     return self.stringsCall(method, values, as_statement);
+                }
+                // Comparator sorting is ordinary std Luce, routed from
+                // list method sugar and specialized at the receiver's
+                // monomorphic element type (FUNCTIONS.md D6).
+                if (descriptor == .list and std.mem.eql(u8, method.name, "sort_by")) {
+                    return self.listsCall(method, values, descriptor.list, as_statement);
                 }
                 if (try self.refuseNamedMethodArguments(method)) return null;
                 if (try self.objectMethod(method, receiver.value_type, descriptor, arguments)) |found| {
@@ -7419,6 +7485,16 @@ pub const FunctionBuilder = struct {
             if (std.mem.eql(u8, name, "insert")) return try self.typeList(&.{ .long, element });
             if (std.mem.eql(u8, name, "remove")) return try self.typeList(&.{.long});
             if (std.mem.eql(u8, name, "pop")) return &.{};
+            if (std.mem.eql(u8, name, "sort_by")) {
+                const parameters = try self.arena().alloc(types.Signature.Parameter, 2);
+                parameters[0] = .{ .value_type = element };
+                parameters[1] = .{ .value_type = element };
+                const comparator = try self.analyzer.internSignature(.{
+                    .parameters = parameters,
+                    .result = .boolean,
+                });
+                return try self.typeList(&.{comparator});
+            }
         }
         if (std.mem.eql(u8, name, "sort") or std.mem.eql(u8, name, "reverse")) return &.{};
         if (std.mem.eql(u8, name, "clear") and growable) return &.{};
@@ -7557,6 +7633,77 @@ pub const FunctionBuilder = struct {
         // module's functions do not fail, so nothing is permitted
         // here: `s.split(",")` can never need a `try`.
         return self.callUser(function_index, qualified, values, method.span, as_statement, false);
+    }
+
+    /// Route `xs.sort_by(before)` to the checked Luce implementation
+    /// in `std.lists`, specialized at the receiver's element type.
+    ///
+    /// This is deliberately parallel to `stringsCall`: the import is
+    /// the feature gate, method arguments stay positional, and the
+    /// target remains a user function.  The only extra step is closed
+    /// monomorphization because Luce has monomorphic `list(T)` and no
+    /// surface generics.  The generated function body is still the
+    /// std source, so neither MIR nor libluce_rt learns a sort callback.
+    fn listsCall(
+        self: *FunctionBuilder,
+        method: ast.Method,
+        values: []const Typed,
+        element: Type,
+        as_statement: bool,
+    ) Error!?Typed {
+        const local_module = self.analyzer.isStandardModule(self.module, "lists");
+        if (!local_module and !self.analyzer.importsStandardModule(self.module, "lists")) {
+            try self.fail(
+                "luce.sema.import",
+                method.span,
+                "comparator sorting lives in the standard library: import std.lists to use sort_by (docs/STD.md)",
+                .{},
+            );
+            return null;
+        }
+        for (method.arguments) |argument| {
+            if (argument.name == null) continue;
+            try self.fail(
+                "luce.sema.method",
+                argument.span,
+                "sort_by routes to std.lists and its comparator is positional here; write sort_by(before)",
+                .{},
+            );
+            return null;
+        }
+        for (method.arguments) |argument| {
+            if (argument.value.* != .give) continue;
+            try self.fail(
+                "luce.sema.own",
+                argument.span,
+                "sort_by only borrows its comparator; give needs an owning destination [OWNERSHIP.md S11, S13]",
+                .{},
+            );
+            return null;
+        }
+
+        const comparator = (try self.sequenceParameters("sort_by", element, true)).?[0];
+        const receiver_type = values[0].value_type;
+        const element_name = try self.analyzer.typeName(element);
+        const specialized_name = try std.fmt.allocPrint(
+            self.arena(),
+            "lists.sort_by({s})",
+            .{element_name},
+        );
+        const function_index = (try self.analyzer.registerStandardSpecialization(
+            "lists.sort_by_template",
+            specialized_name,
+            &.{ receiver_type, comparator },
+        )) orelse {
+            try self.fail(
+                "luce.sema.import",
+                method.span,
+                "std.lists is missing its sort_by implementation",
+                .{},
+            );
+            return null;
+        };
+        return self.callUser(function_index, "lists.sort_by", values, method.span, as_statement, false);
     }
 
     /// The emitting half of a user call, for callers that already
@@ -7891,7 +8038,7 @@ pub const FunctionBuilder = struct {
             return null;
         }
         if (growable) {
-            try self.fail("luce.sema.method", method.span, "list has no method {s} (has append insert remove pop sort reverse find contains clear; join lives in strings)", .{name});
+            try self.fail("luce.sema.method", method.span, "list has no method {s} (has append insert remove pop sort reverse find contains clear; sort_by lives in lists; join lives in strings)", .{name});
             return null;
         }
         try self.fail("luce.sema.method", method.span, "array has no method {s} (has dim fill sort reverse find contains)", .{name});
@@ -8053,9 +8200,9 @@ pub const FunctionBuilder = struct {
     /// name resolution, which is why they are not in the builtin
     /// table and why `string` is a reserved name.
     ///
-    /// `string(x)` takes the scalars and nothing else: a `builder` is
-    /// a heap object and its text comes out through `b.build()`, which
-    /// is the method it should always have had.
+    /// `string(x)` takes scalar values, enums, and function values.  A
+    /// `builder` is a heap object and its text comes out through
+    /// `b.build()`, which is the method it should always have had.
     /// `Method(n)` — the number→enum direction, which answers
     /// `Method?` (docs/ENUMS.md R2).
     ///
@@ -8212,7 +8359,7 @@ pub const FunctionBuilder = struct {
                         try self.fail(
                             "luce.sema.convert",
                             call.span,
-                            "string() converts a scalar; a builder hands over its text with .build()",
+                            "string() converts a number, a bool, a string, an enum, or a function value; a builder hands over its text with .build()",
                             .{},
                         );
                         return null;
@@ -8349,7 +8496,7 @@ pub const FunctionBuilder = struct {
         // a message that enumerates them is a message that goes stale
         // every time the ladder grows a rung.
         const takes: []const u8 = if (conversionNamed(call.callee).? == .string)
-            "a number, a bool, or a string"
+            "a number, a bool, a string, an enum, or a function value"
         else
             "a number";
         try self.fail("luce.sema.convert", call.span, "{s}() converts {s}, not {s}{s}", .{

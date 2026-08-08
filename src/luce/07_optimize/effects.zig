@@ -163,9 +163,12 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         else
             .stable,
         .null_object => .pure,
-        // Reading a function's name reads a constant table
-        // (docs/FUNCTIONS.md D3).
-        .function_name => .pure,
+        // Reading a valid function's name reads a constant table
+        // (docs/FUNCTIONS.md D3).  A verified decoded function value
+        // can still hold the unwritten-local sentinel, however, and
+        // both engines range-check it as `null_object`; deleting an
+        // unread lookup would delete that trap.
+        .function_name => .stable,
 
         // Optionals move no bits and touch no heap: absence is a tag.
         .none_value, .is_none, .optional_wrap, .optional_unwrap => .pure,

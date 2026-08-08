@@ -639,9 +639,10 @@ const testing = std.testing;
 const compile_mod = @import("../compile.zig");
 const interpreter = @import("../interpreter.zig");
 
-fn compileScript(source: []const u8) !mir.Program {
+fn compileScriptWith(source: []const u8, prune: bool) !mir.Program {
     var result = try compile_mod.compile(testing.allocator, source, .{
         .allow_host = true,
+        .prune = prune,
     });
     switch (result) {
         .success => |program| return program,
@@ -653,6 +654,10 @@ fn compileScript(source: []const u8) !mir.Program {
             return error.TestUnexpectedResult;
         },
     }
+}
+
+fn compileScript(source: []const u8) !mir.Program {
+    return compileScriptWith(source, true);
 }
 
 test "a compiled program round-trips through the module format" {
@@ -708,6 +713,150 @@ test "a compiled program round-trips through the module format" {
     const again = try encode(testing.allocator, &loaded);
     defer testing.allocator.free(again);
     try testing.expectEqualSlices(u8, encoded, again);
+}
+
+test "function signatures, values, lambdas, and indirect calls round-trip" {
+    const source =
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\func apply(f: func(long) -> long, n: long) -> long:
+        \\    return f(n)
+        \\
+        \\func main():
+        \\    let chosen: func(long) -> long = twice
+        \\    print(string(chosen))
+        \\    print(string(apply((n) -> n + 1, 4)))
+        \\
+    ;
+    var program = try compileScript(source);
+    defer program.deinit();
+
+    const encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+    var loaded = try decode(testing.allocator, encoded);
+    defer loaded.deinit();
+
+    const original_dump = try mir.print(testing.allocator, &program);
+    defer testing.allocator.free(original_dump);
+    const loaded_dump = try mir.print(testing.allocator, &loaded);
+    defer testing.allocator.free(loaded_dump);
+    try testing.expectEqualStrings(original_dump, loaded_dump);
+
+    const again = try encode(testing.allocator, &loaded);
+    defer testing.allocator.free(again);
+    try testing.expectEqualSlices(u8, encoded, again);
+
+    try testing.expect(loaded.signatures.len != 0);
+    var saw_constant = false;
+    var saw_indirect_call = false;
+    var saw_name = false;
+    for (loaded.functions) |function| {
+        for (function.instructions) |instruction| switch (instruction) {
+            .const_function => saw_constant = true,
+            .call_indirect => saw_indirect_call = true,
+            .intrinsic => |call| if (call.kind == .function_name) {
+                saw_name = true;
+            },
+            else => {},
+        };
+    }
+    try testing.expect(saw_constant);
+    try testing.expect(saw_indirect_call);
+    try testing.expect(saw_name);
+}
+
+test "decoded function types and conversions are verified before execution" {
+    var program = try compileScriptWith(
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\func main():
+        \\    let chosen: func(long) -> long = twice
+        \\    print(string(chosen))
+        \\
+    , false);
+    defer program.deinit();
+    const arena = program.arena.allocator();
+    try testing.expect(program.signatures.len != 0);
+
+    // An unused local still reaches both engines' frame construction.
+    // A function type outside the signature table must therefore be
+    // rejected even though no instruction consumes it.
+    const entry = &program.functions[program.entry_function];
+    const original_locals = entry.locals;
+    const damaged_locals = try arena.alloc(mir.Local, original_locals.len + 1);
+    @memcpy(damaged_locals[0..original_locals.len], original_locals);
+    damaged_locals[original_locals.len] = .{
+        .name = "damaged",
+        .local_type = .{ .function = @intCast(program.signatures.len) },
+    };
+    entry.locals = damaged_locals;
+    {
+        const encoded = try encode(testing.allocator, &program);
+        defer testing.allocator.free(encoded);
+        try testing.expectError(error.InvalidModule, decode(testing.allocator, encoded));
+    }
+    entry.locals = original_locals;
+
+    // An unused signature row is equally part of the decoded type
+    // table.  Its own parameter types are checked without waiting for a
+    // const or call instruction to happen to name the row.
+    const original_signatures = program.signatures;
+    const damaged_signatures = try arena.alloc(types.Signature, original_signatures.len + 1);
+    @memcpy(damaged_signatures[0..original_signatures.len], original_signatures);
+    damaged_signatures[original_signatures.len] = .{
+        .parameters = try arena.dupe(types.Signature.Parameter, &.{.{
+            .value_type = .{ .function = @intCast(damaged_signatures.len) },
+        }}),
+        .result = .none,
+    };
+    program.signatures = damaged_signatures;
+    {
+        const encoded = try encode(testing.allocator, &program);
+        defer testing.allocator.free(encoded);
+        try testing.expectError(error.InvalidModule, decode(testing.allocator, encoded));
+    }
+    program.signatures = original_signatures;
+
+    // A bounded row can still be malformed when it recursively names
+    // itself.  Decoding maps the verifier's cycle refusal to the same
+    // public InvalidModule result as an out-of-bounds type.
+    damaged_signatures[original_signatures.len].parameters[0].value_type = .{
+        .function = @intCast(original_signatures.len),
+    };
+    program.signatures = damaged_signatures;
+    {
+        const encoded = try encode(testing.allocator, &program);
+        defer testing.allocator.free(encoded);
+        try testing.expectError(error.InvalidModule, decode(testing.allocator, encoded));
+    }
+    program.signatures = original_signatures;
+
+    // `Type.storage()` exposes a function index as an integer to the
+    // engines.  It does not make function-to-int a language conversion.
+    var function_value: ?mir.Register = null;
+    var storing: ?mir.Register = null;
+    for (entry.instructions, 0..) |instruction, register| switch (instruction) {
+        .const_function => function_value = @intCast(register),
+        .local_set => |set| if (function_value != null and set.value == function_value.?) {
+            storing = @intCast(register);
+        },
+        else => {},
+    };
+    try testing.expect(function_value != null);
+    try testing.expect(storing != null);
+    const original_instruction = entry.instructions[storing.?];
+    const original_result = entry.result_types[storing.?];
+    entry.instructions[storing.?] = .{ .convert = function_value.? };
+    entry.result_types[storing.?] = .int;
+    {
+        const encoded = try encode(testing.allocator, &program);
+        defer testing.allocator.free(encoded);
+        try testing.expectError(error.InvalidModule, decode(testing.allocator, encoded));
+    }
+    entry.instructions[storing.?] = original_instruction;
+    entry.result_types[storing.?] = original_result;
 }
 
 test "an optional type round-trips with its payload, and T?? is rejected" {

@@ -16,7 +16,8 @@ the two ladders the answer is always `double` (docs/TYPES.md §2).
 Two kinds of data, with a deliberate line between them:
 
 - **Values** — `bool`, the seven numbers, `string` (immutable UTF-8),
-  and user `struct`s and `enum`s.  Values copy on assignment and call;
+  user `struct`s and `enum`s, and function values.  Values copy on
+  assignment and call;
   nobody frees a value.  The numbers are two ladders, and four of them do
   arithmetic: `int` (signed 32-bit) and `long` (signed 64-bit) trap on
   overflow and on division by zero; `float` (IEEE binary32) and
@@ -72,8 +73,8 @@ it):
 - **`return` moves.**  Whatever a function returns, the caller owns —
   returning a borrow or alias is a compile error (`return copy x` is
   the escape hatch).
-- **Values never take verbs.**  Ints, Floats, Bools, Strings,
-  and plain-value structs copy freely.  A struct with object fields
+- **Values never take verbs.**  Numbers, `bool`, `string`, enums,
+  function values and plain-value structs copy freely.  A struct with object fields
   ("object-carrying") follows the object rules when *kept*.
 - **`free(x)` survives as deliberate early release** on owned names,
   and poisons the name like `give`.
@@ -427,6 +428,89 @@ borrow or an alias in any position is S17 exactly, and **no object may
 travel twice** — `return xs, xs` is a compile error, because two moves
 of one handle would free it twice.
 
+## Function values and lambdas
+
+A function may travel as a value.  Its type is the signature with the
+parameter names removed:
+
+```text
+func(long, long) -> bool
+func(string)
+func(give list(long)) -> long
+```
+
+The result is omitted when the function answers nothing.  `give` stays
+on an object parameter because ownership is part of a call's meaning;
+parameter names and defaults do not, and neither does `!`.  A fallible
+function is not a value in this run: a function type has nowhere to
+carry the obligation to write `try` or `catch`.
+
+A function type may annotate a parameter or local and may be a
+function's result.  It may nest inside another function signature.
+It is not yet a container element, struct field or optional payload,
+and a late `var` cannot use it because there is no zero function.
+Top-level `let` remains a compile-time constant and cannot hold one.
+
+```luce
+func ascending(a: long, b: long) -> bool:
+    return a < b
+
+func pick(before: func(long, long) -> bool, a: long, b: long) -> long:
+    if before(a, b):
+        return a
+    return b
+
+func chosen() -> func(long, long) -> bool:
+    return ascending
+```
+
+A named top-level or namespace function is a value where a function
+type is expected: `ascending`, `Scale.twice`, `math.round`.  The place
+supplies the signature, just as a numeric place supplies a literal's
+width.  With no such place, `let f = ascending` is refused and the
+diagnostic asks for an annotation.  A method reference is also refused:
+`p.length` would carry `p`, and carrying an environment is capture.
+Write a lambda that receives the value again, `(p) -> p.length()`.
+
+A lambda is a parenthesized list of bare parameter names, `->`, and
+one expression:
+
+```luce
+func apply(f: func(long) -> long, value: long) -> long:
+    return f(value)
+
+func main():
+    print(string(apply((n) -> n * 2, 21)))
+    let positive: func(long) -> bool = (n) -> n > 0
+    print(string(positive(3)))
+```
+
+Its parameter and result types come from the function type at the
+landing place; a lambda with no such place is refused.  The body is
+exactly one expression, never an indented block.  It may name its own
+parameters, visible functions and file-scope constants.  It may not
+name a local from the surrounding function, including a surrounding
+function-valued local in call position: **a lambda carries no
+environment**.  State that travels with behavior is a struct with a
+method.
+
+A call through a function value is positional.  Its type carries no
+parameter names or defaults, so `f(value = 1)` is refused even when the
+declaration that produced `f` happened to use the name `value`.
+Argument types and `give` are checked exactly as for a direct call.
+
+Function values copy freely and take no ownership verb.  `==` and `!=`
+ask whether two values name the same function; there is no ordering.
+`string(f)` gives a declared function's qualified name and a lambda's
+distinct compiler-generated name.  Visibility gates the reference
+site, and a public signature may not hide a private type inside a
+nested function type.
+
+The proving standard-library customer is stable comparator sorting:
+after `import std.lists`, `xs.sort_by(before)` takes
+`func(T, T) -> bool` for a `list(T)`.  It is ordinary std Luce routed
+through method syntax, not a new runtime builtin.
+
 ## Calls: names at the site, defaults at the declaration
 
 Every parameter has a name, and a call site may use it — never must
@@ -524,9 +608,11 @@ struct Point:
 `self` is a keyword, bare, and its type is the enclosing struct;
 `self: Point` is refused, because inside `struct Point` it can be
 nothing else.  `p.length()` **means** `Point.length(p)` — the same
-call, resolved at compile time.  There is no dispatch, no reference
-type, and no function value: `let f = p.length` is refused for the
-same reason `let f = Point.length` is.
+call, resolved at compile time.  There is no dynamic dispatch or
+reference type.  Both `p.length` and `Point.length` are refused as
+method references because either would carry a receiver; the namespace
+function `Point.origin` is a value wherever `func() -> Point` is
+expected.
 
 **The difference between a namespace and a method is visible in
 exactly one place**, and it is worth saying plainly because a struct
@@ -811,14 +897,15 @@ resolves anything, which is why all eight are reserved.
 `conversion_range` on NaN, an infinity, or a value outside the `long`
 range.  `trunc(x)` is truncation toward zero, so `floor`, `ceil`,
 `trunc` and round are four spellings for four different answers.
-`double(x)` widens and never traps.  `string(x)` prints a `long`, a
-`double`, a `bool` or a `string`, and takes a **scalar only**: a
-`builder` is a heap object and hands over its text with `b.build()`.
+`double(x)` widens and never traps.  `string(x)` prints any numeric
+width, a `bool` or a `string`; it gives an enum member's name and a
+function value's name.  Heap objects are not accepted: a `builder`
+hands over its text with `b.build()`.
 An f-string hole is a `string(...)` the reader did not write, so the
 same rule decides what may stand in one.
 
 ```luce fragment
-string(42)          # "42"        (long, double, bool, string)
+string(42)          # "42"        (numbers, bool, string, enum, function)
 parse_int("42")  # 42          long?   — none when the text is not a number
 parse_float("2.5")               # double?
 chr(955)         # "λ"         codepoint -> string; traps on invalid
@@ -1487,8 +1574,8 @@ or any pipe or process substitution.  Diagnostics then name it
 
 ## Deliberately absent (for now)
 
-First-class functions, closures, **tuples** (a return shape is not a
-type — see "Answering more than one thing"), exceptions (traps are
+Closures, **tuples** (a return shape is not a type — see "Answering
+more than one thing"), exceptions (traps are
 final), implicit *narrowing* of a `double` to a `long`, shadowing,
 mutable file-scope `var`
 (top-level `let` constants exist; mutable globals are a separate

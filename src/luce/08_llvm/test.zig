@@ -390,6 +390,47 @@ test "calls and recursion carry values back and traps forward" {
     try std.testing.expectEqualStrings("fib\n6765\n", capture.printed());
 }
 
+test "string of an unwritten function traps null_object on both engines" {
+    var program = try spec.program(
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\func main():
+        \\    let chosen: func(long) -> long = twice
+        \\    print(string(chosen))
+        \\
+    );
+    defer program.deinit();
+
+    // Source cannot ask for a function value's zero, but a verified MIR
+    // function may still read a local before a store.  Replace the
+    // constant with such a read: both frame implementations fill the
+    // slot with -1, and `function_name` must range-check it before
+    // indexing the name table.
+    const entry = &program.functions[program.entry_function];
+    var function_value: ?mir.Register = null;
+    for (entry.instructions, 0..) |instruction, register| switch (instruction) {
+        .const_function => function_value = @intCast(register),
+        else => {},
+    };
+    try std.testing.expect(function_value != null);
+    const function_type = entry.result_types[function_value.?];
+    try std.testing.expect(function_type == .function);
+
+    const original_locals = entry.locals;
+    const locals = try program.arena.allocator().alloc(mir.Local, original_locals.len + 1);
+    @memcpy(locals[0..original_locals.len], original_locals);
+    locals[original_locals.len] = .{
+        .name = "unwritten",
+        .local_type = function_type,
+    };
+    entry.locals = locals;
+    entry.instructions[function_value.?] = .{ .local_get = @intCast(original_locals.len) };
+
+    try mir.verify(std.testing.allocator, &program);
+    try spec.trapProgram(&program, .{}, .null_object);
+}
+
 test "a call inside a loop does not grow the frame" {
     var capture: Capture = .{};
 

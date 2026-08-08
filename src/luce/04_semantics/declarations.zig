@@ -67,6 +67,16 @@ const isReserved = context.isReserved;
 /// host's memory on messages nobody will read.
 pub const max_diagnostics: u32 = 100;
 
+/// One closed instantiation of a compiler-owned standard-library body.
+/// This is deliberately not a generic-function table: source cannot
+/// add a row, and the only producer validates that its template came
+/// from an embedded standard module.
+const StandardSpecialization = struct {
+    template: u32,
+    parameters: []const Type,
+    function: u32,
+};
+
 /// Check the project and lower it to IR.  Returns null when errors
 /// were reported; the diagnostics tell the story.
 pub fn analyze(
@@ -139,6 +149,7 @@ pub const Analyzer = struct {
     enum_names: std.StringHashMapUnmanaged(u32) = .empty,
     functions: std.ArrayList(FunctionDeclInfo) = .empty,
     function_names: std.StringHashMapUnmanaged(u32) = .empty,
+    standard_specializations: std.ArrayList(StandardSpecialization) = .empty,
     /// The program's string constants.  A `Program` field, so the
     /// pool and its interning live in stage 6; this stage fills it as
     /// literals type-check.
@@ -295,6 +306,18 @@ pub const Analyzer = struct {
                 .builder, .file => null,
                 .task => |work| self.privateMentioned(work.result),
             },
+            // A function type publishes every type in its signature.
+            // `func(Inner) -> long` on a public declaration is no less
+            // an exposure of private `Inner` than `list(Inner)` is;
+            // walking only the outer tag left a quiet second door
+            // through VISIBILITY.md D4.
+            .function => |index| blk: {
+                const signature = self.signatures.items[index];
+                for (signature.parameters) |parameter| {
+                    if (self.privateMentioned(parameter.value_type)) |hidden| break :blk hidden;
+                }
+                break :blk self.privateMentioned(signature.result);
+            },
             .optional => |payload| self.privateMentioned(payload.asType()),
             else => null,
         };
@@ -306,6 +329,24 @@ pub const Analyzer = struct {
             if (std.mem.eql(u8, imported.name, name)) return true;
         }
         return false;
+    }
+
+    /// True only for the embedded-library spelling `import std.NAME`.
+    /// A sibling `import NAME` binds the same namespace at use sites,
+    /// but cannot satisfy a gate that promises compiler-owned source.
+    pub fn importsStandardModule(self: *const Analyzer, module: usize, name: []const u8) bool {
+        for (self.modules[module].tree.imports) |imported| {
+            if (imported.origin == .standard and std.mem.eql(u8, imported.name, name)) return true;
+        }
+        return false;
+    }
+
+    /// True when `module` is the embedded `std.NAME` itself, rather
+    /// than a sibling file that happens to be named NAME.
+    pub fn isStandardModule(self: *const Analyzer, module: usize, name: []const u8) bool {
+        if (!std.mem.eql(u8, self.modules[module].prefix, name)) return false;
+        const source = self.diagnostics.sources.at(self.modules[module].file) orelse return false;
+        return source.kind == .standard;
     }
 
     /// The import that would make `name` reachable, spelled the way
@@ -1752,11 +1793,10 @@ pub const Analyzer = struct {
         declaration: *const ast.FuncDecl,
         module: usize,
         signature: types.Signature,
-        /// Every local name in scope where the lambda was written.  Read
-        /// by exactly one diagnostic: a body that reaches an enclosing
-        /// local is refused with the sentence about capture rather than
-        /// with "unknown name", which would be true and useless.
-        enclosing_locals: []const []const u8,
+        /// Every local in scope where the lambda was written.  Its name
+        /// drives capture diagnostics and its span preserves the normal
+        /// no-shadowing diagnostic after the body is lifted.
+        enclosing_locals: []const context.EnclosingLocal,
     ) Error!u32 {
         const parameter_types = try self.arena.alloc(Type, signature.parameters.len);
         const parameter_modes = try self.arena.alloc(ast.ParameterMode, signature.parameters.len);
@@ -1782,6 +1822,89 @@ pub const Analyzer = struct {
             .fallible = false,
             .is_entry = false,
             .enclosing_locals = enclosing_locals,
+        });
+        return index;
+    }
+
+    /// Instantiate one closed, compiler-owned standard-library
+    /// template at concrete monomorphic parameter types.
+    ///
+    /// Luce exposes no user generics.  `std.lists.sort_by` nevertheless
+    /// has to serve `list(T)` for the receiver's actual T, so its routed
+    /// method takes the same narrow route lambdas take: the ordinary
+    /// Luce body is collected once, this method gives a clone concrete
+    /// parameter types, and the normal lowering loop checks and lowers
+    /// it like every other function.  No MIR instruction or runtime
+    /// callback is added (FUNCTIONS.md D2, D6).
+    pub fn registerStandardSpecialization(
+        self: *Analyzer,
+        template_name: []const u8,
+        specialized_name: []const u8,
+        parameter_types: []const Type,
+    ) Error!?u32 {
+        const template_index = self.function_names.get(template_name) orelse return null;
+        const template = self.functions.items[template_index];
+        const source = self.diagnostics.sources.at(self.modules[template.module].file) orelse return null;
+        if (source.kind != .standard or
+            template.declaration.visibility != .private or
+            template.parameter_types.len != parameter_types.len or
+            template.return_type != .none or
+            template.fallible or
+            template.is_entry or
+            template.receiver != .not or
+            template.enclosing != null)
+        {
+            return null;
+        }
+        for (template.parameter_modes) |mode| {
+            if (mode != .borrow) return null;
+        }
+        for (template.parameter_defaults) |default| {
+            if (default != null) return null;
+        }
+
+        // Cache on types, not their rendered names.  Names are for
+        // traces; `Type.eql` is the language's identity relation.
+        for (self.standard_specializations.items) |existing| {
+            if (existing.template != template_index or existing.parameters.len != parameter_types.len) continue;
+            var same = true;
+            for (existing.parameters, parameter_types) |held, wanted| {
+                if (!held.eql(wanted)) {
+                    same = false;
+                    break;
+                }
+            }
+            if (same) return existing.function;
+        }
+
+        const declaration = try self.arena.create(ast.FuncDecl);
+        declaration.* = template.declaration.*;
+        declaration.name = try self.arena.dupe(u8, specialized_name);
+        // The import and routing gate visibility at the call site.  The
+        // clone itself must be callable from that site even when its
+        // checked source template is private (the object-owning arm).
+        declaration.visibility = .public;
+
+        const index: u32 = @intCast(self.functions.items.len);
+        try self.functions.append(self.arena, .{
+            .declaration = declaration,
+            .name = declaration.name,
+            .module = template.module,
+            .parameter_types = try self.arena.dupe(Type, parameter_types),
+            .parameter_modes = template.parameter_modes,
+            .parameter_defaults = template.parameter_defaults,
+            .receiver = template.receiver,
+            .enclosing = template.enclosing,
+            .results = template.results,
+            .channel = template.channel,
+            .return_type = template.return_type,
+            .fallible = template.fallible,
+            .is_entry = false,
+        });
+        try self.standard_specializations.append(self.arena, .{
+            .template = template_index,
+            .parameters = self.functions.items[index].parameter_types,
+            .function = index,
         });
         return index;
     }

@@ -39,6 +39,14 @@ pub const VerifyError = error{
 
 /// Check every structural and type invariant of a program.
 pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
+    // A signature is a type table in its own right.  Check every row,
+    // including rows no instruction happens to consume: a decoded
+    // module may carry an unused row, and a later type-name or lowering
+    // walk is still allowed to read it.
+    for (program.signatures) |signature| {
+        for (signature.parameters) |parameter| try verifyType(program, parameter.value_type);
+        try verifyType(program, signature.result);
+    }
     for (program.heap_types) |descriptor| switch (descriptor) {
         .list => |element| try verifyType(program, element),
         .map => |pair| {
@@ -55,6 +63,10 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     for (program.structs) |layout| {
         for (layout.fields) |field| try verifyType(program, field.field_type);
     }
+    if (try typeTableCycle(allocator, program)) |cycle| return switch (cycle) {
+        .heap => error.BadStruct,
+        .function => error.BadFunction,
+    };
     if (try anyStructContainsItself(allocator, program)) return error.BadStruct;
 
     // Every signature is checked before any body is.  A `call` types
@@ -94,6 +106,7 @@ fn verifyType(program: *const Program, of: Type) VerifyError!void {
     switch (of) {
         .strukt => |index| if (index >= program.structs.len) return error.BadStruct,
         .heap => |index| if (index >= program.heap_types.len) return error.BadStruct,
+        .function => |index| if (index >= program.signatures.len) return error.BadFunction,
         // An enum names a row of the enum table, and the width it
         // carries must be the one that row declares: the two are one
         // fact in memory (`types.Type.EnumRef`), and a module that says
@@ -110,6 +123,108 @@ fn verifyType(program: *const Program, of: Type) VerifyError!void {
         .optional => |payload| try verifyType(program, payload.asType()),
         else => {},
     }
+}
+
+// ---------------------------------------------------------------------------
+// Recursive type tables
+// ---------------------------------------------------------------------------
+
+const TypeCycle = enum { heap, function };
+const TypeVisit = enum { unvisited, open, closed };
+
+/// Find a cycle among the two tables whose rows render by recursively
+/// rendering another row: heap shapes and function signatures.
+///
+/// Source can only build a finite nesting of these anonymous types,
+/// so its interned graph is a DAG.  A decoded module can instead make
+/// `func(func(...))`, `list(list(...))`, or a heap/signature cross-cycle.
+/// The indices are all in bounds, but `types.typeName` would recurse
+/// forever when `luce ir` prints one.  Check every row, including an
+/// unused one, with an explicit DFS so hostile depth cannot consume the
+/// verifier's call stack.  Structs are leaves here on purpose: a legal
+/// `Node` may hold `list(Node)`, and a type name prints the word `Node`
+/// rather than expanding its fields.
+fn typeTableCycle(allocator: Allocator, program: *const Program) VerifyError!?TypeCycle {
+    const heap_count = program.heap_types.len;
+    const count = heap_count + program.signatures.len;
+    if (count == 0) return null;
+
+    const visits = try allocator.alloc(TypeVisit, count);
+    defer allocator.free(visits);
+    @memset(visits, .unvisited);
+
+    const Step = struct { node: usize, edge: usize = 0 };
+    var path: std.ArrayList(Step) = .empty;
+    defer path.deinit(allocator);
+
+    for (0..count) |root| {
+        if (visits[root] != .unvisited) continue;
+        visits[root] = .open;
+        try path.append(allocator, .{ .node = root });
+
+        while (path.items.len != 0) {
+            const step = &path.items[path.items.len - 1];
+            if (typeReferenceAt(program, step.node, step.edge)) |reference| {
+                step.edge += 1;
+                const child = typeTableNode(program, reference) orelse continue;
+                switch (visits[child]) {
+                    .unvisited => {
+                        visits[child] = .open;
+                        try path.append(allocator, .{ .node = child });
+                    },
+                    .open => {
+                        var kind: TypeCycle = if (child >= heap_count) .function else .heap;
+                        var at = path.items.len;
+                        while (at > 0) {
+                            at -= 1;
+                            const member = path.items[at].node;
+                            if (member >= heap_count) kind = .function;
+                            if (member == child) break;
+                        }
+                        return kind;
+                    },
+                    .closed => {},
+                }
+                continue;
+            }
+
+            visits[step.node] = .closed;
+            _ = path.pop();
+        }
+    }
+    return null;
+}
+
+/// The `edge`th recursively rendered type held by one combined table
+/// row, or null after its last edge.
+fn typeReferenceAt(program: *const Program, node: usize, edge: usize) ?Type {
+    if (node < program.heap_types.len) return switch (program.heap_types[node]) {
+        .list => |element| if (edge == 0) element else null,
+        .map => |pair| switch (edge) {
+            0 => pair.key,
+            1 => pair.value,
+            else => null,
+        },
+        .array => |shape| if (edge == 0) shape.element else null,
+        .task => |work| if (edge == 0) work.result else null,
+        .builder, .file => null,
+    };
+
+    const signature = program.signatures[node - program.heap_types.len];
+    if (edge < signature.parameters.len) return signature.parameters[edge].value_type;
+    if (edge == signature.parameters.len) return signature.result;
+    return null;
+}
+
+/// The combined-table row a type expands, after peeling the one
+/// optional layer the representation permits; null for a printed leaf.
+fn typeTableNode(program: *const Program, of: Type) ?usize {
+    const expanded = if (of == .optional) of.optional.asType() else of;
+    return switch (expanded) {
+        .heap => |index| @as(usize, index),
+        .function => |index| program.heap_types.len + @as(usize, index),
+        else => null,
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -462,6 +577,11 @@ fn verifyInstruction(
             // `int(m)` at an `int` backing changes what the value *is*
             // rather than what it holds — the one conversion whose
             // whole content is the type it lands in.
+            // `storage()` also exposes a function value's machine
+            // representation as `int`; that is an engine fact, not a
+            // source conversion.  Only a numeric value or an enum may
+            // reach this instruction.
+            if (!operand.isNumeric() and operand != .enumeration) return error.TypeMismatch;
             const from = operand.storage();
             if (!from.isNumeric() or !result.isNumeric()) return error.TypeMismatch;
             if (operand != .enumeration and from.eql(result)) return error.TypeMismatch;

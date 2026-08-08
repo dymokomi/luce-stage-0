@@ -85,8 +85,9 @@ name is ada, next year 37
 
 A hole is one expression, and `"..."` strings nested inside a hole are
 fine. `f"..."` desugars to plain `+` concatenation of `string(...)`
-pieces, so the result is a `string` like any other. A `list` in a hole
-is a type error — `string(x)` takes a scalar.
+pieces, so the result is a `string` like any other. Numbers, `bool`,
+strings, enum members and function values all convert; a `list` or
+another heap object in a hole is a type error.
 
 ### Format specs
 

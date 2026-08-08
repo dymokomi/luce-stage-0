@@ -430,6 +430,34 @@ fn standardModule(repository: Repository, module: []const u8) !Names {
     return names;
 }
 
+/// The method spellings backed by a standard module's private
+/// specialization templates. They are not top-level module exports,
+/// so `standardModule` is intentionally blind to them; the analyzer's
+/// registration string is the public route's single source of truth.
+fn routedStandardMethods(repository: Repository, module: []const u8) !Names {
+    var names: Names = .{ .gpa = repository.gpa };
+    errdefer names.deinit();
+
+    const source = try repository.read("src/luce/04_semantics/builder.zig");
+    defer repository.gpa.free(source);
+    const opening = try std.fmt.allocPrint(repository.gpa, "\"{s}.", .{module});
+    defer repository.gpa.free(opening);
+    const suffix = "_template";
+
+    var at: usize = 0;
+    while (std.mem.indexOfPos(u8, source, at, opening)) |start| {
+        const rest = source[start + opening.len ..];
+        const stop = std.mem.indexOfScalar(u8, rest, '"') orelse break;
+        const registered = rest[0..stop];
+        if (std.mem.endsWith(u8, registered, suffix)) {
+            try names.add(registered[0 .. registered.len - suffix.len]);
+        }
+        at = start + opening.len + stop + 1;
+    }
+    if (names.items.items.len == 0) return error.StandardRouteEmpty;
+    return names;
+}
+
 /// Every option `luce` parses, and every command word both binaries
 /// dispatch on.  Options are recognised by shape — `-o`, or `--` and
 /// lower-case letters — which is what keeps the sentence in
@@ -687,6 +715,14 @@ test "each std page names every function and constant its module exports" {
         try expectDocumented(repository, "std/files.md", names, &.{});
     }
     {
+        // `std.lists` exposes routed list methods. Its checked source
+        // template is private, so documenting `sort_by_template` as a
+        // namespace export would be the wrong contract.
+        var names = try routedStandardMethods(repository, "lists");
+        defer names.deinit();
+        try expectDocumented(repository, "std/lists.md", names, &.{});
+    }
+    {
         var names = try standardModule(repository, "paths");
         defer names.deinit();
         try expectDocumented(repository, "std/paths.md", names, &.{});
@@ -722,6 +758,33 @@ test "each std page names every function and constant its module exports" {
         // `private`, so the roster is `parse` and `quote`, and the
         // page's tables carry the methods those two hand back.
         try expectDocumented(repository, "std/json.md", names, &.{});
+    }
+}
+
+test "the reference keeps function value and lambda syntax visible" {
+    // Name rosters catch a missing builtin, but they did not catch two
+    // pages continuing to say that functions were not values. Pin the
+    // new type and expression spellings and the exact stale claims
+    // whose survival exposed that hole.
+    const gpa = std.testing.allocator;
+    const repository = try open(gpa, std.testing.io);
+    defer gpa.free(repository.prefix);
+
+    const types = try describedCode(repository, "ref/types.md");
+    defer gpa.free(types);
+    try std.testing.expect(std.mem.indexOf(u8, types, "func(long, long) -> bool") != null);
+
+    const expressions = try describedCode(repository, "ref/expressions.md");
+    defer gpa.free(expressions);
+    try std.testing.expect(std.mem.indexOf(u8, expressions, "(n) -> n * 2") != null);
+
+    for ([_][]const u8{ "ref/expressions.md", "ref/statements.md" }) |page| {
+        const path = try std.fmt.allocPrint(gpa, "www/luce/content/{s}", .{page});
+        defer gpa.free(path);
+        const text = try repository.read(path);
+        defer gpa.free(text);
+        try std.testing.expect(std.mem.indexOf(u8, text, "Functions are not values") == null);
+        try std.testing.expect(std.mem.indexOf(u8, text, "no first-class functions") == null);
     }
 }
 

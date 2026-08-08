@@ -61,8 +61,8 @@ between them is one sentence — *traps are bugs, errors are news*.
 
 It is a real language with a real compiler, a real runtime, a real
 terminal and a real editor written in itself — and it is early. There
-are no first-class functions, no closures, no generics for user code,
-no tagged unions, no tuples, no package manager
+are no closures, no generics for user code, no tagged unions, no
+tuples, no package manager
 and no language server. Some of those are deliberate and permanent;
 some are simply not built yet. The
 [status page](/status/) says which is which, without rounding up.

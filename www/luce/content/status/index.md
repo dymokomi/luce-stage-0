@@ -38,7 +38,8 @@ language question, and one benchmark row.**
 | f-strings, compound assignment, nested place assignment | shipped |
 | File-scope constants, folded and inlined | shipped |
 | Modules, and a reserved `std.` namespace | shipped |
-| Six standard modules: `math`, `strings`, `files`, `paths`, `os`, `zip` | shipped |
+| Function values and capture-free expression lambdas | shipped |
+| Eight standard modules: `math`, `files`, `strings`, `lists`, `paths`, `os`, `zip`, `json` | shipped |
 | The bit set: `&` `\|` `^` `~` `<<` `>>` at Go's precedence, hex and binary literals, `_` digit separators | shipped |
 | Visibility: public until a declaration says `private` | shipped |
 | Enums at a chosen integer width, and `match` with every member named | shipped |
@@ -103,13 +104,14 @@ These are decisions with reasons written down, not gaps.
 - **Generics for user code.** The type union is closed with twenty
   exhaustive switches over it, and `list(T)` is a monomorphic heap
   object rather than a generic. `T?` became a variant and opened no
-  door at all: nothing about it generalises. What would pay is
-  monomorphised generic *functions*, and that needs first-class
-  functions first.
-- **Closures.** The one place their absence draws blood is
-  comparators, and the cheap answer is a `sort_by` taking a top-level
-  function name — no capture, no lifetime story, no interaction with
-  ownership. That, not closures.
+  door at all: nothing about it generalises. Function values now exist,
+  but user-written monomorphised generic functions would still add a
+  new surface and a specialization model. `std.lists.sort_by` uses one
+  compiler-owned closed specialization instead.
+- **Closures.** Capture-free lambdas and function values shipped, and
+  `std.lists.sort_by` closed the comparator wound without an
+  environment, lifetime story or ownership rule for captured state.
+  Behavior plus state remains a struct with a method.
 
 ## Absent and not decided
 
@@ -182,9 +184,10 @@ warts standing: item 1.
    solely to carry a return — constructed at 8 sites and taken apart
    by 25 field reads, not the 15 this page used to claim — is
    deleted.
-5. **No sort with a comparator.** `wordcount.luc` produces a top-five
-   listing by **destroying the map**. The one place the absence of
-   first-class functions draws blood.
+5. ~~**No sort with a comparator.**~~ **Shipped.** After `import
+   std.lists`, `xs.sort_by(before)` takes a named function or a
+   capture-free lambda. The in-place sort is stable, O(n log n), and
+   works for every list element type.
 6. **Host surface gaps.** Mostly closed: the clock, `sleep`,
    environment access, stderr, reading a line, directory listing,
    delete/rename and append mode all shipped with host ABI version 8,

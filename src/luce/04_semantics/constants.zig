@@ -547,7 +547,7 @@ fn foldConvert(analyzer: *Analyzer, call: ast.Call, operand: TypedConstant) Erro
             .double => |held| try std.fmt.allocPrint(analyzer.arena, "{d}", .{held}),
             .boolean => |held| if (held) "true" else "false",
             .string => |held| held,
-            else => return constantError(analyzer, call.span, "string() converts a number, a bool, or a string", .{}),
+            else => return constantError(analyzer, call.span, "string() converts a number, a bool, a string, or an enum", .{}),
         };
         return .{ .value = .{ .string = printed }, .value_type = .string };
     }

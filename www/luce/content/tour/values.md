@@ -32,6 +32,11 @@ func main():
 | `double` | IEEE 754 binary64, about sixteen. |
 | `string` | Immutable UTF-8 text. A value, not an object. |
 
+Enums, plain structs and functions are values too, but they are not
+scalars. A function value has a signature type such as
+`func(long) -> long`; it copies freely and is introduced in the
+[functions chapter](../functions/#functions-are-values).
+
 **A literal has no type until it lands on one.** It is read from its
 text at the width of the place it reaches, so `let x: double = 0.1` is
 binary64's 0.1 and not binary32's widened. With nothing to land on,

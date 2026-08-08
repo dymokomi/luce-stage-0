@@ -1249,7 +1249,9 @@ pub const Machine = struct {
             // the compiled path's constant table is too.
             .function_name => {
                 const named = registers[arguments[0]].asInt();
-                if (named < 0 or named >= self.program.functions.len) return error.Trap;
+                if (named < 0 or named >= self.program.functions.len) {
+                    return self.runtime.fail(.null_object);
+                }
                 return .ofString(self.program.functions[@intCast(named)].name);
             },
             .parse_int => return text.parseInt(&self.runtime, registers[arguments[0]]),

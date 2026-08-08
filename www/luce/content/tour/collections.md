@@ -16,7 +16,7 @@ literal, and the scope that owns one frees it — which is
 Operations that belong to one type are written as methods —
 `xs.append(v)`, `m.has(k)` — which is sugar for a plain function with
 the receiver first, in the way Zig's `x.f()` is. The generic
-cross-type builtins stay free functions: `len`, `str`, `print`.
+cross-type builtins stay free functions: `len`, `string`, `print`.
 
 ## list
 
@@ -50,8 +50,30 @@ ada and grace
 ```
 
 `find` answers `-1` when the value is absent. The full set is
-`append`, `insert`, `remove`, `pop`, `sort`, `reverse`, `find`,
-`contains`, `clear`, plus `len`, indexing and slicing.
+`append`, `insert`, `remove`, `pop`, `sort`, `sort_by`, `reverse`,
+`find`, `contains`, `clear`, plus `len`, indexing and slicing.
+
+`sort_by` takes a named function or a capture-free lambda and lives in
+the standard library rather than the language. Import `std.lists`
+before using it; the comparator answers whether its first argument
+belongs before its second.
+
+```luce run
+import std.lists
+
+func main():
+    var xs = [4, 1, 3, 2]
+    xs.sort_by((a, b) -> a > b)
+    print(f"{xs[0]} {xs[1]} {xs[2]} {xs[3]}")
+```
+
+```output
+4 3 2 1
+```
+
+Like `sort`, it is in place, stable and O(n log n). Unlike `sort`, it
+works for every element type, including structs and heap objects;
+object elements move and are never copied.
 
 ## Slices
 

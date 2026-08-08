@@ -1,12 +1,14 @@
 # Where to go next
 
-That is the language. Thirteen chapters covered every construct Luce
-has: there is no chapter fourteen holding back generics or traits or
+That is the language. Fifteen chapters covered every construct Luce
+has: there is no chapter sixteen holding back generics or traits or
 async, because those are not in it.
 
 ## What you have seen
 
-Scalars, structs and enums that copy; four heap objects that do not.
+Scalars, structs, enums and function values that copy; four heap
+objects that do not. Named functions as values, and capture-free
+lambdas whose types come from where they land.
 Static types with inference, and one widening: `long` into `double`.
 Dispatch that checks you covered every member. Checked
 arithmetic and bounds checks that no build mode turns off. Scope
@@ -18,8 +20,8 @@ compile time.
 
 ## What you have not
 
-There are no first-class functions or closures, no generics for user
-code, no tagged unions — an [enum](/tour/enums/) has names and numbers
+There are no closures, no generics for user code, no tagged unions —
+an [enum](/tour/enums/) has names and numbers
 and no payloads — no tuples, no operator overloading, no exceptions,
 no shadowing, no mutable file-scope `var`, and no `defer`. Some of those are permanent
 decisions with reasons written down; some are simply not built. The
@@ -42,9 +44,9 @@ the exact grammar, every operator's precedence, all 45 ownership
 situations with individual anchors, every trap code, every builtin
 signature. It is the document to cite.
 
-**Read the library.** [The standard library](/std/) is seven modules —
-`math`, `strings`, `files`, `paths`, `os`, `zip`, `json` — written in
-ordinary Luce and embedded in the compiler.
+**Read the library.** [The standard library](/std/) is eight modules —
+`math`, `strings`, `files`, `lists`, `paths`, `os`, `zip`, `json` —
+written in ordinary Luce and embedded in the compiler.
 
 ## Writing something real
 

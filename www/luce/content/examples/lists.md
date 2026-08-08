@@ -40,6 +40,40 @@ only / 1
 [status page](/status/) admits: `long?` exists now and the sentinel has
 nothing holding it up.
 
+## Sorting by a comparator
+
+`std.lists` adds stable, in-place `sort_by`. Its comparator may be a
+named function or a capture-free lambda and answers whether the first
+argument belongs before the second.
+
+```luce run
+import std.lists
+
+struct Player:
+    name: string
+    score: long
+
+func main():
+    var players = [
+        Player(name = "ada", score = 20),
+        Player(name = "grace", score = 30),
+        Player(name = "lin", score = 20),
+    ]
+    players.sort_by((a, b) -> a.score > b.score)
+    for player in players:
+        print(f"{player.name}: {player.score}")
+```
+
+```output
+grace: 30
+ada: 20
+lin: 20
+```
+
+The equal-score pair keeps its original order because the guarantee
+is stable. The algorithm is O(n log n) and accepts object elements as
+well as values.
+
 ## Slices copy
 
 `xs[a:b]` allocates a new list, owned by whoever receives it. Open

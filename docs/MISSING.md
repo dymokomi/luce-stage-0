@@ -296,10 +296,10 @@ it still hits.
    sentence: a heap object as a mutable cell, a second value dropped
    and guessed, a second value thrown away and fetched again, and two
    traversals for one pass.
-5. **No sort with a comparator.**  `wordcount.luc:64-73` produces a
-   top-5 listing by **destroying the map** — `heaviest` scans, the
-   caller prints, `counts.remove(word)`, repeat.  The one place
-   no-first-class-functions draws blood.
+5. ~~**No sort with a comparator.**~~ **Done** (docs/FUNCTIONS.md D6).
+   `std.lists` supplies stable O(n log n) `xs.sort_by(before)` for every
+   list element type, taking a named function or capture-free lambda.
+   It is ordinary Luce behind an import-routed method, not a builtin.
 6. ~~**Host surface gaps**~~ — **mostly closed.**  Nine services
    shipped at ABI 8: `read_line` (with its prompt),
    `print_error`, `clock_ms`, `sleep_ms`, `env`, `file_append`,
@@ -469,7 +469,7 @@ it still hits.
 - **Build modes are settled, not pending.**  Luce is always
   `ReleaseSafe`; `--release` is closer to `-fstrip`.
 - Also shipped: f-strings, compound assignment, nested place
-  assignment, the three std modules, per-stage fuzzing.
+  assignment, the eight std modules, per-stage fuzzing.
 
 ---
 
@@ -480,13 +480,16 @@ it still hits.
   depending on it, and `list(T)` is a monomorphic heap object rather
   than a generic.  `T?` did become a variant of `Type` — one, whose
   payload is a union of its own so `T??` is unrepresentable — and it
-  opened no door at all: nothing about it generalizes.  What would pay
-  is monomorphized generic *functions*, and that needs first-class
-  functions first.
-- **Closures — absent, and the cheap answer is not closures.**  The one
-  place it draws blood is comparators.  A `sort_by` taking a top-level
-  `func` name needs no capture, no lifetime story, and no interaction
-  with ownership.  Do that; leave closures out.
+  opened no door at all: nothing about it generalizes.  Function values
+  have since shipped, but a callable value is not a type parameter and
+  does not make user code monomorphic at more than one type.  The closed
+  specialization used by `std.lists.sort_by` is compiler-owned std
+  machinery, not a surface generic system.
+- **Closures — absent.**  Function values and one-expression lambdas
+  shipped on the near side of the capture line.  Comparator sorting no
+  longer bleeds: `std.lists.sort_by` takes either a named function or a
+  capture-free lambda.  Behavior plus state remains a struct with a
+  method, explicit and owned.
 - **Iterators.**  What is missing is not a protocol but string
   codepoints — one loop form.
 - **Interfaces, inheritance, operator overloading, async, reflection.**
@@ -560,10 +563,10 @@ wording and column:
   all answered "unknown name" about a declaration the compiler had
   just checked.  Field access on a bare declaration name now resolves
   as a namespace, exactly as it already did in front of a call, and a
-  name in value position that names a declaration says what it is:
-  *`helper` is a function, and Luce has no function values; write
-  `helper(...)` to call it*.  Suggestions come from that namespace's
-  own members.
+  name in value position that names a declaration says what it is.
+  Today the diagnostic offers both valid uses: write `helper(...)` to
+  call it, or annotate the place it goes with the function type it
+  should wear.  Suggestions come from that namespace's own members.
 - ~~A mutual struct cycle reports twice, and both messages are
   false~~ — one message per cycle now, walking the loop that closes
   it (*struct A contains itself: A.b is B, and B.a is A*), caret on
@@ -689,8 +692,9 @@ plus four found while sweeping:
 3. ~~**`str takes long, double, bool, string, or builder` does not say
    what it got.**~~  **Closed** by docs/NUMERICS.md, which retired
    `str` for `string(x)`: the constructor's message names the type in
-   hand — *"string() converts long, double, bool, or string, not
-   list(long)"* — and an f-string hole reports it at the hole.
+   hand, and an f-string hole reports it at the hole.  `string(x)` has
+   since grown two named-value cases — enums and function values —
+   without changing where the refusal lands.
 4. **`give b.items` says "give moves a named object; use copy for
    other expressions".**  A field *is* named, and the real reason is
    that a nested place cannot be moved out of (S21, S25) — the fix

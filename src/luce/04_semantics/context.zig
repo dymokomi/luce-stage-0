@@ -264,6 +264,15 @@ pub const Enclosing = union(enum) {
     }
 };
 
+/// One local visible where a lambda was written.  A lifted lambda does
+/// not carry its value, but it retains the name and declaration span so
+/// capture and no-shadowing diagnostics can still describe the lexical
+/// scope the source actually has.
+pub const EnclosingLocal = struct {
+    name: []const u8,
+    declared_at: Span,
+};
+
 /// A collected function signature: everything a call site has to know
 /// before the body it belongs to has been walked.
 pub const FunctionDeclInfo = struct {
@@ -317,7 +326,7 @@ pub const FunctionDeclInfo = struct {
     fallible: bool,
     is_entry: bool,
     /// Set only on the function a **lambda** became (docs/FUNCTIONS.md
-    /// D2): every local name in scope where the lambda was written.
+    /// D2): every local in scope where the lambda was written.
     ///
     /// A lambda carries no environment, so its body is checked in a
     /// scope holding its parameters and nothing else — which makes a
@@ -326,7 +335,7 @@ pub const FunctionDeclInfo = struct {
     /// the reader needs instead: the name is right there, and it is not
     /// reachable from here.  Null for every declared function, which
     /// has no enclosing frame to speak of.
-    enclosing_locals: ?[]const []const u8 = null,
+    enclosing_locals: ?[]const EnclosingLocal = null,
 };
 
 /// A collected enum declaration with its module (docs/ENUMS.md).  The

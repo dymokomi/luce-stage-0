@@ -30,8 +30,9 @@ because file access genuinely does not exist there.
 
 Sources live in `src/luce/std/*.luc`; the table that embeds them is
 in `src/luce/01_source/load.zig`; the suite proving them is
-`src/luce/specs/std_spec.zig` — math, strings and files alike, each
-program run on both engines and compared (docs/ENGINE.md).
+`src/luce/specs/std_spec.zig` and the language specs — all eight
+modules are ordinary source, with each program run on both engines and
+compared (docs/ENGINE.md).
 
 Naming follows the language's own style: modules are short lower-case
 nouns, functions are short verbs read *with* the module prefix —
@@ -99,6 +100,40 @@ func main():
 ```
 
 Period 2^31 − 2; games and shuffles, never secrets.
+
+## lists
+
+Comparator-driven list algorithms.  `sort_by` is ordinary Luce in
+`std.lists`, reached through list method syntax after the module is
+imported:
+
+```luce
+import std.lists
+
+func descending(a: long, b: long) -> bool:
+    return a > b
+
+func main():
+    var values: list(long) = [3, 1, 4, 1, 5]
+    values.sort_by(descending)
+    values.sort_by((a, b) -> a < b)
+```
+
+For a `list(T)`, `xs.sort_by(before)` expects
+`before: func(T, T) -> bool`.  `before(a, b)` means that `a` belongs
+before `b`.  It should define a consistent strict order; two elements
+are equivalent when neither precedes the other, and stability preserves
+their original order.  The comparator is borrowed and positional; it
+may be a named function or a capture-free lambda.  The sort is in place,
+**stable**, and O(n log n).  Empty and one-element lists are unchanged,
+and every element type is accepted, including structs and heap objects.
+Object elements are moved through the merge, never copied.
+
+This is a routed std method, not a builtin.  Without
+`import std.lists`, the call is `luce.sema.import` and names the import
+to add.  Stage 4 specializes the one checked source template at the
+list's monomorphic element type; MIR and `libluce_rt` gain no sorting
+primitive.
 
 ## strings
 

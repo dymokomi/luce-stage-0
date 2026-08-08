@@ -86,8 +86,11 @@ about. `copy mine` hands the worker a duplicate and keeps yours. A
 fresh object — a literal, a call's result — needs no verb at all,
 because nobody owned it.
 
-Values are values everywhere: a `long`, a `double`, a `string` and a
-plain struct all copy across, and you keep your own.
+Values are values everywhere: numbers, strings, enums, plain structs
+and function values all copy across, and you keep your own. A worker
+may receive a function value as an ordinary parameter or return one to
+the joiner; `spawn` itself still names a declared function call rather
+than calling through a local value.
 
 A function whose object parameter is an ordinary borrow cannot be
 spawned at all, and the compiler says why:

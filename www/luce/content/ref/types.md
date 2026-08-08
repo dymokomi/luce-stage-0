@@ -14,8 +14,8 @@ no value.
 The line between them decides everything about memory.
 
 **Values** copy on assignment and on call, and nobody frees them: the
-seven numbers, `bool`, `string`, `struct`s and `enum`s. A value never
-takes an ownership word.
+seven numbers, `bool`, `string`, plain structs, enums and function
+values. A value never takes an ownership word.
 
 **Heap objects** are referenced, created with `new` or a literal, and
 freed by scope ownership: `list(T)`, `map(K, V)`, `array(T, ...)`,
@@ -126,7 +126,9 @@ loom: trap: conversion out of range [conversion_range]
 ```
 
 `string(x)` prints a number with the shortest text that round-trips
-**at its own width**, so the width is visible in the answer:
+**at its own width**, so the width is visible in the answer. It also
+prints a `bool`, a string, an enum member's name, or a function value's
+name. Heap objects and structs are not accepted.
 
 ```luce run
 func main():
@@ -144,6 +146,36 @@ func main():
 The last line is not a rounding mistake. 65504 is the largest finite
 binary16, and no other binary16 lies nearer to 65500 — so four digits
 name it exactly, and reading them back gives 65504.
+
+## function
+
+A function value's type is its signature with parameter names and
+defaults removed:
+
+```
+func(long, long) -> bool
+func(string)
+func(give list(long)) -> long
+```
+
+The result is omitted when the function returns nothing. `give`
+remains because ownership is part of calling the value. Fallibility
+does not: a fallible function cannot be used as a value because a
+function type has no `!` with which to carry the obligation.
+
+A function type may annotate a parameter or local, be a function's
+result, and nest inside another function signature. It may not be a
+container element, struct field or optional payload. A top-level
+`let` cannot hold one, and `var f: func(long)` without an initializer
+is refused because there is no zero function.
+
+A top-level or namespace function becomes a value where a function
+type is expected. The expected signature supplies the landing shape,
+so an unannotated `let f = named_function` is refused. Function values
+copy freely, compare with `==` and `!=`, have no ordering, and
+`string(f)` gives the declared or compiler-generated function name.
+See [calls and lambdas](../expressions/#function-values-and-lambdas)
+for the expression forms and the capture rule.
 
 ## struct
 
@@ -293,7 +325,7 @@ operations take.
 
 ## builder
 
-Accumulates text. `string(builder)` hands back the `string`.
+Accumulates text. `builder.build()` hands back the `string`.
 
 ## file
 

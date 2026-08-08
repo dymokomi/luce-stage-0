@@ -12,7 +12,8 @@ error handling; global scope is Phase 2 (see docs/V2.md).
 
 Vocabulary used throughout:
 - **object** — a heap value: `list`, `map`, `array`, `builder`.
-  Everything else (`long`, `double`, `bool`, `string`, structs)
+  Everything else (`long`, `double`, `bool`, `string`, structs, enums,
+  function values)
   is a *value*: copied freely, never freed by the program — the
   runtime reclaims a value's storage when the place holding it dies
   (docs/STRINGS.md) — never verbed.
@@ -784,9 +785,11 @@ temporary — every one of them lives inside a function.  A top-level
 `let` has no scope to die at, so it cannot own, and therefore cannot
 be or carry an object: `new`, list literals, slices and indexing are
 all refused there, as is a struct whose layout carries objects.  What
-remains — scalars, string, and object-free structs — folds at compile
-time and inlines at its use sites, which is why an unused constant
-costs nothing to ship.
+  remains — scalars, string, enums, and object-free structs — folds at
+  compile time and inlines at its use sites, which is why an unused
+  constant costs nothing to ship.  A function value is also freely
+  copied and never owned, but a function declaration or lambda is not a
+  compile-time expression, so it is not a file-scope constant.
 
 This is the rule the analyzer already cites when it refuses a
 file-scope object; the restriction is ownership, not an arbitrary

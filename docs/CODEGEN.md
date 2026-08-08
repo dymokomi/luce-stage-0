@@ -406,6 +406,42 @@ machinery and works unchanged on wasm32.  It was an `i1` until errors
 arrived; widening it cost nothing (a register either way, `internal`
 linkage, no stability promise) and bought the whole error channel.
 
+### Function values and indirect calls
+
+A function value is an `i32` index into `Program.functions`, not an
+address carried through the language.  `const_function` materialises
+that index.  `call_indirect` uses the interned signature attached to
+the value, performs the same call-depth check as a direct call, loads
+one pointer from the module's `luce.function_table`, and calls it with
+the same `%host`, `%rt`, `%depth`, value arguments and optional `%out`.
+The returned outcome takes the same unwind edge.  A fallible function
+cannot become a value, so the indirect shape has no error edge to lose.
+
+The table is one pointer per Luce function in program order.  It is a
+private constant and is emitted only if a function value is made, so a
+program of direct calls carries no function-pointer machinery.  A
+second lazy table holds the corresponding names for `string(f)`; a
+named function gives its qualified name and a lambda gives the distinct
+compiler name synthesized from its source place.  The interpreter uses
+the same indices against its `mir.Function` table, which is why the
+differential specs exercise one representation rather than two
+unrelated dispatch rules.
+
+The MIR verifier has two iterative containment checks: one for direct
+struct layout cycles, and one combined graph for anonymous heap-type
+shapes and nested function signatures.  Keeping structs out of the
+second graph permits a legal `Node` through `list(Node)`, while the
+combined anonymous graph still catches heap/signature cross-cycles.
+Both checks run before printing or lowering can recursively expand a
+type — source cannot make these malformed rows, but a hand-written or
+fuzzed `.lcm` can reach the decoder and must be refused without hanging
+it.
+
+Pruning follows `const_function` exactly as it follows a direct call.
+Otherwise an apparently unreachable comparator could be deleted while
+the integer that names it survived, turning a valid value into an
+out-of-range indirect call.
+
 Locals are entry-block `alloca`s that mem2reg promotes.  Every
 `alloca`, including scratch slots created deep in the walk, is emitted
 in the entry block, so nothing accumulates inside a loop.

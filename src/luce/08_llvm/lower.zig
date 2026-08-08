@@ -951,13 +951,13 @@ const Module = struct {
     /// enters this module through (docs/THREADS.md).
     ///
     /// **This is what a spawn's "entry closure" is, and it is not a
-    /// closure.**  Luce has no first-class functions and a `spawn`
-    /// names a declaration, so the only two things that have to cross
-    /// the C boundary are which function and what to hand it — an
-    /// index and a run of boxed `Value`s.  This switch turns the index
-    /// back into a direct call, which means the callee is a static
-    /// target LLVM can still inline into, and no function pointer to a
-    /// Luce function ever exists.
+    /// closure.**  Function values exist elsewhere in a Luce program,
+    /// but `spawn` itself still names a declaration.  The only two
+    /// things that cross this C boundary are which declaration and
+    /// what to hand it — an index and a run of boxed `Value`s.  This
+    /// switch turns the index back into a direct call, so the worker
+    /// entry needs no callback pointer and the callee remains a static
+    /// target LLVM can inline into.
     ///
     /// The host table travels as the nursery's context, so the worker
     /// reaches the same services `main` does — serialized, because the
@@ -5949,6 +5949,23 @@ const Body = struct {
             // one load; the bytes are the module's own constants and
             // nobody frees them (docs/FUNCTIONS.md D3).
             .function_name => {
+                // As at an indirect call, the sentinel in an unwritten
+                // function slot names no table row.  Check before the
+                // inbounds GEP so damaged-but-verified MIR traps instead
+                // of making LLVM assume an out-of-bounds access cannot
+                // happen.
+                try self.check(
+                    try self.wip.icmp(
+                        .uge,
+                        self.produced[of[0]].value,
+                        try self.module.builder.intValue(
+                            .i32,
+                            @as(i64, @intCast(self.module.program.functions.len)),
+                        ),
+                        "no.such.function",
+                    ),
+                    .null_object,
+                );
                 const names = try self.module.functionNames();
                 const slot = try self.wip.gep(
                     .inbounds,

@@ -130,3 +130,12 @@ the capture line?  **Ratified.**
 **Q3 — which std customers ship with it** — `sort_by` alone, or the
 small family (`sort_by`, `keep`, first-class `find_by`)?  **Minimal:
 `sort_by`, with the family at the build's honest discretion.**
+
+## As built (2026-08-08)
+
+S1–S3 and D1–D5 shipped as ratified.  Function values are program
+indices, lambdas synthesize distinct source-positioned function names,
+and both engines dispatch through the same program table.  D6 shipped
+at the ratified minimum: `std.lists` provides stable O(n log n)
+`xs.sort_by(before)` for every list element type, routed through method
+syntax after `import std.lists`; `keep` and `find_by` remain deferred.

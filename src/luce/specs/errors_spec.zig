@@ -416,6 +416,24 @@ test "luce.sema.private: a public surface names public types, refused at the dec
         "private struct Inner:\n    n: long\n\nfunc read() -> list(Inner):\n    return [Inner(n = 1)]\n\nfunc main():\n    return\n",
         "luce.sema.private",
     );
+    // A function type publishes its complete nested signature too.
+    // The outer `func` tag must not hide a private parameter or result
+    // from the same D4 check containers receive above.
+    try expectSaying(
+        "private struct Inner:\n    n: long\n\nfunc use(callback: func(Inner) -> long) -> long:\n    return 0\n\nfunc main():\n    return\n",
+        "luce.sema.private",
+        "use is public and takes Inner, which is marked private",
+    );
+    try expectSaying(
+        "private struct Inner:\n    n: long\n\nfunc use(callback: func(long) -> func(long) -> Inner) -> long:\n    return 0\n\nfunc main():\n    return\n",
+        "luce.sema.private",
+        "which is marked private",
+    );
+    try expectSaying(
+        "private struct Inner:\n    n: long\n\nprivate func reveal(n: long) -> Inner:\n    return Inner(n = n)\n\nfunc expose() -> func(long) -> Inner:\n    return reveal\n\nfunc main():\n    return\n",
+        "luce.sema.private",
+        "expose is public and answers Inner, which is marked private",
+    );
     // The quiet common case: a private function may traffic in the
     // private type freely, and a private field may hold one.
     try expectCompiles(
@@ -1523,6 +1541,28 @@ test "luce.sema.duplicate: a redeclared local points at the first" {
     , "luce.sema.duplicate", "n is already declared on line 2", 3, 9);
 }
 
+test "luce.sema.duplicate: a lambda parameter cannot shadow an enclosing local" {
+    try expectSaying(
+        \\func main():
+        \\    let n = 10
+        \\    let chosen: func(long) -> long = (n) -> n + 1
+        \\
+    , "luce.sema.duplicate", "n is already declared on line 2");
+
+    // The same lexical scope survives a synthesized lambda in between:
+    // an inner parameter cannot shadow a grandparent local merely
+    // because the middle lambda has been lifted to the function table.
+    try expectSaying(
+        \\func apply(f: func(long) -> long, x: long) -> long:
+        \\    return f(x)
+        \\
+        \\func main():
+        \\    let n = 10
+        \\    let nested: func(long) -> long = (x) -> apply((n) -> n + 1, x)
+        \\
+    , "luce.sema.duplicate", "n is already declared on line 5");
+}
+
 test "luce.sema.duplicate: a local over a declaration says which kind, and where" {
     try expectOnlySayingAt(
         \\func helper():
@@ -1958,7 +1998,7 @@ test "luce.sema.import: a format spec is std.strings, and says so" {
     // reported per file").
 }
 
-test "luce.sema.convert: string() takes a scalar, and names build() for a builder" {
+test "luce.sema.convert: string() names its value domain and build() for a builder" {
     // The one reason `str` could not simply be renamed: it took a heap
     // object, and a scalar constructor should not (docs/NUMERICS.md §7).
     try expectOnlySayingAt(
@@ -1970,7 +2010,7 @@ test "luce.sema.convert: string() takes a scalar, and names build() for a builde
         \\
     ,
         "luce.sema.convert",
-        "string() converts a scalar; a builder hands over its text with .build()",
+        "string() converts a number, a bool, a string, an enum, or a function value; a builder hands over its text with .build()",
         4,
         16,
     );
@@ -1982,7 +2022,7 @@ test "luce.sema.convert: string() takes a scalar, and names build() for a builde
         \\
     ,
         "luce.sema.convert",
-        "string() converts a number, a bool, or a string, not list(int)",
+        "string() converts a number, a bool, a string, an enum, or a function value, not list(int)",
         3,
         16,
     );
@@ -4078,7 +4118,7 @@ test "an f-string hole is underlined, not the whole literal" {
         \\
     ,
         "luce.sema.convert",
-        "string() converts a number, a bool, or a string, not list(int)",
+        "string() converts a number, a bool, a string, an enum, or a function value, not list(int)",
         6,
         30,
     );
@@ -5272,7 +5312,7 @@ test "luce.sema.method: a missing method names the receiver it is missing from" 
         \\
     ,
         "luce.sema.method",
-        "list has no method zzzzzz (has append insert remove pop sort reverse find contains clear; join lives in strings)",
+        "list has no method zzzzzz (has append insert remove pop sort reverse find contains clear; sort_by lives in lists; join lives in strings)",
         3,
         5,
     );
@@ -6056,6 +6096,18 @@ test "luce.sema.call: spawn runs a function you declared" {
         \\    let t = spawn print("hello")
         \\
     , hosted, "luce.sema.call");
+    // Function values cross the worker boundary as ordinary value
+    // arguments and results, but the spawn target itself remains the
+    // declaration-index channel THREADS.md specifies.
+    try expectHostSaying(
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\func main():
+        \\    let chosen: func(long) -> long = twice
+        \\    let work = spawn chosen(21)
+        \\
+    , "luce.sema.call", "spawn runs a function you declared");
 }
 
 test "luce.sema.call: a worker answers one value, so a return shape is refused" {
@@ -6162,6 +6214,166 @@ test "luce.sema.name: a lambda reaching an enclosing local is refused, and taugh
         \\    print(string(apply((n) -> n * scale, 2)))
         \\
     , "luce.sema.name", "a lambda carries no environment");
+
+    // A captured function-valued local is still a capture when the
+    // source writes it as a callee.  This used to take the unresolved
+    // direct-call path and say "unknown function", even though the
+    // declaration is visible two lines above.
+    try expectHostSaying(
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\func apply(f: func(long) -> long, x: long) -> long:
+        \\    return f(x)
+        \\
+        \\func main():
+        \\    let chosen: func(long) -> long = twice
+        \\    print(string(apply((n) -> chosen(n), 2)))
+        \\
+    , "luce.sema.name", "a lambda carries no environment");
+
+    // Lexical shadowing still wins when the local happens to have an
+    // imported module's name.  Synthesizing a top-level lambda must
+    // not make the local disappear and silently expose that namespace.
+    try expectHostSaying(
+        \\import std.math
+        \\
+        \\func identity(n: double) -> double:
+        \\    return n
+        \\
+        \\func apply(f: func(double) -> double, x: double) -> double:
+        \\    return f(x)
+        \\
+        \\func main():
+        \\    let math: func(double) -> double = identity
+        \\    print(string(apply((x) -> math.round(x), 2.5)))
+        \\
+    , "luce.sema.name", "a lambda carries no environment");
+    try expectHostSaying(
+        \\import std.math
+        \\
+        \\func read(f: func() -> double) -> double:
+        \\    return f()
+        \\
+        \\func main():
+        \\    let math = 1.0
+        \\    print(string(read(() -> math.pi)))
+        \\
+    , "luce.sema.name", "a lambda carries no environment");
+
+    // That capture set crosses every synthesized-lambda boundary.  A
+    // grandparent local must neither become merely "unknown" nor be
+    // mistaken for an imported namespace after the middle lambda is
+    // lifted to the top level.
+    try expectHostSaying(
+        \\func apply(f: func(long) -> long, x: long) -> long:
+        \\    return f(x)
+        \\
+        \\func main():
+        \\    let step = 4
+        \\    let nested: func(long) -> long = (x) -> apply((y) -> y + step, x)
+        \\    print(string(nested(1)))
+        \\
+    , "luce.sema.name", "a lambda carries no environment");
+    try expectHostSaying(
+        \\import std.math
+        \\
+        \\func apply(f: func(double) -> double, x: double) -> double:
+        \\    return f(x)
+        \\
+        \\func main():
+        \\    let math = 1.0
+        \\    let nested: func(double) -> double = (x) -> apply((y) -> math.round(y), x)
+        \\    print(string(nested(2.75)))
+        \\
+    , "luce.sema.name", "a lambda carries no environment");
+}
+
+test "luce.sema.type: function values have identity but no ordering" {
+    try expectHostSaying(
+        \\func before(a: long, b: long) -> bool:
+        \\    return a < b
+        \\
+        \\func main():
+        \\    let left: func(long, long) -> bool = before
+        \\    let right: func(long, long) -> bool = before
+        \\    print(string(left < right))
+        \\
+    , "luce.sema.type", "there is no order between two");
+}
+
+test "luce.sema.import: sort_by is routed through std lists" {
+    try expectHostSaying(
+        \\func before(a: long, b: long) -> bool:
+        \\    return a < b
+        \\
+        \\func main():
+        \\    var values: list(long) = [3, 1, 2]
+        \\    values.sort_by(before)
+        \\
+    , "luce.sema.import", "import std.lists");
+}
+
+test "luce.sema.type: sort_by's comparator has the receiver's element shape" {
+    try expectHostSaying(
+        \\import std.lists
+        \\
+        \\func unary(a: long) -> bool:
+        \\    return a > 0
+        \\
+        \\func main():
+        \\    var values: list(long) = [3, 1, 2]
+        \\    values.sort_by(unary)
+        \\
+    , "luce.sema.type", "func(long, long) -> bool");
+    try expectHostSaying(
+        \\import std.lists
+        \\
+        \\func before(a: string, b: string) -> bool:
+        \\    return a < b
+        \\
+        \\func main():
+        \\    var values: list(long) = [3, 1, 2]
+        \\    values.sort_by(before)
+        \\
+    , "luce.sema.type", "func(long, long) -> bool");
+    try expectHostSaying(
+        \\import std.lists
+        \\
+        \\func difference(a: long, b: long) -> long:
+        \\    return a - b
+        \\
+        \\func main():
+        \\    var values: list(long) = [3, 1, 2]
+        \\    values.sort_by(difference)
+        \\
+    , "luce.sema.type", "func(long, long) -> bool");
+}
+
+test "luce.sema.method: sort_by's routed method spelling is positional and list-only" {
+    try expectHostSaying(
+        \\import std.lists
+        \\
+        \\func before(a: long, b: long) -> bool:
+        \\    return a < b
+        \\
+        \\func main():
+        \\    var values: list(long) = [3, 1, 2]
+        \\    values.sort_by(before = before)
+        \\
+    , "luce.sema.method", "its comparator is positional here");
+    try expectHostSaying(
+        \\import std.lists
+        \\
+        \\func before(a: long, b: long) -> bool:
+        \\    return a < b
+        \\
+        \\func main():
+        \\    let comparator: func(long, long) -> bool = before
+        \\    var values = new array(long, 3)
+        \\    values.sort_by(comparator)
+        \\
+    , "luce.sema.method", "array has no method sort_by");
 }
 
 test "luce.sema.type: a lambda needs a place that expects a function" {

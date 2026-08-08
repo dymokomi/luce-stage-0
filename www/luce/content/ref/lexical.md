@@ -207,7 +207,7 @@ worked examples.
 == != <  <= >  >=          comparison (non-associative)
 =  += -= *= /= //= %=      assignment
 &= |= ^= <<= >>=           assignment, the bit set's five
-:  ,  .  ->  ?  !          declaration and type syntax
+:  ,  .  ->  ?  !          declaration, type and lambda syntax
 (  )  [  ]  _              grouping, indexing, array shape
 ```
 

@@ -217,7 +217,8 @@ const unspellable = [_][]const u8{};
 /// them in two groups a reader can turn off separately.
 const Role = enum {
     /// `->`, which is neither an operator on values nor punctuation:
-    /// it introduces the answer a function gives.
+    /// it introduces the answer a declaration, function type, or
+    /// expression lambda gives.
     function_return,
     comparison,
     assignment,

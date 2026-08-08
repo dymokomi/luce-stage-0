@@ -13,10 +13,11 @@ the rules.
 ## Vocabulary
 
 **object** — a heap value: `list`, `map`, `array`, `builder`.
-Everything else (`long`, `double`, `bool`, `string`, structs)
-is a **value**: copied freely, never freed by the program, never
-verbed. The runtime reclaims a value's storage when the place holding
-it dies.
+Numbers, `bool`, `string`, enums, function values and plain-value
+structs are **values**: copied freely, never freed by the program,
+never verbed. A struct that carries an object follows that object's
+rules when it is kept. The runtime reclaims a value's storage when the
+place holding it dies.
 
 **fresh** — an object expression nobody has named yet: `new ...`, a
 literal `[1, 2]`, a slice `xs[a:b]`, a call result, `s.split(x)`,

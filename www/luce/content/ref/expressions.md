@@ -93,8 +93,9 @@ trap.
 
 ## Comparison
 
-`== != < <= > >=` order `long`, `double` and `string`. `==` and `!=`
-also apply to `bool` and to objects, where they compare identity.
+`== != < <= > >=` order numbers and `string`. `==` and `!=` also
+apply to `bool`, enums and function values. Functions and enums have
+no ordering. Object equality compares identity.
 
 ## Logic
 
@@ -144,8 +145,10 @@ required. Arguments are evaluated in the order they are *written* and
 bound to the slots they *name*; the two differ only when a call
 reorders. A parameter may declare a trailing **default**, a
 compile-time constant filled in wherever a call omits the argument.
-There are no variadics. Functions are not values — a name in call
-position denotes a function, statically.
+There are no variadics. These names and defaults belong to a direct
+call of a declared function. A call through a function value is
+positional: its type carries parameter types and `give`, but no names
+or defaults.
 
 ```luce run
 func grown(base: long, step: long = 5, twice: bool = false) -> long:
@@ -190,8 +193,37 @@ name(args)                  a function in this file
 module.name(args)           a function in an imported module
 Struct.name(args)           a function in a struct's namespace
 module.Struct.name(args)    both
+value(args)                 a local or parameter of function type
 receiver.method(args)       sugar; see below
 ```
+
+## Function values and lambdas {#function-values-and-lambdas}
+
+A top-level or namespace function name is a value where a
+[function type](../types/#function) is expected. A method reference is
+not: `point.length` would carry its receiver and therefore cross the
+capture line. A value is called with ordinary parentheses, and its
+arguments are checked against the signature exactly as a direct
+call's are, including any required `give`.
+
+A lambda is parenthesized parameter names, `->`, and one expression:
+
+```
+(n) -> n * 2
+(a, b) -> a.score < b.score
+```
+
+Parameter and result types come from the function type at the place
+where the lambda lands. With no expected function type it is refused.
+The body may name its parameters, visible functions and file-scope
+constants; it may not name a local from the surrounding function,
+including a function-valued local used as a callee. A lambda carries
+no environment. State that travels with behavior is a struct with a
+method.
+
+Function values copy freely. `==` and `!=` compare which function they
+name, ordering is refused, and `string(f)` gives a declared function's
+qualified name or a lambda's distinct compiler-generated name.
 
 ## Calls that answer more than one value
 
@@ -284,7 +316,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:3:17: list has no method has (has append insert remove pop sort reverse find contains clear; join lives in strings) [luce.sema.method]
+main.luc:3:17: list has no method has (has append insert remove pop sort reverse find contains clear; sort_by lives in lists; join lives in strings) [luce.sema.method]
         let found = xs.has(1)
                     ^~~~~~~~~
 ```

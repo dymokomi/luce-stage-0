@@ -1,0 +1,37 @@
+# Comparator-driven list algorithms. `sort_by` is a concrete Luce
+# function and stage 4's closed std specialization supplies the actual
+# monomorphic element type behind routed `xs.sort_by(before)` calls.
+#
+# Stable merge sort, rather than an intrinsic: split by moving the back
+# half through pop, recursively sort both runs, then merge from their
+# backs. On equal keys the right run moves first into the reversed
+# result, so popping that result restores the earlier left item first.
+# Every object crosses as the fresh result of pop; nothing is copied and
+# no `give`-specific second body is needed.
+private func sort_by_template(values: list(long), before: func(long, long) -> bool):
+    if len(values) < 2:
+        return
+
+    let middle = len(values) // 2
+    var right = values[0:0]
+    while len(values) > middle:
+        right.append(values.pop())
+    right.reverse()
+
+    values.sort_by(before)
+    right.sort_by(before)
+
+    var reversed = values[0:0]
+    while len(values) > 0 and len(right) > 0:
+        let left_at = len(values) - 1
+        let right_at = len(right) - 1
+        if before(right[right_at], values[left_at]):
+            reversed.append(values.pop())
+        else:
+            reversed.append(right.pop())
+    while len(values) > 0:
+        reversed.append(values.pop())
+    while len(right) > 0:
+        reversed.append(right.pop())
+    while len(reversed) > 0:
+        values.append(reversed.pop())
