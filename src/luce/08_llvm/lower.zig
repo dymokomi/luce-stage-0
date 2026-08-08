@@ -1120,27 +1120,50 @@ const Module = struct {
     /// and crashes on the first call, which is the failure mode this
     /// exists to replace with a sentence.
     ///
+    /// **And put in a section of its own**, which is what makes
+    /// "before" true.  A symbol is something you look up in a library
+    /// you have already opened, so a tag reachable only that way is
+    /// read *after* the platform loader has had its say — and the
+    /// platform loader's say about a damaged file is a crash
+    /// (`artifact.section`, `src/apps/native.zig`).  In a section, the
+    /// same constant is findable in the file's own bytes.
+    ///
+    /// The name is spelled once, in `artifact.section`, and the object
+    /// format decides which spelling: Mach-O sections live in a
+    /// segment, ELF sections do not.
+    ///
     /// `artifact.generator` is stamped and never passed in: it is what
     /// wrote these instructions, so it is this file's answer to give
     /// and no caller's to choose.
     fn describeArtifact(self: *Module) Error!void {
+        const name_type = try self.builder.structType(.normal, &.{
+            .i32,
+            try self.builder.arrayType(artifact.machine_capacity, .i8),
+        });
         const tag_type = try self.builder.structType(
             .normal,
-            &.{ .i64, .i32, .i32, .ptr, .i64, .i64, .i32, .i32, .i64 },
+            &.{ .i64, .i64, .i64, .i32, .i32, .i32, .i32, name_type },
         );
         const debug_build = for (self.program.functions) |function| {
             if (function.origins.len != 0) break true;
         } else false;
         const initializer = try self.builder.structConst(tag_type, &.{
             try self.builder.intConst(.i64, @as(i64, @bitCast(artifact.magic))),
+            try self.builder.intConst(.i64, @as(i64, @bitCast(self.options.source_hash))),
+            try self.builder.intConst(.i64, @as(i64, @bitCast(artifact.generator))),
             try self.builder.intConst(.i32, artifact.format),
             try self.builder.intConst(.i32, abi.version),
-            try self.textBytes(artifact.machine),
-            try self.builder.intConst(.i64, artifact.machine.len),
-            try self.builder.intConst(.i64, @as(i64, @bitCast(self.options.source_hash))),
             try self.builder.intConst(.i32, @intFromBool(debug_build)),
             try self.builder.intConst(.i32, 0),
-            try self.builder.intConst(.i64, @as(i64, @bitCast(artifact.generator))),
+            try self.builder.structConst(name_type, &.{
+                try self.builder.intConst(.i32, artifact.machine.len),
+                // The whole run, padding included, so the tag a loader
+                // reads is the same ninety-six bytes whatever machine
+                // wrote it.
+                try self.builder.stringConst(
+                    try self.builder.string(&artifact.MachineName.here.text),
+                ),
+            }),
         });
         const variable = try self.builder.addVariable(
             try self.builder.strtabString(artifact.symbol),
@@ -1149,6 +1172,13 @@ const Module = struct {
         );
         try variable.setInitializer(initializer, self.builder);
         variable.setMutability(.constant, self.builder);
+        variable.setSection(
+            try self.builder.string(if (self.options.target.os.tag.isDarwin())
+                artifact.section.mach
+            else
+                artifact.section.elf),
+            self.builder,
+        );
         variable.ptrConst(self.builder).global.setLinkage(.external, self.builder);
     }
 

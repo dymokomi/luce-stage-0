@@ -430,9 +430,11 @@ test "a file that is not there and a file that is not a program are different mi
         defer ran.deinit(gpa);
         try testing.expectEqual(@as(u8, 1), ran.status);
         try testing.expectEqualStrings("", ran.out);
-        try testing.expect(ran.saysErr(
-            "it is not a compiled Luce program this machine can run",
-        ));
+        // And the answer is about the *file*, not the loader's opinion
+        // of it: these are read before anything is asked to open them,
+        // so what comes back names what is missing rather than
+        // relaying a "no" from dyld.
+        try testing.expect(ran.saysErr("it is not a compiled Luce artifact"));
     }
 
     // A source file that is not there says the same thing about
@@ -641,30 +643,33 @@ test "LOOM_EDITOR names the program edit runs, in place of the embedded one" {
 // ---------------------------------------------------------------------------
 //
 // A native artifact is not portable and its name cannot be trusted to
-// say so, so every one carries a tag and a loader reads it before a
-// single instruction runs (`luce.llvm.artifact.Artifact`).  Six ways an
-// artifact can be wrong, six sentences — and the sentences are the
-// whole point: "no" tells a person nothing, and "it was built for a
-// different machine" tells them what to do next.
+// say so, so every one carries a tag and a loader reads it — **out of
+// the file's own bytes, before the file is loaded at all** — before a
+// single instruction runs (`luce.llvm.artifact.Artifact`).  Seven ways
+// an artifact can be wrong, seven sentences, and the sentences are the
+// whole point: "no" tells a person nothing, and three of these name
+// both sides, because the loader is one of them and is holding the
+// other.
 //
 // These take a **real artifact** and change one field of its tag in
 // the file, because that is what a stale, copied, or hand-edited `.lc`
-// actually is.  `native.zig` proves the six sentences differ from each
-// other; this proves each one is what comes out of loom when the
+// actually is.  `native.zig` proves the seven sentences differ from
+// each other; this proves each one is what comes out of loom when the
 // matching field is the one that is wrong.
 
-/// Where each field of the tag sits, from `08_llvm/abi.zig` — whose
-/// own test holds these offsets against what the code generator emits.
+/// Where each field of the tag sits, from `08_llvm/artifact.zig` —
+/// whose own test holds these offsets against what the code generator
+/// emits.
 const tag = struct {
     const magic = 0;
-    const format = 8;
-    const abi_version = 12;
-    const machine_length = 24;
-    const source_hash = 32;
-    const generator = 48;
+    const source_hash = 8;
+    const generator = 16;
+    const format = 24;
+    const abi_version = 28;
+    const machine_length = 40;
 };
 
-/// Change one field of an artifact's tag, in place.
+/// Change one 64-bit field of an artifact's tag, in place.
 ///
 /// The tag is found by its magic rather than by asking a loader where
 /// it is: a test that used the loader to locate what it is about to
@@ -676,13 +681,38 @@ fn corrupt(
     offset: usize,
     value: u64,
 ) !void {
+    return change(gpa, install, name, offset, std.mem.toBytes(std.mem.nativeToLittle(u64, value)));
+}
+
+/// The same for a 32-bit field.  Two functions rather than one with a
+/// width, because half the tag is words and half is halves and a
+/// caller that gets it wrong writes over the field *after* the one it
+/// meant — which is exactly the kind of quiet wrongness these tests
+/// exist to catch.
+fn corruptHalf(
+    gpa: Allocator,
+    install: *const Install,
+    name: []const u8,
+    offset: usize,
+    value: u32,
+) !void {
+    return change(gpa, install, name, offset, std.mem.toBytes(std.mem.nativeToLittle(u32, value)));
+}
+
+fn change(
+    gpa: Allocator,
+    install: *const Install,
+    name: []const u8,
+    offset: usize,
+    written: anytype,
+) !void {
     const bytes = try install.read(gpa, name);
     defer gpa.free(bytes);
 
     var magic_bytes: [8]u8 = undefined;
     std.mem.writeInt(u64, &magic_bytes, luce.llvm.artifact.magic, .little);
     const at = std.mem.indexOf(u8, bytes, &magic_bytes) orelse return error.NoArtifactTag;
-    std.mem.writeInt(u64, bytes[at + offset ..][0..8], value, .little);
+    @memcpy(bytes[at + offset ..][0..written.len], &written);
 
     try install.scratch.dir.writeFile(io, .{ .sub_path = name, .data = bytes });
     try resign(gpa, install, name);
@@ -731,25 +761,51 @@ test "an artifact whose tag is wrong in one field is refused by naming that fiel
     const good = try install.read(gpa, "sums.lc");
     defer gpa.free(good);
 
-    const refusals = [_]struct { offset: usize, value: u64, says: []const u8 }{
+    const machine = luce.llvm.artifact.machine;
+    const shortened = machine[0 .. machine.len - 1];
+    const refusals = [_]struct { offset: usize, value: u64, half: bool = false, says: []const u8 }{
         // No magic at the front: whatever this file is, no Luce
         // compiler wrote it.
         .{ .offset = tag.magic, .value = 0, .says = "it is not a compiled Luce artifact" },
         // A tag whose own shape this loader cannot read — the check
         // that has to come before every other one, because the fields
-        // after it would be read at the wrong offsets.
-        .{ .offset = tag.format, .value = 99, .says = "its tag is a layout this loader cannot read" },
+        // after it would be read at the wrong offsets.  It says which
+        // layout it found and which one it reads, because "a layout
+        // this loader cannot read" leaves a person nothing to act on.
+        .{
+            .offset = tag.format,
+            .value = 99,
+            .half = true,
+            .says = std.fmt.comptimePrint(
+                "its tag is layout version 99, and this loader reads version {d}",
+                .{luce.llvm.artifact.format},
+            ),
+        },
         .{
             .offset = tag.abi_version,
             .value = 9999,
-            .says = "it was built against a different host ABI",
+            .half = true,
+            .says = std.fmt.comptimePrint(
+                "it was built against host ABI 9999, and this loader speaks {d}",
+                .{luce.llvm.abi.version},
+            ),
         },
         // One character short of this machine's name is a different
-        // machine's name.
+        // machine's name — and the sentence names both, which is the
+        // whole difference between a refusal and a shrug.
         .{
             .offset = tag.machine_length,
-            .value = luce.llvm.artifact.machine.len - 1,
-            .says = "it was built for a different machine",
+            .value = machine.len - 1,
+            .half = true,
+            .says = "it was built for " ++ shortened ++ ", and this machine is " ++ machine,
+        },
+        // A name longer than the room it lives in is not a foreign
+        // machine, it is a tag nobody can reason from.
+        .{
+            .offset = tag.machine_length,
+            .value = luce.llvm.artifact.machine_capacity + 1,
+            .half = true,
+            .says = "it is truncated, or its object file is damaged",
         },
         .{
             .offset = tag.generator,
@@ -761,7 +817,11 @@ test "an artifact whose tag is wrong in one field is refused by naming that fiel
     for (refusals) |refusal| {
         try install.scratch.dir.writeFile(io, .{ .sub_path = "sums.lc", .data = good });
         try resign(gpa, &install, "sums.lc");
-        try corrupt(gpa, &install, "sums.lc", refusal.offset, refusal.value);
+        if (refusal.half) {
+            try corruptHalf(gpa, &install, "sums.lc", refusal.offset, @intCast(refusal.value));
+        } else {
+            try corrupt(gpa, &install, "sums.lc", refusal.offset, refusal.value);
+        }
 
         var ran = try runLoom(gpa, &install, &.{ "run", artifact }, null, null);
         defer ran.deinit(gpa);
@@ -802,31 +862,35 @@ test "an artifact with a tag and no entry point is not an artifact" {
         \\
         \\struct LuceArtifact {{
         \\    uint64_t magic;
+        \\    uint64_t source_hash;
+        \\    uint64_t generator;
         \\    uint32_t format;
         \\    uint32_t abi_version;
-        \\    const char *machine;
-        \\    int64_t machine_length;
-        \\    uint64_t source_hash;
         \\    int32_t debug;
         \\    int32_t reserved;
-        \\    uint64_t generator;
+        \\    uint32_t machine_length;
+        \\    char machine[{d}];
         \\}};
         \\
-        \\static const char machine_name[] = "{s}";
-        \\
-        \\const struct LuceArtifact luce_artifact = {{
-        \\    {d}ULL, {d}U, {d}U,
-        \\    machine_name, {d}LL,
-        \\    0ULL, 1, 0, {d}ULL
+        \\const struct LuceArtifact luce_artifact
+        \\    __attribute__((section("{s}"))) = {{
+        \\    {d}ULL, 0ULL, {d}ULL,
+        \\    {d}U, {d}U, 1, 0,
+        \\    {d}U, "{s}"
         \\}};
         \\
     , .{
-        artifact.machine,
+        artifact.machine_capacity,
+        if (@import("builtin").os.tag.isDarwin())
+            artifact.section.mach
+        else
+            artifact.section.elf,
         artifact.magic,
+        artifact.generator,
         artifact.format,
         abi.version,
         artifact.machine.len,
-        artifact.generator,
+        artifact.machine,
     });
     defer gpa.free(source);
     try install.write("hollow.c", source);
@@ -852,13 +916,23 @@ test "an artifact with a tag and no entry point is not an artifact" {
     try testing.expectEqualStrings(sentence, ran.err);
 }
 
-test "a truncated artifact is refused by the platform, not read half-way" {
+test "a truncated artifact is refused by name, wherever it was cut" {
     // A file cut short by a full disk, an interrupted copy, or a
-    // half-finished download: the platform's loader will not open it,
-    // and loom has to say something about the *file* rather than
-    // guess at the program.  The tag is never reached, so this is the
-    // other sentence — the one about a file that exists and is not a
-    // program this machine can run.
+    // half-finished download.  **This is the row that used to be a
+    // macOS-only premise**: it read "refused by the platform", and the
+    // platform is not the same everywhere — dyld declines to open such
+    // a file, while a Linux loader opens one cut anywhere from a
+    // quarter of the way to nearly all of it and *runs* it, or maps a
+    // segment past the end of the file and takes a SIGBUS on the first
+    // touch of that page.  Neither of those is an answer about the
+    // file.
+    //
+    // So the tag is read out of the file's bytes first, and reading it
+    // means walking the container's headers, and a header describing
+    // bytes the file does not have is what "truncated" *is*.  Six cuts,
+    // spread across the file so that some fall before the tag and some
+    // after it: every one is one sentence, on every platform, and the
+    // loader is never handed the file at all.
     const gpa = testing.allocator;
     var install = try installTree(gpa, true);
     defer install.deinit(gpa);
@@ -873,24 +947,30 @@ test "a truncated artifact is refused by the platform, not read half-way" {
     const whole = try install.read(gpa, "sums.lc");
     defer gpa.free(whole);
     try testing.expect(whole.len > 64);
-    try install.scratch.dir.writeFile(io, .{
-        .sub_path = "cut.lc",
-        .data = whole[0 .. whole.len / 2],
-    });
 
     const cut = try install.at(gpa, "cut.lc");
     defer gpa.free(cut);
-    var ran = try runLoom(gpa, &install, &.{ "run", cut }, null, null);
-    defer ran.deinit(gpa);
-    try testing.expectEqual(@as(u8, 1), ran.status);
-    try testing.expectEqualStrings("", ran.out);
     const sentence = try std.fmt.allocPrint(
         gpa,
-        "loom: cannot load {s}: it is not a compiled Luce program this machine can run\n",
+        "loom: cannot run {s}: it is truncated, or its object file is damaged\n",
         .{cut},
     );
     defer gpa.free(sentence);
-    try testing.expectEqualStrings(sentence, ran.err);
+
+    for ([_]usize{ 10, 25, 50, 75, 90, 99 }) |part| {
+        try install.scratch.dir.writeFile(io, .{
+            .sub_path = "cut.lc",
+            .data = whole[0 .. whole.len * part / 100],
+        });
+        // Deliberately not re-signed: nothing signs a half-copied
+        // file, and nothing here loads one either.
+
+        var ran = try runLoom(gpa, &install, &.{ "run", cut }, null, null);
+        defer ran.deinit(gpa);
+        try testing.expectEqual(@as(u8, 1), ran.status);
+        try testing.expectEqualStrings("", ran.out);
+        try testing.expectEqualStrings(sentence, ran.err);
+    }
 }
 
 test "an artifact built from another program is rebuilt, and said so when it cannot be" {

@@ -132,7 +132,7 @@ pub fn runModule(
     const path_z = try gpa.dupeZ(u8, path);
     defer gpa.free(path_z);
 
-    switch (native.open(path_z, null)) {
+    switch (native.open(io, path_z, null)) {
         .loaded => |opened| {
             var loaded = opened;
             defer loaded.close();
@@ -155,7 +155,11 @@ pub fn runModule(
             return 1;
         },
         .mismatch => |why| {
-            try err.print("loom: cannot run {s}: {s}\n", .{ path, native.explain(why) });
+            var sentence: [native.explanation_bytes]u8 = undefined;
+            try err.print(
+                "loom: cannot run {s}: {s}\n",
+                .{ path, native.explain(why, &sentence) },
+            );
             return 1;
         },
     }
@@ -293,7 +297,7 @@ fn artifactFor(
     // A hit is the whole point: nothing compiled, nothing linked,
     // nothing external invoked.
     for (places.paths()) |candidate| {
-        switch (native.open(candidate, source_hash)) {
+        switch (native.open(io, candidate, source_hash)) {
             .loaded => |opened| return opened,
             .unopenable, .mismatch => {},
         }
@@ -318,10 +322,13 @@ fn artifactFor(
         if (last) |why| gpa.free(why);
         last = null;
         switch (try compileTo(gpa, io, compiler.path, encoded, candidate)) {
-            .built => switch (native.open(candidate, source_hash)) {
+            .built => switch (native.open(io, candidate, source_hash)) {
                 .loaded => |opened| return opened,
                 .unopenable => last = try gpa.dupe(u8, "the artifact just built could not be loaded"),
-                .mismatch => |why| last = try gpa.dupe(u8, native.explain(why)),
+                .mismatch => |why| {
+                    var sentence: [native.explanation_bytes]u8 = undefined;
+                    last = try gpa.dupe(u8, native.explain(why, &sentence));
+                },
             },
             // Not a place-by-place failure: the program says something
             // the backend has no lowering for, and the next directory

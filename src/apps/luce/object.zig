@@ -274,11 +274,12 @@ test "a program links, loads with its tag intact, and runs" {
     }
     try testing.expectEqualStrings("product.lc ", left.items);
 
-    var loaded = switch (native.open(artifact_path, hash)) {
+    var loaded = switch (native.open(testing.io, artifact_path, hash)) {
         .loaded => |opened| opened,
         .unopenable => return error.CouldNotLoad,
         .mismatch => |why| {
-            std.debug.print("refused: {s}\n", .{native.explain(why)});
+            var sentence: [native.explanation_bytes]u8 = undefined;
+            std.debug.print("refused: {s}\n", .{native.explain(why, &sentence)});
             return error.Refused;
         },
     };
@@ -292,10 +293,7 @@ test "a program links, loads with its tag intact, and runs" {
     try testing.expectEqual(artifact.format, loaded.tag.format);
     try testing.expectEqual(artifact.generator, loaded.tag.generator);
     try testing.expect(loaded.debug());
-    try testing.expectEqualStrings(
-        artifact.machine,
-        loaded.tag.machine[0..@intCast(loaded.tag.machine_length)],
-    );
+    try testing.expectEqualStrings(artifact.machine, loaded.tag.machine.name());
 
     var recorder: Recorder = .{};
     const table = recorder.table();
@@ -326,8 +324,8 @@ test "an artifact built from another program is refused as stale" {
 
     // Content decides, and nothing else: the file is there, it loads,
     // it has a `luce_main` — and it is still the wrong program.
-    try testing.expectEqual(artifact.Mismatch.source, native.open(artifact_path, 0xdead_beef).mismatch);
-    switch (native.open(artifact_path, 0x1111_2222_3333_4444)) {
+    try testing.expect(native.open(testing.io, artifact_path, 0xdead_beef).mismatch.is(.source));
+    switch (native.open(testing.io, artifact_path, 0x1111_2222_3333_4444)) {
         .loaded => |opened| {
             var loaded = opened;
             loaded.close();

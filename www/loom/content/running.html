@@ -50,26 +50,37 @@ So the compiler links it and the environment does not.</p>
 <p>An artifact records four things besides the program: the <strong>machine</strong>
 it was built for, the <strong>host ABI version</strong> it was built against, the
 identity of the <strong>code generator</strong> that produced it, and a content
-hash of the <strong>program</strong> itself. loom reads that tag before it calls
-anything, and a file that does not match is refused by name:</p>
+hash of the <strong>program</strong> itself. The tag sits in a section of its
+own, and loom reads it <strong>out of the file's own bytes, before the file is
+loaded at all</strong> &mdash; so a damaged file is answered rather than handed
+to a platform loader that would map it and crash. A file that does not match is
+refused by name:</p>
 
 <div class="table">
 <table>
 <tr><th>loom says</th><th>Meaning</th></tr>
 <tr><td>it is not a compiled Luce artifact</td><td>The file is something
 else</td></tr>
-<tr><td>its tag is a layout this loader cannot read</td><td>The tag format
-itself moved</td></tr>
-<tr><td>it was built against a different host ABI</td><td>The published
-<code>LuceHost</code> table changed under it</td></tr>
-<tr><td>it was built for a different machine</td><td>Another architecture or
-another operating system</td></tr>
+<tr><td>it is truncated, or its object file is damaged</td><td>A full disk, an
+interrupted copy, a half-finished download</td></tr>
+<tr><td>its tag is layout version <var>N</var>, and this loader reads version
+<var>M</var></td><td>The tag format itself moved</td></tr>
+<tr><td>it was built against host ABI <var>N</var>, and this loader speaks
+<var>M</var></td><td>The published <code>LuceHost</code> table changed under
+it</td></tr>
+<tr><td>it was built for <var>machine</var>, and this machine is
+<var>machine</var></td><td>Another architecture or another operating
+system</td></tr>
 <tr><td>it was built by a different code generator</td><td>A rebuilt or
 different compiler produced it</td></tr>
 <tr><td>the program it was built from has changed</td><td>The source moved; the
 cache entry is stale</td></tr>
 </table>
 </div>
+
+<p><strong>Three of them name both sides.</strong> A loader refusing an artifact
+knows two things the person reading does not have in front of them &mdash; what
+the file says, and what this build is &mdash; so it says both.</p>
 
 <p><strong>There is no fallback and nothing to fall back to.</strong> Refusing by
 name is the whole of the answer: a <code>.luc</code> needs a compiler exactly as
@@ -82,12 +93,13 @@ slower, it is not run.</p>
 </figure>
 <figure class="sample">
 <figcaption class="cap bad">Standard error, exit 1</figcaption>
-<div class="code result bad"><pre><samp>loom: cannot load bad.lc: it is not a compiled Luce program this machine can run</samp></pre></div>
+<div class="code result bad"><pre><samp>loom: cannot run bad.lc: it is not a compiled Luce artifact</samp></pre></div>
 </figure>
 
-<p>The platform loader says only "no", never why, so loom makes the one
-distinction worth making itself: a file that is not there and a file that is not
-a program are different mistakes, and only the second is about the program.</p>
+<p>A platform loader says only "no", never why &mdash; and about a damaged file
+it may say nothing at all and crash instead. So loom does not ask it first: a
+file that is not there and a file that is not a program are different mistakes,
+and both are answered from the file rather than relayed from the loader.</p>
 
 <figure class="sample">
 <figcaption class="cap bad">Standard error, exit 1</figcaption>

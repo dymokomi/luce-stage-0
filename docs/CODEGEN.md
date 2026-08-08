@@ -117,6 +117,36 @@ program — because a native artifact is not portable and a file name
 cannot be trusted to say so.  Without the tag, a `.lc` copied between
 machines is a file that loads cleanly and crashes with no explanation.
 
+**And the tag is read before the file is loaded at all.**  It used to
+be reached through the exported symbol, which meant `dlopen` came
+first and the *platform* loader had the first word — and what a
+platform loader says about a broken file is not a sentence.  A `.lc`
+truncated anywhere from a quarter of the way to nearly all of it opens
+on Linux and **runs**, because the loader needs only the program
+headers and the segments they name; further in, it maps a segment past
+the end of the file and the first touch of that page is a SIGBUS with
+nothing to say.  On macOS dyld declines, and what reached the person
+was dyld's shrug relayed as though it were an answer about the
+program.  So the tag now sits in a section of its own —
+`__LUCE,__artifact` on Mach-O, `.luce_artifact` on ELF, spelled once in
+`artifact.section` — and `src/apps/native.zig` walks the file's own
+container headers to find it: every offset checked against the file's
+length before it is followed, **every** segment or section checked and
+not only the tag's, so a file cut off after the tag is caught too.
+Nothing is mapped, nothing is relocated, nothing runs.  A file whose
+headers describe bytes it does not have is `damaged` — an answer about
+the file, which is the true one — and `dlopen` gets its turn only once
+the tag has agreed.  Both containers are read on both platforms,
+dispatched by the file's own magic rather than by the host, which is
+what makes "it was built for aarch64-linux-gnu, and this machine is
+aarch64-macos-none" a sentence a macOS loom can say about a Linux
+artifact.  Nothing in the tag is a pointer, for the same reason: in a
+file nobody has loaded there are no addresses, only relocations nobody
+has applied, so the machine's name is a run of bytes inside the tag
+(`format` 3).  An artifact with no such section is refused as not an
+artifact — and it is stale by `generator` anyway, since no compiler
+that emits the section shares an identity with one that did not.
+
 **The tag is `08_llvm/artifact.zig` and not `abi.zig`**, and the split
 is the point: `abi.zig` is what generated code and a host agree on,
 while the tag is what a *loader* reads before it can believe any of
