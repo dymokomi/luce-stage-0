@@ -36,7 +36,7 @@ pub const sections = [_]Section{
         .slug = "tour",
         .label = "Tour",
         .title = "A tour of Luce",
-        .blurb = "Start here. Fourteen short chapters, in order, from installing the compiler to writing a program that reads a file.",
+        .blurb = "Start here. Fifteen short chapters, in order, from installing the compiler to writing a program that reads a file.",
         .pages = &.{
             .{ .slug = "hello", .title = "Hello, Luce", .blurb = "Build the toolchain, compile a program, run it." },
             .{ .slug = "values", .title = "Values and types", .blurb = "Int, Float, Bool, String, and the rule that there are no implicit conversions." },
@@ -51,6 +51,7 @@ pub const sections = [_]Section{
             .{ .slug = "modules", .title = "Modules", .blurb = "A file is a module; the standard library lives under std." },
             .{ .slug = "visibility", .title = "Visibility", .blurb = "Public until it says private — the marker, the struct regions, and the factory pattern." },
             .{ .slug = "host", .title = "The outside world", .blurb = "Printing, arguments, files, and the terminal — every effect is a host service." },
+            .{ .slug = "threads", .title = "Workers", .blurb = "spawn runs a function on a worker with a world of its own, and the ownership rules you already know are the concurrency rules." },
             .{ .slug = "next", .title = "Where to go next", .blurb = "What you have seen, what you have not, and where each of them is written down." },
         },
     },

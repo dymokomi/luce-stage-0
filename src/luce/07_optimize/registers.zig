@@ -52,7 +52,7 @@ pub fn mapOperands(
             set.target = map[set.target];
             set.value = map[set.value];
         },
-        .call => |*call| call.arguments = try mapSlice(arena, call.arguments, map),
+        .call, .spawn => |*call| call.arguments = try mapSlice(arena, call.arguments, map),
         .intrinsic => |*call| call.arguments = try mapSlice(arena, call.arguments, map),
         .heap_new => |*new| new.dims = try mapSlice(arena, new.dims, map),
         .object_bind => |*bind| bind.value = map[bind.value],
@@ -101,7 +101,7 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
             used[set.target] = true;
             used[set.value] = true;
         },
-        .call => |call| for (call.arguments) |argument| {
+        .call, .spawn => |call| for (call.arguments) |argument| {
             used[argument] = true;
         },
         .intrinsic => |call| for (call.arguments) |argument| {

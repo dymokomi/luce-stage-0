@@ -78,6 +78,7 @@ pub fn startsExpression(kind: Kind) bool {
         .keyword_not,
         .keyword_give,
         .keyword_copy,
+        .keyword_spawn,
         .keyword_try,
         .minus,
         .tilde,
@@ -380,6 +381,29 @@ fn unaryExpression(self: *Parser) Error!?*ast.Expression {
         const operand = (try unaryExpression(self)) orelse return null;
         return make(self, .{ .try_call = .{
             .operand = operand,
+            .span = .{ .start = keyword.span.start, .end = operand.span().end },
+        } });
+    }
+    // `spawn` takes a *call* and nothing else, so its operand is a
+    // postfix expression rather than a unary one: there is no verb
+    // that could stand between the keyword and the call it hands over
+    // (docs/THREADS.md D2 — the verbs go on the arguments, inside).
+    if (self.accept(.keyword_spawn)) |keyword| {
+        const operand = (try postfixExpression(self)) orelse return null;
+        switch (operand.*) {
+            .call, .method => {},
+            else => {
+                try self.report(
+                    "luce.parse.spawn",
+                    keyword.span,
+                    "spawn runs a call on a worker; write 'spawn f(…)'",
+                    .{},
+                );
+                return null;
+            },
+        }
+        return make(self, .{ .spawn = .{
+            .call = operand,
             .span = .{ .start = keyword.span.start, .end = operand.span().end },
         } });
     }
@@ -796,13 +820,27 @@ fn newObject(self: *Parser) Error!?*ast.Expression {
         if (try self.missingSeparator(previous_end)) return null;
         const closing = (try self.expectClose(.right_paren, opener)) orelse return null;
         closing_end = closing.span.end;
-    } else if (builtin == .file) {
-        // Parsed, then refused by name in stage 4 (docs/BYTES.md R5).
-        // The sentence a reader needs here is "a file is opened, not
-        // made — write files.open(path)", and that sentence belongs
-        // where the language's types are known, not where a `(` is
-        // being looked for.
+    } else if (builtin == .file or builtin == .task) {
+        // Parsed, then refused by name in stage 4 (docs/BYTES.md R5,
+        // docs/THREADS.md D3).  The sentence a reader needs here is
+        // "a file is opened, not made — write files.open(path)", or
+        // "a task is spawned, not made — write spawn f(…)", and both
+        // belong where the language's types are known rather than
+        // where a `(` is being looked for.  The two resources go
+        // together because the reason is one reason: neither has a
+        // state with nothing behind it, so neither has a `new`.
         _ = self.advance();
+        // `new task(long)` carries a type argument the `file` arm
+        // never sees; consuming it keeps the refusal below about the
+        // `new` rather than about a stray `(`.
+        if (self.peekKind() == .left_paren) {
+            const opener = self.advance();
+            while (!endsList(self.peekKind(), .right_paren)) {
+                _ = self.advance();
+            }
+            const closing = (try self.expectClose(.right_paren, opener)) orelse return null;
+            closing_end = closing.span.end;
+        }
     } else {
         try self.report(
             "luce.parse.new",

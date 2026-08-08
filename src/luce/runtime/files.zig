@@ -126,6 +126,8 @@ const read_chunk: usize = 64 * 1024;
 /// naming the path, exactly as the whole-file services always did.
 pub fn open(runtime: *Runtime, path: []const u8, mode: i64) Error!?Value {
     const service = runtime.files.open orelse return runtime.fail(.host_unavailable);
+    runtime.enterEffects();
+    defer runtime.leaveEffects();
     var handle: i64 = -1;
     switch (service(runtime.files.context, path.ptr, @intCast(path.len), mode, &handle)) {
         yes => return try runtime.newFile(handle, path),
@@ -141,6 +143,8 @@ pub fn open(runtime: *Runtime, path: []const u8, mode: i64) Error!?Value {
 /// landed.  Zero means the file is finished.
 pub fn read(runtime: *Runtime, held: Value, buffer: Value) Error!?i64 {
     const service = runtime.files.read orelse return runtime.fail(.host_unavailable);
+    runtime.enterEffects();
+    defer runtime.leaveEffects();
     const handle = try handleOf(runtime, held);
     // Re-resolved after the handle, because both resolves can trap and
     // neither allocates: the pointer stays good across the pair.
@@ -167,6 +171,8 @@ pub fn read(runtime: *Runtime, held: Value, buffer: Value) Error!?i64 {
 /// `array(byte, n)` and answer how many landed.
 pub fn write(runtime: *Runtime, held: Value, buffer: Value, count: i64) Error!?i64 {
     const service = runtime.files.write orelse return runtime.fail(.host_unavailable);
+    runtime.enterEffects();
+    defer runtime.leaveEffects();
     const handle = try handleOf(runtime, held);
     const from = (try runtime.resolve(buffer)).elements;
     const cells = from.cells(u8);
@@ -185,6 +191,8 @@ pub fn write(runtime: *Runtime, held: Value, buffer: Value, count: i64) Error!?i
 /// `f.flush()` — everything written so far is on the device.
 pub fn flush(runtime: *Runtime, held: Value) Error!bool {
     const service = runtime.files.flush orelse return runtime.fail(.host_unavailable);
+    runtime.enterEffects();
+    defer runtime.leaveEffects();
     const handle = try handleOf(runtime, held);
     switch (service(runtime.files.context, handle)) {
         yes => return true,
@@ -204,7 +212,7 @@ fn handleOf(runtime: *Runtime, held: Value) Error!i64 {
     return switch (object.data) {
         .file => |held_file| held_file.handle,
         // The verifier admits only a `file` here.
-        .list, .map, .array, .builder => unreachable,
+        .list, .map, .array, .builder, .task => unreachable,
     };
 }
 
@@ -216,7 +224,7 @@ pub fn pathOf(runtime: *Runtime, held: Value) []const u8 {
     const object = runtime.resolve(held) catch return "";
     return switch (object.data) {
         .file => |held_file| held_file.path,
-        .list, .map, .array, .builder => "",
+        .list, .map, .array, .builder, .task => "",
     };
 }
 

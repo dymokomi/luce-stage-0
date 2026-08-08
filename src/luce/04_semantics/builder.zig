@@ -50,6 +50,7 @@ const array_methods = builtins_mod.array_methods;
 const map_methods = builtins_mod.map_methods;
 const builder_methods = builtins_mod.builder_methods;
 const file_methods = builtins_mod.file_methods;
+const task_methods = builtins_mod.task_methods;
 const fresh_object_methods = builtins_mod.fresh_object_methods;
 
 // Pass one, for the one thing this walk needs from it: the collected
@@ -1204,6 +1205,9 @@ pub const FunctionBuilder = struct {
             .copy => |copied| self.splitsBlocks(copied.operand, left),
             // A fallible call branches on its outcome, always.
             .try_call => true,
+            // A spawn is one runtime call and no branch, but what it
+            // is *given* may split; ask the arguments.
+            .spawn => |worker| self.splitsBlocks(worker.call, left),
             else => false,
         };
     }
@@ -1278,7 +1282,9 @@ pub const FunctionBuilder = struct {
     /// harmless.
     fn yieldsOwnership(self: *FunctionBuilder, expression: *const ast.Expression) Error!bool {
         return switch (expression.*) {
-            .new_object, .list_literal, .slice_range, .call, .give, .copy => true,
+            // A spawn makes a task nobody has named, exactly as `new`
+            // makes a list nobody has named (docs/THREADS.md D3).
+            .new_object, .list_literal, .slice_range, .call, .give, .copy, .spawn => true,
             // `try f()` hands over exactly what `f()` does: the value
             // crosses a block boundary through a slot, and a slot
             // carrying an object changes nothing about who owns it.
@@ -1796,7 +1802,7 @@ pub const FunctionBuilder = struct {
                     .list => |element| element,
                     .array => |shape| shape.element,
                     .map => |pair| pair.value,
-                    .builder, .file => null,
+                    .builder, .file, .task => null,
                 };
             },
             .subscripts => {
@@ -1815,7 +1821,7 @@ pub const FunctionBuilder = struct {
         return switch (descriptor) {
             .list, .array => .long,
             .map => |pair| pair.key,
-            .builder, .file => null,
+            .builder, .file, .task => null,
         };
     }
 
@@ -2478,6 +2484,7 @@ pub const FunctionBuilder = struct {
             .call => |call| call.callee,
             .method => |method| method.name,
             .try_call => |attempt| self.calledName(attempt.operand),
+            .spawn => |worker| self.calledName(worker.call),
             else => "this",
         };
     }
@@ -3215,6 +3222,10 @@ pub const FunctionBuilder = struct {
                 try self.fail("luce.sema.index", span, "file has no index; f.read(buffer) reads bytes", .{});
                 return null;
             },
+            .task => {
+                try self.fail("luce.sema.index", span, "task has no index; t.wait() answers what the worker did", .{});
+                return null;
+            },
         }
     }
 
@@ -3406,6 +3417,10 @@ pub const FunctionBuilder = struct {
             },
             .file => {
                 try self.fail("luce.sema.loop", loop.span, "file is not iterable; read into a buffer with f.read(buffer)", .{});
+                return;
+            },
+            .task => {
+                try self.fail("luce.sema.loop", loop.span, "task is not iterable; t.wait() answers what the worker did", .{});
                 return;
             },
         };
@@ -4098,6 +4113,7 @@ pub const FunctionBuilder = struct {
             .give => |give| return self.lowerGive(give),
             .copy => |copied| return self.lowerCopy(copied),
             .try_call => |attempt| return self.lowerTry(attempt, as_statement, shape_position),
+            .spawn => |worker| return self.lowerSpawn(worker, as_statement),
         }
     }
 
@@ -4582,6 +4598,20 @@ pub const FunctionBuilder = struct {
             );
             return null;
         }
+        // And a task cannot be copied, for the same reason one step
+        // out: there is one worker behind it, and a second handle
+        // would be two joiners of one thread (docs/THREADS.md D3).
+        if (value.value_type == .heap and
+            self.analyzer.heap_types.items[value.value_type.heap] == .task)
+        {
+            try self.fail(
+                "luce.sema.own",
+                copied.span,
+                "a task cannot be copied; there is one worker behind it — give it instead [THREADS.md D3]",
+                .{},
+            );
+            return null;
+        }
         const arguments = try self.arena().alloc(Register, 1);
         arguments[0] = value.register;
         return .{
@@ -4635,6 +4665,17 @@ pub const FunctionBuilder = struct {
                     "luce.sema.new",
                     new.span,
                     "a file is opened, not made; write files.open(path) [BYTES.md R5]",
+                    .{},
+                );
+                return null;
+            }
+            // And a task is spawned, not made: a task with no worker
+            // behind it is the one state *this* type must never hold.
+            if (self.analyzer.heap_types.items[object_type.heap] == .task) {
+                try self.fail(
+                    "luce.sema.new",
+                    new.span,
+                    "a task is spawned, not made; write spawn f(…) [THREADS.md D3]",
                     .{},
                 );
                 return null;
@@ -5772,6 +5813,81 @@ pub const FunctionBuilder = struct {
             as_statement,
             fallible_allowed,
             shape_position,
+            null,
+        );
+    }
+
+    /// `spawn f(args)` — the same call, made on a worker
+    /// (docs/THREADS.md D2, D3).
+    ///
+    /// What may stand behind the keyword is a **function you declared**
+    /// and nothing else, and every refusal here is one sentence about
+    /// the same fact: a worker has a runtime of its own, so nothing it
+    /// is handed can be a borrow of anything here.
+    fn lowerSpawn(self: *FunctionBuilder, worker: ast.Spawn, as_statement: bool) Error!?Typed {
+        const named: struct { index: u32, name: []const u8, arguments: []const ast.Argument } =
+            switch (worker.call.*) {
+                .call => |call| named: {
+                    // A builtin, a conversion or a construction is not
+                    // a declaration and has no frame to run in.
+                    const resolved = (try self.resolveDeclared(call.callee, call.span, call.origin)) orelse
+                        return null;
+                    const index = self.analyzer.function_names.get(resolved) orelse {
+                        try self.fail(
+                            "luce.sema.call",
+                            call.span,
+                            "spawn runs a function you declared; {s} is not one",
+                            .{call.callee},
+                        );
+                        return null;
+                    };
+                    break :named .{ .index = index, .name = call.callee, .arguments = call.arguments };
+                },
+                .method => |method| named: {
+                    switch (try self.methodNamespace(method)) {
+                        .resolved => |resolved| {
+                            if (self.analyzer.function_names.get(resolved)) |index| {
+                                break :named .{
+                                    .index = index,
+                                    .name = resolved,
+                                    .arguments = method.arguments,
+                                };
+                            }
+                            try self.fail(
+                                "luce.sema.call",
+                                method.span,
+                                "spawn runs a function you declared; {s} is not one",
+                                .{resolved},
+                            );
+                            return null;
+                        },
+                        else => {},
+                    }
+                    // A method's receiver is a place in *this* frame —
+                    // and `var self` writes back into it — so there is
+                    // nothing a worker could be given that would still
+                    // be the receiver when it finished.
+                    try self.fail(
+                        "luce.sema.self",
+                        method.span,
+                        "a method's receiver is a place in this frame and a worker cannot reach it; " ++
+                            "move the work into a function and spawn that [THREADS.md D2]",
+                        .{},
+                    );
+                    return null;
+                },
+                // The parser admits nothing else in front of `spawn`.
+                else => unreachable,
+            };
+        return self.lowerUserCall(
+            named.index,
+            named.name,
+            named.arguments,
+            worker.span,
+            as_statement,
+            false,
+            .refused,
+            worker.span,
         );
     }
 
@@ -5784,6 +5900,13 @@ pub const FunctionBuilder = struct {
         as_statement: bool,
         fallible_allowed: bool,
         shape_position: ShapePosition,
+        /// Where the `spawn` keyword stands, when this call is one
+        /// (docs/THREADS.md).  Null for an ordinary call, and the
+        /// whole of what makes a spawn different: the arguments cross
+        /// a runtime boundary, the answer is a `task` rather than the
+        /// return type, and a fallible callee does not oblige *this*
+        /// site to say `try` — the join does.
+        spawning: ?Span,
     ) Error!?Typed {
         const info = self.analyzer.functions.items[function_index];
         if (!try self.functionReachable(function_index, span)) return null;
@@ -5821,7 +5944,10 @@ pub const FunctionBuilder = struct {
         // See `callUser`: a call that can fail has to say which of
         // `try` and `catch` it means, and the check comes before the
         // arguments so the reader is told the one thing that matters.
-        if (info.fallible and !fallible_allowed) {
+        // A spawn is not the site that has to say `try`: nothing
+        // fails here, and what the worker raises reaches the program
+        // at `t.wait()`, which is where the words are (D4).
+        if (info.fallible and !fallible_allowed and spawning == null) {
             try self.fail(
                 "luce.sema.fallible",
                 span,
@@ -5829,6 +5955,34 @@ pub const FunctionBuilder = struct {
                 .{ name, name, name },
             );
             return null;
+        }
+        if (spawning != null) {
+            // A worker answers through its task, one value, once.  A
+            // return shape has no `task(...)` spelling and would need
+            // one before it could mean anything here.
+            if (info.results.len >= 2) {
+                try self.fail(
+                    "luce.sema.call",
+                    span,
+                    "{s} answers {d} values, and a task carries one; wrap them in a struct [THREADS.md D3]",
+                    .{ name, info.results.len },
+                );
+                return null;
+            }
+            // A borrow cannot cross: the callee's runtime is not this
+            // one, so there is nothing here for it to borrow *from*.
+            for (info.parameter_types, info.parameter_modes, info.declaration.parameters) |held, mode, parameter| {
+                if (mode == .give) continue;
+                if (!self.analyzer.carriesObjects(held)) continue;
+                try self.fail(
+                    "luce.sema.own",
+                    span,
+                    "{s} borrows {s}, and a worker cannot borrow from another runtime; " ++
+                        "declare it 'give {s}' [THREADS.md D2]",
+                    .{ name, parameter.name, try self.analyzer.typeName(held) },
+                );
+                return null;
+            }
         }
         // Which slot each argument fills is settled before any of them
         // is lowered: it is what says what type the argument lands in
@@ -5925,9 +6079,21 @@ pub const FunctionBuilder = struct {
             try self.parkFreshStorage(made);
             registers[slot] = made.register;
         }
-        if (info.return_type == .none and !as_statement) {
+        // A spawn always answers something — the task — so the
+        // "returns nothing" sentence is not about it.
+        if (info.return_type == .none and !as_statement and spawning == null) {
             try self.fail("luce.sema.call", span, "{s} returns nothing", .{name});
             return null;
+        }
+        if (spawning) |_| {
+            const carried = try self.analyzer.internHeapType(.{
+                .task = .{ .result = info.return_type, .fallible = info.fallible },
+            });
+            const started = try self.code.emit(
+                .{ .spawn = .{ .function = function_index, .arguments = registers } },
+                carried,
+            );
+            return .{ .register = started, .value_type = carried };
         }
         // A call that answers a return shape may stand in exactly two
         // places: the right of a destructuring bind, and a statement
@@ -5984,6 +6150,7 @@ pub const FunctionBuilder = struct {
                     as_statement,
                     fallible_allowed,
                     shape_position,
+                    null,
                 );
             },
             .reported => return null,
@@ -6202,7 +6369,25 @@ pub const FunctionBuilder = struct {
         // site says which of `try` and `catch` it means, and a site
         // that says neither is `luce.sema.fallible` rather than a
         // silently dropped outcome (docs/FAILURE.md).
-        if (found.kind.isFallible()) {
+        // A wait **consumes** its task: there is one answer and the
+        // caller now has it, so a second wait is refused the way a
+        // second `give` is (docs/THREADS.md D4).  Poisoning is the
+        // same machinery and the same bluntness — source-order and
+        // branch-insensitive, to the end of the scope (S29).
+        if (found.kind == .task_wait and method.target.* == .name) {
+            if (self.findLocal(method.target.name.text)) |held| {
+                held.info.poisoned = .given;
+            }
+        }
+        // `wait` is the one whose fallibility is not a fact about the
+        // method: it comes back errored exactly when the function the
+        // task carries could, so the answer is read off the receiver's
+        // own shape (docs/THREADS.md D4).
+        const may_fail = if (found.kind == .task_wait)
+            self.taskShape(receiver.value_type).?.fallible
+        else
+            found.kind.isFallible();
+        if (may_fail) {
             if (!fallible_allowed) {
                 try self.fail(
                     "luce.sema.fallible",
@@ -6722,6 +6907,9 @@ pub const FunctionBuilder = struct {
                 if (std.mem.eql(u8, name, "flush")) break :blk &.{};
                 break :blk null;
             },
+            // `wait` takes nothing: what a worker was given, it was
+            // given at the `spawn` (docs/THREADS.md D2).
+            .task => if (std.mem.eql(u8, name, "wait")) &.{} else null,
         };
     }
 
@@ -7116,7 +7304,37 @@ pub const FunctionBuilder = struct {
                 }
                 return null;
             },
+            // A task's one method (docs/THREADS.md D4).  It consumes
+            // the task, which `lowerReceiverCall` poisons the receiver
+            // for, and it answers what the worker answered — including
+            // the worker's error, when the task carries a fallible
+            // call.
+            .task => |work| {
+                if (std.mem.eql(u8, name, "wait")) {
+                    if (!try self.methodTakes(method, arguments, receiver)) return null;
+                    return .{ .kind = .task_wait, .result = work.result };
+                }
+                var suggestion = helpers.Suggestion.init(name);
+                suggestion.offerAll(&task_methods);
+                if (suggestion.best()) |closest| {
+                    try self.fail("luce.sema.method", method.span, "task has no method {s}; did you mean {s}?", .{ name, closest });
+                } else {
+                    try self.fail("luce.sema.method", method.span, "task has no method {s} (wait; free t joins it)", .{name});
+                }
+                return null;
+            },
         }
+    }
+
+    /// The task shape a type holds, or null when it holds anything
+    /// else (docs/THREADS.md D3).
+    fn taskShape(
+        self: *const FunctionBuilder,
+        of: Type,
+    ) ?@FieldType(types.HeapType, "task") {
+        if (of != .heap) return null;
+        const shape = self.analyzer.heap_types.items[of.heap];
+        return if (shape == .task) shape.task else null;
     }
 
     /// Methods shared by list and rank-1 array; growth operations are
@@ -7465,7 +7683,7 @@ pub const FunctionBuilder = struct {
             .half => .half,
             .float => .float,
             .double => .double,
-            .boolean, .string, .list, .map, .array, .builder, .file => null,
+            .boolean, .string, .list, .map, .array, .builder, .file, .task => null,
         };
         const value = (try self.lowerExpression(call.arguments[0].value, false)) orelse return null;
         // **A conversion accepts an enum exactly because it is named
@@ -7522,7 +7740,7 @@ pub const FunctionBuilder = struct {
             .half => .half,
             .float => .float,
             .double => .double,
-            .boolean, .string, .list, .map, .array, .builder, .file => unreachable, // answered above
+            .boolean, .string, .list, .map, .array, .builder, .file, .task => unreachable, // answered above
         };
         if (value.value_type.eql(target)) return value;
         if (!value.value_type.isNumeric()) return self.failConvert(call, value);
@@ -7555,7 +7773,7 @@ pub const FunctionBuilder = struct {
             .half => .half,
             .float => .float,
             .double => .double,
-            .boolean, .string, .list, .map, .array, .builder, .file => unreachable, // answered by the caller
+            .boolean, .string, .list, .map, .array, .builder, .file, .task => unreachable, // answered by the caller
         };
         _ = call;
         return .{
@@ -8080,7 +8298,9 @@ pub const FunctionBuilder = struct {
             // which `objectMethod` types against the receiver: a
             // handle method is not a free builtin and has no row in
             // the table above.
-            .handle_read, .handle_write, .handle_flush => unreachable,
+            // And `t.wait()`, for the same reason: the result type is
+            // the task's, so only the receiver can say it.
+            .handle_read, .handle_write, .handle_flush, .task_wait => unreachable,
         }
         // `error("…")` leaves the function, so it can stand where a
         // value belongs the way `trap("…")` can — but only inside a

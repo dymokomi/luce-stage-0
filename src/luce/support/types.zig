@@ -411,6 +411,23 @@ pub const HeapType = union(enum) {
     /// `std.network`'s sockets are meant to arrive beside it wearing
     /// the same pattern.
     file,
+    /// A running worker (docs/THREADS.md D3).  The `file` precedent
+    /// exactly: a resource, not a container, whose death point is the
+    /// owning scope's end — and for a worker the death point is a
+    /// **join**, which is how structured concurrency falls out of
+    /// scope ownership rather than being a discipline laid on top.
+    ///
+    /// `result` is what `f` answers, `.none` when it answers nothing.
+    /// `fallible` is `f`'s own attribute travelling with the call it
+    /// carries, exactly as `Function.fallible` sits beside
+    /// `Function.return_type` — a task is a call in flight, and a call
+    /// carries its function's attributes.  This does **not** make `T!`
+    /// a type (docs/FAILURE.md): `types.Type` is untouched, and what
+    /// the flag decides is only whether `t.wait()` is a site that has
+    /// to say `try` or `catch`.  It is part of the shape because two
+    /// tasks that differ in it are two different obligations, and a
+    /// `list(task(double))` may not hold both.
+    task: struct { result: Type, fallible: bool },
 
     pub fn eql(self: HeapType, other: HeapType) bool {
         return switch (self) {
@@ -421,6 +438,8 @@ pub const HeapType = union(enum) {
                 shape.element.eql(other.array.element) and shape.rank == other.array.rank,
             .builder => other == .builder,
             .file => other == .file,
+            .task => |work| other == .task and
+                work.result.eql(other.task.result) and work.fallible == other.task.fallible,
         };
     }
 };
@@ -514,6 +533,14 @@ pub const Builtin = enum {
     /// file behind it is the one thing this type must never hold.
     /// `files.open(path)` is the only way to make one.
     file,
+    /// A running worker (docs/THREADS.md D3).  A resource like `file`
+    /// and written with a type argument like `list`: `task(double)` is
+    /// what `spawn` answers for a `func -> double`, `task` alone for a
+    /// function that answers nothing, and the `!` inside — `task(T!)`,
+    /// `task!` — is the spawned function's own fallibility, which
+    /// decides whether `wait` is a site that says `try`.  There is no
+    /// `new task`: `spawn` is the only way to make one.
+    task,
 };
 
 /// The builtin a name spells, or null when it names nothing builtin —
@@ -546,6 +573,7 @@ const builtin_table = [_]struct { name: []const u8, is: Builtin }{
     .{ .name = "array", .is = .array },
     .{ .name = "builder", .is = .builder },
     .{ .name = "file", .is = .file },
+    .{ .name = "task", .is = .task },
 };
 
 /// The lowercase name a retired TitleCase spelling is written with
@@ -590,7 +618,7 @@ pub fn conversionNamed(text: []const u8) ?Builtin {
     const builtin = builtinNamed(text) orelse return null;
     return switch (builtin) {
         .byte, .short, .int, .long, .half, .float, .double, .string => builtin,
-        .boolean, .list, .map, .array, .builder, .file => null,
+        .boolean, .list, .map, .array, .builder, .file, .task => null,
     };
 }
 
@@ -664,6 +692,15 @@ fn writeTypeName(
             },
             .builder => try written.appendSlice(allocator, "builder"),
             .file => try written.appendSlice(allocator, "file"),
+            .task => |work| {
+                try written.appendSlice(allocator, "task");
+                if (work.result != .none) {
+                    try written.appendSlice(allocator, "(");
+                    try writeTypeName(written, allocator, layouts, heap_types, enums, work.result);
+                    if (work.fallible) try written.appendSlice(allocator, "!");
+                    try written.appendSlice(allocator, ")");
+                } else if (work.fallible) try written.appendSlice(allocator, "!");
+            },
         },
         .optional => |payload| {
             try writeTypeName(written, allocator, layouts, heap_types, enums, payload.asType());

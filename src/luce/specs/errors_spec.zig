@@ -5952,3 +5952,169 @@ test "luce.sema.type: a map may hold enums but not be keyed by one" {
         \\
     );
 }
+
+// ---------------------------------------------------------------------------
+// Workers (docs/THREADS.md)
+// ---------------------------------------------------------------------------
+//
+// The refusals *are* the design: a worker has a runtime of its own, so
+// every one of them is the same sentence said at a different site.
+
+test "luce.sema.own: a spawned function may not take an object as a borrow" {
+    try expectSaying(
+        \\func total(values: list(long)) -> long:
+        \\    return len(values)
+        \\
+        \\func main():
+        \\    var mine: list(long) = [1, 2]
+        \\    let t = spawn total(give mine)
+        \\
+    , "luce.sema.own", "a worker cannot borrow from another runtime");
+}
+
+test "luce.sema.own: a bare object name still needs a verb at a spawn" {
+    // S13/S14 unchanged: the spawn boundary adds a rule about the
+    // *signature*, and the rule about the call site is the one every
+    // give parameter already had.
+    try expectRejected(
+        \\func total(values: give list(long)) -> long:
+        \\    return len(values)
+        \\
+        \\func main():
+        \\    var mine: list(long) = [1, 2]
+        \\    let t = spawn total(mine)
+        \\
+    , "luce.sema.own");
+}
+
+test "luce.sema.own: a name given to a worker cannot be touched again" {
+    try expectRejected(
+        \\func total(values: give list(long)) -> long:
+        \\    return len(values)
+        \\
+        \\func main():
+        \\    var mine: list(long) = [1, 2]
+        \\    let t = spawn total(give mine)
+        \\    assert(len(mine) == 2)
+        \\
+    , "luce.sema.own");
+}
+
+test "luce.sema.own: a task cannot be copied" {
+    try expectSaying(
+        \\func work() -> long:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let t = spawn work()
+        \\    let twin = copy t
+        \\
+    , "luce.sema.own", "there is one worker behind it");
+}
+
+test "luce.sema.own: a task is consumed by its wait" {
+    try expectRejected(
+        \\func work() -> long:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let t = spawn work()
+        \\    assert(t.wait() == 1)
+        \\    assert(t.wait() == 1)
+        \\
+    , "luce.sema.own");
+}
+
+test "luce.sema.new: a task is spawned, not made" {
+    try expectSaying(
+        \\func main():
+        \\    var t = new task(long)
+        \\
+    , "luce.sema.new", "a task is spawned, not made");
+}
+
+test "luce.sema.self: a method cannot be spawned" {
+    try expectSaying(
+        \\struct Point:
+        \\    x: long
+        \\
+        \\    func doubled(self) -> long:
+        \\        return self.x * 2
+        \\
+        \\func main():
+        \\    let p = Point(x = 3)
+        \\    let t = spawn p.doubled()
+        \\
+    , "luce.sema.self", "a worker cannot reach it");
+}
+
+test "luce.sema.call: spawn runs a function you declared" {
+    try expectRejectedOptions(
+        \\func main():
+        \\    let t = spawn print("hello")
+        \\
+    , hosted, "luce.sema.call");
+}
+
+test "luce.sema.call: a worker answers one value, so a return shape is refused" {
+    try expectSaying(
+        \\func pair() -> (long, long):
+        \\    return 1, 2
+        \\
+        \\func main():
+        \\    let t = spawn pair()
+        \\
+    , "luce.sema.call", "a task carries one");
+}
+
+test "luce.parse.spawn: spawn takes a call and nothing else" {
+    try expectRejected(
+        \\func main():
+        \\    var xs: list(long) = [1]
+        \\    let t = spawn xs
+        \\
+    , "luce.parse.spawn");
+}
+
+test "luce.sema.method: a task has wait and nothing else" {
+    try expectRejected(
+        \\func work() -> long:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let t = spawn work()
+        \\    t.cancel()
+        \\
+    , "luce.sema.method");
+}
+
+test "luce.sema.const: a constant cannot spawn" {
+    // File scope owns nothing, so it cannot own a worker: a task's
+    // death point is a join and there is no scope here to reach one
+    // (OWNERSHIP.md S35).
+    try expectRejected(
+        \\func work() -> long:
+        \\    return 1
+        \\
+        \\let started = spawn work()
+        \\
+        \\func main():
+        \\    print("hi")
+        \\
+    , "luce.sema.const");
+}
+
+test "spawn is gated by nothing, because threads are the language" {
+    // A host that cannot thread refuses at run time with
+    // `host_unavailable` — the fail-closed rule every effect follows —
+    // so there is no analyzer gate to write and none to test for.
+    try expectCompiles(
+        \\func work() -> long:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let t = spawn work()
+        \\    assert(t.wait() == 1)
+        \\
+    );
+}

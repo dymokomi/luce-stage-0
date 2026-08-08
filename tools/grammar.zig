@@ -156,7 +156,11 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
 
         .keyword_true, .keyword_false, .keyword_none => .constant,
 
-        .keyword_new, .keyword_give, .keyword_copy => .ownership,
+        // `spawn` sits with the ownership verbs because that is what it
+        // is: it makes a resource and moves things into it, and the
+        // arguments it carries wear `give` and `copy` themselves
+        // (docs/THREADS.md D2, D3).
+        .keyword_new, .keyword_give, .keyword_copy, .keyword_spawn => .ownership,
 
         .keyword_self => .receiver,
 
@@ -538,6 +542,8 @@ fn methodNames(gpa: Allocator) Allocator.Error!Words {
     try words.addAll(&luce.semantics.array_methods);
     try words.addAll(&luce.semantics.map_methods);
     try words.addAll(&luce.semantics.builder_methods);
+    try words.addAll(&luce.semantics.file_methods);
+    try words.addAll(&luce.semantics.task_methods);
     for (luce.semantics.string_methods) |primitive| try words.add(primitive.name);
     return words;
 }

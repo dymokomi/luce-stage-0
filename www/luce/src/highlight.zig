@@ -43,7 +43,7 @@ pub const keywords = [_][]const u8{
 /// The words that move ownership.  They get a class of their own
 /// because they are the language's one genuinely unusual idea, and a
 /// reader scanning a page should be able to see every one of them.
-pub const verbs = [_][]const u8{ "give", "copy", "free", "new" };
+pub const verbs = [_][]const u8{ "give", "copy", "free", "new", "spawn" };
 
 /// Type names the language itself spells.  Any other capitalised
 /// identifier is highlighted as a type too — that is the convention
@@ -54,13 +54,12 @@ pub const verbs = [_][]const u8{ "give", "copy", "free", "new" };
 pub const type_names = [_][]const u8{
     // The language's own, lowercase (docs/TYPES.md D8): the seven-rung
     // numeric ladder, `bool`, `string`, and the four heap shapes.
-    "bool",  "byte",    "short",   "int",    "long",
-    "half",  "float",   "double",  "string", "list",
-    "map",   "array",   "builder", "file",
+    "bool", "byte",  "short",   "int",    "long",
+    "half", "float", "double",  "string", "list",
+    "map",  "array", "builder", "file",   "task",
     // Retiring: the rename step takes these with it.
-      "Bool",
-    "Int",   "Float",   "String",  "List",   "Map",
-    "Array", "Builder",
+    "Bool", "Int",   "Float",   "String", "List",
+    "Map",  "Array", "Builder",
 };
 
 /// Everything callable by name on its own: the free builtins, the

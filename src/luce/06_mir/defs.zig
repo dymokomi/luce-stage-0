@@ -215,6 +215,22 @@ pub const Intrinsic = enum {
     handle_read,
     handle_write,
     handle_flush,
+    /// `t.wait()` — join the worker this task owns and move its result
+    /// here (docs/THREADS.md D4).  One argument, the task; the result
+    /// is whatever the spawned function answers, and `.none` when it
+    /// answers nothing.  Consuming: a second wait is refused in stage 4
+    /// the way a second `give` is, and traps `use_after_free` for IR
+    /// that arrived some other way.
+    ///
+    /// It is **conditionally fallible**, which no other intrinsic is:
+    /// what crosses the join is whatever the worker did, so a task
+    /// carrying a `-> T!` function answers `T!` here and one carrying
+    /// a `-> T` cannot come back errored at all.  `isFallible` says
+    /// yes because it *may*; the precise answer is the task's own heap
+    /// type, which stage 4 reads to decide whether the site must say
+    /// `try`, and `06_mir/verify.zig` reads to decide whether an
+    /// `errored` may name it.
+    task_wait,
     /// `exit(status)` — the program chooses to stop, carrying a
     /// status the host maps onto whatever its world calls one.  A
     /// fourth way a run ends (docs/LANGUAGE.md): not a trap (nothing
@@ -259,6 +275,124 @@ pub const Intrinsic = enum {
     // a new tag is a compile error here until somebody decides what it
     // is.  `07_optimize/effects.zig`'s `intrinsicEffect` is the model.
 
+    /// Does this intrinsic call a host service **directly**?
+    ///
+    /// The one question the effect lock turns on (docs/THREADS.md D9):
+    /// host services are called from one thread at a time, so an
+    /// engine brackets exactly these with `Runtime.enterEffects` and
+    /// `leaveEffects`.  The compiled path brackets at `callHost`,
+    /// which is the same set said in the backend's own vocabulary —
+    /// `08_llvm/lower.zig`'s test holds the two together.
+    ///
+    /// **The byte channel is deliberately `false`.**  Those four reach
+    /// a host too, but through `libluce_rt`, which takes the lock at
+    /// the channel call itself (`runtime/files.zig`) — the one place
+    /// both engines pass through, and where a handle's close also
+    /// happens with no engine standing.  Saying `true` here as well
+    /// would only take a recursive lock twice.
+    pub fn reachesHost(self: Intrinsic) bool {
+        return switch (self) {
+            .print,
+            .print_error,
+            .read_line,
+            .env_get,
+            .clock_ms,
+            .sleep_ms,
+            .file_exists,
+            .file_read,
+            .file_write,
+            .file_append,
+            .file_delete,
+            .file_rename,
+            .dir_list,
+            .term_rows,
+            .term_cols,
+            .term_clear,
+            .term_move,
+            .term_style,
+            .term_write,
+            .term_flush,
+            .key_read,
+            .exit_program,
+            .os_total_memory,
+            .os_available_memory,
+            .os_cpu_count,
+            => true,
+
+            // `key_text` reads the slot the last `key_read` filled,
+            // which is the run's own state and not the host's.
+            .key_text,
+            // The byte channel locks deeper (see above).
+            .file_open,
+            .handle_read,
+            .handle_write,
+            .handle_flush,
+            // A wait joins a thread; it must **not** hold the lock
+            // while it does, or a worker that prints could never
+            // finish (docs/THREADS.md D9).
+            .task_wait,
+            .abs,
+            .min,
+            .max,
+            .clamp,
+            .sqrt,
+            .floor,
+            .ceil,
+            .trunc,
+            .compare_long_double,
+            .len,
+            .string_slice,
+            .string_byte,
+            .string_find_byte,
+            .assert_true,
+            .trap_message,
+            .null_object,
+            .none_value,
+            .is_none,
+            .optional_wrap,
+            .optional_unwrap,
+            .errored,
+            .error_message,
+            .forget,
+            .raise_error,
+            .index_get,
+            .index_set,
+            .list_slice,
+            .append_value,
+            .append_ascii,
+            .pop_value,
+            .insert_value,
+            .remove_entry,
+            .has_key,
+            .key_at,
+            .value_at,
+            .dim_size,
+            .free_object,
+            .give_object,
+            .copy_object,
+            .list_sort,
+            .list_reverse,
+            .list_find,
+            .list_contains,
+            .clear_object,
+            .map_keys,
+            .map_values,
+            .map_get,
+            .map_place,
+            .array_fill,
+            .str_value,
+            .parse_int,
+            .parse_float,
+            .parse_string,
+            .chr_code,
+            .ord_text,
+            .own_storage,
+            .drop_storage,
+            .export_storage,
+            => false,
+        };
+    }
+
     /// Can this intrinsic come back **errored** rather than answering?
     ///
     /// Stage 4 asks so a call site is made to say which of `try` and
@@ -282,6 +416,11 @@ pub const Intrinsic = enum {
             .handle_read,
             .handle_write,
             .handle_flush,
+            // Conditionally: the worker's own fallibility crosses the
+            // join, and the task's heap type is what records it
+            // (docs/THREADS.md D4).  Yes here means "may", which is
+            // what both readers of this table need it to mean.
+            .task_wait,
             => true,
 
             .abs,
@@ -388,6 +527,10 @@ pub const Intrinsic = enum {
             .pop_value,
             .copy_object,
             .own_storage,
+            // A worker's result is re-owned into *this* runtime as it
+            // crosses the join, so a string that comes back is storage
+            // nobody else owns (docs/THREADS.md).
+            .task_wait,
             => true,
 
             // Everything else that answers text answers a *view*: a
@@ -571,6 +714,7 @@ pub const Intrinsic = enum {
             .handle_read,
             .handle_write,
             .handle_flush,
+            .task_wait,
             .os_cpu_count,
             .own_storage,
             .drop_storage,
@@ -624,6 +768,15 @@ pub const Instruction = union(enum) {
     struct_get: struct { target: Register, layout: u32, field: u32 },
     struct_set: struct { target: Register, layout: u32, field: u32, value: Register },
     call: Call,
+    /// `spawn f(args)` — hand `f` and its arguments to a worker with a
+    /// runtime of its own, and answer the `task` that owns it
+    /// (docs/THREADS.md D2, D3).  The same shape as `call` because it
+    /// *is* a call, made somewhere else: what differs is that the
+    /// arguments cross a runtime boundary, so every object among them
+    /// is **moved** here — stage 4 has already refused a bare object
+    /// name, and every object argument reaching this instruction is one
+    /// this frame owned and no longer does.
+    spawn: Call,
     intrinsic: IntrinsicCall,
     heap_new: HeapNew,
     object_bind: struct { local: LocalId, value: Register },

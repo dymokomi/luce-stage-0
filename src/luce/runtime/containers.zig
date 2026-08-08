@@ -32,7 +32,7 @@ pub fn length(runtime: *Runtime, target: Value) Error!Value {
                 .builder => |builder| builder.items.len,
                 // The verifier admits no file here: a file is not a
                 // container and has no length.
-                .file => unreachable,
+                .file, .task => unreachable,
             };
         },
         else => unreachable,
@@ -63,7 +63,7 @@ pub fn indexGet(runtime: *Runtime, target: Value, indices: []const Value) Error!
                 return runtime.fail(.index_bounds);
             return object.elements.at(flat);
         },
-        .builder, .file => unreachable,
+        .builder, .file, .task => unreachable,
     }
 }
 
@@ -118,7 +118,7 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
             }
             object.elements.put(flat, stored);
         },
-        .builder, .file => unreachable,
+        .builder, .file, .task => unreachable,
     }
     runtime.adopt(stored);
 }
@@ -341,7 +341,7 @@ pub fn clear(runtime: *Runtime, target: Value) Error!void {
             map.clear();
         },
         .builder => |*builder| builder.clearRetainingCapacity(),
-        .array, .file => unreachable,
+        .array, .file, .task => unreachable,
     }
 }
 
@@ -536,7 +536,7 @@ pub fn mapPlace(runtime: *Runtime, target: Value, key: Value, zero: Value) Error
             runtime.adopt(owned_zero);
             return owned_zero;
         },
-        .list, .array, .builder, .file => unreachable, // the verifier refuses these
+        .list, .array, .builder, .file, .task => unreachable, // the verifier refuses these
     }
 }
 

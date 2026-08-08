@@ -122,6 +122,9 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
 
         .local_set,
         .call,
+        // A spawn makes a task nothing else is, and hands a thread
+        // everything it was given (docs/THREADS.md D2).
+        .spawn,
         .object_bind,
         .object_unbind,
         .jump,
@@ -269,6 +272,9 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .handle_write,
         .handle_flush,
         .exit_program,
+        // A wait joins a thread, adopts whatever it left behind, and
+        // moves its result into this runtime.
+        .task_wait,
         // A machine fact is a host call, and one of them — available
         // memory — answers differently each time it is asked, which
         // is the reason a program asks it twice.
@@ -335,6 +341,11 @@ pub fn viewStable(instruction: Instruction) bool {
         .heap_new => false,
         // A callee may do any of the three.
         .call => false,
+        // A spawn attaches the task's row, moves every object argument
+        // out of this runtime, and hands the table to a second thread.
+        // Nothing resolved before it can be believed after it
+        // (docs/THREADS.md).
+        .spawn => false,
         // Binding writes one row's owner field; unbinding is the
         // scope-exit release, and that frees.
         .object_bind => true,
@@ -456,6 +467,9 @@ pub fn viewStable(instruction: Instruction) bool {
             // table row, which is exactly what a resolved array view
             // cannot survive.
             .dir_list, .file_open => false,
+            // A wait moves the worker's result in, which attaches
+            // rows to *this* table.
+            .task_wait => false,
         },
     };
 }

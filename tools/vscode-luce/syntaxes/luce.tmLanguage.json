@@ -25,7 +25,7 @@
     "accessors": {
       "patterns": [
         {
-          "match": "(\\.)(append|insert|remove|pop|clear|sort|reverse|find|contains|dim|fill|has|get|keys|values|append_ascii|build|byte_at|find_byte)\\b",
+          "match": "(\\.)(append|insert|remove|pop|clear|sort|reverse|find|contains|dim|fill|has|get|keys|values|append_ascii|build|read|write|flush|wait|byte_at|find_byte)\\b",
           "captures": {
             "1": { "name": "punctuation.accessor.luce" },
             "2": { "name": "support.function.method.luce" }
@@ -176,7 +176,7 @@
         },
         {
           "name": "keyword.other.ownership.luce",
-          "match": "\\b(?:new|give|copy|free)\\b"
+          "match": "\\b(?:new|give|copy|spawn|free)\\b"
         },
         {
           "name": "variable.language.luce",
@@ -398,7 +398,7 @@
       "patterns": [
         {
           "name": "support.type.luce",
-          "match": "\\b(?:bool|byte|short|int|long|half|float|double|string|list|map|array|builder|file|None)\\b"
+          "match": "\\b(?:bool|byte|short|int|long|half|float|double|string|list|map|array|builder|file|task|None)\\b"
         },
         {
           "name": "entity.name.type.luce",

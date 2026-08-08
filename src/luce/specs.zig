@@ -48,6 +48,10 @@ pub const json = @import("specs/json_spec.zig");
 /// handles as scope-owned resources, and text as a validation
 /// (docs/BYTES.md).
 pub const bytes = @import("specs/bytes_spec.zig");
+
+/// Threads: a worker owns its world, and the ownership model is the
+/// concurrency model (docs/THREADS.md).
+pub const threads = @import("specs/threads_spec.zig");
 /// The host boundary: every effect, offered and withheld.
 pub const host = @import("specs/host_spec.zig");
 /// Several files compiled as one program (`compile/modules.zig`).
@@ -73,6 +77,7 @@ test {
     _ = zip;
     _ = json;
     _ = bytes;
+    _ = threads;
     _ = host;
     _ = modules;
     _ = optimizer;

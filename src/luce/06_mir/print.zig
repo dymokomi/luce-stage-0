@@ -136,6 +136,10 @@ fn printInstruction(
             try appendPrint(text, allocator, "call {s}", .{program.functions[call.function].name});
             for (call.arguments) |argument| try appendPrint(text, allocator, ", r{d}", .{argument});
         },
+        .spawn => |call| {
+            try appendPrint(text, allocator, "spawn {s}", .{program.functions[call.function].name});
+            for (call.arguments) |argument| try appendPrint(text, allocator, ", r{d}", .{argument});
+        },
         .intrinsic => |intrinsic| {
             try appendPrint(text, allocator, "intrinsic {s}", .{@tagName(intrinsic.kind)});
             for (intrinsic.arguments) |argument| try appendPrint(text, allocator, ", r{d}", .{argument});

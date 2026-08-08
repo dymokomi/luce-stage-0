@@ -30,6 +30,12 @@ const sanitize = @import("sanitize");
 const Allocator = std.mem.Allocator;
 const abi = luce.llvm.abi;
 
+/// What a host is asked to run on a thread: one C function and one
+/// opaque argument, both `libluce_rt`'s (docs/THREADS.md D8).  Named
+/// here because the two spellings of the slot — the ABI's and the
+/// runtime library's — take the same pointer.
+const WorkerBody = *const fn (argument: ?*anyopaque) callconv(.c) void;
+
 // ---------------------------------------------------------------------------
 // Limits this host sets
 // ---------------------------------------------------------------------------
@@ -95,6 +101,11 @@ pub const Host = struct {
     /// makes a stale number land on a row that says "shut" rather than
     /// on whoever moved in.
     open_files: std.ArrayList(OpenFile) = .empty,
+    /// Every worker thread this run started (docs/THREADS.md D8).  A
+    /// thread is this table's index plus one, so zero is never a
+    /// handle; a joined row is emptied and kept in place, so a stale
+    /// number lands on nothing rather than on whoever moved in.
+    threads: std.ArrayList(?std.Thread) = .empty,
     // -- what a trapped or errored run left behind ------------------------
 
     /// What a compiled artifact reported through the C table.
@@ -149,6 +160,8 @@ pub const Host = struct {
         self.listed_names.deinit(self.gpa);
         self.closeOpenFiles();
         self.open_files.deinit(self.gpa);
+        self.joinThreads();
+        self.threads.deinit(self.gpa);
         self.* = undefined;
     }
 
@@ -239,7 +252,93 @@ pub const Host = struct {
             .handle_write = cHandleWrite,
             .handle_flush = cHandleFlush,
             .handle_close = cHandleClose,
+            .worker_spawn = cWorkerSpawn,
+            .worker_join = cWorkerJoin,
         };
+    }
+
+    /// The thread channel, in the `libluce_rt` spelling the oracle
+    /// installs (docs/THREADS.md D8) — the same two functions the
+    /// table above publishes, `Answer` unwrapped, exactly as
+    /// `fileChannel` does for the handle channel.
+    pub fn workerChannel(self: *Host) luce.runtime.workers.Channel {
+        return .{ .context = self, .spawn = pWorkerSpawn, .join = pWorkerJoin };
+    }
+
+    // -- threads ---------------------------------------------------------
+    //
+    // A host's whole contribution to concurrency: start a C function on
+    // a thread, and wait for it to end (docs/THREADS.md D8).  Nothing
+    // here knows what a worker is, and nothing here needs to be
+    // thread-safe — `libluce_rt` serializes every host service behind
+    // one lock, which is D9 and is why `open_files`, the screen and the
+    // output buffers can stay what they are.
+    //
+    // The number a thread is known by is its row in `threads` plus one,
+    // so zero is never a handle.
+
+    fn startThread(self: *Host, body: WorkerBody, argument: ?*anyopaque) ?i64 {
+        const Runner = struct {
+            fn go(run: WorkerBody, given: ?*anyopaque) void {
+                run(given);
+            }
+        };
+        const started = std.Thread.spawn(.{}, Runner.go, .{ body, argument }) catch return null;
+        self.threads.append(self.gpa, started) catch {
+            // Nothing owns the thread now, so it must not be left
+            // running with nobody able to wait for it.
+            started.join();
+            return null;
+        };
+        return @intCast(self.threads.items.len);
+    }
+
+    fn cWorkerSpawn(
+        context: ?*anyopaque,
+        body: WorkerBody,
+        argument: ?*anyopaque,
+        thread: *i64,
+    ) callconv(.c) abi.Answer {
+        thread.* = of(context).startThread(body, argument) orelse return .no;
+        return .yes;
+    }
+
+    fn cWorkerJoin(context: ?*anyopaque, thread: i64) callconv(.c) abi.Answer {
+        const self = of(context);
+        if (thread < 1 or thread > self.threads.items.len) return .no;
+        const row = &self.threads.items[@intCast(thread - 1)];
+        if (row.*) |running| {
+            row.* = null;
+            running.join();
+        }
+        return .yes;
+    }
+
+    fn pWorkerSpawn(
+        context: ?*anyopaque,
+        body: WorkerBody,
+        argument: ?*anyopaque,
+        thread: *i64,
+    ) callconv(.c) i32 {
+        return @intFromEnum(cWorkerSpawn(context, body, argument, thread));
+    }
+
+    fn pWorkerJoin(context: ?*anyopaque, thread: i64) callconv(.c) i32 {
+        return @intFromEnum(cWorkerJoin(context, thread));
+    }
+
+    /// Wait for anything a program left running.  A worker is joined by
+    /// the scope that owned it (D5), so this only ever finds a thread a
+    /// trap unwound past — but a process must not outlive its threads,
+    /// and this is the run's backstop, beside `closeOpenFiles`.
+    pub fn joinThreads(self: *Host) void {
+        for (self.threads.items) |*row| {
+            if (row.*) |running| {
+                row.* = null;
+                running.join();
+            }
+        }
+        self.threads.clearRetainingCapacity();
     }
 
     /// Leave the alternate screen and raw mode; safe to call twice.

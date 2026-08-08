@@ -282,6 +282,7 @@ pub const Analyzer = struct {
                 .map => |pair| self.privateMentioned(pair.value),
                 .array => |shape| self.privateMentioned(shape.element),
                 .builder, .file => null,
+                .task => |work| self.privateMentioned(work.result),
             },
             .optional => |payload| self.privateMentioned(payload.asType()),
             else => null,
@@ -379,7 +380,7 @@ pub const Analyzer = struct {
                     .float => .float,
                     .double => .double,
                     .string => .string,
-                    .list, .map, .array, .builder, .file => unreachable, // answered by the outer switch
+                    .list, .map, .array, .builder, .file, .task => unreachable, // answered by the outer switch
                 };
             },
             .list => {
@@ -447,6 +448,26 @@ pub const Analyzer = struct {
                     return null;
                 }
                 return try self.internHeapType(.file);
+            },
+            // `task(...)` holds a **return shape**, written exactly as
+            // it would be after `->`: `task(double)`, `task(double!)`,
+            // `task(!)`, and a bare `task` for a worker that answers
+            // nothing and cannot fail (docs/THREADS.md D3).  The `!` is
+            // the spawned function's own attribute travelling with the
+            // call the task carries — `types.Type` is untouched by it,
+            // exactly as `Function.fallible` leaves it untouched.
+            .task => {
+                if (written.wildcards != 0 or written.arguments.len > 1) {
+                    try self.fail("luce.sema.type", written.span, "task holds one answer: task(T), task(T!), task(!), or task", .{});
+                    return null;
+                }
+                var answered: Type = .none;
+                if (written.arguments.len == 1) {
+                    answered = (try self.resolveType(module, written.arguments[0])) orelse return null;
+                }
+                return try self.internHeapType(.{
+                    .task = .{ .result = answered, .fallible = written.fallible },
+                });
             },
         };
         if (written.arguments.len != 0 or written.wildcards != 0) {
@@ -1827,6 +1848,7 @@ pub const Analyzer = struct {
                 return null;
             },
             .field => |field| return parameterRead(declaration, field.target),
+            .spawn => |worker| return parameterRead(declaration, worker.call),
             .call => |call| {
                 for (call.arguments) |argument| {
                     if (parameterRead(declaration, argument.value)) |read| return read;

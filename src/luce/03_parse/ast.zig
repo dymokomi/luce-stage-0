@@ -23,6 +23,11 @@ pub const TypeName = struct {
     arguments: []TypeName = &.{},
     wildcards: u8 = 0,
     optional: bool = false,
+    /// A `!` written inside `task(...)` — the spawned function's own
+    /// fallibility, travelling with the call the task carries
+    /// (docs/THREADS.md).  Only `task` takes one; it is not the `!`
+    /// after a return type, which the declaration parser reads.
+    fallible: bool = false,
     span: Span,
 };
 
@@ -119,6 +124,13 @@ pub const Give = struct { operand: *Expression, span: Span };
 pub const Copy = struct { operand: *Expression, span: Span };
 pub const NoneLiteral = struct { span: Span };
 pub const Try = struct { operand: *Expression, span: Span };
+/// `spawn f(args)` — the call is *not* made here; it is handed to a
+/// worker with a runtime of its own (docs/THREADS.md D2).  `call` is
+/// always a `.call` or a `.method` node, because the parser refuses
+/// anything else in front of it; which of the two is legal is stage
+/// 4's question, since only stage 4 can tell `Struct.helper(x)` from
+/// `value.method(x)`.
+pub const Spawn = struct { call: *Expression, span: Span };
 
 pub const Expression = union(enum) {
     int_literal: Literal,
@@ -154,6 +166,9 @@ pub const Expression = union(enum) {
     /// try CALL — hand the caller whatever the call raised, releasing
     /// what this frame owns on the way out (docs/FAILURE.md).
     try_call: Try,
+    /// spawn CALL — run the call on a worker and answer the `task`
+    /// that owns it (docs/THREADS.md D3).
+    spawn: Spawn,
 
     pub fn span(self: *const Expression) Span {
         return switch (self.*) {

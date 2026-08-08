@@ -162,7 +162,12 @@ const trace = @import("../runtime/trace.zig");
 /// One bump for the whole movement, because it is one movement: an
 /// artifact built against the old reading calls a `file_read` slot the
 /// host no longer fills, and must be rebuilt rather than tolerated.
-pub const version: u32 = 12;
+/// 13 — threads (docs/THREADS.md D8).  Two slots, `worker_spawn` and
+/// `worker_join`, appended: a host supplies threads and nothing else,
+/// so the whole of concurrency's machine surface is "start this C
+/// function on a thread" and "wait for it".  Both fail-closed; a host
+/// that answers neither traps `host_unavailable` at the `spawn`.
+pub const version: u32 = 13;
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the
@@ -609,6 +614,26 @@ pub const HandlePlainFn = *const fn (
 // The table itself
 // ---------------------------------------------------------------------------
 
+/// Start `body(argument)` on a thread of its own and answer the number
+/// this host will know that thread by (docs/THREADS.md D8).
+///
+/// The host is told nothing about Luce: what runs is a C function, and
+/// what it is handed is a pointer whose meaning is `libluce_rt`'s.
+/// That is deliberate — a machine's contribution here is a thread, and
+/// a host that grew an opinion about workers would be a second place
+/// the concurrency model lived.
+pub const WorkerSpawnFn = *const fn (
+    context: ?*anyopaque,
+    body: *const fn (argument: ?*anyopaque) callconv(.c) void,
+    argument: ?*anyopaque,
+    thread: *i64,
+) callconv(.c) Answer;
+
+/// Wait for a thread this host started to end.  `yes` when it has;
+/// the caller does not read a `no`, because a host that cannot join
+/// has already lost the thread and there is nobody left to tell.
+pub const WorkerJoinFn = *const fn (context: ?*anyopaque, thread: i64) callconv(.c) Answer;
+
 pub const Host = extern struct {
     /// Opaque host state, passed back to every callback.
     context: ?*anyopaque = null,
@@ -671,6 +696,18 @@ pub const Host = extern struct {
     handle_write: ?HandleWriteFn = null,
     handle_flush: ?HandlePlainFn = null,
     handle_close: ?HandlePlainFn = null,
+    /// Version 13: threads (docs/THREADS.md D8).  Two slots and no
+    /// more, because a machine's whole contribution to concurrency is
+    /// a thread: start this function on one, wait for it to end.
+    /// Everything else a worker is — a runtime of its own, the
+    /// arguments moved into it, the join, the census — is the
+    /// language's, and none of it is a machine's business.
+    ///
+    /// Fail-closed like every other service: a host that answers
+    /// neither traps `host_unavailable` at the `spawn`, which is the
+    /// same sentence a host with no `print` says at a `print`.
+    worker_spawn: ?WorkerSpawnFn = null,
+    worker_join: ?WorkerJoinFn = null,
 };
 
 /// The index of each `Host` field, as the generated code addresses it.
@@ -714,6 +751,8 @@ pub const Slot = enum(u32) {
     handle_write = 34,
     handle_flush = 35,
     handle_close = 36,
+    worker_spawn = 37,
+    worker_join = 38,
 
     pub const count = @typeInfo(Slot).@"enum".fields.len;
 };

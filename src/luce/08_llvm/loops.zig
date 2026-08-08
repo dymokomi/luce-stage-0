@@ -215,7 +215,7 @@ fn storedShape(program: *const mir.Program, of: types.Type) ?Shape {
         // A List has one bound and it is `count`, which is where a
         // rank-1 array's bound already comes from.
         .list => |element| .{ .element = element, .rank = 1 },
-        .map, .builder, .file => null,
+        .map, .builder, .file, .task => null,
     };
 }
 
