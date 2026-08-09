@@ -112,6 +112,34 @@ test "the editor's keys reach the file, and the unsaved gate holds" {
 /// What the scripted keys leave in the file.
 const expected_content = "ab    \nxhello\nworld\n";
 
+test "Enter carries indentation and opens one level after a code colon" {
+    const keys = [_]agree.World.Key{
+        .{ .name = "text", .text = "if true:" },
+        .{ .name = "enter" },
+        .{ .name = "text", .text = "print" },
+        .{ .name = "enter" },
+        // A colon inside a string is not a block opener.
+        .{ .name = "text", .text = "value = \"not a block:\"" },
+        .{ .name = "enter" },
+        // A comment after a colon does not hide the block opener.
+        .{ .name = "text", .text = "if true: # comment" },
+        .{ .name = "enter" },
+        .{ .name = "text", .text = "done" },
+        .{ .name = "ctrl_s" },
+        .{ .name = "ctrl_q" },
+    };
+    var world: agree.World = .withFile("notes.txt", "");
+    world.arguments = &[_][]const u8{"notes.txt"};
+    world.keys = &keys;
+    var session = try agree.compare(editor, .{ .world = world });
+    defer session.deinit();
+
+    try testing.expectEqualStrings(
+        "if true:\n    print\n    value = \"not a block:\"\n    if true: # comment\n        done",
+        session.file().?.content,
+    );
+}
+
 test "a save that will not land says what the runtime said, not what the editor guessed" {
     // `save` used to build "cannot write " and the path itself, which
     // is the program writing the runtime's sentence a second time and

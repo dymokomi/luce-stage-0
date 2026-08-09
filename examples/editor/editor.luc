@@ -47,6 +47,10 @@ private const theme = Theme(
     alert = 215,
 )
 
+# Luce's lexer uses the same four-column step, and the editor writes
+# spaces rather than tabs so what it creates is immediately valid source.
+private const indent_unit = "    "
+
 # What a single byte is, before anything has decided what it means.
 # Every predicate here answers about one byte and reaches nothing.
 private struct Bytes:
@@ -97,6 +101,46 @@ private struct Text:
         while at < len(value) and value.byte_at(at) != 10:
             at = at + 1
         return at
+
+    # The leading whitespace already in the line at the cursor.  The
+    # result is borrowed from `value` and is safe to use while the
+    # caller is still deciding what the next line should contain.
+    static func indentation(value: string, cursor: long) -> string:
+        let start = Text.line_start(value, cursor)
+        var at = start
+        while at < cursor:
+            let byte = value.byte_at(at)
+            if byte != 32 and byte != 9:
+                break
+            at = at + 1
+        return value[start:at]
+
+    # Whether the code before the cursor opens an indented block.  A
+    # small lexical scan is enough here: comments and quoted strings
+    # are not Luce layout, but a colon before a trailing comment is.
+    static func opens_block(value: string, cursor: long) -> bool:
+        let start = Text.line_start(value, cursor)
+        var at = start
+        var quoted = false
+        var escaped = false
+        var last: byte = 0
+        while at < cursor:
+            let byte = value.byte_at(at)
+            if quoted:
+                if escaped:
+                    escaped = false
+                elif byte == 92:
+                    escaped = true
+                elif byte == 34:
+                    quoted = false
+            elif byte == 35:
+                break
+            elif byte == 34:
+                quoted = true
+            elif byte != 32 and byte != 9:
+                last = byte
+            at = at + 1
+        return not quoted and last == 58
 
     static func line_of(value: string, cursor: long) -> long:
         var line = 0
@@ -411,12 +455,16 @@ private struct State:
                     self.content = Editing.erase_at(self.content, self.cursor)
                     self.dirty = true
             newline:
-                self.content = Editing.splice(self.content, self.cursor, "\n")
-                self.cursor = self.cursor + 1
+                let current_indent = Text.indentation(self.content, self.cursor)
+                var line_break = "\n" + current_indent
+                if Text.opens_block(self.content, self.cursor):
+                    line_break = line_break + indent_unit
+                self.content = Editing.splice(self.content, self.cursor, line_break)
+                self.cursor = self.cursor + len(line_break)
                 self.dirty = true
             indent:
-                self.content = Editing.splice(self.content, self.cursor, "    ")
-                self.cursor = self.cursor + 4
+                self.content = Editing.splice(self.content, self.cursor, indent_unit)
+                self.cursor = self.cursor + len(indent_unit)
                 self.dirty = true
             insert_text:
                 self.content = Editing.splice(self.content, self.cursor, inserted)
