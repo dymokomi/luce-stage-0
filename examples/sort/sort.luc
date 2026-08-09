@@ -1,6 +1,6 @@
 # Sorting, searching, and joining a real list(long).
 #
-#   loom luce programs/sort.luc
+#   loom luce examples/sort/sort.luc
 
 import std.strings
 

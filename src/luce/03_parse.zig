@@ -71,7 +71,7 @@
 //! * **Bounded reporting.**  A file of noise is a hundred messages
 //!   plus one `luce.parse.limit`, matching stage 2.
 //!
-//! Throughput on ordinary source (programs/editor.luc, ReleaseSafe) is
+//! Throughput on ordinary source (examples/editor/editor.luc, ReleaseSafe) is
 //! roughly 100 MB/s from bytes to AST.  Most of that is stage 2: lexing
 //! the same buffer alone runs at about 150 MB/s, so the parse proper is
 //! nearer 340 MB/s and is not the bottleneck.  Absolute numbers move

@@ -1,6 +1,6 @@
 //! The flagship program, driven by a scripted keyboard.
 //!
-//! `programs/editor.luc` is the largest thing written in Luce, and
+//! `examples/editor/editor.luc` is the largest thing written in Luce, and
 //! until now the only thing standing behind it was a compile test:
 //! nothing said what it *did*.  That is exactly the guarantee a
 //! restructuring needs, and `docs/METHODS.md` named the line where its

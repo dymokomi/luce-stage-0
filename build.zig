@@ -7,7 +7,7 @@ const builtin = @import("builtin");
 //   loom  — the terminal that runs compiled Luce programs
 //
 // zig build installs both plus the compiled bundled programs
-// (programs/*.luc -> PREFIX/programs/*.lc); zig build test runs the
+// (examples/*/*.luc -> PREFIX/examples/*/*.lc); zig build test runs the
 // language suite and both app suites.  The editor rides inside the
 // loom binary as embedded Luce source, so `loom edit` needs no paths.
 //
@@ -112,12 +112,12 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    // The flagship program, as bytes the specification can run.  A
+    // The flagship example, as bytes the specification can run.  A
     // build-system import rather than a relative `@embedFile`, for the
     // reason `loom`'s shell takes one: a spec that pinned its own
     // inline copy of the editor would pin nothing.
     specs.addAnonymousImport("editor.luc", .{
-        .root_source_file = b.path("programs/editor.luc"),
+        .root_source_file = b.path("examples/editor/editor.luc"),
     });
 
     // The five files of the adventure engine, for the same reason and
@@ -127,7 +127,7 @@ pub fn build(b: *std.Build) void {
     // compiles them together the way `luce build` does.
     for ([_][]const u8{ "adventure", "world", "story", "command", "journal" }) |program_file| {
         specs.addAnonymousImport(b.fmt("{s}.luc", .{program_file}), .{
-            .root_source_file = b.path(b.fmt("programs/{s}.luc", .{program_file})),
+            .root_source_file = b.path(b.fmt("examples/adventure/{s}.luc", .{program_file})),
         });
     }
 
@@ -211,7 +211,7 @@ pub fn build(b: *std.Build) void {
     // module root, and `@embedFile` does not leave a module — so it
     // arrives under a name instead.
     grammar_generator.addAnonymousImport("editor.luc", .{
-        .root_source_file = b.path("programs/editor.luc"),
+        .root_source_file = b.path("examples/editor/editor.luc"),
     });
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = grammar_generator })).step);
 
@@ -424,7 +424,7 @@ pub fn build(b: *std.Build) void {
         },
     });
     terminal_module.addAnonymousImport("editor.luc", .{
-        .root_source_file = b.path("programs/editor.luc"),
+        .root_source_file = b.path("examples/editor/editor.luc"),
     });
     const terminal = b.addExecutable(.{ .name = "loom", .root_module = terminal_module });
     const install_terminal = b.addInstallArtifact(terminal, .{
@@ -461,7 +461,7 @@ pub fn build(b: *std.Build) void {
 
     // The userland program the pair exists to run, proved end to end:
     // a real ZIP archive on a real disk, listed, extracted and built
-    // again by `programs/zipper.luc` through both installed binaries.
+    // again by `examples/zipper/zipper.luc` through both installed binaries.
     //
     // A module of its own beside `product.zig` for the same reason
     // that file is one — it names the binaries — and apart from it
@@ -478,7 +478,7 @@ pub fn build(b: *std.Build) void {
         },
     });
     zipping_module.addAnonymousImport("zipper.luc", .{
-        .root_source_file = b.path("programs/zipper.luc"),
+        .root_source_file = b.path("examples/zipper/zipper.luc"),
     });
     zipping_module.addOptions("build_options", binaries);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = zipping_module })).step);
@@ -510,16 +510,16 @@ pub fn build(b: *std.Build) void {
     for (bundled) |program| {
         const compile_program = b.addRunArtifact(compiler);
         compile_program.addArg("build");
-        compile_program.addFileArg(b.path(b.fmt("programs/{s}.luc", .{program.name})));
+        compile_program.addFileArg(b.path(b.fmt("examples/{s}/{s}.luc", .{ program.name, program.name })));
         compile_program.addArg("-o");
         const artifact_file = compile_program.addOutputFileArg(b.fmt("{s}.lc", .{program.name}));
         for (program.deps) |dependency| {
-            compile_program.addFileInput(b.path(b.fmt("programs/{s}.luc", .{dependency})));
+            compile_program.addFileInput(b.path(b.fmt("examples/{s}/{s}.luc", .{ program.name, dependency })));
         }
         linkAgainstRuntime(compile_program, install_runtime, runtime_directory, runtime_library);
         const install_program = b.addInstallFile(
             artifact_file,
-            b.fmt("programs/{s}.lc", .{program.name}),
+            b.fmt("examples/{s}/{s}.lc", .{ program.name, program.name }),
         );
         b.getInstallStep().dependOn(&install_program.step);
         // `zig build test` compiles every bundled program too, so a

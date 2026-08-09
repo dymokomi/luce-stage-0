@@ -218,7 +218,7 @@ system `unzip` would have added a test-time dependency on a tool
 already prove — and it would have proven it on one machine's `unzip`
 rather than on the format.
 
-**And then a person had to be able to do it, which is `programs/zipper.luc`.**
+**And then a person had to be able to do it, which is `examples/zipper/zipper.luc`.**
 A library nobody can run is a claim rather than a capability, so the
 byte path came with a userland program over it — `zipper list`,
 `zipper unzip`, `zipper zip` — and a product suite that drives the

@@ -1433,7 +1433,7 @@ test "luce.sema.main: a script needs func main(), with or without the command li
 }
 
 // "script entry must be exactly func main():" was not true —
-// `func main() -> !:` is legal and `programs/dice.luc` writes it, as
+// `func main() -> !:` is legal and `examples/dice/dice.luc` writes it, as
 // the comment three lines above the message said.  It also answered
 // two different mistakes with one sentence, and pointed at `func main`
 // rather than at the part that is wrong.

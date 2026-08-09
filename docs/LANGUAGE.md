@@ -406,7 +406,7 @@ scope ownership, which already knows that `return` moves what it hands
 back and `try` moves nothing. The one bit `errdefer` encodes is
 already a parameter of the unwinder (docs/OWNERSHIP.md S4).
 
-`programs/calc.luc` is the worked example, and `docs/FAILURE.md` is
+`examples/calc/calc.luc` is the worked example, and `docs/FAILURE.md` is
 the decision record.
 
 ## Answering more than one thing

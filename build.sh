@@ -1,6 +1,6 @@
 #!/bin/sh
 # Build LuciaOS v2: installs the luce compiler and the loom terminal at
-# build/, plus the compiled bundled programs at build/programs/.
+# build/, plus the compiled bundled examples at build/examples/<name>/.
 #
 # Installed binaries default to ReleaseSafe — the compiler and the
 # runtime are a trust boundary (a .lc runs like the executable it is,

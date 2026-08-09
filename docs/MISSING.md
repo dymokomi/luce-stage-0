@@ -64,7 +64,7 @@ struct zero templates, host text on its way into owned storage).
   language's own claim made literal — *values copy*.
 
 The flagship program was the worked example and is now the proof.
-`Editing.splice` (`programs/editor.luc:146`) is
+`Editing.splice` (`examples/editor/editor.luc:146`) is
 `value[0:cursor] + extra + value[cursor:len(value)]`, and 20,000
 keystrokes into a 40 KB file peaked at **1204 MB RSS**.  The same
 simulation now peaks at **3.3 MB**, and costs 24 µs a keystroke
@@ -368,7 +368,7 @@ directly instead of being told to give a name to itself.
 
 ## Tier 3 — what a real program actually hits
 
-Read from `programs/` for awkwardness rather than features.
+Read from `examples/` for awkwardness rather than features.
 `editor.luc` was the oldest file in the corpus — written before enums,
 `match`, visibility, std, f-strings and constants — so it was both the
 most workaround-dense and the proof the language moved.  It has now
@@ -467,7 +467,7 @@ it still hits.
      this: `append` is reserved by the method table, and visibility
      does not unreserve names (docs/VISIBILITY.md §6).
 7. ~~**No default or named arguments.**  `term_style(fg, bg, bold)` is
-   called 15 times across `programs/`; 14 end in the same noise word
+   called 15 times across `examples/`; 14 end in the same noise word
    `false`.~~ — **Closed** (docs/ARGS.md, ratified and built).  Every
    parameter has a name a call site may write, defaults are trailing
    folded constants, struct fields take the same clause, and the
@@ -531,7 +531,7 @@ it still hits.
     let-bound; use var for reassignment" — because the place rule
     walks to the root binding and a nested place rebuilds value
     structs up to it.  Nothing is reassigned: the write lands in the
-    container either way.  `programs/world.luc` therefore opens five
+    container either way.  `examples/adventure/world.luc` therefore opens five
     of its methods with `var slots = self.<table>`, an alias declared
     `var` for no reason a reader can see, and the comment there has to
     explain it.  The fix is either to stop at the innermost container
@@ -774,7 +774,7 @@ improvement the audit exposed:
   visibility run marked them `private`, and now the documentation and
   the compiler say the same thing.
 - **The editor still mirrors the compiler's word vocabulary by hand.**
-  `programs/editor.luc` now carries immutable keyword and builtin maps
+  `examples/editor/editor.luc` now carries immutable keyword and builtin maps
   for syntax highlighting.  They include `const`, and lookup is no
   longer a fenced string scan, but nothing derives or checks that
   in-language copy against the compiler tables.  Generating or
@@ -1010,7 +1010,7 @@ What is left of the item is smaller and named in `docs/BYTES.md`: no
 seek on a handle, no file metadata, and no directory creation.
 
 **The directory is the one that bites, and there is now a program that
-proves it.**  `programs/zipper.luc` extracts a ZIP archive, and an
+proves it.**  `examples/zipper/zipper.luc` extracts a ZIP archive, and an
 archive names its entries with directories in them; with no way to make
 one, zipper can extract an entry under `papers/` only where `papers/`
 already exists, and the honest thing it can do is check every name

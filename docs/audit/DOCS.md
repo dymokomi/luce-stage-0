@@ -128,8 +128,8 @@ succeeding quietly.
 
 Nine of the eleven shipped at ABI 8.  Only `exit` and path manipulation
 remain.  The repository's own bundled programs contradict the page:
-`programs/calc.luc:109,114` uses `read_line` and `print_error`, and
-`programs/life.luc:92,100` uses `clock_ms` and `sleep_ms`.  The same page
+`examples/calc/calc.luc:109,114` uses `read_line` and `print_error`, and
+`examples/life/life.luc:92,100` uses `clock_ms` and `sleep_ms`.  The same page
 also undercounts the raw builtins — "The host's raw file builtins are
 `file_read`, `file_write` and `file_exists`" (`tour/host.md:37`) — where
 there are seven.
@@ -421,10 +421,10 @@ edit "loom's host" looks in the wrong directory.
 
 ### F13. The status page's corpus counts are half-drifted, on a page that swears they are not
 
-> **FIXED** (`bf45def`, `dbfa587`), re-derived from `programs/` in both
+> **FIXED** (`bf45def`, `dbfa587`), re-derived from `examples/` in both
 > site pages and in MISSING.md.  The dispatch chain is **15**
 > comparisons, not 17; `term_style` is **15 calls, 14 ending in
-> `false`** across `programs/`; 46 is right; and the
+> `false`** across `examples/`; 46 is right; and the
 > `Struct.func(state, …)` figure was muddled rather than off by one — it
 > is 88 namespaced calls of every shape, and the ten-of-ten is ten of
 > `Text`'s **eleven** functions.  **The "with no `else`" half of this
@@ -436,14 +436,14 @@ edit "loom's host" looks in the wrong directory.
 > "The corpus pays for it constantly, and **the counts are real**"
 > — `www/luce/content/status/index.md:107`
 
-Re-derived against `programs/`:
+Re-derived against `examples/`:
 
 | claim | file:line | actual |
 |---|---|---|
 | "**17 string comparisons** and no `else`" | `status/index.md:109` | **15** (`editor.luc:361-400`) |
 | "**46** `word == "…"` comparisons" | `status/index.md:114` | **46** ✓ |
 | "**87** `Struct.func(state, …)` calls" | `status/index.md` §3 | **88** — near enough |
-| "`term_style(fg, bg, bold)` is called **16 times** and **13** of them end in … `false`" | `status/index.md:145` | **12** and **11** in `editor.luc`; **15** and **14** across `programs/` |
+| "`term_style(fg, bg, bold)` is called **16 times** and **13** of them end in … `false`" | `status/index.md:145` | **12** and **11** in `editor.luc`; **15** and **14** across `examples/` |
 
 Two of four are right, which is better than it sounds and worse than the
 page promises.  `www/luce/content/examples/programs.md:124-126` carries the
@@ -514,7 +514,7 @@ written, a reader concludes `get` does not exist.
   `100000000000000000000`.  On a page whose own "The one sentinel"
   section is about honesty at the edges, the trap should be stated.
 - **`/examples/programs/:39-43`** and **`/examples/errors/:125-129`**
-  describe `programs/calc.luc` as a one-shot expression evaluator.  Since
+  describe `examples/calc/calc.luc` as a one-shot expression evaluator.  Since
   `7bff37d` it is a REPL when given no arguments (`calc.luc:105-118`),
   driven by `read_line` and `print_error` — the very builtins
   `/tour/host/` says do not exist (**F1b**).  `/examples/programs/:110`
@@ -522,7 +522,7 @@ written, a reader concludes `get` does not exist.
 
 These three, plus F1, all trace to the same commit.  A host-surface
 change landed in the compiler, the std library, `docs/STD.md` and
-`programs/`, and stopped short of five site pages.
+`examples/`, and stopped short of five site pages.
 
 ### F17. `docs/` has no index, and the README names 6 of 13 files
 
@@ -552,7 +552,7 @@ directory listing.
 `luce.luciaos.com` appears exactly once outside `www/luce/` — in
 `CLAUDE.md:65`.  Not in `README.md`, not in any `docs/*.md`, not in
 `AGENTS.md`.  The README's **Packages** block (`:136-165`) lists
-`src/luce`, `src/apps/*`, `programs/`, `bench/`, `tools/vscode-luce/`,
+`src/luce`, `src/apps/*`, `examples/`, `bench/`, `tools/vscode-luce/`,
 `docs/`, `build.sh` — and omits `www/luce/` entirely, though it is a
 first-class deliverable with its own build gate.
 
@@ -840,9 +840,9 @@ number cannot tell whether they broke something.
 **3. Run a program.** `README.md:34-38` works verbatim:
 
 ```
-$ build/luce build programs/hello.luc
-programs/hello.luc -> programs/hello.lc
-$ build/loom run programs/hello.lc you
+$ build/luce build examples/hello/hello.luc
+examples/hello/hello.luc -> examples/hello/hello.lc
+$ build/loom run examples/hello/hello.lc you
 hello, you
 ```
 

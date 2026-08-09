@@ -75,7 +75,7 @@ Measured consequences, both in MISSING.md:
 - A loop building and discarding one string per iteration, retaining
   nothing: **28 / 36 / 54 / 90 MB RSS at 0.5M / 1M / 2M / 4M
   iterations.** Dead linear, ~18 bytes an iteration, forever.
-- `programs/editor.luc` peaks at **976 MB after 20,000 keystrokes into
+- `examples/editor/editor.luc` peaks at **976 MB after 20,000 keystrokes into
   a 40 KB file** — 49 KB retained per keystroke. `Editing.splice` is
   `value[0:cursor] + extra + value[cursor:len(value)]`, two concats
   into the arena, and `Handle.key` then does four to six `struct_set`s,
@@ -172,7 +172,7 @@ could mutate the source. `07_optimize/effects.zig` already answers
 The conservative version — copy whenever a container read is live
 across any impure call in the statement — is what should ship, and it
 should ship *with* the core change, not after it. Prediction to check:
-it fires on zero lines of `programs/` and `src/luce/std/`.
+it fires on zero lines of `examples/` and `src/luce/std/`.
 
 ## What it costs
 
@@ -654,7 +654,7 @@ it can be falsified:
 
 The one thing that cannot be predicted from here is how often the
 mutation-during-statement read rule fires on real code. The
-measurement is a count of copies it inserts across `programs/`,
+measurement is a count of copies it inserts across `examples/`,
 `bench/` and `src/luce/std/`. Prediction: zero.
 
 ## What shipped
@@ -681,7 +681,7 @@ so 32× the work is the same footprint. The compiled path's 20 MB is
 anything Luce is holding — the interpreter, which draws on Zig's
 general-purpose allocator, sits at the 1.8 MB do-nothing floor.
 
-**The editor**, `programs/editor.luc` verbatim with its interactive
+**The editor**, `examples/editor/editor.luc` verbatim with its interactive
 `main` replaced by 20,000 keystrokes played into a 40 KB buffer through
 the same `Handle.key` / `Handle.adjust` path: **1204.2 MB → 3.3 MB**
 peak RSS, same output. Wall time 0.18 s → 0.48 s for the 20,000
@@ -708,7 +708,7 @@ allocate-and-free pairs. The average piece is 11.7 bytes and every
 essentially all of it**, which is why step 5 is next.
 
 **The mutation-during-statement rule fires on zero lines** of
-`programs/`, `bench/` and `src/luce/std/` — the memo's prediction,
+`examples/`, `bench/` and `src/luce/std/` — the memo's prediction,
 checked by counting the copies it inserts across the whole corpus. It
 does fire on the memo's own example, `f(pieces[0], drop_first(pieces))`,
 which is in the spec suite.
@@ -859,7 +859,7 @@ zero times rather than in a matched pair:
 | compiled | 1.9 MB | 1.9 MB | 1.9 MB | 1.9 MB | 1.9 MB |
 | interpreter | 1.8 MB | 1.8 MB | 1.8 MB | 1.8 MB | 1.8 MB |
 
-The editor simulation — `programs/editor.luc` verbatim with its
+The editor simulation — `examples/editor/editor.luc` verbatim with its
 interactive `main` replaced by 20,000 keystrokes played into a 40 KB
 buffer through the same `Handle.adjust` / `Handle.key` path — is
 **3.5 MB compiled and 5.3 MB on the interpreter**, against 3.0 MB and
@@ -1050,7 +1050,7 @@ Max):
 benchmarks did not move; three earlier runs of the same A/B put
 `strings` at −3.3% to −3.8% and every other row inside ±1.8%.
 
-**The editor is where it pays.** `programs/editor.luc` verbatim with
+**The editor is where it pays.** `examples/editor/editor.luc` verbatim with
 its interactive `main` replaced by 20,000 keystrokes played into a
 40 KB buffer through the same `Handle.adjust` / `Handle.key` path,
 same output both ways:
@@ -1072,7 +1072,7 @@ list and a map, nothing retained — is 21.0% faster at 2M iterations
 | compiled | 1.7 MB | 1.8 MB | 1.8 MB | 1.8 MB | 1.9 MB |
 | interpreter | 2.0 MB | 2.0 MB | 2.0 MB | 2.1 MB | 2.2 MB |
 
-Counted across `programs/` and `bench/`, the corpus emits **185
+Counted across `examples/` and `bench/`, the corpus emits **185
 `own_storage` copies before and 101 after** — 45% of every copy site in
 userland is gone. `editor.luc` alone goes from 59 to 36.
 

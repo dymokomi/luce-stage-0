@@ -41,7 +41,7 @@ only *runs* Luce programs needs none at all.  `cc` is a prerequisite
 of building at all, because compiling a bundled program is a link:
 
 ```sh
-./build.sh         # installs build/luce, build/loom, build/lib/libluce_rt.a, build/programs/*.lc
+./build.sh         # installs build/luce, build/loom, build/lib/libluce_rt.a, build/examples/<name>/<name>.lc
 zig build test     # ~5 min: the executable specification (every program
                    # run on both the compiled path and the test suite's
                    # reference implementation, and compared) + language,
@@ -51,10 +51,10 @@ zig build test     # ~5 min: the executable specification (every program
 ## Try it
 
 ```sh
-build/luce build programs/hello.luc   # hello.luc -> hello.lc (machine code)
-build/loom run programs/hello.lc you  # hello, you
+build/luce build examples/hello/hello.luc   # hello.luc -> hello.lc (machine code)
+build/loom run examples/hello/hello.lc you  # hello, you
 build/loom                            # the interactive shell
-build/loom edit programs/hello.luc    # the editor, written in Luce
+build/loom edit examples/editor/editor.luc  # the editor, written in Luce
 ```
 
 The compiler:
@@ -101,7 +101,7 @@ uses `cc`; `LUCE_CC` names another driver and `LUCE_LIB` the directory
 holding `libluce_rt.a`.
 
 ```sh
-build/luce build programs/hello.luc --emit=exe -o hello
+build/luce build examples/hello/hello.luc --emit=exe -o hello
 ./hello you                           # hello, you — no loom, no runtime
 ```
 
@@ -154,7 +154,7 @@ func main(args: list(string)):
 
 ## The editor
 
-`programs/editor.luc` is a full-screen terminal editor written
+`examples/editor/editor.luc` is a full-screen terminal editor written
 entirely in Luce: movement, editing, scrolling, line numbers, a status
 bar, and per-line Luce syntax highlighting.  Its source ships embedded
 in the loom binary (`loom edit` always works); set
@@ -175,7 +175,7 @@ src/apps/loom/            the loom terminal: shell, program runner,
                           palette — the trusted host behind the Luce
                           host builtins is one level up in src/apps/,
                           shared with the compiler
-programs/                 userland, written in Luce: the editor,
+examples/                 userland, written in Luce: the editor,
                           hello, sort, wordcount, a calculator,
                           Conway's Life, stats (a two-file module
                           demo), dice, a Brainfuck interpreter,

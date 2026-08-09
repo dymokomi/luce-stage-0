@@ -16,7 +16,7 @@ to the permanent gap list.
 | S5 | In-place replacement creates a new argument-lifetime hazard: `s.change(s)` and `s.change(s.text)` can otherwise leave the ordinary argument borrowing storage the receiver frees.  Likewise, in `f(s, s.change())`, the first operand's local read is no longer intrinsically safe. | **Fixed in stage 4:** storage-owning arguments to writers are copied and parked through the call; owning-local reads participate in the existing later-operand mutation hazard rule. |
 | S6 | Receiver write behavior cannot be inferred by a local syntax scan.  Forward calls and wrappers such as `self.real()` can mutate only because another method they call writes `self`; object-content calls such as `self.items.append(...)` must not count as value-self writes. | **Fixed in SELF:** declaration analysis computes a fixed point over same-owner method calls and distinguishes value replacement from borrowed object-content mutation. |
 | S7 | Two production methods, `Play.take` and `Play.put_down`, were marked `var self` even though they only read receiver fields and mutate a separately borrowed object. | **Improved by inference:** both become ordinary read methods after migration. |
-| S8 | `programs/editor.luc` described a thirty-word keyword table and omitted the already-reserved `spawn`; adding `static` would otherwise make that drift two words wide. | **Fixed during corpus migration:** include both `spawn` and `static`, and pin the real count of 32.  Deriving this sample table from the compiler is recorded in `docs/MISSING.md`. |
+| S8 | `examples/editor/editor.luc` described a thirty-word keyword table and omitted the already-reserved `spawn`; adding `static` would otherwise make that drift two words wide. | **Fixed during corpus migration:** include both `spawn` and `static`, and pin the real count of 32.  Deriving this sample table from the compiler is recorded in `docs/MISSING.md`. |
 | S9 | A writing method's receiver expression can be spilled while later arguments introduce control flow.  Aliasing that spill would mutate a temporary instead of the caller's binding. | **Fixed by construction:** `call_inout` stores a `LocalId`, and stage 4 re-resolves and rechecks the bare receiver after every argument is lowered. |
 | S10 | Dead-store elimination used to be free to remove a final `local_set self` because old receiver writeback observed a returned value.  With a true alias, that store is externally visible even if the callee never reads it again. | **Fixed in stage 7:** writes to inout local zero are effects and survive DCE, with a verifier-valid inout regression. |
 | S11 | Enum member visibility markers were parsed but discarded even though `FuncDecl` already carries visibility.  Adding `private static func` made the drift observable. | **Fixed in the parser:** enum functions now retain direct visibility just as struct functions do, with a cross-module private-static regression. |
@@ -45,7 +45,7 @@ to the permanent gap list.
   `holder.counter.advance()` and `items[i].advance()` need a real place
   descriptor, caller-owner identity, and single-evaluation rules.  The
   current surface deliberately promises only a bare `var` binding.
-- `programs/editor.luc` still mirrors the compiler's keyword and builtin
+- `examples/editor/editor.luc` still mirrors the compiler's keyword and builtin
   vocabulary manually.  Generating or checking those tables would prevent
   another drift like the missing `spawn` found during this run.
 

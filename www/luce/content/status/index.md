@@ -185,7 +185,7 @@ route: it is generated directly from the compiler's tables.
 
 ## The short list of what a real program hits
 
-Read out of `programs/` for awkwardness rather than for features.
+Read out of `examples/` for awkwardness rather than for features.
 `editor.luc` used to be the oldest file in the corpus — written
 before enums, `match`, visibility, the standard library, f-strings
 and constants — and was for a long time both the most workaround-dense

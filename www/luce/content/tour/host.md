@@ -172,7 +172,7 @@ and may be a pipe, while standard error is shared with the runner.
 already-elapsed duration — zero, or the negative left by
 `deadline - clock_ms()` after a frame overran — simply returns. There
 is no time left to wait, so an animation loop subtracts without
-guarding. That is exactly what `programs/life.luc` does.
+guarding. That is exactly what `examples/life/life.luc` does.
 
 `env(name)` answers `string?`: one variable, or `none` when unset.
 

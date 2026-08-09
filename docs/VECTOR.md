@@ -314,7 +314,7 @@ and that changing it is somebody's future decision.  A comment saying
 
 ## What Layer 1 covers today: nothing, and it goes first anyway
 
-Swept across `programs/`, `src/luce/std/` and `bench/`, the compound
+Swept across `examples/`, `src/luce/std/` and `bench/`, the compound
 additions are float reductions (`math.luc`'s `sum`, `dot`, `variance`,
 `norm`), scalar counters in `strings.luc`, and the three benchmark
 reductions — none of which is a narrow-element integer reduction into
@@ -804,7 +804,7 @@ class of bug, and release needs no separate testing story".  An
 operator is the same trade at a smaller scope still.  Each creates a
 region where the safety story is conditional, and each makes every
 library function's contract depend on which spelling its author
-reached for.  (This is not the same thing as `programs/bf.luc`'s
+reached for.  (This is not the same thing as `examples/bf/bf.luc`'s
 `% 256`, which is a wrap the *program* asked for, computed at full
 checked width, and which the `byte` type has since made legible.)
 

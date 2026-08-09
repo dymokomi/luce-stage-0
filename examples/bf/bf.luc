@@ -1,7 +1,7 @@
 # A Brainfuck interpreter in Luce: the byte tape is a real array,
 # output accumulates in a builder, and chr() maps cell values to text.
 #
-#   loom luce programs/bf.luc
+#   loom luce examples/bf/bf.luc
 
 func matching_forward(code: string, pc: long) -> long:
     var depth = 1

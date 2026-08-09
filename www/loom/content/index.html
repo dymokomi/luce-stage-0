@@ -145,7 +145,7 @@ do</td></tr>
 
 <figure class="sample">
 <figcaption class="cap shell">Shell</figcaption>
-<div class="code"><pre><samp><span class="prompt">$</span> <kbd>loom run build/programs/life.lc</kbd></samp></pre></div>
+<div class="code"><pre><samp><span class="prompt">$</span> <kbd>loom run build/examples/life/life.lc</kbd></samp></pre></div>
 </figure>
 
 <h2 id="building">Building it</h2>
@@ -168,7 +168,7 @@ links neither.</p>
 
 <p>The build installs <code>build/loom</code>, <code>build/luce</code>,
 <code>build/lib/libluce_rt.a</code> (Luce's semantics as a linkable library,
-which every compiled artifact carries) and <code>build/programs/*.lc</code>. Put
+which every compiled artifact carries) and <code>build/examples/&lt;name&gt;/&lt;name&gt;.lc</code>. Put
 <code>build/</code> on your <code>PATH</code> and the two binaries find each
 other: loom looks for the compiler beside its own executable first and on
 <code>PATH</code> after, which is how a toolchain finds its tools.</p>

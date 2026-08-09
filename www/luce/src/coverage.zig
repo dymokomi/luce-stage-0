@@ -4,7 +4,7 @@
 //! *runs* and prints what its page claims.  Nothing proved anything
 //! about the prose around a sample, and the cost of that was measured:
 //! a host expansion landed in the compiler, the standard library and
-//! `programs/`, and two pages went on telling readers for a week that
+//! `examples/`, and two pages went on telling readers for a week that
 //! nine shipped builtins were "not built".  A false negative does not
 //! cost a reader a search; it costs them the feature.
 //!

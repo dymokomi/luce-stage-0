@@ -140,7 +140,7 @@ whose storage that turn had already released. `08_llvm/lower.zig`
 empties the result slot before it returns `errored`; the interpreter
 now does the same. It needed a loop, and one turn that worked before
 one that did not, which is why a thousand lines of small programs
-never met it and `programs/adventure.luc` did on its first playthrough.
+never met it and `examples/adventure/adventure.luc` did on its first playthrough.
 That is the argument for a corpus with a *large* program in it, and it
 cuts both ways: an oracle is only an oracle where the two arms are
 written independently, and the price of that is that either one can be
@@ -262,7 +262,7 @@ The two lowering gaps that make the fallback load-bearing today are
 `lower.zig`; the other 23 refuse IR that could only arrive damaged.
 `Bytes` is **unconstructible** (`docs/MISSING.md` item 8): `var b:
 Bytes` compiles, nothing produces one, and a grep across
-`src/luce/std/`, `programs/`, `bench/` and the site's 173 samples finds
+`src/luce/std/`, `examples/`, `bench/` and the site's 173 samples finds
 zero uses. The evaluator ports are v1 machinery `docs/V2.md` already
 defers. Cutting both makes stage 10's lowering **total**, and that is
 step 1 and 2 of the plan.
@@ -581,7 +581,7 @@ what proves it safe, and what it forecloses.
 of the 34 `self.fail(` sites in `lower.zig`. Bumps `format_version`.
 *Proves it safe:* it is unconstructible — `var b: Bytes` compiles and
 nothing produces or consumes one (`docs/MISSING.md` item 8) — and a
-grep across `src/luce/std/`, `programs/`, `bench/` and the site's 173
+grep across `src/luce/std/`, `examples/`, `bench/` and the site's 173
 samples finds zero uses. The suite and the site build are the check.
 *Forecloses:* nothing. A real `Bytes` would be designed fresh, and
 `docs/MISSING.md` already says "cut it or grow it".
@@ -613,7 +613,7 @@ their `schema` parameter; `backend.evaluate` lost `inputs` and
 set went; and `EntryMode` went entirely rather than becoming a
 one-variant enum, so `CompileOptions` is now `allow_host` plus two
 cosmetic fields. `input`, `output`, `Input`, `Output` and `evaluate`
-left `reserved_names` with it — `programs/calc.luc` has a function
+left `reserved_names` with it — `examples/calc/calc.luc` has a function
 called `evaluate` that only compiled because `isReserved` special-cased
 the name, and that special case is gone.
 

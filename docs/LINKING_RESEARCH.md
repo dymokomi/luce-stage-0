@@ -36,7 +36,7 @@ Apple Silicon**, against **this tree's `build/`** (Apple clang 17.0.0,
 nothing off this host; the *shapes* are what the memo rests on.
 
 **M1 — LLD 22.1.8 links this tree's real artifact with no `cc` and no
-SDK.**  Using `programs/editor.luc`'s object and the installed runtime,
+SDK.**  Using `examples/editor/editor.luc`'s object and the installed runtime,
 against a directory containing exactly one file:
 
 ```text
@@ -73,7 +73,7 @@ data between invocations."*  Since Zig 0.7.1 (Dec 2020).  **The child
 is Zig's own binary**, so this costs no external dependency.
 
 **M6 — our generated object's relocation surface is five types, no GOT,
-no TLS.**  `programs/editor.luc` → 1,031 fixups:
+no TLS.**  `examples/editor/editor.luc` → 1,031 fixups:
 
 ```text
 type=2  ARM64_RELOC_BRANCH26     479   (BL to luce_rt_*)

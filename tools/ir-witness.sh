@@ -17,7 +17,7 @@ fi
 root=$(cd "$(dirname "$0")/.." && pwd)
 luce="$root/build/luce"
 mkdir -p "$out"
-for source in "$root"/programs/*.luc "$root"/bench/*.luc; do
+for source in "$root"/examples/*/*.luc "$root"/bench/*.luc; do
     name=$(basename "$source" .luc)
     "$luce" ir "$source" --full >"$out/$name.ir" 2>&1 || echo "refused: $source" >&2
 done

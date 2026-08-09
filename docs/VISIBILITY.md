@@ -174,7 +174,7 @@ revision makes — recommended, owner may veto.**
 The shipped `.luc` corpus is 10 programs, 3 std modules and 6
 benchmarks.  Its import graph is small enough to state exactly:
 
-- `programs/stats.luc` imports the sibling `programs/mathx.luc` — the
+- `examples/stats/stats.luc` imports the sibling `examples/stats/mathx.luc` — the
   **one** userland module in the tree.
 - `dice`, `editor`, `sort`, `wordcount`, `bench/stats`,
   `bench/strings` import std modules.
@@ -205,7 +205,7 @@ func main():
 ```
 
 Nothing in the tree calls either from outside — checked, not assumed:
-`grep -rn 'fold_case(\|is_space_byte(' programs/ bench/ www/luce/content
+`grep -rn 'fold_case(\|is_space_byte(' examples/ bench/ www/luce/content
 src/luce/specs/` finds prose mentions and zero calls.  The leak has no
 victims yet, which is precisely `docs/MISSING.md`'s point: *"matters
 before userland libraries exist."*  Under public-by-default the leak
@@ -237,10 +237,10 @@ reversal verbatim: **no internal member goes public to save an
 idiom — the library gets fixed instead.**)
 
 Counted at head rather than remembered: the tree writes `Rng(state`
-fourteen times across `programs/`, `www/luce/content/` and `specs/`, and
+fourteen times across `examples/`, `www/luce/content/` and `specs/`, and
 the honest split matters now — **ten** are cross-module
 `math.Rng(state = …)` construction sites that must migrate
-(`programs/dice.luc:25`; the compiled site fences at
+(`examples/dice/dice.luc:25`; the compiled site fences at
 `www/luce/content/std/math.md:162`, `:174` and
 `www/luce/content/tour/modules.md:66`; six `std_spec.zig` rows at 245,
 246, 249, 251, 258, 268), **two** are spec fixtures whose `Rng` is a
@@ -260,8 +260,8 @@ It survives as the amendment's evidence:
 | where | `public` markers the old default demanded | actually internal |
 |---|---:|---:|
 | `src/luce/std/` (strings 15, math 30 incl. the new `rng` factory, files 10) | **55** | 5 |
-| `programs/mathx.luc` | **4** | 1 |
-| every other `programs/` and `bench/` file | **0** | — |
+| `examples/stats/mathx.luc` | **4** | 1 |
+| every other `examples/` and `bench/` file | **0** | — |
 | site samples (`geometry.luc` 5, `shapes.luc` 6) | **11** | 0 |
 | spec and driver fixtures (`modules_spec`, `compile/test.zig`, `errors_spec`) | **~30** | 0 |
 
@@ -810,7 +810,7 @@ at.
 
 ## 6. std's own surface, audited (D12)
 
-Every declaration in `src/luce/std/*.luc` and `programs/mathx.luc`,
+Every declaration in `src/luce/std/*.luc` and `examples/stats/mathx.luc`,
 audited against docs/STD.md, the site's std pages, and every call in
 the corpus.  **std obeys the same rule it imposes** — `files.luc`
 reaches `strings.split`/`join` through the same public surface any
@@ -872,7 +872,7 @@ new default is **zero-edit**.  (The `append_text` reserved-name wart
 is item 6's and is **not** closed by this memo: `append` is reserved
 by the method table, and visibility does not unreserve names.)
 
-### mathx (userland, `programs/`) — 5 declarations: 1 marked `private`
+### mathx (userland, `examples/`) — 5 declarations: 1 marked `private`
 
 `mean`, `extremes`, `median`, `deviation` unmarked (stats.luc calls
 them); **`sorted` marked `private`** — it is called only by `median`,
@@ -893,7 +893,7 @@ The lexer accepts `_` as a word start today
 array-shape wildcard — recognised *contextually* by the type parser
 (`03_parse/grammar.zig:700`: an identifier token whose text is `_`).
 Nothing else in the language wants a leading underscore, and the
-corpus proves it: **zero** identifiers beginning `_` in `programs/`,
+corpus proves it: **zero** identifiers beginning `_` in `examples/`,
 `bench/`, `std/`, the site's samples, and the spec fixtures — checked
 with `grep -roE '\b_[a-zA-Z][a-zA-Z0-9_]*'` over each.  The rule
 lands on a green field.
@@ -1037,7 +1037,7 @@ What **does** move above stage 4, named so the claim is checkable:
   onto their members' markers (§5), and owns the parse refusals in
   §8's table.  Regions are the one genuinely new piece of parser
   surface in this memo.
-- **`programs/editor.luc`'s own highlighter** keeps a *manual*
+- **`examples/editor/editor.luc`'s own highlighter** keeps a *manual*
   keyword list (`Words.is_keyword`, `editor.luc:159`) — two more `or
   word == …` clauses, a corpus edit the shell's compile test gates.
 - **One severity, unchanged**: an unused private declaration is
@@ -1062,10 +1062,10 @@ is public and the corpus's meaning is the default's.
 |---|---|---:|
 | `src/luce/std/strings.luc` | `private` on `is_space_byte`, `fold_case` | 2 |
 | `src/luce/std/math.luc` | `private` on `ln2`, `ln10`, and on `Rng.state`; plus the new factory `func rng(seed: long) -> Rng` (~4 lines, unmarked); the module's own head comments stop teaching `Rng(state = 42)` | 3 + 1 decl |
-| `programs/mathx.luc` | `private` on `sorted` | 1 |
-| `src/luce/std/files.luc`, every `programs/` and `bench/` file besides mathx and dice | nothing | 0 |
+| `examples/stats/mathx.luc` | `private` on `sorted` | 1 |
+| `src/luce/std/files.luc`, every `examples/` and `bench/` file besides mathx and dice | nothing | 0 |
 | site samples (`geometry.luc`, `shapes.luc`) and spec fixtures (`modules_spec`, `compile/test.zig`, `errors_spec`) | nothing — they compile unchanged under the default | 0 |
-| the `Rng` idiom, compiled sites | `math.Rng(state = …)` → `math.rng(…)`: `programs/dice.luc:25`; site fences `std/math.md:162`, `:174`, `tour/modules.md:66`; `std_spec.zig:245`, `:246`, `:249`, `:251`, `:258`, `:268` | 10 |
+| the `Rng` idiom, compiled sites | `math.Rng(state = …)` → `math.rng(…)`: `examples/dice/dice.luc:25`; site fences `std/math.md:162`, `:174`, `tour/modules.md:66`; `std_spec.zig:245`, `:246`, `:249`, `:251`, `:258`, `:268` | 10 |
 | prose | `www/luce/content/std/math.md` (the five-constants line 13 becomes three; the `Rng(state:)` table row and prose at 149/154 teach `math.rng`), `docs/STD.md:95`, `docs/RETURNS.md:976`'s table mention, `docs/MISSING.md` (item 10 closed; the Tier 5 "reachable anyway" sentence resolved), `docs/LANGUAGE.md` §Modules gains the rule, `www/luce/content/tour/modules.md` + `ref/modules.md` ("an import reaches the imported file's top level — all of it, unless a declaration is marked `private`"), the status page | ~8 files |
 
 **Six `private` markers, one four-line factory, ten call-site

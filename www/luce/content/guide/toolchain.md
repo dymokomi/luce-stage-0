@@ -49,7 +49,7 @@ the wrong one by name rather than crashing. Linking uses `cc`;
 `libluce_rt.a`.
 
 ```sh
-build/luce build programs/hello.luc --emit=exe -o hello
+build/luce build examples/hello/hello.luc --emit=exe -o hello
 ./hello you        # needs neither loom nor a runtime beside it
 ```
 
@@ -257,7 +257,7 @@ a mismatch fails the build.
 
 Some samples do not carry their own source at all: the
 [bundled programs](/examples/programs/) are included from
-`programs/*.luc` in the repository, so if one of them changes, the
+`examples/*/*.luc` in the repository, so if one of them changes, the
 page changes with it or the build stops.
 
 Finally every generated page is walked for links, and every `href`

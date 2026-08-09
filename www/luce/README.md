@@ -31,7 +31,7 @@ once and stopped testing.
 - Attributes: `file=NAME.luc` names the file written, `args=…` are the
   program's arguments, and `include=PATH` shows a file from the
   repository instead of a fence body — so the pages that document
-  `programs/*.luc` change when those programs do, or the build stops.
+  `examples/*/*.luc` change when those programs do, or the build stops.
 - Every generated page is then walked for links, and every `href` must
   resolve to a file in the output tree **with the anchor it names**.
 

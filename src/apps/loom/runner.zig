@@ -664,7 +664,7 @@ fn scratchDirectory(scratch: *testing.TmpDir, storage: *[std.fs.max_path_bytes]u
 
 test "an artifact is named beside the source it came from" {
     const gpa = testing.allocator;
-    try testing.expectEqualStrings("programs/editor", stemOf("programs/editor.luc").?);
+    try testing.expectEqualStrings("examples/editor/editor", stemOf("examples/editor/editor.luc").?);
     // Nothing to sit beside: the embedded editor, or a stream.
     try testing.expectEqual(@as(?[]const u8, null), stemOf("editor"));
 
@@ -673,11 +673,11 @@ test "an artifact is named beside the source it came from" {
     var path_storage: [std.fs.max_path_bytes]u8 = undefined;
     const temporary = try scratchDirectory(&scratch, &path_storage);
 
-    var beside = try Places.of(gpa, testing.io, temporary, "programs/editor.luc", 0x1234);
+    var beside = try Places.of(gpa, testing.io, temporary, "examples/editor/editor.luc", 0x1234);
     defer beside.deinit(gpa);
-    try testing.expectEqualStrings("programs/editor.lc", beside.beside.?);
+    try testing.expectEqualStrings("examples/editor/editor.lc", beside.beside.?);
     try testing.expectEqual(@as(usize, 2), beside.paths().len);
-    try testing.expectEqualStrings("programs/editor.lc", beside.paths()[0]);
+    try testing.expectEqualStrings("examples/editor/editor.lc", beside.paths()[0]);
 
     var anonymous = try Places.of(gpa, testing.io, temporary, "editor", 0x1234);
     defer anonymous.deinit(gpa);

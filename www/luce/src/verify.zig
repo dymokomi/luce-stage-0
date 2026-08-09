@@ -194,7 +194,7 @@ fn renderFence(
 
     // `include=` shows a file that lives in the repository rather than
     // in the page.  The site then cannot drift from the corpus: change
-    // `programs/sort.luc` and this page changes with it, or the build
+    // `examples/sort/sort.luc` and this page changes with it, or the build
     // stops.
     var source: []const u8 = primary.code;
     var owned: ?[]u8 = null;

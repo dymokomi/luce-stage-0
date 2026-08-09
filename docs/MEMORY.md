@@ -233,7 +233,7 @@ pure optimization later), Lobster/Perceus (compile-time RC elision if
 The candidates above were weighed for **objects**, and scope ownership
 won for objects and still holds.  Values — Strings and struct field
 runs — were left on a run-lifetime arena, and that has now been
-measured against a real program: `programs/editor.luc` peaks at
+measured against a real program: `examples/editor/editor.luc` peaks at
 **976 MB after 20,000 keystrokes into a 40 KB file**, because
 `Editing.splice` copies the whole buffer twice per keystroke and
 nothing is ever reclaimed.  Any program with a main loop has the same

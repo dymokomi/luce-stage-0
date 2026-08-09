@@ -139,7 +139,7 @@ that is the system allocator's working set for a hot allocate-and-free
 loop, not anything Luce is holding.
 
 The flagship program was the worked example and is now the proof.
-`programs/editor.luc` splices its lines as
+`examples/editor/editor.luc` splices its lines as
 `value[0:cursor] + extra + value[cursor:len(value)]`, and twenty
 thousand keystrokes into a 40 KB file used to peak at **1204 MB**. The
 same simulation now peaks at **3.3 MB**, and costs 24 µs a keystroke

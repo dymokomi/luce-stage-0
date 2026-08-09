@@ -212,7 +212,7 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         // Reads of the heap.  These *are* deterministic between two
         // mutations, and folding them is exactly the optimization LLVM
         // cannot do — but it needs a barrier analysis, and measurement
-        // over programs/ and bench/ found zero pairs to fold (see
+        // over examples/ and bench/ found zero pairs to fold (see
         // 07_optimize.zig's header).  Unwritten, not off by choice.
         .len,
         .dim_size,

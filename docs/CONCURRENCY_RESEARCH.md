@@ -110,10 +110,10 @@ table without the language knowing.**  `sleep_ms` and `key_read`
 already block there, and `key_read` already does something a poll would
 have to do — it presents the pending frame before it blocks.
 
-**And one program.**  `programs/editor.luc` is already an event loop:
+**And one program.**  `examples/editor/editor.luc` is already an event loop:
 
 ```text
-while not state.quit:                       # programs/editor.luc:459,
+while not state.quit:                       # examples/editor/editor.luc:459,
     let visible = max(term_rows() - 1, 1)   # comments elided
     state.adjust(visible)
     state.frame()                           # draw

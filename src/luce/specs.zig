@@ -70,7 +70,7 @@ pub const optimizer = @import("specs/optimize_spec.zig");
 /// A serialized module read back from bytes is the same program.
 pub const module_format = @import("specs/format_spec.zig");
 /// The flagship program, driven by a scripted keyboard: the only
-/// thing that says what `programs/editor.luc` *does*.
+/// thing that says what `examples/editor/editor.luc` *does*.
 pub const editor = @import("specs/editor_spec.zig");
 /// The largest program in the tree, driven by a scripted player: five
 /// files importing each other, played through end to end.

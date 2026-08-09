@@ -46,7 +46,7 @@ name claimed by two classes; every *symbol* token kind must have a row in the
 generator's spelling table, and every row's text must lex back to the kind it
 claims; and no spelling may be written before a longer one it opens with, which
 is what makes `<<=` a compound assignment rather than a shift and a stray `=`.
-A last one reads `programs/editor.luc`, the largest Luce program there is, and
+A last one reads `examples/editor/editor.luc`, the largest Luce program there is, and
 checks that every language word it actually uses has a class.
 
 ## What is coloured

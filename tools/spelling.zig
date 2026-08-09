@@ -73,7 +73,7 @@ const Scope = enum {
 const Tree = struct { path: []const u8, suffix: []const u8, scope: Scope };
 
 const trees = [_]Tree{
-    .{ .path = "programs", .suffix = ".luc", .scope = .whole_file },
+    .{ .path = "examples", .suffix = ".luc", .scope = .whole_file },
     .{ .path = "bench", .suffix = ".luc", .scope = .whole_file },
     .{ .path = "src/luce/std", .suffix = ".luc", .scope = .whole_file },
     .{ .path = "www/luce/content", .suffix = ".md", .scope = .fenced_luce },

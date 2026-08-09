@@ -114,7 +114,7 @@
 //! *CSE of container reads* — `len` of a list nothing has touched,
 //! `index_get` with the same index twice.  This one would be genuinely
 //! ours, and it still does not pay: every candidate needs a mutation
-//! barrier, and a scan of `programs/` and `bench/` finds *zero* pairs
+//! barrier, and a scan of `examples/` and `bench/` finds *zero* pairs
 //! to fold.  MIR keeps a value in a local across a block boundary, so
 //! the two reads of one container in a loop are in different blocks,
 //! and inside a block a container is read once.  The opportunity is a

@@ -14,11 +14,11 @@ with a payload-carrying member in view.
 
 The corpus has been paying for this hole longer than any other:
 
-- `programs/editor.luc:361-405` — key handling as fifteen string
+- `examples/editor/editor.luc:361-405` — key handling as fifteen string
   comparisons in an `elif` chain with no final `else`.  A misspelled
   `"page_dwon"` compiles and silently does nothing; exhaustiveness is
   exactly the property the chain cannot state.
-- `programs/editor.luc:189` — `# 1 keyword, 2 type name, 3 builtin,
+- `examples/editor/editor.luc:189` — `# 1 keyword, 2 type name, 3 builtin,
   0 plain.`  An enum written as a `long` with a comment.
 - `src/luce/std/zip.luc` — written *this week*, under the current
   language, by an author trying to use it well: `method == 8` and

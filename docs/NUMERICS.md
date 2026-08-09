@@ -322,7 +322,7 @@ return [folded + 1]
 # under floor-mod
 return [from % 2147483646 + 1]
 
-# programs/bf.luc:42 — a byte decrement, today
+# examples/bf/bf.luc:42 — a byte decrement, today
 tape[pointer] = (tape[pointer] + 255) % 256
 # under floor-mod, the spelling the author meant
 tape[pointer] = (tape[pointer] - 1) % 256
@@ -805,7 +805,7 @@ the old rule*, and they should be rewritten rather than repaired:
   deleted, and replaced by tests that the same programs now *compile*.
 
 **One program needs a real decision, not a migration.**
-`programs/calc.luc:65,67` is a user-facing calculator whose
+`examples/calc/calc.luc:65,67` is a user-facing calculator whose
 `Step.value` is an `Int`, so `7/2` prints `3` today. Under the new
 rules it can become a Float calculator — which is what a calculator
 should be, and what every pocket calculator is — or keep `Int` and
@@ -1039,7 +1039,7 @@ integer `/` at all rather than keeping a dead arm — `effects.zig` now
 reaches `/` through its Float arm and calls it `pure`, and the
 `divide_by_zero` guard lives on `//` and `%`.  `1 / 0` is `inf`,
 `0 / 0` is NaN, and `minInt / -1` is `-9.223372036854776e18`.
-`programs/calc.luc` is a Float calculator: `7/2` is `3.5`, `1/0` is
+`examples/calc/calc.luc` is a Float calculator: `7/2` is `3.5`, `1/0` is
 `inf`, and its scanner did not have to learn about decimal points to
 get there, because promotion does it.
 
@@ -1152,7 +1152,7 @@ same bytes a run would produce, and the specs compare them.
 `f"{mean:.2f}"` lowers to `strings.format_float(mean, 2)`, exactly as
 §8 recommends: one production in the f-string scanner, no runtime, and
 the std function that already existed and already rounds half away
-from zero.  `programs/dice.luc:36-37` — the shape §8 names as what
+from zero.  `examples/dice/dice.luc:36-37` — the shape §8 names as what
 this replaces — is one line now, and reads
 `f"total {total}, mean {total / count:.2f}"`, which is D1, D3 and D6
 in the same expression.

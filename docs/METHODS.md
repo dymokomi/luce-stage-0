@@ -50,7 +50,7 @@ correction changes the shape of the feature, so it goes first.
 | namespaced `Struct.func(…)` call sites | **88**, not 87 |
 
 `docs/MISSING.md:220-226` already had this right — *"nine of twelve
-structs in `programs/` have **no fields at all** — namespaces
+structs in `examples/` have **no fields at all** — namespaces
 impersonating types"* — and `docs/audit/DOCS.md:445` already recorded
 the count as 88.
 
@@ -193,12 +193,12 @@ The migration surface, enumerated:
 
 | where | sites |
 |---|---|
-| `programs/hello.luc:6-10` | guard + `arg(0)` |
-| `programs/stats.luc:8-19` | the `range(0, arg_count())` loop |
-| `programs/dice.luc:17-23` | two positional optionals |
-| `programs/wordcount.luc:43-50` | `arg(0)` + optional `arg(1)` |
-| `programs/editor.luc:417-421` | exact-arity check |
-| `programs/calc.luc:116-120` | `arg_count() == 0` as a mode switch |
+| `examples/hello/hello.luc:6-10` | guard + `arg(0)` |
+| `examples/stats/stats.luc:8-19` | the `range(0, arg_count())` loop |
+| `examples/dice/dice.luc:17-23` | two positional optionals |
+| `examples/wordcount/wordcount.luc:43-50` | `arg(0)` + optional `arg(1)` |
+| `examples/editor/editor.luc:417-421` | exact-arity check |
+| `examples/calc/calc.luc:116-120` | `arg_count() == 0` as a mode switch |
 | `bench/*.luc`, `src/luce/std/*.luc` | **none** |
 | `docs/FAILURE.md:107`, `docs/LANGUAGE.md:169,196,460,490`, `docs/V2.md:93` | 6 |
 | `www/luce/content/` | `tour/host.md:13-33`, `tour/hello.md:46`, `examples/hello.md:14-38`, `examples/files.md:84`, `examples/optionals.md:49`, `tour/absence.md:91`, `index.md:8`, `ref/builtins.md:83-84`, `ref/failure.md:42` |
@@ -409,7 +409,7 @@ on the way out. In one line:
 
 That sentence is not a new mechanism. It is **transcribed from the
 corpus**, which writes it by hand at every mutation site it has
-(`programs/editor.luc:332-415`):
+(`examples/editor/editor.luc:332-415`):
 
 ```luce historical
     func vertical(state: State, target_line: Int) -> State:
@@ -571,7 +571,7 @@ because the receiver rule leans on it:
 
 ## The migration hazard, named
 
-`programs/editor.luc:380` reads:
+`examples/editor/editor.luc:380` reads:
 
 ```luce historical
                 next.cursor = Text.previous_boundary(state.content, next.cursor)

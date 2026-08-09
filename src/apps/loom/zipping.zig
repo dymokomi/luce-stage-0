@@ -3,7 +3,7 @@
 //! `std.zip` is proved as a library in `specs/zip_spec.zig` — the
 //! format, against archives other people wrote, on both engines.  This
 //! is the other half of that claim and it cannot be made from inside a
-//! process: the program is `programs/zipper.luc`, it is compiled by the
+//! process: the program is `examples/zipper/zipper.luc`, it is compiled by the
 //! installed `luce`, run by the installed `loom`, and the archives it
 //! reads and writes are real files in a real directory.  A library
 //! nobody can run is a claim rather than a capability, and the distance

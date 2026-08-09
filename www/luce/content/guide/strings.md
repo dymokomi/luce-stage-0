@@ -10,7 +10,7 @@ buys, and the one benchmark row where the bill is still visible.
 A string's bytes used to live in a run-lifetime arena that was never
 reclaimed. A program that built and discarded text grew without bound
 even when it retained nothing at all — and the flagship program did
-exactly that. `programs/editor.luc` splices a line as
+exactly that. `examples/editor/editor.luc` splices a line as
 
 ```
 value[0:cursor] + extra + value[cursor:len(value)]

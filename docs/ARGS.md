@@ -43,12 +43,12 @@ It is `docs/MISSING.md`'s Tier 3 **item 7** (`MISSING.md:302-304`),
 quoted in full because it is the whole warrant:
 
 > **No default or named arguments.** `term_style(fg, bg, bold)` is
-> called 15 times across `programs/`; 14 end in the same noise word
+> called 15 times across `examples/`; 14 end in the same noise word
 > `false`.
 
 That count is exact — `docs/audit/DOCS.md`'s finding **F13** already
 caught and corrected an earlier over-claim of *"16 times / 13"*,
-settling on 15 and 14 across `programs/` and 12 and 11 inside
+settling on 15 and 14 across `examples/` and 12 and 11 inside
 `editor.luc` alone — and it is re-derived below. What it does *not* say, and what changes the shape
 of the feature, is that `term_style` is a **builtin**, not a function,
 and lives in a table with no parameter names in it at all
@@ -128,7 +128,7 @@ One read, twelve answers. Each is argued at the section named.
 ## What the corpus actually says
 
 The shipped Luce corpus is **1,822 lines, 128 `func` declarations and
-618 calls** across `programs/`, `src/luce/std/` and `bench/`. Its
+618 calls** across `examples/`, `src/luce/std/` and `bench/`. Its
 arity ≥ 3 population is **46 calls** — 36 at arity 3, 10 at arity 4.
 Everything below is measured against that, and the embedded test
 corpus (1,342 more declarations inside `.zig` test blocks) is reported
@@ -136,21 +136,21 @@ separately where it disagrees, because a test fixture is not idiom.
 
 ### The headline number is right, and points at the wrong machinery
 
-`term_style` is written 16 times in `programs/`. One is a string
+`term_style` is written 16 times in `examples/`. One is a string
 comparison inside the editor's own highlighter (`editor.luc:183`), so
 **15 are calls** — `MISSING.md:302` is exact. Fourteen end in `false`;
 the fifteenth (`editor.luc:413`, the keyword colour) ends in `true`.
 
 | what repeats | count |
 |---|---|
-| `term_style` calls in `programs/` | **15** |
+| `term_style` calls in `examples/` | **15** |
 | …ending in the literal `false` | **14** |
 | …passing `-1` for the background | **13** |
 | …whose last two arguments are `-1, false` | **12** |
 | `term_style` as a share of all arity-3 calls in shipped Luce | **15 of 36 — 42%** |
 
 ```luce historical
-# programs/editor.luc:352, 381, 397, 404, 415, 417, 419, 425, 431, 433
+# examples/editor/editor.luc:352, 381, 397, 404, 415, 417, 419, 425, 431, 433
 term_style(theme.gutter, -1, false)
 term_style(theme.comment, -1, false)
 term_style(theme.text, -1, false)
@@ -165,7 +165,7 @@ number in this survey:
 
 > **Every boolean literal argument in the entire shipped Luce corpus
 > is `term_style`'s third argument.** Fifteen of fifteen. No other
-> call in `programs/`, `src/luce/std/` or `bench/` passes a bare
+> call in `examples/`, `src/luce/std/` or `bench/` passes a bare
 > `true` or `false` to anything.
 
 The corollary is just as sharp. Userland Luce declares exactly **one**
@@ -264,7 +264,7 @@ come free.
 ### The densest site is not a call at all
 
 ```luce historical
-# programs/editor.luc:449-458
+# examples/editor/editor.luc:449-458
 var state = State(
     path = path,
     content = opening,
@@ -324,9 +324,9 @@ alternative. What is evidence is the two lines eleven apart in the
 same file by the same author:
 
 ```luce historical
-# programs/editor.luc:328
+# examples/editor/editor.luc:328
 term_style(theme.status_fg, theme.status_bg, false)
-# programs/editor.luc:454
+# examples/editor/editor.luc:454
     dirty = false,
 ```
 
@@ -1418,7 +1418,7 @@ The tripwire, written down so the claim is falsifiable rather than
 reassuring:
 
 > **Shipped Luce's arity histogram is the measurement.** Today, over
-> the 128 declarations in `programs/`, `src/luce/std/` and `bench/`:
+> the 128 declarations in `examples/`, `src/luce/std/` and `bench/`:
 > **14** at arity 0, **54** at 1, **47** at 2, **8** at 3, **4** at 4,
 > **1** at 5, and nothing above. **If the count at arity ≥ 5 reaches
 > double figures, or any single declaration passes seven, this memo
@@ -1500,11 +1500,11 @@ in full.
 | site | change | what it deletes |
 |---|---|---|
 | `src/luce/std/strings.luc:16-46` | `find_from` becomes `find(s, needle, start: long = 0)`; `find` deleted, `contains` retargeted | one declaration, five explicit `0`s, and the `-1`-for-a-bad-`start` disagreement `MISSING.md:172-178` files |
-| `programs/editor.luc:212-220, 449-458` | five `State` fields gain defaults | ten lines at the construction site, and an invariant that lived there |
-| `programs/editor.luc:328-433` | twelve `term_style` calls lose their tail | eleven `-1`s and eleven `false`s |
-| `programs/life.luc:68-74` | three `term_style` calls | two `-1`s and three `false`s |
+| `examples/editor/editor.luc:212-220, 449-458` | five `State` fields gain defaults | ten lines at the construction site, and an invariant that lived there |
+| `examples/editor/editor.luc:328-433` | twelve `term_style` calls lose their tail | eleven `-1`s and eleven `false`s |
+| `examples/life/life.luc:68-74` | three `term_style` calls | two `-1`s and three `false`s |
 | `src/luce/std/strings.luc:85, 88` | `fold_case`'s two call sites gain names | nothing; it buys the corpus's worst three-magic-number call |
-| `programs/editor.luc:314-354` | `State.status` gains names at its one call site | nothing; it buys four adjacent `long`s |
+| `examples/editor/editor.luc:314-354` | `State.status` gains names at its one call site | nothing; it buys four adjacent `long`s |
 
 **And four rows deliberately not in the table** — `lower`/`upper`,
 `pad_left`/`pad_right`, `log2`/`log10`, `write`/`append_text` — each
@@ -1571,7 +1571,7 @@ and nothing else, so it should compile unchanged — and
 `test "the committed grammar is what the generator emits"` is what
 catches it if that turns out to be wrong. Let it.
 
-**`www/luce/src/highlight.zig` needs nothing** and **`programs/editor.luc`'s
+**`www/luce/src/highlight.zig` needs nothing** and **`examples/editor/editor.luc`'s
 own highlighter needs nothing**: `=`, `(`, `)` and `,` already fall to
 the punctuation arm, and this feature introduces **no new word**. The
 guard that could fire —

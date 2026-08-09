@@ -1365,7 +1365,7 @@ fn inList(list: []const []const u8, word: []const u8) bool {
 const corpus = @embedFile("editor.luc");
 
 test "every language word the editor uses is coloured" {
-    // A corpus test rather than another table test: `programs/editor.luc`
+    // A corpus test rather than another table test: `examples/editor/editor.luc`
     // is the largest Luce program there is, and what it says is what a
     // person actually looks at in an editor.  Any word in it that the
     // language reserves, or that names a method, must have a class.

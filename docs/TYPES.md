@@ -84,7 +84,7 @@ that cannot survive it, and they are genuinely fatal:
   magnitude before the number does.
 - **`clock_ms`** is a monotonic millisecond reading
   (`src/apps/host.zig:432`). At `i32` it saturates after **24.85 days
-  of uptime**. `programs/life.luc:95,103` reads it.
+  of uptime**. `examples/life/life.luc:95,103` reads it.
 
 And a fourth that is quieter and worse: `src/luce/std/math.luc:17-22`
 holds five constants carrying **20–21 significant digits**, deliberately
@@ -283,8 +283,8 @@ an audit; the rest follow from the shape of the ladder.
 >   (`240`). Under a signed `Byte` those become `−16`, `−50`, `−69`,
 >   which nobody would write and nobody could check.
 > - **Every UTF-8 test in the corpus is an ordered comparison against
->   128, 192 or 194** — `programs/editor.luc:53-54,151,157`,
->   `programs/wordcount.luc:14`. Signed bytes invert the ordering at
+>   128, 192 or 194** — `examples/editor/editor.luc:53-54,151,157`,
+>   `examples/wordcount/wordcount.luc:14`. Signed bytes invert the ordering at
 >   precisely the point that matters: `byte >= 128 and byte < 192`
 >   becomes `byte < 0 and byte < -64`.
 > - **Luce has no bitwise operators and no hex literals**, refused by
@@ -879,7 +879,7 @@ rather than discovered:
   taking *"a byte"* (`docs/STD.md:116`, `www/luce/content/guide/strings.md:94`);
   a real `Byte` type makes that gap more visible, not less.
 - **`chr` and `ord` stay codepoint functions** over 0..0x10FFFF, so
-  `chr(255)` is two bytes and not one. `programs/bf.luc:44`'s
+  `chr(255)` is two bytes and not one. `examples/bf/bf.luc:44`'s
   `chr(tape[pointer])` for a cell ≥ 128 is a latent bug that a
   `Byte`-typed tape would surface rather than fix.
 
@@ -918,7 +918,7 @@ applied while both names still mean what they mean today.
 
 | where | `Int`/`Float` lines | what happens |
 |---|---:|---|
-| `.luc` corpus — 19 files (10 `programs/`, 6 `bench/`, 3 `std/`) | 94 / 63 | rename; **no program changes meaning** |
+| `.luc` corpus — 19 files (10 `examples/`, 6 `bench/`, 3 `std/`) | 94 / 63 | rename; **no program changes meaning** |
 | `www/luce/content/**` — 42 files | 269 | rename; the 194 fenced samples re-verify byte-for-byte |
 | `docs/**` | 363 (132 in `NUMERICS.md`) | rename; every claim stays true |
 | `src/**/*.zig` — Luce inside specs | 775 `func main` programs | rename; the oracle re-runs both engines |
@@ -939,11 +939,11 @@ nothing in *Order* depends on any of it happening.
 | `bench/matmul.luc` | checksum 225,000,000 fits | the best candidate for a new 32-bit row |
 | `bench/loops.luc` | total 462,794,501 fits | yes |
 | `bench/math.luc`, `bench/strings.luc` | no range dependency | yes |
-| `programs/dice.luc` | via `math.random` | — |
-| `programs/life.luc` | `clock_ms` at `:95,103` | grid indices could be `Int` |
-| `programs/bf.luc` | no — tape is `% 256` | **`Array(Byte, cells)`** is what `:29` wants |
-| `programs/editor.luc` (61 `Int`) | no | rows/columns/offsets are `Int`; theme fields are 0..255 **with `-1` as a sentinel** (`:13-43,229`), so they are *not* `Byte`s |
-| `programs/wordcount.luc`, `sort.luc`, `calc.luc`, `stats.luc` | no | yes |
+| `examples/dice/dice.luc` | via `math.random` | — |
+| `examples/life/life.luc` | `clock_ms` at `:95,103` | grid indices could be `Int` |
+| `examples/bf/bf.luc` | no — tape is `% 256` | **`Array(Byte, cells)`** is what `:29` wants |
+| `examples/editor/editor.luc` (61 `Int`) | no | rows/columns/offsets are `Int`; theme fields are 0..255 **with `-1` as a sentinel** (`:13-43,229`), so they are *not* `Byte`s |
+| `examples/wordcount/wordcount.luc`, `sort.luc`, `calc.luc`, `stats.luc` | no | yes |
 
 **The site.** 194 fenced Luce blocks, all compiled and run by the
 freshly built toolchain, with `www/luce/src/verify.zig:229-249` requiring an
@@ -1100,7 +1100,7 @@ settled `fit` than a moving one.
    softfloat routines on a baseline x86-64 build (§7) before calling
    this done.
 6. **Opt down, deliberately.** One reviewable commit per program:
-   `programs/bf.luc`'s tape becomes `Array(Byte, cells)`,
+   `examples/bf/bf.luc`'s tape becomes `Array(Byte, cells)`,
    `editor.luc`'s offsets become `Int`, and `bench/` gains **new**
    32-bit rows against new `float`/`int` C twins rather than converting
    the ones that exist (D7). Nothing here is required for the language
@@ -1300,12 +1300,12 @@ carries a documented precision claim.
 | `std/math.luc` | `term`, `total` (`:59-60`) | `double` | `exp`'s series backs the module's 1e-14 claim |
 | `std/math.luc` | `result` (`:127`) | `long` | `ipow`'s specs assert 2^62 |
 | `std/math.luc` | `total` ×3 (`:167`, `:215`, `:229`) | `double` | reductions over `array(double, _)` |
-| `programs/mathx.luc` | `total`, `spread` | `double` | sums of `double` values |
-| `programs/dice.luc` | `seed`, `count`, `total` | `long` | `parse_int` and `math.random` answer `long` |
-| `programs/bf.luc` | `pc` | `long` | indexes a `long`-measured program |
-| `programs/editor.luc` | `at`, `used` | `long` | byte offsets, from `len` |
-| `programs/wordcount.luc` | `best_count`, `top` | `long` | counts from `len` |
-| `programs/life.luc` | — | — | `frame_ms` widens at the operator; nothing to annotate |
+| `examples/stats/mathx.luc` | `total`, `spread` | `double` | sums of `double` values |
+| `examples/dice/dice.luc` | `seed`, `count`, `total` | `long` | `parse_int` and `math.random` answer `long` |
+| `examples/bf/bf.luc` | `pc` | `long` | indexes a `long`-measured program |
+| `examples/editor/editor.luc` | `at`, `used` | `long` | byte offsets, from `len` |
+| `examples/wordcount/wordcount.luc` | `best_count`, `top` | `long` | counts from `len` |
+| `examples/life/life.luc` | — | — | `frame_ms` widens at the operator; nothing to annotate |
 | `bench/loops.luc` | `total` | `long` | sums to 462,794,501 and must print it |
 | `bench/strings.luc` | `total_len` | `long` | from `len` |
 | `bench/arrays.luc` | `sum` | `double` | the 1/8-exactness argument needs binary64 |
@@ -1561,7 +1561,7 @@ trips *at its own width*" caught in the act, and it is pinned.
 
 **The opt-downs, and the one the memo asked for that was wrong.**
 
-- **`programs/bf.luc`'s tape is `array(byte, cells)`**, which is what
+- **`examples/bf/bf.luc`'s tape is `array(byte, cells)`**, which is what
   §11's table said it wanted, and the program prints the same
   `Hello World!` and passes the same assertion it always did.  The
   `% 256` stays and now reads as what it always was — the *wrap*

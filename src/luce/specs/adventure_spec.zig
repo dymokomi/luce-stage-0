@@ -1,6 +1,6 @@
 //! The adventure engine, played through on both engines.
 //!
-//! `programs/adventure.luc` and the four modules it imports are the
+//! `examples/adventure/adventure.luc` and the four modules it imports are the
 //! largest thing written in Luce — a project rather than a file, and
 //! the only program in the tree where a struct in one module is built
 //! by a factory in a second, handed to a third, and saved by a fourth.

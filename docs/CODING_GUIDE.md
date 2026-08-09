@@ -119,7 +119,7 @@ src/apps/*.zig                shared by both binaries, because a program's behav
                               must not depend on who started it: host (the real host),
                               key, machine, native, report, sanitize, start, streams,
                               files — plus harness, the install tree both product suites drive
-programs/                     userland, written in Luce; editor.luc is embedded in loom
+examples/                     userland, written in Luce; editor/editor.luc is embedded in loom
 docs/                         V2.md LANGUAGE.md OWNERSHIP.md CODEGEN.md; v1/ is history
 ```
 

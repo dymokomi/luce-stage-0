@@ -1,6 +1,6 @@
 # The bundled programs
 
-`programs/` in the repository is Luce's userland. These pages include
+`examples/` in the repository is Luce's userland. These pages include
 the real files directly and compile and run each executable example
 from that source when the site is built — so if one changes, this page
 changes with it, or the build stops.
@@ -9,7 +9,7 @@ changes with it, or the build stops.
 
 Sorting, searching and joining a real `list(long)`.
 
-```luce run include=programs/sort.luc
+```luce run include=examples/sort/sort.luc
 ```
 
 ```output
@@ -26,10 +26,10 @@ It is also the tree's worked example of [visibility](/tour/visibility/):
 for nothing else. `stats.luc` reaches `mean`, `extremes`, `median` and
 `deviation`, and reaching `sorted` would be `luce.sema.private`.
 
-```luce module include=programs/mathx.luc
+```luce module include=examples/stats/mathx.luc
 ```
 
-```luce run include=programs/stats.luc args=3 1 4 1 5 9 2.6
+```luce run include=examples/stats/stats.luc args=3 1 4 1 5 9 2.6
 ```
 
 ```output
@@ -47,7 +47,7 @@ Structs as parser state, recursion, checked integer arithmetic, and
 the worked example for errors: every way this parser can be defeated
 is a way the *user* defeated it, so it raises rather than traps.
 
-```luce run include=programs/calc.luc args="2 + 3 * (10 - 4)"
+```luce run include=examples/calc/calc.luc args="2 + 3 * (10 - 4)"
 ```
 
 ```output
@@ -59,7 +59,7 @@ is a way the *user* defeated it, so it raises rather than traps.
 The byte tape is a real `array`, output accumulates in a `builder`,
 and `chr()` maps cell values to text.
 
-```luce run include=programs/bf.luc
+```luce run include=examples/bf/bf.luc
 ```
 
 ```output
@@ -72,7 +72,7 @@ Deterministic randomness from a seed with no globals, a histogram, and
 a file written at the end. `main() -> !` hands what the disk said to
 loom.
 
-```luce run include=programs/dice.luc args=7 12
+```luce run include=examples/dice/dice.luc args=7 12
 ```
 
 ```output
@@ -97,7 +97,7 @@ jumps over the lazy dog
 the fox and the dog and the fox
 ```
 
-```luce run include=programs/wordcount.luc args=input.txt 4
+```luce run include=examples/wordcount/wordcount.luc args=input.txt 4
 ```
 
 ```output
@@ -123,7 +123,7 @@ directory and writes what comes out is the bug called zip-slip.
 `zip` half goes through it too: zipper will not author an archive it
 would refuse to extract.
 
-```luce module file=zipper.luc include=programs/zipper.luc
+```luce module file=zipper.luc include=examples/zipper/zipper.luc
 ```
 
 Two files to put in one:
@@ -205,17 +205,17 @@ how its specification in the repository drives a whole playthrough on
 both engines and compares every byte of it.
 
 ```sh
-build/loom run programs/adventure.lc          # a new game
-build/loom run programs/adventure.lc rescue   # resume rescue.sav
+build/loom run examples/adventure/adventure.lc          # a new game
+build/loom run examples/adventure/adventure.lc rescue   # resume rescue.sav
 ```
 
 ## The ones that need a terminal
 
 Two programs cannot be shown here, because they draw on a real screen.
 
-`programs/life.luc` is Conway's Life on the terminal grid.
+`examples/life/life.luc` is Conway's Life on the terminal grid.
 
-`programs/editor.luc` is the flagship: a full-screen editor with
+`examples/editor/editor.luc` is the flagship: a full-screen editor with
 movement, editing, scrolling, line numbers, a status bar and per-line
 Luce syntax highlighting — 589 lines, written entirely in Luce. Its
 source ships embedded in the `loom` binary, so `loom edit` always
@@ -226,7 +226,7 @@ engines.
 
 ```sh
 build/loom edit notes.txt          # Ctrl-S saves, Ctrl-Q quits
-build/loom run programs/life.lc
+build/loom run examples/life/life.lc
 ```
 
 The editor used to be the honest example of what Luce still lacked:

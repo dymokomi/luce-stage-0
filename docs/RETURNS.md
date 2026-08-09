@@ -102,7 +102,7 @@ types. **One exists to carry a return**, and it is the exhibit
 `docs/MISSING.md:227-229` filed:
 
 ```luce historical
-# programs/calc.luc:20-22
+# examples/calc/calc.luc:20-22
 struct Step:
     value: Int
     at: Int
@@ -988,7 +988,7 @@ That is the only edit this memo makes to the previous one.
 | `std/math.luc:229-251` | `seed` allocating a `List(Int)`; `random_step`, `random`, `random_int` all taking it | `struct Rng` with `func next(var self) -> Int` (§5) |
 | `dice.luc:25-30` | `math.seed(seed)` + `math.random_int(rng, 1, 7)` | `Rng(state = seed)` + `rng.in_range(1, 7)` — since spelled `math.rng(seed)`, once `state` took its `private` marker (docs/VISIBILITY.md §6) |
 | `wordcount.luc:34-41, 65` | `heaviest -> String`, count re-looked-up | `heaviest -> (String, Int)`; one hash lookup deleted |
-| `std/math.luc:159-174` | `vmin` and `vmax`, two traversals | a `minmax -> (Float?, Float?)` beside them, one traversal; `bench/stats.luc:34-35` and `programs/stats.luc:21-24` become its users, the second losing a whole sort |
+| `std/math.luc:159-174` | `vmin` and `vmax`, two traversals | a `minmax -> (Float?, Float?)` beside them, one traversal; `bench/stats.luc:34-35` and `examples/stats/stats.luc:21-24` become its users, the second losing a whole sort |
 | `editor.luc:212-299` | `Draw.emit -> Int`; six call sites set `at` from a bound they computed themselves | `Draw.emit -> (Int, Int)` — the columns used *and* where it stopped; the clip argument stops being load-bearing |
 
 Six sites, and only the first deletes a declaration.
@@ -1217,7 +1217,7 @@ cannot: **this feature introduces no new word.** That is worth saying
 out loud, because it is the strongest single piece of evidence that the
 surface is small — a language change that adds no token and no keyword.
 
-**`programs/editor.luc`'s own highlighter needs nothing** either.
+**`examples/editor/editor.luc`'s own highlighter needs nothing** either.
 `Words.classify` dispatches on keywords, capitalisation and builtins,
 and `(`, `)`, `,` already land in `Draw.line`'s final `else` arm as
 `theme.punct`. (`editor.luc` is separately a *consumer* of the feature —
@@ -1286,7 +1286,7 @@ without both. Each step leaves the tree green.
 5. **The corpus.** §6's six sites, each in its own commit with its own
    test: `calc.luc`'s `Step` deleted, `std/math.luc`'s `Rng`,
    `dice.luc`, `wordcount.luc`'s `heaviest`, `math.minmax` with
-   `bench/stats.luc` and `programs/stats.luc` as its users,
+   `bench/stats.luc` and `examples/stats/stats.luc` as its users,
    `editor.luc`'s `Draw.emit`. The `editor.luc` one goes last and
    alone, because its six call sites are the change most able to go
    quietly wrong — and it is also the row §6 says to drop first if the

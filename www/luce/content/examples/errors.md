@@ -122,7 +122,7 @@ loom: error: 500 is too large [user_error]
 
 ## The worked example
 
-`programs/calc.luc` in the repository is a recursive-descent
+`examples/calc/calc.luc` in the repository is a recursive-descent
 calculator — a `double` one, because `/` is real division and a pocket
 calculator that answers `3` to `7 / 2` is broken. Every way it can be
 defeated is a way the *user* defeated it, so the parser says
@@ -130,7 +130,7 @@ defeated is a way the *user* defeated it, so the parser says
 through four frames of recursion without a single `if` written for
 it.
 
-```luce run include=programs/calc.luc args="2 + 3 * (10 - 4)"
+```luce run include=examples/calc/calc.luc args="2 + 3 * (10 - 4)"
 ```
 
 ```output
@@ -140,7 +140,7 @@ it.
 Give it something it cannot parse and the same program says so, at the
 position it gave up:
 
-```luce raise include=programs/calc.luc args="2 + )"
+```luce raise include=examples/calc/calc.luc args="2 + )"
 ```
 
 ```output

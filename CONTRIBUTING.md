@@ -13,7 +13,7 @@ only *runs* Luce programs needs none.
 
 ```sh
 ./build.sh   # installs build/luce, build/loom, build/lib/libluce_rt.a,
-             # build/programs/*.lc
+             # build/examples/<name>/<name>.lc
 ```
 
 `build.zig` finds LLVM by asking `llvm-config`, on `PATH` or in the

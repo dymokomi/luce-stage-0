@@ -368,7 +368,7 @@ test "the assignment form takes a binding too, and the place keeps its old value
 
 test "a call site that raised after it returned gives nothing back twice" {
     // The shape a thousand-line program found and no small one had
-    // (`programs/adventure.luc`, `src/luce/specs/adventure_spec.zig`):
+    // (`examples/adventure/adventure.luc`, `src/luce/specs/adventure_spec.zig`):
     // **one** call site, run more than once, answering a value that
     // owns storage, and raising on a later turn than the one it
     // returned on.

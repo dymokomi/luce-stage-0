@@ -34,7 +34,7 @@ so structs and containers stop having different mutation stories.
 | **D4** | **`var self` is retired**, and with it the copy-in/copy-out write-back and the "receiver is result zero" convention.  A member function that writes `self` simply writes the receiver in place — one mutation story, no hidden travel in returns. |
 | **D5** | **`var` parameters do not enter the language.**  A value passed to a function is never mutated by it, with no exception to learn.  (The near-miss was value-only copy-in/copy-out; refused for the clarity cost the ratification names.) |
 | **D6** | The value/object line is untouched: an object argument still borrows, and borrowed contents still mutate through the object's own methods — that is what a reference is.  What this memo removes is any way for a *value* to change under a caller's feet. |
-| **D7** | **Migration is mechanical and total**: every method in `std/`, `programs/` and every doc/site sample drops its `self` parameter; namespace functions gain `static`; `var self` methods (the rng, zip's writer) become plain writing methods.  The suite, the site build and the doc guards verify every one.  The old spellings are refused with sentences that teach the new (`self is implied; remove the parameter`, `a namespace function says static`). |
+| **D7** | **Migration is mechanical and total**: every method in `std/`, `examples/` and every doc/site sample drops its `self` parameter; namespace functions gain `static`; `var self` methods (the rng, zip's writer) become plain writing methods.  The suite, the site build and the doc guards verify every one.  The old spellings are refused with sentences that teach the new (`self is implied; remove the parameter`, `a namespace function says static`). |
 
 ## Where it lands
 

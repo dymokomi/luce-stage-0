@@ -37,7 +37,7 @@ to use it well, all paying the same rent.
   compressed block** — and again in `deflate` (`:778-781`).  These are
   literally printed tables from a 1996 RFC.  Nothing about them is a
   computation.
-- **`programs/editor.luc:178-230`** — the workaround that shipped
+- **`examples/editor/editor.luc:178-230`** — the workaround that shipped
   *this week*, and the best one the language currently permits: two
   **space-fenced string constants** searched with `find`, because
   *"Luce has no sets and no constant containers (docs/MISSING.md
@@ -503,7 +503,7 @@ moves `abi.version`, so there is no contention with threads' worker
 slots.  Nothing here touches the self revision, which has no receivers
 in common with a constant.  The two files that pay for it first are
 `std/zip.luc` — six tables, deleted as computations and written as
-what they are — and `programs/editor.luc`, where a fenced scan becomes
+what they are — and `examples/editor/editor.luc`, where a fenced scan becomes
 `keywords.has(word)` and a doc comment about `at - 1` goes away.
 
 ## Ratified (owner, 2026-08-07/08, in conversation)
