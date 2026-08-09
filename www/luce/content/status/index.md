@@ -10,21 +10,32 @@ prediction was too optimistic, this page says so too.
 
 ## The short version
 
-**The language surface is done as designed.** Ten conceptual pipeline
-stages, eighteen executable specification packages, and a front end
-whose diagnostics name the fix rather than the parser's predicament.
-Optionals closed the absence half of the last semantic hole and errors
-closed the failure half; nothing that was designed is now unbuilt.
+**The shipped language core is locked.** Ten conceptual pipeline
+stages, a registered executable specification, and a front end whose
+diagnostics mostly name the fix rather than the parser's predicament.
+Optionals closed absence and errors closed failure. Typed channels are
+the approved next design-and-implementation run, not a feature silently
+counted as shipped or a surface already fully ratified.
+
+One ownership diagnostic remains deliberately below that standard:
+retaining calls, constructions and literals are refused correctly, but
+an early bare owner can be told to add `give` even when that edit would
+poison a later occurrence in the same operand batch. This is advice
+precision, not semantic acceptance.
 
 **The runtime is not done, but the wall is down.** The two items that
-blocked real programs are both closed: a `.lc` **is** machine code at
-C parity, whether `loom run` opens it or a shell runs an `--emit=exe`
-binary, and memory is genuinely given back — object identity first,
-then string bytes and struct field runs. A Luce program can run all
-day.
+blocked real programs are both closed: a `.lc` **is** machine code,
+with six of the nine current benchmarks at C parity, whether `loom run`
+opens it or a shell runs an `--emit=exe` binary, and memory is genuinely
+given back for ordinary acyclic owner graphs — object identity first,
+then string bytes and struct field runs. A known self-owning adoption
+cycle remains an explicit correctness gap rather than being rounded up
+as fixed.
 
-**What is left is a short list of library and host builtins, one open
-language question, and one benchmark row.**
+**What is left is a short list of library questions, two named runtime
+correctness repairs, the typed-channel design-and-implementation run, a
+drafted but unscheduled union design, and three measured performance
+gaps.**
 
 ## What works
 
@@ -100,8 +111,8 @@ These are decisions with reasons written down, not gaps.
   that needs genuinely shared ownership restructures, or uses indices
   into a container it owns.
 - **Static borrow checking.** Lifetimes and aliasing rules are the
-  opposite of what Luce is aiming at; two dynamic checks cover what
-  the static rules cannot see.
+  opposite of what Luce is aiming at; one source-reachable dynamic
+  lifetime check covers the alias that outlives its owner.
 - **`errdefer` and error return traces.** Both refused, with reasons —
   the one bit `errdefer` encodes is already a parameter of the
   unwinder, and a trace would charge the success path.
@@ -122,15 +133,26 @@ These are decisions with reasons written down, not gaps.
   environment, lifetime story or ownership rule for captured state.
   Behavior plus state remains a struct with a method.
 
-## Absent and not decided
+## Approved next, and drafted later
+
+**Typed channels between workers are the approved next
+design-and-implementation run.** Workers and owned `task` joins shipped
+first. `docs/THREADS.md` D12 ratifies typed pipes and the direction in
+which `send(give x)` moves ownership between worker runtimes. It does
+not yet ratify endpoint construction, capacity and back-pressure,
+receive and close behavior, or the failure surface; those belong to
+that next run, built on the existing two-runtime transfer and worker
+machinery.
 
 **Tagged unions — a member with a payload.** Enums shipped, and with
 them [`match`](/tour/enums/): a set of names at one integer width,
 dispatch that refuses to compile when a member has no arm, and
 `Method(n)` answering `Method?` for the number that arrived from a
-file. What a member still cannot carry is a *value*, which is the
-tagged union — ratified, not built, and the reason a `Result`-style
-error type was refused in favour of `T!` as a function attribute.
+file. What a member still cannot carry is a *value*. The tagged
+direction is ratified and the full design is drafted with three held
+questions, but it is not scheduled. It is also the reason a
+`Result`-style error type was refused in favour of `T!` as a function
+attribute.
 
 The half that shipped was decided on the corpus, and the corpus has
 spent it. `std.zip` reads a compression method and a DEFLATE block
@@ -265,24 +287,26 @@ than shipping a highlighter that disagrees with the compiler.
 
 ## The order the work goes in
 
-1. The cheap slice: character classes, then decide whether a dedicated
-   `set` earns its surface. Constant containers, `exit` and path
-   manipulation were on this list and have shipped.
-2. `m.get(k) -> V?`, and a corpus sweep.
-3. ~~Decide receivers and multiple returns~~ — shipped; the
-   integer-division spelling is decided too.
-4. ~~Enums and `match`~~ — shipped. Tagged unions are the half that
-   is left, and they extend `match` rather than introducing a second
-   statement.
+1. Typed channels — the approved D12 design-and-implementation follow-on
+   to workers; its full surface is not ratified yet.
+2. The cheap library slice: character classes, `m.get(k) -> V?`, and
+   decide whether a dedicated `set` earns its surface.
+3. Cross-compilation and sharing one runtime between artifacts.
+4. Tagged unions only when the drafted design is scheduled.
 5. The faithful syntax tree, which a formatter and a language server
    both need.
 
 ## The honest summary
 
-The language is complete as designed. The front end is in genuinely
-good shape, and the remaining language work is one open question and a
-short list of library and host builtins. The runtime's outstanding
-item is not correctness but speed, in one benchmark row.
+The shipped core is locked and the front end is in genuinely good
+shape. Typed channels are the approved next design-and-implementation
+run; tagged unions are drafted but unscheduled, and a short list of
+library questions remains. Runtime correctness work is still explicit:
+the ownership-cycle guard, file-handle cleanup if allocation fails after
+open, and the worker-registry and whole-file effect-serialization
+prerequisites for channels. The runtime attribute table itself is already
+corrected and exhaustively pinned. Separately, three benchmarks are behind
+for the three stated reasons above.
 
 If you are looking for a language to build production systems on
 today, this is not that. If you are interested in a small, fast,

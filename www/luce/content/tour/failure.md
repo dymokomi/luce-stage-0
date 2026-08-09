@@ -21,11 +21,11 @@ the check is inherently racy or impossible, it is an error. And if the
 answer is simply "there is nothing there", with no reason worth
 carrying, it is neither — it is a `T?`.
 
-That rule left all but one of Luce's trap codes exactly where they
-were. What it moves is the host's file boundary: a read or a write the
-world refuses is an error, because `file_exists` before `file_read` is
-a race no program can close. There are
-[18 trap codes](/ref/failure/#the-codes) and two error codes.
+The current trap roster is for deterministic program bugs. A host file
+refusal is instead an error: `file_exists` before `file_read` is a race
+no program can close, so a read or write the world refuses cannot be
+made into a precondition. There are
+[20 trap codes](/ref/failure/#the-codes) and two error codes.
 
 ## try and catch
 

@@ -12,21 +12,34 @@ the rules.
 
 ## Vocabulary
 
-**object** — a heap value: `list`, `map`, `array`, `builder`.
-Numbers, `bool`, `string`, enums, function values and plain-value
-structs are **values**: copied freely, never freed by the program,
-never verbed. A struct that carries an object follows that object's
-rules when it is kept. The runtime reclaims a value's storage when the
-place holding it dies.
+**container object** — one of `list`, `map`, `array`, `builder`. It
+owns the elements it keeps and may be deep-copied when its complete
+type graph carries no resource.
 
-**fresh** — an object expression nobody has named yet: `new ...`, a
-literal `[1, 2]`, a slice `xs[a:b]`, a call result, `s.split(x)`,
-`m.keys()`, `pop()`.
+**resource** — a scope-owned heap handle with one external thing behind
+it: `file` or `task`. It moves with `give` or `return` and releases with
+`free` or scope end, but cannot be copied: two handles would mean two
+owners of one file or worker.
 
-**owned name** — a binding that received a fresh object, a `give`, or
+The established clause titles below use **object-carrying struct** for
+any struct carrying an owned thing. That legacy term includes resources;
+the clause text states where a resource's no-copy rule is stricter.
+
+Numbers, `bool`, `string`, enums, function values and structs carrying
+no object or resource are **values**: copied freely, never freed by the
+program, never verbed. A struct that carries an object or resource
+follows that owned thing's rules when it is kept. The runtime reclaims
+a value's storage when the place holding it dies.
+
+**fresh** — an admitted owned expression nobody has named yet: `new ...`, a
+literal `[1, 2]`, an admitted slice `xs[a:b]`, a call result, `s.split(x)`,
+`m.keys()`, `pop()`, `files.open(path)` or `spawn f()`.
+
+**owned name** — a binding that received a fresh owned thing, a `give`, or
 a `give` parameter.
 
-**alias** — any other name for an object. Reading through one is free.
+**alias** — any other name for an object or resource. Reading through
+one is free.
 
 **poisoned** — a name the compiler refuses to evaluate after `give` or
 `free`, from that line to the end of its scope.
@@ -82,10 +95,17 @@ whole of what Zig spells `errdefer`.
 
 Drop-on-reassign.
 
+Reassignment still needs a genuinely new owner. A resource-bearing
+`x = x` or `x = alias_of_x` is refused as a redundant same-graph
+assignment; `x = give x` would make one binding both the poisoned source
+and the receiving destination.
+
 ### S6 — `free(x)` survives as early release {#s6}
 
-Legal only on owned names, and it poisons the name like `give`. Casual
-code never needs it.
+Legal only on an owned container or resource handle, and it poisons the
+name like `give`. A carrying struct still releases its fields at scope
+end; explicitly freeing the whole struct is not in the current surface.
+Casual code never needs it.
 
 ### S7 — a fresh object created inside a loop dies every iteration {#s7}
 
@@ -155,7 +175,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:2:5: a container keeps its object elements; hits is a borrowed parameter and can never be given away — store copy hits, or take hits as give in the signature [OWNERSHIP.md S12, S21] [luce.sema.own]
+main.luc:2:5: a container keeps its owned elements; hits is a borrowed parameter and can never be given away — store copy hits, or take hits as give in the signature [OWNERSHIP.md S12, S21] [luce.sema.own]
         index["latest"] = hits
         ^~~~~~~~~~~~~~~~~~~~~~
 ```
@@ -164,6 +184,13 @@ main.luc:2:5: a container keeps its object elements; hits is a borrowed paramete
 
 `give` appears at **both** ends. Ownership handoffs are never
 invisible.
+
+For a resource graph this means the complete handoff: change the
+borrowing parameter to `give`, make every caller pass an owning name
+with `give` (or a fresh value without a verb), and move the parameter at
+the retaining site. A field/index view or an alias with no available
+live owner can remain a borrow, but cannot be copied or given; an
+adopting use needs a distinct owned graph or a restructured handoff.
 
 ### S14 — a fresh argument satisfies a `give` parameter with no verb {#s14}
 
@@ -209,13 +236,15 @@ Owned in, owned out.
 
 ### S20 — containers adopt fresh values silently {#s20}
 
-Freeing a container frees the objects it owns, recursively.
+Releasing a container recursively releases the container objects and
+resources it owns.
 
 ### S21 — storing a bare name is a compile error {#s21}
 
-Say what you mean: `give` to transfer, `copy` to duplicate. The
-consequence is that **containers always own their object elements** —
-a dangling element is unrepresentable.
+Say what you mean: `give` to transfer, or `copy` to duplicate a
+resource-free graph. The consequence is that **containers always own
+their owned elements** — container objects, resources, or carrying
+structs — so a dangling element is unrepresentable.
 
 ```luce fail
 func main():
@@ -226,7 +255,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:4:5: a container keeps its object elements; write give hits to hand it over, or copy hits to keep your own [OWNERSHIP.md S21] [luce.sema.own]
+main.luc:4:5: a container keeps its owned elements; write give hits to hand it over, or copy hits to keep your own [OWNERSHIP.md S21] [luce.sema.own]
         index["a.luc"] = hits
         ^~~~~~~~~~~~~~~~~~~~~
 ```
@@ -240,7 +269,7 @@ every slot; store per slot instead.
 ### S22 — reading elements borrows; taking one out is `pop`; overwriting frees the old one {#s22}
 
 `pop()` hands the element to the receiver. `remove`, `clear` and
-overwriting an element free the owned element immediately.
+overwriting an element release the owned element immediately.
 
 ```luce run
 func main():
@@ -354,26 +383,28 @@ compiler did not produce, and **no source program can reach it**.
 
 ## F. Structs
 
-### S24 — structs are values; object fields follow the verb rule at construction {#s24}
+### S24 — a struct's value representation copies; owned fields follow the verb rule at construction {#s24}
 
 Own-at-construction: the binding that receives the struct owns the
-objects put into it fresh or by verb.
+container objects or resources put into it fresh or by verb. Its
+plain-value fields still copy as values do.
 
 ### S25 — field assignment follows the verb rule; the old owned field value is freed {#s25}
 
 ### S26 — struct copies alias the same objects {#s26}
 
-Copying a struct value never duplicates or moves objects; ownership
-stays where it was. Object fields alias; value fields — `string`s and
-nested plain structs — copy, so a struct copy costs the bytes of its
-value fields.
+Assigning a struct value never duplicates or moves an owned field;
+container and resource handles alias and ownership stays where it was.
+Value fields — `string`s and nested plain structs — copy, so the
+assignment costs the bytes of those fields.
 
-### S27 — an object-carrying struct is subject to the verb rule when kept {#s27}
+### S27 — a struct carrying a container object or resource is subject to the verb rule when kept {#s27}
 
 The rule is type-driven: any struct type transitively containing
-object fields is object-carrying and needs a verb to be kept.
-Plain-value structs never do. `copy` on a carrying struct deep-copies
-its owned objects.
+container objects or resources is object-carrying in the compiler's
+established term and needs a verb to be kept. Plain-value structs never
+do. `give` moves either kind. `copy` deep-copies only a resource-free
+carrying struct; one carrying `file` or `task` cannot be copied.
 
 ```luce fail
 struct Bag:
@@ -388,7 +419,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:8:17: a container keeps its object elements; write give bag to hand it over, or copy bag to keep your own [OWNERSHIP.md S21] [luce.sema.own]
+main.luc:8:17: a container keeps its owned elements; write give bag to hand it over, or copy bag to keep your own [OWNERSHIP.md S21] [luce.sema.own]
         bags.append(bag)
                     ^~~
 ```
@@ -402,24 +433,29 @@ main.luc:8:17: a container keeps its object elements; write give bag to hand it 
 ### S29 — poisoning is source-order and branch-insensitive {#s29}
 
 `give` inside a branch still poisons the name after the `if`. Blunt
-and predictable beats flow-sensitive and clever; `copy` is always the
-escape hatch.
+and predictable beats flow-sensitive and clever. For a resource-free
+graph, `copy` is the escape hatch; a resource graph must instead be
+created inside the branch or moved only once.
 
 ### S30 — giving an outer name from inside a loop is a compile error {#s30}
 
 The second iteration would use a given-away name. Create fresh inside
-the loop, or copy.
+the loop, or copy a resource-free graph.
 
-### S31 — `copy` is a deep copy and is always legal on readable objects {#s31}
+### S31 — `copy` is a deep copy of a readable copyable object {#s31}
 
 It duplicates the object and everything it owns, recursively,
 including through a borrowed parameter. Its cost is visible at the
-call site — that is the point.
+call site — that is the point. A `file`, a `task`, or anything carrying
+one cannot be copied: there is one resource, so `give` of a live owning
+name is what moves it. A borrowed or ownerless view has nothing it may
+hand over.
 
 ### S32 — values never take verbs {#s32}
 
-`give` and `copy` apply to `list`, `map`, `array`, `builder` and
-carrying structs, and to nothing else.
+`give` applies to container objects, resources and carrying structs.
+`copy` applies only where [S31](#s31) can make an independent owner.
+Values take neither: they copy by themselves.
 
 ```luce fail
 func main():
@@ -430,7 +466,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:3:17: give applies to objects (list, map, array, builder, object-carrying structs), not values [OWNERSHIP.md S32] [luce.sema.own]
+main.luc:3:17: give applies to containers and resources (list, map, array, builder, file, task) and structs that carry them, not values [OWNERSHIP.md S32] [luce.sema.own]
         let title = give name
                     ^~~~~~~~~
 ```
@@ -441,12 +477,24 @@ main.luc:3:17: give applies to objects (list, map, array, builder, object-carryi
 
 ### S33 — nothing can leak {#s33}
 
-Every ordinary run-created object is owned by a binding, a container,
-or a statement temporary, and all three have defined death points.
+Every ordinary run-created object or resource is owned by a binding, a
+container, or a statement temporary, and all three have defined death
+points.
 [S46](#s46)'s constant containers have the program root as their
 fourth owner and die at runtime teardown. The runtime's leak census is
 an internal assertion: if it fires, the *runtime* has a bug, not the
 program.
+
+**Known implementation breach, 2026-08-08.** The current adopting
+doors can still accept `root.children.append(give root)`, putting an
+owner inside its own descendant. That self-owned row trips the leak
+assertion; keeping an alias and then copying it overflows the runtime's
+recursive copy. This contradicts S20 and S33. The pending repair is an
+ownership-cycle guard at every adopting door, with a proposed stable
+`ownership_cycle` trap; the [status page](/status/) does not count it
+as fixed. Stage 4 already refuses ordinary resource `x = x` and
+`x = alias_of_x` reassignment; that redundant same-graph case is not
+the descendant adoption above and does not close this gap.
 
 ### S34 — traps and the depth budget abort cleanly {#s34}
 
@@ -586,10 +634,14 @@ func main():
 7 8
 ```
 
-`return a, b` is [S16](#s16) said once per value and nothing more. Each
-value moves independently, a borrowed parameter or an alias in any
-position is [S17](#s17) exactly, and a destructuring bind creates one
-owning binding per name ([S1](#s1)).
+`return a, b` applies [S16](#s16)/[S17](#s17) to each value, then adds
+the facts that exist only across slots. A destructuring bind creates one
+owning binding per name ([S1](#s1)), so returned object graphs must be
+distinct. Stage 4 resolves visible roots before lowering the shape: an
+owner beside its alias, a repeated borrow, and `return x, give x` are
+one graph trying to fill two results. The repair is distinct owned
+graphs or a changed return shape, never another spelling that repeats
+the same graph.
 
 The existing-name form `a, b = f()` adds [S5](#s5) on the receiving
 side. Every object-carrying target must still be a live owning `var`;
@@ -602,10 +654,13 @@ guarded call fails, none of those replacement releases or stores runs.
 Ordinary side effects from evaluating the right side have already
 happened and are not rolled back.
 
-The one fact the single-value channel never had to state is that **the
-values must be distinct objects**: two moves of one handle would leave
-two bindings owning it and free it twice, which [S23](#s23) forbids and
-which only a comma can now write.
+Evaluation order adds one more cross-slot rule. Stage 4 records an owning
+bare name's replacement revision when that operand is staged. A writing
+operation to the left is legal: the later bare name stages the replacement.
+A later result may not give away or replace a name whose old value is
+already staged, including through a nested ownership-taking call or a
+writing method. Put that operation first, then return distinct current
+values.
 
 ```luce fail
 func bad(xs: give list(long)) -> (list(long), list(long)):

@@ -799,6 +799,23 @@ pub const FunctionBuilder = struct {
         declared.info.owner_name = root;
     }
 
+    /// Replacing an owning binding does not make its old aliases point
+    /// at the replacement.  They still hold the old (now released)
+    /// handle, so retaining `owner_name` would make later diagnostics
+    /// recommend moving an unrelated new graph.  Alias chains are
+    /// collapsed to the written root in `rememberOwnerName`, making a
+    /// linear visible-scope invalidation both complete and rare (S8,
+    /// S23).
+    fn forgetAliasesOwnedBy(self: *FunctionBuilder, owner: []const u8) void {
+        for (self.scopes.items) |*scope| {
+            var locals = scope.names.valueIterator();
+            while (locals.next()) |info| {
+                const remembered = info.owner_name orelse continue;
+                if (std.mem.eql(u8, remembered, owner)) info.owner_name = null;
+            }
+        }
+    }
+
     /// The owner to name in a refusal, or null when there is none worth
     /// naming.  A recorded name is only useful advice while it is still
     /// the owner: one that has since been given away or freed would
@@ -809,6 +826,27 @@ pub const FunctionBuilder = struct {
         const found = self.findLocal(owner) orelse return null;
         if (found.info.class != .owned) return null;
         if (found.info.poisoned != null) return null;
+        return owner;
+    }
+
+    /// True when giving this binding here would poison a name that a
+    /// later iteration can reach (S30).  Returns and other terminating
+    /// moves ask their own question; this is for handoff advice and
+    /// the `give` expression itself.
+    fn declaredOutsideActiveLoop(self: *const FunctionBuilder, depth: usize) bool {
+        if (self.loops.items.len == 0) return false;
+        return depth < self.loops.items[self.loops.items.len - 1].scope_depth;
+    }
+
+    /// A live owner that may actually be given at this source point.
+    /// An outer-loop owner is still the alias's owner, but naming it as
+    /// a repair would immediately earn S30's next diagnostic.
+    fn giveableOwnerNameFor(self: *FunctionBuilder, info: *const LocalInfo) ?[]const u8 {
+        const owner = self.ownerNameFor(info) orelse return null;
+        const found = self.findLocal(owner) orelse return null;
+        if (self.declaredOutsideActiveLoop(found.depth)) return null;
+        const owner_type = self.code.localType(found.info.local);
+        if (owner_type == .optional and !self.isNarrowed(found.info.local)) return null;
         return owner;
     }
 
@@ -1472,6 +1510,24 @@ pub const FunctionBuilder = struct {
         return register;
     }
 
+    /// The integer constant behind `register`, when the tape proves
+    /// one.  Bounds land on `long`, so an integer expression may have
+    /// one folded `convert` between its `const_long` producer and the
+    /// register the slice receives.  Looking through exactly that
+    /// conversion keeps this a proof about emitted MIR rather than a
+    /// second source-expression folder.
+    fn constantLong(self: *const FunctionBuilder, register: Register) ?i64 {
+        const instruction = self.code.instructions.items[self.sourceOf(register)];
+        return switch (instruction) {
+            .const_long => |value| value,
+            .convert => |operand| switch (self.code.instructions.items[self.sourceOf(operand)]) {
+                .const_long => |value| value,
+                else => null,
+            },
+            else => null,
+        };
+    }
+
     /// Is this register's storage parked in a statement temporary?
     fn parkedForStorage(self: *const FunctionBuilder, register: Register) bool {
         for (self.temps.items) |temp| {
@@ -1803,37 +1859,180 @@ pub const FunctionBuilder = struct {
         span: Span,
         subject: []const u8,
         value: *const ast.Expression,
+        value_type: Type,
         situations: []const u8,
     ) Error!void {
-        if (value.* == .name) {
-            if (self.findLocal(value.name.text)) |found| {
-                const name = value.name.text;
-                if (found.info.class == .borrow_param) {
-                    try self.fail(
-                        "luce.sema.own",
-                        span,
-                        "{s}; {s} is a borrowed parameter and can never be given away — store copy {s}, or take {s} as give in the signature [OWNERSHIP.md S12, {s}]",
-                        .{ subject, name, name, name, situations },
-                    );
-                    return;
-                }
-                if (found.info.class == .inout_receiver) {
-                    try self.fail(
-                        "luce.sema.own",
-                        span,
-                        "{s}; self is the caller's receiver and cannot be moved out — store copy self [SELF.md D4, OWNERSHIP.md S12, {s}]",
-                        .{ subject, situations },
-                    );
-                    return;
-                }
+        const carries_resource = try self.analyzer.carriesResource(value_type);
+        if (value_type == .optional) {
+            if (carries_resource) {
+                const advice = try self.resourceMoveAdvice(value);
                 try self.fail(
                     "luce.sema.own",
                     span,
-                    "{s}; write give {s} to hand it over, or copy {s} to keep your own [OWNERSHIP.md {s}]",
-                    .{ subject, name, name, situations },
+                    "{s}; {s} may be absent and its payload carries a file or task that cannot be copied — prove the owning binding is present, then {s} [OWNERSHIP.md S31, S43, {s}]",
+                    .{ subject, try self.analyzer.typeName(value_type), advice, situations },
                 );
-                return;
+            } else {
+                try self.fail(
+                    "luce.sema.own",
+                    span,
+                    "{s}; {s} may be absent — test it first, then store something fresh, copy a narrowed view, or give a narrowed owning name [OWNERSHIP.md S21, S43, {s}]",
+                    .{ subject, try self.analyzer.typeName(value_type), situations },
+                );
             }
+            return;
+        }
+        if (value.* == .name) {
+            if (self.findLocal(value.name.text)) |found| {
+                const name = value.name.text;
+                const outside_loop = self.declaredOutsideActiveLoop(found.depth);
+                switch (found.info.class) {
+                    .borrow_param => {
+                        if (outside_loop) {
+                            if (carries_resource) {
+                                try self.fail(
+                                    "luce.sema.own",
+                                    span,
+                                    "{s}; {s} comes from outside this loop and carries a file or task, so it cannot be moved or copied per iteration — create or receive an owned value inside each iteration, or redesign the handoff [OWNERSHIP.md S12, S30, S31, {s}]",
+                                    .{ subject, name, situations },
+                                );
+                            } else {
+                                try self.fail(
+                                    "luce.sema.own",
+                                    span,
+                                    "{s}; {s} is borrowed from outside this loop — store copy {s}; moving it would poison the next iteration [OWNERSHIP.md S12, S30, {s}]",
+                                    .{ subject, name, name, situations },
+                                );
+                            }
+                            return;
+                        }
+                        if (carries_resource) {
+                            try self.fail(
+                                "luce.sema.own",
+                                span,
+                                "{s}; {s} is a borrowed parameter and carries a file or task, so it can neither be given nor copied — change {s} to a give parameter and make each call site pass ownership (give NAME for an owning name; fresh values need no verb), then write give {s} here [OWNERSHIP.md S12, S13, S14, S31, {s}]",
+                                .{ subject, name, name, name, situations },
+                            );
+                            return;
+                        }
+                        try self.fail(
+                            "luce.sema.own",
+                            span,
+                            "{s}; {s} is a borrowed parameter and can never be given away — store copy {s}, or take {s} as give in the signature [OWNERSHIP.md S12, {s}]",
+                            .{ subject, name, name, name, situations },
+                        );
+                        return;
+                    },
+                    .inout_receiver => {
+                        if (carries_resource) {
+                            if (outside_loop) {
+                                try self.fail(
+                                    "luce.sema.own",
+                                    span,
+                                    "{s}; self comes from outside this loop and carries a file or task, so it cannot be moved or copied per iteration — create or receive an owned value inside each iteration, or redesign the handoff [SELF.md D4, OWNERSHIP.md S12, S30, S31, {s}]",
+                                    .{ subject, situations },
+                                );
+                            } else {
+                                try self.fail(
+                                    "luce.sema.own",
+                                    span,
+                                    "{s}; self is the caller's receiver and cannot be moved out or copied because it carries a file or task — take a separate give parameter [SELF.md D4, OWNERSHIP.md S12, S31, {s}]",
+                                    .{ subject, situations },
+                                );
+                            }
+                            return;
+                        }
+                        try self.fail(
+                            "luce.sema.own",
+                            span,
+                            "{s}; self is the caller's receiver and cannot be moved out — store copy self [SELF.md D4, OWNERSHIP.md S12, {s}]",
+                            .{ subject, situations },
+                        );
+                        return;
+                    },
+                    .alias => {
+                        if (self.giveableOwnerNameFor(found.info)) |owner| {
+                            if (carries_resource) {
+                                try self.fail(
+                                    "luce.sema.own",
+                                    span,
+                                    "{s}; {s} aliases a resource graph it does not own — write give {s}, the owning binding; {s} cannot be copied [OWNERSHIP.md S8, S23, S31, {s}]",
+                                    .{ subject, name, owner, name, situations },
+                                );
+                                return;
+                            }
+                            try self.fail(
+                                "luce.sema.own",
+                                span,
+                                "{s}; {s} aliases an object it does not own — store copy {s}, or write give {s}, the owning binding [OWNERSHIP.md S8, S23, {s}]",
+                                .{ subject, name, name, owner, situations },
+                            );
+                            return;
+                        }
+                        if (carries_resource) {
+                            try self.fail(
+                                "luce.sema.own",
+                                span,
+                                "{s}; {s} aliases a resource graph it does not own; this borrowed view cannot be copied or moved — obtain an owned value from an ownership-returning operation or redesign the handoff [OWNERSHIP.md S8, S23, S31, {s}]",
+                                .{ subject, name, situations },
+                            );
+                            return;
+                        }
+                        try self.fail(
+                            "luce.sema.own",
+                            span,
+                            "{s}; {s} aliases an object it does not own — store copy {s} [OWNERSHIP.md S8, S23, {s}]",
+                            .{ subject, name, name, situations },
+                        );
+                        return;
+                    },
+                    .owned => {
+                        if (outside_loop) {
+                            if (carries_resource) {
+                                try self.fail(
+                                    "luce.sema.own",
+                                    span,
+                                    "{s}; {s} is owned outside this loop and cannot be moved or copied per iteration — create or receive an owned value inside each iteration, or redesign the handoff [OWNERSHIP.md S30, S31, {s}]",
+                                    .{ subject, name, situations },
+                                );
+                            } else {
+                                try self.fail(
+                                    "luce.sema.own",
+                                    span,
+                                    "{s}; {s} is owned outside this loop — store copy {s}; moving it would poison the next iteration [OWNERSHIP.md S30, {s}]",
+                                    .{ subject, name, name, situations },
+                                );
+                            }
+                            return;
+                        }
+                        if (carries_resource) {
+                            try self.fail(
+                                "luce.sema.own",
+                                span,
+                                "{s}; write give {s} to hand it over — {s} carries a file or task and cannot be copied [OWNERSHIP.md {s}, S31]",
+                                .{ subject, name, name, situations },
+                            );
+                            return;
+                        }
+                        try self.fail(
+                            "luce.sema.own",
+                            span,
+                            "{s}; write give {s} to hand it over, or copy {s} to keep your own [OWNERSHIP.md {s}]",
+                            .{ subject, name, name, situations },
+                        );
+                        return;
+                    },
+                }
+            }
+        }
+        if (carries_resource) {
+            try self.fail(
+                "luce.sema.own",
+                span,
+                "{s}; this borrowed resource view cannot be copied or moved — obtain an owned value from an ownership-returning operation or redesign the handoff [OWNERSHIP.md {s}, S31]",
+                .{ subject, situations },
+            );
+            return;
         }
         try self.fail(
             "luce.sema.own",
@@ -1841,6 +2040,208 @@ pub const FunctionBuilder = struct {
             "{s}; store something fresh, give NAME, or copy NAME [OWNERSHIP.md {s}]",
             .{ subject, situations },
         );
+    }
+
+    /// A move spelling that is actually available for a resource graph.
+    /// `copy` is never one; `give` is offered only for a live owning
+    /// binding, while a borrow or alias names the ownership change that
+    /// must happen first (S12, S23, S31).
+    fn resourceMoveAdvice(self: *FunctionBuilder, expression: *const ast.Expression) Error![]const u8 {
+        if (expression.* != .name) {
+            if (try self.yieldsOwnership(expression)) {
+                return "remove copy; this expression already yields an owned resource graph";
+            }
+            return "this borrowed view cannot be copied or moved; obtain an owned value from an ownership-returning operation or redesign the handoff";
+        }
+        const name = expression.name.text;
+        const found = self.findLocal(name) orelse
+            return "obtain an owned value from an ownership-returning operation or redesign the handoff";
+        return switch (found.info.class) {
+            .owned => if (self.declaredOutsideActiveLoop(found.depth))
+                "this resource is owned outside the active loop; create or receive an owned value inside each iteration, or redesign the handoff"
+            else
+                try std.fmt.allocPrint(
+                    self.arena(),
+                    "write give {s} to move its owning binding instead",
+                    .{name},
+                ),
+            .borrow_param => if (self.declaredOutsideActiveLoop(found.depth))
+                "this resource is borrowed from outside the active loop; create or receive an owned value inside each iteration, or redesign the handoff"
+            else
+                try std.fmt.allocPrint(
+                    self.arena(),
+                    "{s} is borrowed; change it to a give parameter and make each call site pass ownership (give NAME for an owning name; fresh values need no verb), then write give {s} at this handoff",
+                    .{ name, name },
+                ),
+            .inout_receiver => if (self.declaredOutsideActiveLoop(found.depth))
+                "self comes from outside the active loop; create or receive an owned value inside each iteration, or redesign the handoff"
+            else
+                "self is the caller's receiver; pass the resource as a separate give parameter instead",
+            .alias => if (self.giveableOwnerNameFor(found.info)) |owner|
+                try std.fmt.allocPrint(
+                    self.arena(),
+                    "{s} is an alias; write give {s}, its owning binding, instead",
+                    .{ name, owner },
+                )
+            else
+                try std.fmt.allocPrint(
+                    self.arena(),
+                    "{s} is an alias; this borrowed view cannot be copied or moved — obtain an owned value from an ownership-returning operation or redesign the handoff",
+                    .{name},
+                ),
+        };
+    }
+
+    /// `copy` can appear either where the result is merely read or
+    /// where the surrounding operation intends to keep it.  Advice
+    /// that blindly says `give NAME` is therefore wrong for
+    /// `inspect(copy NAME)`: `inspect` may be a borrowing call.  The
+    /// repair stated here is valid in either context.  Removing copy
+    /// preserves the existing borrow; an ownership-taking context must
+    /// instead receive a distinct owned graph through its own legal
+    /// handoff (S12, S21, S31).
+    fn resourceCopyAdvice(self: *FunctionBuilder, expression: *const ast.Expression) Error![]const u8 {
+        if (expression.* == .give) {
+            return "this spelling gives before it copies; in a borrowing context remove both give and copy, while an ownership-taking context removes copy only";
+        }
+        if (try self.yieldsOwnership(expression)) {
+            return "remove copy; this expression already yields an owned resource graph";
+        }
+        if (expression.* == .name) {
+            if (self.findLocal(expression.name.text)) |found| {
+                if (found.info.class == .alias and self.ownerNameFor(found.info) == null) {
+                    return try std.fmt.allocPrint(
+                        self.arena(),
+                        "remove copy only if {s} still names a live borrowed view; if its owner was replaced or this site must own the result, obtain a distinct owned graph or redesign the handoff",
+                        .{expression.name.text},
+                    );
+                }
+            }
+            return try std.fmt.allocPrint(
+                self.arena(),
+                "remove copy to use or borrow {s}; if the surrounding site must take ownership, supply a distinct owned graph or redesign the handoff",
+                .{expression.name.text},
+            );
+        }
+        return "remove copy to use this borrowed view; if the surrounding site must take ownership, obtain a distinct owned graph from an ownership-returning operation or redesign the handoff";
+    }
+
+    /// `free` is not an ownership-taking destination for an expression:
+    /// it deliberately releases one *binding*.  Diagnose a nested `give`
+    /// before lowering it, otherwise `free(give view)` first teaches a
+    /// handoff spelling and only the repaired program explains that free
+    /// takes a bare owner (S6, S8).  `copy` must be lowered normally so an
+    /// unknown name, an illegal value copy, or a non-copyable resource
+    /// keeps its own earlier diagnostic.  False leaves ordinary names and
+    /// unrelated expressions to free's type/name checks below.
+    fn refuseFreeVerb(
+        self: *FunctionBuilder,
+        expression: *const ast.Expression,
+        span: Span,
+    ) Error!bool {
+        if (expression.* != .give) return false;
+
+        const operand = expression.give.operand;
+        if (operand.* != .name) {
+            try self.fail(
+                "luce.sema.own",
+                span,
+                "free(give EXPR) has no legal verb stack — remove the whole call, or bind a direct freeable handle and write free(NAME); carrying structs and borrowed views are released by their owner or scope [OWNERSHIP.md S6, S10, S31]",
+                .{},
+            );
+            return true;
+        }
+        const name = operand.name.text;
+        const found = self.findLocal(name) orelse return false;
+        const info = found.info;
+        if (!info.carries or info.poisoned != null) return false;
+        const local_type = self.code.localType(info.local);
+        const freeable = local_type == .heap or
+            (local_type == .optional and local_type.optional.asType() == .heap);
+        if (!freeable) {
+            try self.fail(
+                "luce.sema.own",
+                span,
+                "a carrying struct cannot be released through free(give NAME) — remove the whole call and let this value's scope release it, or move it to an ownership-taking site [OWNERSHIP.md S6, S31]",
+                .{},
+            );
+            return true;
+        }
+        const may_be_absent = local_type == .optional and !self.isNarrowed(info.local);
+        switch (info.class) {
+            .owned => {
+                if (self.declaredOutsideActiveLoop(found.depth)) {
+                    try self.fail(
+                        "luce.sema.own",
+                        span,
+                        "free names its owner directly, but {s} is declared outside this loop and cannot be released per iteration — let its outer scope release it, or create the owner inside the loop [OWNERSHIP.md S6, S30]",
+                        .{name},
+                    );
+                } else if (may_be_absent) {
+                    try self.fail(
+                        "luce.sema.own",
+                        span,
+                        "{s} may be absent; prove {s} is present, then write free({s}) directly without give [OWNERSHIP.md S6, S43]",
+                        .{ try self.analyzer.typeName(local_type), name, name },
+                    );
+                } else {
+                    try self.fail(
+                        "luce.sema.own",
+                        span,
+                        "free names its owner directly; remove give and write free({s}) [OWNERSHIP.md S6, S10]",
+                        .{name},
+                    );
+                }
+            },
+            .borrow_param => try self.fail(
+                "luce.sema.own",
+                span,
+                "{s} is borrowed, so neither give nor free may release it; let its caller-owned scope release the resource [OWNERSHIP.md S6, S12]",
+                .{name},
+            ),
+            .inout_receiver => try self.fail(
+                "luce.sema.own",
+                span,
+                "self is the caller's receiver, so neither give nor free may release it; let the caller's scope release it [SELF.md D4, OWNERSHIP.md S6, S12]",
+                .{},
+            ),
+            .alias => {
+                if (self.ownerNameFor(info)) |owner| {
+                    const owning = self.findLocal(owner).?;
+                    const owner_type = self.code.localType(owning.info.local);
+                    if (self.declaredOutsideActiveLoop(owning.depth)) {
+                        try self.fail(
+                            "luce.sema.own",
+                            span,
+                            "{s} is only an alias and its owner {s} lives outside this loop; neither may be released per iteration — let the outer scope release it [OWNERSHIP.md S6, S8, S23, S30]",
+                            .{ name, owner },
+                        );
+                    } else if (owner_type == .optional and !self.isNarrowed(owning.info.local)) {
+                        try self.fail(
+                            "luce.sema.own",
+                            span,
+                            "{s} is only an alias and its owner {s} is not proven present — prove the owning binding is present, then write free({s}) directly without give [OWNERSHIP.md S6, S8, S23, S43]",
+                            .{ name, owner, owner },
+                        );
+                    } else {
+                        try self.fail(
+                            "luce.sema.own",
+                            span,
+                            "{s} is only an alias; free names the live owner directly — write free({s}), without give [OWNERSHIP.md S6, S8, S23]",
+                            .{ name, owner },
+                        );
+                    }
+                } else {
+                    try self.fail(
+                        "luce.sema.own",
+                        span,
+                        "{s} is a borrowed view with no giveable owner here; neither give nor free may release it — obtain the owning binding or redesign the lifetime [OWNERSHIP.md S6, S8, S23, S30]",
+                        .{name},
+                    );
+                }
+            },
+        }
+        return true;
     }
 
     // Absence ---------------------------------------------------------------
@@ -2436,6 +2837,16 @@ pub const FunctionBuilder = struct {
         subscripts,
     };
 
+    /// A bare owning operand is staged at one exact point in a batch.
+    /// Its revision at that point distinguishes a later write, which
+    /// invalidates the staged value, from an earlier write whose new
+    /// value is precisely what the operand loads.
+    const StagedOperandOwner = struct {
+        local: LocalId,
+        revision: u32,
+        name: []const u8,
+    };
+
     /// As `lowerOperands`, with the type each operand lands in already
     /// known — which is what lets a bare `none` be written among them,
     /// since it has no type of its own.
@@ -2444,6 +2855,23 @@ pub const FunctionBuilder = struct {
         expressions: []const *ast.Expression,
         landing: Landing,
     ) Error!?[]Typed {
+        return self.lowerOperandsIntoTracking(expressions, landing, null);
+    }
+
+    /// The ordinary operand walk, optionally recording the revision of
+    /// each bare owning name at the moment that operand is staged.  Only
+    /// shaped returns need the observation; all other callers use the
+    /// wrapper above and pay no allocation or bookkeeping cost.
+    fn lowerOperandsIntoTracking(
+        self: *FunctionBuilder,
+        expressions: []const *ast.Expression,
+        landing: Landing,
+        staged_owners: ?[]?StagedOperandOwner,
+    ) Error!?[]Typed {
+        if (staged_owners) |owners| {
+            std.debug.assert(owners.len == expressions.len);
+            @memset(owners, null);
+        }
         var spill_storage: [inline_operands]?LocalId = undefined;
         var split_storage: [inline_operands]bool = undefined;
         const wide = expressions.len > inline_operands;
@@ -2511,6 +2939,19 @@ pub const FunctionBuilder = struct {
             else
                 (try self.lowerExpression(expression, false)) orelse return null;
             values[index] = value;
+            if (staged_owners) |owners| {
+                if (expression.* == .name) {
+                    if (self.findLocal(expression.name.text)) |found| {
+                        if (found.info.carries and found.info.class == .owned) {
+                            owners[index] = .{
+                                .local = found.info.local,
+                                .revision = found.info.revision,
+                                .name = expression.name.text,
+                            };
+                        }
+                    }
+                }
+            }
             // The residual hazard copy-on-store leaves open
             // (docs/STRINGS.md): this register may be a *borrow* of an
             // element's or a field's bytes, and an operand still to
@@ -3173,13 +3614,17 @@ pub const FunctionBuilder = struct {
         }
 
         for (prepared) |item| {
+            if (item.target.owns_objects) self.forgetAliasesOwnedBy(item.target.name.text);
             try self.code.release(item.target.local, item.target.owns_objects, item.target.owns_storage);
             try self.code.store(item.target.local, item.register);
             if (item.target.owns_objects) try self.code.bind(item.target.local, item.register);
             if (item.target.value_type == .optional) {
                 if (item.present) try self.narrow(item.target.local) else self.widen(item.target.local);
             }
-            if (self.localById(item.target.local)) |info| info.root = .mutable;
+            if (self.localById(item.target.local)) |info| {
+                info.root = .mutable;
+                info.revision +%= 1;
+            }
         }
         // The targets now own every object the return shape carried;
         // its statement temporary keeps only its own field storage.
@@ -3682,6 +4127,25 @@ pub const FunctionBuilder = struct {
         const combine_type = if (narrowed_place) local_type.held().? else local_type;
         const wanted = if (assign.compound != null) combine_type else local_type;
 
+        // Refuse `tasks = give tasks` and the alias spelling before
+        // lowering `give`: lowering would poison the destination name
+        // itself and then rebind it, leaving a live slot marked dead.
+        // The same-root bare spelling is handled after fitting below;
+        // this early form is needed because an alias give otherwise
+        // reports without knowing the enclosing destination (S5, S8).
+        if (info.carries and assign.compound == null and assign.value.* == .give) {
+            const source_root = try self.visibleOwnershipRoot(assign.value);
+            if (source_root != null and source_root.? == local) {
+                try self.fail(
+                    "luce.sema.own",
+                    assign.span,
+                    "{s} already owns the object graph named by this give; a binding cannot give its graph back to itself — remove the redundant assignment, or assign a distinct owned graph [OWNERSHIP.md S5, S8, S21, S23]",
+                    .{base},
+                );
+                return;
+            }
+        }
+
         const fitted = (try self.lowerTyped(assign.value, wanted, assign.span, base)) orelse return;
         const value = fitted.value;
         if (info.carries) {
@@ -3693,11 +4157,31 @@ pub const FunctionBuilder = struct {
             const owns_place = class == .owned or class == .inout_receiver;
             if (owns_place and !yields) {
                 if (try self.refuseConstantEscape(value.root, assign.span, "assignment")) return;
-                try self.fail(
-                    "luce.sema.own",
+                // A resource graph has no copying escape hatch.  In
+                // particular, telling `tasks = tasks` to write
+                // `tasks = give tasks` would ask one binding to poison
+                // itself while it is also the destination, and an alias
+                // of `tasks` is the same graph with the same problem.
+                // Name that no-op/ownership conflict directly instead
+                // of manufacturing a second error (S5, S8, S21).
+                if (try self.analyzer.carriesResource(value.value_type) and assign.value.* == .name) {
+                    const source_root = try self.visibleOwnershipRoot(assign.value);
+                    if (source_root != null and source_root.? == local) {
+                        try self.fail(
+                            "luce.sema.own",
+                            assign.span,
+                            "{s} already owns the resource graph named by {s}; it cannot take the same graph back through itself or an alias — remove a redundant self-assignment, or assign a distinct owned graph [OWNERSHIP.md S5, S8, S21, S31]",
+                            .{ base, assign.value.name.text },
+                        );
+                        return;
+                    }
+                }
+                try self.failNeedsOwnership(
                     assign.span,
-                    "{s} owns its object; assign something fresh, give NAME, or copy NAME [OWNERSHIP.md S5, S21]",
-                    .{base},
+                    try std.fmt.allocPrint(self.arena(), "{s} owns its value", .{base}),
+                    assign.value,
+                    value.value_type,
+                    "S5, S21",
                 );
                 return;
             }
@@ -3745,12 +4229,18 @@ pub const FunctionBuilder = struct {
         // Compound assignment is value-only, so `carries` is false.
         const owns_objects = info.carries and
             (class == .owned or class == .inout_receiver);
+        if (owns_objects) self.forgetAliasesOwnedBy(base);
         try self.code.release(local, owns_objects, owns_storage);
         try self.code.store(local, store);
         if (owns_objects) {
             try self.code.bind(local, store);
         }
+        if (class == .alias) {
+            info.owner_name = null;
+            if (assign.value.* == .name) self.rememberOwnerName(base, assign.value.name.text);
+        }
         info.root = value.root;
+        info.revision +%= 1;
     }
 
     fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast.Assign) Error!void {
@@ -3811,8 +4301,9 @@ pub const FunctionBuilder = struct {
             if (!(try self.yieldsOwnership(assign.value))) {
                 try self.failNeedsOwnership(
                     assign.span,
-                    "this field keeps its object",
+                    "this field keeps its owned value",
                     assign.value,
+                    value.value_type,
                     "S21, S25",
                 );
                 return;
@@ -3829,6 +4320,15 @@ pub const FunctionBuilder = struct {
                 .field = field_index,
             } }, expected);
             store = (try self.compoundCombine(op, old_value, expected, value, assign.span)) orelse return;
+        }
+        if (info.carries) {
+            self.forgetAliasesOwnedBy(target.base);
+            // A mutable alias owns its struct storage but not the object
+            // fields inside it.  Writing even a scalar field makes that
+            // copied value differ from the recorded owner's struct, so
+            // later advice must not redirect the whole value to that
+            // owner (S8, S26).
+            if (info.class == .alias) info.owner_name = null;
         }
         if (field_carries) {
             const old_field = try self.code.emit(.{ .struct_get = .{
@@ -3855,6 +4355,7 @@ pub const FunctionBuilder = struct {
         if (field_carries) {
             try self.code.bind(local, store);
         }
+        info.revision +%= 1;
     }
 
     /// place[i] = v, grid[r, c] = v, m[key] = v.  The base may be any
@@ -3877,6 +4378,13 @@ pub const FunctionBuilder = struct {
         if (value.value_type.widensTo(element_type)) {
             value.* = try self.widenNumeric(value.*, element_type);
         }
+        if (!value.value_type.eql(element_type)) {
+            try self.fail("luce.sema.type", assign.span, "this place holds {s} but the value is {s}", .{
+                try self.analyzer.typeName(element_type),
+                try self.analyzer.typeName(value.value_type),
+            });
+            return;
+        }
         // Containers own their object elements: storing one takes a
         // fresh value, a give, or a copy (S20, S21).
         if (self.analyzer.carriesObjects(element_type) and
@@ -3884,17 +4392,11 @@ pub const FunctionBuilder = struct {
         if (self.analyzer.carriesObjects(element_type) and !(try self.yieldsOwnership(assign.value))) {
             try self.failNeedsOwnership(
                 assign.span,
-                "a container keeps its object elements",
+                "a container keeps its owned elements",
                 assign.value,
+                value.value_type,
                 "S21",
             );
-            return;
-        }
-        if (!value.value_type.eql(element_type)) {
-            try self.fail("luce.sema.type", assign.span, "this place holds {s} but the value is {s}", .{
-                try self.analyzer.typeName(element_type),
-                try self.analyzer.typeName(value.value_type),
-            });
             return;
         }
         var store = value.register;
@@ -4296,6 +4798,166 @@ pub const FunctionBuilder = struct {
         try self.narrowRestore(entry);
     }
 
+    /// Refuse a named object that this frame does not own from leaving
+    /// as a return value.  Resource graphs deliberately get no `copy`
+    /// advice: changing the parameter/owner is their only legal exit
+    /// (S16, S17, S31).  False means the name is owned and may move.
+    fn refuseBorrowedReturn(
+        self: *FunctionBuilder,
+        span: Span,
+        name: []const u8,
+        info: *const LocalInfo,
+        value_type: Type,
+        already_moved: []const LocalId,
+        resource_conflict: bool,
+    ) Error!bool {
+        if (info.class == .owned) return false;
+        const carries_resource = try self.analyzer.carriesResource(value_type);
+        switch (info.class) {
+            .owned => unreachable,
+            .borrow_param => {
+                if (carries_resource) {
+                    if (resource_conflict) {
+                        try self.fail(
+                            "luce.sema.own",
+                            span,
+                            "{s} is one borrowed resource graph used by more than one result; it cannot be copied — every resource result needs a distinct owned graph, so change the values or the return shape [OWNERSHIP.md S17, S23, S31, S45]",
+                            .{name},
+                        );
+                    } else {
+                        try self.fail(
+                            "luce.sema.own",
+                            span,
+                            "{s} is a borrowed parameter and carries a file or task; it cannot be copied — change it to a give parameter and make each call site pass ownership (give NAME for an owning name; fresh values need no verb) [OWNERSHIP.md S13, S14, S17, S31]",
+                            .{name},
+                        );
+                    }
+                } else {
+                    try self.fail(
+                        "luce.sema.own",
+                        span,
+                        "{s} is a borrowed parameter; return copy {s}, or take the parameter as give [OWNERSHIP.md S17]",
+                        .{ name, name },
+                    );
+                }
+            },
+            .alias => {
+                if (carries_resource) {
+                    if (self.ownerNameFor(info)) |owner| {
+                        const owner_info = self.findLocal(owner).?.info;
+                        const owner_type = self.code.localType(owner_info.local);
+                        if (owner_type == .optional and !self.isNarrowed(owner_info.local)) {
+                            try self.fail(
+                                "luce.sema.own",
+                                span,
+                                "{s} aliases a resource graph owned by {s}, but that owning binding is not proven present — prove {s} is present, then return the owner; the alias cannot be copied [OWNERSHIP.md S17, S23, S31, S43]",
+                                .{ name, owner, owner },
+                            );
+                        } else if (std.mem.indexOfScalar(LocalId, already_moved, owner_info.local) != null) {
+                            try self.fail(
+                                "luce.sema.own",
+                                span,
+                                "{s} aliases a resource graph already returned through {s}; one graph cannot fill two results — return a distinct owned graph or change the return shape [OWNERSHIP.md S23, S31, S45]",
+                                .{ name, owner },
+                            );
+                        } else if (resource_conflict) {
+                            try self.fail(
+                                "luce.sema.own",
+                                span,
+                                "{s} aliases the resource graph owned by {s}; every result needs a distinct owned graph — return {s} in only one slot and change the other slot or the return shape [OWNERSHIP.md S16, S17, S23, S31, S45]",
+                                .{ name, owner, owner },
+                            );
+                        } else {
+                            try self.fail(
+                                "luce.sema.own",
+                                span,
+                                "{s} aliases a resource graph it does not own; return {s}, the owning name — {s} cannot be copied [OWNERSHIP.md S16, S17, S31]",
+                                .{ name, owner, name },
+                            );
+                        }
+                    } else {
+                        try self.fail(
+                            "luce.sema.own",
+                            span,
+                            "{s} aliases a resource graph it does not own; this borrowed view cannot be copied or moved — obtain an owned value from an ownership-returning operation or redesign the return [OWNERSHIP.md S16, S17, S31]",
+                            .{name},
+                        );
+                    }
+                } else {
+                    if (resource_conflict) {
+                        try self.fail(
+                            "luce.sema.own",
+                            span,
+                            "{s} aliases an object graph already used by another result; return copy {s} to make a distinct graph, or change the return shape [OWNERSHIP.md S17, S23, S45]",
+                            .{ name, name },
+                        );
+                    } else {
+                        try self.fail(
+                            "luce.sema.own",
+                            span,
+                            "{s} aliases an object it does not own; return copy {s} or return the owning name [OWNERSHIP.md S16, S17]",
+                            .{ name, name },
+                        );
+                    }
+                }
+            },
+            .inout_receiver => {
+                if (carries_resource) {
+                    if (resource_conflict) {
+                        try self.fail(
+                            "luce.sema.own",
+                            span,
+                            "self is one caller-owned resource graph used by more than one result; it cannot be copied or moved out — every resource result needs a distinct owned graph, so change the values or the return shape [OWNERSHIP.md S17, S23, S31, S45, SELF.md D4]",
+                            .{},
+                        );
+                    } else {
+                        try self.fail(
+                            "luce.sema.own",
+                            span,
+                            "self is the caller's receiver and cannot be moved out or copied because it carries a file or task; return a separate give parameter whose caller hands it over [OWNERSHIP.md S17, S31, SELF.md D4]",
+                            .{},
+                        );
+                    }
+                } else {
+                    try self.fail(
+                        "luce.sema.own",
+                        span,
+                        "self is the caller's receiver and cannot be moved out; return copy self [OWNERSHIP.md S17, SELF.md D4]",
+                        .{},
+                    );
+                }
+            },
+        }
+        return true;
+    }
+
+    /// A visible resource root used by a shaped return.  Unlike
+    /// `ownerNameFor`, this is identity, not advice: a borrowed
+    /// parameter and an alias of it still denote the same graph even
+    /// though neither is a giveable owner.  The prepass lets
+    /// `return view, owner` and `return borrowed, borrowed` diagnose
+    /// duplication before suggesting a repair that simply repeats the
+    /// same graph in another slot (S23, S45).
+    fn visibleOwnershipRoot(
+        self: *FunctionBuilder,
+        expression: *const ast.Expression,
+    ) Error!?LocalId {
+        const named = switch (expression.*) {
+            .name => expression,
+            .give => |given| given.operand,
+            else => return null,
+        };
+        if (named.* != .name) return null;
+        const found = self.findLocal(named.name.text) orelse return null;
+        if (!found.info.carries) return null;
+        if (found.info.class == .alias) {
+            if (found.info.owner_name) |owner| {
+                if (self.findLocal(owner)) |root| return root.info.local;
+            }
+        }
+        return found.info.local;
+    }
+
     fn lowerReturn(self: *FunctionBuilder, returned: ast.Return) Error!void {
         if (returned.values.len >= 2) return self.lowerReturnShape(returned);
         if (returned.values.len == 1) {
@@ -4355,48 +5017,34 @@ pub const FunctionBuilder = struct {
                         // because a compiler that unwraps its beliefs
                         // crashes when one turns out to be wrong.
                         const found = self.findLocal(name.text) orelse return;
-                        switch (found.info.class) {
-                            .owned => {
-                                moved_storage[0] = found.info.local;
-                                moved = moved_storage[0..1];
-                            },
-                            .borrow_param => {
-                                try self.fail(
-                                    "luce.sema.own",
-                                    returned.span,
-                                    "{s} is a borrowed parameter; return copy {s}, or take the parameter as give [OWNERSHIP.md S17]",
-                                    .{ name.text, name.text },
-                                );
-                                return;
-                            },
-                            .alias => {
-                                try self.fail(
-                                    "luce.sema.own",
-                                    returned.span,
-                                    "{s} aliases an object it does not own; return copy {s} or return the owning name [OWNERSHIP.md S16, S17]",
-                                    .{ name.text, name.text },
-                                );
-                                return;
-                            },
-                            .inout_receiver => {
-                                try self.fail(
-                                    "luce.sema.own",
-                                    returned.span,
-                                    "self is the caller's receiver and cannot be moved out; return copy self [OWNERSHIP.md S17, SELF.md D4]",
-                                    .{},
-                                );
-                                return;
-                            },
-                        }
+                        if (try self.refuseBorrowedReturn(
+                            returned.span,
+                            name.text,
+                            found.info,
+                            value.value_type,
+                            &.{},
+                            false,
+                        )) return;
+                        moved_storage[0] = found.info.local;
+                        moved = moved_storage[0..1];
                     },
                     else => {
                         if (!(try self.yieldsOwnership(expression))) {
-                            try self.fail(
-                                "luce.sema.own",
-                                returned.span,
-                                "this object is borrowed from a container or struct; return a copy [OWNERSHIP.md S17, S22]",
-                                .{},
-                            );
+                            if (try self.analyzer.carriesResource(value.value_type)) {
+                                try self.fail(
+                                    "luce.sema.own",
+                                    returned.span,
+                                    "this resource graph is borrowed from a container or struct and cannot be copied or moved from this view; obtain an owned value from an ownership-returning operation or redesign the return [OWNERSHIP.md S17, S22, S31]",
+                                    .{},
+                                );
+                            } else {
+                                try self.fail(
+                                    "luce.sema.own",
+                                    returned.span,
+                                    "this object is borrowed from a container or struct; return a copy [OWNERSHIP.md S17, S22]",
+                                    .{},
+                                );
+                            }
                             return;
                         }
                         // The fresh return value was parked as a
@@ -4455,16 +5103,11 @@ pub const FunctionBuilder = struct {
         try self.code.ret(null);
     }
 
-    /// `return a, b` — S16 said once per value, and nothing more
-    /// (OWNERSHIP.md S45, docs/RETURNS.md §3).
-    ///
-    /// Each value moves independently to the caller; a borrowed
-    /// parameter or an alias in any position is S17 exactly and says
-    /// so with the words it already had.  The one fact the single-value
-    /// channel never had to state is that **the values must be distinct
-    /// objects**: two moves of one handle would leave two caller
-    /// bindings owning it and free it twice.  That is the only
-    /// genuinely new check here, and it is where `moved` already is.
+    /// `return a, b` applies the ordinary per-value S16/S17 move rules,
+    /// then adds the shaped channel's two cross-slot facts: one graph
+    /// cannot fill two results, and a later operand cannot give or
+    /// replace an owned name whose old value was already staged for an
+    /// earlier result (OWNERSHIP.md S23, S45).
     fn lowerReturnShape(self: *FunctionBuilder, returned: ast.Return) Error!void {
         if (self.results.len < 2) {
             for (returned.values) |expression| _ = try self.lowerExpression(expression, false);
@@ -4485,15 +5128,62 @@ pub const FunctionBuilder = struct {
             return;
         }
 
+        // Preflight visible roots before lowering: `return xs, give
+        // xs` otherwise loads the first handle and poisons the name
+        // only while lowering the second operand, allowing two caller
+        // bindings to receive one object.  A give spelling is the one
+        // form the ordinary post-lowering duplicate-name check cannot
+        // recover (S23, S45).
+        const resource_roots = try self.arena().alloc(?LocalId, returned.values.len);
+        const resource_conflicts = try self.arena().alloc(bool, returned.values.len);
+        @memset(resource_conflicts, false);
+        for (returned.values, resource_roots) |expression, *root| {
+            root.* = try self.visibleOwnershipRoot(expression);
+        }
+        for (resource_roots, 0..) |root, position| {
+            const wanted = root orelse continue;
+            for (resource_roots, 0..) |other, other_position| {
+                if (position != other_position and other != null and other.? == wanted) {
+                    resource_conflicts[position] = true;
+                    break;
+                }
+            }
+        }
+        for (returned.values, self.results, resource_conflicts) |expression, result_type, conflict| {
+            if (!conflict or expression.* != .give) continue;
+            const operand = expression.give.operand;
+            if (operand.* != .name) continue;
+            const found = self.findLocal(operand.name.text) orelse continue;
+            if (found.info.class != .owned or found.info.poisoned != null or
+                self.declaredOutsideActiveLoop(found.depth)) continue;
+            const local_type = self.code.localType(found.info.local);
+            if (local_type == .optional and !self.isNarrowed(found.info.local)) continue;
+            const given_type = local_type.held() orelse local_type;
+            if (!given_type.eql(result_type) and !given_type.widensTo(result_type)) continue;
+            try self.fail(
+                "luce.sema.own",
+                expression.span(),
+                "one object graph is used by more than one return result, including this give; one graph cannot be owned twice — supply distinct owned graphs or change the return shape [OWNERSHIP.md S23, S45]",
+                .{},
+            );
+            return;
+        }
+
         // One walk, so an operand that splits blocks cannot strand the
         // ones before it — the same rule every other operand run keeps.
-        const values = (try self.lowerOperandsInto(returned.values, .{ .places = self.results })) orelse return;
+        const staged_owners = try self.arena().alloc(?StagedOperandOwner, returned.values.len);
+        const values = (try self.lowerOperandsIntoTracking(
+            returned.values,
+            .{ .places = self.results },
+            staged_owners,
+        )) orelse return;
+        const fitted_values = try self.arena().alloc(Typed, values.len);
         const registers = try self.arena().alloc(Register, values.len);
-
-        var moved: std.ArrayList(LocalId) = .empty;
-        defer moved.deinit(self.temporary());
+        // Type errors retain precedence over cross-operand ownership
+        // effects.  Fit every staged result first, then ask whether a
+        // later operand poisoned or replaced one of the names.
         for (values, returned.values, 0..) |lowered, expression, position| {
-            const value = (try self.fit(lowered, self.results[position])) orelse {
+            fitted_values[position] = (try self.fit(lowered, self.results[position])) orelse {
                 try self.fail(
                     "luce.sema.type",
                     expression.span(),
@@ -4508,7 +5198,35 @@ pub const FunctionBuilder = struct {
                 );
                 return;
             };
-            if (try self.movesOut(expression, value, &moved)) |register| {
+        }
+        // A later operand may hand over a binding loaded by an earlier
+        // bare-name result through a nested call (`return xs,
+        // hand(give xs)`).  Recheck after the whole operand batch so a
+        // staged register can never outlive the ownership move that
+        // happened to its right (S10, S23, S45).
+        for (returned.values) |expression| {
+            if (expression.* != .name) continue;
+            const found = self.findLocal(expression.name.text) orelse continue;
+            if (!found.info.carries) continue;
+            if (try self.checkPoisoned(found.info, expression.name.text, expression.span())) return;
+        }
+        for (staged_owners, returned.values) |maybe_staged, expression| {
+            const staged = maybe_staged orelse continue;
+            const current = self.localById(staged.local) orelse continue;
+            if (current.revision == staged.revision) continue;
+            try self.fail(
+                "luce.sema.own",
+                expression.span(),
+                "{s} was replaced by a later return expression after its old value was staged; evaluate the writing operation first, then return distinct current values [OWNERSHIP.md S5, S23, S45, SELF.md D3]",
+                .{staged.name},
+            );
+            return;
+        }
+
+        var moved: std.ArrayList(LocalId) = .empty;
+        defer moved.deinit(self.temporary());
+        for (fitted_values, returned.values, 0..) |value, expression, position| {
+            if (try self.movesOut(expression, value, &moved, resource_conflicts[position])) |register| {
                 registers[position] = register;
             } else return;
         }
@@ -4538,6 +5256,7 @@ pub const FunctionBuilder = struct {
         expression: *const ast.Expression,
         value: Typed,
         moved: *std.ArrayList(LocalId),
+        resource_conflict: bool,
     ) Error!?Register {
         if (!self.analyzer.carriesObjects(value.value_type)) {
             return try self.ownedForStore(value);
@@ -4546,61 +5265,46 @@ pub const FunctionBuilder = struct {
         switch (expression.*) {
             .name => |name| {
                 const found = self.findLocal(name.text) orelse return null;
-                switch (found.info.class) {
-                    .owned => {
-                        // The genuinely new check.  `return` is a
-                        // terminator, so with one value there was
-                        // never anything after it to poison — the
-                        // comma is what puts something after a return
-                        // for the first time (docs/RETURNS.md §3).
-                        if (std.mem.indexOfScalar(LocalId, moved.items, found.info.local) != null) {
-                            try self.fail(
-                                "luce.sema.own",
-                                expression.span(),
-                                "{s} is returned twice; one object cannot be owned twice [OWNERSHIP.md S23, S45]",
-                                .{name.text},
-                            );
-                            return null;
-                        }
-                        try moved.append(self.temporary(), found.info.local);
-                    },
-                    .borrow_param => {
-                        try self.fail(
-                            "luce.sema.own",
-                            expression.span(),
-                            "{s} is a borrowed parameter; return copy {s}, or take the parameter as give [OWNERSHIP.md S17]",
-                            .{ name.text, name.text },
-                        );
-                        return null;
-                    },
-                    .alias => {
-                        try self.fail(
-                            "luce.sema.own",
-                            expression.span(),
-                            "{s} aliases an object it does not own; return copy {s} or return the owning name [OWNERSHIP.md S16, S17]",
-                            .{ name.text, name.text },
-                        );
-                        return null;
-                    },
-                    .inout_receiver => {
-                        try self.fail(
-                            "luce.sema.own",
-                            expression.span(),
-                            "self is the caller's receiver and cannot be moved out; return copy self [OWNERSHIP.md S17, SELF.md D4]",
-                            .{},
-                        );
-                        return null;
-                    },
-                }
-            },
-            else => {
-                if (!(try self.yieldsOwnership(expression))) {
+                if (try self.refuseBorrowedReturn(
+                    expression.span(),
+                    name.text,
+                    found.info,
+                    value.value_type,
+                    moved.items,
+                    resource_conflict,
+                )) return null;
+                // The genuinely new check.  `return` is a terminator,
+                // so with one value there was never anything after it
+                // to poison — the comma is what puts something after
+                // a return for the first time (docs/RETURNS.md §3).
+                if (std.mem.indexOfScalar(LocalId, moved.items, found.info.local) != null) {
                     try self.fail(
                         "luce.sema.own",
                         expression.span(),
-                        "this object is borrowed from a container or struct; return a copy [OWNERSHIP.md S17, S22]",
-                        .{},
+                        "{s} is returned twice; one object cannot be owned twice [OWNERSHIP.md S23, S45]",
+                        .{name.text},
                     );
+                    return null;
+                }
+                try moved.append(self.temporary(), found.info.local);
+            },
+            else => {
+                if (!(try self.yieldsOwnership(expression))) {
+                    if (try self.analyzer.carriesResource(value.value_type)) {
+                        try self.fail(
+                            "luce.sema.own",
+                            expression.span(),
+                            "this resource graph is borrowed from a container or struct and cannot be copied or moved from this view; obtain an owned value from an ownership-returning operation or redesign the return [OWNERSHIP.md S17, S22, S31]",
+                            .{},
+                        );
+                    } else {
+                        try self.fail(
+                            "luce.sema.own",
+                            expression.span(),
+                            "this object is borrowed from a container or struct; return a copy [OWNERSHIP.md S17, S22]",
+                            .{},
+                        );
+                    }
                     return null;
                 }
                 self.disownTemp(value.register);
@@ -5303,7 +6007,7 @@ pub const FunctionBuilder = struct {
             try self.fail(
                 "luce.sema.own",
                 give.span,
-                "give moves a named object; use copy for other expressions [OWNERSHIP.md S10, S31]",
+                "give moves a bare owning name; pass a fresh expression without give, or copy a resource-free borrowed expression [OWNERSHIP.md S10, S21, S31]",
                 .{},
             );
             return null;
@@ -5329,22 +6033,83 @@ pub const FunctionBuilder = struct {
             try self.fail(
                 "luce.sema.own",
                 give.span,
-                "give applies to objects (list, map, array, builder, object-carrying structs), not values [OWNERSHIP.md S32]",
+                "give applies to containers and resources (list, map, array, builder, file, task) and structs that carry them, not values [OWNERSHIP.md S32]",
                 .{},
             );
             return null;
         }
         if (try self.checkPoisoned(info, name, give.span)) return null;
+        const carries_resource = try self.analyzer.carriesResource(local_type);
+        if (local_type == .optional and !self.isNarrowed(local)) {
+            if (carries_resource) {
+                try self.fail(
+                    "luce.sema.own",
+                    give.span,
+                    "{s} may be absent and its payload carries a file or task that cannot be copied; prove the binding is present first — a borrowing site then removes give, while an ownership-taking site must receive the narrowed live owner [OWNERSHIP.md S13, S31, S43]",
+                    .{try self.analyzer.typeName(local_type)},
+                );
+            } else {
+                try self.failAbsence(give.span, "give", local_type, give.operand);
+            }
+            return null;
+        }
+        if ((info.class == .owned or info.class == .borrow_param) and
+            self.declaredOutsideActiveLoop(found.depth))
+        {
+            if (carries_resource) {
+                try self.fail(
+                    "luce.sema.own",
+                    give.span,
+                    "{s} is declared outside this loop; giving it would poison the next iteration — remove give to keep borrowing it, or create or receive a distinct owned resource inside each iteration for an ownership-taking site [OWNERSHIP.md S13, S30, S31]",
+                    .{name},
+                );
+            } else {
+                try self.fail(
+                    "luce.sema.own",
+                    give.span,
+                    "{s} is declared outside this loop; the next iteration would use a given-away name — create it fresh inside the loop, or copy [OWNERSHIP.md S30]",
+                    .{name},
+                );
+            }
+            return null;
+        }
         if (info.class == .borrow_param) {
+            if (carries_resource) {
+                try self.fail(
+                    "luce.sema.own",
+                    give.span,
+                    "{s} is a borrowed parameter carrying a file or task — remove give to keep borrowing it; if this site must take ownership, change the parameter to give and make every caller pass ownership (give NAME for an owning name; fresh values need no verb) [OWNERSHIP.md S11, S12, S13, S14, S31]",
+                    .{name},
+                );
+                return null;
+            }
             try self.fail(
                 "luce.sema.own",
                 give.span,
-                "{s} is a borrowed parameter and cannot be given; take it as give in the signature, or copy it [OWNERSHIP.md S12]",
-                .{name},
+                "{s} is a borrowed parameter and cannot be given; replace this with copy {s}, or change it to a give parameter and make each call site pass ownership (give or copy for an owning name; fresh values need no verb) [OWNERSHIP.md S12, S13, S14]",
+                .{ name, name },
             );
             return null;
         }
         if (info.class == .inout_receiver) {
+            if (carries_resource) {
+                if (self.declaredOutsideActiveLoop(found.depth)) {
+                    try self.fail(
+                        "luce.sema.own",
+                        give.span,
+                        "self comes from outside this loop and carries a file or task — remove give to keep borrowing self; an ownership-taking site needs a distinct owned value created or received inside each iteration [SELF.md D4, OWNERSHIP.md S11, S12, S13, S30, S31]",
+                        .{},
+                    );
+                } else {
+                    try self.fail(
+                        "luce.sema.own",
+                        give.span,
+                        "self is the caller's receiver and carries a file or task — remove give to keep borrowing self; if this site must take ownership, pass a separate give parameter [SELF.md D4, OWNERSHIP.md S11, S12, S13, S31]",
+                        .{},
+                    );
+                }
+                return null;
+            }
             try self.fail(
                 "luce.sema.own",
                 give.span,
@@ -5358,7 +6123,16 @@ pub const FunctionBuilder = struct {
         // `not_owned` at the give; the class is known right here, so
         // the answer is given here instead (S23).
         if (info.class == .alias) {
-            if (self.ownerNameFor(info)) |owner| {
+            if (self.giveableOwnerNameFor(info)) |owner| {
+                if (carries_resource) {
+                    try self.fail(
+                        "luce.sema.own",
+                        give.span,
+                        "{s} aliases a resource graph it does not own — remove give to keep borrowing this view; if this site must take ownership, write give {s}, the live owning binding [OWNERSHIP.md S8, S11, S13, S23, S31]",
+                        .{ name, owner },
+                    );
+                    return null;
+                }
                 try self.fail(
                     "luce.sema.own",
                     give.span,
@@ -5366,6 +6140,15 @@ pub const FunctionBuilder = struct {
                     .{ name, owner, name },
                 );
             } else {
+                if (carries_resource) {
+                    try self.fail(
+                        "luce.sema.own",
+                        give.span,
+                        "{s} aliases a resource graph it does not own — remove give only if this still names a live borrowed view; if its owner was replaced or this site must take ownership, obtain an owned value from an ownership-returning operation or redesign the handoff [OWNERSHIP.md S8, S11, S13, S23, S31]",
+                        .{name},
+                    );
+                    return null;
+                }
                 try self.fail(
                     "luce.sema.own",
                     give.span,
@@ -5373,24 +6156,6 @@ pub const FunctionBuilder = struct {
                     .{ name, name },
                 );
             }
-            return null;
-        }
-        if (self.loops.items.len > 0 and
-            found.depth < self.loops.items[self.loops.items.len - 1].scope_depth)
-        {
-            try self.fail(
-                "luce.sema.own",
-                give.span,
-                "{s} is declared outside this loop; the next iteration would use a given-away name — create it fresh inside the loop, or copy [OWNERSHIP.md S30]",
-                .{name},
-            );
-            return null;
-        }
-        // An object that might not be there cannot be handed over: the
-        // receiver would own a question, not a thing.  Narrowing is
-        // what turns it back into a thing.
-        if (local_type == .optional and !self.isNarrowed(local)) {
-            try self.failAbsence(give.span, "give", local_type, give.operand);
             return null;
         }
         info.poisoned = .given;
@@ -5490,10 +6255,25 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    /// copy EXPR — a deep, independent duplicate; always legal on
-    /// readable objects (S31).
+    /// copy EXPR — a deep, independent duplicate of a readable object.
+    /// Resources have one owner and cannot occur anywhere in that copy.
     fn lowerCopy(self: *FunctionBuilder, copied: ast.Copy) Error!?Typed {
         const value = (try self.lowerExpression(copied.operand, false)) orelse return null;
+        const carries_resource = try self.analyzer.carriesResource(value.value_type);
+        // The ordinary optional diagnostic says to test and continue,
+        // but that would only reveal the next refusal here: a present
+        // resource graph is still non-copyable.  Say both facts once
+        // and give only a move/restructure repair.
+        if (value.value_type == .optional and carries_resource) {
+            const advice = try self.resourceCopyAdvice(copied.operand);
+            try self.fail(
+                "luce.sema.own",
+                copied.span,
+                "{s} may be absent and, when present, carries a file or task that cannot be copied; prove the owning binding is present, then {s} [OWNERSHIP.md S31, S43]",
+                .{ try self.analyzer.typeName(value.value_type), advice },
+            );
+            return null;
+        }
         // Copying a question makes no sense: there may be nothing to
         // duplicate.  Test it first.
         if (try self.refusesAbsence(value, "copy", copied.span, copied.operand)) return null;
@@ -5501,7 +6281,7 @@ pub const FunctionBuilder = struct {
             try self.fail(
                 "luce.sema.own",
                 copied.span,
-                "copy applies to objects (list, map, array, builder, object-carrying structs); values copy by themselves [OWNERSHIP.md S32]",
+                "copy applies to resource-free containers and carrying structs; values copy by themselves, and resources move with give [OWNERSHIP.md S31, S32]",
                 .{},
             );
             return null;
@@ -5515,11 +6295,12 @@ pub const FunctionBuilder = struct {
         if (value.value_type == .heap and
             self.analyzer.heap_types.items[value.value_type.heap] == .file)
         {
+            const advice = try self.resourceCopyAdvice(copied.operand);
             try self.fail(
                 "luce.sema.own",
                 copied.span,
-                "a file cannot be copied; there is one open file behind a handle — give it instead [BYTES.md R5]",
-                .{},
+                "a file cannot be copied; there is one open file behind a handle — {s} [BYTES.md R5]",
+                .{advice},
             );
             return null;
         }
@@ -5529,11 +6310,27 @@ pub const FunctionBuilder = struct {
         if (value.value_type == .heap and
             self.analyzer.heap_types.items[value.value_type.heap] == .task)
         {
+            const advice = try self.resourceCopyAdvice(copied.operand);
             try self.fail(
                 "luce.sema.own",
                 copied.span,
-                "a task cannot be copied; there is one worker behind it — give it instead [THREADS.md D3]",
-                .{},
+                "a task cannot be copied; there is one worker behind it — {s} [THREADS.md D3]",
+                .{advice},
+            );
+            return null;
+        }
+        // The same rule is transitive.  A container or struct owns the
+        // resources nested inside it; copying the outer object would
+        // still manufacture a second Luce owner for the one file or
+        // worker.  The type graph may be cyclic through containers, so
+        // the analyzer answers this with its iterative visited walk.
+        if (carries_resource) {
+            const advice = try self.resourceCopyAdvice(copied.operand);
+            try self.fail(
+                "luce.sema.own",
+                copied.span,
+                "{s} contains a file or task and cannot be copied; resources have one owner — {s} [OWNERSHIP.md S31, BYTES.md R5, THREADS.md D3]",
+                .{ try self.analyzer.typeName(value.value_type), advice },
             );
             return null;
         }
@@ -5696,8 +6493,9 @@ pub const FunctionBuilder = struct {
             if (self.analyzer.carriesObjects(element.value_type) and !(try self.yieldsOwnership(expression))) {
                 try self.failNeedsOwnership(
                     expression.span(),
-                    "a container literal keeps its object elements",
+                    "a container literal keeps its owned elements",
                     expression,
+                    element.value_type,
                     "S21",
                 );
                 return null;
@@ -5799,8 +6597,9 @@ pub const FunctionBuilder = struct {
                 if (try self.refuseConstantEscape(value.root, entry.value.span(), "a map store")) return null;
                 try self.failNeedsOwnership(
                     entry.value.span(),
-                    "a map literal keeps its object values",
+                    "a map literal keeps its owned values",
                     entry.value,
+                    value.value_type,
                     "S21",
                 );
                 return null;
@@ -5853,7 +6652,6 @@ pub const FunctionBuilder = struct {
             });
             return null;
         }
-
         const lowered_bounds = sequence[1..];
         for (lowered_bounds) |*value| {
             if (!try self.widensInto(value, .long)) {
@@ -5876,6 +6674,29 @@ pub const FunctionBuilder = struct {
             const whole = try self.arena().alloc(Register, 1);
             whole[0] = target.register;
             end = try self.code.emit(.{ .intrinsic = .{ .kind = .len, .arguments = whole } }, .long);
+        }
+
+        // A list slice owns a deep copy of every element it traverses
+        // (S31), so a resource-carrying element type normally cannot
+        // take this path.  Equal constant bounds are the narrow proof
+        // that the runtime loop executes zero times: this is both a
+        // useful empty-list constructor for std.lists' closed
+        // specialization and genuinely performs no copy.  Dynamic or
+        // unequal bounds retain the type-driven refusal.  Bounds are
+        // checked first so `xs["a":"b"]` still teaches their type
+        // before ownership can matter.
+        const empty = if (self.constantLong(start)) |from|
+            if (self.constantLong(end)) |to| from == to else false
+        else
+            false;
+        if (!is_string and !empty and try self.analyzer.carriesResource(target.value_type)) {
+            try self.fail(
+                "luce.sema.own",
+                slice.span,
+                "a list slice deep-copies its elements, but {s} carries a file or task; only equal compile-time bounds make a resource-safe empty slice [OWNERSHIP.md S31, S32]",
+                .{try self.analyzer.typeName(target.value_type)},
+            );
+            return null;
         }
 
         const arguments = try self.arena().alloc(Register, 3);
@@ -6985,21 +7806,13 @@ pub const FunctionBuilder = struct {
             );
             return null;
         }
-        // The verbs, exactly as a direct call checks them (D5): a give
-        // parameter needs `give NAME`, `copy NAME` or something fresh,
-        // and a borrowing one refuses a give.
+        // A borrowing parameter refuses `give` before the expression
+        // lowers: lowering the verb would otherwise poison an owned
+        // name before reporting that nobody receives it.  The other
+        // half of the verb rule waits until after fitting below, so a
+        // type mistake is not described as an ownership mistake.
         for (call.arguments, signature.parameters) |argument, parameter| {
-            if (parameter.gives) {
-                if (!(try self.yieldsOwnership(argument.value))) {
-                    try self.failNeedsOwnership(
-                        argument.span,
-                        try std.fmt.allocPrint(self.arena(), "this argument of {s} takes ownership", .{call.callee}),
-                        argument.value,
-                        "S13, S14",
-                    );
-                    return null;
-                }
-            } else if (argument.value.* == .give) {
+            if (!parameter.gives and argument.value.* == .give) {
                 try self.fail(
                     "luce.sema.own",
                     argument.span,
@@ -7028,6 +7841,16 @@ pub const FunctionBuilder = struct {
                 });
                 return null;
             };
+            if (parameter.gives and !(try self.yieldsOwnership(expressions[index]))) {
+                try self.failNeedsOwnership(
+                    call.arguments[index].span,
+                    try std.fmt.allocPrint(self.arena(), "this argument of {s} takes ownership", .{call.callee}),
+                    expressions[index],
+                    value.value_type,
+                    "S13, S14",
+                );
+                return null;
+            }
             slot.* = fitted.register;
         }
         if (signature.result == .none and !as_statement) {
@@ -7193,9 +8016,33 @@ pub const FunctionBuilder = struct {
                 );
                 return null;
             }
+            // `Runtime.copyFrom` is the worker boundary.  It can re-own
+            // ordinary object graphs, but a file belongs to the runtime
+            // that opened it and a task owns a worker allocated by the
+            // runtime that spawned it.  Refuse those types here rather
+            // than letting `spawn` or `wait` reach the runtime's
+            // defensive `not_owned` trap.
+            if (info.results.len == 1 and try self.analyzer.carriesResource(info.return_type)) {
+                try self.fail(
+                    "luce.sema.own",
+                    span,
+                    "{s} answers {s}, which carries a file or task; a resource stays in the worker Runtime that created it and cannot cross back through wait [THREADS.md D1, D4]",
+                    .{ name, try self.analyzer.typeName(info.return_type) },
+                );
+                return null;
+            }
             // A borrow cannot cross: the callee's runtime is not this
             // one, so there is nothing here for it to borrow *from*.
             for (info.parameter_types, info.parameter_modes, info.declaration.parameters) |held, mode, parameter| {
+                if (try self.analyzer.carriesResource(held)) {
+                    try self.fail(
+                        "luce.sema.own",
+                        span,
+                        "parameter {s} of {s} is {s}, which carries a file or task; a resource stays in the Runtime that created it and cannot cross a worker boundary [THREADS.md D1, D2]",
+                        .{ parameter.name, name, try self.analyzer.typeName(held) },
+                    );
+                    return null;
+                }
                 if (mode == .give) continue;
                 if (!self.analyzer.carriesObjects(held)) continue;
                 try self.fail(
@@ -7226,21 +8073,13 @@ pub const FunctionBuilder = struct {
         const slots = (try self.resolveSlots(name, "luce.sema.call", surface, 0, call_arguments, seen, span)) orelse
             return null;
         if (!(try self.checkRequiredSlots(name, "luce.sema.call", surface, seen, span))) return null;
-        // Ownership handoffs are never invisible: a give parameter
-        // needs give NAME, copy NAME, or something fresh at the call
-        // site; a borrow parameter refuses a give (S13, S14).
+        // Refuse a `give` to a borrowing parameter before lowering it,
+        // so an owned name is not poisoned on an already-invalid call.
+        // A give parameter's ownership check follows fitting below:
+        // type errors take precedence, and any advice describes the
+        // argument's real type rather than the destination type.
         for (call_arguments, slots) |argument, slot| {
-            if (info.parameter_modes[slot] == .give) {
-                if (!(try self.yieldsOwnership(argument.value))) {
-                    try self.failNeedsOwnership(
-                        argument.span,
-                        try std.fmt.allocPrint(self.arena(), "argument {d} of {s} takes ownership", .{ slot + 1, name }),
-                        argument.value,
-                        "S13, S14",
-                    );
-                    return null;
-                }
-            } else if (argument.value.* == .give) {
+            if (info.parameter_modes[slot] != .give and argument.value.* == .give) {
                 try self.fail(
                     "luce.sema.own",
                     argument.span,
@@ -7285,6 +8124,18 @@ pub const FunctionBuilder = struct {
                 }
                 return null;
             };
+            if (info.parameter_modes[slot] == .give and
+                !(try self.yieldsOwnership(expressions[index])))
+            {
+                try self.failNeedsOwnership(
+                    call_arguments[index].span,
+                    try std.fmt.allocPrint(self.arena(), "argument {d} of {s} takes ownership", .{ slot + 1, name }),
+                    expressions[index],
+                    value.value_type,
+                    "S13, S14",
+                );
+                return null;
+            }
             registers[slot] = fitted.register;
         }
         // A slot nobody filled takes its default: the constant
@@ -7568,8 +8419,9 @@ pub const FunctionBuilder = struct {
                     if (!(try self.yieldsOwnership(method.arguments[value_index].value))) {
                         try self.failNeedsOwnership(
                             method.arguments[value_index].span,
-                            "a container keeps its object elements",
+                            "a container keeps its owned elements",
                             method.arguments[value_index].value,
+                            arguments[value_index].value_type,
                             "S21",
                         );
                         return null;
@@ -7770,26 +8622,12 @@ pub const FunctionBuilder = struct {
             return null;
         if (!(try self.checkRequiredSlots(method.name, "luce.sema.method", surface, seen, method.span))) return null;
 
-        // Ownership at the call site is the plain-call rule said once
-        // per argument: a give parameter needs `give`/`copy`/something
-        // fresh, and a borrow parameter refuses a `give` (S13, S14).
-        // The receiver never takes a verb — it is a struct value.
+        // The receiver never takes a verb — it is a struct value.  A
+        // written `give` to a borrowing parameter is refused before
+        // fitting; the give-parameter half waits until after fitting
+        // below so a type mistake wins and advice names the real type.
         for (method.arguments, slots) |argument, slot| {
-            if (info.parameter_modes[slot] == .give) {
-                if (!(try self.yieldsOwnership(argument.value))) {
-                    try self.failNeedsOwnership(
-                        argument.span,
-                        try std.fmt.allocPrint(
-                            self.arena(),
-                            "argument {d} of {s} takes ownership",
-                            .{ slot, method.name },
-                        ),
-                        argument.value,
-                        "S13, S14",
-                    );
-                    return null;
-                }
-            } else if (argument.value.* == .give) {
+            if (info.parameter_modes[slot] != .give and argument.value.* == .give) {
                 try self.fail(
                     "luce.sema.own",
                     argument.span,
@@ -7828,6 +8666,22 @@ pub const FunctionBuilder = struct {
                 }
                 return null;
             };
+            if (info.parameter_modes[slot] == .give and
+                !(try self.yieldsOwnership(argument.value)))
+            {
+                try self.failNeedsOwnership(
+                    argument.span,
+                    try std.fmt.allocPrint(
+                        self.arena(),
+                        "argument {d} of {s} takes ownership",
+                        .{ slot, method.name },
+                    ),
+                    argument.value,
+                    value.value_type,
+                    "S13, S14",
+                );
+                return null;
+            }
             // A writing method may replace its receiver while this
             // ordinary argument is still live in the callee.  If the
             // argument borrows string or struct storage from that
@@ -7895,6 +8749,18 @@ pub const FunctionBuilder = struct {
                 info.return_type,
             );
         };
+        // A writing method may replace the whole struct in its caller's
+        // slot.  Aliases made before the call still name the old graph;
+        // keeping their collapsed owner name would make a later refusal
+        // recommend moving the unrelated replacement (S8, SELF D3-D4).
+        if (info.receiver == .writes and method.target.* == .name) {
+            if (self.findLocal(method.target.name.text)) |receiver| {
+                if (self.analyzer.carriesObjects(receiver_type)) {
+                    self.forgetAliasesOwnedBy(method.target.name.text);
+                }
+                receiver.info.revision +%= 1;
+            }
+        }
         const answered: Typed = if (info.fallible)
             try self.openFallible(call, info.return_type)
         else
@@ -8541,6 +9407,19 @@ pub const FunctionBuilder = struct {
                 }
                 if (std.mem.eql(u8, name, "values")) {
                     if (!try self.methodTakes(method, arguments, receiver)) return null;
+                    // `values()` answers a fresh list that independently
+                    // owns a deep copy of every map value.  A resource
+                    // has one owner, so no resource-carrying value type
+                    // can take that copying path (S31, S32).
+                    if (try self.analyzer.carriesResource(pair.value)) {
+                        try self.fail(
+                            "luce.sema.own",
+                            method.span,
+                            "map.values() deep-copies every value, but {s} carries a file or task; access those values through the map instead [OWNERSHIP.md S31, S32]",
+                            .{try self.analyzer.typeName(pair.value)},
+                        );
+                        return null;
+                    }
                     return .{ .kind = .map_values, .result = try self.analyzer.internHeapType(.{ .list = pair.value }) };
                 }
                 if (std.mem.eql(u8, name, "get")) {
@@ -8808,8 +9687,9 @@ pub const FunctionBuilder = struct {
             {
                 try self.failNeedsOwnership(
                     argument.span,
-                    try std.fmt.allocPrint(self.arena(), "{s}.{s} keeps its object", .{ layout.name, name }),
+                    try std.fmt.allocPrint(self.arena(), "{s}.{s} keeps its owned value", .{ layout.name, name }),
                     argument.value,
+                    expected,
                     "S21, S24",
                 );
                 return null;
@@ -9247,6 +10127,11 @@ pub const FunctionBuilder = struct {
         const slots = (try self.resolveSlots(matched.name, "luce.sema.call", surface, 0, call.arguments, seen, call.span)) orelse
             return .failed;
         if (!(try self.checkRequiredSlots(matched.name, "luce.sema.call", surface, seen, call.span))) return .failed;
+        if (matched.kind == .free_object and call.arguments.len == 1 and
+            try self.refuseFreeVerb(call.arguments[0].value, call.arguments[0].span))
+        {
+            return .failed;
+        }
         var argument_expressions: [3]*ast.Expression = undefined;
         for (call.arguments, 0..) |argument, index| {
             // Builtins borrow (S11); a give with no owner to receive
@@ -9382,17 +10267,30 @@ pub const FunctionBuilder = struct {
                         try self.failAbsence(call.span, "free", arguments[0].value_type, call.arguments[0].value);
                         return .failed;
                     }
-                    return self.failIntrinsic(call, "free releases a list, map, array, or builder");
+                    return self.failIntrinsic(call, "free releases a list, map, array, builder, file, or task");
                 }
                 // free is deliberate early release of an owned name,
                 // and poisons the name like give does (S6).
                 if (operand.* != .name) {
-                    try self.fail(
-                        "luce.sema.own",
-                        call.span,
-                        "free releases an owned name; containers free their own elements [OWNERSHIP.md S6, S22]",
-                        .{},
-                    );
+                    if (operand.* == .copy) {
+                        // Reaching this point proves the inner copy was
+                        // itself legal and produced a direct heap handle.
+                        // Diagnose free's binding requirement only after
+                        // preserving every earlier copy/name/type error.
+                        try self.fail(
+                            "luce.sema.own",
+                            call.span,
+                            "free releases an owned name; bind this copy result to a name, then write free(NAME) [OWNERSHIP.md S6, S31]",
+                            .{},
+                        );
+                    } else {
+                        try self.fail(
+                            "luce.sema.own",
+                            call.span,
+                            "free releases an owned name; containers free their own elements [OWNERSHIP.md S6, S22]",
+                            .{},
+                        );
+                    }
                     return .failed;
                 }
                 const found = self.findLocal(operand.name.text) orelse return .failed;
@@ -9407,12 +10305,43 @@ pub const FunctionBuilder = struct {
                         return .failed;
                     },
                     .alias => {
-                        try self.fail(
-                            "luce.sema.own",
-                            call.span,
-                            "{s} aliases an object it does not own; free the owning name [OWNERSHIP.md S6, S8]",
-                            .{operand.name.text},
-                        );
+                        if (self.ownerNameFor(found.info)) |owner| {
+                            const owning = self.findLocal(owner).?;
+                            const owner_type = self.code.localType(owning.info.local);
+                            if (self.declaredOutsideActiveLoop(owning.depth)) {
+                                try self.fail(
+                                    "luce.sema.own",
+                                    call.span,
+                                    "{s} is only an alias and its owner {s} lives outside this loop; neither may be freed per iteration — let the outer scope release it [OWNERSHIP.md S6, S8, S30]",
+                                    .{ operand.name.text, owner },
+                                );
+                            } else if (owner_type == .optional and !self.isNarrowed(owning.info.local)) {
+                                try self.fail(
+                                    "luce.sema.own",
+                                    call.span,
+                                    "{s} is only an alias and its owner {s} is not proven present — prove the owning binding is present, then write free({s}) [OWNERSHIP.md S6, S8, S43]",
+                                    .{ operand.name.text, owner, owner },
+                                );
+                            } else {
+                                // Preserve the established resource-free
+                                // wording; the two refinements above are
+                                // exactly the cases where that advice would
+                                // lead to another refusal.
+                                try self.fail(
+                                    "luce.sema.own",
+                                    call.span,
+                                    "{s} aliases an object it does not own; free the owning name [OWNERSHIP.md S6, S8]",
+                                    .{operand.name.text},
+                                );
+                            }
+                        } else {
+                            try self.fail(
+                                "luce.sema.own",
+                                call.span,
+                                "{s} is a borrowed or stale view with no live owner to free here; let its owner or scope release it [OWNERSHIP.md S6, S8, S23]",
+                                .{operand.name.text},
+                            );
+                        }
                         return .failed;
                     },
                     // Handled before free's heap-type gate above.  Keep

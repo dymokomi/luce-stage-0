@@ -791,19 +791,26 @@ that quietly goes out bare.
 Three claims, each justified from the body of the corresponding export:
 
 - **`nounwind`** — `libluce_rt` is Zig; a Luce trap is the `i32` a
-  fallible call returns, not an unwind.
-- **`willreturn`** — every export terminates, and a trap returns rather
-  than jumping.
+  fallible call returns, not an unwind.  Only final `report` and
+  `report_error` conservatively withhold the promise because arbitrary
+  host callbacks own their control flow.
+- **`willreturn`** — a trap returns rather than jumping, but host/worker
+  callbacks, the effect-lock wait, and release paths that can close a
+  file or join a task may not.  Until ownership cycles are prevented,
+  `copy`, `list_slice`, and `map_values` also cannot promise termination:
+  each recursively deep-copies a source graph.  Exactly twenty-three
+  exports withhold the attribute, pinned as a closed set in
+  `runtime_effects.zig`; every other export is asserted to keep it.
 - **`memory(...)`** — per function.  `argmem` is what a pointer
   argument reaches: the `*Runtime`'s trap slot and counters, a borrowed
-  `*const Value`, an out-parameter.  `inaccessiblemem` is the object
-  table, the container storage, and the value arena, none of which
-  generated code can reach — it holds objects as `i32` handles and
-  Strings as `{ptr, len}` pairs it never loads through, and the only
-  memory it ever *writes* is its own `alloca`s.  That separation is
-  what distinguishes a reader (`luce_rt_len` —
-  `memory(argmem: readwrite, inaccessiblemem: read)`) from a mutator
-  (`luce_rt_append` — `readwrite` on both).
+  `*const Value`, an out-parameter.  `inaccessiblemem` is only private
+  storage generated code cannot reach: the value arena, list/map/builder
+  buffers, and the unwind trace.  The default location includes the
+  object-table rows and array dimensions/elements because inline
+  container access reaches those directly.  That separation still lets
+  a reader such as `luce_rt_len` promise not to disturb an element store,
+  while a mutator such as `luce_rt_append` makes the general read/write
+  claim.  The detailed boundary is pinned below.
 
 `luce_rt_report` and `luce_rt_report_error` are the two exports that
 promise nothing — same attributes, same reason: each hands control to
@@ -818,9 +825,10 @@ bar for an attribute on a shared declaration: a boxed `Value` is
 because it is always an entry-block `alloca`; an out-parameter is the
 same with `writeonly`; bytes that came from a *host* service get
 `readonly nocapture` and nothing more, because the host fills those
-slots and a host is not ours to promise for.  Two pointers the runtime
-*keeps* — a trap's message and the function table — are deliberately
-not `nocapture`.
+slots and a host is not ours to promise for.  Exactly one pointer the
+runtime keeps — `luce_rt_open`'s function table — is deliberately not
+`nocapture`.  Trap words are copied into runtime-owned storage rather
+than retained from the caller.
 
 A generated Luce function makes the matching promises about its own
 hidden arguments: `%host` is `readonly nocapture nonnull noundef align
@@ -1081,9 +1089,9 @@ rather than tolerate it.
 Version history, which is also the shape of the decisions: **2**
 dropped `str_int` — a pure conversion belongs in the runtime, where it
 is `luce_rt_str` — and added `finished`.  **3** added the remaining
-host services (files, arguments, the terminal) and with them the
-single `Answer` convention, which changed `print`'s return type and so
-required the bump.  **4** made a trap a whole trap: `trap` carries the
+host-table slots (files, command-line input, the terminal) and with them
+the single `Answer` convention, which changed `print`'s return type and
+so required the bump.  **4** made a trap a whole trap: `trap` carries the
 call trace and is called once when the program has stopped, and
 `call_depth` arrived beside it, because a trace of a runaway recursion
 is only worth having if the recursion traps in the first place.  **5**
@@ -1194,18 +1202,19 @@ the conventions already there rather than inventing new ones:
 ## The lowering is total
 
 There is no list here any more.  Everything a program can say lowers:
-long, double, string, structs, all four container kinds, `T?`, `T!`,
-ownership, the math builtins, and every host service.  The two things
-that did not — `Bytes` and the evaluator ports — were cut rather than
-grown (docs/ENGINE.md steps 1 and 2), because nothing constructed a
-`Bytes` and nothing reached an evaluator.
+integers, floats, strings, structs, function values, all four container
+kinds, file/task resources and workers, `T?`, `T!`, ownership, the math
+builtins, and every host service.  The two things that did not — `Bytes`
+and the evaluator ports — were cut rather than grown (docs/ENGINE.md
+steps 1 and 2), because nothing constructed a `Bytes` and nothing
+reached an evaluator.
 
 `grep 'self.fail("' src/luce/08_llvm/lower.zig` is still the
 authority, and what it finds now is entirely refusals of IR that could
 only arrive damaged: a block without a terminator, arithmetic on a
-type that has none, an entry function with parameters.  A `.lc` is
-trusted like an executable, so those are how a forged one reports
-itself instead of being `unreachable`.
+type that has none, an entry function with more than one parameter.  A
+`.lc` is trusted like an executable, so those are how a forged one
+reports itself instead of being `unreachable`.
 
 Trap reporting is **not** on that list any more: a compiled trap
 reports its code, its message, and its call stack with

@@ -347,6 +347,24 @@ fn foldSequence(
             .{},
         );
     }
+    // Flatness belongs to the declared element type, not to today's
+    // population.  Without this check an annotated empty list/array
+    // skipped the per-element loop below and could install a program
+    // root shaped as list(task), list(list(T)), or T? — exactly the
+    // graphs R-E says a constant container cannot own.
+    if (wanted_element) |element_type| {
+        if (element_type == .optional) {
+            return constantError(
+                analyzer,
+                literal.span,
+                "constant container elements cannot be optional; choose a present value, or put the optional inside an object-free struct",
+                .{},
+            );
+        }
+        if (analyzer.carriesObjects(element_type)) {
+            return nestedContainerError(analyzer, literal.span);
+        }
+    }
 
     const folded = try analyzer.temporary.alloc(TypedConstant, literal.elements.len);
     defer analyzer.temporary.free(folded);

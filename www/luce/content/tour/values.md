@@ -71,10 +71,10 @@ func main():
 65025
 ```
 
-What you gain by writing one down is memory. An `array(byte, n)` is
-one byte an element where an `array(long, n)` is eight, and that
-eightfold difference is the whole reason the narrow types exist —
-image data, byte buffers, the dense numeric arrays a GPU wants.
+What you gain by writing one down is memory. `new array(byte, n)` uses
+one byte an element where `new array(long, n)` uses eight, and that
+eightfold difference is the whole reason the narrow types exist — image
+data, byte buffers, the dense numeric arrays a GPU wants.
 
 ```luce run
 func main():

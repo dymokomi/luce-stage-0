@@ -509,6 +509,11 @@ pub const LocalInfo = struct {
     /// Set by give/free in lowering (= source) order; any later use in
     /// this scope is a compile error (S10, S29).
     poisoned: ?Poison = null,
+    /// Successful whole-value replacement count.  A shaped return
+    /// snapshots this for an owned bare-name result before lowering the
+    /// operands to its right; a later writing method must not leave the
+    /// already-staged old value escaping beside the replacement.
+    revision: u32 = 0,
     /// True while a for-loop iterates this name: reassignment would
     /// free the collection under the loop's feet (S5 meets S9).
     iterating: bool = false,

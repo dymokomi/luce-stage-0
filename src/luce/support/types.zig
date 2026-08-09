@@ -7,10 +7,12 @@
 
 const std = @import("std");
 
-/// Host-controlled compile options.  A program is a script: exactly
-/// `func main():`, or `func main() -> !:` when it can be stopped.
-/// `allow_host` grants the host builtins (console, files, arguments,
-/// terminal) and is the only authority gate left.
+/// Host-controlled compile options.  A program is a script: `main`
+/// takes either no parameter or one `list(string)` argument parameter,
+/// and either shape may declare `-> !` — the four legal entries.
+/// `allow_host` grants the host builtins (console, files and terminal)
+/// and is the only authority gate left.  Command-line arguments are
+/// handed to `main`; they are not a callable service.
 pub const CompileOptions = struct {
     allow_host: bool = false,
     /// Display name for the root module in debug info ("dice.luc") —
@@ -45,8 +47,9 @@ pub const Type = union(enum) {
     /// does anything, so no expression ever *has* one of these types
     /// and there is no checked arithmetic at 8 or 16 bits.  They are
     /// what an annotation, a parameter, a struct field and above all
-    /// an array element may say — `array(byte, n)` at one byte an
-    /// element is what the three are for (§10).
+    /// an array element may say — `array(byte, _)`, with its extent
+    /// supplied at construction, is one byte an element and is what the
+    /// three are for (§10).
     byte,
     short,
     int,
@@ -415,8 +418,10 @@ pub const Type = union(enum) {
     }
 };
 
-/// The shape of one heap object type: what a list holds, a map's key
-/// and value, an array's element and rank, or a builder.
+/// The shape of one heap-backed type: a container's element/key/rank,
+/// or the state a scope-owned file/task resource carries.  Resources
+/// use the heap table for an owner and death point; they are not
+/// containers.
 pub const HeapType = union(enum) {
     list: Type,
     map: struct { key: Type, value: Type },
@@ -588,17 +593,18 @@ pub const Builtin = enum {
     map,
     array,
     builder,
-    /// An open file (docs/BYTES.md R5).  A heap type like the four
-    /// above it and unlike them in one way: it takes no type
+    /// An open file (docs/BYTES.md R5).  A heap-backed resource rather
+    /// than a fifth container: it takes no type
     /// argument and there is no `new file`, because a handle with no
     /// file behind it is the one thing this type must never hold.
-    /// `files.open(path)` is the only way to make one.
+    /// The raw `file_open(path, mode)` host builtin makes one;
+    /// `std.files` exposes the ordinary open/create/append wrappers.
     file,
     /// A running worker (docs/THREADS.md D3).  A resource like `file`
     /// and written with a type argument like `list`: `task(double)` is
     /// what `spawn` answers for a `func -> double`, `task` alone for a
     /// function that answers nothing, and the `!` inside — `task(T!)`,
-    /// `task!` — is the spawned function's own fallibility, which
+    /// `task(!)` — is the spawned function's own fallibility, which
     /// decides whether `wait` is a site that says `try`.  There is no
     /// `new task`: `spawn` is the only way to make one.
     task,

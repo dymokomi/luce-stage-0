@@ -42,11 +42,12 @@ A parenthesised list of **two or more** types is a
 [return shape](../types/#return-shapes): the function answers that
 many values. It is not a type, and it may be written nowhere but here.
 
-A parameter may be prefixed `give` to take ownership of an object,
-and may declare a trailing default — `start: long = 0`, a
-compile-time constant a call site may omit; call sites may also name
-arguments (see [calls](../expressions/#calls)). Every path through a
-function that declares a value return type must return; the compiler
+A parameter may be prefixed `give` to take ownership of a container
+object, resource, or carrying struct. Values never take the verb. A
+parameter may also declare a trailing default — `start: long = 0`, a
+compile-time constant a call site may omit; call sites may name
+arguments too (see [calls](../expressions/#calls)). Every path through
+a function that declares a value return type must return; the compiler
 checks it.
 
 A plain function member of a struct or enum is a [method](#methods):
@@ -480,7 +481,9 @@ const ORDER: array(long, _) = [16, 17, 18, 0]
   structs. Such a struct may contain an optional field, but an optional
   top-level element or map value is refused.
 - A bracket literal is a `list` unless an `array(T, _)` annotation
-  makes it rank 1. Empty list and array constants need an annotation.
+  makes it rank 1. Empty list and array constants need an annotation,
+  but its element type must still be flat and non-optional; zero
+  elements do not waive the constant-container boundary.
 - Constant containers are flat: no nested container, builder,
   object-carrying struct, or multidimensional array.
 - A constant map rejects duplicate folded keys and names both sites.

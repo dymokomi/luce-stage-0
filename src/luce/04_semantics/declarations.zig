@@ -622,7 +622,7 @@ pub const Analyzer = struct {
                 try self.fail(
                     "luce.sema.own",
                     part.span,
-                    "give applies to objects (list, map, array, builder, object-carrying structs), not values [OWNERSHIP.md S32]",
+                    "give applies to containers and resources (list, map, array, builder, file, task) and structs that carry them, not values [OWNERSHIP.md S32]",
                     .{},
                 );
                 return null;
@@ -726,8 +726,11 @@ pub const Analyzer = struct {
         return self.heap_types.items[of.heap];
     }
 
-    /// True for types the ownership rules apply to: heap objects and
-    /// structs transitively containing them (S27's "object-carrying").
+    /// True for types the ownership rules apply to: every heap-backed
+    /// object, including file and task resources, and structs
+    /// transitively containing one (S27's "object-carrying").  The
+    /// legacy name says "objects", but it is the broad ownership
+    /// predicate, not a list/map/array/builder-only test.
     /// An array read: `collectStructs` settles every struct's shape
     /// once the layouts are known, and struct cycles are rejected
     /// before that.
@@ -741,6 +744,73 @@ pub const Analyzer = struct {
             .optional => |payload| self.carriesObjects(payload.asType()),
             else => false,
         };
+    }
+
+    /// Whether `of` contains a scope-owned resource anywhere in its
+    /// type graph.  Files and tasks are tied to the `Runtime` that made
+    /// them: neither can be duplicated by `copy` or re-owned into a
+    /// worker's separate runtime by `Runtime.copyFrom`.
+    ///
+    /// This is an iterative graph walk, not a recursive type query.  A
+    /// source program may legitimately make `Node` contain
+    /// `list(Node)`: the container makes the value's size finite, but it
+    /// also makes the type graph cyclic.  The two visited tables keep
+    /// that cycle, and shared subgraphs, linear in the number of layouts
+    /// and interned heap shapes rather than in the number of paths.
+    pub fn carriesResource(self: *const Analyzer, of: Type) Error!bool {
+        const seen_structs = try self.temporary.alloc(bool, self.structs.items.len);
+        defer self.temporary.free(seen_structs);
+        @memset(seen_structs, false);
+
+        const seen_heaps = try self.temporary.alloc(bool, self.heap_types.items.len);
+        defer self.temporary.free(seen_heaps);
+        @memset(seen_heaps, false);
+
+        var pending: std.ArrayList(Type) = .empty;
+        defer pending.deinit(self.temporary);
+        try pending.append(self.temporary, of);
+
+        while (pending.items.len != 0) {
+            const current = pending.pop().?;
+            switch (current) {
+                .optional => |payload| try pending.append(self.temporary, payload.asType()),
+                .strukt => |layout| {
+                    if (seen_structs[layout]) continue;
+                    seen_structs[layout] = true;
+                    for (self.structs.items[layout].fields) |field| {
+                        try pending.append(self.temporary, field.field_type);
+                    }
+                },
+                .heap => |index| {
+                    if (seen_heaps[index]) continue;
+                    seen_heaps[index] = true;
+                    switch (self.heap_types.items[index]) {
+                        .list => |element| try pending.append(self.temporary, element),
+                        .map => |pair| {
+                            try pending.append(self.temporary, pair.key);
+                            try pending.append(self.temporary, pair.value);
+                        },
+                        .array => |shape| try pending.append(self.temporary, shape.element),
+                        .builder => {},
+                        .file, .task => return true,
+                    }
+                },
+                .none,
+                .boolean,
+                .byte,
+                .short,
+                .int,
+                .long,
+                .half,
+                .float,
+                .double,
+                .string,
+                .enumeration,
+                .function,
+                => {},
+            }
+        }
+        return false;
     }
 
     /// True for types that carry *storage* — a string's bytes, a
@@ -1912,7 +1982,7 @@ pub const Analyzer = struct {
                 try self.fail(
                     "luce.sema.own",
                     parameter.span,
-                    "give applies to objects (list, map, array, builder, object-carrying structs), not values [OWNERSHIP.md S32]",
+                    "give applies to containers and resources (list, map, array, builder, file, task) and structs that carry them, not values [OWNERSHIP.md S32]",
                     .{},
                 );
                 continue;
@@ -2458,7 +2528,7 @@ pub const Analyzer = struct {
             try self.fail(
                 "luce.sema.main",
                 written,
-                "main returns nothing; the entry is func main(): or func main() -> !: when the world can stop it",
+                "main returns nothing; use func main():, func main() -> !:, func main(args: list(string)):, or func main(args: list(string)) -> !:",
                 .{},
             );
         }

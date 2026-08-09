@@ -11,13 +11,13 @@ along a ladder every rung reaches every rung above it — `byte` to
 the two ladders the answer is always `double` (docs/TYPES.md §2).
 **Nothing narrows**, in any direction or context.
 
-## Values and objects
+## Values, objects, and resources
 
-Two kinds of data, with a deliberate line between them:
+Three categories of data, with deliberate lines between them:
 
 - **Values** — `bool`, the seven numbers, `string` (immutable UTF-8),
-  user `struct`s and `enum`s, and function values.  Values copy on
-  assignment and call;
+  user `struct`s that carry no container object or resource, `enum`s,
+  and function values.  Values copy on assignment and call;
   nobody frees a value.  The numbers are two ladders, and four of them do
   arithmetic: `int` (signed 32-bit) and `long` (signed 64-bit) trap on
   overflow and on division by zero; `float` (IEEE binary32) and
@@ -27,16 +27,31 @@ Two kinds of data, with a deliberate line between them:
   and `half` (IEEE binary16) — are **storage**: an operator widens
   them to `int` and `float` before it does anything, so no expression
   ever has one and there is no arithmetic at 8 or 16 bits to define.
-  What they are for is `array(byte, n)` at one byte an element
-  (docs/TYPES.md D5).
-- **Heap objects** — `list(T)`, `map(K, V)`, `array(T, ...)`, and
+  What they are for is `array(byte, _)` at one byte an element, with
+  the extent supplied at construction (docs/TYPES.md D5).
+- **Container objects** — `list(T)`, `map(K, V)`, `array(T, ...)`, and
   `builder`.  Variables hold *references*.  Runtime objects are
   created with `new ...` or a literal and freed automatically by
   **scope ownership** (next section).  A flat list, map, or rank-1
   array declared with file-scope `const` is instead materialized once
   into the program root and remains there until that runtime ends
-  (S46).  Copying a struct that contains a list copies the *reference*
-  — both structs see the same list.
+  (S46).  Assigning or passing a struct value that contains a list copies
+  the *reference* — both struct values see the same list.  The explicit
+  `copy` verb instead deep-copies a resource-free owned graph.
+- **Scope-owned resources** — `file` and `task(...)`.  They use heap
+  handles because a resource needs one owner and one death point, but
+  they are not containers: there is no `new file` or `new task`.
+  The raw `file_open` host builtin is the primitive file door;
+  `std.files` wraps it as `open`, `create`, and `append_to`.  `spawn` is
+  the task door.  A resource may be
+  moved with `give` or `return`, or released early with `free`; it
+  cannot be copied because that would make two owners of one file or
+  worker.  Releasing a file closes it, and releasing a task joins it.
+
+A struct that carries a container object or resource is an
+**ownership-carrying struct**.  Its scalar fields remain values, but
+keeping the whole struct follows the rules of what it carries; if any
+member is a resource, the whole struct is non-copyable.
 
 ## Ownership
 
@@ -45,8 +60,8 @@ The memory model, in one paragraph (the full ratified specification —
 its numbers in diagnostics and `src/luce/specs/ownership_spec.zig` executes
 it):
 
-- **The binding that received a fresh object owns it**, and the
-  owning scope frees it — at the block end, at early `return`/`break`/
+- **The binding that received a fresh object or resource owns it**, and the
+  owning scope releases it — at the block end, at early `return`/`break`/
   `continue`, and immediately on reassignment of the owning `var`.
   Casual code never writes a memory word:
 
@@ -58,32 +73,48 @@ it):
       # scope ends: everything owned here is freed
   ```
 
-- **`let y = x` is an alias** — two names, one object, no tracking.
-  An alias that outlives the object traps `use_after_free` at use
+- **`let y = x` is an alias** — two names, one container object or
+  resource handle, no tracking.  An alias that outlives its target
+  traps `use_after_free` at use
   (safe builds; the Zig posture).
-- **Keeping a *named* object needs a verb.**  Storing into a
+- **Keeping a named owned thing needs a verb.**  Storing into a
   container or struct field, or passing to a `give` parameter, takes
   something fresh, `give x` (transfer; `x` is poisoned — a compile
-  error — to the end of its scope), or `copy x` (deep copy).
-  Containers therefore *always* own their object elements: `pop()`
-  hands the element out; overwrite/`remove`/`clear` free the old one;
+  error — to the end of its scope), or `copy x` (deep copy, for a
+  container object or a carrying struct with no resource inside it).
+  Containers therefore *always* own their owned elements: `pop()`
+  hands the element out; overwrite/`remove`/`clear` releases the old one;
   freeing a container frees everything it owns.
 - **Calls borrow by default.**  A borrowed parameter may read and
-  mutate contents but never keep, give, free, or return its object.
+  mutate through its handle but never keep, give, free, or return the
+  borrowed owned thing.
   Taking ownership is declared in the signature *and* echoed at the
   call site: `func stash(hits: give list(long))` /
-  `stash(give mine)`.
+  `stash(give mine)`.  For a resource graph, changing a borrow into a
+  handoff means changing the parameter, making every caller pass an
+  owning name with `give` (or a fresh value without a verb), and moving
+  that parameter at the retaining site.  A field/index view or an alias
+  with no live owning name can be borrowed but cannot be copied or
+  given; an ownership-taking use must obtain a distinct owned graph or
+  be restructured.
 - **`return` moves.**  Whatever a function returns, the caller owns —
-  returning a borrow or alias is a compile error (`return copy x` is
-  the escape hatch).
+  returning a borrow or alias is a compile error.  For a resource-free
+  graph, `return copy x` is the escape hatch.  A resource borrow cannot
+  be duplicated: the function must instead receive it through a `give`
+  parameter and every caller must hand over ownership.
 - **Values never take verbs.**  Numbers, `bool`, `string`, enums,
-  function values and plain-value structs copy freely.  A struct with object fields
-  ("object-carrying") follows the object rules when *kept*.
-- **`free(x)` survives as deliberate early release** on owned names,
-  and poisons the name like `give`.
+  function values and plain-value structs copy freely.  A struct that
+  carries a container object or resource follows the ownership rules when
+  *kept*.  A resource takes `give` and `free`, but never `copy`.
+- **`free(x)` survives as deliberate early release** on a direct owned
+  container or resource handle, and poisons the name like `give`.  A
+  carrying struct releases its fields at scope end; explicit early
+  release of that outer struct is not in the current surface (S6).
 - **`var name: Type`** (no value) declares now, fills later: the slot
-  holds the type's zero value — the null object for object types —
-  and using it before assignment traps `null_object`.  A `T?` says
+  holds the type's zero value — a null handle for a container object or
+  resource type — and using it before assignment traps `null_object`.
+  That stable trap name uses the runtime's older broad “object” term.
+  A `T?` says
   "there may be nothing here" out loud instead (next section), and
   holding `none` owns nothing (S43), so a `list(T)?` obeys every rule
   above exactly as a `list(T)` does.
@@ -94,8 +125,15 @@ gone — `give` through an alias was a `not_owned` trap until
 2026-08-04 and is now a compile error, because an alias is one at the
 site (S23).  `not_owned` itself stays as defense against a module the
 front end did not produce, and is no longer reachable from source.
-Nothing can leak — loom's leak report is now a runtime self-check,
-not a program diagnostic.
+The ratified model says nothing can leak, so loom's leak report is a
+runtime self-check rather than a program diagnostic.  One current
+implementation breach is recorded rather than hidden: an adopting
+store can still put an owner inside its own descendant, producing a
+self-owned cycle with no death point.  The proposed `ownership_cycle`
+trap and its complete runtime gate remain pending in `docs/MISSING.md`.
+This is separate from ordinary `x = x` or `x = alias_of_x` resource
+reassignment, which stage 4 already refuses directly as a redundant
+same-graph assignment; that check does not inspect descendant adoption.
 
 ## Absence: `T?` and `none`
 
@@ -250,12 +288,13 @@ the check is inherently racy or impossible, it is an error. And if the
 answer is simply "there is nothing there", with no reason worth
 carrying, it is neither — it is `T?`.
 
-That rule left nineteen of the twenty trap codes then in the language
-exactly where they were. What it moves is the host's file boundary: a
-read or a write the world refuses is an error, because `file_exists`
-before `file_read` is a race no program can close. (Luce has **18**
-trap codes today; the twentieth left with the step budget, for
-reasons of its own.)
+The shared vocabulary currently carries **twenty trap codes**.  This
+rule moved the host's file boundary out of that set: a read or a write
+the world refuses is an error, because `file_exists` before
+`file_read` is a race no program can close.  Later language features
+added their own traps without changing the rule — checked shifts,
+allocator refusal, and mutation hidden behind a constant-container
+borrow remain bugs rather than recoverable news.
 
 **A call that can fail must say which it means.** Ignoring the outcome
 is not a spelling the grammar has:
@@ -453,13 +492,23 @@ shape. An element may be a `T?` — absence is an ordinary value — but
 `-> (long, long)?` is refused, because there the `?` would be marking
 the shape.
 
-Ownership is `docs/OWNERSHIP.md` S45: each value moves independently
-(S16 per value), each new binding owns what it received (S1 per name),
-and each existing owning `var` releases its old object and adopts its
-answer only after the whole shape is ready (S5). A borrow or alias in
-any position is S17 exactly, a poisoned target cannot be revived, and
-**no object may travel twice** — `return xs, xs` is a compile error,
-because two moves of one handle would free it twice.
+Ownership is `docs/OWNERSHIP.md` S45: S16 applies to each returned
+value, each new binding owns what it received (S1 per name), and each
+existing owning `var` releases its old object and adopts its answer only
+after the whole shape is ready (S5). The ordinary S17 borrow/alias rule
+applies to each position, then the shape adds cross-slot constraints: a
+poisoned target cannot be revived, and **no object graph may travel
+twice** — `return xs, xs` is a compile error because two moves of one
+handle would free it twice.  The
+compiler resolves visible ownership roots across the whole return: an
+owner beside its alias, a repeated borrow, or an explicit `give` of a
+graph already used by another result is one cross-slot conflict, not a
+second opportunity to copy or move that graph.  Evaluation stays
+left-to-right: stage 4 records an owning bare name's replacement revision
+when that operand is staged.  A writer to the left is therefore legal —
+the later bare name stages the replacement — while a later result may not
+give or replace a name whose old value is already staged.  Put the writing
+operation first, then return distinct current values.
 
 ## Function values and lambdas
 
@@ -473,10 +522,11 @@ func(give list(long)) -> long
 ```
 
 The result is omitted when the function answers nothing.  `give` stays
-on an object parameter because ownership is part of a call's meaning;
-parameter names and defaults do not, and neither does `!`.  A fallible
-function is not a value in this run: a function type has nowhere to
-carry the obligation to write `try` or `catch`.
+on a container, resource, or carrying-struct parameter because ownership
+is part of a call's meaning; parameter names and defaults do not, and
+neither does `!`.  A fallible function is not a value in this run: a
+function type has nowhere to carry the obligation to write `try` or
+`catch`.
 
 A function type may annotate a parameter or local and may be a
 function's result.  It may nest inside another function signature.
@@ -706,7 +756,8 @@ Members are **namespaced always** — `Method.stored`, never a bare
 `stored` — and each is a compile-time constant, so a member stands in
 a file-scope `const`, a parameter default and a field default.  An enum
 is a value: it copies, it takes no ownership word, and a `list(Method)`
-or an `array(Method, n)` holds it at the backing width.
+or an array constructed with `new array(Method, n)` holds it at the
+backing width.
 
 **No implicit conversion in either direction.**  `int(m)` (and every
 other numeric constructor) answers the member's number, trapping
@@ -751,9 +802,10 @@ stops compiling.  An `else` stands for the members the arms above did
 not name, and one that covers nothing is refused for the same reason
 `a else b` is when `a` is never absent.
 
-A member carries no payload: that is a tagged union, it is ratified,
-and it will extend `match` with payload arms rather than introduce a
-second statement.
+A member carries no payload: that is a tagged union.  The tagged
+direction is ratified and the full design is drafted, but it is not
+scheduled; if it ships, it extends `match` with payload arms rather
+than introducing a second statement (docs/UNION.md).
 
 ## Collections
 
@@ -791,15 +843,21 @@ sugar for a plain function with the receiver first, not dispatch):
   when empty), `sort()` (in place, **stable**; long/double/string
   elements),
   `reverse()`, `find(v) -> long` (-1 when absent), `contains(v)`,
-  `clear()`, plus `len`, index, slice.
+  `clear()`, plus `len`, index, slice.  A slice copies its selected
+  elements into a fresh list.  If `T` carries `file` or `task`, it is
+  admitted only when both effective bounds are equal compile-time
+  `long` constants, which proves that no element is selected or copied.
 - rank-1 `array(T, _)` shares `sort()`, `reverse()`, `find(v)`,
   `contains(v)`, `fill(v)` (value elements only — an array of
-  objects stores each slot separately); every array has `dim(axis)`.
+  container or resource handles stores each slot separately); every
+  array has `dim(axis)`.
 - `map(K, V)`: `K` is `long` or `string`.  Index get (traps on a
   missing key), index set (insert or update), `has(k)`, `get(k,
   default) -> V` (the value or the default — no trap), `remove(k)`
   (no-op when absent), `keys() -> list(K)`, `values() -> list(V)`,
-  `clear()`, `len`.  Iteration order is insertion order, and the
+  `clear()`, `len`.  `values()` copies each value into its fresh list
+  and is therefore admitted only when `V` carries no `file` or `task`.
+  Iteration order is insertion order, and the
   lookups (index, `has`, `get`, index-set) are O(1): the entries
   stay a dense array in arrival order with a hash index over it.
   `{key: value, ...}` constructs a fresh mutable map and evaluates
@@ -814,15 +872,22 @@ sugar for a plain function with the receiver first, not dispatch):
   UTF-8.  Wider characters go through `append(chr(code))`.
 - `array(T, ...)`: fixed shape, up to 4 dimensions, sizes are runtime
   values at `new`, elements zero-initialized (numbers 0, bool false,
-  string "", structs zeroed field by field, object elements start null
-  — using a null element traps until you store something).  In type
+  string "", structs zeroed field by field, container/resource handle
+  elements start null — using a null element traps until you store
+  something).  In type
   annotations the shape is spelled with `_`:
   `func total(grid: array(long, _, _)) -> long`.
-- `==` / `!=` on objects compare *identity* (same object), never
-  contents.
+- `==` / `!=` on container objects and resources compare handle
+  *identity* (the same object or resource), never contents.
 - Slices copy: `xs[a:b]` allocates a new list the receiver owns —
-  deeply, when elements are objects (two containers can never own one
-  object); `s[a:b]` on a string stays a value.
+  deeply, when its elements are resource-free container objects or
+  carrying structs (two containers can never own one object).  If the
+  element type transitively carries `file` or `task`, both effective
+  bounds must be equal compile-time `long` constants; that one form
+  constructs a statically empty list and executes no element copy.
+  Every other such slice is a compile error rather than a second owner
+  for that resource.
+  `s[a:b]` on a string stays a value.
 
 ## Iteration
 
@@ -944,8 +1009,8 @@ range.  `trunc(x)` is truncation toward zero, so `floor`, `ceil`,
 `trunc` and round are four spellings for four different answers.
 `double(x)` widens and never traps.  `string(x)` prints any numeric
 width, a `bool` or a `string`; it gives an enum member's name and a
-function value's name.  Heap objects are not accepted: a `builder`
-hands over its text with `b.build()`.
+function value's name.  Container objects, resources, and structs are
+not accepted: a `builder` hands over its text with `b.build()`.
 An f-string hole is a `string(...)` the reader did not write, so the
 same rule decides what may stand in one.
 
@@ -976,10 +1041,9 @@ func main(args: list(string)):
 The free builtins are the generic, cross-type set — Python's own
 split of capability: `len print range assert trap error free abs
 min max clamp sqrt floor ceil trunc chr ord parse_int parse_float`,
-the eight conversion constructors (docs/NUMERICS.md §7), and the
-host-gated file, argument, terminal, and key builtins (see
-docs/V2.md).  Everything that belongs
-to one type is a method on it.
+`parse_string`, the eight conversion constructors (docs/NUMERICS.md
+§7), and the host-gated file, terminal, and key builtins (see
+docs/V2.md).  Everything that belongs to one type is a method on it.
 
 ## The host
 
@@ -1021,6 +1085,7 @@ file_delete(path)            # !
 file_rename(from, to)        # !
 file_exists(path)            # bool — a question, never a guard
 dir_list(path)               # list(string)! — plain names, unsorted
+file_open(path, mode)         # file! — 0 read, 1 write, 2 append
 
 term_rows()   term_cols()   term_clear()   term_move(row, col)
 term_style(fg, bg, bold)   term_write(text)   term_flush()
@@ -1032,6 +1097,16 @@ os_total_memory()            # long — bytes the machine has
 os_available_memory()        # long — bytes it could still hand out
 os_cpu_count()               # long — logical processors
 ```
+
+`file_open` is the primitive under `std.files.open`, `create`, and
+`append_to`; ordinary code uses those named doors rather than the mode
+numbers.  It answers a scope-owned `file`.  A file has three fallible
+methods: `f.read(buffer) -> long!`, `f.write(buffer, count) -> long!`,
+and `f.flush() -> !`, where the buffer is an `array(byte, _)`.  There
+is deliberately no `close`: `free(f)` closes early and the owning
+scope closes otherwise.  `parse_string(bytes) -> string?` is the pure
+boundary in the other direction — bytes that are not UTF-8 are absent,
+not an I/O error.
 
 Three shapes and one rule behind them (docs/FAILURE.md).  A file
 operation is `!` because the world decides and no non-racy check
@@ -1109,7 +1184,7 @@ started by a person has that person's user, that person's working
 directory and that person's permissions, exactly as `grep` does.
 `allow_host` is the gate — it decides whether a program may reach the
 world *at all*, and a program compiled without it cannot name a file,
-open a terminal or read an argument — and the operating system is the
+open a terminal or ask for a host service — and the operating system is the
 sandbox that decides which files.  Two mechanisms, each doing one
 thing, both of them things a reader can check.
 
@@ -1456,10 +1531,12 @@ such a struct may contain an optional field.  A container may not hold
 another container, and a top-level optional element or map value is
 refused.  A bracket literal is a `list` unless an `array(T, _)`
 annotation makes it a rank-1 array.  An empty list or array therefore
-needs an annotation.  A map uses `{key: value}`; duplicate folded keys
-are a compile error naming both sites, and `{}` is refused in favour of
-`new map(K, V)`.  `builder`, object-carrying structs, and
-multi-dimensional arrays cannot be constant containers.
+needs an annotation, but the annotation supplies only the missing type:
+its element type must still be flat and non-optional even when `[]` has
+no elements.  A map uses `{key: value}`; duplicate folded keys are a
+compile error naming both sites, and `{}` is refused in favour of `new
+map(K, V)`.  `builder`, object-carrying structs, and multi-dimensional
+arrays cannot be constant containers.
 
 Each written construction has one identity.  Repeated uses, aliases,
 imports, lambdas, and a borrowing parameter default all read that same
@@ -1524,12 +1601,14 @@ Four sentences are the whole of it, and three of them are rules the
 language already had.
 
 **Arguments cross a boundary.**  A worker has a heap of its own, so it
-cannot borrow anything of the spawner's: every object argument must be
-`give`n or `copy`ed, or be fresh, and a function whose object
-parameter is an ordinary borrow cannot be spawned at all.  `give`
-poisons the sender's name from that line (S10, S23, unchanged), so
-after the spawn there is nothing left behind to race on.  Values copy
-as they copy everywhere (S32).
+cannot borrow anything of the spawner's: every resource-free container
+or carrying struct must be `give`n or `copy`ed, or be fresh, and its
+parameter must take ownership.  A `file`, `task`, or any graph carrying
+one does not cross at all — the resource stays in the runtime that made
+it, so both such arguments and such worker results are refused
+statically.  `give` poisons the sender's name from that line (S10, S23,
+unchanged), so after an ordinary object transfer there is nothing left
+behind to race on.  Values copy as they copy everywhere (S32).
 
 **A task is a scope-owned resource**, the `file` precedent exactly:
 made by `spawn` and by nothing else — there is no `new task` and no
@@ -1551,35 +1630,44 @@ frames in front of the joiner's, and stops the program.  A task
 nobody waits on is joined all the same and its answer discarded —
 only a wait observes.
 
-**Effects from workers are serialized.**  The host's services are
-called from one thread at a time, so a `print` from a worker is
-line-atomic and no host implementation needs to be thread-safe.  A
-program that never spawns pays nothing for that: its compiled module
-contains no lock, no install, and no worker entry at all.
+**Effects from workers are specified to be serialized.**  The shared
+recursive guard covers lowered effects and handle operations, so a
+`print` from a worker is line-atomic.  The language-lock audit found two
+implementation gaps before that can be stated for every host callback:
+the whole-file read/write loops and the host worker registries need the
+same synchronization (docs/MISSING.md).  A program that never spawns
+still pays nothing for the mechanism: its compiled module contains no
+lock, no install, and no worker entry at all.
 
 Absent from the surface, permanently: locks, atomics, shared mutable
 state, condition variables, thread identifiers, priorities, and
 `async`/`await` colouring.  Their jobs are done by moving ownership,
 or they do not exist here.  Workers are OS threads — thousands, not
-millions — and typed channels between them are the next piece
-(docs/THREADS.md D12).
+millions — and typed channels are the approved next design-and-build
+run.  D12 ratifies typed pipes and ownership-moving `send(give x)`;
+their complete endpoint, capacity, receive, close and failure surface
+is not ratified yet.
 
 ## Traps
 
 A trap is a **bug**: deterministic, with a stable code, and it aborts
 the program without publishing anything.  What a correct program can
 meet anyway is an *error* and is not here (see the section above).
-New codes in this round:
-`index_bounds`, `key_missing`, `empty_collection`, `use_after_free`,
-`null_object`, `not_owned`, `bad_codepoint`.
-One of those is **defense-only**: no source program can still reach
-`not_owned`, because S23's alias case became a compile error on
-2026-08-04.  It remains in the runtime for a module the front end did
-not produce, which is a real thing to defend against — the IR
-verifier trusts instruction types, and a `.lc` is an executable.
-long-standing codes:
-integer overflow, divide by zero, conversion range, assertion failed,
-string bounds/boundary, call depth.  Call depth is a
+The twenty current codes are `integer_overflow`, `divide_by_zero`,
+`conversion_range`, `assertion_failed`, `explicit_trap`,
+`missing_return`, `call_depth_exceeded`, `string_bounds`,
+`string_boundary`, `host_unavailable`, `index_bounds`, `key_missing`,
+`empty_collection`, `use_after_free`, `null_object`, `bad_codepoint`,
+`not_owned`, `shift_out_of_range`, `allocation_failed`, and
+`immutable_object`.
+
+Two are compiler defenses rather than paths correct source can reach.
+`missing_return` seals a typed MIR block after stage 4 has already
+refused a source function that can fall off its end.  `not_owned`
+survives for a damaged module that presents a `give` the front end
+could not emit; S23's source alias case became a compile error on
+2026-08-04.  The IR verifier trusts instruction types and a `.lc` is
+an executable, so both backstops remain real.  Call depth is a
 *policy* limit, not a native-stack accident: compiled code carries
 its remaining depth as a hidden argument and refuses the call that
 would exhaust it (docs/CODEGEN.md).  Runaway recursion is a trap with
@@ -1682,7 +1770,9 @@ decision), `errdefer` and error return traces (docs/FAILURE.md
 refuses both, with reasons), typed error sets and error payloads
 beyond the message, garbage collection and reference counting (scope
 ownership is the model — docs/OWNERSHIP.md), operator overloading,
-**tagged unions** (enums shipped and carry no payload — docs/ENUMS.md),
+**tagged unions** (the tagged direction is ratified and the design is
+drafted, but it is not scheduled; enums shipped and carry no payload —
+docs/ENUMS.md and docs/UNION.md),
 and **positional-only and keyword-only parameter
 markers** (Python's `/` and `*`, Dart's `{}` section): one kind of
 parameter, and the trailing-defaults rule is what keeps a

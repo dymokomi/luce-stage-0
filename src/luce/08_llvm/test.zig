@@ -27,6 +27,7 @@ const interpreter = luce.interpreter;
 const mir = luce.mir;
 const abi = luce.llvm.abi;
 const artifact = luce.llvm.artifact;
+const runtime_effects = luce.llvm.effects;
 
 const Capture = spec.Capture;
 const Provided = spec.Provided;
@@ -309,23 +310,38 @@ test "every runtime declaration carries what the compiler knows about it" {
         if (!std.mem.startsWith(u8, line, "declare ")) continue;
         if (std.mem.indexOf(u8, line, "@luce_rt_") == null) continue;
         checked += 1;
-        // `luce_rt_report` is the one that hands control to the host,
-        // so it is the one that promises nothing.
-        if (std.mem.indexOf(u8, line, "@luce_rt_report") != null) continue;
+        const symbol_at = std.mem.indexOf(u8, line, "@luce_rt_").? + 1;
+        const symbol_end = std.mem.indexOfScalarPos(u8, line, symbol_at, '(').?;
+        const service = std.meta.stringToEnum(
+            runtime_effects.Service,
+            line[symbol_at..symbol_end],
+        ) orelse return error.Undescribed;
+        const effect = runtime_effects.describe(service);
         // Function attributes travel in a numbered group; the
-        // declaration names the group it belongs to.
+        // declaration names the group it belongs to.  A service whose
+        // exact description promises neither nounwind nor willreturn
+        // may legitimately have no function group at all.
         const marker = std.mem.lastIndexOfScalar(u8, line, '#') orelse {
-            std.debug.print("bare declaration: {s}\n", .{line});
-            return error.Undescribed;
+            try std.testing.expect(!effect.nounwind and !effect.willreturn);
+            continue;
         };
         const group = try std.fmt.allocPrint(gpa, "attributes {s} = ", .{line[marker..]});
         defer gpa.free(group);
         const at = std.mem.indexOf(u8, rendered, group) orelse return error.Undescribed;
         const end = std.mem.indexOfScalarPos(u8, rendered, at, '\n').?;
         const described = rendered[at..end];
-        for ([_][]const u8{ "nounwind", "willreturn" }) |wanted| {
-            if (std.mem.indexOf(u8, described, wanted) == null) {
-                std.debug.print("{s}\n  is {s}\n", .{ line, described });
+        for (
+            [_][]const u8{ "nounwind", "willreturn" },
+            [_]bool{ effect.nounwind, effect.willreturn },
+        ) |wanted, expected| {
+            const present = std.mem.indexOf(u8, described, wanted) != null;
+            if (present != expected) {
+                std.debug.print("{s}\n  is {s}\n  wants {s}={any}\n", .{
+                    line,
+                    described,
+                    wanted,
+                    expected,
+                });
                 return error.Undescribed;
             }
         }

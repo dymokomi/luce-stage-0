@@ -134,12 +134,15 @@ means **a machine that only runs Luce programs needs neither LLVM nor
 
 A Luce program is a script with a `main` entry.  The language is
 statically typed with inference, has structs, `list`/`map`/`array`/
-`builder` heap objects created with `new` or literals and freed by scope
-ownership (`give`/`copy`/`free`, docs/OWNERSHIP.md), slices, and
-checked traps — `docs/LANGUAGE.md` is the
-reference.  Effects — console,
-files, arguments, the screen — only exist as host builtins that loom,
-the trusted boundary, implements; the language itself stays pure:
+`builder` container objects created with `new` or literals, and `file`/
+`task` resources, all released by scope ownership. Containers may
+`give` or `free`, and may `copy` when their whole graph is resource-free;
+resources may `give` or `free` but never copy (docs/OWNERSHIP.md). The
+language also has slices and checked traps —
+`docs/LANGUAGE.md` is the reference.  Effects — console, files and the
+screen — only exist as host builtins that loom, the trusted boundary,
+implements; arguments are instead handed to `main` as its owned
+parameter.  The language itself stays pure:
 
 ```python
 func main(args: list(string)):
@@ -161,8 +164,8 @@ rebuilding loom.  `Ctrl-S` saves, `Ctrl-Q` quits.
 ## Packages
 
 ```text
-src/luce/                 the Luce language, one numbered folder per
-                          pipeline stage (01_source .. 08_llvm, driven
+src/luce/                 the Luce language, one numbered stage surface
+                          (01_source .. 08_llvm, folder or barrel, driven
                           by compile.zig — docs/PIPELINE.md), plus
                           libluce_rt (the semantics as a linkable
                           library) and the test suite's differential
@@ -212,8 +215,10 @@ not built.
 ## Deferred scope
 
 Persistence images, the Fabric (Texels, Fibers, Views, capabilities),
-the C ABI, braids/synchronization, multi-user collaboration, and the
-agent all stay deferred until the language and terminal are excellent.
+a user-facing C FFI/ABI for Luce programs, braids/synchronization,
+multi-user collaboration, and the agent all stay deferred until the
+language and terminal are excellent.  The runtime and host C ABI used
+internally by compiled artifacts is already built.
 
 ## License
 

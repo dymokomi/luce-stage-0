@@ -230,6 +230,36 @@ test "S5/S45: multi-return assignment releases both old owners and adopts both a
     , .use_after_free);
 }
 
+test "S5/S45: a writing result to the left stages the replacement for a later result" {
+    // Revision tracking is captured when each result is staged.  A
+    // writer to the right invalidates an earlier bare-name result; a
+    // writer to the left is safe because the later bare name loads the
+    // replacement rather than the value that existed before the call.
+    try agreeClean(
+        \\struct Box:
+        \\    running: task(long)
+        \\
+        \\    func replace(next: give task(long)) -> long:
+        \\        self.running = give next
+        \\        return 1
+        \\
+        \\func work(value: long) -> long:
+        \\    return value
+        \\
+        \\func pair(box: give Box, next: give task(long)) -> (long, Box):
+        \\    var current = give box
+        \\    return current.replace(give next), current
+        \\
+        \\func main():
+        \\    let first = spawn work(1)
+        \\    var box = Box(running = give first)
+        \\    let next = spawn work(2)
+        \\    let marker, replaced = pair(give box, give next)
+        \\    assert(marker == 1)
+        \\
+    );
+}
+
 test "S5/S45: a failed multi-return call performs no replacement release" {
     try agreeClean(
         \\func risky(ok: bool) -> (list(string), string)!:
@@ -521,7 +551,7 @@ test "S13: give appears in the signature and at the call site" {
         \\    assert(len(xs) == 1)
         \\
         \\func main():
-        \\    var mine = [1]
+        \\    var mine: list(long) = [1]
         \\    consume(mine)
         \\
     );
@@ -698,7 +728,7 @@ test "S21: storing a bare name is a compile error at every container door" {
     try expectRejected(
         \\func main():
         \\    var index = new map(string, list(long))
-        \\    var hits = [12, 40]
+        \\    var hits: list(long) = [12, 40]
         \\    index["a.luc"] = hits
         \\
     );
@@ -1252,7 +1282,7 @@ test "S30: names created inside the loop give freely" {
     );
 }
 
-test "S31: copy is deep and always legal on readable objects" {
+test "S31: copy is deep and always legal on readable copyable objects" {
     try agreeClean(
         \\func dup(borrowed: list(list(long))) -> list(list(long)):
         \\    return copy borrowed
@@ -1267,6 +1297,22 @@ test "S31: copy is deep and always legal on readable objects" {
         \\    var again = dup(nested)
         \\    again[0].append(4)
         \\    assert(len(nested[0]) == 2)
+        \\
+    );
+}
+
+test "S31: resource-free recursive object types remain copyable" {
+    // `carriesResource` walks this legal Node -> list(Node) cycle and
+    // must answer false rather than looping or conservatively refusing
+    // every recursive object type.
+    try agreeClean(
+        \\struct Node:
+        \\    children: list(Node)
+        \\
+        \\func main():
+        \\    var root = Node(children = new list(Node))
+        \\    let twin = copy root
+        \\    assert(len(twin.children) == 0)
         \\
     );
 }
@@ -2195,6 +2241,20 @@ test "storage: a map owns its keys as well as its values" {
         \\    assert(len(table) == 1)
         \\    table.clear()
         \\    free(table)
+        \\
+    );
+}
+
+test "S31: map.values deep-copies resource-free object values" {
+    try agreeClean(
+        \\func main():
+        \\    var table = new map(string, list(long))
+        \\    var row: list(long) = [1, 2]
+        \\    table["row"] = give row
+        \\    var values = table.values()
+        \\    values[0].append(3)
+        \\    assert(len(table["row"]) == 2)
+        \\    assert(len(values[0]) == 3)
         \\
     );
 }

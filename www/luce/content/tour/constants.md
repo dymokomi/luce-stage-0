@@ -59,7 +59,8 @@ an object-free struct may have an optional field, present or absent.
 - A bracket literal is a `list(T)` unless an `array(T, _)` annotation
   makes it a rank-1 array. The literal supplies the array's length.
 - An empty list or array needs its `list(T)` or `array(T, _)`
-  annotation.
+  annotation. The annotation supplies the missing type only: `T` must
+  still be flat and non-optional even when `[]` has no elements.
 - A container cannot contain another container in this version. A
   top-level optional element is refused too; put absence in an
   object-free struct field when it is part of the row.

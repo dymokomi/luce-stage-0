@@ -112,9 +112,10 @@ a now has 3
 3 bags, first a
 ```
 
-Copying a struct never duplicates or moves the objects inside it —
-ownership stays where it was. `copy bag` deep-copies them if that is
-what you want.
+Copying a struct value never duplicates or moves the owned handles
+inside it — ownership stays where it was. `copy bag` deep-copies its
+resource-free object graph if that is what you want; a struct carrying
+`file` or `task` moves with `give` and cannot be copied.
 
 ## Fields a module keeps
 

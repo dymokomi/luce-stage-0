@@ -189,6 +189,21 @@ test "a stale handle to a reused row names nobody, not the newcomer" {
     try testing.expectEqual(@as(u32, 0), runtime.live);
 }
 
+test "the runtime copy backstop refuses a resource handle" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    // Stage 4 refuses this source spelling.  Keep the shared runtime
+    // wall for decoded or otherwise hostile MIR: a second handle would
+    // be a second owner of the one host file.
+    const file = try runtime.newFile(17, "input.bin");
+    try expectTrap(.not_owned, runtime, runtime.deepCopy(file));
+    runtime.freeObject(file.asObject());
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
 test "a row out of generations is retired rather than handed out again" {
     var bench: Bench = undefined;
     bench.setup();

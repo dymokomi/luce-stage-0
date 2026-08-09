@@ -1,10 +1,10 @@
 # Lists, maps and arrays
 
-Everything so far has been a **value**: it copies on assignment and
-nobody frees it. The four collection types are **heap objects**.
-A variable holds a reference to one, they are created with `new` or a
-literal, and the scope that owns one frees it — which is
-[the memory chapter](../ownership/). This one is about what they do.
+Values copy on assignment and need no release. The four collection
+types are **container objects**: a variable holds a reference, `new` or
+a literal creates one, and its owning scope releases it — which is
+[the memory chapter](../ownership/). `file` and `task` are the separate,
+non-copyable resource category; this chapter is about containers.
 
 | Type | Shape |
 |---|---|
@@ -72,13 +72,18 @@ func main():
 ```
 
 Like `sort`, it is in place, stable and O(n log n). Unlike `sort`, it
-works for every element type, including structs and heap objects;
-object elements move and are never copied.
+works for every element type, including structs and container/resource
+handles; owned elements move and are never copied.
 
 ## Slices
 
 `xs[a:b]` is a **new list**, owned by whoever receives it — never a
-view. Open ends default to the beginning and the end.
+view. Open ends default to the beginning and the end. Its elements are
+deep-copied. If the element type carries `file` or `task`, both effective
+bounds must be equal compile-time `long` constants, such as `[0:0]`;
+that proves the new list is empty and no resource is copied. Every other
+resource-carrying slice is refused, even if runtime data would make its
+range empty.
 
 ```luce run
 func main():

@@ -13,14 +13,14 @@ every `file:line` here was re-derived rather than carried forward.
 
 ## Scorecard
 
-The **language surface is done.**  Ten conceptual stages, seven
-folders, eighteen executable spec packages, stages 1 and 2 marked
-*Locked*, and a front end whose diagnostics mostly name the fix rather
-than the parser's predicament — mostly, because the ownership, optional
-and failure families set a standard that fifteen other places do not yet
-meet (Tier 5b).  `T?` closed the absence half of the last semantic
-hole and `T!` closed the failure half; nothing designed is now
-unbuilt.
+The **shipped language core is locked.**  Ten conceptual stages, seven
+stage folders, and a front end whose diagnostics mostly name the fix
+rather than the parser's predicament — mostly, because the ownership,
+optional and failure families set a standard that fifteen other places
+do not yet meet (Tier 5b).  `T?` closed absence and `T!` closed
+failure.  One approved extension is deliberately next rather than
+silently counted as shipped: typed channels between workers
+(`docs/THREADS.md` D12).
 
 The **runtime is not done**, but the wall is down.  Tier 0 held two
 items, both properties of what existed rather than missing features,
@@ -199,8 +199,9 @@ methods and namespace functions, containers at the backing width —
 and `match`, with an arm for every member or an `else`.  `std.zip`
 converted the day it landed: a compression method and a DEFLATE block
 type, read through the enums rather than through `== 8` and an `elif`
-chain.  **Union is what is left**, and it extends `match` with payload
-arms rather than introducing a second statement.
+chain.  **Union is the drafted sum-type direction**, and it would
+extend `match` with payload arms rather than introduce a second
+statement.  It is not scheduled.
 
 
 **Owner direction, 2026-08-04 — the endgame is set.**  After the
@@ -216,7 +217,9 @@ the bits-reinterpretation view (TYPES.md D4) remains the principled
 home for genuine raw-overlay needs.  The design memo, when its turn
 comes, designs the tagged world: payload-per-member over the enum
 machinery, checked access, exhaustive dispatch, and the question of
-whether `T?` becomes a two-member tagged union under the hood.
+whether `T?` becomes a two-member tagged union under the hood.  The
+resulting `docs/UNION.md` records eighteen drafted decisions and holds
+three questions; tagged is ratified, the complete feature is not.
 
 
 No tagged unions: a member carries a name and a number, never a
@@ -259,6 +262,79 @@ to be the better factoring, and it inherits the machinery enums
 built: the type tag, the per-program table, the compare-and-branch
 tree, and a `match` whose arms are already the shape payload arms
 extend.
+
+**Concurrency has a separate approved next run.**  Workers and owned
+`task` joins are built.  D12 reserves typed channels whose
+`send(give x)` transfers ownership between worker runtimes; it is the
+next language extension, before any unscheduled union run.  That is the
+ratified direction, not a complete channel surface: the channel type,
+buffering and back-pressure, receive result, close behavior and failure
+surface still need an owner decision.
+
+The language-lock audit also found six channel-prerequisite checks.
+Two implementation gaps remain open before channel syntax is frozen;
+four implementation/documentation checks closed in this run:
+
+- **Closed here:** LLVM's runtime table now withholds `willreturn` from
+  exactly the calls that cannot promise termination.  The direct
+  host/blocking set is `report`, `report_error`, `args_list`,
+  `file_open`, `file_read`, `file_write`, `file_flush`,
+  `file_read_text`, `file_write_text`, `spawn`, `task_wait`, and
+  `effects_enter`.  Resource release can transitively call the host's
+  close callback, so `close`, `constants_abort`, `discard_loose`,
+  `unbind`, `free`, `index_set`, `remove`, and `clear` withhold it too.
+  Until ownership-cycle prevention lands, `copy`, `list_slice`, and
+  `map_values` also withhold it because a source-created cycle can make
+  their recursive deep copy fail to terminate.  `map_keys` stays true:
+  map keys are non-owning `long` or `string` values.  All other services
+  are pinned `willreturn = true`; `nounwind` remains unchanged.
+  Colocated Debug and ReleaseSafe tests pin the exact twenty-three-service
+  false set and every remaining true entry.
+- The real host's growable worker table and both spec hosts' fixed
+  worker tables are accessed without their own synchronization
+  (`src/apps/host.zig`, `src/luce/specs/hosts.zig`).  D9's effect
+  serialization is not a safe substitute for a registry lock once a
+  blocking channel operation or nested worker activity enters the
+  design.
+- The whole-file text paths call the host's read, write and flush slots
+  directly inside their loops (`src/luce/runtime/files.zig`), outside
+  the Effects guard that covers handle methods, open and deferred close.
+  Workers can therefore race the host's shared file and buffer state
+  despite D9; those callback loops need the same serialization rule.
+- **Closed here:** a container or struct that transitively carries
+  `file` or `task` is now refused statically by `copy` and at every
+  worker-runtime boundary.  The runtime's `not_owned` trap remains a
+  defense, not the source-language rule.  Ownership diagnostics are
+  type- and ownership-aware at the same boundary.  They offer `give`
+  only for a live owning name; a borrowed resource parameter names the
+  signature, every caller and the retaining handoff; a known alias names
+  its owner; an ownerless view names an ownership-returning operation or
+  restructuring; and an invalid `copy`/`give` in a borrowing context
+  says to remove the verb.  Active-loop and direct-`free` contexts have
+  their own valid repairs rather than an impossible `copy` or `give`.
+- **Closed here:** the other two deep-copying surfaces share that
+  resource-graph gate.  A list slice whose element type carries `file`
+  or `task` is refused unless both effective bounds are equal
+  compile-time `long` constants, which proves that the runtime copies
+  zero elements; the direct `[0:0]` case and the bound-type diagnostic
+  precedence are pinned.  `map.values()` remains type-driven and is
+  refused whenever its value type carries a resource, even for an empty
+  map.
+- **Closed here:** current reference/highlighter coverage now keeps
+  `task.wait()` in the method roster, so the next receiver surface
+  cannot drift silently.
+
+Two later language-lock repairs are closed too.  Empty constant `[]`
+now checks flatness from its annotated element type before there are
+elements to walk, so `list(task(long))`, nested-container and optional
+empty constants cannot bypass the ordinary boundary.  Shaped returns
+preflight visible ownership roots and explicit `give`, then record each
+owning bare name's replacement revision when that operand is staged.  A
+writer to the left is accepted because a later bare name stages the new
+value; a handoff or writer to the right cannot invalidate an old value
+already staged, and one graph cannot escape through two results.  Ordinary
+resource `x = x` or `x = alias_of_x` reassignment is likewise refused
+directly instead of being told to give a name to itself.
 
 ---
 
@@ -534,6 +610,60 @@ improvement the audit exposed:
   choosing which contribution-language section represents owner intent
   is a governance decision, not a documentation cleanup.  Once decided,
   remove the contradictory section and keep one policy (F69).
+- **S6's early-release wording is broader than its current surface.**
+  `free(x)` accepts an owned container handle, `file`, or `task`, but a
+  struct that carries one of those is rejected by the builtin's heap
+  type gate even though its binding participates in ownership and dies
+  correctly at scope end.  Decide whether S6 means direct heap/resource
+  handles only or whether explicit early release should walk a carrying
+  struct; do not imply either answer by accident in a diagnostic.
+- **An ownership cycle is still source-reachable.**  This accepted
+  program puts its owner inside its own descendant:
+
+  ```luce
+  struct Node:
+      children: list(Node)
+
+  func main():
+      var root = Node(children = new list(Node))
+      root.children.append(give root)
+  ```
+
+  The root name is poisoned, scope release sees the row owned by its own
+  list and skips it, and loom reports the internal assertion “1 object
+  escaped ownership.”  Saving `let alias = root` before the append and
+  then evaluating `copy alias` is worse: the compiled path overflows
+  after more than ten thousand alternating `Runtime.copyFrom` list and
+  struct frames.  Both outcomes contradict S20's recursive release and
+  S33's defined death point.  Stage 4 now recognizes the much narrower
+  ordinary assignment `x = x` or `x = alias_of_x` when `x` owns a
+  resource graph and refuses that redundant same-graph handback.  It
+  does not inspect an adopting destination's ancestry, so it does not
+  reach the accepted `root.children.append(give root)` above.
+
+  The remaining repair is to refuse an owner entering its own
+  descendant at every adopting door, with a direct static diagnostic
+  where stage 4 can see the adopting ancestry and a runtime
+  `ownership_cycle` trap (“attempted store would create an ownership
+  cycle”) for alias-hidden cases.  Adding that stable trap requires
+  `module.format_version` 33 → 34; the host ABI does not change.  The
+  invariant is clear, but the trap surface still needs owner
+  ratification before implementation.
+- **A successful host open can leak its handle if Luce allocation fails
+  immediately afterward.**  `runtime/files.zig::open` receives the host
+  handle and then calls `Runtime.newFile`; duplicating the path or
+  attaching the resource row can fail, and no `errdefer` closes the host
+  handle on that route.  Add the close handoff and a failing-allocator
+  test that checks the spec host's open-handle census before treating
+  resource allocation as atomic.
+- **Four stable trap messages retain pre-resource vocabulary.**
+  `use_after_free`, `null_object`, and defense-only `not_owned` use
+  “object” in the runtime's broad heap-handle sense, so they can also
+  describe `file` or `task`; `allocation_failed` says “container” even
+  when allocating a file/task resource row failed.  The current site
+  explains the broad legacy term.  Decide whether to keep that ABI-like
+  diagnostic stability or migrate all four together; do not change one
+  opportunistically.
 - **Flatness is an implementation boundary as well as a language
   decision.**  If nested constant containers are admitted later, the
   program-root census and teardown must count and sweep child rows, and
@@ -692,10 +822,11 @@ wording and column:
   than one that does not help.
 - ~~Only the first missing struct field is reported~~ — all of them,
   in declaration order, with the conjunction English wants.
-- ~~`script entry must be exactly func main():` is not true~~ — it
-  names `func main() -> !:` too, splits the two unrelated mistakes it
-  used to answer with one sentence, and points at the return type or
-  the parameter rather than at `func main`.
+- ~~`script entry must be exactly func main():` is not true~~ — the
+  return-type diagnostic now enumerates all four legal entries: no
+  parameter or one `list(string)` command-line parameter, each with or
+  without `-> !`.  Parameter and return mistakes have separate sentences,
+  with the caret on the return type or parameter rather than `func main`.
 - ~~Over-nested blocks produce 152 diagnostics and 215 KB~~ — one
   message and 305 bytes.  The bound reports once and stops; `lex()`
   answers `Lexed{tokens, truncated}` and the parser falls silent on a
@@ -815,6 +946,17 @@ plus four found while sweeping:
    other expressions".**  A field *is* named, and the real reason is
    that a nested place cannot be moved out of (S21, S25) — the fix
    offered is right, the sentence describing why is not.
+5. **Ownership advice is not yet whole-batch-aware at every adopting
+   surface.**  `take(running, running)` where both parameters say
+   `give`, and `[running, running]`, correctly fail on the first bare
+   name and advise `give running`; applying that edit poisons the later
+   occurrence.  Likewise `consume(running, len(running))` for a `give`
+   first parameter advises the locally correct handoff before the later
+   borrow.  The original programs are refused and no invalid ownership
+   reaches MIR: this is diagnostic precision only.  A future pass should
+   inspect the complete operand batch before prescribing a move, across
+   user calls, constructions and retaining literals, and either name the
+   later use or recommend splitting/reordering the operation.
 
 **Swept with nothing to fix**, so the next sweep can start elsewhere:
 the `give`/`copy` family (names the situation, its S-numbers and the
@@ -880,58 +1022,38 @@ multi-user — all deferred by design in `docs/V2.md`.
 
 ## The order to work down
 
-1. ~~**Give string storage a reclaimable lifetime**~~ — **done**, and
-   so is the **small-string optimisation** that paid for it; see Tier
-   0 and step 5 of `docs/STRINGS.md`.  Twenty-two bytes of text live
-   in the `Value` that already travels, which cost an `abi.version`
-   bump and a `format_version` bump and removed every allocation
-   the benchmark's 400,000 `string(i)` results were making.
-2. ~~Make the compiled path reachable~~ — **done**; see Tier 0.
-3. ~~**`T?`, `none`, narrowing, `else`**~~ — **done**;
-   `parse_int` and `parse_float` answer `long?`/`double?`, and a `T?`
-   lowers to `{T, i1}`.
-4. **The cheap Tier-3 slice:** character classes.  Constant
-   containers shipped; a `set` waits for pressure a constant map does
-   not answer.  ~~`read_line`, `clock`, `sleep`, `env`,
-   stderr, directory listing~~ — **done**; see Tier 3
-   item 6 for what shipped and what was deliberately left out.
-5. ~~**Cut `Bytes`**~~ — done; stage 10 is total.
-6. **A `V?`-returning `m.get`**, and sweep the corpus for `ord("x")`
-   and f-strings.  (`m.get(key, default)` already exists; what is
-   wanted is the overload that can tell a stored `0` from an absent
-   one.  ~~Rewrite `wordcount.luc`~~ — **done**, by the zero-value
-   rule rather than by this item: docs/LANGUAGE.md, "Zero values".)
-7. ~~**Errors** — steps 5–7 of FAILURE.md.~~ **Done.**
-8. **Cross-compilation** — `--target`, and one `libluce_rt` per
-   target.  Named in `docs/CODEGEN.md` and folded into Tier 0's tail
-   without ever reaching this list, which is how the largest
-   outstanding backend item came to have no scheduled position.
-9. **Share one `libluce_rt` between artifacts** instead of copying it
-   into each.  The other one from `docs/CODEGEN.md`, and the reason a
-   `.lc` is mostly runtime by size.
-10. ~~**Decide receivers and multiple returns**~~ — **done**.  The
-    original receiver memo was superseded before lock by implied self
-    and `static` (docs/SELF.md); multiple returns are docs/RETURNS.md.
-    Integer-division spelling is decided and shipped
-    (docs/NUMERICS.md).
-11. **Sum types**, if the `T?` experience says the hole is still there.
-12. **Stage 5 (HIR)** — required by `fmt`, by an LSP, and by keeping
-    array operations whole.
+Completed chronology lives in the tiers above.  The current queue is:
+
+1. **Typed channels** — the approved next design-and-implementation run,
+   building on the shipped two-runtime transfer and worker machinery.
+   `docs/THREADS.md` D12 ratifies typed pipes and the ownership-moving
+   `send(give x)` direction only; endpoint construction, capacity,
+   receive and close behavior, and the failure surface remain to be
+   ratified, along with the prerequisites above.
+2. **The cheap library slice** — character classes first; add a
+   dedicated `set` only if a constant map stops answering the corpus.
+   A `V?`-returning `m.get` and the old `strings.find` sentinel are the
+   other small API questions.
+3. **Cross-compilation** — `--target`, and one `libluce_rt` per target.
+4. **Share one `libluce_rt` between artifacts** instead of copying it
+   into each.
+5. **Tagged unions only when scheduled.**  The direction is ratified
+   and the design is drafted with held questions; it is not the current
+   run.
+6. **Stage 5 (HIR)** — required by `fmt`, by an LSP, and by keeping
+   array operations whole.
 
 ---
 
-**The honest summary:** the language is complete as designed.  The
-front end is in genuinely good shape, and the remaining language work
-is one open question (sum types) and a short list of library
-functions.  The host surface is closed: the last two names on its gap
-list, `exit` and path manipulation, both shipped — `exit` as a gated
-builtin and paths as `std.paths` over `strings`.  The runtime's
-outstanding item is not correctness but speed: `strings` is the one
-benchmark row still behind its C twin, at **2.73× on the compute
-column** (`docs/CODEGEN.md`'s table is the one place that number is
-written down).  Small-string optimisation was the queued answer and
-**has shipped**; it took roughly three quarters of the cost back and
-not the "essentially all" that was predicted, and what is left of the
-row is **not yet accounted for** — the element copy it was long
-blamed on measures 1.3 ms and cannot be removed anyway, because a
-slice is a borrow with no allocation to hand over (`docs/STRINGS.md`).
+**The honest summary:** the shipped core is locked and the front end is
+in genuinely good shape.  Typed channels are the approved next
+design-and-implementation run; tagged unions are drafted but
+unscheduled, and a short list of library questions remains.  The host surface is closed:
+the last two names on its gap list, `exit` and path manipulation, both
+shipped — `exit` as a gated builtin and paths as `std.paths` over
+`strings`.  Three benchmark rows remain behind their C twins for three
+different reasons; `docs/CODEGEN.md` is the one current table and the
+one place their ratios are written.  Small-string optimisation shipped
+and removed roughly three quarters of the string cost rather than the
+“essentially all” predicted; the remaining part of that row is not yet
+accounted for (`docs/STRINGS.md`).

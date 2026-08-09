@@ -9,18 +9,31 @@ An annotation is optional wherever the initializer decides the type,
 and required where nothing does — an empty list literal, a `var` with
 no value.
 
-## Values and objects
+## Values, container objects, and resources
 
-The line between them decides everything about memory.
+The lines between them decide everything about memory.
 
 **Values** copy on assignment and on call, and nobody frees them: the
-seven numbers, `bool`, `string`, plain structs, enums and function
-values. A value never takes an ownership word.
+seven numbers, `bool`, `string`, structs carrying no object or resource,
+enums and function values. A value never takes an ownership word.
 
-**Heap objects** are referenced, created with `new` or a literal, and
-freed by scope ownership: `list(T)`, `map(K, V)`, `array(T, ...)`,
-`builder`. Copying a struct that contains a list copies the
-*reference* — both structs see the same list.
+**Container objects** are referenced, created with `new` or a literal,
+and freed by scope ownership: `list(T)`, `map(K, V)`, `array(T, ...)`,
+`builder`. Assigning or passing a struct value that contains a list
+copies the *reference* — both struct values see the same list. The
+explicit `copy` verb instead deep-copies a resource-free owned graph.
+
+**Resources** are heap-backed so scope ownership can give them one
+owner and one death point, but they are not containers: `file` and
+`task(...)`. They move with `give` or `return`, release with `free` or
+scope end, and cannot be copied because there is one file or worker
+behind the handle.
+
+A struct that transitively carries a container object or resource is an
+**ownership-carrying struct**. The compiler's older internal and
+diagnostic term is *object-carrying*; that class includes resources. The
+whole struct follows what it carries, and one carrying a resource is
+non-copyable.
 
 ## Scalars
 
@@ -66,9 +79,11 @@ func main():
 1
 ```
 
-What they are *for* is `array(byte, n)` at one byte an element — an
-eighth of what the same array of `long` costs, and the same vector
-register holding four `float`s where it held two `double`s.
+What they are *for* is `array(byte, _)` at one byte an element — the
+underscore is the type's rank-only extent, with the actual dimension
+given to `new array(byte, n)` — an eighth of what the same array of
+`long` costs, and the same vector register holding four `float`s where
+it held two `double`s.
 
 ## Promotion
 
@@ -83,7 +98,7 @@ that there is one cross-family answer rather than a rule about which
 values happen to fit — and Java's `int → float`, which loses
 everything above 2^24, is the widening this declines to grow.
 
-`/` is real division and always answers a float. `//` is floor
+`/` is real division and always answers a `double`. `//` is floor
 division and `%` the modulus that pairs with it — both answer the
 promoted integer type, both floor, so `%` takes the sign of the
 divisor, and both trap on a zero divisor. `/` does not trap:
@@ -128,7 +143,7 @@ loom: trap: conversion out of range [conversion_range]
 `string(x)` prints a number with the shortest text that round-trips
 **at its own width**, so the width is visible in the answer. It also
 prints a `bool`, a string, an enum member's name, or a function value's
-name. Heap objects and structs are not accepted.
+name. Container objects, resources and structs are not accepted.
 
 ```luce run
 func main():
@@ -224,9 +239,11 @@ A plain function declared inside a struct is a method with implied
 and is the namespace form reached as `Struct.name(...)`.  Neither form
 adds dynamic dispatch or inheritance.
 
-A struct type is **object-carrying** if it transitively contains a
-field of object type. Object-carrying structs follow the object
-ownership rules when they are *kept*; plain-value structs never do.
+A struct type is **object-carrying** — the established compiler term —
+if it transitively contains a container object or resource. Such structs
+follow the owned member's rules when they are *kept*; one carrying
+`file` or `task` cannot be copied, while plain-value structs never take
+an ownership verb.
 
 Struct definitions may not be cyclic through plain fields. Recursion
 goes through an optional field:
@@ -302,8 +319,8 @@ deflated is 8, and 3 is false
 A growable sequence. Created with a literal or `new list(T)`. An empty
 literal requires an annotated binding.
 
-`T` may be any value type or any object type. When `T` is an object
-type the list **owns** its elements.
+`T` may be any value, container object, or resource type. When `T`
+carries an owned thing, the list **owns** its elements.
 
 ## map(K, V)
 
@@ -316,8 +333,9 @@ index over it. Iteration is in insertion order.
 
 Fixed shape, one to four dimensions, sizes given as runtime values at
 `new`. Elements begin at the type's zero value: `0`, `0.0`, `false`,
-`""`, a field-by-field zeroed struct, or — for object element types —
-the null object, which traps on use until something is stored.
+`""`, a field-by-field zeroed struct, or — for container/resource
+handle element types — the null handle, which traps on use until
+something is stored.
 
 In a type annotation the shape is spelled with `_` for each axis:
 `array(long, _, _)`.
@@ -331,9 +349,10 @@ Accumulates text. `builder.build()` hands back the `string`.
 
 ## file
 
-An open file. A heap type like the four above it, and unlike them in
-two ways: it takes no type argument, and there is no `new file` —
-`files.open(path)` is the only door in, because a handle with no file
+An open file. A heap-backed resource rather than a fifth container. It
+takes no type argument, and there is no `new file`. The raw
+`file_open(path, mode)` host builtin is the primitive door; `std.files`
+wraps it as `open`, `create`, and `append_to`. A handle with no file
 behind it is the one thing this type must never hold.
 
 It is a **resource**, and scope ownership is what gives a resource a
@@ -380,6 +399,12 @@ way it would be written after a function's `->`:
 | `task(!)` | nothing, or a failure |
 | `task(double)` | a `double` |
 | `task(double!)` | a `double`, or a failure |
+
+A `spawn` is admitted only when its worker's return shape is
+resource-free. A worker function that answers `file`, `task`, or any
+container or struct carrying one is refused there, because that resource
+belongs to the runtime that created it and cannot cross back through
+`wait`. The type spelling itself remains valid for an unfilled slot.
 
 The `!` is the spawned function's own attribute travelling with the
 call the task carries — the same fact `-> T!` states, one level out —
@@ -489,8 +514,9 @@ main.luc:2:16: expected end of line after the field, found '!' [luce.parse.expec
 
 `var name: Type` with no initializer declares the binding, its type
 and its scope. The slot holds the type's zero value until it is
-assigned. For an object type that is the null object, and using it
-traps `null_object`. For an enum it is the **first declared member**:
+assigned. For a container object or resource type that is the null
+handle, and using it traps `null_object`; the stable code uses the
+runtime's older broad “object” term. For an enum it is the **first declared member**:
 zero is a number no member need hold, and every value of an enum is a
 member.
 
@@ -502,5 +528,6 @@ genuinely hold nothing is a `T?` and says so.
 
 ## Identity
 
-`==` and `!=` on objects compare identity — whether two names denote
-the same object — never contents.
+`==` and `!=` on container objects and resources compare handle
+identity — whether two names denote the same owned thing — never
+contents.

@@ -534,6 +534,29 @@ test "constants: flatness and explicit empty shapes are compile-time contracts" 
         \\    assert(len(EMPTY) == 0)
         \\
     , "luce.sema.const", "an empty [] needs a list(T) or array(T, _) annotation", "[]");
+    // Flatness is a property of the annotated element type even when
+    // the literal contains no elements to walk.
+    try expectRefusedAt(
+        \\const TASKS: list(task(long)) = []
+        \\
+        \\func main():
+        \\    assert(len(TASKS) == 0)
+        \\
+    , "luce.sema.const", "constant containers are flat in this version; an element cannot itself carry a list, map, array, builder, file, or task [CONSTANTS.md R-E]", "[]");
+    try expectRefusedAt(
+        \\const TASKS: array(task(long), _) = []
+        \\
+        \\func main():
+        \\    assert(TASKS.dim(0) == 0)
+        \\
+    , "luce.sema.const", "constant containers are flat in this version; an element cannot itself carry a list, map, array, builder, file, or task [CONSTANTS.md R-E]", "[]");
+    try expectRefusedAt(
+        \\const ROWS: list(list(long)) = []
+        \\
+        \\func main():
+        \\    assert(len(ROWS) == 0)
+        \\
+    , "luce.sema.const", "constant containers are flat in this version; an element cannot itself carry a list, map, array, builder, file, or task [CONSTANTS.md R-E]", "[]");
     try expectRefusedAt(
         \\const EMPTY = {}
         \\

@@ -4182,7 +4182,9 @@ test "absence survives a round trip through a struct field and a var" {
 }
 
 // ---------------------------------------------------------------------------
-// Runtime traps: one program per stable TrapCode
+// Runtime traps reachable through ordinary core expressions.  Host,
+// constant-materialization and defense-only traps have their proofs in
+// the specs or runtime seams that can actually produce them.
 // ---------------------------------------------------------------------------
 
 // Checked arithmetic exists at both arithmetic widths and traps with

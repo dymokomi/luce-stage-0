@@ -2,9 +2,10 @@
 
 **Good for humans. Good for computers.**
 
-Luce is a small statically typed language that looks like Python, runs
-at the speed of C, and gives memory back without a garbage collector
-and without reference counting anywhere.
+Luce is a small statically typed language that looks like Python,
+compiles to native code — with six of nine current benchmarks at C
+parity — and gives memory back without a garbage collector or reference
+counting anywhere.
 
 ```luce run args=world
 func main(args: list(string)):

@@ -90,7 +90,8 @@ loom PROGRAM.lc [ARGS]      shorthand for run
 ```
 
 `loom` is the trusted boundary that implements the host services —
-console, files, arguments, the terminal. It owns raw mode, the
+console, files and the terminal. Command-line arguments are instead
+handed to `main` as its owned parameter. The host owns raw mode, the
 alternate screen, frame buffering and every escape byte, and it
 sanitizes `term_write` text so a Luce program can never emit a control
 sequence.
@@ -232,7 +233,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:4:17: a container keeps its object elements; write give item to hand it over, or copy item to keep your own [OWNERSHIP.md S21] [luce.sema.own]
+main.luc:4:17: a container keeps its owned elements; write give item to hand it over, or copy item to keep your own [OWNERSHIP.md S21] [luce.sema.own]
         rows.append(item)
                     ^~~~
 ```

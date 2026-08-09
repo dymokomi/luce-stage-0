@@ -15,7 +15,7 @@ receiver first, resolved by the receiver's type, not dispatched.
 | `assert(condition: bool)` | traps `assertion_failed` |
 | `trap(message: string)` | never returns; traps `explicit_trap` |
 | `error(message: string)` | never returns; raises `user_error` |
-| `free(object)` | early release of an owned object; poisons the name |
+| `free(object)` | early release of a direct owned container or resource handle; the parameter's established broad name includes both; poisons the name |
 | `abs(value)` | any number; answers its operand's type |
 | `min(a, b)`, `max(a, b)` | any two numbers of the same type |
 | `clamp(value, low, high)` | any three numbers of the same type |
@@ -26,7 +26,7 @@ receiver first, resolved by the receiver's type, not dispatched.
 | `ord(text: string) -> long` | first codepoint; traps on empty |
 | `parse_int(text: string) -> long?` | `none` when the text is not an integer |
 | `parse_float(text: string) -> double?` | `none` when the text is not a number |
-| `byte(x)`, `short(x)`, `int(x)`, `long(x)`, `half(x)`, `float(x)`, `double(x)`, `string(x)` | the conversion constructors, each named for what it produces. Float to integer rounds half away from zero and traps outside the target's range; integer to a narrower integer traps outside it; float to a narrower float rounds to nearest and reaches `inf` rather than trapping; `string(x)` accepts numbers, `bool`, strings, enums and function values, and refuses heap objects and structs |
+| `byte(x)`, `short(x)`, `int(x)`, `long(x)`, `half(x)`, `float(x)`, `double(x)`, `string(x)` | the conversion constructors, each named for what it produces. Float to integer rounds half away from zero and traps outside the target's range; integer to a narrower integer traps outside it; float to a narrower float rounds to nearest and reaches `inf` rather than trapping; `string(x)` accepts numbers, `bool`, strings, enums and function values, and refuses container objects, resources and structs |
 
 The four numeric builtins that answer their operand's own type land
 their arguments where the whole call lands, so `let x: double =
@@ -241,9 +241,14 @@ and a larger file answers the same failure as an unreadable one.
 | `clear()` | frees all owned elements |
 
 Plus `len`, `xs[i]`, `xs[i] = v`, and `xs[a:b]` — which allocates a
-new list the receiver owns, deeply when the elements are objects.
+new list the receiver owns, deeply when the elements are resource-free
+container objects or carrying structs. When the element type carries
+`file` or `task`, both effective bounds must be equal compile-time `long`
+constants, proving an empty slice with no element copies; every other
+such slice is refused.
 `sort_by` borrows a named function or capture-free lambda; when the
-elements are heap objects the merge moves them rather than copying.
+elements are containers, resources, or carrying structs the merge moves
+them rather than copying.
 
 ## map(K, V)
 
@@ -253,19 +258,23 @@ elements are heap objects the merge moves them rather than copying.
 | `get(key, default) -> V` | never traps |
 | `remove(key)` | a no-op when absent |
 | `keys() -> list(K)` | a fresh list the receiver owns |
-| `values() -> list(V)` | a fresh list the receiver owns |
+| `values() -> list(V)` | a fresh list the receiver owns; refused when `V` carries `file` or `task` |
 | `clear()` | |
 
 Plus `len`, `m[k]` — which traps `key_missing` when the key is
 absent — `m[k] = v`, which inserts or updates, and `m[k] OP= v`, which
 defines a missing key at `V`'s zero value and then applies.
 
+`values()` copies each value into its new list. Container and carrying
+struct values are deep-copied, so their complete type graph must be
+resource-free.
+
 ## array(T, ...)
 
 | Method | Notes |
 |---|---|
 | `dim(axis) -> long` | the size of one axis |
-| `fill(value)` | every element at any rank; **value elements only** |
+| `fill(value)` | every element at any rank; **non-handle value elements only** |
 | `sort()`, `reverse()`, `find(v)`, `contains(v)` | rank-1 only |
 
 Plus `len` (dimension 0), `a[i]`, `grid[r, c]` up to four indices, and
@@ -313,6 +322,20 @@ the owning scope closes it and `free(f)` closes it early.
 The buffer is the caller's, which is the C shape and is what makes the
 same three methods serve a socket later. [`std.files`](/std/files/) is
 where the loops over them live.
+
+## task
+
+| Method | Notes |
+|---|---|
+| `wait()` | consume the task and answer its worker's return shape; a fallible worker makes this a fallible call |
+
+`wait` is a join and may be used once. A resource-free worker answer
+moves into the joining runtime; a function answering `file`, `task`, or
+a graph carrying either is refused at `spawn` instead. An error crosses
+as an error, and a trap surfaces with the worker's frames before the
+joiner's. A task not explicitly waited on is still joined when its
+owning scope ends, but its answer is discarded. See the [`task`
+type](/ref/types/#task).
 
 ## string
 

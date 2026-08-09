@@ -101,7 +101,7 @@ header, because a reader trusts it.
 
 ```text
 build.zig  build.zig.zon      zig build test runs everything; ./build.sh installs
-src/luce/                     the language, one numbered folder per stage:
+src/luce/                     the language, one numbered surface per stage:
   compile.zig                 the driver: the stage sequence, in order
   01_source 02_lex 03_parse   bytes to tokens to tree
   04_semantics                resolve + type-check + validate (and, still, the MIR lowering)
@@ -109,7 +109,7 @@ src/luce/                     the language, one numbered folder per stage:
   06_mir                      the typed MIR, verifier, printer, module format
   07_optimize                 three MIR passes: prune, ownership, dead
   08_llvm                     MIR to LLVM IR to an object; the host ABI
-  runtime                     libluce_rt: the heap, ownership, containers, text
+  runtime                     libluce_rt: heap, ownership, resources, workers, text
   interpreter                 the differential oracle over that runtime
   support/                    types and diagnostics, used by every stage
   specs/                      the executable specification — its own module
@@ -202,7 +202,7 @@ IR internals.
 ## What not to add casually
 
 - Comptime metaprogramming beyond what a reader can hold in their head
-- Async or threads
+- Concurrency outside THREADS.md's share-nothing ownership design
 - Codegen / build-time tricks beyond simple steps in `build.zig`
 - Premature abstraction before a caller needs it
 - Wrappers around Zig std that add nothing but indirection

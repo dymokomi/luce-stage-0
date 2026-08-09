@@ -318,6 +318,7 @@ It is not a set of flags: `Method.stored | Method.deflated` is not a
 the other one — naming a value that is exactly one of a few things.
 
 It carries no payload yet, either. A member is a name and a number,
-not a name and a value: that is a tagged union, it is ratified, and it
-will extend `match` with payload arms rather than introduce a second
-statement.
+not a name and a value: that is a tagged union. The tagged direction is
+ratified; the full design is drafted with three held questions, but it
+is not scheduled. If it ships, it extends `match` with payload arms
+rather than introducing a second statement.

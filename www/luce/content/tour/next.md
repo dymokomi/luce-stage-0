@@ -6,15 +6,19 @@ async, because those are not in it.
 
 ## What you have seen
 
-Scalars, structs, enums and function values that copy; four heap
-objects that do not. Named functions as values, and capture-free
+Scalars, plain structs, enums and function values that copy; four
+container objects that do not. Scope-owned `file` and `task` resources
+that move but cannot copy. Named functions as values, and capture-free
 lambdas whose types come from where they land.
 Folded file-scope values and flat immutable tables owned by each
 runtime's program root.
-Static types with inference, and one widening: `long` into `double`.
+Static types with inference and two widening ladders —
+`byte` → `short` → `int` → `long` and `half` → `float` → `double` —
+with any cross-ladder mix widening to `double`.
 Dispatch that checks you covered every member. Checked
 arithmetic and bounds checks that no build mode turns off. Scope
-ownership with `give`, `copy` and `free`. `T?` for absence with
+ownership with `give`, `copy` and `free`; share-nothing workers whose
+task scopes join. `T?` for absence with
 narrowing and `else`. `T!` for failure with `try`, `catch` and
 `error`. A file as a module and a reserved `std.` namespace, public
 until a declaration says `private`. Effects as host services, gated at
@@ -25,8 +29,12 @@ compile time.
 There are no closures, no generics for user code, no tagged unions —
 an [enum](/tour/enums/) has names and numbers
 and no payloads — no tuples, no operator overloading, no exceptions,
-no shadowing, no mutable file-scope `var`, and no `defer`. Some of those are permanent
-decisions with reasons written down; some are simply not built. The
+no shadowing, no mutable file-scope `var`, and no `defer`. Typed
+channels are the next approved design-and-implementation run: typed
+pipes and ownership-moving `send(give x)` are ratified, while their
+construction, capacity, receive, close and failure surface is not yet.
+Tagged unions are drafted but not scheduled. Some absent features are
+permanent decisions with reasons written down; some are simply not built. The
 [status page](/status/) says which is which, and it does not round up.
 
 ## Four directions

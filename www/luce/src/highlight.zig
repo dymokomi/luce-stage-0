@@ -86,15 +86,16 @@ pub const builtins = [_][]const u8{
 /// are words a program may perfectly well use for its own function,
 /// and colouring one of those as language would be a lie about it.
 ///
-/// The compiler's lists are `list_methods`, `array_methods`,
-/// `map_methods` and `builder_methods` in `04_semantics/builtins.zig`,
-/// plus the two String primitives beside them.
+/// The compiler's six lists are `list_methods`, `array_methods`,
+/// `map_methods`, `builder_methods`, `file_methods` and `task_methods`
+/// in `04_semantics/builtins.zig`, plus the two String primitives beside
+/// them.
 pub const methods = [_][]const u8{
     "byte_at", "find_byte", "append", "append_ascii", "build",
     "insert",  "remove",    "pop",    "clear",        "sort",
     "sort_by", "reverse",   "find",   "contains",     "dim",
     "fill",    "has",       "get",    "keys",         "values",
-    "read",    "write",     "flush",
+    "read",    "write",     "flush",  "wait",
 };
 
 pub fn inTable(table: []const []const u8, word: []const u8) bool {

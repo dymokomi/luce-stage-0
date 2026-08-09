@@ -71,13 +71,17 @@ lin: 20
 ```
 
 The equal-score pair keeps its original order because the guarantee
-is stable. The algorithm is O(n log n) and accepts object elements as
+is stable. The algorithm is O(n log n) and accepts owned elements as
 well as values.
 
 ## Slices copy
 
 `xs[a:b]` allocates a new list, owned by whoever receives it. Open
-ends default to the beginning and the end.
+ends default to the beginning and the end. The slice deep-copies owned
+elements. If the element type carries `file` or `task`, only equal
+compile-time `long` bounds are admitted, because they prove the result
+is empty and no resource is copied. A dynamically empty range is still
+refused.
 
 ```luce run
 func main():
@@ -94,7 +98,7 @@ head 3, tail 2, source 5
 
 ## Lists of lists
 
-A container always owns its object elements, so putting a *named* list
+A container always owns its owned elements, so putting a *named* list
 into another one needs `give` or `copy`.
 
 ```luce run

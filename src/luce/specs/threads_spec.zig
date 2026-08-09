@@ -313,6 +313,34 @@ test "a task returned from a function is the caller's to wait on" {
     , "15\n");
 }
 
+test "a resource-carrying object may be given and returned inside one Runtime" {
+    try agree.prints(
+        \\func work() -> long:
+        \\    return 7
+        \\
+        \\func handoff(running: give list(task(long))) -> list(task(long)):
+        \\    return running
+        \\
+        \\func main():
+        \\    var running = new list(task(long))
+        \\    running.append(spawn work())
+        \\    let moved = handoff(give running)
+        \\    for task in moved:
+        \\        print(string(task.wait()))
+        \\
+    , "7\n");
+}
+
+test "equal constant slice bounds construct an empty resource list without copying" {
+    try agree.prints(
+        \\func main():
+        \\    var running = new list(task(long))
+        \\    let empty = running[0:0]
+        \\    print(string(len(empty)))
+        \\
+    , "0\n");
+}
+
 test "tasks in a list are joined in the order the list holds them" {
     // N workers, joined in loop order — deterministic by shape, which
     // is the discipline the whole suite is written under.

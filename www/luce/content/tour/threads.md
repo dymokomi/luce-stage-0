@@ -25,13 +25,14 @@ func main():
 
 `spawn f(...)` does not call `f`. It hands `f` and its arguments to a
 worker and answers a **`task`** — a handle on the worker, which your
-scope owns exactly as it owns a list.
+scope owns beside its containers but which, unlike a list, cannot be
+copied.
 
 ## Waiting
 
-`t.wait()` joins the worker and moves its answer to you, once. The
-answer is yours from then on: a list a worker built is a list you own,
-and you may append to it.
+`t.wait()` joins the worker and moves its resource-free answer to you,
+once. The answer is yours from then on: a plain list a worker built is a
+list you own, and you may append to it.
 
 ```luce run
 func build(n: long) -> list(long):
@@ -60,8 +61,8 @@ second `give` is refused — there is one answer and you have it.
 
 This is the one place a `spawn` differs from a call, and it follows
 from the first paragraph: a worker has a heap of its own, so it cannot
-*borrow* anything of yours. Every object argument must be moved or
-duplicated, and the function has to say so in its signature.
+*borrow* anything of yours. Every resource-free object graph must be
+moved or duplicated, and the function has to say so in its signature.
 
 ```luce run
 func total(values: give list(long)) -> long:
@@ -85,6 +86,27 @@ on, and there is nothing left behind for two threads to disagree
 about. `copy mine` hands the worker a duplicate and keeps yours. A
 fresh object — a literal, a call's result — needs no verb at all,
 because nobody owned it.
+
+A `file`, `task`, or container or struct carrying one is different: it
+belongs to the runtime that created it and cannot be deep-re-owned into
+another runtime. Such a graph is refused both as a worker argument and
+as the result that `wait()` would bring back.
+
+```luce fail
+func inspect(opened: give file) -> long:
+    return 1
+
+func main():
+    var opened: file
+    let t = spawn inspect(give opened)
+```
+
+```output
+luce: compile failed
+main.luc:6:13: parameter opened of inspect is file, which carries a file or task; a resource stays in the Runtime that created it and cannot cross a worker boundary [THREADS.md D1, D2] [luce.sema.own]
+        let t = spawn inspect(give opened)
+                ^~~~~~~~~~~~~~~~~~~~~~~~~~
+```
 
 Values are values everywhere: numbers, strings, enums, plain structs
 and function values all copy across, and you keep your own. A worker
@@ -139,10 +161,11 @@ worker 1
 main 1
 ```
 
-Effects from workers are **serialized**: the host's services are
-called from one thread at a time, so a `print` from a worker arrives
-as a whole line and no host has to be written for threads. A program
-that never spawns pays nothing for that — there is no lock in it at
+Effects from workers are specified to be **serialized**. The shared
+guard makes `print` line-atomic today; the language-lock audit records
+two gaps still to close for the broader D9 promise — whole-file helper
+loops and worker registries do not yet take that guard. A program that
+never spawns pays nothing for the mechanism — there is no lock in it at
 all.
 
 ## When a worker fails
@@ -179,8 +202,10 @@ front of yours, and stops the program.
 
 ## Many workers
 
-Tasks are ordinary values, so a list of them is an ordinary list, and
-joining them in order is an ordinary loop.
+Tasks are owned resources. A list may own them, so collecting tasks and
+joining them in order is still an ordinary loop. A `list(task(...))` is
+non-copyable because its element type carries a resource, even while the
+list is empty.
 
 ```luce run
 func square(n: long) -> long:
@@ -209,6 +234,7 @@ their jobs are done by moving ownership, or they do not exist here at
 all.
 
 Workers are operating-system threads, so the honest number is
-thousands, not millions. Typed channels — pipes whose `send(give x)`
-moves an object from one worker to another — are the next piece, and
-they build on the boundary this chapter describes.
+thousands, not millions. Typed channels are the approved next
+design-and-implementation run. D12 ratifies typed pipes and the
+ownership-moving `send(give x)` direction; endpoint construction,
+capacity, receive, close and failure behavior still await that run.

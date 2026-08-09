@@ -1977,10 +1977,10 @@ const Module = struct {
     /// the same way — the host supplies effects, not memory.
     fn lowerEntry(self: *Module) Error!void {
         const entry = &self.program.functions[self.program.entry_function];
-        // `func main():` or `func main(args: List(String)):`, and
-        // nothing else — stage 4's `checkEntry` is what says so, and
-        // this is the shape that survived it (docs/METHODS.md).
-        if (entry.parameter_count > 1) return self.fail("an entry function with parameters");
+        // `func main():` or `func main(args: List(String)):`, with or
+        // without `-> !`, and nothing else — stage 4's `checkEntry` is
+        // what says so, and this is the shape that survived it.
+        if (entry.parameter_count > 1) return self.fail("an entry function with more than one parameter");
         const takes_arguments = entry.parameter_count == 1;
 
         const signature_type = try self.builder.fnType(.i32, &.{.ptr}, .normal);

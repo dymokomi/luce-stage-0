@@ -29,12 +29,12 @@ the rest.
 
 | Code | Message | Raised when |
 |---|---|---|
-| `integer_overflow` | integer overflow | a checked `long` operation leaves 64 bits |
-| `divide_by_zero` | division by zero | `/` or `%` with a zero `long` divisor |
-| `conversion_range` | conversion out of range | `long(f)` outside the `long` range |
+| `integer_overflow` | integer overflow | a checked `int` or `long` operation leaves its width |
+| `divide_by_zero` | division by zero | integer `//` or `%` with a zero divisor; real `/` follows IEEE and does not trap |
+| `conversion_range` | conversion out of range | an explicit numeric conversion or storage narrowing cannot represent its value |
 | `assertion_failed` | assertion failed | `assert(false)` |
 | `explicit_trap` | explicit trap | `trap(message)` |
-| `missing_return` | function ended without returning a value | a value-returning function fell off its end |
+| `missing_return` | function ended without returning a value | compiler defense: sealing typed MIR after stage 4 has already refused a source path that falls off |
 | `call_depth_exceeded` | call depth exceeded | the call-depth budget ran out |
 | `string_bounds` | string index out of bounds | a `string` index or slice past the end |
 | `string_boundary` | string slice splits a UTF-8 sequence | a `string` slice cutting a character |
@@ -42,22 +42,32 @@ the rest.
 | `index_bounds` | index out of bounds | a list or array index past the end |
 | `key_missing` | key not found in map | indexing a map with an absent key |
 | `empty_collection` | pop from an empty list | `pop()` on an empty list |
-| `use_after_free` | object used after free | an alias outliving its owner ([S9](../ownership/#s9)) |
-| `null_object` | null object reference | using an unfilled object slot ([S41](../ownership/#s41)) |
-| `immutable_object` | constant container is immutable | mutating a program-root constant through a parameter that hid its provenance ([S46](../ownership/#s46)) |
+| `use_after_free` | object used after free | an alias or resource handle used after its owner released it ([S9](../ownership/#s9)) |
+| `null_object` | null object reference | using an unfilled container/resource handle slot ([S41](../ownership/#s41)) |
 | `bad_codepoint` | invalid character code | `chr` outside Unicode, or `append_ascii` outside 0..127 |
-| `shift_out_of_range` | shift count out of range | `x << n` or `x >> n` with `n < 0` or `n` at or past the operand's width — C leaves this undefined and Go silently masks; Luce says it |
 | `not_owned` | object is owned by a container | never, from source — see below ([S23](../ownership/#s23)) |
+| `shift_out_of_range` | shift count out of range | `x << n` or `x >> n` with `n < 0` or `n` at or past the operand's width — C leaves this undefined and Go silently masks; Luce says it |
+| `allocation_failed` | not enough memory for this container | the allocator refuses container storage or a resource row |
+| `immutable_object` | constant container is immutable | mutating a program-root constant through a parameter that hid its provenance ([S46](../ownership/#s46)) |
 
-Every code above is reachable from a program you can write, with one
-exception. **`not_owned` is defense, not a language rule.** It was
-S23's dynamic check — `give` through an alias — until 2026-08-04,
-when that became a compile error instead, because the compiler
-already knows an alias is one where it stands. The check stayed in
-the runtime because the IR verifier trusts instruction types and a
-`.lc` is an executable: a damaged or forged module can still present
-a `give` that names a binding owning nothing. A correct compiler
-cannot emit one, so a correct program cannot meet the trap.
+Four stable messages predate the container/resource vocabulary.
+`use_after_free`, `null_object`, and defense-only `not_owned` use
+“object” in the runtime's broad heap-handle sense, so they can include a
+`file` or `task`; `allocation_failed` says “container” even when the
+allocator refused a resource row. The source reference otherwise uses
+*object* for containers. A coordinated wording migration is tracked in
+the language-lock ledger rather than changing one stable message here.
+
+Two codes are compiler defenses rather than paths correct source can
+reach. **`missing_return`** seals a typed MIR block only after stage 4
+has diagnosed a source function that can fall off its end.
+**`not_owned`** was S23's dynamic check — `give` through an alias —
+until 2026-08-04, when that became a compile error because the compiler
+already knows an alias where it stands. The runtime check remains
+because the IR verifier trusts instruction types and a `.lc` is an
+executable: a damaged or forged module can still present a `give` that
+names a binding owning nothing. A correct compiler cannot emit either
+defense path.
 
 Call depth is a **policy** limit, not a native-stack accident:
 compiled code carries its remaining depth as a hidden argument and

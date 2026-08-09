@@ -9,16 +9,17 @@ This page is why, what it costs, and what was measured.
 
 ## The model, in one paragraph
 
-The binding that received a fresh object owns it, and the owning scope
-frees it: at the end of the block, at an early `return`/`break`/
-`continue`/`try`, and immediately on reassignment. An unnamed
-temporary lives exactly as long as the statement that made it. `let y
-= x` is an alias, tracked by nothing. Keeping a *named* object —
-storing it in a container or struct, or handing it to a parameter that
-says `give` — takes a word from you, `give` (transfer) or `copy`
-(duplicate). `return` moves. `free(x)` is an early release. Values —
-`long`, `double`, `bool`, `string`, and object-free structs — never take
-a word at all.
+The binding that received a fresh container object or resource owns it,
+and the owning scope releases it: at the end of the block, at an early
+`return`/`break`/`continue`/`try`, and immediately on reassignment. An
+unnamed temporary lives exactly as long as the statement that made it.
+`let y = x` is an alias, tracked by nothing. Keeping a *named* owned
+thing — storing it in a container or struct, or handing it to a
+parameter that says `give` — takes a word from you: `give` transfers;
+`copy` duplicates only a graph containing no `file` or `task`.
+`return` moves. `free(x)` is an early release of a direct container or
+resource handle. Values — `long`, `double`, `bool`, `string`, and
+structs carrying no container or resource — never take a word at all.
 
 File-scope constant containers have one additional owner: the program
 root holds them until that runtime is torn down, so a shared immutable
@@ -59,7 +60,7 @@ scope ownership exists to keep.
 
 **Scope ownership plus `give`** won. `free` disappears from
 essentially all code while drop points stay readable from the source;
-leak reports become structurally impossible rather than usually empty;
+the model makes leak reports structurally impossible rather than usually empty;
 the `give` keyword makes a transfer of ownership visible at both ends;
 and the dynamic checks mean no borrow checker, no lifetimes, and no
 fight with the compiler.
@@ -68,9 +69,17 @@ One fact made every option cheaper than usual: the runtime already
 tracks every object and traps on dead references. Luce can afford
 *dynamic* enforcement of rules other languages must prove statically.
 
+There is one known implementation breach in that invariant. An
+adopting store can currently put an owner inside its own descendant;
+the accepted self-owned graph leaks, and copying it through a saved
+alias overflows the recursive copy. That is a runtime bug against the
+model, not an accepted trade-off. A proposed `ownership_cycle` trap at
+every adopting door is pending in the language-lock follow-up.
+
 ## What it costs
 
-One thing surfaces at run time rather than at compile time.
+One intended lifetime check surfaces at run time rather than at compile
+time.
 
 An **alias that outlives its owner** traps `use_after_free` at the
 point of use. That is the accepted price of having no borrow checker,

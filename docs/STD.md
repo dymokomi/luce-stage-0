@@ -271,8 +271,9 @@ file you have to remember to close is a file somebody will not, and
 the compiler already knows where a name's life ends.
 
 The handle's own three are `f.read(buffer)`, `f.write(buffer, count)`
-and `f.flush()`, all fallible.  The buffer is an `array(byte, n)` the
-caller owns; a read fills it and answers **how many bytes landed**,
+and `f.flush()`, all fallible.  The buffer is an `array(byte, _)` the
+caller owns, with its extent supplied at construction; a read fills it
+and answers **how many bytes landed**,
 where zero is the end of the file, and a write answers how many landed,
 which may be fewer than were offered.  That is the C shape on purpose:
 short is ordinary, the caller loops, and the same three serve a socket

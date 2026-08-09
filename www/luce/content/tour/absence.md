@@ -170,18 +170,20 @@ sum 6
 
 ## Absence owns nothing
 
-An optional inherits every ownership rule unchanged: a `list(long)?`
-holding an object owns it exactly as a `list(long)` would, and holding
-`none` owns nothing. `give`, `copy` and `free` demand a value that is
-there, and so demand narrowing first.
+An optional inherits its payload's ownership rule unchanged: a
+`list(long)?` holding a container owns it, a `file?` holding a resource
+owns that, and either holding `none` owns nothing. A verb first demands
+a present value and therefore narrowing; the payload then keeps its
+ordinary domain — a file may be given or freed, never copied.
 
 ## Declared now, filled later
 
 There is a second, older shape that looks similar and is not. `var
 name: Type` with no value declares the binding and its scope, and the
 slot holds the type's **zero value** — 0, 0.0, `false`, `""`, a zeroed
-struct, or for an object type the null object. Using an unfilled
-object slot traps `null_object`.
+struct, or for a container/resource handle type the null handle. Using
+an unfilled handle traps `null_object`; that stable code uses the
+runtime's older broad “object” term.
 
 ```luce trap
 func main():

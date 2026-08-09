@@ -107,6 +107,8 @@ index is a position in something that already has a shape, and
 `append` is the verb that grows a list.
 
 `keys()` and `values()` hand back fresh lists the receiver owns.
+`values()` copies the map's values into that list, so it is refused
+when the value type carries `file` or `task`.
 
 ```luce run
 func main():

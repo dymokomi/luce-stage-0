@@ -5,8 +5,8 @@ the language, not in the runtime, not hidden anywhere. And it has no
 `malloc`/`free` bookkeeping in ordinary code.
 
 What it has instead is **scope ownership**: the binding that received
-a fresh object owns it, and the owning scope frees it. Most programs
-never write a memory word.
+a fresh container object or resource owns it, and the owning scope
+releases it. Most programs never write a memory word.
 
 ```luce run
 func main():
@@ -29,16 +29,19 @@ own, and the compiler quotes their numbers in its diagnostics.
 
 ## What owns what
 
-Only **objects** are owned: `list`, `map`, `array`, `builder`, and
-structs that transitively contain one. **Values** — `long`, `double`,
-`bool`, `string`, and plain structs — copy freely and are never
-verbed.
+**Container objects** — `list`, `map`, `array`, `builder` — are owned,
+as are structs that transitively contain one. **Resources** — `file`
+and `task` — use the same one-owner model, but cannot be copied because
+there is one file or worker behind the handle. A struct carrying a
+resource inherits that rule: the whole struct is owned and non-copyable.
+**Values** — `long`, `double`, `bool`, `string`, and structs carrying
+nothing owned — copy freely and are never verbed.
 
-An ordinary run-created object is freed when its owner dies. Its owner
-is a binding, a container, or the statement that made it. A file-scope
-constant container instead belongs to the program root and dies when
-that runtime is torn down; [the constants chapter](../constants/)
-shows that fourth owner.
+An ordinary run-created object or resource is released when its owner
+dies. Its owner is a binding, a container, or the statement that made
+it. A file-scope constant container instead belongs to the program
+root and dies when that runtime is torn down; [the constants
+chapter](../constants/) shows that fourth owner.
 
 ```luce run
 import std.strings
@@ -98,9 +101,10 @@ loom: trap: object used after free [use_after_free]
 
 ## Keeping something needs a word
 
-Storing a *named* object into a container or a struct field, or handing
-it to a function that will keep it, is where the compiler stops
-guessing. It wants you to say which you meant.
+Storing a *named* container object, resource or carrying struct into a
+container or a struct field, or handing it to a function that will keep
+it, is where the compiler stops guessing. It wants you to say which you
+meant.
 
 ```luce fail
 func main():
@@ -111,12 +115,17 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:4:5: a container keeps its object elements; write give hits to hand it over, or copy hits to keep your own [OWNERSHIP.md S21] [luce.sema.own]
+main.luc:4:5: a container keeps its owned elements; write give hits to hand it over, or copy hits to keep your own [OWNERSHIP.md S21] [luce.sema.own]
         index["a.luc"] = hits
         ^~~~~~~~~~~~~~~~~~~~~
 ```
 
-The two answers are `give` and `copy`:
+For the resource-free graph in this example, the two answers are `give`
+and `copy`. A graph carrying `file` or `task` cannot be copied, and only
+a live owning name can be given. A borrowed resource parameter needs a
+`give` signature plus ownership from every caller; a field/index view or
+an alias with no available live owner must remain a borrow or be
+restructured before an adopting use:
 
 ```luce run
 func main():
@@ -159,16 +168,17 @@ main.luc:6:22: xs was given away and cannot be touched again in this scope [OWNE
                          ^~
 ```
 
-Because keeping always transfers, **a container always owns its object
-elements** — a dangling element is not something you can write.
-Freeing a container frees everything it owns, recursively.
+Because keeping always transfers, **a container always owns its owned
+elements** — container objects, resources, and carrying structs alike.
+A dangling element is not something you can write. Releasing a
+container recursively releases everything it owns.
 
 ## Calls borrow
 
-Passing an object to a function is a borrow, with no word at either
-end. A borrowed parameter may read and mutate contents freely; what it
-may not do is *keep* the object — store it, return it, give it away or
-free it.
+Passing a container object, resource, or carrying struct to a function
+is a borrow, with no word at either end. A borrowed parameter may use
+the borrowed thing freely; what it may not do is *keep* it — store it,
+return it, give it away, or free it.
 
 ```luce run
 func fill(xs: list(long), upto: long):
@@ -241,9 +251,11 @@ func main():
 
 ## free, for when you want the memory back now
 
-`free(x)` is legal on an owned name and poisons it exactly like
-`give`. Casual code never needs it; a program holding something large
-that it has finished with sometimes does.
+`free(x)` is legal on an owned container or resource handle and poisons
+it exactly like `give`. A carrying struct releases its fields at scope
+end rather than taking this explicit form. Casual code never needs
+`free`; a program holding something large that it has finished with
+sometimes does.
 
 ```luce run
 func main():
@@ -260,11 +272,19 @@ sum 14
 
 ## What this buys
 
-Nothing can leak: every ordinary object is owned by a binding, a
-container, or a statement temporary, while a constant container is
-owned by the program root; all four have defined death points. There is
-no collector to pause, no reference count to increment on every
-assignment, and no cycle problem to have.
+The ratified rule says nothing can leak: every ordinary container object
+or resource is owned by a binding, a container, or a statement
+temporary, while a constant container is owned by the program root; all
+four have defined death points. There is no collector to pause or
+reference count to increment on every assignment.
+
+One current implementation breach is tracked explicitly: an adopting
+store can still put an owner inside its own descendant, creating a
+self-owned cycle with no death point. The proposed fix is an
+`ownership_cycle` trap at the store; it is pending rather than being
+rounded up as fixed on this page. The compiler's direct refusal of
+resource `x = x` or `x = alias_of_x` is a different, redundant
+same-graph assignment check and does not inspect descendant adoption.
 
 What it costs is the one dynamic backstop you have met — an alias used
 after its owner released it traps `use_after_free` — plus the

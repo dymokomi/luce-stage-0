@@ -23,15 +23,15 @@
 //!
 //! **The lowering is total over the instruction set.**  Everything a
 //! program can say lowers: integers, floats, strings, structs, all
-//! four container kinds, `T?`, `T!`, ownership, the math builtins, and
-//! every host service.  There is no list of gaps here because there
-//! are none.
+//! four container kinds, file/task resources and worker operations,
+//! `T?`, `T!`, ownership, the math builtins, and every host service.
+//! There is no list of gaps here because there are none.
 //!
 //! The `fail` messages that remain in `lower.zig` are not gaps.  They
 //! name invariants the front end already guarantees — a block without
 //! a terminator, arithmetic on a type that has none, an entry function
-//! with parameters — and exist so IR that could only arrive damaged
-//! reports itself instead of being `unreachable`.
+//! with more than one parameter — and exist so IR that could only
+//! arrive damaged reports itself instead of being `unreachable`.
 //! `lower.zig` is the authority; docs/CODEGEN.md keeps the prose.
 //!
 //! `src/apps/luce/object.zig` carries a lowered program the rest of the

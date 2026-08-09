@@ -75,8 +75,10 @@ main.luc:5:21: xs is declared outside this loop; the next iteration would use a 
 
 ## copy — duplicate
 
-`copy` is a deep copy: the object and everything it owns, recursively.
-Its cost is visible at the call site, which is the point.
+`copy` is a deep copy of a resource-free object graph: the object and
+everything it owns, recursively. Its cost is visible at the call site,
+which is the point. A `file`, `task`, or graph carrying either moves
+with `give` and cannot be copied.
 
 ```luce run
 func main():
@@ -93,8 +95,9 @@ func main():
 source inner 2, copy inner 3
 ```
 
-`copy` is always legal on anything you can read, including a borrowed
-parameter — it is the escape hatch when `give` is not what you meant.
+`copy` is legal on any readable, copyable object graph, including a
+borrowed parameter. It is the escape hatch when `give` is not what you
+meant, but the graph must carry no `file` or `task`.
 
 ```luce run
 func remember(store: list(list(long)), values: list(long)):
@@ -153,7 +156,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:2:18: a container keeps its object elements; values is a borrowed parameter and can never be given away — store copy values, or take values as give in the signature [OWNERSHIP.md S12, S21] [luce.sema.own]
+main.luc:2:18: a container keeps its owned elements; values is a borrowed parameter and can never be given away — store copy values, or take values as give in the signature [OWNERSHIP.md S12, S21] [luce.sema.own]
         store.append(values)
                      ^~~~~~
 ```

@@ -80,8 +80,9 @@ meaningless. Only optimised builds are timed.
 ## What makes it fast
 
 **One code generator, one runtime.** Every semantic — the object heap,
-scope ownership, the four containers, string storage, checked
-arithmetic, the trap channel — lives in `libluce_rt`, a real static
+scope ownership, the four containers, file/task resources and workers,
+string storage, checked arithmetic, the trap channel — lives in
+`libluce_rt`, a real static
 library behind a C ABI. Compiled code calls it, and so does the
 interpreter that acts as the test suite's oracle, so there is exactly
 one implementation of every rule and no second one to be slower or
@@ -144,11 +145,16 @@ key at the value type's zero, so the first-sighting arm and the
 path is two hash lookups rather than three.
 
 **Remember that slicing a list copies.** `xs[a:b]` allocates a new
-list — deeply, when the elements are objects, because two containers
-can never own one object.
+list — deeply, when the elements are resource-free objects, because
+two containers can never own one object. If the element type carries
+`file` or `task`, slicing normally is refused: only equal compile-time
+`long` bounds are admitted, because they prove a zero-element result and
+execute no deep copies.
 
-**Do not reach for `copy` by reflex.** `copy` is a deep copy and its
-cost is deliberately visible at the call site; a borrow is free.
+**Do not reach for `copy` by reflex.** For a resource-free object graph,
+`copy` is a deep copy and its cost is deliberately visible at the call
+site; a borrow is free. A graph carrying `file` or `task` moves with
+`give` and cannot be copied.
 
 ```luce run
 import std.math

@@ -24,14 +24,22 @@
 //! raises an exception.  A Luce trap is a *value* — `1` returned
 //! through the `i32` every fallible export answers with — not an
 //! unwind, which is the whole reason the C surface has that convention
-//! (docs/CODEGEN.md).  The one exception is `luce_rt_report`, which
-//! calls back into the host, and a host is anybody's code.
+//! (docs/CODEGEN.md).  Host callbacks follow that same C boundary and
+//! may return normally or not at all; the two final reporting exports
+//! conservatively withhold the promise because they hand off the
+//! stopped run to arbitrary host code.
 //!
-//! **`willreturn`.**  Every export terminates: the container algorithms
-//! are bounded by the container, the text ones by the string, and
-//! nothing loops on an external condition.  A trap does not `longjmp`,
-//! it returns.  `luce_rt_report` is again the exception — it hands
-//! control to the host, which is free to `exit`.
+//! **`willreturn`.**  Most exports terminate: the container algorithms
+//! are bounded by the container, the text ones by the string, and a
+//! trap returns rather than using `longjmp`.  The promise is withheld
+//! from direct host or worker callbacks, the effect-lock wait, and
+//! release paths that can transitively close a file or join a task.
+//! Deep-copy operations with a source-created ownership cycle can also
+//! recurse forever: the current language admits the cycle and the
+//! runtime cannot assume it away.  Those calls may wait forever, hand
+//! control to a callback that never returns, or exhaust the native
+//! stack.  The exact set is pinned below; everything outside it still
+//! carries `willreturn`.
 //!
 //! **`memory(...)`.**  This is the claim with teeth, so it is made per
 //! function from what the body actually does.  Three locations matter:
@@ -294,9 +302,12 @@ pub const Effect = struct {
     /// One entry per parameter, in declaration order.
     parameters: []const Parameter,
     /// Whether the callee can raise an exception through this frame.
-    /// True for everything but the one export that calls the host.
+    /// Host callbacks obey the C boundary; final reporting alone
+    /// conservatively withholds the promise.
     nounwind: bool = true,
-    /// Whether the call comes back.  Same exception, same reason.
+    /// Whether the call is guaranteed to come back.  Host callbacks,
+    /// waits, cyclic deep copies, and release paths that may reach a
+    /// wait or callback withhold it.
     willreturn: bool = true,
     /// Only reached while the program is failing.  LLVM sinks the
     /// blocks that call these out of the straight-line path, which is
@@ -385,7 +396,11 @@ pub fn describe(service: Service) Effect {
             .parameters = &.{ .bytes_kept, .plain },
             .returns_noalias = true,
         },
-        .luce_rt_close => .{ .memory = touches_heap, .parameters = &.{.run} },
+        .luce_rt_close => .{
+            .memory = touches_heap,
+            .parameters = &.{.run},
+            .willreturn = false,
+        },
         .luce_rt_leaked => .{ .memory = reads_run, .parameters = &.{.run} },
         .luce_rt_status => .{ .memory = reads_run, .parameters = &.{ .run, .plain } },
         // Reads the counter and bumps it.
@@ -424,11 +439,13 @@ pub fn describe(service: Service) Effect {
         .luce_rt_constants_abort => .{
             .memory = touches_heap,
             .parameters = &.{.run},
+            .willreturn = false,
             .cold = true,
         },
         .luce_rt_discard_loose => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in },
+            .willreturn = false,
             .cold = true,
         },
 
@@ -540,6 +557,7 @@ pub fn describe(service: Service) Effect {
         .luce_rt_args_list => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .unknown, .unknown, .unknown, .value_out },
+            .willreturn = false,
         },
         // The byte channel (docs/BYTES.md).  Every one of them calls
         // back into the host through the slots installed at the start
@@ -564,14 +582,21 @@ pub fn describe(service: Service) Effect {
         .luce_rt_spawn => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .plain, .unknown, .plain, .value_out },
+            .willreturn = false,
         },
         .luce_rt_task_wait => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in, .value_out },
+            .willreturn = false,
         },
         // The lock is a store on shared state and a wait on other
         // threads; nothing about it may be moved across anything.
-        .luce_rt_effects_enter, .luce_rt_effects_leave => .{
+        .luce_rt_effects_enter => .{
+            .memory = touches_heap,
+            .parameters = &.{.run},
+            .willreturn = false,
+        },
+        .luce_rt_effects_leave => .{
             .memory = touches_heap,
             .parameters = &.{.run},
         },
@@ -587,10 +612,12 @@ pub fn describe(service: Service) Effect {
                 .plain,
                 .plain,
             },
+            .willreturn = false,
         },
         .luce_rt_file_read => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in, .value_in, .unknown, .unknown, .plain, .plain },
+            .willreturn = false,
         },
         .luce_rt_file_write => .{
             .memory = touches_heap,
@@ -604,14 +631,17 @@ pub fn describe(service: Service) Effect {
                 .plain,
                 .plain,
             },
+            .willreturn = false,
         },
         .luce_rt_file_flush => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in, .unknown, .plain, .plain },
+            .willreturn = false,
         },
         .luce_rt_file_read_text => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .bytes_in, .plain, .value_out, .unknown, .plain, .plain },
+            .willreturn = false,
         },
         .luce_rt_file_write_text => .{
             .memory = touches_heap,
@@ -626,6 +656,7 @@ pub fn describe(service: Service) Effect {
                 .plain,
                 .plain,
             },
+            .willreturn = false,
         },
         .luce_rt_set_key_text => .{
             .memory = touches_text,
@@ -654,9 +685,14 @@ pub fn describe(service: Service) Effect {
             .memory = touches_heap,
             .parameters = &.{ .run, .numbers_in, .plain, .value_in, .value_out },
         },
-        .luce_rt_bind, .luce_rt_unbind => .{
+        .luce_rt_bind => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in, .plain, .plain },
+        },
+        .luce_rt_unbind => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .plain, .plain },
+            .willreturn = false,
         },
         .luce_rt_loosen_from_frame => .{
             .memory = touches_heap,
@@ -665,6 +701,7 @@ pub fn describe(service: Service) Effect {
         .luce_rt_free => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in, .plain, .plain, .plain },
+            .willreturn = false,
         },
         .luce_rt_give => .{
             .memory = touches_heap,
@@ -673,6 +710,7 @@ pub fn describe(service: Service) Effect {
         .luce_rt_copy => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in, .value_out },
+            .willreturn = false,
         },
 
         // -- value storage --------------------------------------------
@@ -743,14 +781,21 @@ pub fn describe(service: Service) Effect {
         .luce_rt_index_set => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in, .values_in, .plain, .value_in },
+            .willreturn = false,
         },
         .luce_rt_list_slice => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in, .plain, .plain, .value_out },
+            .willreturn = false,
         },
-        .luce_rt_append, .luce_rt_remove, .luce_rt_array_fill => .{
+        .luce_rt_append, .luce_rt_array_fill => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in, .value_in },
+        },
+        .luce_rt_remove => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .value_in },
+            .willreturn = false,
         },
         .luce_rt_append_ascii => .{
             .memory = touches_heap,
@@ -764,13 +809,23 @@ pub fn describe(service: Service) Effect {
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in, .plain, .value_in },
         },
-        .luce_rt_sort, .luce_rt_reverse, .luce_rt_clear => .{
+        .luce_rt_sort, .luce_rt_reverse => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in },
         },
-        .luce_rt_map_keys, .luce_rt_map_values => .{
+        .luce_rt_clear => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in },
+            .willreturn = false,
+        },
+        .luce_rt_map_keys => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in, .value_in, .value_out },
+        },
+        .luce_rt_map_values => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .value_in, .value_out },
+            .willreturn = false,
         },
 
         // -- strings and conversions ----------------------------------
@@ -959,13 +1014,45 @@ test "the boxed-value promises match the layout generated code writes" {
     try std.testing.expectEqual(@as(u32, 8), value_align);
 }
 
-test "only the host-calling export withholds nounwind and willreturn" {
+test "only final host reporting withholds nounwind and a memory summary" {
     for (std.enums.values(Service)) |service| {
         const effect = describe(service);
         const opaque_to_us = service == .luce_rt_report or service == .luce_rt_report_error;
         try std.testing.expectEqual(!opaque_to_us, effect.nounwind);
-        try std.testing.expectEqual(!opaque_to_us, effect.willreturn);
         try std.testing.expectEqual(opaque_to_us, effect.memory == null);
+    }
+}
+
+test "exactly callbacks, waits, deep copies, and release-reachable services withhold willreturn" {
+    for (std.enums.values(Service)) |service| {
+        const expected = switch (service) {
+            .luce_rt_report,
+            .luce_rt_report_error,
+            .luce_rt_args_list,
+            .luce_rt_file_open,
+            .luce_rt_file_read,
+            .luce_rt_file_write,
+            .luce_rt_file_flush,
+            .luce_rt_file_read_text,
+            .luce_rt_file_write_text,
+            .luce_rt_spawn,
+            .luce_rt_task_wait,
+            .luce_rt_effects_enter,
+            .luce_rt_close,
+            .luce_rt_constants_abort,
+            .luce_rt_discard_loose,
+            .luce_rt_unbind,
+            .luce_rt_free,
+            .luce_rt_copy,
+            .luce_rt_index_set,
+            .luce_rt_list_slice,
+            .luce_rt_remove,
+            .luce_rt_clear,
+            .luce_rt_map_values,
+            => false,
+            else => true,
+        };
+        try std.testing.expectEqual(expected, describe(service).willreturn);
     }
 }
 

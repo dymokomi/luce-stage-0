@@ -336,7 +336,7 @@ main.luc:3:17: list has no method has (has append insert remove pop sort reverse
 | `xs[i]` | list or rank-1 array element; bounds-checked |
 | `grid[r, c]` | multi-dimensional array element |
 | `m[k]` | map get; a missing key traps |
-| `xs[a:b]` | a **new list**, owned by the receiver; deep when elements are objects |
+| `xs[a:b]` | a **new list**, owned by the receiver; deep when elements are resource-free objects; resource-carrying elements require equal compile-time `long` bounds, proving an empty slice |
 | `s[a:b]` | a `string` slice; still a value; checks UTF-8 boundaries |
 
 Open slice ends default to `0` and to the length.
@@ -364,8 +364,10 @@ an immutable [constant container](../statements/#file-scope-constants).
 ## Ownership operators
 
 `give x` transfers ownership and poisons `x` to the end of its scope.
-`copy x` deep-copies. Both apply only to objects and to
-object-carrying structs; using one on a value is a compile error.
+`copy x` deep-copies. `give` applies to container objects, resources
+and ownership-carrying structs. `copy` applies only to container
+objects and carrying structs whose complete type graph contains no
+`file` or `task`; values copy by themselves.
 
 A verb in a pure borrow position — a builtin argument, a
 non-adopting method argument, an operator operand — is refused: a

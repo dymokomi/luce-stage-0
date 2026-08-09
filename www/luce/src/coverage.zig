@@ -356,7 +356,7 @@ fn retiredTypeNames(repository: Repository) !Names {
     return names;
 }
 
-/// Every method name a receiver answers to: the four tables beside the
+/// Every method name a receiver answers to: the six tables beside the
 /// dispatch, plus the two String primitives the language keeps.
 fn methods(repository: Repository) !Names {
     var names: Names = .{ .gpa = repository.gpa };
@@ -371,6 +371,7 @@ fn methods(repository: Repository) !Names {
         "const map_methods = [_][]const u8{",
         "const builder_methods = [_][]const u8{",
         "const file_methods = [_][]const u8{",
+        "const task_methods = [_][]const u8{",
     }) |opening| {
         const table = between(source, opening, "};") orelse return error.MethodTableNotFound;
         try quotedWhere(&names, table, isPlainName);
@@ -384,24 +385,108 @@ fn methods(repository: Repository) !Names {
     return names;
 }
 
-/// One Zig enum's members, by name.
-fn enumMembers(repository: Repository, path: []const u8, declaration: []const u8) !Names {
-    var names: Names = .{ .gpa = repository.gpa };
+/// Update `depth` for the structural braces on one Zig source line.
+/// Strings, character literals, line comments and multiline-string
+/// payload lines do not contain syntax braces.
+fn scanBraceDepth(line: []const u8, depth: *usize) bool {
+    if (std.mem.startsWith(u8, std.mem.trimStart(u8, line, " \t"), "\\\\")) return false;
+
+    var quoted: ?u8 = null;
+    var escaped = false;
+    var at: usize = 0;
+    while (at < line.len) : (at += 1) {
+        const byte = line[at];
+        if (quoted) |closing| {
+            if (escaped) {
+                escaped = false;
+            } else if (byte == '\\') {
+                escaped = true;
+            } else if (byte == closing) {
+                quoted = null;
+            }
+            continue;
+        }
+        if (byte == '/' and at + 1 < line.len and line[at + 1] == '/') break;
+        if (byte == '"' or byte == '\'') {
+            quoted = byte;
+        } else if (byte == '{') {
+            depth.* += 1;
+        } else if (byte == '}') {
+            if (depth.* == 0) return true;
+            depth.* -= 1;
+            if (depth.* == 0) return true;
+        }
+    }
+    return false;
+}
+
+/// One Zig enum's top-level members, by name.  Declarations inside an
+/// enum may contain blank lines and their own brace trees; neither may
+/// truncate the roster or manufacture members from a nested body.
+fn enumMembersFromSource(gpa: Allocator, source: []const u8, declaration: []const u8) !Names {
+    var names: Names = .{ .gpa = gpa };
     errdefer names.deinit();
 
-    const source = try repository.read(path);
-    defer repository.gpa.free(source);
+    const opening = try std.fmt.allocPrint(gpa, "pub const {s} = enum {{", .{declaration});
+    defer gpa.free(opening);
+    const start = std.mem.indexOf(u8, source, opening) orelse return error.EnumNotFound;
+    const body = source[start + opening.len ..];
 
-    const opening = try std.fmt.allocPrint(repository.gpa, "pub const {s} = enum {{\n", .{declaration});
-    defer repository.gpa.free(opening);
-    const body = between(source, opening, "\n\n") orelse return error.EnumNotFound;
-
+    var depth: usize = 1;
+    var found_end = false;
     var lines = std.mem.splitScalar(u8, body, '\n');
     while (lines.next()) |line| {
-        if (enumMember(line)) |name| try names.add(name);
+        if (depth == 1) {
+            if (enumMember(line)) |name| try names.add(name);
+        }
+        if (scanBraceDepth(line, &depth)) {
+            found_end = true;
+            break;
+        }
     }
+    if (!found_end) return error.EnumNotFound;
     if (names.items.items.len == 0) return error.EnumEmpty;
     return names;
+}
+
+test "enum member coverage spans blanks and ignores nested declarations" {
+    const source =
+        \\pub const Example = enum {
+        \\    first,
+        \\
+        \\    /// A documented member; braces here are prose: { }.
+        \\    second,
+        \\
+        \\    pub fn word(value: Example) []const u8 {
+        \\        return switch (value) {
+        \\            impostor,
+        \\            .first => "{",
+        \\            .second => "}",
+        \\        };
+        \\    }
+        \\
+        \\    tail,
+        \\};
+        \\
+        \\pub const Later = enum {
+        \\    outside,
+        \\};
+    ;
+
+    var names = try enumMembersFromSource(std.testing.allocator, source, "Example");
+    defer names.deinit();
+    try std.testing.expectEqual(@as(usize, 3), names.items.items.len);
+    try std.testing.expect(names.has("first"));
+    try std.testing.expect(names.has("second"));
+    try std.testing.expect(names.has("tail"));
+    try std.testing.expect(!names.has("impostor"));
+    try std.testing.expect(!names.has("outside"));
+}
+
+fn enumMembers(repository: Repository, path: []const u8, declaration: []const u8) !Names {
+    const source = try repository.read(path);
+    defer repository.gpa.free(source);
+    return enumMembersFromSource(repository.gpa, source, declaration);
 }
 
 /// The declarations one standard-library module exports: `func` for
