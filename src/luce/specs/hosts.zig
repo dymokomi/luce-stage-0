@@ -1182,6 +1182,9 @@ pub const Reference = struct {
     /// closing rule as the compiled host's.
     thread_mutex: std.Io.Mutex = .init,
     threads_closing: bool = false,
+    /// Worker-enabled oracle runs share this allocator across their
+    /// runtimes.  The default testing allocator is thread-safe; a spec
+    /// that substitutes another allocator must preserve that contract.
     gpa: Allocator = testing.allocator,
     provided: Provided = .{},
     world: World = .{},

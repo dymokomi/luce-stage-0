@@ -34,6 +34,11 @@ const text = runtime.text;
 // Running a program
 // ---------------------------------------------------------------------------
 
+/// Run one verified program through the differential oracle.  When
+/// `host.workers` is installed, `memory.objects` and any allocator it
+/// shares with `memory.arena` must support concurrent calls: the root
+/// and its worker runtimes allocate from that backing store until their
+/// structured joins finish.
 pub fn run(
     memory: runtime.Memory,
     program: *const mir.Program,

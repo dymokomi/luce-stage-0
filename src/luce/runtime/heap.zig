@@ -93,6 +93,13 @@ pub const Memory = struct {
     /// an arena cannot.  Pass an ordinary freeing allocator; under
     /// `std.testing.allocator` anything not reclaimed is a reported
     /// leak, which is what proves the ownership rules.
+    ///
+    /// An interpreter run whose Host enables workers shares this
+    /// allocator with every worker runtime.  In that case `objects`,
+    /// and any backing allocator it shares with `arena`, must be safe
+    /// for concurrent allocation until structured joins have finished.
+    /// The compiled runtime supplies that property itself; a caller of
+    /// the public oracle API supplies it with `Memory`.
     objects: Allocator,
 };
 
@@ -1435,7 +1442,14 @@ pub const Runtime = struct {
     /// still the caller's: `spawn f(name)` leaves `name` exactly as a
     /// call would.
     pub fn moveInto(self: *Runtime, target: *Runtime, held: Value) Error!Value {
-        const carried = try target.copyFrom(self, held);
+        const carried = target.copyFrom(self, held) catch |mistake| switch (mistake) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.Trap => {
+                const trapped = target.pending.?;
+                target.pending = null;
+                return self.failMessage(trapped.code, trapped.message);
+            },
+        };
         self.freeObjectsIn(held);
         return carried;
     }

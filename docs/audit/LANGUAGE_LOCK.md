@@ -396,6 +396,51 @@ retained capacity (`src/luce/runtime/heap.zig:1979-2152`;
 `src/luce/runtime/workers.zig:340-380`;
 `src/luce/runtime/test.zig:636-792`).
 
+### L24 — closed: worker-enabled oracle memory states its concurrency contract
+
+The public interpreter accepts caller-supplied allocators.  Once a Host
+enables workers, the root and every worker runtime allocate concurrently
+from the backing store supplied as `Memory.objects`; callers may also have
+built `Memory.arena` over the same allocator state.  `std.mem.Allocator`
+does not retain a thread-safety property, so the API cannot inspect that
+choice at runtime.
+
+`Memory`, `interpreter.run`, and the executable-spec Reference host now
+state the actual precondition: every allocator state shared by a
+worker-enabled run must support concurrent allocation and remain alive
+through structured joins (`src/luce/runtime/heap.zig:76-105`;
+`src/luce/interpreter/machine.zig:36-48`;
+`src/luce/specs/hosts.zig:1171-1188`).  The compiled runtime already uses
+concurrency-safe libc/page allocators and the spec host defaults to Zig's
+thread-safe testing allocator; this closes the public embedding contract
+without adding a lock to an allocator whose type erased that distinction.
+
+### L25 — closed: cross-runtime traps belong to the initiating runtime
+
+`Runtime.copyFrom` necessarily detects stale handles and forbidden
+resources while constructing in the target runtime, so its trap was left
+on the target even though the source runtime initiated the move.  Spawn
+could consequently translate an empty source trap rather than the actual
+failure.  `moveInto` now transfers the target's pending trap to the source,
+clears the target channel, preserves `OutOfMemory`, and leaves the source
+value owned when the move fails (`src/luce/runtime/heap.zig:1444-1458`).
+
+Nested tests first attach a real copied child, then encounter either a
+stale handle or a file resource; both prove correct attribution, target
+rollback, byte balance, and source liveness.  A third test pins allocation
+failure as allocation failure (`src/luce/runtime/test.zig:794-917`).
+
+### L26 — closed: resources have no generic MIR constructor
+
+The verifier used to accept `heap_new` for a `.file` or `.task` heap row.
+No source can produce that instruction: file-open and worker-spawn are the
+two resource constructors.  The interpreter therefore reached an
+`unreachable` while LLVM returned a lowering error.  Verification now
+admits only list, map, builder and ranked-array rows at `heap_new`, and
+rejects both forged resource forms with `BadIntrinsic`
+(`src/luce/06_mir/verify.zig:874-890`;
+`src/luce/06_mir/test.zig:704-757`).
+
 ## Deliberately deferred owner decisions
 
 ### L13 — S6 does not decide early release of a carrying struct
@@ -463,14 +508,16 @@ quality only — no invalid ownership reaches MIR — and Tier 5b of
   passed on the final snapshot.
 - `zig build grammar --summary all` — 5/5 steps passed, and regeneration
   left the committed VS Code grammar diff unchanged.
-- `zig build test -j2 --summary all` — 65/65 steps and 1735/1735 tests
-  passed in Debug.
-- `zig build test -Doptimize=ReleaseSafe -j1 --summary all` — 65/65
-  steps and 1735/1735 tests passed.
+- `zig build test -j2 --summary all` — 65/65 steps and 1738/1738 tests
+  passed in Debug on the final source snapshot.
+- Before L24–L26, `zig build test -Doptimize=ReleaseSafe -j1 --summary all`
+  passed 65/65 steps and 1735/1735 tests.  Their post-closeout focused
+  ReleaseSafe checks passed 4/4 cross-runtime move tests and 2/2 hostile-
+  MIR heap-row tests; the same focused filters passed in Debug.
 - Repository-wide `zig fmt --check src/ build.zig www/luce/src/ tools/`
   and `git diff --check` — clean on the final snapshot.
 
 The ownership-cycle prerequisite L17, owner decisions L13–L15, and
 diagnostic follow-up L22 remain explicitly recorded; none is silently
-counted as fixed by the green closeout suites.  L11, L12, L18 and L23 are
-closed by the implementation and tests cited above.
+counted as fixed by the green closeout suites.  L11, L12, L18 and L23–L26
+are closed by the implementation, contracts, and tests cited above.

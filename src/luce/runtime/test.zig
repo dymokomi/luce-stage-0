@@ -791,6 +791,133 @@ test "failed task allocation discards the worker result before close" {
     try testing.expectEqual(child_objects.allocated_bytes, child_objects.freed_bytes);
 }
 
+test "a cross-runtime move attributes a nested stale-handle trap to its source" {
+    var source_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer source_arena.deinit();
+    var source: Runtime = .init(.{
+        .arena = source_arena.allocator(),
+        .objects = testing.allocator,
+    });
+    defer source.deinit();
+
+    var target_objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+    var target_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer target_arena.deinit();
+    var target: Runtime = .init(.{
+        .arena = target_arena.allocator(),
+        .objects = target_objects.allocator(),
+    });
+    defer target.deinit();
+
+    // Leave one live target object and one reusable row.  A nested
+    // duplicate can then become live before the later stale handle
+    // traps, without a table growth obscuring the allocation balance.
+    const baseline = try target.newMap();
+    const spare = try target.newList(Value.none);
+    target.freeObject(spare.asObject());
+    const baseline_live = target.live;
+    const baseline_bytes = target_objects.allocated_bytes - target_objects.freed_bytes;
+
+    const outer = try source.newList(Value.none);
+    const middle = try source.newList(Value.none);
+    const good = try source.newList(Value.none);
+    try containers.append(&source, middle, good);
+    const stale = try source.newList(Value.none);
+    source.freeObject(stale.asObject());
+    try containers.append(&source, middle, stale);
+    try containers.append(&source, outer, middle);
+
+    try expectTrap(.use_after_free, &source, source.moveInto(&target, outer));
+    try testing.expect(target.pending == null);
+    try testing.expectEqual(baseline_live, target.live);
+    try testing.expectEqual(
+        baseline_bytes,
+        target_objects.allocated_bytes - target_objects.freed_bytes,
+    );
+    _ = try target.resolve(baseline);
+    _ = try source.resolve(outer);
+}
+
+test "a cross-runtime move returns a resource refusal to its source" {
+    var source_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer source_arena.deinit();
+    var source: Runtime = .init(.{
+        .arena = source_arena.allocator(),
+        .objects = testing.allocator,
+    });
+    defer source.deinit();
+
+    var target_objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+    var target_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer target_arena.deinit();
+    var target: Runtime = .init(.{
+        .arena = target_arena.allocator(),
+        .objects = target_objects.allocator(),
+    });
+    defer target.deinit();
+
+    const baseline = try target.newMap();
+    const spare = try target.newList(Value.none);
+    target.freeObject(spare.asObject());
+    const baseline_live = target.live;
+    const baseline_bytes = target_objects.allocated_bytes - target_objects.freed_bytes;
+
+    const outer = try source.newList(Value.none);
+    const good = try source.newList(Value.none);
+    try containers.append(&source, outer, good);
+    const file = try source.newFile(17, "worker.txt");
+    try containers.append(&source, outer, file);
+
+    try expectTrap(.not_owned, &source, source.moveInto(&target, outer));
+    try testing.expect(target.pending == null);
+    try testing.expectEqual(baseline_live, target.live);
+    try testing.expectEqual(
+        baseline_bytes,
+        target_objects.allocated_bytes - target_objects.freed_bytes,
+    );
+    _ = try target.resolve(baseline);
+    _ = try source.resolve(outer);
+}
+
+test "a cross-runtime move preserves target allocation failure" {
+    var source_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer source_arena.deinit();
+    var source: Runtime = .init(.{
+        .arena = source_arena.allocator(),
+        .objects = testing.allocator,
+    });
+    defer source.deinit();
+
+    var target_objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+    var target_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer target_arena.deinit();
+    var target: Runtime = .init(.{
+        .arena = target_arena.allocator(),
+        .objects = target_objects.allocator(),
+    });
+    defer target.deinit();
+
+    const baseline = try target.newMap();
+    const baseline_live = target.live;
+    const baseline_bytes = target_objects.allocated_bytes - target_objects.freed_bytes;
+    const carried = try source.newList(Value.none);
+    try containers.append(&source, carried, Value.ofLong(7));
+
+    target_objects.fail_index = target_objects.alloc_index;
+    try testing.expectError(error.OutOfMemory, source.moveInto(&target, carried));
+    target_objects.fail_index = std.math.maxInt(usize);
+
+    try testing.expect(source.pending == null);
+    try testing.expect(target.pending == null);
+    try testing.expectEqual(baseline_live, target.live);
+    try testing.expectEqual(
+        baseline_bytes,
+        target_objects.allocated_bytes - target_objects.freed_bytes,
+    );
+    _ = try target.resolve(baseline);
+    _ = try source.resolve(carried);
+}
+
 test "program roots stay rooted, leave the census, and copy into mutable ownership" {
     var bench: Bench = undefined;
     bench.setup();

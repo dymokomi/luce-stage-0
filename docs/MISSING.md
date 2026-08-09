@@ -272,9 +272,10 @@ buffering and back-pressure, receive result, close behavior and failure
 surface still need an owner decision.
 
 The language-lock audit also found six channel-prerequisite checks.
-All six are closed before channel syntax is frozen; a subsequent
-failure-path audit also made the existing cross-runtime copy primitive
-transactional before a queue can depend on it:
+All six are closed before channel syntax is frozen.  Subsequent closeout
+reviews closed three more design-independent seams, and a failure-path
+audit made the existing cross-runtime copy primitive transactional before
+a queue can depend on it:
 
 - **Closed here:** LLVM's runtime table now withholds `willreturn` from
   exactly the calls that cannot promise termination.  The direct
@@ -311,6 +312,23 @@ transactional before a queue can depend on it:
   so the oracle does not add a second operation-wide guard which the
   compiled path lacks.  A concurrent runtime test detects both overlap and
   a guard held beyond the one callback; a MIR test pins that engine seam.
+- **Closed before channels:** the public oracle now states the allocator
+  contract its real worker threads already require.  A worker-enabled
+  `interpreter.run` shares `Memory.objects` across the root and worker
+  runtimes, so that allocator and any backing allocator shared with
+  `Memory.arena` must support concurrent calls through the structured
+  joins.  The compiled runtime and the executable-spec host already use
+  thread-safe allocators; the contract keeps a caller-supplied allocator
+  from being mistaken for an unchecked private one.
+- **Closed before channels:** a failed cross-runtime re-own now reports a
+  stale handle or forbidden resource on the source runtime that initiated
+  the handoff, clears the target's private pending trap, and leaves every
+  partially copied row rolled back.  Allocation failure remains allocation
+  failure rather than being translated into a language trap.
+- **Closed before channels:** verified MIR no longer admits `heap_new` for
+  `file` or `task`.  Resources enter only through file-open and worker-spawn,
+  so malformed decoded modules are refused before either engine reaches an
+  impossible constructor.
 - **Closed here:** a container or struct that transitively carries
   `file` or `task` is now refused statically by `copy` and at every
   worker-runtime boundary.  The runtime's `not_owned` trap remains a
@@ -593,12 +611,6 @@ improvement the audit exposed:
   `luce.sema.name` as `unknown name X`.  Constants preflight now keeps
   that boundary instead of leaking the hidden declaration; unifying
   field and value namespace diagnostics remains follow-up work (F72).
-- **Verified hostile MIR can still spell `heap_new` for `file` or
-  `task`.**  The verifier accepts those resource kinds even though they
-  have no ordinary heap construction: the interpreter reaches an
-  `unreachable`, while LLVM lowering returns an error.  The verifier
-  should reject the malformed instruction before either engine sees it
-  (F55).
 - **Verified MIR can carry an empty constant-map pool row.**  Source
   `{}` is deliberately refused because it supplies neither key nor
   value type, but a decoded module may name both in its heap row and

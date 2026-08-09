@@ -722,6 +722,14 @@ test "the heap type table is checked before anything indexes it" {
     program.heap_types = heap_types;
     try verify_mod.verify(testing.allocator, &program);
 
+    // Resource rows are made only by file-open and worker-spawn.  A
+    // decoded module may name their table rows, but `heap_new` has no
+    // valid resource constructor in either engine.
+    heap_types[0] = .file;
+    try testing.expectError(error.BadIntrinsic, verify_mod.verify(testing.allocator, &program));
+    heap_types[0] = .{ .task = .{ .result = .long, .fallible = false } };
+    try testing.expectError(error.BadIntrinsic, verify_mod.verify(testing.allocator, &program));
+
     // A map keyed by something that cannot be a key.
     heap_types[0] = .{ .map = .{ .key = .double, .value = .long } };
     try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));

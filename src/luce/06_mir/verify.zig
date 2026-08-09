@@ -875,7 +875,12 @@ fn verifyInstruction(
             if (new.heap >= program.heap_types.len) return error.BadStruct;
             const expected_dims: usize = switch (program.heap_types[new.heap]) {
                 .array => |shape| shape.rank,
-                else => 0,
+                .list, .map, .builder => 0,
+                // Resources enter through their dedicated runtime
+                // doors.  Treating one as an ordinary heap allocation
+                // leaves the interpreter at `unreachable` and gives
+                // the backend no constructor it can lower.
+                .file, .task => return error.BadIntrinsic,
             };
             if (new.dims.len != expected_dims) return error.BadStruct;
             for (new.dims) |dimension| {
