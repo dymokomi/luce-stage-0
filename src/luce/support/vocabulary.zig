@@ -202,6 +202,10 @@ pub const TrapCode = enum {
     /// through a borrow whose static provenance was no longer visible.
     /// Appended so every earlier trap keeps its wire ordinal.
     immutable_object,
+    /// A retaining store attempted to make an object own itself,
+    /// directly or through one of its descendants.  Appended so every
+    /// earlier trap keeps its wire ordinal.
+    ownership_cycle,
 
     /// A static string; the caller owns nothing.
     pub fn message(self: TrapCode) []const u8 {
@@ -226,6 +230,7 @@ pub const TrapCode = enum {
             .shift_out_of_range => "shift count out of range",
             .allocation_failed => "not enough memory for this container",
             .immutable_object => "constant container is immutable",
+            .ownership_cycle => "attempted store would create an ownership cycle",
         };
     }
 };

@@ -49,6 +49,7 @@ the rest.
 | `shift_out_of_range` | shift count out of range | `x << n` or `x >> n` with `n < 0` or `n` at or past the operand's width — C leaves this undefined and Go silently masks; Luce says it |
 | `allocation_failed` | not enough memory for this container | the allocator refuses container storage or a resource row |
 | `immutable_object` | constant container is immutable | mutating a program-root constant through a parameter that hid its provenance ([S46](../ownership/#s46)) |
+| `ownership_cycle` | attempted store would create an ownership cycle | an alias-hidden retaining store would place an owner inside itself or one of its descendants ([S20](../ownership/#s20), [S33](../ownership/#s33)) |
 
 Four stable messages predate the container/resource vocabulary.
 `use_after_free`, `null_object`, and defense-only `not_owned` use

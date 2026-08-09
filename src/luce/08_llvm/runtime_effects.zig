@@ -34,12 +34,12 @@
 //! trap returns rather than using `longjmp`.  The promise is withheld
 //! from direct host or worker callbacks, the effect-lock wait, and
 //! release paths that can transitively close a file or join a task.
-//! Deep-copy operations with a source-created ownership cycle can also
-//! recurse forever: the current language admits the cycle and the
-//! runtime cannot assume it away.  Those calls may wait forever, hand
-//! control to a callback that never returns, or exhaust the native
-//! stack.  The exact set is pinned below; everything outside it still
-//! carries `willreturn`.
+//! Deep-copy operations withhold it too: ownership cycles are refused,
+//! but an acyclic graph's native recursive depth remains data-dependent
+//! and can exhaust the stack.  Those calls may wait forever, hand control
+//! to a callback that never returns, or exhaust the native stack.  The
+//! exact set is pinned below; everything outside it still carries
+//! `willreturn`.
 //!
 //! **`memory(...)`.**  This is the claim with teeth, so it is made per
 //! function from what the body actually does.  Three locations matter:

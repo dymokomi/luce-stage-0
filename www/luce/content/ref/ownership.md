@@ -237,7 +237,9 @@ Owned in, owned out.
 ### S20 — containers adopt fresh values silently {#s20}
 
 Releasing a container recursively releases the container objects and
-resources it owns.
+resources it owns. An object cannot be adopted by itself or one of its
+descendants: a visible same-root handoff is a compile error, while an
+alias-hidden retaining store traps `ownership_cycle` before mutation.
 
 ### S21 — storing a bare name is a compile error {#s21}
 
@@ -249,7 +251,7 @@ structs — so a dangling element is unrepresentable.
 ```luce fail
 func main():
     var index = new map(string, list(long))
-    var hits = [12, 40]
+    var hits: list(long) = [12, 40]
     index["a.luc"] = hits
 ```
 
@@ -485,16 +487,12 @@ fourth owner and die at runtime teardown. The runtime's leak census is
 an internal assertion: if it fires, the *runtime* has a bug, not the
 program.
 
-**Known implementation breach, 2026-08-08.** The current adopting
-doors can still accept `root.children.append(give root)`, putting an
-owner inside its own descendant. That self-owned row trips the leak
-assertion; keeping an alias and then copying it overflows the runtime's
-recursive copy. This contradicts S20 and S33. The pending repair is an
-ownership-cycle guard at every adopting door, with a proposed stable
-`ownership_cycle` trap; the [status page](/status/) does not count it
-as fixed. Stage 4 already refuses ordinary resource `x = x` and
-`x = alias_of_x` reassignment; that redundant same-graph case is not
-the descendant adoption above and does not close this gap.
+Every retaining store preserves those death points. Stage 4 refuses a
+visible attempt to give an owning graph into itself or one of its
+descendants. If aliases or parameters hide the ancestry, the runtime
+walks the target's exact owner chain and traps `ownership_cycle` before
+mutation. Trees may be arbitrarily deep, but they cannot become cycles
+with no owner outside them.
 
 ### S34 — traps and the depth budget abort cleanly {#s34}
 

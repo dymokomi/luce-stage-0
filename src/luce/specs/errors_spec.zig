@@ -5574,6 +5574,72 @@ test "luce.sema.type: a T? argument to a method earns the same advice it earns a
     );
 }
 
+test "ownership-cycle refusal follows method, type, index, and ordinary ownership checks" {
+    // These all resemble an owner entering its descendant, but each
+    // has an earlier mistake.  The ancestry check is deliberately the
+    // last gate on an otherwise-valid adopting store (S20, S33).
+    try expectSaying(
+        \\struct Node:
+        \\    children: list(Node)
+        \\
+        \\func main():
+        \\    var root = Node(children = new list(Node))
+        \\    root.children.apend(give root)
+        \\
+    , "luce.sema.method", "did you mean append?");
+    try expectSaying(
+        \\struct Root:
+        \\    rows: list(list(long))
+        \\
+        \\func main():
+        \\    var root = Root(rows = new list(list(long)))
+        \\    root.rows.append(give root)
+        \\
+    , "luce.sema.type", "argument 1 of append is list(long), got Root");
+    try expectSaying(
+        \\struct Node:
+        \\    children: map(string, Node)
+        \\
+        \\func main():
+        \\    var root = Node(children = new map(string, Node))
+        \\    root.children[true] = give root
+        \\
+    , "luce.sema.index", "this map is keyed by string");
+    try expectSaying(
+        \\struct Node:
+        \\    children: list(Node)
+        \\
+        \\func main():
+        \\    var root = Node(children = new list(Node))
+        \\    root.children.append(root)
+        \\
+    , "luce.sema.own", "a container keeps its owned elements; write give root to hand it over, or copy root to keep your own");
+    try expectSaying(
+        \\struct Node:
+        \\    children: list(Node)
+        \\
+        \\func main():
+        \\    var root = Node(children = new list(Node))
+        \\    root.children[0] += give root
+        \\
+    , "luce.sema.type", "Node has no compound assignment");
+}
+
+test "a field replacement that gives its base away is S10, not an ownership cycle" {
+    // The fresh list makes this graph reshaping acyclic, but installing
+    // it still reloads `root` after the right-hand side gave `root`
+    // away.  The established use-after-give rule therefore decides it.
+    try expectSaying(
+        \\struct Node:
+        \\    children: list(Node)
+        \\
+        \\func main():
+        \\    var root = Node(children = new list(Node))
+        \\    root.children = [give root]
+        \\
+    , "luce.sema.own", "root was given away and cannot be touched again in this scope [OWNERSHIP.md S10, S29]");
+}
+
 test "luce.sema.call: a builtin counts its arguments the way a function does" {
     // "print takes 1 arguments" miscounted its own grammar and never
     // said how many it got.  Hosted, because the host gate is checked

@@ -109,7 +109,7 @@ meant.
 ```luce fail
 func main():
     var index = new map(string, list(long))
-    var hits = [12, 40]
+    var hits: list(long) = [12, 40]
     index["a.luc"] = hits
 ```
 
@@ -278,13 +278,11 @@ temporary, while a constant container is owned by the program root; all
 four have defined death points. There is no collector to pause or
 reference count to increment on every assignment.
 
-One current implementation breach is tracked explicitly: an adopting
-store can still put an owner inside its own descendant, creating a
-self-owned cycle with no death point. The proposed fix is an
-`ownership_cycle` trap at the store; it is pending rather than being
-rounded up as fixed on this page. The compiler's direct refusal of
-resource `x = x` or `x = alias_of_x` is a different, redundant
-same-graph assignment check and does not inspect descendant adoption.
+An adopting store cannot put an owner inside itself or one of its
+descendants. The compiler refuses the relationship when the two visible
+places expose it. If aliases or parameters hide the ancestry, the store
+traps `ownership_cycle` before either graph is changed. That keeps every
+owner's death point real without requiring a borrow checker.
 
 What it costs is the one dynamic backstop you have met — an alias used
 after its owner released it traps `use_after_free` — plus the

@@ -88,7 +88,10 @@ pub const magic = "LUCE";
 /// 33 — constant containers arrive (docs/CONSTANTS.md): a second
 /// constant pool, its flat recursive value encoding, `const_container`,
 /// and the `immutable_object` trap.  All are wire surface.
-pub const format_version: u32 = 33;
+///
+/// 34 — ownership cycles are refused at every retaining store.  The
+/// `ownership_cycle` trap is appended to the stable trap vocabulary.
+pub const format_version: u32 = 34;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -1619,8 +1622,8 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // moved this number and left the hash alone.  A version bump is
     // still required for that, and this test is not what will remind
     // you.
-    try testing.expectEqual(@as(u32, 33), format_version);
-    try testing.expectEqual(@as(u64, 1494861490901555643), hasher.final());
+    try testing.expectEqual(@as(u32, 34), format_version);
+    try testing.expectEqual(@as(u64, 18277088416003522183), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

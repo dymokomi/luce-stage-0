@@ -17,13 +17,14 @@ front end's hand-over to the back end, not something to ship; that is
 how `loom` gets a program compiled without carrying a code generator,
 by running this binary over the module it already has.
 
-The current `.lcm` format is **33**. It moved for the program-root
-constant-container pool, its load instruction and `immutable_object`;
-the earlier `call_inout` edge used by writing methods first moved it to
-32. The published host ABI is **13** and did not move: neither feature
+The current `.lcm` format is **34**. Format 33 introduced the
+program-root constant-container pool, its load instruction and
+`immutable_object`; 34 appends `ownership_cycle`. The earlier
+`call_inout` edge used by writing methods first moved it to 32. The
+published host ABI is **13** and did not move: none of these features
 added a host service.
 
-Current version pair: `format_version = 33`; `abi.version = 13`.
+Current version pair: `format_version = 34`; `abi.version = 13`.
 
 `FILE` may also be `-`, to read the program from standard input.
 Imports then resolve beside the current directory, and `build` needs

@@ -88,6 +88,7 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
             if (index < 0 or index >= object.elements.count) {
                 return runtime.fail(.index_bounds);
             }
+            try runtime.ensureAcyclicAdoption(target.asObject(), stored);
             // An element overwrite frees the old owned element (S22);
             // only a `Value` cell can be holding one.
             if (object.elements.kind == .value) {
@@ -98,9 +99,11 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
         .map => |*map| {
             const key = indices[0];
             if (map.find(&key)) |at| {
+                try runtime.ensureAcyclicAdoption(target.asObject(), stored);
                 runtime.freeValue(map.entries.items[at].value);
                 map.entries.items[at].value = stored;
             } else {
+                try runtime.ensureAcyclicAdoption(target.asObject(), stored);
                 // A fresh entry owns its key too, and frees it with
                 // itself.
                 const owned_key = try runtime.ownValue(key);
@@ -111,6 +114,7 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
         .array => {
             const flat = heap.flattenIndex(object.dims, indices) orelse
                 return runtime.fail(.index_bounds);
+            try runtime.ensureAcyclicAdoption(target.asObject(), stored);
             // An element overwrite frees the old owned element (S22);
             // only a `Value` cell can be holding one.
             if (object.elements.kind == .value) {
@@ -120,7 +124,7 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
         },
         .builder, .file, .task => unreachable,
     }
-    runtime.adopt(stored);
+    runtime.adoptInto(target.asObject(), stored);
 }
 
 /// `xs[a:b]` on a list.  Slices copy — including deep copies of object
@@ -140,7 +144,6 @@ pub fn listSlice(runtime: *Runtime, target: Value, start: i64, end: i64) Error!V
         const duplicate = try runtime.deepCopy(source.at(at));
         copied.count += 1;
         copied.put(copied.count - 1, duplicate);
-        runtime.adopt(duplicate);
     }
     return runtime.attachList(copied);
 }
@@ -162,8 +165,16 @@ pub fn append(runtime: *Runtime, target: Value, held: Value) Error!void {
         .list => {
             errdefer runtime.dropStorage(held);
             try runtime.requireMutable(object);
+            // String and scalar appends cannot add an ownership edge.
+            // Keep their hot runtime path to the one growth/store call
+            // they had before cycle validation; only an object handle or
+            // a struct can carry the child whose ancestry needs checking.
+            const may_carry_objects = held.tag == .object or held.tag == .strukt;
+            if (may_carry_objects) {
+                try runtime.ensureAcyclicAdoption(target.asObject(), held);
+            }
             try object.elements.append(runtime.objects, held);
-            runtime.adopt(held);
+            if (may_carry_objects) runtime.adoptInto(target.asObject(), held);
         },
         .builder => {
             try runtime.requireMutable(object);
@@ -198,8 +209,9 @@ pub fn insert(runtime: *Runtime, target: Value, index: i64, held: Value) Error!v
     errdefer runtime.dropStorage(held);
     const object = try runtime.resolveMutable(target);
     if (index < 0 or index > object.elements.count) return runtime.fail(.index_bounds);
+    try runtime.ensureAcyclicAdoption(target.asObject(), held);
     try object.elements.insert(runtime.objects, @intCast(index), held);
-    runtime.adopt(held);
+    runtime.adoptInto(target.asObject(), held);
 }
 
 /// `xs.remove(i)` or `m.remove(key)`.  Removing an owned element frees
@@ -500,7 +512,6 @@ pub fn mapValues(runtime: *Runtime, target: Value, zero: Value) Error!Value {
         const duplicate = try runtime.deepCopy(entry.value);
         errdefer runtime.freeValue(duplicate);
         try listed.append(runtime.objects, duplicate);
-        runtime.adopt(duplicate);
     }
     return runtime.attachList(listed);
 }
@@ -545,12 +556,13 @@ pub fn mapPlace(runtime: *Runtime, target: Value, key: Value, zero: Value) Error
     switch (object.data) {
         .map => |*map| {
             if (map.find(&key)) |at| return map.entries.items[at].value;
+            try runtime.ensureAcyclicAdoption(target.asObject(), zero);
             const owned_key = try runtime.ownValue(key);
             errdefer runtime.dropStorage(owned_key);
             const owned_zero = try runtime.ownValue(zero);
             errdefer runtime.dropStorage(owned_zero);
             try map.insert(runtime.objects, .{ .key = owned_key, .value = owned_zero });
-            runtime.adopt(owned_zero);
+            runtime.adoptInto(target.asObject(), owned_zero);
             return owned_zero;
         },
         .list, .array, .builder, .file, .task => unreachable, // the verifier refuses these
@@ -561,10 +573,28 @@ pub fn mapPlace(runtime: *Runtime, target: Value, key: Value, zero: Value) Error
 /// old contents go back and every new one is its own copy.
 pub fn arrayFill(runtime: *Runtime, target: Value, held: Value) Error!void {
     const object = try runtime.resolveMutable(target);
+    // Stage 4 refuses an object-carrying fill: one borrowed graph cannot
+    // become the owner of every array slot.  Keep the same wall here for
+    // verified MIR obtained some other way, before any old cell is
+    // released.  This is double ownership, not specifically a cycle.
+    if (carriesObject(held)) return runtime.fail(.not_owned);
     if (object.elements.kind == .value) {
         for (object.elements.cells(Value)) |cell| runtime.dropStorage(cell);
     }
     try runtime.fillElements(object.elements, held);
+}
+
+fn carriesObject(held: Value) bool {
+    return switch (held.view()) {
+        .object => true,
+        .strukt => |fields| blk: {
+            for (fields) |field| {
+                if (carriesObject(field)) break :blk true;
+            }
+            break :blk false;
+        },
+        else => false,
+    };
 }
 
 // ---------------------------------------------------------------------------

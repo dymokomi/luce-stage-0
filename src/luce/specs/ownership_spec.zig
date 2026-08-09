@@ -723,6 +723,145 @@ test "S20: freeing a container frees the objects it owns" {
     , .use_after_free);
 }
 
+test "S20/S33: a visible owner cannot be adopted into its own descendant" {
+    const direct =
+        \\struct Node:
+        \\    children: list(Node)
+        \\
+        \\func main():
+        \\    var root = Node(children = new list(Node))
+        \\    root.children.append(give root)
+        \\
+    ;
+    try expectSayingAt(
+        direct,
+        "giving root here would put its owning graph inside one of its own descendants; an owning graph cannot contain itself [OWNERSHIP.md S20, S33]",
+        6,
+        26,
+    );
+
+    // Every adopting container door asks the same ancestry question.
+    try expectRejected(
+        \\struct Node:
+        \\    children: list(Node)
+        \\
+        \\func main():
+        \\    var root = Node(children = new list(Node))
+        \\    root.children.insert(0, give root)
+        \\
+    );
+    try expectRejected(
+        \\struct Node:
+        \\    children: list(Node)
+        \\
+        \\func main():
+        \\    var root = Node(children = new list(Node))
+        \\    root.children[0] = give root
+        \\
+    );
+    try expectRejected(
+        \\struct Node:
+        \\    children: map(string, Node)
+        \\
+        \\func main():
+        \\    var root = Node(children = new map(string, Node))
+        \\    root.children["self"] = give root
+        \\
+    );
+    try expectRejected(
+        \\struct Node:
+        \\    children: array(Node, _)
+        \\
+        \\func main():
+        \\    var root = Node(children = new array(Node, 1))
+        \\    root.children[0] = give root
+        \\
+    );
+
+    // Peeling fields and indices reaches the written owner.  A direct
+    // alias does too because stage 4 recorded which name owns it.
+    try expectRejected(
+        \\struct Node:
+        \\    children: list(Node)
+        \\
+        \\func main():
+        \\    var root = Node(children = new list(Node))
+        \\    root.children[0].children.append(give root)
+        \\
+    );
+    try expectRejected(
+        \\struct Node:
+        \\    children: list(Node)
+        \\
+        \\func main():
+        \\    var root = Node(children = new list(Node))
+        \\    let view = root
+        \\    view.children.append(give root)
+        \\
+    );
+}
+
+test "S20/S33: nested fresh construction cannot hide a visible ownership cycle" {
+    // The given root is retained two fresh doors down: by the inner
+    // list literal, then by the Node construction, before append would
+    // make that whole value the root's descendant.
+    try expectRejected(
+        \\struct Node:
+        \\    children: list(Node)
+        \\
+        \\func main():
+        \\    var root = Node(children = new list(Node))
+        \\    root.children.append(Node(children = [give root]))
+        \\
+    );
+
+    // The same nested construction remains a cycle through an indexed
+    // container store: the existing child container would retain a new
+    // node that already owns its own root.
+    try expectRejected(
+        \\struct Node:
+        \\    children: list(Node)
+        \\
+        \\func main():
+        \\    var root = Node(children = new list(Node))
+        \\    root.children[0] = Node(children = [give root])
+        \\
+    );
+}
+
+test "S20/S33: distinct owned trees may still grow into one tree" {
+    try agreeClean(
+        \\struct Node:
+        \\    value: long
+        \\    children: list(Node)
+        \\
+        \\func main():
+        \\    var root = Node(value = 1, children = new list(Node))
+        \\    var branch = Node(value = 2, children = new list(Node))
+        \\    var leaf = Node(value = 3, children = new list(Node))
+        \\    branch.children.append(give leaf)
+        \\    root.children.append(give branch)
+        \\    assert(root.children[0].value == 2)
+        \\    assert(root.children[0].children[0].value == 3)
+        \\
+    );
+}
+
+test "S20/S33: an alias-hidden ownership cycle reaches the runtime backstop" {
+    try agree.trapSays(
+        \\struct Node:
+        \\    children: list(Node)
+        \\
+        \\func attach(target: list(Node), item: give Node):
+        \\    target.append(give item)
+        \\
+        \\func main():
+        \\    var root = Node(children = new list(Node))
+        \\    attach(root.children, give root)
+        \\
+    , .ownership_cycle, "attempted store would create an ownership cycle");
+}
+
 test "S21: storing a bare name is a compile error at every container door" {
     // map value.
     try expectRejected(

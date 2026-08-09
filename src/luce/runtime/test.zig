@@ -64,6 +64,12 @@ fn expectTrap(code: vocabulary.TrapCode, runtime: *Runtime, mistake: anytype) !v
     try testing.expectEqualStrings(code.message(), runtime.pending.?.message);
 }
 
+fn expectContainerParent(runtime: *Runtime, child: Value, parent: Value) !void {
+    const owner = (try runtime.resolve(child)).owner;
+    try testing.expectEqual(heap.Owner.Kind.container, owner.kind);
+    try testing.expect(owner.details.parent.same(parent.asObject()));
+}
+
 /// One run for `checkAllAllocationFailures`: rollback must be visible
 /// before teardown, and teardown must return every target byte.
 fn copyWithAllocator(allocator: std.mem.Allocator, source: *Runtime, held: Value) !void {
@@ -367,7 +373,7 @@ test "a fresh object is loose, and the census counts what was not freed" {
     const first = try runtime.newList(Value.none);
     const second = try runtime.newMap();
     try testing.expectEqual(@as(u32, 2), runtime.live);
-    try testing.expectEqual(heap.Owner.loose, (try runtime.resolve(first)).owner);
+    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(first)).owner.kind);
 
     runtime.freeObject(first.asObject());
     try testing.expectEqual(@as(u32, 1), runtime.live);
@@ -567,13 +573,262 @@ test "a container owns what it adopts and frees it with itself (S20, S22)" {
     const outer = try runtime.newList(Value.none);
     const inner = try runtime.newList(Value.none);
     try containers.append(runtime, outer, inner);
-    try testing.expectEqual(heap.Owner.container, (try runtime.resolve(inner)).owner);
+    try expectContainerParent(runtime, inner, outer);
 
     // Giving away what a container owns would forge a second owner.
     try expectTrap(.not_owned, runtime, containers.giveVerb(runtime, inner, null));
 
     runtime.freeObject(outer.asObject());
     try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
+test "every adopting door refuses a direct ownership cycle without changing its target" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const appended = try runtime.newList(Value.none);
+    defer runtime.freeValue(appended);
+    try expectTrap(.ownership_cycle, runtime, containers.append(runtime, appended, appended));
+    runtime.pending = null;
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, appended)).asLong());
+    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(appended)).owner.kind);
+
+    const inserted = try runtime.newList(Value.none);
+    defer runtime.freeValue(inserted);
+    try expectTrap(.ownership_cycle, runtime, containers.insert(runtime, inserted, 0, inserted));
+    runtime.pending = null;
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, inserted)).asLong());
+
+    const indexed = try runtime.newList(Value.none);
+    defer runtime.freeValue(indexed);
+    try containers.append(runtime, indexed, Value.none);
+    try expectTrap(
+        .ownership_cycle,
+        runtime,
+        containers.indexSet(runtime, indexed, &.{Value.ofLong(0)}, indexed),
+    );
+    runtime.pending = null;
+    try testing.expect((try containers.indexGet(runtime, indexed, &.{Value.ofLong(0)})).isNone());
+
+    const mapped = try runtime.newMap();
+    defer runtime.freeValue(mapped);
+    try expectTrap(
+        .ownership_cycle,
+        runtime,
+        containers.indexSet(runtime, mapped, &.{Value.ofString("self")}, mapped),
+    );
+    runtime.pending = null;
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, mapped)).asLong());
+
+    const placed = try runtime.newMap();
+    defer runtime.freeValue(placed);
+    try expectTrap(
+        .ownership_cycle,
+        runtime,
+        containers.mapPlace(runtime, placed, Value.ofString("self"), placed),
+    );
+    runtime.pending = null;
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, placed)).asLong());
+
+    const array = try runtime.newArray(&.{1}, Value.none);
+    defer runtime.freeValue(array);
+    try expectTrap(
+        .ownership_cycle,
+        runtime,
+        containers.indexSet(runtime, array, &.{Value.ofLong(0)}, array),
+    );
+    runtime.pending = null;
+    try testing.expect((try containers.indexGet(runtime, array, &.{Value.ofLong(0)})).isNone());
+
+    // A struct is value storage, but every object field in it is still
+    // a top ownership root.  Hiding the receiver one value deep cannot
+    // evade the same check.
+    const through_struct = try runtime.newList(Value.none);
+    defer runtime.freeValue(through_struct);
+    const safe_field = try runtime.newList(Value.none);
+    defer runtime.freeValue(safe_field);
+    const record = try runtime.makeStruct(&.{ safe_field, through_struct });
+    try expectTrap(
+        .ownership_cycle,
+        runtime,
+        containers.append(runtime, through_struct, record),
+    );
+    runtime.pending = null;
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, through_struct)).asLong());
+    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(safe_field)).owner.kind);
+}
+
+test "the runtime refuses an object-carrying array fill before replacing any cell" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const array = try runtime.newArray(&.{1}, Value.none);
+    defer runtime.freeValue(array);
+    const kept = try runtime.newList(Value.none);
+    try containers.indexSet(runtime, array, &.{Value.ofLong(0)}, kept);
+    try expectContainerParent(runtime, kept, array);
+
+    const incoming = try runtime.newList(Value.none);
+    defer runtime.freeValue(incoming);
+    try expectTrap(.not_owned, runtime, containers.arrayFill(runtime, array, incoming));
+    runtime.pending = null;
+    const after_direct = try containers.indexGet(runtime, array, &.{Value.ofLong(0)});
+    try testing.expect(after_direct.asObject().same(kept.asObject()));
+    try expectContainerParent(runtime, kept, array);
+    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(incoming)).owner.kind);
+
+    const record = try runtime.makeStruct(&.{incoming});
+    defer runtime.dropStorage(record);
+    try expectTrap(.not_owned, runtime, containers.arrayFill(runtime, array, record));
+    runtime.pending = null;
+    const after_struct = try containers.indexGet(runtime, array, &.{Value.ofLong(0)});
+    try testing.expect(after_struct.asObject().same(kept.asObject()));
+    try expectContainerParent(runtime, kept, array);
+
+    // A null object is still an object-typed fill, and the same hostile
+    // MIR wall applies without first trying to resolve it.
+    try expectTrap(.not_owned, runtime, containers.arrayFill(runtime, array, Value.null_object));
+    runtime.pending = null;
+    const after_null = try containers.indexGet(runtime, array, &.{Value.ofLong(0)});
+    try testing.expect(after_null.asObject().same(kept.asObject()));
+}
+
+test "the cycle backstop preserves receiver, mutability, and bounds trap precedence" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const list = try runtime.newList(Value.none);
+    defer runtime.freeValue(list);
+    try expectTrap(
+        .index_bounds,
+        runtime,
+        containers.indexSet(runtime, list, &.{Value.ofLong(0)}, list),
+    );
+    runtime.pending = null;
+    try expectTrap(.index_bounds, runtime, containers.insert(runtime, list, 1, list));
+    runtime.pending = null;
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, list)).asLong());
+
+    const stale = try runtime.newList(Value.none);
+    runtime.freeValue(stale);
+    try expectTrap(.use_after_free, runtime, containers.append(runtime, stale, stale));
+    runtime.pending = null;
+
+    try runtime.beginConstants(1);
+    const rooted = try runtime.newList(Value.none);
+    try runtime.publishConstant(0, rooted);
+    runtime.finishConstants();
+    try expectTrap(.immutable_object, runtime, containers.append(runtime, rooted, rooted));
+    runtime.pending = null;
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, rooted)).asLong());
+}
+
+test "an ancestor cannot move into its descendant and a rejected overwrite stays intact" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const root = try runtime.newList(Value.none);
+    defer runtime.freeValue(root);
+    const middle = try runtime.newList(Value.none);
+    const leaf = try runtime.newList(Value.none);
+    try containers.append(runtime, leaf, Value.none);
+    try containers.append(runtime, middle, leaf);
+    try containers.append(runtime, root, middle);
+    try expectContainerParent(runtime, middle, root);
+    try expectContainerParent(runtime, leaf, middle);
+
+    try expectTrap(
+        .ownership_cycle,
+        runtime,
+        containers.indexSet(runtime, leaf, &.{Value.ofLong(0)}, root),
+    );
+    runtime.pending = null;
+    try testing.expect((try containers.indexGet(runtime, leaf, &.{Value.ofLong(0)})).isNone());
+    try expectContainerParent(runtime, middle, root);
+    try expectContainerParent(runtime, leaf, middle);
+
+    try expectTrap(.ownership_cycle, runtime, containers.append(runtime, leaf, root));
+    runtime.pending = null;
+    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, leaf)).asLong());
+    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(root)).owner.kind);
+}
+
+test "a damaged parent cycle is bounded and refused rather than walked forever" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const first = try runtime.newList(Value.none);
+    defer runtime.freeValue(first);
+    const second = try runtime.newList(Value.none);
+    defer runtime.freeValue(second);
+    const child = try runtime.newList(Value.none);
+    defer runtime.freeValue(child);
+
+    (try runtime.resolve(first)).owner = .containedBy(second.asObject());
+    (try runtime.resolve(second)).owner = .containedBy(first.asObject());
+    try expectTrap(
+        .ownership_cycle,
+        runtime,
+        runtime.ensureAcyclicAdoption(first.asObject(), child),
+    );
+    runtime.pending = null;
+    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(child)).owner.kind);
+
+    // Restore the deliberately damaged metadata before the ordinary
+    // teardown path proves all three rows still have one death point.
+    (try runtime.resolve(first)).owner = .loose;
+    (try runtime.resolve(second)).owner = .loose;
+}
+
+test "pop, bind, and reinsertion keep one exact acyclic owner tree" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const root = try runtime.newList(Value.none);
+    defer runtime.freeValue(root);
+    const branch = try runtime.newList(Value.none);
+    const leaf = try runtime.newList(Value.none);
+    try containers.append(runtime, branch, leaf);
+    try containers.append(runtime, root, branch);
+    try expectContainerParent(runtime, branch, root);
+    try expectContainerParent(runtime, leaf, branch);
+
+    const taken = try containers.pop(runtime, root);
+    try testing.expect(taken.asObject().same(branch.asObject()));
+    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(branch)).owner.kind);
+    // The subtree stays a tree while its root changes owner.
+    try expectContainerParent(runtime, leaf, branch);
+
+    const serial = runtime.takeSerial();
+    runtime.bind(branch, serial, 7);
+    const bound = (try runtime.resolve(branch)).owner;
+    try testing.expectEqual(heap.Owner.Kind.binding, bound.kind);
+    try testing.expectEqual(serial, bound.details.binding.serial);
+    try testing.expectEqual(@as(u32, 7), bound.details.binding.local);
+    runtime.loosenFromFrame(branch, serial);
+    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(branch)).owner.kind);
+
+    try containers.insert(runtime, root, 0, branch);
+    try expectContainerParent(runtime, branch, root);
+    try expectContainerParent(runtime, leaf, branch);
+
+    // Growing below an existing ancestry is the ordinary, legal
+    // direction: only moving an ancestor down below itself is refused.
+    const twig = try runtime.newList(Value.none);
+    try containers.append(runtime, leaf, twig);
+    try expectContainerParent(runtime, twig, leaf);
 }
 
 test "give demands the binding it names still owns the object (S23)" {
@@ -604,7 +859,7 @@ test "a return moves what the finished frame owned out loose (S16)" {
     const serial = runtime.takeSerial();
     runtime.bind(held, serial, 0);
     runtime.loosenFromFrame(held, serial);
-    try testing.expectEqual(heap.Owner.loose, (try runtime.resolve(held)).owner);
+    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(held)).owner.kind);
 }
 
 test "copy duplicates what an object owns, recursively (S31)" {
@@ -624,6 +879,7 @@ test "copy duplicates what an object owns, recursively (S31)" {
     // The copy's element is a different object that holds equal data.
     const copied_inner = try containers.indexGet(runtime, duplicate, &.{Value.ofLong(0)});
     try testing.expect(!copied_inner.asObject().same(inner.asObject()));
+    try expectContainerParent(runtime, copied_inner, duplicate);
     const element = try containers.indexGet(runtime, copied_inner, &.{Value.ofLong(0)});
     try testing.expectEqual(@as(i64, 7), element.asLong());
 
@@ -631,6 +887,62 @@ test "copy duplicates what an object owns, recursively (S31)" {
     runtime.freeObject(duplicate.asObject());
     try testing.expectEqual(@as(u32, 2), runtime.live);
     _ = try runtime.resolve(inner);
+}
+
+test "deep copies and derived lists name the exact parent they build" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const list_source = try nestedCopySource(runtime, .list);
+    defer runtime.freeValue(list_source);
+    const list_copy = try runtime.deepCopy(list_source);
+    defer runtime.freeValue(list_copy);
+    const sliced = try containers.listSlice(runtime, list_source, 0, 2);
+    defer runtime.freeValue(sliced);
+    for (0..2) |at| {
+        const index = Value.ofLong(@intCast(at));
+        try expectContainerParent(
+            runtime,
+            try containers.indexGet(runtime, list_copy, &.{index}),
+            list_copy,
+        );
+        try expectContainerParent(
+            runtime,
+            try containers.indexGet(runtime, sliced, &.{index}),
+            sliced,
+        );
+    }
+
+    const map_source = try nestedCopySource(runtime, .map);
+    defer runtime.freeValue(map_source);
+    const map_copy = try runtime.deepCopy(map_source);
+    defer runtime.freeValue(map_copy);
+    for (0..2) |at| {
+        try expectContainerParent(runtime, try containers.valueAt(runtime, map_copy, @intCast(at)), map_copy);
+    }
+    const values = try containers.mapValues(runtime, map_source, Value.none);
+    defer runtime.freeValue(values);
+    for (0..2) |at| {
+        try expectContainerParent(
+            runtime,
+            try containers.indexGet(runtime, values, &.{Value.ofLong(@intCast(at))}),
+            values,
+        );
+    }
+
+    const array_source = try nestedCopySource(runtime, .array);
+    defer runtime.freeValue(array_source);
+    const array_copy = try runtime.deepCopy(array_source);
+    defer runtime.freeValue(array_copy);
+    for (0..2) |at| {
+        try expectContainerParent(
+            runtime,
+            try containers.indexGet(runtime, array_copy, &.{Value.ofLong(@intCast(at))}),
+            array_copy,
+        );
+    }
 }
 
 test "a packed list copy ignores retained spare capacity" {
@@ -942,7 +1254,10 @@ test "program roots stay rooted, leave the census, and copy into mutable ownersh
     // runtime keeps them safe and reports not-owned.
     const serial = runtime.takeSerial();
     runtime.bind(rooted, serial, 4);
-    runtime.adopt(rooted);
+    const parent = try runtime.newList(Value.none);
+    try runtime.ensureAcyclicAdoption(parent.asObject(), rooted);
+    runtime.adoptInto(parent.asObject(), rooted);
+    runtime.freeValue(parent);
     runtime.loosen(rooted);
     runtime.loosenFromFrame(rooted, serial);
     runtime.unbind(rooted, serial, 4);
@@ -1455,10 +1770,10 @@ test "objects inside a struct value are walked, not skipped" {
     const record = Value.ofStruct(&fields);
     const serial = runtime.takeSerial();
     runtime.bind(record, serial, 0);
-    try testing.expectEqual(
-        heap.Owner.bound(.{ .serial = serial, .local = 0 }),
-        (try runtime.resolve(fields[1])).owner,
-    );
+    const owner = (try runtime.resolve(fields[1])).owner;
+    try testing.expectEqual(heap.Owner.Kind.binding, owner.kind);
+    try testing.expectEqual(serial, owner.details.binding.serial);
+    try testing.expectEqual(@as(u32, 0), owner.details.binding.local);
     runtime.unbind(record, serial, 0);
     try testing.expectEqual(@as(u32, 0), runtime.live);
 }

@@ -458,7 +458,9 @@ instruction removal, compacts the pool, and remaps the indices.  An
 unused table therefore emits neither data nor startup work.  The pool,
 the instruction, their wire tags, and `immutable_object` moved the
 serialized module to **format 33**; none is a host service, so
-`abi.version` remains **13**.
+`abi.version` remains **13**.  The later appended `ownership_cycle`
+trap moves the current module format to **34** without moving that host
+ABI.
 
 Every generated entry path calls one private `luce.constants`
 materializer before user code.  It constructs rows through the same
@@ -522,9 +524,9 @@ This is genuinely in-place, not the retired copy-in/copy-out result
 convention: a store performed before an error remains visible while
 the error unwinds.  It is also entirely internal.  `call_inout` and
 the local flag first moved the serialized module to format 32;
-program-root constants have since moved the current format to **33**.
-Neither changed a `LuceHost` slot, so the published host ABI remains
-**13**.
+program-root constants then moved it to 33, and the appended
+`ownership_cycle` trap moved the current format to **34**.  None changed
+a `LuceHost` slot, so the published host ABI remains **13**.
 
 ## Call depth, and the trace a trap carries
 
@@ -796,9 +798,10 @@ Three claims, each justified from the body of the corresponding export:
   host callbacks own their control flow.
 - **`willreturn`** — a trap returns rather than jumping, but host/worker
   callbacks, the effect-lock wait, and release paths that can close a
-  file or join a task may not.  Until ownership cycles are prevented,
-  `copy`, `list_slice`, and `map_values` also cannot promise termination:
-  each recursively deep-copies a source graph.  Exactly twenty-three
+  file or join a task may not.  `copy`, `list_slice`, and `map_values`
+  also withhold the promise: the ownership-cycle guard makes their graph
+  walk finite, but native recursion depth remains data-dependent and has
+  no fixed return bound.  Exactly twenty-three
   exports withhold the attribute, pinned as a closed set in
   `runtime_effects.zig`; every other export is asserted to keep it.
 - **`memory(...)`** — per function.  `argmem` is what a pointer

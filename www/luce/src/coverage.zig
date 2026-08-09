@@ -949,7 +949,7 @@ test "the reference keeps implied self and static visible" {
 
     const toolchain = try repository.read("www/luce/content/guide/toolchain.md");
     defer gpa.free(toolchain);
-    try std.testing.expect(std.mem.indexOf(u8, toolchain, "`format_version = 33`; `abi.version = 13`") != null);
+    try std.testing.expect(std.mem.indexOf(u8, toolchain, "`format_version = 34`; `abi.version = 13`") != null);
 }
 
 test "the reference keeps existing-name multi-return assignment visible" {

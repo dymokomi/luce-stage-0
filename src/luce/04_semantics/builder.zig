@@ -4292,6 +4292,14 @@ pub const FunctionBuilder = struct {
         }
         const named = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ target.base, target.field });
         const value = ((try self.lowerTyped(assign.value, expected, assign.span, named)) orelse return).value;
+        // The right-hand side is evaluated before this assignment
+        // reloads and rebuilds the base struct.  It may therefore have
+        // given the base away even though the place was live when the
+        // statement began (`root.field = consume(give root)`).  That
+        // is the ordinary S10 use-after-give rule, not an ownership
+        // cycle: a fresh replacement can legally reshape the graph,
+        // but the poisoned binding cannot be touched to install it.
+        if (try self.checkPoisoned(info, target.base, target.span)) return;
         // `none` owns nothing, so emptying an optional object field is
         // always legal.  Otherwise the field retains the object: a
         // program root must be copied first, and an ordinary value must
@@ -4399,6 +4407,13 @@ pub const FunctionBuilder = struct {
             );
             return;
         }
+        // Index shape, element type, constant ownership and the verb
+        // rule all precede the cycle question.  A valid adopting store
+        // is the first point at which destination ancestry matters
+        // (S20, S33).
+        if (assign.compound == null and
+            self.analyzer.carriesObjects(element_type) and
+            try self.refuseVisibleOwnershipCycle(target.base, assign.value)) return;
         var store = value.register;
         if (assign.compound) |op| {
             // Read the element once (the base and indices were lowered
@@ -4956,6 +4971,168 @@ pub const FunctionBuilder = struct {
             }
         }
         return found.info.local;
+    }
+
+    /// The owning local visibly at the root of a place expression.
+    /// Field and index reads remain descendants of their written root;
+    /// a bare alias recorded by `rememberOwnerName` remains visibly the
+    /// same root too.  An alias made from a field or index has no such
+    /// record and deliberately answers its own local: that is the
+    /// alias-hidden case the runtime backstop must decide (S20, S33).
+    ///
+    /// A narrowed optional is still a `.name` in the tree, so it takes
+    /// this same path.  The one expression form that unwraps without a
+    /// prior narrowing, `x else trap(\"…\")`, keeps `x`'s root because
+    /// its other arm cannot answer a value.
+    fn visiblePlaceRoot(
+        self: *FunctionBuilder,
+        expression: *const ast.Expression,
+    ) Error!?LocalId {
+        return switch (expression.*) {
+            .name => |name| blk: {
+                const found = self.findLocal(name.text) orelse break :blk null;
+                if (!found.info.carries) break :blk null;
+                if (found.info.class == .alias) {
+                    if (found.info.owner_name) |owner| {
+                        if (self.findLocal(owner)) |root| break :blk root.info.local;
+                    }
+                }
+                break :blk found.info.local;
+            },
+            .field => |field| self.visiblePlaceRoot(field.target),
+            .index => |index| self.visiblePlaceRoot(index.target),
+            .binary => |binary| blk: {
+                if (binary.op != .coalesce) break :blk null;
+                const left = try self.visiblePlaceRoot(binary.left);
+                const right = try self.visiblePlaceRoot(binary.right);
+                if (left != null and right != null and left.? == right.?) break :blk left;
+                if (left != null and binary.right.* == .call and
+                    std.mem.eql(u8, binary.right.call.callee, "trap")) break :blk left;
+                break :blk null;
+            },
+            else => null,
+        };
+    }
+
+    const VisibleCycleGive = struct {
+        name: []const u8,
+        span: Span,
+    };
+
+    /// Whether this bare call is a struct construction.  Written calls
+    /// have bare names; imported `module.Struct(...)` constructions are
+    /// method-shaped and answered by `methodConstructsStruct` below.
+    /// This is intentionally silent: it is consulted only after the
+    /// ordinary lowering has already resolved and checked the call.
+    fn callConstructsStruct(self: *FunctionBuilder, call: ast.Call) Error!bool {
+        if (std.mem.indexOfScalar(u8, call.callee, '.') != null) return false;
+        if (self.findLocal(call.callee) != null) return false;
+        const qualified = try self.analyzer.qualify(self.prefix, call.callee);
+        return self.analyzer.struct_names.contains(qualified);
+    }
+
+    /// Whether a dotted call is an imported struct construction,
+    /// silently and without re-running name diagnostics.
+    fn methodConstructsStruct(self: *FunctionBuilder, method: ast.Method) Error!bool {
+        const chain = helpers.dottedChain(method.target) orelse return false;
+        const head = chain.head();
+        if (self.findLocal(head) != null) return false;
+
+        var written: std.ArrayList(u8) = .empty;
+        defer written.deinit(self.temporary());
+        var at = chain.count;
+        while (at > 0) {
+            at -= 1;
+            try written.appendSlice(self.temporary(), chain.parts[at]);
+            try written.append(self.temporary(), '.');
+        }
+        try written.appendSlice(self.temporary(), method.name);
+
+        const head_qualified = try self.analyzer.qualify(self.prefix, head);
+        if (self.analyzer.struct_names.contains(head_qualified)) {
+            const qualified = try self.analyzer.qualify(self.prefix, written.items);
+            return self.analyzer.struct_names.contains(qualified);
+        }
+        if (!self.analyzer.importsModule(self.module, head)) return false;
+        return self.analyzer.struct_names.contains(written.items);
+    }
+
+    /// Find a visible give retained by `expression` itself.  Only the
+    /// language's definite construction doors recurse: list and map
+    /// literals and struct construction.  A user call that takes a
+    /// give argument may release it, transform it, or return another
+    /// graph, so its result is deliberately left to the runtime rather
+    /// than guessed here.  `copy` likewise breaks identity and is not
+    /// traversed (S20, S31, S33).
+    fn visibleCycleGiveIn(
+        self: *FunctionBuilder,
+        expression: *const ast.Expression,
+        destination: LocalId,
+    ) Error!?VisibleCycleGive {
+        return switch (expression.*) {
+            .give => |given| blk: {
+                const root = (try self.visibleOwnershipRoot(expression)) orelse break :blk null;
+                if (root != destination or given.operand.* != .name) break :blk null;
+                break :blk .{
+                    .name = given.operand.name.text,
+                    .span = given.span,
+                };
+            },
+            .list_literal => |literal| blk: {
+                for (literal.elements) |element| {
+                    if (try self.visibleCycleGiveIn(element, destination)) |found| break :blk found;
+                }
+                break :blk null;
+            },
+            .map_literal => |literal| blk: {
+                // A map borrows its key and owns its value.
+                for (literal.entries) |entry| {
+                    if (try self.visibleCycleGiveIn(entry.value, destination)) |found| break :blk found;
+                }
+                break :blk null;
+            },
+            .call => |call| blk: {
+                if (!try self.callConstructsStruct(call)) break :blk null;
+                for (call.arguments) |argument| {
+                    if (try self.visibleCycleGiveIn(argument.value, destination)) |found| break :blk found;
+                }
+                break :blk null;
+            },
+            .method => |method| blk: {
+                if (!try self.methodConstructsStruct(method)) break :blk null;
+                for (method.arguments) |argument| {
+                    if (try self.visibleCycleGiveIn(argument.value, destination)) |found| break :blk found;
+                }
+                break :blk null;
+            },
+            // Either arm may be the value the adopting place keeps.
+            .binary => |binary| blk: {
+                if (binary.op != .coalesce and binary.op != .catch_error) break :blk null;
+                if (try self.visibleCycleGiveIn(binary.left, destination)) |found| break :blk found;
+                break :blk try self.visibleCycleGiveIn(binary.right, destination);
+            },
+            else => null,
+        };
+    }
+
+    /// Refuse a statically visible owner entering one of its own
+    /// descendants.  Runtime ancestry metadata is the authority for
+    /// aliases stage 4 cannot see; this gate exists to make the direct
+    /// spelling a compile-time ownership error (S20, S33).
+    fn refuseVisibleOwnershipCycle(
+        self: *FunctionBuilder,
+        destination: *const ast.Expression,
+        retained: *const ast.Expression,
+    ) Error!bool {
+        const root = (try self.visiblePlaceRoot(destination)) orelse return false;
+        const given = (try self.visibleCycleGiveIn(retained, root)) orelse return false;
+        try self.fail(
+            "luce.sema.own",
+            given.span,
+            "giving {s} here would put its owning graph inside one of its own descendants; an owning graph cannot contain itself [OWNERSHIP.md S20, S33]",
+            .{given.name},
+        );
+        return true;
     }
 
     fn lowerReturn(self: *FunctionBuilder, returned: ast.Return) Error!void {
@@ -8426,6 +8603,16 @@ pub const FunctionBuilder = struct {
                         );
                         return null;
                     }
+                    // Resolve the method, its arity and argument type,
+                    // then enforce the ordinary handoff spelling
+                    // before asking the ancestry question.  A direct
+                    // owner-into-descendant append/insert is therefore
+                    // `luce.sema.own` without masking an earlier
+                    // method, type or ownership diagnostic (S20, S33).
+                    if (try self.refuseVisibleOwnershipCycle(
+                        method.target,
+                        method.arguments[value_index].value,
+                    )) return null;
                 }
             }
         }

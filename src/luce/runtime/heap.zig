@@ -114,14 +114,18 @@ pub const Memory = struct {
 
 pub const OwnedBy = struct { serial: u64, local: u32 };
 
-/// An explicitly laid-out ownership discriminator and its binding
-/// payload.  Generated code checks `kind` before an inline mutation,
-/// so it is a plain measured field rather than a tagged-union detail.
+/// An explicitly laid-out ownership discriminator and identity payload.
+/// Generated code checks `kind` before an inline mutation, so it is a
+/// plain measured field rather than a tagged-union detail.
 pub const Owner = struct {
     /// The owner class generated code may inspect through `layout`.
     kind: Kind = .loose,
-    /// Meaningful only for `.binding`; zeroed for the other kinds.
-    binding: OwnedBy = .{ .serial = 0, .local = 0 },
+    /// The identity meaningful for this owner class.  A binding names
+    /// one local in one frame; a container names the exact object row
+    /// and generation that adopted this one.  The two are mutually
+    /// exclusive, so they share storage and keep an object row the size
+    /// generated code already measures.
+    details: Details = .{ .binding = .{ .serial = 0, .local = 0 } },
 
     pub const Kind = enum(u32) {
         loose,
@@ -130,13 +134,22 @@ pub const Owner = struct {
         program,
     };
 
+    pub const Details = union {
+        binding: OwnedBy,
+        parent: Handle,
+    };
+
     pub const loose: Owner = .{};
-    pub const container: Owner = .{ .kind = .container };
     pub const program: Owner = .{ .kind = .program };
+
+    /// The exact container object that owns this object.
+    pub fn containedBy(parent: Handle) Owner {
+        return .{ .kind = .container, .details = .{ .parent = parent } };
+    }
 
     /// The owner naming one local in one live call frame.
     pub fn bound(binding: OwnedBy) Owner {
-        return .{ .kind = .binding, .binding = binding };
+        return .{ .kind = .binding, .details = .{ .binding = binding } };
     }
 };
 
@@ -1549,12 +1562,31 @@ pub const Runtime = struct {
             row.* = storage;
             row.generation = generation;
             self.live += 1;
-            return Value.ofObject(.{ .index = index, .generation = generation });
+            const held = Value.ofObject(.{ .index = index, .generation = generation });
+            self.adoptContents(held.asObject());
+            return held;
         }
         const index: u32 = @intCast(self.table.items.len);
         try self.table.append(self.objects, storage);
         self.live += 1;
-        return Value.ofObject(.{ .index = index });
+        const held = Value.ofObject(.{ .index = index });
+        self.adoptContents(held.asObject());
+        return held;
+    }
+
+    /// Give every top object already stored in a newly attached row its
+    /// exact parent.  Builders such as `listSlice`, `mapValues`, and
+    /// `copyFrom` cannot name that parent until the outer row exists, so
+    /// attachment is the single commit point for all of them.
+    fn adoptContents(self: *Runtime, parent: Handle) void {
+        const object = &self.table.items[parent.index];
+        switch (object.data) {
+            .list, .array => if (object.elements.kind == .value) {
+                for (object.elements.cells(Value)) |item| self.adoptInto(parent, item);
+            },
+            .map => |map| for (map.entries.items) |entry| self.adoptInto(parent, entry.value),
+            .builder, .file, .task => {},
+        }
     }
 
     // -- value storage ---------------------------------------------------
@@ -1815,14 +1847,51 @@ pub const Runtime = struct {
         }
     }
 
-    /// The objects in `held` were adopted by a container (S20).
-    pub fn adopt(self: *Runtime, held: Value) void {
+    /// Refuse an adoption that would put an object above itself in the
+    /// ownership tree.  `parent` is the live container about to store
+    /// `held`; callers resolve it and settle their own immutable/bounds
+    /// errors first, so this adds only the cycle backstop and mutates
+    /// nothing.
+    ///
+    /// Walking parents rather than descendants makes the answer exact
+    /// and allocation-free: adopting `child` under `parent` cycles iff
+    /// `child` already appears on `parent`'s ancestry.  Exact handles,
+    /// including generations, keep a reused row from impersonating an
+    /// ancestor.  A damaged pre-existing parent cycle consumes the
+    /// bounded walk and is refused rather than looping forever.
+    pub fn ensureAcyclicAdoption(self: *Runtime, parent: Handle, held: Value) Error!void {
+        switch (held.view()) {
+            .object => |child| {
+                if (child.index == value.null_index or self.liveObject(child) == null) return;
+                var ancestor = parent;
+                var remaining = self.table.items.len + 1;
+                while (remaining != 0) : (remaining -= 1) {
+                    if (child.same(ancestor)) return self.fail(.ownership_cycle);
+                    const object = self.liveObject(ancestor) orelse return;
+                    if (object.owner.kind != .container) return;
+                    ancestor = object.owner.details.parent;
+                }
+                return self.fail(.ownership_cycle);
+            },
+            .strukt => |fields| for (fields) |field| {
+                try self.ensureAcyclicAdoption(parent, field);
+            },
+            else => {},
+        }
+    }
+
+    /// The objects in `held` now belong to the exact container `parent`
+    /// (S20).  A retaining caller has already passed
+    /// `ensureAcyclicAdoption` and completed the store; `attach` instead
+    /// knows its parent is a brand-new row.  Either way this commit
+    /// cannot fail or leave a half-mutated container behind.
+    pub fn adoptInto(self: *Runtime, parent: Handle, held: Value) void {
         switch (held.view()) {
             .object => |handle| {
                 const object = self.liveObject(handle) orelse return;
-                if (object.owner.kind != .program) object.owner = .container;
+                if (object.owner.kind != .program) object.owner = .containedBy(parent);
             },
-            .strukt => |fields| for (fields) |field| self.adopt(field),
+            .strukt => |fields| for (fields) |field| self.adoptInto(parent, field),
             else => {},
         }
     }
@@ -1846,7 +1915,9 @@ pub const Runtime = struct {
         switch (held.view()) {
             .object => |handle| {
                 const object = self.liveObject(handle) orelse return;
-                if (object.owner.kind == .binding and object.owner.binding.serial == serial) {
+                if (object.owner.kind == .binding and
+                    object.owner.details.binding.serial == serial)
+                {
                     object.owner = .loose;
                 }
             },
@@ -1863,8 +1934,8 @@ pub const Runtime = struct {
             .object => |handle| {
                 const object = self.liveObject(handle) orelse return;
                 if (object.owner.kind == .binding and
-                    object.owner.binding.serial == serial and
-                    object.owner.binding.local == local)
+                    object.owner.details.binding.serial == serial and
+                    object.owner.details.binding.local == local)
                 {
                     self.freeObject(handle);
                 }
@@ -1967,8 +2038,8 @@ pub const Runtime = struct {
                 }
                 if (expected) |owner| {
                     if (!(found.owner.kind == .binding and
-                        found.owner.binding.serial == owner.serial and
-                        found.owner.binding.local == owner.local))
+                        found.owner.details.binding.serial == owner.serial and
+                        found.owner.details.binding.local == owner.local))
                     {
                         return self.fail(.not_owned);
                     }
@@ -2140,17 +2211,7 @@ pub const Runtime = struct {
                     .task => return self.fail(.not_owned),
                 };
                 errdefer self.discardCopiedObject(&storage);
-                const duplicate = try self.attach(storage);
-                // The copy's own elements belong to it.
-                const made = &self.table.items[duplicate.asObject().index];
-                switch (made.data) {
-                    .list, .array => if (made.elements.kind == .value) {
-                        for (made.elements.cells(Value)) |item| self.adopt(item);
-                    },
-                    .map => |map| for (map.entries.items) |entry| self.adopt(entry.value),
-                    .builder, .file, .task => {},
-                }
-                return duplicate;
+                return self.attach(storage);
             },
             .strukt => |fields| {
                 if (fields.len == 0) return held;

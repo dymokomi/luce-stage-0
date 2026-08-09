@@ -25,7 +25,7 @@ The current trap roster is for deterministic program bugs. A host file
 refusal is instead an error: `file_exists` before `file_read` is a race
 no program can close, so a read or write the world refuses cannot be
 made into a precondition. There are
-[20 trap codes](/ref/failure/#the-codes) and two error codes.
+[21 trap codes](/ref/failure/#the-codes) and two error codes.
 
 ## try and catch
 

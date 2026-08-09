@@ -285,11 +285,11 @@ a queue can depend on it:
   `effects_enter`.  Resource release can transitively call the host's
   close callback, so `close`, `constants_abort`, `discard_loose`,
   `unbind`, `free`, `index_set`, `remove`, and `clear` withhold it too.
-  Until ownership-cycle prevention lands, `copy`, `list_slice`, and
-  `map_values` also withhold it because a source-created cycle can make
-  their recursive deep copy fail to terminate.  `map_keys` stays true:
-  map keys are non-owning `long` or `string` values.  All other services
-  are pinned `willreturn = true`; `nounwind` remains unchanged.
+  `copy`, `list_slice`, and `map_values` also withhold it: ownership
+  cycles are now refused, but an acyclic graph's native recursive depth
+  remains data-dependent and can exhaust the stack.  `map_keys` stays
+  true because map keys are non-owning `long` or `string` values.  All
+  other services are pinned `willreturn = true`; `nounwind` remains unchanged.
   Colocated Debug and ReleaseSafe tests pin the exact twenty-three-service
   false set and every remaining true entry.
 - **Closed before channels:** the real host's growable worker table and
@@ -639,38 +639,16 @@ improvement the audit exposed:
   correctly at scope end.  Decide whether S6 means direct heap/resource
   handles only or whether explicit early release should walk a carrying
   struct; do not imply either answer by accident in a diagnostic.
-- **An ownership cycle is still source-reachable.**  This accepted
-  program puts its owner inside its own descendant:
-
-  ```luce
-  struct Node:
-      children: list(Node)
-
-  func main():
-      var root = Node(children = new list(Node))
-      root.children.append(give root)
-  ```
-
-  The root name is poisoned, scope release sees the row owned by its own
-  list and skips it, and loom reports the internal assertion “1 object
-  escaped ownership.”  Saving `let alias = root` before the append and
-  then evaluating `copy alias` is worse: the compiled path overflows
-  after more than ten thousand alternating `Runtime.copyFrom` list and
-  struct frames.  Both outcomes contradict S20's recursive release and
-  S33's defined death point.  Stage 4 now recognizes the much narrower
-  ordinary assignment `x = x` or `x = alias_of_x` when `x` owns a
-  resource graph and refuses that redundant same-graph handback.  It
-  does not inspect an adopting destination's ancestry, so it does not
-  reach the accepted `root.children.append(give root)` above.
-
-  The remaining repair is to refuse an owner entering its own
-  descendant at every adopting door, with a direct static diagnostic
-  where stage 4 can see the adopting ancestry and a runtime
-  `ownership_cycle` trap (“attempted store would create an ownership
-  cycle”) for alias-hidden cases.  Adding that stable trap requires
-  `module.format_version` 33 → 34; the host ABI does not change.  The
-  invariant is clear, but the trap surface still needs owner
-  ratification before implementation.
+- **Closed before channels:** an owner cannot be stored into itself or
+  one of its descendants.  Stage 4 rejects the relationship when a
+  visible place chain exposes it.  A store into an existing container
+  walks its exact parent chain before mutation; a fresh deep-copy or
+  derived container or object cannot already be an ancestor, so
+  attachment records its children's exact parent at commit.  Parameters
+  and aliases cannot therefore hide a cycle: those hidden cases trap
+  `ownership_cycle` (“attempted store would create an ownership cycle”).
+  The appended stable trap moves `module.format_version` 33 → 34;
+  `abi.version` stays 13.
 - **Closed before channels:** a successful host open remains locally
   owned until `Runtime.newFile` attaches its resource row.  Either
   allocation failure closes that raw handle exactly once under Effects
@@ -1059,7 +1037,7 @@ Completed chronology lives in the tiers above.  The current queue is:
    `docs/THREADS.md` D12 ratifies typed pipes and the ownership-moving
    `send(give x)` direction only; endpoint construction, capacity,
    receive and close behavior, and the failure surface remain to be
-   ratified, along with the ownership-cycle trap decision above.
+   ratified.  The ownership-cycle prerequisite is closed above.
 2. **The cheap library slice** — character classes first; add a
    dedicated `set` only if a constant map stops answering the corpus.
    A `V?`-returning `m.get` and the old `strings.find` sentinel are the

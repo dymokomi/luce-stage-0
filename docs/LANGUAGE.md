@@ -126,14 +126,11 @@ gone — `give` through an alias was a `not_owned` trap until
 site (S23).  `not_owned` itself stays as defense against a module the
 front end did not produce, and is no longer reachable from source.
 The ratified model says nothing can leak, so loom's leak report is a
-runtime self-check rather than a program diagnostic.  One current
-implementation breach is recorded rather than hidden: an adopting
-store can still put an owner inside its own descendant, producing a
-self-owned cycle with no death point.  The proposed `ownership_cycle`
-trap and its complete runtime gate remain pending in `docs/MISSING.md`.
-This is separate from ordinary `x = x` or `x = alias_of_x` resource
-reassignment, which stage 4 already refuses directly as a redundant
-same-graph assignment; that check does not inspect descendant adoption.
+runtime self-check rather than a program diagnostic.  A container
+cannot adopt itself or one of its ancestors: stage 4 refuses a visible
+same-root handoff, while an alias-hidden case traps `ownership_cycle`
+before the store mutates either graph.  Every container owner therefore
+still has the recursive death point S20 and S33 require.
 
 ## Absence: `T?` and `none`
 
@@ -288,13 +285,14 @@ the check is inherently racy or impossible, it is an error. And if the
 answer is simply "there is nothing there", with no reason worth
 carrying, it is neither — it is `T?`.
 
-The shared vocabulary currently carries **twenty trap codes**.  This
+The shared vocabulary currently carries **twenty-one trap codes**.  This
 rule moved the host's file boundary out of that set: a read or a write
 the world refuses is an error, because `file_exists` before
 `file_read` is a race no program can close.  Later language features
 added their own traps without changing the rule — checked shifts,
-allocator refusal, and mutation hidden behind a constant-container
-borrow remain bugs rather than recoverable news.
+allocator refusal, mutation hidden behind a constant-container borrow,
+and an alias-hidden ownership cycle remain bugs rather than recoverable
+news.
 
 **A call that can fail must say which it means.** Ignoring the outcome
 is not a spelling the grammar has:
@@ -1655,13 +1653,13 @@ is not ratified yet.
 A trap is a **bug**: deterministic, with a stable code, and it aborts
 the program without publishing anything.  What a correct program can
 meet anyway is an *error* and is not here (see the section above).
-The twenty current codes are `integer_overflow`, `divide_by_zero`,
+The twenty-one current codes are `integer_overflow`, `divide_by_zero`,
 `conversion_range`, `assertion_failed`, `explicit_trap`,
 `missing_return`, `call_depth_exceeded`, `string_bounds`,
 `string_boundary`, `host_unavailable`, `index_bounds`, `key_missing`,
 `empty_collection`, `use_after_free`, `null_object`, `bad_codepoint`,
-`not_owned`, `shift_out_of_range`, `allocation_failed`, and
-`immutable_object`.
+`not_owned`, `shift_out_of_range`, `allocation_failed`,
+`immutable_object`, and `ownership_cycle`.
 
 Two are compiler defenses rather than paths correct source can reach.
 `missing_return` seals a typed MIR block after stage 4 has already

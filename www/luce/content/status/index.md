@@ -27,15 +27,13 @@ precision, not semantic acceptance.
 blocked real programs are both closed: a `.lc` **is** machine code,
 with six of the nine current benchmarks at C parity, whether `loom run`
 opens it or a shell runs an `--emit=exe` binary, and memory is genuinely
-given back for ordinary acyclic owner graphs — object identity first,
-then string bytes and struct field runs. A known self-owning adoption
-cycle remains an explicit correctness gap rather than being rounded up
-as fixed.
+given back for owner trees — object identity first, then string bytes
+and struct field runs. Retaining stores refuse a visible ownership cycle
+statically and trap an alias-hidden one before mutation.
 
-**What is left is a short list of library questions, two named runtime
-correctness repairs, the typed-channel design-and-implementation run, a
-drafted but unscheduled union design, and three measured performance
-gaps.**
+**What is left is a short list of library questions and tracked runtime
+hardening, the typed-channel design-and-implementation run, a drafted but
+unscheduled union design, and three measured performance gaps.**
 
 ## What works
 
@@ -63,10 +61,10 @@ gaps.**
 | Two build modes that differ only in what a trap can say | shipped |
 | map lookups O(1); sort O(n log n) and stable by guarantee | shipped |
 
-The compiler-internal serialized module is format **33**. The
-published host ABI is **13**; program-root containers changed the
-former by adding a pool, instruction and trap code, but changed no
-host slot in the latter.
+The compiler-internal serialized module is format **34**. Program-root
+containers moved it to 33 by adding a pool, instruction and trap code;
+the later `ownership_cycle` trap moved it once more. The published host
+ABI remains **13** because neither change added a host slot.
 
 ## What is measured
 
@@ -305,9 +303,8 @@ library questions remains. The channel-independent runtime prerequisites
 are closed: worker registries synchronize their own lifetime, every file
 callback is effect-serialized, a failed file-resource allocation closes
 the raw handle it acquired, and partial cross-runtime copies roll back.
-The ownership-cycle guard remains an explicit language decision before
-channels. Separately, three benchmarks are behind for the three stated
-reasons above.
+Retaining stores also preserve an acyclic owner tree. Separately, three
+benchmarks are behind for the three stated reasons above.
 
 If you are looking for a language to build production systems on
 today, this is not that. If you are interested in a small, fast,

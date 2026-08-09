@@ -368,6 +368,9 @@ func main():
 ```
 Decision: container adoption of fresh container objects or resources is
 automatic, and releasing a container recursively releases what it owns.
+An object cannot be adopted by itself or one of its descendants.  A
+visible same-root handoff is a compile error; when aliases hide the
+ancestry, the retaining store traps `ownership_cycle` before mutation.
 
 **S21. Storing a bare name is a compile error — say what you mean.**
 ```luce refused
@@ -806,19 +809,12 @@ as their fourth owner and die at runtime teardown.  loom's "leaked N
 objects" report becomes an internal assertion (it should never fire;
 if it does, the *runtime* has a bug, not the program).
 
-**Known implementation breach, 2026-08-08.**  The current adopting
-doors can still put an owner inside its own descendant:
-`root.children.append(give root)`.  That accepted program creates a
-self-owned row and trips the leak assertion; keeping an alias and then
-copying it recurses until the compiled process overflows.  This
-contradicts S20 and S33 rather than extending them.  The pending fix is
-an ownership-cycle guard at every adopting door, with a proposed stable
-`ownership_cycle` trap; its exact surface still needs owner ratification
-and is tracked in `docs/MISSING.md` and the language-lock ledger.
-Stage 4 already refuses ordinary `x = x` and `x = alias_of_x`
-reassignment when `x` owns a resource graph.  That direct, redundant
-same-graph case is not the descendant adoption above and does not close
-this gap.
+Every retaining store preserves that death point.  Stage 4 refuses a
+visible attempt to give an owning graph into itself or one of its
+descendants.  For ancestry hidden behind aliases or parameters, the
+runtime walks the target's exact owner chain and traps
+`ownership_cycle` before mutating the target.  A program can build an
+arbitrarily deep tree, but never a cycle with no owner outside it.
 
 **S34. The call-depth budget and traps still abort cleanly.**  On any
 trap, teardown reclaims everything regardless of ownership state:

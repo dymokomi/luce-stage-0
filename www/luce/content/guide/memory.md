@@ -69,12 +69,10 @@ One fact made every option cheaper than usual: the runtime already
 tracks every object and traps on dead references. Luce can afford
 *dynamic* enforcement of rules other languages must prove statically.
 
-There is one known implementation breach in that invariant. An
-adopting store can currently put an owner inside its own descendant;
-the accepted self-owned graph leaks, and copying it through a saved
-alias overflows the recursive copy. That is a runtime bug against the
-model, not an accepted trade-off. A proposed `ownership_cycle` trap at
-every adopting door is pending in the language-lock follow-up.
+Every adopting store preserves that invariant. The compiler refuses a
+visible attempt to put an owner inside itself or one of its descendants;
+if aliases hide the ancestry, the runtime traps `ownership_cycle` before
+the store mutates either graph.
 
 ## What it costs
 
