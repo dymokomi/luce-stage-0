@@ -272,8 +272,9 @@ buffering and back-pressure, receive result, close behavior and failure
 surface still need an owner decision.
 
 The language-lock audit also found six channel-prerequisite checks.
-Two implementation gaps remain open before channel syntax is frozen;
-four implementation/documentation checks closed in this run:
+All six are closed before channel syntax is frozen; a subsequent
+failure-path audit also made the existing cross-runtime copy primitive
+transactional before a queue can depend on it:
 
 - **Closed here:** LLVM's runtime table now withholds `willreturn` from
   exactly the calls that cannot promise termination.  The direct
@@ -290,17 +291,26 @@ four implementation/documentation checks closed in this run:
   are pinned `willreturn = true`; `nounwind` remains unchanged.
   Colocated Debug and ReleaseSafe tests pin the exact twenty-three-service
   false set and every remaining true entry.
-- The real host's growable worker table and both spec hosts' fixed
-  worker tables are accessed without their own synchronization
-  (`src/apps/host.zig`, `src/luce/specs/hosts.zig`).  D9's effect
-  serialization is not a safe substitute for a registry lock once a
-  blocking channel operation or nested worker activity enters the
-  design.
-- The whole-file text paths call the host's read, write and flush slots
-  directly inside their loops (`src/luce/runtime/files.zig`), outside
-  the Effects guard that covers handle methods, open and deferred close.
-  Workers can therefore race the host's shared file and buffer state
-  despite D9; those callback loops need the same serialization rule.
+- **Closed before channels:** the real host's growable worker table and
+  both spec hosts' fixed worker tables now own a registry mutex rather
+  than borrowing D9's Effects lock.  A spawn starts outside the lock and
+  publishes under it; join and teardown detach a row under the lock and
+  wait only after releasing it.  Closing refuses later publication and
+  drains one detached thread at a time, so a worker waiting for or
+  spawning a nested worker cannot deadlock the registry.  Production
+  handles remain append-only; the fixed spec tables reuse storage but
+  assign a new monotonic identity before reuse, so a stale task cannot
+  join the row's next worker.  Contention, closing and stable-handle tests
+  run in Debug and ReleaseSafe, and a two-engine program has eight
+  siblings each spawn and join a child.
+- **Closed before channels:** every host open, read, write and flush
+  callback now takes the shared Effects guard, including each callback
+  inside the whole-file text loops.  Allocation, validation and loop
+  bookkeeping remain outside the guard, so workers can progress between
+  callbacks.  The MIR classifies whole-file operations as runtime-mediated,
+  so the oracle does not add a second operation-wide guard which the
+  compiled path lacks.  A concurrent runtime test detects both overlap and
+  a guard held beyond the one callback; a MIR test pins that engine seam.
 - **Closed here:** a container or struct that transitively carries
   `file` or `task` is now refused statically by `copy` and at every
   worker-runtime boundary.  The runtime's `not_owned` trap remains a
@@ -649,13 +659,21 @@ improvement the audit exposed:
   `module.format_version` 33 → 34; the host ABI does not change.  The
   invariant is clear, but the trap surface still needs owner
   ratification before implementation.
-- **A successful host open can leak its handle if Luce allocation fails
-  immediately afterward.**  `runtime/files.zig::open` receives the host
-  handle and then calls `Runtime.newFile`; duplicating the path or
-  attaching the resource row can fail, and no `errdefer` closes the host
-  handle on that route.  Add the close handoff and a failing-allocator
-  test that checks the spec host's open-handle census before treating
-  resource allocation as atomic.
+- **Closed before channels:** a successful host open remains locally
+  owned until `Runtime.newFile` attaches its resource row.  Either
+  allocation failure closes that raw handle exactly once under Effects
+  and preserves the original `OutOfMemory`; an open slot without a close
+  slot fails `host_unavailable` before acquiring anything.  Failing-
+  allocator tests cover both allocation points, the handle census, the
+  guard depth and every returned byte.
+- **Closed before channels:** `Runtime.copyFrom` now rolls back every
+  copied child row and owned value run when a later list, map, array or
+  struct allocation fails.  The same rule covers list slices, map
+  `values()`, the other list-building helpers, partially moved worker
+  arguments, and a worker result stranded when its task row cannot be
+  allocated.  Fail-index tests require the target live count and byte
+  census to return to their baseline at every refusal.  Packed-list copy
+  also copies live cells rather than retained spare capacity.
 - **Four stable trap messages retain pre-resource vocabulary.**
   `use_after_free`, `null_object`, and defense-only `not_owned` use
   “object” in the runtime's broad heap-handle sense, so they can also
@@ -1029,7 +1047,7 @@ Completed chronology lives in the tiers above.  The current queue is:
    `docs/THREADS.md` D12 ratifies typed pipes and the ownership-moving
    `send(give x)` direction only; endpoint construction, capacity,
    receive and close behavior, and the failure surface remain to be
-   ratified, along with the prerequisites above.
+   ratified, along with the ownership-cycle trap decision above.
 2. **The cheap library slice** — character classes first; add a
    dedicated `set` only if a constant map stops answering the corpus.
    A `V?`-returning `m.get` and the old `strings.find` sentinel are the

@@ -362,6 +362,7 @@ pub const World = struct {
 fn ThreadChannel(comptime Owner: type) type {
     return struct {
         const Body = *const fn (argument: ?*anyopaque) callconv(.c) void;
+        const no_handle: i64 = 0;
 
         fn ownerOf(context: ?*anyopaque) *Owner {
             return @ptrCast(@alignCast(context.?));
@@ -373,25 +374,96 @@ fn ThreadChannel(comptime Owner: type) type {
 
         fn start(owner: *Owner, body: Body, argument: ?*anyopaque) ?i64 {
             const started = std.Thread.spawn(.{}, go, .{ body, argument }) catch return null;
+
+            // Start outside the registry lock: the new thread may
+            // immediately spawn a nested worker and enter this table.
+            owner.thread_mutex.lockUncancelable(testing.io);
+            if (owner.threads_closing) {
+                owner.thread_mutex.unlock(testing.io);
+                started.join();
+                return null;
+            }
             for (&owner.threads, 0..) |*row, index| {
                 if (row.* != null) continue;
+
+                // Rows are reusable storage, never identity.  A stale
+                // task value must not acquire a later occupant of the
+                // same row, so handles only move forward for the life
+                // of this registry.
+                const handle = owner.next_thread_handle;
+                if (handle == std.math.maxInt(i64)) break;
+                owner.next_thread_handle = handle + 1;
                 row.* = started;
-                return @intCast(index + 1);
+                owner.thread_handles[index] = handle;
+                owner.thread_mutex.unlock(testing.io);
+                return handle;
             }
+            owner.thread_mutex.unlock(testing.io);
             // No room left in the fixed table: the thread must not be
-            // left running with nobody able to wait for it.
+            // left running with nobody able to wait for it.  Join
+            // outside the lock so it can enter this registry itself.
             started.join();
             return null;
         }
 
         fn waitFor(owner: *Owner, thread: i64) bool {
-            if (thread < 1 or thread > owner.threads.len) return false;
-            const row = &owner.threads[@intCast(thread - 1)];
-            if (row.*) |running| {
-                row.* = null;
-                running.join();
+            owner.thread_mutex.lockUncancelable(testing.io);
+            if (thread < 1) {
+                owner.thread_mutex.unlock(testing.io);
+                return false;
             }
-            return true;
+
+            for (&owner.thread_handles, 0..) |*handle, index| {
+                if (handle.* != thread) continue;
+
+                // Detach the thread atomically.  Keep its identity
+                // until this row is reused so a repeated join remains
+                // harmless, as it is in the dynamic host; a new
+                // occupant overwrites it with a monotonic handle.
+                const running = owner.threads[index];
+                owner.threads[index] = null;
+                owner.thread_mutex.unlock(testing.io);
+
+                if (running) |detached| detached.join();
+                return true;
+            }
+
+            owner.thread_mutex.unlock(testing.io);
+            return false;
+        }
+
+        fn close(owner: *Owner) void {
+            while (true) {
+                owner.thread_mutex.lockUncancelable(testing.io);
+                owner.threads_closing = true;
+
+                var running: ?std.Thread = null;
+                for (&owner.threads, 0..) |*row, index| {
+                    if (row.*) |detached| {
+                        row.* = null;
+                        owner.thread_handles[index] = no_handle;
+                        running = detached;
+                        break;
+                    }
+                }
+                if (running == null) {
+                    // Joined rows deliberately retain their identities
+                    // until reuse.  Teardown ends that lifetime and
+                    // invalidates every handle from this registry.
+                    @memset(&owner.thread_handles, no_handle);
+                }
+                owner.thread_mutex.unlock(testing.io);
+
+                // Detach one under the lock and join it outside.  It
+                // may have published a nested worker before observing
+                // that this registry is closing, so inspect the table
+                // again after every join.
+                if (running) |detached| {
+                    detached.join();
+                } else {
+                    return;
+                }
+            }
         }
 
         fn spawn(
@@ -660,9 +732,23 @@ pub const Capture = struct {
     /// Every worker thread this run started (docs/THREADS.md D8).  A
     /// fixed table because a `Capture` is fixed buffers throughout and
     /// a spec that needs more workers than this is a spec about
-    /// something other than the language; a thread is its index plus
-    /// one, so zero is never a handle.
+    /// something other than the language.  Rows are reusable storage;
+    /// their monotonic handles are separate so a stale value can never
+    /// name a later worker.
     threads: [max_worker_threads]?std.Thread = @splat(null),
+    thread_handles: [max_worker_threads]i64 = @splat(0),
+    next_thread_handle: i64 = 1,
+    /// D9 serializes effects, not the registry underneath worker
+    /// lifetime.  Sibling and nested workers can enter this table at
+    /// the same time, so it owns a lock of its own.
+    thread_mutex: std.Io.Mutex = .init,
+    /// Teardown refuses publication after it starts and joins such a
+    /// newly started thread on the spawning side instead.
+    threads_closing: bool = false,
+    // A Capture needs no separate teardown hook.  The compiled entry
+    // calls `luce_rt_close` before it returns; `Runtime.deinit` sweeps
+    // every live task, and releasing a task joins its thread.  Thus
+    // every row is empty before `agree.zig` can destroy this value.
     world: World = .{},
     printed_storage: [32768]u8 = undefined,
     printed_length: usize = 0,
@@ -1086,9 +1172,16 @@ pub const Reference = struct {
     /// Every worker thread this run started (docs/THREADS.md D8).  A
     /// fixed table because a `Capture` is fixed buffers throughout and
     /// a spec that needs more workers than this is a spec about
-    /// something other than the language; a thread is its index plus
-    /// one, so zero is never a handle.
+    /// something other than the language.  Rows are reusable storage;
+    /// their monotonic handles are separate so a stale value can never
+    /// name a later worker.
     threads: [max_worker_threads]?std.Thread = @splat(null),
+    thread_handles: [max_worker_threads]i64 = @splat(0),
+    next_thread_handle: i64 = 1,
+    /// The oracle's registry follows the same synchronization and
+    /// closing rule as the compiled host's.
+    thread_mutex: std.Io.Mutex = .init,
+    threads_closing: bool = false,
     gpa: Allocator = testing.allocator,
     provided: Provided = .{},
     world: World = .{},
@@ -1108,6 +1201,9 @@ pub const Reference = struct {
     exit_status: ?i64 = null,
 
     pub fn deinit(self: *Reference) void {
+        // Keep every field a worker might still reach alive until the
+        // registry has refused new publications and drained its rows.
+        Threads.close(self);
         self.printed.deinit(self.gpa);
         self.trap_trace.deinit(self.gpa);
         self.error_origin.deinit(self.gpa);
@@ -1351,6 +1447,212 @@ pub const Reference = struct {
 // ---------------------------------------------------------------------------
 // The capture buffers' own test
 // ---------------------------------------------------------------------------
+
+test "the spec thread channel synchronizes sibling nested registries" {
+    const Owner = struct {
+        threads: [max_worker_threads]?std.Thread = @splat(null),
+        thread_handles: [max_worker_threads]i64 = @splat(0),
+        next_thread_handle: i64 = 1,
+        thread_mutex: std.Io.Mutex = .init,
+        threads_closing: bool = false,
+    };
+    const Threads = ThreadChannel(Owner);
+    const Stress = struct {
+        channel: luce.runtime.workers.Channel,
+        go: std.atomic.Value(bool) = .init(false),
+        ready: std.atomic.Value(u32) = .init(0),
+        completed: std.atomic.Value(u32) = .init(0),
+        failures: std.atomic.Value(u32) = .init(0),
+
+        fn pause() void {
+            std.Thread.yield() catch std.atomic.spinLoopHint();
+        }
+
+        fn leaf(argument: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(argument.?));
+            _ = self.completed.fetchAdd(1, .monotonic);
+        }
+
+        fn branch(argument: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(argument.?));
+            _ = self.ready.fetchAdd(1, .release);
+            while (!self.go.load(.acquire)) pause();
+
+            var nested: i64 = 0;
+            if (self.channel.spawn.?(
+                self.channel.context,
+                leaf,
+                self,
+                &nested,
+            ) != luce.runtime.workers.yes) {
+                _ = self.failures.fetchAdd(1, .monotonic);
+                return;
+            }
+            if (self.channel.join.?(self.channel.context, nested) != luce.runtime.workers.yes) {
+                _ = self.failures.fetchAdd(1, .monotonic);
+            }
+        }
+    };
+
+    const sibling_count = max_worker_threads / 2;
+    const rounds = 64;
+    var owner: Owner = .{};
+    var stress: Stress = .{ .channel = Threads.channel(&owner) };
+    defer {
+        // Also releases already-published branches if an assertion or
+        // an OS thread-spawn failure exits a round early.
+        stress.go.store(true, .release);
+        Threads.close(&owner);
+    }
+    var siblings: [sibling_count]i64 = undefined;
+    for (0..rounds) |_| {
+        stress.go.store(false, .release);
+        stress.ready.store(0, .release);
+        for (&siblings) |*thread| {
+            try testing.expectEqual(
+                luce.runtime.workers.yes,
+                stress.channel.spawn.?(stress.channel.context, Stress.branch, &stress, thread),
+            );
+        }
+        while (stress.ready.load(.acquire) != sibling_count) Stress.pause();
+        stress.go.store(true, .release);
+        for (siblings) |thread| {
+            try testing.expectEqual(
+                luce.runtime.workers.yes,
+                stress.channel.join.?(stress.channel.context, thread),
+            );
+        }
+    }
+
+    try testing.expectEqual(@as(u32, 0), stress.failures.load(.acquire));
+    try testing.expectEqual(@as(u32, sibling_count * rounds), stress.completed.load(.acquire));
+    for (owner.threads) |thread| try testing.expect(thread == null);
+}
+
+test "the spec thread channel rejects a stale handle after row reuse" {
+    const Owner = struct {
+        threads: [max_worker_threads]?std.Thread = @splat(null),
+        thread_handles: [max_worker_threads]i64 = @splat(0),
+        next_thread_handle: i64 = 1,
+        thread_mutex: std.Io.Mutex = .init,
+        threads_closing: bool = false,
+    };
+    const Threads = ThreadChannel(Owner);
+    const Worker = struct {
+        fn run(_: ?*anyopaque) callconv(.c) void {}
+    };
+
+    var owner: Owner = .{};
+    defer Threads.close(&owner);
+    const channel = Threads.channel(&owner);
+
+    var first: i64 = 0;
+    try testing.expectEqual(
+        luce.runtime.workers.yes,
+        channel.spawn.?(channel.context, Worker.run, null, &first),
+    );
+    try testing.expectEqual(luce.runtime.workers.yes, channel.join.?(channel.context, first));
+    try testing.expectEqual(luce.runtime.workers.yes, channel.join.?(channel.context, first));
+
+    var second: i64 = 0;
+    try testing.expectEqual(
+        luce.runtime.workers.yes,
+        channel.spawn.?(channel.context, Worker.run, null, &second),
+    );
+    try testing.expect(second > first);
+    // With only one live worker, the second spawn necessarily reused
+    // the first physical row; its independent identity is new.
+    try testing.expectEqual(second, owner.thread_handles[0]);
+    try testing.expectEqual(luce.runtime.workers.no, channel.join.?(channel.context, first));
+    try testing.expectEqual(luce.runtime.workers.yes, channel.join.?(channel.context, second));
+    try testing.expectEqual(second, owner.thread_handles[0]);
+}
+
+test "the spec thread channel closes publication and joins outside its lock" {
+    const Owner = struct {
+        threads: [max_worker_threads]?std.Thread = @splat(null),
+        thread_handles: [max_worker_threads]i64 = @splat(0),
+        next_thread_handle: i64 = 1,
+        thread_mutex: std.Io.Mutex = .init,
+        threads_closing: bool = false,
+    };
+    const Threads = ThreadChannel(Owner);
+    const Closing = struct {
+        channel: luce.runtime.workers.Channel,
+        entered: std.atomic.Value(bool) = .init(false),
+        go: std.atomic.Value(bool) = .init(false),
+        nested_answer: std.atomic.Value(i32) = .init(luce.runtime.workers.exhausted),
+        probe_entered: std.atomic.Value(bool) = .init(false),
+
+        fn pause() void {
+            std.Thread.yield() catch std.atomic.spinLoopHint();
+        }
+
+        fn probe(argument: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(argument.?));
+            if (self.channel.join.?(self.channel.context, 0) == luce.runtime.workers.no) {
+                self.probe_entered.store(true, .release);
+            }
+        }
+
+        fn parent(argument: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(argument.?));
+            self.entered.store(true, .release);
+            while (!self.go.load(.acquire)) pause();
+
+            var nested: i64 = 0;
+            const answer = self.channel.spawn.?(
+                self.channel.context,
+                probe,
+                self,
+                &nested,
+            );
+            self.nested_answer.store(answer, .release);
+            if (answer == luce.runtime.workers.yes) {
+                _ = self.channel.join.?(self.channel.context, nested);
+            }
+        }
+
+        fn close(owner: *Owner) void {
+            Threads.close(owner);
+        }
+    };
+
+    var owner: Owner = .{};
+    var closing: Closing = .{ .channel = Threads.channel(&owner) };
+    defer {
+        // Do not strand the parent if spawning the teardown probe
+        // itself fails.
+        closing.go.store(true, .release);
+        Threads.close(&owner);
+    }
+    var parent: i64 = 0;
+    try testing.expectEqual(
+        luce.runtime.workers.yes,
+        closing.channel.spawn.?(closing.channel.context, Closing.parent, &closing, &parent),
+    );
+    while (!closing.entered.load(.acquire)) Closing.pause();
+
+    const teardown = try std.Thread.spawn(.{}, Closing.close, .{&owner});
+    while (true) {
+        owner.thread_mutex.lockUncancelable(testing.io);
+        const started = owner.threads_closing;
+        owner.thread_mutex.unlock(testing.io);
+        if (started) break;
+        Closing.pause();
+    }
+    closing.go.store(true, .release);
+    teardown.join();
+
+    try testing.expectEqual(luce.runtime.workers.no, closing.nested_answer.load(.acquire));
+    try testing.expect(closing.probe_entered.load(.acquire));
+    for (owner.threads) |thread| try testing.expect(thread == null);
+    // Teardown clears both the row and its identity.
+    try testing.expectEqual(
+        luce.runtime.workers.no,
+        closing.channel.join.?(closing.channel.context, parent),
+    );
+}
 
 test "a message too long for a capture buffer names the harness, not a diff" {
     // The two failure channels used to answer this differently — the

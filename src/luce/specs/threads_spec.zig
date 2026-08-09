@@ -515,6 +515,31 @@ test "a worker may spawn a worker" {
     , "50\n");
 }
 
+test "sibling workers may each spawn and join a child" {
+    // Eight parents and their eight children can all be live together.
+    // The result is joined in source order, so the program stays
+    // deterministic while both hosts exercise concurrent publication
+    // in their worker registries.
+    try agree.prints(
+        \\func leaf(n: long) -> long:
+        \\    return n + 1
+        \\
+        \\func branch(n: long) -> long:
+        \\    let inner = spawn leaf(n)
+        \\    return inner.wait() * 10
+        \\
+        \\func main():
+        \\    var tasks = new list(task(long))
+        \\    for i in range(1, 9):
+        \\        tasks.append(spawn branch(i))
+        \\    var total: long = 0
+        \\    for t in tasks:
+        \\        total = total + t.wait()
+        \\    print(string(total))
+        \\
+    , "440\n");
+}
+
 // ---------------------------------------------------------------------------
 // The census, across runtimes (D10)
 // ---------------------------------------------------------------------------

@@ -13,6 +13,25 @@ const Register = defs.Register;
 const Block = defs.Block;
 const Local = defs.Local;
 
+test "runtime-mediated file services need no engine Effects guard" {
+    const runtime_guarded = [_]defs.Intrinsic{
+        .file_read,
+        .file_write,
+        .file_append,
+        .file_open,
+        .handle_read,
+        .handle_write,
+        .handle_flush,
+    };
+    for (runtime_guarded) |intrinsic| {
+        try testing.expect(!intrinsic.reachesHost());
+    }
+
+    // Direct host calls remain the engine's responsibility.
+    try testing.expect(defs.Intrinsic.file_exists.reachesHost());
+    try testing.expect(defs.Intrinsic.file_delete.reachesHost());
+}
+
 test "a struct graph is checked for cycles in one pass, not one per path" {
     // Forty layouts, each holding the next one twice: no cycle, but
     // 2^39 distinct paths from the first to the last.  A per-path walk

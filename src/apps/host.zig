@@ -106,6 +106,16 @@ pub const Host = struct {
     /// handle; a joined row is emptied and kept in place, so a stale
     /// number lands on nothing rather than on whoever moved in.
     threads: std.ArrayList(?std.Thread) = .empty,
+    /// The worker registry has its own lock.  D9's Effects lock guards
+    /// host effects, not the lifetime of the threads that may call
+    /// them, and a worker may enter this table while another worker is
+    /// blocked in a join.  Every process entry point supplies a
+    /// `std.Io.Threaded` Io, as does `testing.io`, so its futex-backed
+    /// mutex is safe to enter from these raw `std.Thread` callbacks.
+    thread_mutex: std.Io.Mutex = .init,
+    /// Once teardown starts, a thread that was started concurrently is
+    /// joined by its spawner rather than published into a dying table.
+    threads_closing: bool = false,
     // -- what a trapped or errored run left behind ------------------------
 
     /// What a compiled artifact reported through the C table.
@@ -152,6 +162,10 @@ pub const Host = struct {
     }
 
     pub fn deinit(self: *Host) void {
+        // A worker may still be using any other field below.  Close and
+        // drain the registry while the whole host is still alive.
+        self.joinThreads();
+        self.threads.deinit(self.gpa);
         self.restoreScreen();
         self.screen.buffer.deinit(self.gpa);
         self.loaded_file.deinit(self.gpa);
@@ -160,8 +174,6 @@ pub const Host = struct {
         self.listed_names.deinit(self.gpa);
         self.closeOpenFiles();
         self.open_files.deinit(self.gpa);
-        self.joinThreads();
-        self.threads.deinit(self.gpa);
         self.* = undefined;
     }
 
@@ -269,10 +281,9 @@ pub const Host = struct {
     //
     // A host's whole contribution to concurrency: start a C function on
     // a thread, and wait for it to end (docs/THREADS.md D8).  Nothing
-    // here knows what a worker is, and nothing here needs to be
-    // thread-safe — `libluce_rt` serializes every host service behind
-    // one lock, which is D9 and is why `open_files`, the screen and the
-    // output buffers can stay what they are.
+    // here knows what a worker is.  D9 serializes effects, but the
+    // registry is machinery beneath that rule and owns its own lock:
+    // nested workers and joins can reach it concurrently.
     //
     // The number a thread is known by is its row in `threads` plus one,
     // so zero is never a handle.
@@ -284,13 +295,27 @@ pub const Host = struct {
             }
         };
         const started = std.Thread.spawn(.{}, Runner.go, .{ body, argument }) catch return null;
+
+        // Start outside the registry lock.  The new thread may
+        // immediately spawn a nested worker and must be able to take
+        // this same lock before its parent has been published.
+        self.thread_mutex.lockUncancelable(self.io);
+        if (self.threads_closing) {
+            self.thread_mutex.unlock(self.io);
+            started.join();
+            return null;
+        }
         self.threads.append(self.gpa, started) catch {
+            self.thread_mutex.unlock(self.io);
             // Nothing owns the thread now, so it must not be left
-            // running with nobody able to wait for it.
+            // running with nobody able to wait for it.  Joining outside
+            // the lock lets that thread enter this registry itself.
             started.join();
             return null;
         };
-        return @intCast(self.threads.items.len);
+        const handle: i64 = @intCast(self.threads.items.len);
+        self.thread_mutex.unlock(self.io);
+        return handle;
     }
 
     fn cWorkerSpawn(
@@ -305,12 +330,19 @@ pub const Host = struct {
 
     fn cWorkerJoin(context: ?*anyopaque, thread: i64) callconv(.c) abi.Answer {
         const self = of(context);
-        if (thread < 1 or thread > self.threads.items.len) return .no;
-        const row = &self.threads.items[@intCast(thread - 1)];
-        if (row.*) |running| {
-            row.* = null;
-            running.join();
+        self.thread_mutex.lockUncancelable(self.io);
+        if (thread < 1 or thread > self.threads.items.len) {
+            self.thread_mutex.unlock(self.io);
+            return .no;
         }
+        const row = &self.threads.items[@intCast(thread - 1)];
+        const running = row.*;
+        row.* = null;
+        self.thread_mutex.unlock(self.io);
+
+        // A joining worker can itself be waiting for a nested worker,
+        // so no registry lock may be held across this wait.
+        if (running) |detached| detached.join();
         return .yes;
     }
 
@@ -332,13 +364,30 @@ pub const Host = struct {
     /// trap unwound past — but a process must not outlive its threads,
     /// and this is the run's backstop, beside `closeOpenFiles`.
     pub fn joinThreads(self: *Host) void {
-        for (self.threads.items) |*row| {
-            if (row.*) |running| {
-                row.* = null;
-                running.join();
+        while (true) {
+            self.thread_mutex.lockUncancelable(self.io);
+            self.threads_closing = true;
+
+            var running: ?std.Thread = null;
+            for (self.threads.items) |*row| {
+                if (row.*) |detached| {
+                    row.* = null;
+                    running = detached;
+                    break;
+                }
             }
+            if (running == null) {
+                self.threads.clearRetainingCapacity();
+                self.thread_mutex.unlock(self.io);
+                return;
+            }
+            self.thread_mutex.unlock(self.io);
+
+            // Detach one under the lock, then join it without the lock.
+            // Repeat because the thread being joined may have published
+            // a nested worker before it observed `threads_closing`.
+            running.?.join();
         }
-        self.threads.clearRetainingCapacity();
     }
 
     /// Leave the alternate screen and raw mode; safe to call twice.
@@ -1400,6 +1449,202 @@ fn windowSize() Size {
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
+
+test "worker registry publishes and joins sibling nested threads under contention" {
+    const Stress = struct {
+        channel: luce.runtime.workers.Channel,
+        go: std.atomic.Value(bool) = .init(false),
+        ready: std.atomic.Value(u32) = .init(0),
+        completed: std.atomic.Value(u32) = .init(0),
+        failures: std.atomic.Value(u32) = .init(0),
+
+        fn pause() void {
+            std.Thread.yield() catch std.atomic.spinLoopHint();
+        }
+
+        fn leaf(argument: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(argument.?));
+            _ = self.completed.fetchAdd(1, .monotonic);
+        }
+
+        fn branch(argument: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(argument.?));
+            _ = self.ready.fetchAdd(1, .release);
+            while (!self.go.load(.acquire)) pause();
+
+            var nested: i64 = 0;
+            if (self.channel.spawn.?(
+                self.channel.context,
+                leaf,
+                self,
+                &nested,
+            ) != luce.runtime.workers.yes) {
+                _ = self.failures.fetchAdd(1, .monotonic);
+                return;
+            }
+            if (self.channel.join.?(self.channel.context, nested) != luce.runtime.workers.yes) {
+                _ = self.failures.fetchAdd(1, .monotonic);
+            }
+        }
+    };
+
+    var written: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer written.deinit();
+    var reported: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer reported.deinit();
+    var host: Host = undefined;
+    host.setup(testing.allocator, testing.io, &written.writer, &reported.writer, &.{});
+    defer host.deinit();
+
+    const sibling_count = 8;
+    const rounds = 32;
+    var stress: Stress = .{ .channel = host.workerChannel() };
+    // If publishing one sibling fails, release every branch already
+    // waiting at the round's gate before Host.deinit joins it.
+    defer stress.go.store(true, .release);
+    var siblings: [sibling_count]i64 = undefined;
+    for (0..rounds) |_| {
+        stress.go.store(false, .release);
+        stress.ready.store(0, .release);
+        for (&siblings) |*thread| {
+            try testing.expectEqual(
+                luce.runtime.workers.yes,
+                stress.channel.spawn.?(stress.channel.context, Stress.branch, &stress, thread),
+            );
+        }
+        while (stress.ready.load(.acquire) != sibling_count) Stress.pause();
+        stress.go.store(true, .release);
+        for (siblings) |thread| {
+            try testing.expectEqual(
+                luce.runtime.workers.yes,
+                stress.channel.join.?(stress.channel.context, thread),
+            );
+        }
+    }
+
+    try testing.expectEqual(@as(u32, 0), stress.failures.load(.acquire));
+    try testing.expectEqual(@as(u32, sibling_count * rounds), stress.completed.load(.acquire));
+    try testing.expectEqual(@as(usize, sibling_count * rounds * 2), host.threads.items.len);
+    for (host.threads.items) |thread| try testing.expectEqual(@as(?std.Thread, null), thread);
+}
+
+test "worker teardown closes publication and never joins under its registry lock" {
+    const Closing = struct {
+        channel: luce.runtime.workers.Channel,
+        entered: std.atomic.Value(bool) = .init(false),
+        go: std.atomic.Value(bool) = .init(false),
+        nested_answer: std.atomic.Value(i32) = .init(luce.runtime.workers.exhausted),
+        probe_entered: std.atomic.Value(bool) = .init(false),
+
+        fn pause() void {
+            std.Thread.yield() catch std.atomic.spinLoopHint();
+        }
+
+        fn probe(argument: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(argument.?));
+            // Re-enter the registry.  If the rejected thread were
+            // joined while its publisher still held the lock, this
+            // callback and the teardown test would deadlock.
+            if (self.channel.join.?(self.channel.context, 0) == luce.runtime.workers.no) {
+                self.probe_entered.store(true, .release);
+            }
+        }
+
+        fn parent(argument: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(argument.?));
+            self.entered.store(true, .release);
+            while (!self.go.load(.acquire)) pause();
+
+            var nested: i64 = 0;
+            const answer = self.channel.spawn.?(
+                self.channel.context,
+                probe,
+                self,
+                &nested,
+            );
+            self.nested_answer.store(answer, .release);
+            if (answer == luce.runtime.workers.yes) {
+                _ = self.channel.join.?(self.channel.context, nested);
+            }
+        }
+
+        fn close(host: *Host) void {
+            host.joinThreads();
+        }
+    };
+
+    var written: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer written.deinit();
+    var reported: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer reported.deinit();
+    var host: Host = undefined;
+    host.setup(testing.allocator, testing.io, &written.writer, &reported.writer, &.{});
+    defer host.deinit();
+
+    var closing: Closing = .{ .channel = host.workerChannel() };
+    // An OS refusal while starting the teardown probe must not leave
+    // the parent parked when the deferred Host.deinit drains it.
+    defer closing.go.store(true, .release);
+    var parent: i64 = 0;
+    try testing.expectEqual(
+        luce.runtime.workers.yes,
+        closing.channel.spawn.?(closing.channel.context, Closing.parent, &closing, &parent),
+    );
+    while (!closing.entered.load(.acquire)) Closing.pause();
+
+    const teardown = try std.Thread.spawn(.{}, Closing.close, .{&host});
+    while (true) {
+        host.thread_mutex.lockUncancelable(host.io);
+        const started = host.threads_closing;
+        host.thread_mutex.unlock(host.io);
+        if (started) break;
+        Closing.pause();
+    }
+    closing.go.store(true, .release);
+    teardown.join();
+
+    try testing.expectEqual(luce.runtime.workers.no, closing.nested_answer.load(.acquire));
+    try testing.expect(closing.probe_entered.load(.acquire));
+    try testing.expectEqual(@as(usize, 0), host.threads.items.len);
+    // Teardown retains the old behavior of clearing the table: a
+    // handle from the finished run is out of range, not recycled.
+    try testing.expectEqual(
+        luce.runtime.workers.no,
+        closing.channel.join.?(closing.channel.context, parent),
+    );
+}
+
+test "worker handles are append-only and a repeated join is harmless" {
+    const Done = struct {
+        fn run(_: ?*anyopaque) callconv(.c) void {}
+    };
+
+    var written: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer written.deinit();
+    var reported: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer reported.deinit();
+    var host: Host = undefined;
+    host.setup(testing.allocator, testing.io, &written.writer, &reported.writer, &.{});
+    defer host.deinit();
+
+    const channel = host.workerChannel();
+    var first: i64 = 0;
+    try testing.expectEqual(
+        luce.runtime.workers.yes,
+        channel.spawn.?(channel.context, Done.run, null, &first),
+    );
+    try testing.expectEqual(luce.runtime.workers.yes, channel.join.?(channel.context, first));
+    try testing.expectEqual(luce.runtime.workers.yes, channel.join.?(channel.context, first));
+
+    var second: i64 = 0;
+    try testing.expectEqual(
+        luce.runtime.workers.yes,
+        channel.spawn.?(channel.context, Done.run, null, &second),
+    );
+    try testing.expect(second > first);
+    try testing.expectEqual(luce.runtime.workers.yes, channel.join.?(channel.context, second));
+    try testing.expectEqual(luce.runtime.workers.no, channel.join.?(channel.context, 0));
+}
 
 test "styles render 256-color SGR runs and clamp to defaults" {
     var buffer: std.ArrayList(u8) = .empty;

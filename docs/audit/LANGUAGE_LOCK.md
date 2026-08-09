@@ -287,26 +287,43 @@ function table as the one retained pointer that cannot promise `nocapture`
 claim that only one reporting export did so
 (`src/luce/08_llvm/runtime_effects.zig:23-30,1017-1024`).
 
-## Open prerequisites transferred to `docs/MISSING.md`
+## Channel prerequisites found by the lock
 
-### L11 — worker registries rely on a serialization assumption they do not own
+### L11 — closed: worker registries own their synchronization
 
-The real host says its worker table needs no synchronization because all
-host services take the Effects lock (`src/apps/host.zig:268-293`), yet
-spawn/join mutate the growable table directly (`src/apps/host.zig:280-314`).
-The two spec hosts likewise scan and mutate fixed arrays with no registry
-lock (`src/luce/specs/hosts.zig:374-408`).  Nested workers and blocking
-channel operations make the effect-lock assumption unsafe; the real and
-oracle registries need the same explicit synchronization policy.
+The original real and spec hosts mutated their worker rows without a lock,
+assuming D9's Effects guard also serialized lifetime machinery.  It does
+not: spawn and join deliberately run outside Effects so a join cannot
+deadlock a worker that is trying to print or spawn again.
 
-### L12 — whole-file helpers bypass D9 around their callback loops
+The real growable registry and both fixed spec registries now own a
+dedicated mutex and closing bit.  A thread starts before publication,
+publication happens under the mutex, join detaches under it and waits after
+unlocking, and teardown refuses new publication before repeatedly
+detaching and joining one row.  The production table is append-only; the
+fixed spec tables reuse physical rows but attach a monotonic identity, so
+reuse invalidates the earlier handle rather than letting it join the next
+occupant.  The Host keeps every other field alive until its drain completes
+(`src/apps/host.zig:104-118,291-391`;
+`src/luce/specs/hosts.zig:375-465,732-750,1172-1205`).  Raw contention,
+closing/re-entry and stable-handle tests exercise both registry shapes
+(`src/apps/host.zig:1453-1647`; `src/luce/specs/hosts.zig:1451-1638`);
+`src/luce/specs/threads_spec.zig:518-540` also runs sibling nested spawns
+through both engines.
 
-Handle `read`, `write` and `flush` take the recursive Effects guard, as do
-open and deferred close.  The whole-file text helpers instead call the
-host read/write/flush slots directly inside their loops
-(`src/luce/runtime/files.zig:274-334`).  Concurrent workers can therefore
-race the host's shared file/buffer state despite D9.  Bring those callbacks
-under the same rule before channel work relies on the promise.
+### L12 — closed: every file callback obeys D9
+
+Small callback helpers now put the recursive Effects guard around exactly
+one host open, read, write or flush invocation.  Direct handle methods and
+the whole-file loops share them; allocation, UTF-8 validation and loop
+bookkeeping happen after the guard is released
+(`src/luce/runtime/files.zig:112-162,182-257,326-386`).  Whole-file MIR
+intrinsics are explicitly runtime-mediated rather than direct-host calls,
+so the oracle does not wrap the entire loop in another recursive guard
+(`src/luce/06_mir/defs.zig:288-342`; `src/luce/06_mir/test.zig:16-33`).
+A two-thread runtime test checks that callbacks neither overlap nor observe
+a recursive depth broader than that one invocation
+(`src/luce/runtime/test.zig:967-1135`).
 
 ### L17 — an owner can still be adopted into its own descendant
 
@@ -345,17 +362,39 @@ ownership cycle” for alias-hidden cases.  That trap would bump
 clear, but the trap surface and implementation are pending owner
 ratification and therefore remain open in `docs/MISSING.md`.
 
-### L18 — file allocation failure can lose an already-open host handle
+### L18 — closed: file construction keeps the raw handle transactional
 
-`runtime/files.zig::open` receives a successful host handle and then
-calls `Runtime.newFile`.  Path duplication or attaching the resource row
-can fail, but the error route frees only a duplicated path; it never
-calls the host close slot for the handle already returned
-(`src/luce/runtime/files.zig:127-139`;
-`src/luce/runtime/heap.zig:1411-1415`).  Add an error handoff that closes
-the handle and a failing-allocator/open-handle census test.  This runtime
-repair is recorded in `docs/MISSING.md`; it was not smuggled into the
-documentation lane.
+`files.open` now requires the open/close resource pair before touching the
+host.  A successful raw handle remains locally owned until `Runtime.newFile`
+has duplicated the path and attached its row; either allocation error
+closes the raw handle once under Effects and returns the original
+`OutOfMemory` (`src/luce/runtime/files.zig:182-201`).  Focused failing-
+allocator tests refuse both allocation points and pin the open/close
+census, handle identity, guard depth, live-row count and byte balance; an
+open-only channel is refused before its callback runs
+(`src/luce/runtime/test.zig:1137-1247`).
+
+### L23 — closed: deep re-own and worker handoff are transactional
+
+The audit that prepared the cross-runtime primitive for a queue found that
+`Runtime.copyFrom` released only outer buffers on a later allocation
+failure.  Already-copied child rows and nested String/struct storage could
+survive until teardown; derived list builders had the same partial-result
+hole, and a worker whose spawn or task-row construction failed could strand
+argument/result storage.
+
+Every partially built list, map, array and struct now walks its initialized
+prefix with `freeValue` before releasing raw storage.  List slices, map
+`values()` and the String/key list builders clean both their accumulated
+run and the item that failed to append.  Spawn drops the storage of every
+carried argument before closing the child runtime, and a joined worker whose
+task row cannot be attached frees its unclaimed result.  Fail-index tests
+pin immediate live-row rollback and full byte balance for each shape.  The
+same review corrected packed-list copy to copy live cell bytes rather than
+retained capacity (`src/luce/runtime/heap.zig:1979-2152`;
+`src/luce/runtime/containers.zig:125-145,355-503`;
+`src/luce/runtime/workers.zig:340-380`;
+`src/luce/runtime/test.zig:636-792`).
 
 ## Deliberately deferred owner decisions
 
@@ -424,13 +463,14 @@ quality only — no invalid ownership reaches MIR — and Tier 5b of
   passed on the final snapshot.
 - `zig build grammar --summary all` — 5/5 steps passed, and regeneration
   left the committed VS Code grammar diff unchanged.
-- `zig build test -j2 --summary all` — 65/65 steps and 1718/1718 tests
+- `zig build test -j2 --summary all` — 65/65 steps and 1735/1735 tests
   passed in Debug.
 - `zig build test -Doptimize=ReleaseSafe -j1 --summary all` — 65/65
-  steps and 1718/1718 tests passed.
+  steps and 1735/1735 tests passed.
 - Repository-wide `zig fmt --check src/ build.zig www/luce/src/ tools/`
   and `git diff --check` — clean on the final snapshot.
 
-Open prerequisites L11, L12, L17 and L18, owner decisions L13–L15, and
+The ownership-cycle prerequisite L17, owner decisions L13–L15, and
 diagnostic follow-up L22 remain explicitly recorded; none is silently
-counted as fixed by the green closeout suites.
+counted as fixed by the green closeout suites.  L11, L12, L18 and L23 are
+closed by the implementation and tests cited above.

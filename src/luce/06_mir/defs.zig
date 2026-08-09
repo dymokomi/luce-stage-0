@@ -295,12 +295,14 @@ pub const Intrinsic = enum {
     /// which is the same set said in the backend's own vocabulary —
     /// `08_llvm/lower.zig`'s test holds the two together.
     ///
-    /// **The byte channel is deliberately `false`.**  Those four reach
-    /// a host too, but through `libluce_rt`, which takes the lock at
-    /// the channel call itself (`runtime/files.zig`) — the one place
-    /// both engines pass through, and where a handle's close also
-    /// happens with no engine standing.  Saying `true` here as well
-    /// would only take a recursive lock twice.
+    /// **The file services are deliberately `false`.**  Whole-file
+    /// operations and the byte channel reach a host through
+    /// `libluce_rt`, which takes the lock at each callback
+    /// (`runtime/files.zig`) — the one place both engines pass through,
+    /// and where a handle's close also happens with no engine standing.
+    /// Saying `true` here as well would only take a recursive lock
+    /// twice, and would give the oracle a wider Effects scope than the
+    /// compiled path.
     pub fn reachesHost(self: Intrinsic) bool {
         return switch (self) {
             .print,
@@ -310,9 +312,6 @@ pub const Intrinsic = enum {
             .clock_ms,
             .sleep_ms,
             .file_exists,
-            .file_read,
-            .file_write,
-            .file_append,
             .file_delete,
             .file_rename,
             .dir_list,
@@ -333,7 +332,10 @@ pub const Intrinsic = enum {
             // `key_text` reads the slot the last `key_read` filled,
             // which is the run's own state and not the host's.
             .key_text,
-            // The byte channel locks deeper (see above).
+            // The file runtime locks each host callback (see above).
+            .file_read,
+            .file_write,
+            .file_append,
             .file_open,
             .handle_read,
             .handle_write,

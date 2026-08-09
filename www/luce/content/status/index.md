@@ -301,12 +301,13 @@ than shipping a highlighter that disagrees with the compiler.
 The shipped core is locked and the front end is in genuinely good
 shape. Typed channels are the approved next design-and-implementation
 run; tagged unions are drafted but unscheduled, and a short list of
-library questions remains. Runtime correctness work is still explicit:
-the ownership-cycle guard, file-handle cleanup if allocation fails after
-open, and the worker-registry and whole-file effect-serialization
-prerequisites for channels. The runtime attribute table itself is already
-corrected and exhaustively pinned. Separately, three benchmarks are behind
-for the three stated reasons above.
+library questions remains. The channel-independent runtime prerequisites
+are closed: worker registries synchronize their own lifetime, every file
+callback is effect-serialized, a failed file-resource allocation closes
+the raw handle it acquired, and partial cross-runtime copies roll back.
+The ownership-cycle guard remains an explicit language decision before
+channels. Separately, three benchmarks are behind for the three stated
+reasons above.
 
 If you are looking for a language to build production systems on
 today, this is not that. If you are interested in a small, fast,

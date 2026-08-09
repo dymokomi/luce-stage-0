@@ -162,11 +162,12 @@ main 1
 ```
 
 Effects from workers are specified to be **serialized**. The shared
-guard makes `print` line-atomic today; the language-lock audit records
-two gaps still to close for the broader D9 promise — whole-file helper
-loops and worker registries do not yet take that guard. A program that
-never spawns pays nothing for the mechanism — there is no lock in it at
-all.
+guard makes `print` line-atomic and brackets every file callback,
+including each read, write and flush in a whole-file helper. Worker
+registries have their own mutex: publication is protected, while joins
+detach under the lock and wait after releasing it, so nested workers
+cannot deadlock teardown. A program that never spawns pays nothing for
+the mechanism — there is no lock in it at all.
 
 ## When a worker fails
 

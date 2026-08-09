@@ -105,6 +105,61 @@ pub const Channel = struct {
     close: ?CloseFn = null,
 };
 
+/// Call one host slot while holding this program's shared Effects
+/// guard.  The guard belongs around the callback alone: allocations,
+/// validation and whole-file loops stay outside it so another worker
+/// can make progress between calls (docs/THREADS.md D9).
+fn callOpen(
+    runtime: *Runtime,
+    service: OpenFn,
+    path: []const u8,
+    mode: i64,
+    handle: *i64,
+) i32 {
+    runtime.enterEffects();
+    defer runtime.leaveEffects();
+    return service(runtime.files.context, path.ptr, @intCast(path.len), mode, handle);
+}
+
+fn callRead(
+    runtime: *Runtime,
+    service: ReadFn,
+    handle: i64,
+    into: []u8,
+    filled: *i64,
+) i32 {
+    runtime.enterEffects();
+    defer runtime.leaveEffects();
+    return service(runtime.files.context, handle, into.ptr, @intCast(into.len), filled);
+}
+
+fn callWrite(
+    runtime: *Runtime,
+    service: WriteFn,
+    handle: i64,
+    from: []const u8,
+    written: *i64,
+) i32 {
+    runtime.enterEffects();
+    defer runtime.leaveEffects();
+    return service(runtime.files.context, handle, from.ptr, @intCast(from.len), written);
+}
+
+fn callFlush(runtime: *Runtime, service: FlushFn, handle: i64) i32 {
+    runtime.enterEffects();
+    defer runtime.leaveEffects();
+    return service(runtime.files.context, handle);
+}
+
+/// Give back a raw handle whose open succeeded but which could not be
+/// attached to a Luce resource.  Close cannot report a failure at this
+/// boundary, matching scope-end close in `Runtime.freeObject`.
+fn closeFailedOpen(runtime: *Runtime, service: CloseFn, handle: i64) void {
+    runtime.enterEffects();
+    defer runtime.leaveEffects();
+    _ = service(runtime.files.context, handle);
+}
+
 // ---------------------------------------------------------------------------
 // The handle, as a scope-owned object
 // ---------------------------------------------------------------------------
@@ -126,11 +181,20 @@ const read_chunk: usize = 64 * 1024;
 /// naming the path, exactly as the whole-file services always did.
 pub fn open(runtime: *Runtime, path: []const u8, mode: i64) Error!?Value {
     const service = runtime.files.open orelse return runtime.fail(.host_unavailable);
-    runtime.enterEffects();
-    defer runtime.leaveEffects();
+    // Opening a scope-owned resource without a way to close it would
+    // violate the resource contract even on the successful path.  Like
+    // the worker channel's spawn/join pair, this pair fails closed
+    // before the host acquires anything.
+    const closer = runtime.files.close orelse return runtime.fail(.host_unavailable);
     var handle: i64 = -1;
-    switch (service(runtime.files.context, path.ptr, @intCast(path.len), mode, &handle)) {
-        yes => return try runtime.newFile(handle, path),
+    switch (callOpen(runtime, service, path, mode, &handle)) {
+        yes => {
+            // The raw handle belongs here until the object row takes it.
+            // Either allocation in `newFile` may fail; neither may leave
+            // the host handle behind.
+            errdefer closeFailedOpen(runtime, closer, handle);
+            return try runtime.newFile(handle, path);
+        },
         no => return null,
         else => {
             runtime.exhausted = true;
@@ -143,21 +207,13 @@ pub fn open(runtime: *Runtime, path: []const u8, mode: i64) Error!?Value {
 /// landed.  Zero means the file is finished.
 pub fn read(runtime: *Runtime, held: Value, buffer: Value) Error!?i64 {
     const service = runtime.files.read orelse return runtime.fail(.host_unavailable);
-    runtime.enterEffects();
-    defer runtime.leaveEffects();
     const handle = try handleOf(runtime, held);
     // Re-resolved after the handle, because both resolves can trap and
     // neither allocates: the pointer stays good across the pair.
     const into = (try runtime.resolveMutable(buffer)).elements;
     var filled: i64 = 0;
     const cells = into.cells(u8);
-    switch (service(
-        runtime.files.context,
-        handle,
-        cells.ptr,
-        @intCast(cells.len),
-        &filled,
-    )) {
+    switch (callRead(runtime, service, handle, cells, &filled)) {
         yes => return filled,
         no => return null,
         else => {
@@ -171,14 +227,12 @@ pub fn read(runtime: *Runtime, held: Value, buffer: Value) Error!?i64 {
 /// `array(byte, n)` and answer how many landed.
 pub fn write(runtime: *Runtime, held: Value, buffer: Value, count: i64) Error!?i64 {
     const service = runtime.files.write orelse return runtime.fail(.host_unavailable);
-    runtime.enterEffects();
-    defer runtime.leaveEffects();
     const handle = try handleOf(runtime, held);
     const from = (try runtime.resolve(buffer)).elements;
     const cells = from.cells(u8);
     if (count < 0 or count > cells.len) return runtime.fail(.index_bounds);
     var written: i64 = 0;
-    switch (service(runtime.files.context, handle, cells.ptr, count, &written)) {
+    switch (callWrite(runtime, service, handle, cells[0..@intCast(count)], &written)) {
         yes => return written,
         no => return null,
         else => {
@@ -191,10 +245,8 @@ pub fn write(runtime: *Runtime, held: Value, buffer: Value, count: i64) Error!?i
 /// `f.flush()` — everything written so far is on the device.
 pub fn flush(runtime: *Runtime, held: Value) Error!bool {
     const service = runtime.files.flush orelse return runtime.fail(.host_unavailable);
-    runtime.enterEffects();
-    defer runtime.leaveEffects();
     const handle = try handleOf(runtime, held);
-    switch (service(runtime.files.context, handle)) {
+    switch (callFlush(runtime, service, handle)) {
         yes => return true,
         no => return false,
         else => {
@@ -283,11 +335,11 @@ pub fn readText(runtime: *Runtime, path: []const u8) Error!?Value {
         try loaded.resize(runtime.objects, before + read_chunk);
         var filled: i64 = 0;
         const service = runtime.files.read orelse return runtime.fail(.host_unavailable);
-        const answered = service(
-            runtime.files.context,
+        const answered = callRead(
+            runtime,
+            service,
             try handleOf(runtime, handle),
-            loaded.items[before..].ptr,
-            @intCast(read_chunk),
+            loaded.items[before..],
             &filled,
         );
         if (answered == exhausted) {
@@ -314,11 +366,11 @@ pub fn writeText(runtime: *Runtime, path: []const u8, text: []const u8, mode: Mo
     var sent: usize = 0;
     while (sent < text.len) {
         var written: i64 = 0;
-        const answered = service(
-            runtime.files.context,
+        const answered = callWrite(
+            runtime,
+            service,
             try handleOf(runtime, handle),
-            text[sent..].ptr,
-            @intCast(text.len - sent),
+            text[sent..],
             &written,
         );
         if (answered == exhausted) {
@@ -331,5 +383,5 @@ pub fn writeText(runtime: *Runtime, path: []const u8, text: []const u8, mode: Mo
         if (written <= 0) return false;
         sent += @intCast(written);
     }
-    return flusher(runtime.files.context, try handleOf(runtime, handle)) == yes;
+    return callFlush(runtime, flusher, try handleOf(runtime, handle)) == yes;
 }

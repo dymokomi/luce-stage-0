@@ -340,8 +340,15 @@ pub fn spawn(
     child.depth_budget = parent.depth_budget;
 
     const moved = try child.objects.alloc(Value, arguments.len);
-    errdefer child.objects.free(moved);
     var carried: usize = 0;
+    errdefer {
+        // The worker frame borrows these values from this array.  On a
+        // failed spawn there is no frame left to return that storage to,
+        // while any object rows are reclaimed by the child Runtime's
+        // closing sweep just below.
+        for (moved[0..carried]) |argument| child.dropStorage(argument);
+        child.objects.free(moved);
+    }
     while (carried < arguments.len) : (carried += 1) {
         moved[carried] = try parent.moveInto(child, arguments[carried]);
     }
@@ -365,6 +372,11 @@ pub fn spawn(
     // than leaving an orphan the errdefers above cannot reach.
     const task = parent.newTask(worker) catch |mistake| {
         joinThread(worker);
+        // `body` made a successful result this runtime's own.  The task
+        // row could not be allocated, so no later `wait`/`release` can
+        // perform `finish` and this is its only remaining death point.
+        child.freeValue(worker.result);
+        worker.result = .none;
         return mistake;
     };
     out.* = task;

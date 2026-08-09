@@ -1631,13 +1631,15 @@ nobody waits on is joined all the same and its answer discarded —
 only a wait observes.
 
 **Effects from workers are specified to be serialized.**  The shared
-recursive guard covers lowered effects and handle operations, so a
-`print` from a worker is line-atomic.  The language-lock audit found two
-implementation gaps before that can be stated for every host callback:
-the whole-file read/write loops and the host worker registries need the
-same synchronization (docs/MISSING.md).  A program that never spawns
-still pays nothing for the mechanism: its compiled module contains no
-lock, no install, and no worker entry at all.
+recursive guard covers lowered effects and every file callback, including
+each read, write and flush made by a whole-file helper, so a `print` from
+a worker is line-atomic and host file state is never entered concurrently.
+Worker registries use a separate mutex because spawn and join are lifetime
+machinery rather than effects: publication is locked, a join detaches its
+row under that lock and waits only after releasing it, and teardown refuses
+new publications before draining the same way.  A program that never
+spawns still pays nothing for either mechanism: its compiled module
+contains no effect lock, no install, and no worker entry at all.
 
 Absent from the surface, permanently: locks, atomics, shared mutable
 state, condition variables, thread identifiers, priorities, and

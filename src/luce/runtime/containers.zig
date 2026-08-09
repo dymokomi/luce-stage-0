@@ -131,7 +131,7 @@ pub fn listSlice(runtime: *Runtime, target: Value, start: i64, end: i64) Error!V
     if (start < 0 or end < start or end > source.count) return runtime.fail(.index_bounds);
     // The slice holds what the source holds, packed the same way.
     var copied: heap.Object.Elements = .{ .kind = source.kind };
-    errdefer copied.deinit(runtime.objects);
+    errdefer dropBuilt(runtime, &copied);
     try copied.ensureCapacity(runtime.objects, @intCast(end - start));
     var at: usize = @intCast(start);
     while (at < @as(usize, @intCast(end))) : (at += 1) {
@@ -364,7 +364,9 @@ pub fn mapKeys(runtime: *Runtime, target: Value, zero: Value) Error!Value {
     var listed = emptyList(zero);
     errdefer dropBuilt(runtime, &listed);
     for (entries) |entry| {
-        try listed.append(runtime.objects, try runtime.ownValue(entry.key));
+        const key = try runtime.ownValue(entry.key);
+        errdefer runtime.dropStorage(key);
+        try listed.append(runtime.objects, key);
     }
     return runtime.attachList(listed);
 }
@@ -395,7 +397,7 @@ const text_list: heap.Object.Elements = .{ .kind = .value };
 /// Give back a half-built run and the storage its elements own.
 fn dropBuilt(runtime: *Runtime, listed: *heap.Object.Elements) void {
     if (listed.kind == .value) {
-        for (listed.cells(Value)) |item| runtime.dropStorage(item);
+        for (listed.cells(Value)) |item| runtime.freeValue(item);
     }
     listed.deinit(runtime.objects);
 }
@@ -408,7 +410,9 @@ pub fn listOfText(runtime: *Runtime, names: []const []const u8) Error!Value {
     errdefer dropBuilt(runtime, &listed);
     try listed.ensureCapacity(runtime.objects, names.len);
     for (names) |name| {
-        try listed.append(runtime.objects, try runtime.ownValue(Value.ofString(name)));
+        const held = try runtime.ownValue(Value.ofString(name));
+        errdefer runtime.dropStorage(held);
+        try listed.append(runtime.objects, held);
     }
     return runtime.attachList(listed);
 }
@@ -427,7 +431,9 @@ pub fn listOfJoinedText(runtime: *Runtime, joined: []const u8) Error!Value {
     var rest = joined;
     while (rest.len != 0) {
         const stop = std.mem.indexOfScalar(u8, rest, 0) orelse rest.len;
-        try listed.append(runtime.objects, try runtime.ownValue(Value.ofString(rest[0..stop])));
+        const held = try runtime.ownValue(Value.ofString(rest[0..stop]));
+        errdefer runtime.dropStorage(held);
+        try listed.append(runtime.objects, held);
         rest = if (stop == rest.len) rest[stop..] else rest[stop + 1 ..];
     }
     return runtime.attachList(listed);
@@ -471,7 +477,9 @@ pub fn listOfArguments(
             // nothing left to say about the ones after it.
             if (callback(context, index, &text, &size) == 0) break;
             const borrowed = text[0..@intCast(size)];
-            try listed.append(runtime.objects, try runtime.ownValue(Value.ofString(borrowed)));
+            const held = try runtime.ownValue(Value.ofString(borrowed));
+            errdefer runtime.dropStorage(held);
+            try listed.append(runtime.objects, held);
         }
     }
     return runtime.attachList(listed);
@@ -490,6 +498,7 @@ pub fn mapValues(runtime: *Runtime, target: Value, zero: Value) Error!Value {
     errdefer dropBuilt(runtime, &listed);
     for (entries) |entry| {
         const duplicate = try runtime.deepCopy(entry.value);
+        errdefer runtime.freeValue(duplicate);
         try listed.append(runtime.objects, duplicate);
         runtime.adopt(duplicate);
     }

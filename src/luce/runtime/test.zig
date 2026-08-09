@@ -15,6 +15,7 @@ const operators = @import("operators.zig");
 const text = @import("text.zig");
 const trace = @import("trace.zig");
 const value = @import("value.zig");
+const workers = @import("workers.zig");
 
 const Runtime = heap.Runtime;
 const Value = value.Value;
@@ -62,6 +63,296 @@ fn expectTrap(code: vocabulary.TrapCode, runtime: *Runtime, mistake: anytype) !v
     try testing.expectEqual(code, runtime.pending.?.code);
     try testing.expectEqualStrings(code.message(), runtime.pending.?.message);
 }
+
+/// One run for `checkAllAllocationFailures`: rollback must be visible
+/// before teardown, and teardown must return every target byte.
+fn copyWithAllocator(allocator: std.mem.Allocator, source: *Runtime, held: Value) !void {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var target: Runtime = .init(.{ .arena = arena.allocator(), .objects = allocator });
+    defer {
+        target.deinit();
+        arena.deinit();
+    }
+    const duplicate = target.copyFrom(source, held) catch |mistake| {
+        try testing.expectEqual(@as(u32, 0), target.live);
+        return mistake;
+    };
+    target.freeValue(duplicate);
+    try testing.expectEqual(@as(u32, 0), target.live);
+}
+
+const CopyShape = enum { list, map, array, strukt };
+
+fn nestedList(runtime: *Runtime) !Value {
+    const list = try runtime.newList(Value.none);
+    errdefer runtime.freeValue(list);
+    const words = try runtime.ownValue(Value.ofString(
+        "a nested object owns bytes that its failed copy must return",
+    ));
+    try containers.append(runtime, list, words);
+    return list;
+}
+
+fn nestedCopySource(runtime: *Runtime, shape: CopyShape) !Value {
+    const first = try nestedList(runtime);
+    var first_loose = true;
+    errdefer if (first_loose) runtime.freeValue(first);
+    const second = try nestedList(runtime);
+    var second_loose = true;
+    errdefer if (second_loose) runtime.freeValue(second);
+
+    return switch (shape) {
+        .list => blk: {
+            const outer = try runtime.newList(Value.none);
+            errdefer runtime.freeValue(outer);
+            try containers.append(runtime, outer, first);
+            first_loose = false;
+            try containers.append(runtime, outer, second);
+            second_loose = false;
+            break :blk outer;
+        },
+        .map => blk: {
+            const map = try runtime.newMap();
+            errdefer runtime.freeValue(map);
+            try containers.indexSet(
+                runtime,
+                map,
+                &.{Value.ofString("the first copied map key owns outside bytes")},
+                first,
+            );
+            first_loose = false;
+            try containers.indexSet(
+                runtime,
+                map,
+                &.{Value.ofString("the second copied map key owns outside bytes")},
+                second,
+            );
+            second_loose = false;
+            break :blk map;
+        },
+        .array => blk: {
+            const array = try runtime.newArray(&.{2}, Value.none);
+            errdefer runtime.freeValue(array);
+            try containers.indexSet(runtime, array, &.{Value.ofLong(0)}, first);
+            first_loose = false;
+            try containers.indexSet(runtime, array, &.{Value.ofLong(1)}, second);
+            second_loose = false;
+            break :blk array;
+        },
+        .strukt => blk: {
+            var fields = [_]Value{
+                first,
+                second,
+                Value.ofString("the copied struct itself owns outside bytes"),
+            };
+            const record = try runtime.ownValue(Value.ofStruct(&fields));
+            first_loose = false;
+            second_loose = false;
+            break :blk record;
+        },
+    };
+}
+
+const DerivedCopy = enum { list_slice, map_values };
+
+fn expectDerivedCopyFailures(kind: DerivedCopy) !usize {
+    var failures: usize = 0;
+    for (0..32) |failure_offset| {
+        var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+        var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var runtime: Runtime = .init(.{
+            .arena = arena.allocator(),
+            .objects = objects.allocator(),
+        });
+        const source = try nestedCopySource(
+            &runtime,
+            if (kind == .list_slice) .list else .map,
+        );
+        const baseline_live = runtime.live;
+        objects.fail_index = objects.alloc_index + failure_offset;
+
+        var completed = false;
+        var failed_with_oom = false;
+        const outcome = switch (kind) {
+            .list_slice => containers.listSlice(&runtime, source, 0, 2),
+            .map_values => containers.mapValues(&runtime, source, Value.none),
+        };
+        if (outcome) |duplicate| {
+            runtime.freeValue(duplicate);
+            completed = true;
+        } else |mistake| {
+            failed_with_oom = mistake == error.OutOfMemory;
+            failures += 1;
+        }
+        const live_after = runtime.live;
+        const induced = objects.has_induced_failure;
+        runtime.deinit();
+        arena.deinit();
+
+        try testing.expectEqual(baseline_live, live_after);
+        try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
+        if (completed) return failures;
+        try testing.expect(failed_with_oom);
+        try testing.expect(induced);
+    }
+    return error.DerivedCopyNeverCompleted;
+}
+
+const BuiltList = enum { map_keys, text_slices, joined_text, arguments };
+
+const built_list_words = [_][]const u8{
+    "the first list-builder value owns bytes outside its Value",
+    "the second list-builder value owns different outside bytes",
+};
+const built_list_joined =
+    "the first list-builder value owns bytes outside its Value\x00" ++
+    "the second list-builder value owns different outside bytes";
+
+const BuiltListArguments = struct {
+    fn get(
+        _: ?*anyopaque,
+        index: i64,
+        text_out: *[*]const u8,
+        length_out: *i64,
+    ) callconv(.c) i32 {
+        if (index < 0 or index >= @as(i64, built_list_words.len)) return 0;
+        const held = built_list_words[@intCast(index)];
+        text_out.* = held.ptr;
+        length_out.* = @intCast(held.len);
+        return 1;
+    }
+};
+
+fn expectBuiltListFailures(kind: BuiltList) !usize {
+    var failures: usize = 0;
+    for (0..16) |failure_offset| {
+        var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+        var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var runtime: Runtime = .init(.{
+            .arena = arena.allocator(),
+            .objects = objects.allocator(),
+        });
+        const source = if (kind == .map_keys) try runtime.newMap() else Value.none;
+        if (kind == .map_keys) {
+            for (built_list_words, 0..) |key, number| {
+                try containers.indexSet(
+                    &runtime,
+                    source,
+                    &.{Value.ofString(key)},
+                    Value.ofLong(@intCast(number)),
+                );
+            }
+        }
+        const baseline_live = runtime.live;
+        objects.fail_index = objects.alloc_index + failure_offset;
+
+        const outcome = switch (kind) {
+            .map_keys => containers.mapKeys(&runtime, source, Value.ofString("")),
+            .text_slices => containers.listOfText(&runtime, &built_list_words),
+            .joined_text => containers.listOfJoinedText(&runtime, built_list_joined),
+            .arguments => containers.listOfArguments(
+                &runtime,
+                built_list_words.len,
+                null,
+                BuiltListArguments.get,
+            ),
+        };
+        var completed = false;
+        var failed_with_oom = false;
+        if (outcome) |listed| {
+            runtime.freeValue(listed);
+            completed = true;
+        } else |mistake| {
+            failed_with_oom = mistake == error.OutOfMemory;
+            failures += 1;
+        }
+        const live_after = runtime.live;
+        const induced = objects.has_induced_failure;
+        runtime.deinit();
+        arena.deinit();
+
+        try testing.expectEqual(baseline_live, live_after);
+        try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
+        if (completed) return failures;
+        try testing.expect(failed_with_oom);
+        try testing.expect(induced);
+    }
+    return error.BuiltListNeverCompleted;
+}
+
+const WorkerFailureState = struct {
+    child: *Runtime,
+    produce_result: bool = false,
+    closes: usize = 0,
+    child_live_at_close: u32 = 0,
+    spawns: usize = 0,
+    joins: usize = 0,
+    ran: bool = false,
+
+    fn open(context: ?*anyopaque) callconv(.c) ?*Runtime {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        return self.child;
+    }
+
+    fn close(context: ?*anyopaque, runtime: *Runtime) callconv(.c) void {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        self.closes += 1;
+        self.child_live_at_close = runtime.live;
+        runtime.deinit();
+    }
+
+    fn run(
+        context: ?*anyopaque,
+        runtime: *Runtime,
+        _: i64,
+        _: [*]const Value,
+        _: i64,
+        out: *Value,
+        _: i64,
+    ) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        if (!self.produce_result) return workers.survived;
+        const words = runtime.ownValue(Value.ofString(
+            "the unclaimed worker result owns outside bytes",
+        )) catch return workers.raised_trap;
+        out.* = runtime.makeStruct(&.{words}) catch return workers.raised_trap;
+        self.ran = true;
+        return workers.survived;
+    }
+
+    fn spawn(
+        context: ?*anyopaque,
+        body: workers.Body,
+        argument: ?*anyopaque,
+        thread: *i64,
+    ) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        self.spawns += 1;
+        body(argument);
+        thread.* = 9;
+        return workers.yes;
+    }
+
+    fn join(context: ?*anyopaque, _: i64) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        self.joins += 1;
+        return workers.yes;
+    }
+
+    fn install(self: *@This(), parent: *Runtime) void {
+        parent.workers = .{
+            .context = self,
+            .spawn = spawn,
+            .join = join,
+        };
+        parent.nursery = .{
+            .context = self,
+            .open = open,
+            .close = close,
+            .run = run,
+        };
+    }
+};
 
 // ---------------------------------------------------------------------------
 // The object heap and the census
@@ -342,6 +633,164 @@ test "copy duplicates what an object owns, recursively (S31)" {
     _ = try runtime.resolve(inner);
 }
 
+test "a packed list copy ignores retained spare capacity" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const source = try runtime.newList(Value.ofLong(0));
+    defer runtime.freeValue(source);
+    for (0..64) |number| {
+        try containers.append(runtime, source, Value.ofLong(@intCast(number)));
+    }
+    try containers.clear(runtime, source);
+    try containers.append(runtime, source, Value.ofLong(17));
+    try containers.append(runtime, source, Value.ofLong(29));
+
+    const duplicate = try runtime.deepCopy(source);
+    defer runtime.freeValue(duplicate);
+    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, duplicate)).asLong());
+    try testing.expectEqual(
+        @as(i64, 17),
+        (try containers.indexGet(runtime, duplicate, &.{Value.ofLong(0)})).asLong(),
+    );
+    try testing.expectEqual(
+        @as(i64, 29),
+        (try containers.indexGet(runtime, duplicate, &.{Value.ofLong(1)})).asLong(),
+    );
+}
+
+test "failed nested list, map, array, and struct copies leave no target" {
+    for ([_]CopyShape{ .list, .map, .array, .strukt }) |shape| {
+        var bench: Bench = undefined;
+        bench.setup();
+        defer bench.deinit();
+        const source = try nestedCopySource(&bench.runtime, shape);
+        defer bench.runtime.freeValue(source);
+
+        // The standard matrix refuses every allocation, including
+        // ones after the first child has reached the target table.
+        try testing.checkAllAllocationFailures(
+            testing.allocator,
+            copyWithAllocator,
+            .{ &bench.runtime, source },
+        );
+    }
+}
+
+test "failed list slices and map value lists roll copied rows back" {
+    try testing.expect((try expectDerivedCopyFailures(.list_slice)) >= 4);
+    try testing.expect((try expectDerivedCopyFailures(.map_values)) >= 4);
+}
+
+test "failed list builders return their current owned value" {
+    for ([_]BuiltList{ .map_keys, .text_slices, .joined_text, .arguments }) |kind| {
+        try testing.expect((try expectBuiltListFailures(kind)) >= 2);
+    }
+}
+
+test "failed worker argument transfer returns carried struct storage" {
+    var parent_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer parent_arena.deinit();
+    var parent: Runtime = .init(.{
+        .arena = parent_arena.allocator(),
+        .objects = testing.allocator,
+    });
+    defer parent.deinit();
+
+    var child_objects: std.testing.FailingAllocator = .init(testing.allocator, .{
+        // The argument array and the first argument's struct run and
+        // outside String consume three allocations.  Refuse the later
+        // List's String after its element run has also been allocated.
+        .fail_index = 4,
+    });
+    var child_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer child_arena.deinit();
+    var child: Runtime = .init(.{
+        .arena = child_arena.allocator(),
+        .objects = child_objects.allocator(),
+    });
+    var state: WorkerFailureState = .{ .child = &child };
+    state.install(&parent);
+
+    var arguments = [_]Value{ Value.none, Value.none };
+    defer {
+        parent.dropStorage(arguments[0]);
+        parent.freeValue(arguments[1]);
+    }
+    var fields = [_]Value{Value.ofString(
+        "the carried worker struct owns these outside bytes",
+    )};
+    arguments[0] = try parent.ownValue(Value.ofStruct(&fields));
+    arguments[1] = try parent.newList(Value.none);
+    try containers.append(
+        &parent,
+        arguments[1],
+        try parent.ownValue(Value.ofString("the refused worker object owns other bytes")),
+    );
+
+    var task: Value = .none;
+    try testing.expectError(error.OutOfMemory, workers.spawn(&parent, 0, &arguments, &task));
+    try testing.expect(child_objects.has_induced_failure);
+    try testing.expectEqual(@as(usize, 0), state.spawns);
+    try testing.expectEqual(@as(usize, 1), state.closes);
+    // The first argument's standalone value storage did cross and was
+    // returned before close; the second object stayed in the parent.
+    try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
+    try testing.expectEqual(@as(u32, 1), parent.live);
+    parent.dropStorage(arguments[0]);
+    arguments[0] = Runtime.emptied(arguments[0]);
+    parent.freeValue(arguments[1]);
+    arguments[1] = .none;
+    try testing.expectEqual(@as(u32, 0), parent.live);
+    try testing.expectEqual(child_objects.allocated_bytes, child_objects.freed_bytes);
+}
+
+test "failed task allocation discards the worker result before close" {
+    var parent_objects: std.testing.FailingAllocator = .init(testing.allocator, .{
+        // Effects and Worker succeed; the task table's first row does
+        // not.  By then the synchronous worker has returned its value.
+        .fail_index = 2,
+    });
+    var parent_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var parent: Runtime = .init(.{
+        .arena = parent_arena.allocator(),
+        .objects = parent_objects.allocator(),
+    });
+
+    var child_objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+    var child_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var child: Runtime = .init(.{
+        .arena = child_arena.allocator(),
+        .objects = child_objects.allocator(),
+    });
+    var state: WorkerFailureState = .{
+        .child = &child,
+        .produce_result = true,
+        .child_live_at_close = std.math.maxInt(u32),
+    };
+    state.install(&parent);
+
+    var task: Value = .none;
+    const outcome = workers.spawn(&parent, 0, &.{}, &task);
+    const parent_live = parent.live;
+    parent.deinit();
+    parent_arena.deinit();
+    child_arena.deinit();
+
+    try testing.expectError(error.OutOfMemory, outcome);
+    try testing.expect(parent_objects.has_induced_failure);
+    try testing.expect(state.ran);
+    try testing.expectEqual(@as(usize, 1), state.spawns);
+    try testing.expectEqual(@as(usize, 1), state.joins);
+    try testing.expectEqual(@as(usize, 1), state.closes);
+    try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
+    try testing.expectEqual(@as(u32, 0), parent_live);
+    try testing.expectEqual(parent_objects.allocated_bytes, parent_objects.freed_bytes);
+    try testing.expectEqual(child_objects.allocated_bytes, child_objects.freed_bytes);
+}
+
 test "program roots stay rooted, leave the census, and copy into mutable ownership" {
     var bench: Bench = undefined;
     bench.setup();
@@ -513,6 +962,288 @@ test "a host read cannot write into a program-root byte array" {
     try expectTrap(.immutable_object, runtime, files.read(runtime, file, bytes));
     try testing.expectEqual(@as(usize, 0), host.calls);
     runtime.freeObject(file.asObject());
+}
+
+test "whole-file callbacks take Effects one callback at a time" {
+    const Host = struct {
+        effects: *workers.Effects,
+        active: std.atomic.Value(u32) = .init(0),
+        next_handle: std.atomic.Value(i64) = .init(0),
+        opens: std.atomic.Value(u32) = .init(0),
+        reads: std.atomic.Value(u32) = .init(0),
+        writes: std.atomic.Value(u32) = .init(0),
+        flushes: std.atomic.Value(u32) = .init(0),
+        closes: std.atomic.Value(u32) = .init(0),
+        wrong_depth: std.atomic.Value(bool) = .init(false),
+        overlapped: std.atomic.Value(bool) = .init(false),
+
+        fn observe(self: *@This()) void {
+            const this_thread: usize = @intCast(std.Thread.getCurrentId());
+            const owns = self.effects.owner.load(.acquire) == this_thread;
+            if (!owns or self.effects.depth != 1) self.wrong_depth.store(true, .release);
+            if (self.active.fetchAdd(1, .acq_rel) != 0) {
+                self.overlapped.store(true, .release);
+            }
+            // Give a competing callback ample opportunity to expose a
+            // missing guard without making the test depend on a timer.
+            for (0..128) |_| std.Thread.yield() catch {};
+            _ = self.active.fetchSub(1, .acq_rel);
+        }
+
+        fn open(
+            context: ?*anyopaque,
+            _: [*]const u8,
+            _: i64,
+            _: i64,
+            handle: *i64,
+        ) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.observe();
+            _ = self.opens.fetchAdd(1, .monotonic);
+            handle.* = self.next_handle.fetchAdd(1, .monotonic);
+            return files.yes;
+        }
+
+        fn read(
+            context: ?*anyopaque,
+            _: i64,
+            _: [*]u8,
+            _: i64,
+            filled: *i64,
+        ) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.observe();
+            _ = self.reads.fetchAdd(1, .monotonic);
+            filled.* = 0;
+            return files.yes;
+        }
+
+        fn write(
+            context: ?*anyopaque,
+            _: i64,
+            _: [*]const u8,
+            length: i64,
+            written: *i64,
+        ) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.observe();
+            _ = self.writes.fetchAdd(1, .monotonic);
+            written.* = length;
+            return files.yes;
+        }
+
+        fn flush(context: ?*anyopaque, _: i64) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.observe();
+            _ = self.flushes.fetchAdd(1, .monotonic);
+            return files.yes;
+        }
+
+        fn close(context: ?*anyopaque, _: i64) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.observe();
+            _ = self.closes.fetchAdd(1, .monotonic);
+            return files.yes;
+        }
+    };
+
+    const Work = struct {
+        const Kind = enum { read, write };
+
+        runtime: *Runtime,
+        ready: *std.atomic.Value(u32),
+        start: *std.atomic.Value(bool),
+        kind: Kind,
+        worked: bool = false,
+
+        fn run(self: *@This()) void {
+            _ = self.ready.fetchAdd(1, .release);
+            while (!self.start.load(.acquire)) std.Thread.yield() catch {};
+            switch (self.kind) {
+                .read => {
+                    const answer = files.readText(self.runtime, "read.txt") catch return;
+                    const held = answer orelse return;
+                    self.runtime.dropStorage(held);
+                    self.worked = true;
+                },
+                .write => self.worked = files.writeText(
+                    self.runtime,
+                    "write.txt",
+                    "bytes",
+                    .write,
+                ) catch false,
+            }
+        }
+    };
+
+    var first: Bench = undefined;
+    first.setup();
+    defer first.deinit();
+    var second: Bench = undefined;
+    second.setup();
+    defer second.deinit();
+
+    const effects = try first.runtime.sharedEffects();
+    second.runtime.effects = effects;
+    var host: Host = .{ .effects = effects };
+    const channel: files.Channel = .{
+        .context = &host,
+        .open = Host.open,
+        .read = Host.read,
+        .write = Host.write,
+        .flush = Host.flush,
+        .close = Host.close,
+    };
+    first.runtime.files = channel;
+    second.runtime.files = channel;
+
+    var ready: std.atomic.Value(u32) = .init(0);
+    var start: std.atomic.Value(bool) = .init(false);
+    var reading: Work = .{
+        .runtime = &first.runtime,
+        .ready = &ready,
+        .start = &start,
+        .kind = .read,
+    };
+    var writing: Work = .{
+        .runtime = &second.runtime,
+        .ready = &ready,
+        .start = &start,
+        .kind = .write,
+    };
+    var reader: ?std.Thread = try std.Thread.spawn(.{}, Work.run, .{&reading});
+    errdefer {
+        start.store(true, .release);
+        if (reader) |thread| thread.join();
+    }
+    const writer = try std.Thread.spawn(.{}, Work.run, .{&writing});
+    while (ready.load(.acquire) != 2) std.Thread.yield() catch {};
+    start.store(true, .release);
+    reader.?.join();
+    reader = null;
+    writer.join();
+
+    try testing.expect(reading.worked);
+    try testing.expect(writing.worked);
+    try testing.expect(!host.wrong_depth.load(.acquire));
+    try testing.expect(!host.overlapped.load(.acquire));
+    try testing.expectEqual(@as(u32, 2), host.opens.load(.acquire));
+    try testing.expectEqual(@as(u32, 1), host.reads.load(.acquire));
+    try testing.expectEqual(@as(u32, 1), host.writes.load(.acquire));
+    try testing.expectEqual(@as(u32, 1), host.flushes.load(.acquire));
+    try testing.expectEqual(@as(u32, 2), host.closes.load(.acquire));
+}
+
+test "a failed file allocation closes its successful host open exactly once" {
+    const Host = struct {
+        effects: *workers.Effects,
+        handle: i64,
+        opened: usize = 0,
+        closed: usize = 0,
+        closed_handle: i64 = -1,
+        callbacks_guarded: bool = true,
+
+        fn guarded(self: *@This()) bool {
+            const this_thread: usize = @intCast(std.Thread.getCurrentId());
+            return self.effects.owner.load(.acquire) == this_thread and
+                self.effects.depth == 1;
+        }
+
+        fn open(
+            context: ?*anyopaque,
+            _: [*]const u8,
+            _: i64,
+            _: i64,
+            handle: *i64,
+        ) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.callbacks_guarded = self.callbacks_guarded and self.guarded();
+            self.opened += 1;
+            handle.* = self.handle;
+            return files.yes;
+        }
+
+        fn close(context: ?*anyopaque, handle: i64) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.callbacks_guarded = self.callbacks_guarded and self.guarded();
+            self.closed += 1;
+            self.closed_handle = handle;
+            // Close has no error channel at scope end.  Its answer must
+            // not replace the allocation failure which led us here.
+            return files.no;
+        }
+    };
+
+    // `newFile` allocates the copied path and then, when there is no
+    // reusable row, the object table.  Refuse each in turn.
+    for (0..2) |failure_offset| {
+        var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+        var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var runtime: Runtime = .init(.{
+            .arena = arena.allocator(),
+            .objects = objects.allocator(),
+        });
+        const effects = try runtime.sharedEffects();
+        var host: Host = .{
+            .effects = effects,
+            .handle = 70 + @as(i64, @intCast(failure_offset)),
+        };
+        runtime.files = .{
+            .context = &host,
+            .open = Host.open,
+            .close = Host.close,
+        };
+        objects.fail_index = objects.alloc_index + failure_offset;
+
+        const outcome = files.open(&runtime, "allocation.txt", @intFromEnum(files.Mode.read));
+        const live = runtime.live;
+        const exhausted_run = runtime.exhausted;
+        const trapped = runtime.pending != null;
+        runtime.deinit();
+        arena.deinit();
+
+        try testing.expectError(error.OutOfMemory, outcome);
+        try testing.expectEqual(@as(u32, 0), live);
+        try testing.expect(!exhausted_run);
+        try testing.expect(!trapped);
+        try testing.expect(host.callbacks_guarded);
+        try testing.expectEqual(@as(usize, 1), host.opened);
+        try testing.expectEqual(@as(usize, 1), host.closed);
+        try testing.expectEqual(host.handle, host.closed_handle);
+        try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
+    }
+}
+
+test "file open fails closed before acquisition when the host cannot close" {
+    const Host = struct {
+        opened: usize = 0,
+
+        fn open(
+            context: ?*anyopaque,
+            _: [*]const u8,
+            _: i64,
+            _: i64,
+            _: *i64,
+        ) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.opened += 1;
+            return files.yes;
+        }
+    };
+
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    var host: Host = .{};
+    bench.runtime.files = .{ .context = &host, .open = Host.open };
+
+    try expectTrap(
+        .host_unavailable,
+        &bench.runtime,
+        files.open(&bench.runtime, "cannot-close.txt", @intFromEnum(files.Mode.read)),
+    );
+    try testing.expectEqual(@as(usize, 0), host.opened);
+    try testing.expectEqual(@as(u32, 0), bench.runtime.live);
 }
 
 test "failed materialization discards its partial object and every published root" {

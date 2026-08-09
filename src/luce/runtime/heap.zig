@@ -1972,6 +1972,37 @@ pub const Runtime = struct {
         return self.copyFrom(self, held);
     }
 
+    /// Give back a container run whose values were copied for an object
+    /// that has not reached the object table yet.  `Elements.deinit`
+    /// knows only about the byte run; the values in it can own copied
+    /// strings, structs and object rows of their own.
+    fn discardCopiedElements(self: *Runtime, elements: *Object.Elements) void {
+        if (elements.kind == .value) {
+            for (elements.cells(Value)) |item| self.freeValue(item);
+        }
+        elements.deinit(self.objects);
+    }
+
+    /// Roll back one fully-built object value before `attach` has made a
+    /// table row its owner.  This is deliberately the unattached twin of
+    /// `destroyObject`: copied children are already live rows, while the
+    /// outer object's own buffers still live only in `storage`.
+    fn discardCopiedObject(self: *Runtime, storage: *Object) void {
+        switch (storage.data) {
+            .list, .array => if (storage.elements.kind == .value) {
+                for (storage.elements.cells(Value)) |item| self.freeValue(item);
+            },
+            .map => |map| for (map.entries.items) |entry| {
+                self.dropStorage(entry.key);
+                self.freeValue(entry.value);
+            },
+            .builder => {},
+            // `copyFrom` refuses resources before constructing storage.
+            .file, .task => unreachable,
+        }
+        storage.release(self.objects);
+    }
+
     /// The same walk, reading out of `source` and building in `self`.
     ///
     /// **Two runtimes is the general case and one is the special one.**
@@ -1997,13 +2028,18 @@ pub const Runtime = struct {
                     .list => blk: {
                         const run = source.table.items[index].elements;
                         var copied: Object.Elements = .{ .kind = run.kind };
-                        errdefer copied.deinit(self.objects);
+                        errdefer self.discardCopiedElements(&copied);
                         try copied.ensureCapacity(self.objects, run.count);
                         // Packed cells own nothing, so the whole run
                         // copies as bytes; only a `Value` element needs
                         // a walk of its own.
                         if (run.kind != .value) {
-                            @memcpy(copied.bytes[0..run.bytes.len], run.bytes);
+                            // A List retains spare capacity after a
+                            // remove or clear.  The copy sizes itself
+                            // from the live count, so only those cells
+                            // fit and only those cells are values.
+                            const used = run.count * run.kind.width();
+                            @memcpy(copied.bytes[0..used], run.bytes[0..used]);
                             copied.count = run.count;
                         } else {
                             // `run` is a copy of the row's descriptor, so
@@ -2019,7 +2055,13 @@ pub const Runtime = struct {
                     },
                     .map => |map| blk: {
                         var copied: Map = .empty;
-                        errdefer copied.deinit(self.objects);
+                        errdefer {
+                            for (copied.entries.items) |entry| {
+                                self.dropStorage(entry.key);
+                                self.freeValue(entry.value);
+                            }
+                            copied.deinit(self.objects);
+                        }
                         for (map.entries.items) |entry| {
                             // The key's bytes are the source map's, so
                             // the copy takes its own: a `map(string, T)`
@@ -2028,9 +2070,11 @@ pub const Runtime = struct {
                             // of bytes, and two frees of it.
                             const key = try self.ownValue(entry.key);
                             errdefer self.dropStorage(key);
+                            const copied_value = try self.copyFrom(source, entry.value);
+                            errdefer self.freeValue(copied_value);
                             try copied.insert(self.objects, .{
                                 .key = key,
-                                .value = try self.copyFrom(source, entry.value),
+                                .value = copied_value,
                             });
                         }
                         break :blk .{ .data = .{ .map = copied } };
@@ -2044,20 +2088,22 @@ pub const Runtime = struct {
                             .of(Value),
                             run.bytes.len,
                         );
-                        errdefer self.objects.free(elements);
-                        const copied: Object.Elements = .{
+                        var copied: Object.Elements = .{
                             .kind = run.kind,
                             .bytes = elements,
-                            .count = run.count,
                         };
+                        errdefer self.discardCopiedElements(&copied);
                         // Cells that own nothing copy as bytes; only a
                         // `Value` element needs a walk of its own.
                         if (run.kind == .value) {
-                            for (run.cells(Value), copied.cells(Value)) |item, *slot| {
-                                slot.* = try self.copyFrom(source, item);
+                            for (run.cells(Value)) |item| {
+                                const duplicate = try self.copyFrom(source, item);
+                                copied.count += 1;
+                                copied.put(copied.count - 1, duplicate);
                             }
                         } else {
                             @memcpy(elements, run.bytes);
+                            copied.count = run.count;
                         }
                         break :blk .{ .data = .array, .dims = dims, .elements = copied };
                     },
@@ -2079,7 +2125,7 @@ pub const Runtime = struct {
                     // it (docs/THREADS.md D3).
                     .task => return self.fail(.not_owned),
                 };
-                errdefer storage.release(self.objects);
+                errdefer self.discardCopiedObject(&storage);
                 const duplicate = try self.attach(storage);
                 // The copy's own elements belong to it.
                 const made = &self.table.items[duplicate.asObject().index];
@@ -2097,7 +2143,7 @@ pub const Runtime = struct {
                 const copied = try self.objects.alloc(Value, fields.len);
                 var filled: usize = 0;
                 errdefer {
-                    for (copied[0..filled]) |field| self.dropStorage(field);
+                    for (copied[0..filled]) |field| self.freeValue(field);
                     self.objects.free(copied);
                 }
                 for (fields, copied) |field, *slot| {
