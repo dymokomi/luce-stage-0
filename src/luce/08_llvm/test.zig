@@ -1363,14 +1363,13 @@ test "negating a float flips the sign bit, so -0.0 survives" {
     );
 }
 
-// A `min`/`max` reduction is the one float loop LLVM may reorder
-// without being told to reassociate anything, because
-// `llvm.minimumnum` is associative and commutative on the nose — so
-// `lower.emitExtremum` lets it, and the vectorized loop has to answer
-// what the interpreter's one-at-a-time loop answers, down to which
-// zero it kept.  Nothing below is a constant to the optimizer: the
-// values come out of a List and the length out of `len`, so the
-// reductions stay loops long enough to be vectorized.
+// A `min`/`max` reduction exercises the explicit floating-point
+// compare/select lowering in `lower.emitExtremum`.  The generated code
+// must answer what the interpreter's one-at-a-time loop answers, down to
+// which signed zero it kept; target-specific min/max instructions are not
+// allowed to change that choice.  Nothing below is a constant to the
+// optimizer: the values come out of a List and the length out of `len`,
+// so the reductions stay loops long enough to exercise the lowering.
 test "min and max reductions over an array agree, signed zeros and all" {
     try agree(
         \\func lowest(xs: array(double, _)) -> double:

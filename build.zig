@@ -39,8 +39,13 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .link_libc = true,
+            // This archive is linked into the shared .lc artifact.
+            .pic = true,
         }),
     });
+    // The final .lc/exe link is driven by the host's `cc`, so it does not
+    // automatically supply Zig's compiler-rt symbols to this archive.
+    runtime_library.bundle_compiler_rt = true;
     // Installed rather than only built, and named here, because the
     // bundled programs below are linked against the *installed* copy:
     // compiling one is a link, and a link needs a library on a path

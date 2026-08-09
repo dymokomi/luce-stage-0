@@ -313,10 +313,6 @@ const Module = struct {
     /// one slot per `effects.Service`, filled on first use.
     services: std.EnumMap(Service, Builder.Function.Index) = .{},
 
-    /// `llvm.minimumnum.f64` and `llvm.maximumnum.f64`, in that order,
-    /// declared on first use (`floatExtremum`).
-    float_extrema: [2][2]?Builder.Function.Index = @splat(.{ null, null }),
-
     /// One retired object row, read in place of a null handle's when a
     /// resolution is lifted out of a loop (`loops.zig`).  A lifted
     /// resolution loads the row without deciding anything about it, so
@@ -546,41 +542,6 @@ const Module = struct {
             self.builder,
         );
         self.services.put(which, declared);
-        return declared;
-    }
-
-    /// `llvm.minimumnum.f64` when `wants_minimum`, `llvm.maximumnum.f64`
-    /// otherwise, interned per module.
-    ///
-    /// These are IEEE 754-2019 `minimumNumber`/`maximumNumber`: the
-    /// operand that is a number when the other is NaN, and `-0.0` below
-    /// `+0.0` — the one shape of extremum that is fully specified, so
-    /// LLVM's constant folder and every target's instruction give the
-    /// same answer, which is the property `emitExtremum` needs.
-    ///
-    /// They are declared by name rather than through
-    /// `Builder.Intrinsic`, whose table in the pinned standard library
-    /// predates them.  A declaration whose name is an intrinsic's *is*
-    /// that intrinsic to LLVM — it recognizes the name on the way in and
-    /// attaches the intrinsic's own attributes — so nothing about the
-    /// module differs from one the enum could have built.
-    fn floatExtremum(self: *Module, wants_minimum: bool, of: types.Type) Error!Builder.Function.Index {
-        const narrow: usize = if (of == .float) 1 else 0;
-        const slot: usize = if (wants_minimum) 0 else 1;
-        if (self.float_extrema[narrow][slot]) |found| return found;
-        const width: Builder.Type = if (of == .float) .float else .double;
-        const signature_type = try self.builder.fnType(width, &.{ width, width }, .normal);
-        const name: []const u8 = if (of == .float)
-            (if (wants_minimum) "llvm.minimumnum.f32" else "llvm.maximumnum.f32")
-        else
-            (if (wants_minimum) "llvm.minimumnum.f64" else "llvm.maximumnum.f64");
-        const declared = try self.builder.addFunction(
-            signature_type,
-            try self.builder.strtabString(name),
-            .default,
-        );
-        declared.setLinkage(.external, self.builder);
-        self.float_extrema[narrow][slot] = declared;
         return declared;
     }
 
@@ -5640,7 +5601,27 @@ const Body = struct {
             .greater_equal,
             => return self.fail("a comparison on the arithmetic path"),
         };
-        return self.wip.bin(tag, left, right, "float");
+        const result = try self.wip.bin(tag, left, right, "float");
+        if (operation != .divide) return result;
+
+        // The sign of the NaN produced by 0.0 / 0.0 is target-dependent
+        // in LLVM's fdiv lowering.  Zig's floating operation, which is
+        // the oracle's behavior, answers a negative quiet NaN, so make
+        // that invalid case explicit while leaving ordinary division
+        // as the hardware operation it is.
+        const zero = try self.zeroValue(of);
+        const both_zero = try self.wip.bin(
+            .@"and",
+            try self.wip.fcmp(.normal, .oeq, left, zero, "left.zero"),
+            try self.wip.fcmp(.normal, .oeq, right, zero, "right.zero"),
+            "both.zero",
+        );
+        const negative_nan = switch (of) {
+            .float => try self.module.builder.floatValue(@bitCast(@as(u32, 0xffc00000))),
+            .double => try self.module.builder.doubleValue(@bitCast(@as(u64, 0xfff8000000000000))),
+            else => unreachable,
+        };
+        return self.wip.select(.normal, both_zero, negative_nan, result, "float");
     }
 
     /// `llvm.s*.with.overflow`, then the trap the interpreter raises.
@@ -7044,25 +7025,13 @@ const Body = struct {
     ///
     /// A long is `llvm.smin`/`llvm.smax`, which mean exactly one thing.
     ///
-    /// A double is `llvm.minimumnum`/`llvm.maximumnum`, which mean exactly
-    /// what the interpreter's `@min` means and are the only extremum
-    /// intrinsics that mean anything at all: `llvm.minnum` leaves
-    /// `(-0.0, +0.0)` unspecified, so LLVM's constant folder and the
-    /// target's instruction disagree — which is why this was once a
-    /// runtime call — and `llvm.minimum` is specified there but
-    /// propagates NaN, where Luce answers the operand that is a number.
-    /// The 754-2019 pair is both: `-0.0` below `+0.0`, and NaN as an
-    /// identity rather than an absorber.
-    ///
-    /// That last property is what makes an extremum *reduction* fast.
-    /// A `min` with no NaN case to steer around is associative and
-    /// commutative on the nose, so LLVM's vectorizer may reorder one
-    /// without reassociating anything — `vmin` over a million elements
-    /// becomes `fminnm.2d` four lanes at a time and beats the scalar
-    /// `a < b ? a : b` loop a C compiler is stuck with, while the answer
-    /// stays the same value it would have accumulated one at a time.
-    /// `08_llvm/test.zig` holds both engines to the same answer for
-    /// every signed zero and NaN pairing, scalar and reduced.
+    /// Floating extrema spell Zig's `@min`/`@max` semantics explicitly.
+    /// The LLVM `minimumnum`/`maximumnum` intrinsics are not a portable
+    /// substitute here: their lowering can choose a different signed zero
+    /// on x86-64, and the resulting instruction sequence can even reverse
+    /// an ordinary `min`/`max` when the operands are ordered.  Luce keeps
+    /// the non-NaN operand, then uses an inclusive comparison so equal
+    /// values retain the left operand, including its sign bit.
     fn emitExtremum(
         self: *Body,
         wants_minimum: bool,
@@ -7081,17 +7050,18 @@ const Body = struct {
                 "extremum",
             );
         }
-        const target = try self.module.floatExtremum(wants_minimum, kind);
-        const builder = self.module.builder;
-        return self.wip.call(
+        const left_is_nan = try self.wip.fcmp(.normal, .uno, left, left, "left.nan");
+        const right_is_nan = try self.wip.fcmp(.normal, .uno, right, right, "right.nan");
+        const left_wins = try self.wip.fcmp(
             .normal,
-            Builder.CallConv.default,
-            .none,
-            target.typeOf(builder),
-            target.toValue(builder),
-            &.{ left, right },
-            "extremum",
+            if (wants_minimum) .ole else .oge,
+            left,
+            right,
+            "left.extremum",
         );
+        const ordered = try self.wip.select(.normal, left_wins, left, right, "ordered.extremum");
+        const right_is_number = try self.wip.select(.normal, right_is_nan, left, ordered, "right.extremum");
+        return self.wip.select(.normal, left_is_nan, right, right_is_number, "extremum");
     }
 
     /// One of the float-only builtins, as its LLVM intrinsic, at the
