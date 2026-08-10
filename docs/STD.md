@@ -30,7 +30,7 @@ because file access genuinely does not exist there.
 
 Sources live in `src/luce/std/*.luc`; the table that embeds them is
 in `src/luce/01_source/load.zig`; the suite proving them is
-`src/luce/specs/std_spec.zig` and the language specs — all eight
+`src/luce/specs/std_spec.zig` and the language specs — all nine
 modules are ordinary source, with each program run on both engines and
 compared (docs/ENGINE.md).
 
@@ -355,10 +355,13 @@ argument-vector API.
 ### `os.term` and `os.term.ui`
 
 Terminal operations now have a Luce-owned home instead of making every
-program call the flat `term_*` and `key_*` builtins directly:
+program call the flat `term_*` and `key_*` builtins directly. `std.os` is
+the full system module (`os.term`), and `std.term` is the short terminal
+module (`term`) for programs that do not need the other OS facts:
 
 ```
 import std.os
+import std.term
 
 let rows = os.term.rows()
 let cols = os.term.cols()
@@ -366,18 +369,27 @@ os.term.move(0, 0)
 os.term.style(80, bold = true)
 os.term.write(os.term.ui.junction(top = true, right = true, bottom = true, left = true))
 os.term.flush()
-let name = os.term.key()
-let text = os.term.text()
+let name = os.term.io.read()
+let text = os.term.io.text()
+let mouse_row = os.term.io.row()
+
+term.write(term.ui.horizontal())
 ```
 
 The `os.term` methods are hosted and retain the existing raw-mode,
-alternate-screen, frame-buffering and sanitization rules. `os.term.ui` is
-pure Unicode geometry: `horizontal()`, `vertical()`, the four corners,
+alternate-screen, mouse-reporting, frame-buffering and sanitization rules.
+`os.term.io` is one event stream: `read()` answers keyboard names,
+`mouse_press`/`mouse_release`/`mouse_drag`/`mouse_wheel`, or `resize`; its
+`text`, `row`, `column`, `button`, `modifiers` and `value` methods describe
+the event just read. Buttons are left `0`, middle `1`, right `2`, and `-1`
+for keyboard, resize and wheel events; modifier bits are shift `1`, alt `2`
+and ctrl `4`. `os.term.ui` is pure Unicode geometry:
+`horizontal()`, `vertical()`, the four corners,
 `junction(top, right, bottom, left)`, and light/dark one-cell shadows. The
 four booleans describe the lines that continue through a cell, so a layout
 can draw uninterrupted borders and correct intersections rather than
 overwriting a corner with a generic plus sign. The existing flat builtins
-remain the compiler/ABI seam underneath this facade.
+remain the compiler/ABI seam underneath these facades.
 
 Nothing here answers `?` or `!`.  A fact the host knows is a number; a
 fact it does not know is a **refusal** — `host_unavailable`, the same

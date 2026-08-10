@@ -110,7 +110,7 @@ pub const sections = [_]Section{
         .slug = "std",
         .label = "Library",
         .title = "The standard library",
-        .blurb = "Eight modules, written in ordinary Luce and embedded in the compiler. There is no install path and there is no package manager.",
+        .blurb = "Nine modules, written in ordinary Luce and embedded in the compiler. There is no install path and there is no package manager.",
         .pages = &.{
             .{ .slug = "math", .title = "std.math", .blurb = "Transcendentals, integer powers, whole-array reductions, and a seeded generator." },
             .{ .slug = "strings", .title = "std.strings", .blurb = "Everything built on the String primitives: find, split, join, trim, case, padding." },
@@ -118,6 +118,7 @@ pub const sections = [_]Section{
             .{ .slug = "lists", .title = "std.lists", .blurb = "Stable comparator sorting for every list element type, with named functions or capture-free lambdas." },
             .{ .slug = "paths", .title = "std.paths", .blurb = "Pure text over path names: join, base, dir, extension, stem." },
             .{ .slug = "os", .title = "std.os", .blurb = "The machine's own facts: how much memory it has, how much is left, how many processors." },
+            .{ .slug = "term", .title = "std.term", .blurb = "Terminal drawing and keyboard, mouse, and resize events." },
             .{ .slug = "zip", .title = "std.zip", .blurb = "ZIP archives and DEFLATE, in pure Luce: read a real archive, write one, and check it." },
             .{ .slug = "json", .title = "std.json", .blurb = "JSON against RFC 8259, parsed lazily into a flat document: read the leaves, print it back." },
         },

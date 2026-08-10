@@ -281,6 +281,11 @@ pub const Intrinsic = enum {
     /// inline is copied into storage the caller owns, and everything
     /// already independent of the frame moves untouched.
     export_storage,
+    /// Numeric data belonging to the most recent `key_read`: row,
+    /// column, button, modifier bits, or wheel value by field number.
+    /// The standard library presents this host query as `term.io`'s
+    /// mouse and resize accessors.
+    term_event_data,
 
     // -- per-intrinsic facts, classified once ---------------------------
     //
@@ -333,6 +338,7 @@ pub const Intrinsic = enum {
             .os_available_memory,
             .os_cpu_count,
             .shell_run,
+            .term_event_data,
             => true,
 
             // `key_text` reads the slot the last `key_read` filled,
@@ -520,6 +526,7 @@ pub const Intrinsic = enum {
             .os_total_memory,
             .os_available_memory,
             .os_cpu_count,
+            .term_event_data,
             .own_storage,
             .drop_storage,
             .export_storage,
@@ -627,6 +634,7 @@ pub const Intrinsic = enum {
             .term_style,
             .term_write,
             .term_flush,
+            .term_event_data,
             .key_text,
             .print_error,
             .clock_ms,
@@ -745,6 +753,7 @@ pub const Intrinsic = enum {
             .task_wait,
             .os_cpu_count,
             .shell_run,
+            .term_event_data,
             .own_storage,
             .drop_storage,
             .export_storage,

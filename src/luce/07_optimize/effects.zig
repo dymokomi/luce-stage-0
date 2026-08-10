@@ -296,6 +296,7 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .os_available_memory,
         .os_cpu_count,
         .shell_run,
+        .term_event_data,
         => .impure,
     };
 }
@@ -408,6 +409,7 @@ pub fn viewStable(instruction: Instruction) bool {
             .os_available_memory,
             .os_cpu_count,
             .shell_run,
+            .term_event_data,
             // The error channel is not the object table.
             .errored,
             .error_message,
@@ -558,6 +560,7 @@ pub fn ownershipTransparent(function: *const Function, instruction: Instruction)
             .drop_storage,
             .export_storage,
             .shell_run,
+            .term_event_data,
             => true,
             .str_value => function.result_types[call.arguments[0]] != .heap,
             else => false,

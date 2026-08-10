@@ -95,7 +95,10 @@ pub const magic = "LUCE";
 /// 35 — `shell_run` joins the intrinsic set behind `std.os.shell.run`.
 /// It is appended, but the tag is still part of the serialized program,
 /// so an older decoder must refuse it rather than guess.
-pub const format_version: u32 = 35;
+///
+/// 36 — `term_event_data` joins the intrinsic set behind `term.io`'s
+/// mouse and resize accessors.
+pub const format_version: u32 = 36;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -1626,8 +1629,8 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // moved this number and left the hash alone.  A version bump is
     // still required for that, and this test is not what will remind
     // you.
-    try testing.expectEqual(@as(u32, 35), format_version);
-    try testing.expectEqual(@as(u64, 7597597497813748242), hasher.final());
+    try testing.expectEqual(@as(u32, 36), format_version);
+    try testing.expectEqual(@as(u64, 11437522259294766851), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

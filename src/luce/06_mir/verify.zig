@@ -1412,6 +1412,11 @@ fn verifyIntrinsic(
             try exactly(arguments, 0);
             try expectType(result, .long);
         },
+        .term_event_data => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .long);
+            try expectType(result, .long);
+        },
         .term_clear, .term_flush => {
             try exactly(arguments, 0);
             try expectType(result, .none);

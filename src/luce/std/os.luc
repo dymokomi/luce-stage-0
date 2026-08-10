@@ -46,6 +46,7 @@ struct shell:
 # family of globals.
 struct Term:
     ui: UI
+    io: IO
 
     func rows() -> long:
         return term_rows()
@@ -68,11 +69,47 @@ struct Term:
     func flush():
         term_flush()
 
+    # Compatibility aliases for programs that used the first facade draft.
+    # New terminal programs should read through `term.io`, which keeps input
+    # beside the mouse and resize data that belongs to the same event.
     func key() -> string?:
+        return self.io.read()
+
+    func text() -> string:
+        return self.io.text()
+
+# Terminal input is one event stream.  `read()` answers a stable event name:
+# text, enter, ctrl_s, mouse_press, mouse_release, mouse_drag, mouse_move,
+# mouse_wheel, resize, or none at end of input.  The accessors read numeric
+# data belonging to the event most recently returned by `read()`.
+struct IO:
+    private:
+        token: long
+
+    func read() -> string?:
         return key_read()
 
     func text() -> string:
         return key_text()
+
+    # Coordinates are zero based.  For keyboard events these answer 0.
+    func row() -> long:
+        return term_event_data(0)
+
+    func column() -> long:
+        return term_event_data(1)
+
+    # Mouse buttons are left=0, middle=1 and right=2.  A wheel event uses -1.
+    func button() -> long:
+        return term_event_data(2)
+
+    # Modifier bits are shift=1, alt=2 and ctrl=4.
+    func modifiers() -> long:
+        return term_event_data(3)
+
+    # Wheel events answer +1 for up and -1 for down; other events answer 0.
+    func value() -> long:
+        return term_event_data(4)
 
 # Unicode terminal geometry belongs here rather than in every program that
 # draws a pane.  `junction` takes the four sides that continue through the
@@ -146,7 +183,7 @@ struct UI:
 # One immutable facade value gives callers the requested `os.term.ui` path.
 # The token makes UI an ordinary object-free struct while remaining invisible
 # to callers; all useful state lives in the terminal host, not in this value.
-const term = Term(ui = UI(token = 0))
+const term = Term(ui = UI(token = 0), io = IO(token = 0))
 
 # Bytes of physical memory the machine has.  Fixed for the life of the
 # run — this is the hardware's size, not a quota and not a limit the

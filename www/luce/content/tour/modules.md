@@ -106,7 +106,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:1:1: there is no standard module std.nope; the standard library is std.math, std.files, std.strings, std.lists, std.paths, std.os, std.zip, std.json [luce.import.standard]
+main.luc:1:1: there is no standard module std.nope; the standard library is std.math, std.files, std.strings, std.lists, std.paths, std.os, std.term, std.zip, std.json [luce.import.standard]
     import std.nope
     ^~~~~~~~~~~~~~~
 ```

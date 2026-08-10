@@ -1731,6 +1731,13 @@ pub const Machine = struct {
                 };
                 return self.runtime.ownValue(.ofString(output));
             },
+            .term_event_data => {
+                const screen = try self.terminal();
+                return .ofLong(screen.event_data(
+                    screen.context,
+                    registers[arguments[0]].asLong(),
+                ));
+            },
             .file_exists => {
                 const host = try self.service();
                 const callback = host.file_exists orelse return self.runtime.fail(.host_unavailable);

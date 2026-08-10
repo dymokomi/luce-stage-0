@@ -18,7 +18,29 @@ pub const Key = union(enum) {
     page_down,
     escape,
     control: u8,
+    mouse: Mouse,
     none,
+};
+
+/// The mouse report a terminal sends in SGR mode.  Coordinates are zero
+/// based, unlike the one-based coordinates in the escape sequence.  `button`
+/// is 0 for left, 1 for middle and 2 for right; wheel reports use `value` of
+/// +1 for up and -1 for down.  Modifier bits are shift=1, alt=2 and ctrl=4.
+pub const Mouse = struct {
+    kind: MouseKind,
+    row: i64,
+    column: i64,
+    button: i64,
+    modifiers: i64,
+    value: i64 = 0,
+};
+
+pub const MouseKind = enum {
+    press,
+    release,
+    drag,
+    move,
+    wheel,
 };
 
 pub const Decoded = struct {
@@ -68,6 +90,7 @@ fn decodeEscape(bytes: []const u8) Decoded {
     if (bytes.len < 3) return .{ .key = .none, .used = 0 };
 
     switch (bytes[2]) {
+        '<' => return decodeMouse(bytes),
         'A' => return .{ .key = .up, .used = 3 },
         'B' => return .{ .key = .down, .used = 3 },
         'C' => return .{ .key = .right, .used = 3 },
@@ -91,6 +114,83 @@ fn decodeEscape(bytes: []const u8) Decoded {
     }
 }
 
+/// Decode an xterm SGR mouse report (`CSI < button;column;row M/m`).  The
+/// escape sequence can arrive over several reads, so an incomplete report
+/// answers `used = 0` and leaves the pending bytes in place.
+fn decodeMouse(bytes: []const u8) Decoded {
+    var at: usize = 3;
+    const encoded_button = mouseNumber(bytes, &at) orelse return incompleteOrInvalid(bytes, at);
+    if (!mouseSeparator(bytes, &at)) return incompleteOrInvalid(bytes, at);
+    const encoded_column = mouseNumber(bytes, &at) orelse return incompleteOrInvalid(bytes, at);
+    if (!mouseSeparator(bytes, &at)) return incompleteOrInvalid(bytes, at);
+    const encoded_row = mouseNumber(bytes, &at) orelse return incompleteOrInvalid(bytes, at);
+    if (at >= bytes.len) return .{ .key = .none, .used = 0 };
+    const final = bytes[at];
+    if (final != 'M' and final != 'm') return incompleteOrInvalid(bytes, at);
+
+    const base = encoded_button & 3;
+    var modifiers: i64 = 0;
+    if (encoded_button & 4 != 0) modifiers |= 1;
+    if (encoded_button & 8 != 0) modifiers |= 2;
+    if (encoded_button & 16 != 0) modifiers |= 4;
+    const wheel = encoded_button & 64 != 0;
+    const motion = encoded_button & 32 != 0;
+    const kind: MouseKind = if (wheel)
+        .wheel
+    else if (final == 'm')
+        .release
+    else if (motion and base == 3)
+        .move
+    else if (motion)
+        .drag
+    else
+        .press;
+    const button = if (wheel or base == 3) @as(i64, -1) else base;
+    const value: i64 = if (!wheel)
+        0
+    else if (base == 0)
+        1
+    else if (base == 1)
+        -1
+    else
+        0;
+
+    return .{
+        .key = .{ .mouse = .{
+            .kind = kind,
+            .row = if (encoded_row > 0) encoded_row - 1 else 0,
+            .column = if (encoded_column > 0) encoded_column - 1 else 0,
+            .button = button,
+            .modifiers = modifiers,
+            .value = value,
+        } },
+        .used = at + 1,
+    };
+}
+
+fn mouseNumber(bytes: []const u8, at: *usize) ?i64 {
+    if (at.* >= bytes.len or bytes[at.*] < '0' or bytes[at.*] > '9') return null;
+    var value: i64 = 0;
+    while (at.* < bytes.len and bytes[at.*] >= '0' and bytes[at.*] <= '9') : (at.* += 1) {
+        const digit: i64 = bytes[at.*] - '0';
+        if (value > @divTrunc(std.math.maxInt(i64) - digit, 10)) return null;
+        value = value * 10 + digit;
+    }
+    return value;
+}
+
+fn mouseSeparator(bytes: []const u8, at: *usize) bool {
+    if (at.* >= bytes.len) return false;
+    if (bytes[at.*] != ';') return false;
+    at.* += 1;
+    return true;
+}
+
+fn incompleteOrInvalid(bytes: []const u8, at: usize) Decoded {
+    if (at >= bytes.len) return .{ .key = .none, .used = 0 };
+    return .{ .key = .none, .used = @min(at + 1, bytes.len) };
+}
+
 test "keys and printable UTF-8 decode from raw bytes" {
     try std.testing.expectEqualStrings("x", decode("x").key.text);
     try std.testing.expectEqualStrings("λ", decode("λ").key.text);
@@ -99,4 +199,26 @@ test "keys and printable UTF-8 decode from raw bytes" {
     try std.testing.expectEqual(Key.up, decode("\x1b[A").key);
     try std.testing.expectEqual(Key.delete, decode("\x1b[3~").key);
     try std.testing.expectEqual(@as(usize, 0), decode(&.{0xce}).used);
+}
+
+test "SGR mouse reports decode into zero-based events" {
+    const pressed = decode("\x1b[<0;11;7M").key.mouse;
+    try std.testing.expectEqual(MouseKind.press, pressed.kind);
+    try std.testing.expectEqual(@as(i64, 6), pressed.row);
+    try std.testing.expectEqual(@as(i64, 10), pressed.column);
+    try std.testing.expectEqual(@as(i64, 0), pressed.button);
+    try std.testing.expectEqual(@as(i64, 0), pressed.modifiers);
+
+    const dragged = decode("\x1b[<41;3;4M").key.mouse;
+    try std.testing.expectEqual(MouseKind.drag, dragged.kind);
+    try std.testing.expectEqual(@as(i64, 2), dragged.column);
+    try std.testing.expectEqual(@as(i64, 2), dragged.modifiers);
+
+    const wheel = decode("\x1b[<64;5;9M").key.mouse;
+    try std.testing.expectEqual(MouseKind.wheel, wheel.kind);
+    try std.testing.expectEqual(@as(i64, 1), wheel.value);
+    try std.testing.expectEqual(@as(i64, -1), wheel.button);
+
+    try std.testing.expectEqual(MouseKind.release, decode("\x1b[<0;11;7m").key.mouse.kind);
+    try std.testing.expectEqual(@as(usize, 0), decode("\x1b[<0;11").used);
 }

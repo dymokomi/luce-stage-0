@@ -447,6 +447,7 @@ const Module = struct {
             .file_write => builder.fnType(.i32, &.{ .ptr, .ptr, .i64, .ptr, .i64 }, .normal),
             .file_exists => builder.fnType(.i32, &.{ .ptr, .ptr, .i64 }, .normal),
             .arg_count, .term_rows, .term_cols => builder.fnType(.i64, &.{.ptr}, .normal),
+            .term_event_data => builder.fnType(.i64, &.{ .ptr, .i64 }, .normal),
             .arg => builder.fnType(.i32, &.{ .ptr, .i64, .ptr, .ptr }, .normal),
             .term_clear, .term_flush => builder.fnType(.i32, &.{.ptr}, .normal),
             .term_move => builder.fnType(.i32, &.{ .ptr, .i64, .i64 }, .normal),
@@ -4509,6 +4510,22 @@ const Body = struct {
         return answer;
     }
 
+    /// The same plain-number service with arguments — currently the
+    /// terminal event-data query.  Unlike `callHost`, this callback does
+    /// not return `abi.Answer`, so its result is already the number the
+    /// program asked for.
+    fn callHostNumberWith(
+        self: *Body,
+        slot: abi.Slot,
+        arguments: []const Builder.Value,
+        name: []const u8,
+    ) Error!Builder.Value {
+        try self.enterEffects();
+        const answer = try self.invokeHost(slot, arguments, name);
+        try self.leaveEffects();
+        return answer;
+    }
+
     /// Call a host service that answers one fact about the machine:
     /// nothing to ask with, a number in an out-parameter, and an
     /// answer that may be `no`.
@@ -6997,6 +7014,13 @@ const Body = struct {
             },
             .term_cols => {
                 self.produced[register].value = try self.callHostNumber(.term_cols, "cols");
+            },
+            .term_event_data => {
+                self.produced[register].value = try self.callHostNumberWith(
+                    .term_event_data,
+                    &.{self.produced[of[0]].value},
+                    "event.data",
+                );
             },
             .term_clear => _ = try self.callHost(.term_clear, &.{}, "cleared"),
             .term_move => _ = try self.callHost(.term_move, &.{

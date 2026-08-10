@@ -460,8 +460,9 @@ the instruction, their wire tags, and `immutable_object` moved the
 serialized module to **format 33**; none is a host service, so
 `abi.version` remains **13** at that point in the format history. The
 later appended `ownership_cycle` trap moves the module format to **34**;
-the subsequent `shell_run` host service moves the current format to
-**35** and the ABI to **14**.
+the subsequent `shell_run` host service moved it to **35** and the ABI
+to **14**; `term_event_data` moves the current format to **36** and the
+ABI to **15**.
 
 Every generated entry path calls one private `luce.constants`
 materializer before user code.  It constructs rows through the same
@@ -527,7 +528,9 @@ the error unwinds.  It is also entirely internal.  `call_inout` and
 the local flag first moved the serialized module to format 32;
 program-root constants then moved it to 33, and the appended
 `ownership_cycle` trap moved the module format to **34**. The current
-`shell_run` service moves the format to **35** and the host ABI to **14**.
+`shell_run` service moved the format to **35** and the host ABI to **14**;
+the appended `term_event_data` service makes the current format **36**
+and ABI **15**.
 
 ## Call depth, and the trace a trap carries
 
@@ -1034,7 +1037,7 @@ fits; generated code only ever *writes* the other form, and reads both
 ## The published host ABI
 
 `src/luce/08_llvm/abi.zig` is the contract and the only authority on
-it; `abi.version` is the number a loader checks, currently **14**.  A compiled artifact
+it; `abi.version` is the number a loader checks, currently **15**.  A compiled artifact
 exports one symbol:
 
 ```c

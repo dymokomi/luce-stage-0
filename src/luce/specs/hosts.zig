@@ -71,6 +71,10 @@ pub const World = struct {
     keys: []const Key = &default_keys,
     /// How many keys the program has read.
     keys_read: usize = 0,
+    /// Data belonging to the most recently returned terminal event.  The
+    /// number-only event query reads this after `key_read`, just as the real
+    /// host reads its screen's last event.
+    last_event: Key = .{ .name = "" },
     /// The lines standard input will answer.  The script does *not*
     /// repeat: running off the end is end of input, which is the case
     /// a `string?` exists for.
@@ -122,7 +126,15 @@ pub const World = struct {
     handle_position: usize = 0,
     handle_writes: bool = false,
 
-    pub const Key = struct { name: []const u8, text: []const u8 = "" };
+    pub const Key = struct {
+        name: []const u8,
+        text: []const u8 = "",
+        row: i64 = 0,
+        column: i64 = 0,
+        button: i64 = -1,
+        modifiers: i64 = 0,
+        value: i64 = 0,
+    };
 
     const rows: i64 = 24;
     const cols: i64 = 80;
@@ -256,9 +268,24 @@ pub const World = struct {
     }
 
     fn nextKey(self: *World) ?Key {
-        if (self.keys_read >= self.keys.len) return null;
+        if (self.keys_read >= self.keys.len) {
+            self.last_event = .{ .name = "" };
+            return null;
+        }
         defer self.keys_read += 1;
-        return self.keys[self.keys_read];
+        self.last_event = self.keys[self.keys_read];
+        return self.last_event;
+    }
+
+    fn eventData(self: *const World, field: i64) i64 {
+        return switch (field) {
+            0 => self.last_event.row,
+            1 => self.last_event.column,
+            2 => self.last_event.button,
+            3 => self.last_event.modifiers,
+            4 => self.last_event.value,
+            else => 0,
+        };
     }
 
     /// The listing a compiled program takes, NUL-joined into this
@@ -844,6 +871,7 @@ pub const Capture = struct {
             .term_style = if (provided.terminal) termStyle else null,
             .term_write = if (provided.terminal) termWrite else null,
             .term_flush = if (provided.terminal) termFlush else null,
+            .term_event_data = if (provided.terminal) termEventData else null,
             .key_read = if (provided.terminal) keyRead else null,
             .raised = raised,
             .file_append = if (provided.files) fileAppend else null,
@@ -1052,6 +1080,10 @@ pub const Capture = struct {
     fn termFlush(context: ?*anyopaque) callconv(.c) abi.Answer {
         of(context).record("[flush]", "");
         return .yes;
+    }
+
+    fn termEventData(context: ?*anyopaque, field: i64) callconv(.c) i64 {
+        return of(context).world.eventData(field);
     }
 
     fn keyRead(
@@ -1285,6 +1317,7 @@ pub const Reference = struct {
                 .term_style = termStyle,
                 .term_write = termWrite,
                 .term_flush = termFlush,
+                .event_data = eventData,
                 .key_read = keyRead,
             } else null,
             .files = if (self.provided.files) Handles.channel(self) else .{},
@@ -1402,6 +1435,10 @@ pub const Reference = struct {
 
     fn termFlush(context: *anyopaque) error{OutOfMemory}!void {
         try of(context).record("[flush]", "");
+    }
+
+    fn eventData(context: *anyopaque, field: i64) i64 {
+        return of(context).world.eventData(field);
     }
 
     fn keyRead(context: *anyopaque, arena: Allocator) error{OutOfMemory}!?interpreter.KeyEvent {

@@ -10678,6 +10678,11 @@ pub const FunctionBuilder = struct {
             .term_rows, .term_cols => {
                 result = .long;
             },
+            .term_event_data => {
+                if (!try self.widensInto(&arguments[0], .long))
+                    return self.failIntrinsic(call, "term_event_data takes a long field");
+                result = .long;
+            },
             .term_clear, .term_flush => {
                 result = .none;
             },

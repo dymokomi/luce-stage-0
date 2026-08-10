@@ -1,13 +1,15 @@
 //! The loom host: the trusted boundary behind the Luce host builtins.
 //!
-//! Programs describe console lines, file paths, and screen drawing;
+//! Programs describe console lines, file paths, screen drawing, and input;
 //! this file owns the real terminal.  Raw mode and the alternate
 //! screen engage lazily on the first terminal builtin, every frame is
 //! buffered and presented on flush (or before blocking on a key), and
 //! program text is sanitized so a Luce program can never emit raw
-//! escape sequences — the host writes every control byte itself.  The
-//! sanitizing rule is `sanitize.zig`'s, because a trap report follows
-//! it too and a trap report is not a terminal.
+//! escape sequences — the host writes every control byte itself.  Mouse
+//! reporting is enabled for the interactive screen and decoded in
+//! `key.zig`; the program receives names and numeric event data, never
+//! terminal escape sequences.  The sanitizing rule is `sanitize.zig`'s,
+//! because a trap report follows it too and a trap report is not a terminal.
 //!
 //! **What a run's ending is called, and what it exits with, is not
 //! here**: `report.zig` renders the trap, the uncaught error and the
@@ -248,6 +250,7 @@ pub const Host = struct {
             .term_style = cTermStyle,
             .term_write = cTermWrite,
             .term_flush = cTermFlush,
+            .term_event_data = cTermEventData,
             .key_read = cKeyRead,
             .call_depth = cCallDepth,
             .raised = cRaised,
@@ -396,13 +399,14 @@ pub const Host = struct {
         }
     }
 
-    /// Leave the alternate screen and raw mode; safe to call twice.
+    /// Leave the alternate screen, mouse reporting, and raw mode; safe to
+    /// call twice.
     /// The runner calls this before reporting traps so messages land
     /// on the ordinary screen.
     pub fn restoreScreen(self: *Host) void {
         if (!self.screen.active) return;
         self.screen.active = false;
-        self.out.writeAll("\x1b[0m\x1b[?25h\x1b[?1049l") catch {};
+        self.out.writeAll("\x1b[0m\x1b[?25h\x1b[?1006l\x1b[?1002l\x1b[?1049l") catch {};
         self.out.flush() catch {};
         std.posix.tcsetattr(self.screen.handle, .FLUSH, self.screen.saved) catch {};
     }
@@ -767,8 +771,16 @@ pub const Host = struct {
         raw.cc[@intFromEnum(std.posix.V.TIME)] = 0;
         std.posix.tcsetattr(self.screen.handle, .FLUSH, raw) catch return;
         self.screen.saved = saved;
+        const size = windowSize();
+        self.screen.last_rows = size.rows;
+        self.screen.last_columns = size.columns;
+        self.screen.event = .{};
         self.screen.active = true;
-        self.out.writeAll("\x1b[?1049h\x1b[0m\x1b[2J\x1b[H") catch {};
+        // SGR mouse mode is unambiguous for UTF-8 terminals.  Button-event
+        // tracking gives clicks and drags without flooding an editor with
+        // every pointer movement, while the host still decodes motion reports
+        // from terminals that send them.
+        self.out.writeAll("\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[0m\x1b[2J\x1b[H") catch {};
         self.out.flush() catch {};
     }
 
@@ -835,6 +847,14 @@ pub const Host = struct {
         // is the natural end of a frame.
         if (self.screen.buffer.items.len != 0) try self.present();
 
+        const size = windowSize();
+        if (size.rows != self.screen.last_rows or size.columns != self.screen.last_columns) {
+            self.screen.last_rows = size.rows;
+            self.screen.last_columns = size.columns;
+            self.screen.event = .{};
+            return .{ .name = "resize" };
+        }
+
         while (true) {
             if (self.screen.pending_used != 0) {
                 std.mem.copyForwards(
@@ -848,7 +868,10 @@ pub const Host = struct {
             const decoded = key_mod.decode(self.screen.pending[0..self.screen.pending_len]);
             if (decoded.used != 0) {
                 self.screen.pending_used = decoded.used;
-                if (keyView(&self.screen.control_name, decoded.key)) |view| return view;
+                if (keyView(&self.screen.control_name, decoded.key)) |view| {
+                    self.screen.event = view.event;
+                    return view;
+                }
                 continue;
             }
             // A full buffer that decodes to nothing is not going to
@@ -863,7 +886,10 @@ pub const Host = struct {
                 self.screen.handle,
                 self.screen.pending[self.screen.pending_len..],
             ) catch 0;
-            if (count == 0) return null;
+            if (count == 0) {
+                self.screen.event = .{};
+                return null;
+            }
             self.screen.pending_len += count;
         }
     }
@@ -899,6 +925,13 @@ pub const Host = struct {
         /// Where a control key's name ("ctrl_s") is written, so naming
         /// one costs no allocation.
         control_name: [6]u8 = undefined,
+        /// Numeric data belonging to the most recently returned terminal
+        /// event.  `term_event_data` reads this after `key_read`; the host
+        /// owns it and every field is reset when input ends or the window
+        /// changes.
+        event: EventData = .{},
+        last_rows: i64 = 0,
+        last_columns: i64 = 0,
     };
 
     // -- the services, as the C table -----------------------------------
@@ -1247,6 +1280,10 @@ pub const Host = struct {
         return .yes;
     }
 
+    fn cTermEventData(context: ?*anyopaque, field: i64) callconv(.c) i64 {
+        return of(context).screen.event.field(field);
+    }
+
     fn cKeyRead(
         context: ?*anyopaque,
         name: *[*]const u8,
@@ -1417,12 +1454,36 @@ const OpenFile = struct {
 
 const max_file_size = 64 * 1024 * 1024;
 
+/// Numeric data belonging to the most recent terminal input event.
+/// Coordinates are zero based; keyboard and resize events use row/column
+/// zero, button -1, modifiers zero and value zero.  Modifiers use
+/// shift=1, alt=2 and ctrl=4.
+const EventData = struct {
+    row: i64 = 0,
+    column: i64 = 0,
+    button: i64 = -1,
+    modifiers: i64 = 0,
+    value: i64 = 0,
+
+    fn field(self: EventData, number: i64) i64 {
+        return switch (number) {
+            0 => self.row,
+            1 => self.column,
+            2 => self.button,
+            3 => self.modifiers,
+            4 => self.value,
+            else => 0,
+        };
+    }
+};
+
 /// One decoded key as the host sees it, before either boundary copies
 /// it: `name` is static text or `control_name`, `text` points into the
-/// pending input buffer.
+/// pending input buffer, and `event` carries mouse or resize data.
 const KeyView = struct {
     name: []const u8,
     text: []const u8 = "",
+    event: EventData = .{},
 };
 
 /// map a decoded key to its stable Luce-visible event, or null for
@@ -1448,6 +1509,22 @@ fn keyView(control_name: *[6]u8, decoded: key_mod.Key) ?KeyView {
             @memcpy(control_name[0..5], "ctrl_");
             control_name[5] = letter;
             break :blk .{ .name = control_name };
+        },
+        .mouse => |mouse| .{
+            .name = switch (mouse.kind) {
+                .press => "mouse_press",
+                .release => "mouse_release",
+                .drag => "mouse_drag",
+                .move => "mouse_move",
+                .wheel => "mouse_wheel",
+            },
+            .event = .{
+                .row = mouse.row,
+                .column = mouse.column,
+                .button = mouse.button,
+                .modifiers = mouse.modifiers,
+                .value = mouse.value,
+            },
         },
         .none => null,
     };

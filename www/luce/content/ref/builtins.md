@@ -207,6 +207,7 @@ bytes — lives beside it.
 | `term_flush()` | |
 | `key_read() -> string?` | presents the pending frame, then blocks; a stable name, or `none` at end of input |
 | `key_text() -> string` | the payload when the last `key_read` returned `"text"` |
+| `term_event_data(field: long) -> long` | numeric data for the most recent terminal event: row, column, button, modifiers or wheel value; used by `std.os.term.io` |
 
 `key_read` answers `string?` because a keyboard can run dry — the pipe
 driving the program ends, the terminal closes — and then there is

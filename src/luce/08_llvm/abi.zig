@@ -171,7 +171,13 @@ const trace = @import("../runtime/trace.zig");
 /// capture its output and return it to a Luce program.  A command's
 /// non-zero exit is data in the captured text; only failure to start
 /// the shell answers `no` and becomes `io_failed`.
-pub const version: u32 = 14;
+///
+/// 15 — `term_event_data` is appended.  Terminal input still arrives
+/// through the existing `key_read` slot; this number-only query exposes
+/// the mouse coordinates, button, modifiers and wheel value belonging to
+/// the event just read, plus zero for keyboard events.  No earlier field
+/// moves, but the new intrinsic must not index an older table.
+pub const version: u32 = 15;
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the
@@ -440,6 +446,15 @@ pub const TermWriteFn = *const fn (
     text: [*]const u8,
     length: i64,
 ) callconv(.c) Answer;
+
+/// Numeric data belonging to the most recent `key_read`: field 0 is the
+/// zero-based row, 1 the zero-based column, 2 the mouse button, 3 the
+/// modifier bits (shift=1, alt=2, ctrl=4), and 4 the wheel value.  Other
+/// fields answer zero.  Keyboard events use the default values.
+pub const TermEventDataFn = *const fn (
+    context: ?*anyopaque,
+    field: i64,
+) callconv(.c) i64;
 
 /// Block until one key arrives, and describe it: a stable name
 /// ("text", "enter", "ctrl_s", ...) and the inserted text when the name
@@ -728,6 +743,8 @@ pub const Host = extern struct {
     /// Version 14: one host-shell command, captured as text. Appended
     /// so every earlier table field keeps its address.
     shell_run: ?ShellRunFn = null,
+    /// Version 15: numeric data for the most recent terminal input event.
+    term_event_data: ?TermEventDataFn = null,
 };
 
 /// The index of each `Host` field, as the generated code addresses it.
@@ -774,6 +791,7 @@ pub const Slot = enum(u32) {
     worker_spawn = 37,
     worker_join = 38,
     shell_run = 39,
+    term_event_data = 40,
 
     pub const count = @typeInfo(Slot).@"enum".fields.len;
 };

@@ -52,7 +52,7 @@ unscheduled union design, and three measured performance gaps.**
 | Implied-self methods and `static` namespace functions | shipped |
 | Multiple returns into new or existing bindings | shipped |
 | Structured workers with owned `task` joins | shipped |
-| Eight standard modules: `math`, `files`, `strings`, `lists`, `paths`, `os`, `zip`, `json` | shipped |
+| Nine standard modules: `math`, `files`, `strings`, `lists`, `paths`, `os`, `term`, `zip`, `json` | shipped |
 | The bit set: `&` `\|` `^` `~` `<<` `>>` at Go's precedence, hex and binary literals, `_` digit separators | shipped |
 | Visibility: public until a declaration says `private` | shipped |
 | Enums at a chosen integer width, and `match` with every member named | shipped |
@@ -61,10 +61,11 @@ unscheduled union design, and three measured performance gaps.**
 | Two build modes that differ only in what a trap can say | shipped |
 | map lookups O(1); sort O(n log n) and stable by guarantee | shipped |
 
-The compiler-internal serialized module is format **35**. Program-root
+The compiler-internal serialized module is format **36**. Program-root
 containers moved it to 33 by adding a pool, instruction and trap code;
-the later `ownership_cycle` trap moved it once more. The published host
-ABI is **14** because `std.os.shell.run` adds the `shell_run` host slot.
+the later `ownership_cycle` trap, `shell_run` service and `term_event_data`
+intrinsic moved it again. The published host ABI is **15** because the
+last two add host slots.
 
 ## What is measured
 

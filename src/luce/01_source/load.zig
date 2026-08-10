@@ -150,6 +150,7 @@ const standard_modules = [_]struct { name: []const u8, source: []const u8 }{
     .{ .name = "lists", .source = @embedFile("../std/lists.luc") },
     .{ .name = "paths", .source = @embedFile("../std/paths.luc") },
     .{ .name = "os", .source = @embedFile("../std/os.luc") },
+    .{ .name = "term", .source = @embedFile("../std/term.luc") },
     .{ .name = "zip", .source = @embedFile("../std/zip.luc") },
     .{ .name = "json", .source = @embedFile("../std/json.luc") },
 };

@@ -951,8 +951,8 @@ test "the reference keeps implied self and static visible" {
     defer gpa.free(toolchain);
     for ([_][]const u8{
         "Current release label:",
-        "`format_version = 35`",
-        "`abi.version = 14`",
+        "`format_version = 36`",
+        "`abi.version = 15`",
     }) |claim| {
         try std.testing.expect(std.mem.indexOf(u8, toolchain, claim) != null);
     }

@@ -130,6 +130,7 @@ pub const builtins = [_]Builtin{
     .{ .name = "os_available_memory", .kind = .os_available_memory, .host = true },
     .{ .name = "os_cpu_count", .kind = .os_cpu_count, .host = true },
     .{ .name = "shell_run", .kind = .shell_run, .parameters = &.{.{ .name = "command" }}, .host = true },
+    .{ .name = "term_event_data", .kind = .term_event_data, .parameters = &.{.{ .name = "field" }}, .host = true },
 };
 
 /// Names the language spelled once and does not any more, and what to

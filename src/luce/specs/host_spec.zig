@@ -554,6 +554,43 @@ test "terminal builtins drive the host screen and key queue" {
         "24x80\n", session.printed());
 }
 
+test "std.term.io carries mouse coordinates, modifiers, and wheel values" {
+    const keys = [_]agree.World.Key{
+        .{
+            .name = "mouse_press",
+            .row = 6,
+            .column = 10,
+            .button = 0,
+            .modifiers = 1,
+        },
+        .{
+            .name = "mouse_wheel",
+            .row = 8,
+            .column = 4,
+            .value = -1,
+        },
+    };
+    var session = try agree.compare(
+        \\import std.term
+        \\
+        \\func main():
+        \\    let pressed = term.io.read() else ""
+        \\    assert(pressed == "mouse_press")
+        \\    assert(term.io.text() == "")
+        \\    assert(term.io.row() == 6)
+        \\    assert(term.io.column() == 10)
+        \\    assert(term.io.button() == 0)
+        \\    assert(term.io.modifiers() == 1)
+        \\    let wheel = term.io.read() else ""
+        \\    assert(wheel == "mouse_wheel")
+        \\    assert(term.io.row() == 8)
+        \\    assert(term.io.column() == 4)
+        \\    assert(term.io.value() == -1)
+        \\
+    , .{ .world = .{ .keys = &keys } });
+    defer session.deinit();
+}
+
 test "term_style's defaults fill from the table, on both engines" {
     // docs/ARGS.md §3: the table is the builtin's signature, and its
     // two defaults — bg = -1, bold = false — are the whole of what

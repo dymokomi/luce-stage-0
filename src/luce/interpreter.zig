@@ -274,6 +274,10 @@ pub const Terminal = struct {
     ) error{OutOfMemory}!void,
     term_write: *const fn (context: *anyopaque, text: []const u8) error{OutOfMemory}!void,
     term_flush: *const fn (context: *anyopaque) error{OutOfMemory}!void,
+    /// Numeric data belonging to the most recently returned event: row,
+    /// column, button, modifiers, or wheel value by field number.  The
+    /// result is zero for unknown fields and keyboard events use defaults.
+    event_data: *const fn (context: *anyopaque, field: i64) i64,
     /// Blocks until one key arrives, or answers null when no key ever
     /// will — the pipe driving it ended, the terminal closed.  Slices
     /// must stay valid for the evaluation; the host may allocate them
