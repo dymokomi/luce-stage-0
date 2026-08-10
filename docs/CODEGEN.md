@@ -1235,29 +1235,41 @@ change moves.  Absolute times mean nothing off this host — for a
 before/after, use `bench/compare.sh GIT-REF`, which interleaves the
 two on the machine in front of you.
 
-**Taken 2026-08-07, after `list` joined the inline path.**  One run,
-all nine rows: a table is one measurement or it is not a table.  This
-is the one number — where a document quotes a benchmark row it quotes
-the `compute` column here, and says which column it is.
+**Taken 2026-08-10, after the compiler-rt bundling regression was
+found and confined.**  One run, all nine rows: a table is one
+measurement or it is not a table.  This is the one number — where a
+document quotes a benchmark row it quotes the `compute` column here,
+and says which column it is.
 
 | benchmark | C        | luce     | luce/C | compute |
 |-----------|----------|----------|--------|---------|
-| loops     |  82.2 ms |  87.2 ms |  1.06x |   1.06x |
-| math      | 139.1 ms | 110.2 ms |  0.79x |   0.78x |
-| strings   |  21.7 ms |  52.6 ms |  2.43x |   2.67x |
-| arrays    |  44.3 ms |  47.6 ms |  1.07x |   1.06x |
-| arrays32  |   8.1 ms |  43.4 ms |  5.38x |   8.66x |
-| matmul    |  10.9 ms |  12.0 ms |  1.10x |   1.05x |
-| matmul32  |   7.0 ms |   7.8 ms |  1.12x |   1.05x |
-| stats     |  32.8 ms |  35.0 ms |  1.07x |   1.05x |
-| lists     |   8.7 ms |  17.5 ms |  2.03x |   2.60x |
-| floor     |   3.5 ms |   4.2 ms |      - |       - |
+| loops     |  80.5 ms |  84.1 ms |  1.05x |   1.04x |
+| math      | 138.8 ms | 109.2 ms |  0.79x |   0.78x |
+| strings   |  19.9 ms |  50.0 ms |  2.51x |   2.75x |
+| arrays    |  43.5 ms |  46.9 ms |  1.08x |   1.07x |
+| arrays32  |   8.0 ms |  42.8 ms |  5.39x |   7.92x |
+| matmul    |  10.4 ms |  11.7 ms |  1.12x |   1.07x |
+| matmul32  |   6.7 ms |   7.7 ms |  1.15x |   1.09x |
+| stats     |  32.4 ms |  42.5 ms |  1.31x |   1.32x |
+| lists     |   8.1 ms |  16.7 ms |  2.05x |   2.53x |
+| floor     |   3.0 ms |   3.7 ms |      - |       - |
 
-Every row but `lists` is unchanged within noise from the snapshot
-before it, and the A/B below says so with the machine held still.
-`lists` is the row that moved: **29.10x to 2.60x**, which is the
-inline path reaching the container whose buffer moves.  It is read
-below.
+Two stories separate this snapshot from 2026-08-07's, and both are
+worth keeping.  First, "Fix linux compile" (`c2fa6ae`) set
+`bundle_compiler_rt` on `libluce_rt` unconditionally, and the bundled
+generic helpers won the `cc`-driven static link over libSystem's
+optimized ones — measured at +52% on `strings`, +58% on `lists`,
++65% on `stats` and +15–23% on the matmuls (interleaved A/B against
+`545b028`), sitting undetected for a day because the commit ran no
+benchmark.  Bundling is now Linux-only in `build.zig`, where the
+missing-symbol failure it fixes actually occurs, and every row above
+is back within noise of its 2026-08-07 value except one.  Second,
+that one: **`stats` (1.05x → 1.32x) is the recorded price of the
+parked `llvm.minimumnum` vectorization** ("The extrema, and a
+vectorization that is parked" above) — the extremum reduction is
+scalar compare/select again until the intrinsic's x86-64 lowering can
+be trusted, and the two extremum passes are a third of the row's
+work.
 
 **The interleaved A/B, twice, against `822382a`** — the authoritative
 form, because absolute times move with the host.  `compute`:
@@ -1338,13 +1350,14 @@ the surrounding loop vectorizes.
 ### What the two new rows measured
 
 **`matmul32` is the good news and it is unremarkable, which is the
-point.**  1.07x compute against 1.03x for the `double` twin: the
+point.**  1.07x compute against 1.03x for the `double` twin as
+measured that day (1.09x and 1.07x in the 2026-08-10 table above): the
 binary32 inner loop vectorizes on both sides, four lanes where the
 64-bit one got two, and Luce keeps pace.  Whatever the resize cost, it
 did not cost this.
 
-**`arrays32` is 8.14x, and it is not a 32-bit problem.**  The
-measurement that says so:
+**`arrays32` is 8.14x — of its day; 7.92x in the current table —
+and it is not a 32-bit problem.**  The measurement that says so:
 
 | dot product | C       | luce    |
 |-------------|---------|---------|

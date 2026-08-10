@@ -46,7 +46,19 @@ pub fn build(b: *std.Build) void {
     });
     // The final .lc/exe link is driven by the host's `cc`, so it does not
     // automatically supply Zig's compiler-rt symbols to this archive.
-    runtime_library.bundle_compiler_rt = true;
+    // The final .lc/exe link is driven by the host's `cc`.  On Linux
+    // that link does not supply Zig's compiler-rt symbols to this
+    // archive, so there the archive must carry them.  On macOS it
+    // must NOT: Apple's link resolves everything the archive needs,
+    // and bundling was measured at ~+50% on every runtime-call-heavy
+    // benchmark row (strings, lists, stats; matmul's row walks too —
+    // bench/compare.sh against 545b028, 2026-08-10), consistent with
+    // compiler-rt's generic helpers winning the static link over
+    // libSystem's optimized ones.  If a Linux host shows the same
+    // shape, the fix is supplying the missing symbols narrowly, not
+    // un-bundling — the missing-symbol failure is a broken build,
+    // which is worse than a slow one.
+    runtime_library.bundle_compiler_rt = target.result.os.tag != .macos;
     // Installed rather than only built, and named here, because the
     // bundled programs below are linked against the *installed* copy:
     // compiling one is a link, and a link needs a library on a path

@@ -7,7 +7,7 @@ would cost.
 
 The occasion is one row.  `bench/arrays32` sits at **8.14× its C twin
 on the compute column** (`docs/CODEGEN.md` is the one place that
-number is written down) [8.66× in that table as of 2026-08-10 — the
+number is written down) [7.92× in that table as of 2026-08-10 — the
 row has drifted with the tree, the cause has not], and the cause is not the 32-bit width, not
 the row resolution, and not allocation.  It is that every `+` and
 every `*` in Luce carries an overflow test, a checked reduction
@@ -892,7 +892,7 @@ cross-compilation (item 8) is the largest backend item outstanding.  This work g
 **after the two small in-flight items and before cross-compilation**,
 because `docs/MISSING.md`'s own summary says the runtime's outstanding
 item is speed and names `strings` at 2.74× — and `arrays32` at 8.14×
-is now the worse row by a factor of three [2.67× and 8.66× in the
+is now the worse row by a factor of three [2.75× and 7.92× in the
 2026-08-10 table; the ranking stands].
 
 **Step 0 — the ceiling. Half a day. Gates everything.**
@@ -932,7 +932,7 @@ to Step 2's emitter, and the first integer whole-array operations in
 `std.math` become worth writing.
 
 **What success is.**  `arrays32` at ≈3× its C twin on the compute
-column instead of 8.14× [8.66× today]; `arrays16` at parity; every other row inside
+column instead of 8.14× [7.92× today]; `arrays16` at parity; every other row inside
 2% under `bench/compare.sh`; 1187 tests plus the new specs green; and
 the oracle still trapping on every element it traps on today, which is
 the only number that was never negotiable.
