@@ -5284,6 +5284,24 @@ test "luce.sema.let: every assignment form refuses a let, not only the plain one
         \\    left, right = pair()
         \\
     , "luce.sema.const", "left is a file-scope constant");
+
+    // A writing method is a mutation of its receiver, so a file-scope
+    // constant refuses it in the constants family too — and never
+    // silently drops the call (the compile that reports success while
+    // deleting a statement is the one failure a build cannot see).
+    try expectSaying(
+        \\struct Counter:
+        \\    value: long
+        \\
+        \\    func bump():
+        \\        self.value += 1
+        \\
+        \\const START = Counter(value = 1)
+        \\
+        \\func main():
+        \\    START.bump()
+        \\
+    , "luce.sema.const", "START is a file-scope constant; bump writes its implicit self");
 }
 
 test "luce.sema.field: an unknown field is named wherever the chain meets it" {

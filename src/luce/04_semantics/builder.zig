@@ -8965,7 +8965,20 @@ pub const FunctionBuilder = struct {
     ) Error!?LocalId {
         switch (method.target.*) {
             .name => |name| {
-                const found = self.findLocal(name.text) orelse return null;
+                const found = self.findLocal(name.text) orelse {
+                    const qualified = try self.analyzer.qualify(self.prefix, name.text);
+                    if (self.analyzer.constant_names.contains(qualified)) {
+                        try self.fail(
+                            "luce.sema.const",
+                            name.span,
+                            "{s} is a file-scope constant; {s} writes its implicit self — assign it to a var first",
+                            .{ name.text, method.name },
+                        );
+                    } else {
+                        try self.failUnknownName(name.text, name.span);
+                    }
+                    return null;
+                };
                 if (!found.info.mutable) {
                     try self.fail(
                         "luce.sema.let",
