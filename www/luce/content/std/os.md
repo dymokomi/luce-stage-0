@@ -1,7 +1,8 @@
 # std.os
 
 What machine is this? Three numbers, over the three host builtins that
-ask for them.
+ask for them, plus the small host-shell seam used by tools such as the
+example editor.
 
 ```
 import std.os
@@ -19,6 +20,7 @@ written rather than where it would run.
 | `os.available_memory() -> long` | bytes it could still hand out. This one **moves**: ask twice and expect two answers |
 | `os.cpu_count() -> long` | processors the host would schedule work onto — logical ones, so simultaneous multithreading counts threads |
 | `os.used_memory() -> long` | total minus available; never negative |
+| `os.shell.run(command: string) -> string!` | captured stdout/stderr followed by the command's exit status; quote arguments for the host shell |
 
 ```luce run
 import std.os
@@ -43,6 +45,10 @@ The sample prints relations rather than numbers because this page is
 built on a real machine and yours is a different one. Everything above
 holds on every machine; the numbers hold on none but the one that
 printed them.
+
+`os.shell.run` is deliberately a tool boundary rather than a portable
+process API. It runs one command string through the host shell, and a
+host that cannot start that shell reports `io_failed`.
 
 Note what it does *not* claim: that `used_memory()` equals
 `total - available` for the `available` read a line earlier. It takes

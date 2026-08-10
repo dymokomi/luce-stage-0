@@ -15,6 +15,7 @@
 //! loom's own (`apps/host.zig` names the numbers).
 
 const std = @import("std");
+const files = @import("files");
 const runner = @import("runner.zig");
 const palette_mod = @import("palette.zig");
 const report = @import("report");
@@ -22,6 +23,9 @@ const report = @import("report");
 const Allocator = std.mem.Allocator;
 
 const embedded_editor = @embedFile("editor.luc");
+const embedded_editor_files = [_]files.MemoryFile{
+    .{ .name = "editor_model", .source = @embedFile("editor_model.luc") },
+};
 
 pub const Shell = struct {
     gpa: Allocator,
@@ -138,8 +142,8 @@ pub const Shell = struct {
             ) };
         }
         if (std.mem.eql(u8, command, "edit")) {
-            if (rest.len != 1) return self.complain("edit FILE");
-            return .{ .status = try self.edit(rest[0]) };
+            if (rest.len == 0) return self.complain("edit FILE [FILE ...]");
+            return .{ .status = try self.edit(rest) };
         }
 
         // A bare program path runs directly: hello.lc, tools/fmt.luc 2 3.
@@ -175,13 +179,13 @@ pub const Shell = struct {
         return .{ .status = report.exit_trapped };
     }
 
-    /// Run the editor on one file: the LOOM_EDITOR script when set,
-    /// the embedded editor otherwise.
-    pub fn edit(self: *Shell, path: []const u8) !u8 {
-        const arguments = [_][]const u8{path};
+    /// Run the editor on one or more files: the LOOM_EDITOR script when
+    /// set, the embedded editor otherwise.
+    pub fn edit(self: *Shell, arguments: []const []const u8) !u8 {
         if (self.editor_override) |editor_path| {
-            return runner.runScript(self.gpa, self.io, self.out, self.err, self.policy, editor_path, &arguments);
+            return runner.runScript(self.gpa, self.io, self.out, self.err, self.policy, editor_path, arguments);
         }
+        var loader: files.MemoryLoader = .{ .files = &embedded_editor_files };
         return runner.runSource(
             self.gpa,
             self.io,
@@ -190,8 +194,8 @@ pub const Shell = struct {
             self.policy,
             "editor",
             embedded_editor,
-            null,
-            &arguments,
+            loader.loader(),
+            arguments,
         );
     }
 
@@ -202,7 +206,7 @@ pub const Shell = struct {
         try self.out.print(
             "  {s}run{s} PROGRAM.lc [ARGS]   {s}run a compiled Luce program{s}\n" ++
                 "  {s}luce{s} PROGRAM.luc [ARGS] {s}compile and run a Luce source file{s}\n" ++
-                "  {s}edit{s} FILE              {s}open the Luce editor (LOOM_EDITOR overrides){s}\n" ++
+                "  {s}edit{s} FILE [FILE ...]     {s}open the Luce editor (LOOM_EDITOR overrides){s}\n" ++
                 "  {s}clear{s}                  {s}clear the screen{s}\n" ++
                 "  {s}exit{s}                   {s}leave loom{s}\n" ++
                 "  {s}a bare PROGRAM.lc or .luc path runs it directly{s}\n",
@@ -428,11 +432,16 @@ test "clear writes the escape sequence only where escapes are read" {
 test "every command that takes a file says so when it is given none" {
     try expectRejected("run", "run PROGRAM.lc [ARGS]");
     try expectRejected("luce", "luce PROGRAM.luc [ARGS]");
-    try expectRejected("edit", "edit FILE");
-    // `edit` takes exactly one, so a second is refused rather than
-    // ignored: an editor opening the wrong file is worse than one that
-    // does not open.
-    try expectRejected("edit one.txt two.txt", "edit FILE");
+    try expectRejected("edit", "edit FILE [FILE ...]");
+}
+
+test "edit passes multiple files to the selected editor" {
+    var ran: Dispatched = undefined;
+    try ran.of("edit one.txt two.txt", false, "no/such/editor.luc");
+    defer ran.deinit();
+    try testing.expect(ran.outcome.keep_going);
+    try testing.expectEqual(@as(u8, 1), ran.outcome.status);
+    try testing.expect(std.mem.indexOf(u8, ran.err.written(), "no/such/editor.luc") != null);
 }
 
 test "a command nobody has is named back, and counts as a line that failed" {
@@ -498,9 +507,11 @@ test "an interactive loom always leaves cleanly" {
 }
 
 test "the embedded editor source compiles as a hosted script" {
-    var result = try @import("luce").compile.compile(
+    var loader: files.MemoryLoader = .{ .files = &embedded_editor_files };
+    var result = try @import("luce").compile.compileProject(
         testing.allocator,
         embedded_editor,
+        loader.loader(),
         runner.compile_options,
     );
     defer result.deinit();

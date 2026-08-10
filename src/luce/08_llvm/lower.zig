@@ -513,6 +513,11 @@ const Module = struct {
                 .normal,
             ),
             .worker_join => builder.fnType(.i32, &.{ .ptr, .i64 }, .normal),
+            .shell_run => builder.fnType(
+                .i32,
+                &.{ .ptr, .ptr, .i64, .ptr, .ptr },
+                .normal,
+            ),
         };
     }
 
@@ -4737,6 +4742,66 @@ const Body = struct {
         });
     }
 
+    /// `shell_run(command)` — the host returns captured text through an
+    /// out-parameter. A command's exit status is part of that text; only
+    /// failure to start the shell takes the error path.
+    fn emitShellRun(self: *Body, register: mir.Register, command_register: mir.Register) Error!void {
+        const command, const command_length = try self.textParts(command_register, "command");
+        const output = try self.hostText("shell.output");
+        try output.clear(self);
+        const answer = try self.callHost(
+            .shell_run,
+            &.{ command, command_length, output.text, output.length },
+            "shell",
+        );
+
+        const box = try self.scratch(self.module.value_type, value_alignment, "shell.box");
+        const outcome_slot = try self.scratch(.i32, Builder.Alignment.fromByteUnits(4), "shell.outcome");
+        const failing = try self.wip.block(1, "shell.failed");
+        const running = try self.wip.block(1, "shell.ok");
+        const done = try self.wip.block(2, "shell.done");
+        _ = try self.wip.brCond(try self.saidNo(answer), failing, running, .else_likely);
+
+        self.seek(failing);
+        try self.emitRaiseIo(.run, command, command_length);
+        _ = try self.wip.store(
+            .normal,
+            try self.module.builder.intValue(.i32, outcome_errored),
+            outcome_slot,
+            Builder.Alignment.fromByteUnits(4),
+        );
+        try self.fillBoxShape(box, .string);
+        try self.fillBoxValue(box, .string, (try self.module.textConstant("")).toValue());
+        _ = try self.wip.br(done);
+
+        self.seek(running);
+        const bytes, const size = try output.load(self);
+        try self.callChecked(.luce_rt_intern_text, &.{
+            self.runtime,
+            bytes,
+            size,
+            box,
+        });
+        _ = try self.wip.store(
+            .normal,
+            try self.module.builder.intValue(.i32, outcome_ok),
+            outcome_slot,
+            Builder.Alignment.fromByteUnits(4),
+        );
+        _ = try self.wip.br(done);
+
+        self.seek(done);
+        self.produced[register].value = try self.unboxed(.string, box, "shell.value");
+        self.produced[register].box = box;
+        self.produced[register].outcome = try self.wip.load(
+            .normal,
+            .i32,
+            outcome_slot,
+            Builder.Alignment.fromByteUnits(4),
+            "shell.outcome",
+        );
+    }
+
     /// `dir_list(path)` — the names the host joined, as the
     /// `List(String)` the program asked for.
     ///
@@ -6883,6 +6948,7 @@ const Body = struct {
                 "line",
             ),
             .env_get => try self.emitMaybeText(register, .env, of[0], "env"),
+            .shell_run => try self.emitShellRun(register, of[0]),
             .print_error => {
                 const text, const length = try self.textParts(of[0], "diagnostic");
                 _ = try self.callHost(.print_error, &.{ text, length }, "reported");

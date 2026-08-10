@@ -28,6 +28,10 @@ const testing = std.testing;
 /// The program itself, not a copy of it.  A test that pins a
 /// transcript against its own inline copy of a program pins nothing.
 const editor = @embedFile("editor.luc");
+const editor_model = @embedFile("editor_model.luc");
+const editor_files = [_]agree.File{
+    .{ .name = "editor_model", .source = editor_model },
+};
 
 /// Every key the editor handles, in an order where each one can be
 /// seen to have changed what the next one did: type, move by word and
@@ -70,7 +74,9 @@ fn drive() !agree.Session {
     var world: agree.World = .withFile("notes.txt", "hello\nworld\n");
     world.arguments = &[_][]const u8{"notes.txt"};
     world.keys = &script;
-    return agree.compare(editor, .{ .world = world });
+    var program = try agree.project(editor, &editor_files);
+    defer program.deinit();
+    return agree.compareProgram(&program, .{ .world = world });
 }
 
 test "the editor draws the same frames, key for key, on both engines" {
@@ -93,7 +99,7 @@ test "the editor draws the same frames, key for key, on both engines" {
     // said could go quietly wrong.
     try testing.expectEqual(@as(usize, 31856), session.printed().len);
     try testing.expectEqual(
-        @as(u64, 6306024964287991885),
+        @as(u64, 5049734095918354461),
         std.hash.Wyhash.hash(0, session.printed()),
     );
 }
@@ -131,7 +137,9 @@ test "Enter carries indentation and opens one level after a code colon" {
     var world: agree.World = .withFile("notes.txt", "");
     world.arguments = &[_][]const u8{"notes.txt"};
     world.keys = &keys;
-    var session = try agree.compare(editor, .{ .world = world });
+    var program = try agree.project(editor, &editor_files);
+    defer program.deinit();
+    var session = try agree.compareProgram(&program, .{ .world = world });
     defer session.deinit();
 
     try testing.expectEqualStrings(
@@ -156,7 +164,9 @@ test "a save that will not land says what the runtime said, not what the editor 
     world.arguments = &[_][]const u8{"notes.txt"};
     world.keys = &keys;
     world.refuse_writes = true;
-    var session = try agree.compare(editor, .{ .world = world });
+    var program = try agree.project(editor, &editor_files);
+    defer program.deinit();
+    var session = try agree.compareProgram(&program, .{ .world = world });
     defer session.deinit();
 
     const shown = try screenText(session.printed());
@@ -164,6 +174,47 @@ test "a save that will not land says what the runtime said, not what the editor 
     try testing.expect(std.mem.indexOf(u8, shown, "cannot write notes.txt") != null);
     // The write was refused, so nothing about the file moved.
     try testing.expectEqualStrings("hello\n", session.file().?.content);
+}
+
+test "Ctrl-B saves, runs the current file and shows the host transcript" {
+    const keys = [_]agree.World.Key{
+        .{ .name = "ctrl_b" },
+        .{ .name = "ctrl_q" },
+    };
+    var world: agree.World = .withFile("notes.txt", "print(\"hello\")\n");
+    world.arguments = &[_][]const u8{"notes.txt"};
+    world.keys = &keys;
+    var program = try agree.project(editor, &editor_files);
+    defer program.deinit();
+    var session = try agree.compareProgram(&program, .{ .world = world });
+    defer session.deinit();
+
+    const shown = try screenText(session.printed());
+    defer testing.allocator.free(shown);
+    try testing.expect(std.mem.indexOf(u8, shown, "mock shell: loom luce 'notes.txt'") != null);
+    try testing.expect(std.mem.indexOf(u8, shown, "exit status: 0") != null);
+    try testing.expect(std.mem.indexOf(u8, shown, "+- output ") != null);
+}
+
+test "the file pane is optional and receives focus through the pane cycle" {
+    const keys = [_]agree.World.Key{
+        .{ .name = "ctrl_e" },
+        .{ .name = "ctrl_w" },
+        .{ .name = "ctrl_q" },
+    };
+    var world: agree.World = .withFile("notes.txt", "hello\n");
+    world.arguments = &[_][]const u8{"notes.txt"};
+    world.keys = &keys;
+    var program = try agree.project(editor, &editor_files);
+    defer program.deinit();
+    var session = try agree.compareProgram(&program, .{ .world = world });
+    defer session.deinit();
+
+    const shown = try screenText(session.printed());
+    defer testing.allocator.free(shown);
+    try testing.expect(std.mem.indexOf(u8, shown, "alpha.txt") != null);
+    try testing.expect(std.mem.indexOf(u8, shown, "[files]") != null);
+    try testing.expect(std.mem.indexOf(u8, shown, "+ files") != null);
 }
 
 /// The characters a transcript put on the screen, with the frame

@@ -12,9 +12,21 @@ bundled program is a link.  `loom` links no LLVM, so a machine that
 only *runs* Luce programs needs none.
 
 ```sh
-./build.sh   # installs build/luce, build/loom, build/lib/libluce_rt.a,
-             # build/examples/<name>/<name>.lc
+./build.sh   # installs build/luce, build/loom, build/editor,
+             # build/lib/*, and build/examples/<name>/<name>.lc
 ```
+
+`VERSION` is the one shared two-component release label during the 0.x
+series; both binaries expose it with `--version`. It is separate from the
+module format and host ABI versions.
+
+`./install.sh` is for a user-local daily-use snapshot on macOS or Linux. It
+builds ReleaseSafe by default, copies both binaries and both static libraries
+under `~/.local`, and adds `~/.local/bin` to the user shell profile without
+using `sudo`. `--no-build`, `--no-path`, and `--prefix DIR` are available for
+existing builds, profile-free installs, and another user-owned prefix. Keep
+tests and benchmarks on their explicit `build/` paths; an installed snapshot
+must not silently become the thing they exercise.
 
 `build.zig` finds LLVM by asking `llvm-config`, on `PATH` or in the
 usual Homebrew and distribution prefixes; `-Dllvm-config=PATH` points

@@ -6,8 +6,8 @@ it — an interactive shell, and a command line.
 
 ## Getting the toolchain
 
-There is no installer and no package. You build it from the
-repository, with [Zig 0.16](https://ziglang.org/) and LLVM:
+You can build it from the repository, with [Zig 0.16](https://ziglang.org/)
+and LLVM:
 
 ```sh
 git clone https://github.com/dymokomi/luciaos
@@ -15,12 +15,17 @@ cd luciaos
 ./build.sh
 ```
 
-That writes `build/luce`, `build/loom` and `build/lib/libluce_rt.a`.
-LLVM is needed to build `luce`, because Luce's one code generator
-calls libLLVM in process — `brew install llvm` or `apt install
-llvm-dev` is enough, and `zig build -Dllvm-config=/path/to/llvm-config`
-points the build at an installation somewhere unusual. `loom` links no
-LLVM at all, so a machine that only *runs* Luce programs needs none.
+That writes `build/luce`, `build/loom` and the build-tree libraries. For a
+user-local daily-use install on macOS or Linux, run `./install.sh`; it copies
+both tools and their libraries under `~/.local`, updates the appropriate user
+shell profile, and never needs `sudo`. Repository tests and benchmarks keep
+using the explicit `build/` tools.
+
+LLVM is needed to build `luce`, because Luce's one code generator calls
+libLLVM in process — `brew install llvm` or `apt install llvm-dev` is enough,
+and `zig build -Dllvm-config=/path/to/llvm-config` points the build at an
+installation somewhere unusual. `loom` links no LLVM at all, so a machine
+that only *runs* Luce programs needs none.
 
 ## The smallest program
 

@@ -1,0 +1,14 @@
+# The editor's durable per-file state.
+#
+# The terminal view may switch away from a file, but a buffer keeps its
+# text, cursor and scroll position so returning to it does not lose the
+# work that is not on disk yet.  The root editor owns the active view and
+# the host effects; this module owns only the data that can be parked.
+
+struct Buffer:
+    path: string
+    content: string
+    message: string = ""
+    cursor: long = 0
+    scroll: long = 0
+    dirty: bool = false

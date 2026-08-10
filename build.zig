@@ -22,6 +22,7 @@ const builtin = @import("builtin");
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    const project_version = readProjectVersion(b);
 
     const llvm = discoverLlvm(b);
 
@@ -119,6 +120,9 @@ pub fn build(b: *std.Build) void {
     specs.addAnonymousImport("editor.luc", .{
         .root_source_file = b.path("examples/editor/editor.luc"),
     });
+    specs.addAnonymousImport("editor_model.luc", .{
+        .root_source_file = b.path("examples/editor/editor_model.luc"),
+    });
 
     // The five files of the adventure engine, for the same reason and
     // by the same road: a spec that drives the game has to drive the
@@ -212,6 +216,9 @@ pub fn build(b: *std.Build) void {
     // arrives under a name instead.
     grammar_generator.addAnonymousImport("editor.luc", .{
         .root_source_file = b.path("examples/editor/editor.luc"),
+    });
+    grammar_generator.addAnonymousImport("editor_model.luc", .{
+        .root_source_file = b.path("examples/editor/editor_model.luc"),
     });
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = grammar_generator })).step);
 
@@ -359,6 +366,7 @@ pub fn build(b: *std.Build) void {
     // does — the point of those tests is that the *product* path
     // links, loads and runs, not that a private one does.
     const installed_libraries = b.addOptions();
+    installed_libraries.addOption([]const u8, "version", project_version);
     installed_libraries.addOptionPath("luce_rt_library", runtime_library.getEmittedBin());
     installed_libraries.addOptionPath("luce_start_library", start_library.getEmittedBin());
     compiler_module.addOptions("build_options", installed_libraries);
@@ -403,6 +411,7 @@ pub fn build(b: *std.Build) void {
         },
     });
     const compiler_pieces = b.addOptions();
+    compiler_pieces.addOption([]const u8, "version", project_version);
     compiler_pieces.addOptionPath("luce_binary", compiler.getEmittedBin());
     compiler_pieces.addOptionPath("luce_rt_library", runtime_library.getEmittedBin());
     compiler_pieces.addOptionPath("luce_start_library", start_library.getEmittedBin());
@@ -426,6 +435,12 @@ pub fn build(b: *std.Build) void {
     terminal_module.addAnonymousImport("editor.luc", .{
         .root_source_file = b.path("examples/editor/editor.luc"),
     });
+    terminal_module.addAnonymousImport("editor_model.luc", .{
+        .root_source_file = b.path("examples/editor/editor_model.luc"),
+    });
+    const terminal_options = b.addOptions();
+    terminal_options.addOption([]const u8, "version", project_version);
+    terminal_module.addOptions("build_options", terminal_options);
     const terminal = b.addExecutable(.{ .name = "loom", .root_module = terminal_module });
     const install_terminal = b.addInstallArtifact(terminal, .{
         .dest_dir = .{ .override = .prefix },
@@ -453,6 +468,7 @@ pub fn build(b: *std.Build) void {
         },
     });
     const binaries = b.addOptions();
+    binaries.addOption([]const u8, "version", project_version);
     binaries.addOptionPath("loom_binary", terminal.getEmittedBin());
     binaries.addOptionPath("luce_binary", compiler.getEmittedBin());
     binaries.addOptionPath("luce_rt_library", runtime_library.getEmittedBin());
@@ -528,6 +544,29 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&compile_program.step);
     }
 
+    // The editor is also useful as a standalone command.  Keep this
+    // executable in the build graph beside the `.lc`: the source and its
+    // imported model are explicit inputs, so editing either one rebuilds
+    // the executable instead of leaving the old copy from
+    // `examples/build_examples.sh` in place.
+    const compile_editor = b.addRunArtifact(compiler);
+    compile_editor.addArg("build");
+    compile_editor.addFileArg(b.path("examples/editor/editor.luc"));
+    compile_editor.addArg("--emit=exe");
+    compile_editor.addArg("--release");
+    compile_editor.addArg("-o");
+    const editor_executable = compile_editor.addOutputFileArg("editor");
+    compile_editor.addFileInput(b.path("examples/editor/editor_model.luc"));
+    compile_editor.addFileInput(b.path("src/luce/std/os.luc"));
+    compile_editor.step.dependOn(&start_library.step);
+    compile_editor.addFileInput(start_library.getEmittedBin());
+    linkAgainstRuntime(compile_editor, install_runtime, runtime_directory, runtime_library);
+    const install_editor = b.addInstallFile(editor_executable, "editor");
+    const install_editor_example = b.addInstallFile(editor_executable, "examples/editor/editor");
+    b.getInstallStep().dependOn(&install_editor.step);
+    b.getInstallStep().dependOn(&install_editor_example.step);
+    test_step.dependOn(&compile_editor.step);
+
     // The benchmark programs compile under test too, so bench/*.luc
     // cannot rot; timing them stays manual (bench/run.sh).  Every name
     // bench/run.sh times is here — a guard that covers all but one
@@ -567,6 +606,43 @@ fn linkAgainstRuntime(
     run.setEnvironmentVariable("LUCE_LIB", directory);
     run.step.dependOn(&install_runtime.step);
     run.addFileInput(runtime_library.getEmittedBin());
+}
+
+/// The public toolchain release is intentionally a two-component number
+/// during the 0.x series.  Keep its grammar here so every binary in a build
+/// receives the same value from the one repository source.
+fn readProjectVersion(b: *std.Build) []const u8 {
+    const raw = b.build_root.handle.readFileAlloc(
+        b.graph.io,
+        "VERSION",
+        b.allocator,
+        .unlimited,
+    ) catch |failure| std.process.fatal(
+        "cannot read VERSION: {s}",
+        .{@errorName(failure)},
+    );
+    const version = std.mem.trim(u8, raw, " \t\r\n");
+    if (!validProjectVersion(version)) std.process.fatal(
+        "VERSION must contain two numeric components such as 0.18, got {s}",
+        .{version},
+    );
+    return version;
+}
+
+fn validProjectVersion(version: []const u8) bool {
+    var parts = std.mem.splitScalar(u8, version, '.');
+    const major = parts.next() orelse return false;
+    const minor = parts.next() orelse return false;
+    if (parts.next() != null) return false;
+    return validVersionPart(major) and validVersionPart(minor);
+}
+
+fn validVersionPart(part: []const u8) bool {
+    if (part.len == 0 or (part.len > 1 and part[0] == '0')) return false;
+    for (part) |character| {
+        if (character < '0' or character > '9') return false;
+    }
+    return true;
 }
 
 // ---------------------------------------------------------------------------

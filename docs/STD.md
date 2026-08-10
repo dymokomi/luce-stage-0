@@ -328,7 +328,8 @@ bare name's directory is `"."` rather than `""` — and
 What machine is this?  Three numbers, over the three host builtins
 that ask for them.  Hosted: the machine's size is the world's business
 and not the program's, so every function here is behind the host gate
-like `print` and `file_read`.
+like `print` and `file_read`.  This module also owns the deliberately
+small shell seam used by host tools such as the example editor.
 
 ```
 import std.os
@@ -339,7 +340,17 @@ os.cpu_count()              # long — logical processors
 os.used_memory()            # long — total minus available, both read
                             # here: it does not equal a difference you
                             # computed from readings taken elsewhere
+
+try os.shell.run("loom luce examples/hello.luc")
+                            # string! — captured stdout/stderr and exit status
 ```
+
+`os.shell.run(command)` sends one command string to the host shell and
+returns its combined standard output and standard error, followed by a
+line describing the exit status. Quote paths and other arguments for that
+shell. It is host-gated and fallible: a shell the host cannot start is an
+`io_failed` error. This is a tool boundary, not a portable process or
+argument-vector API.
 
 Nothing here answers `?` or `!`.  A fact the host knows is a number; a
 fact it does not know is a **refusal** — `host_unavailable`, the same

@@ -77,7 +77,8 @@ pub const builtins = [_][]const u8{
     "file_append",     "file_exists",         "file_delete",  "file_rename", "dir_list",
     "term_rows",       "term_cols",           "term_clear",   "term_move",   "term_style",
     "term_write",      "term_flush",          "key_read",     "key_text",    "exit",
-    "os_total_memory", "os_available_memory", "os_cpu_count", "file_open",   "parse_string",
+    "os_total_memory", "os_available_memory", "os_cpu_count", "shell_run",   "file_open",
+    "parse_string",
 };
 
 /// Names that mean something only behind a receiver: `xs.append(v)`,

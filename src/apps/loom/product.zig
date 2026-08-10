@@ -48,6 +48,7 @@ const Allocator = std.mem.Allocator;
 const Install = harness.Install;
 const Ran = harness.Ran;
 const environmentWith = harness.environmentWith;
+const expected_version = std.fmt.comptimePrint("loom {s}\n", .{build_options.version});
 
 // ---------------------------------------------------------------------------
 // A miniature install tree
@@ -90,6 +91,18 @@ fn runLoom(
     try argv.append(gpa, loom);
     try argv.appendSlice(gpa, arguments);
     return install.spawn(gpa, argv.items, .{ .environment = environment, .input = script });
+}
+
+test "loom reports the project version without a compiler" {
+    const gpa = testing.allocator;
+    var install = try installTree(gpa, false);
+    defer install.deinit(gpa);
+
+    var ran = try runLoom(gpa, &install, &.{"--version"}, null, null);
+    defer ran.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), ran.status);
+    try testing.expectEqualStrings(expected_version, ran.out);
+    try testing.expectEqualStrings("", ran.err);
 }
 
 /// Run the compiler in the tree — for the tests that need a real
@@ -377,15 +390,14 @@ test "every form loom does not have answers with usage, and every usage names th
 
     // A command nobody has; a path that is neither of the two
     // extensions loom knows; and each of the three commands with the
-    // file left off.  `edit` takes exactly one file, so two is refused
-    // rather than half-obeyed.
+    // file left off.  `edit` accepts one or more files, so a multi-file
+    // invocation is intentionally not in this refusal table.
     const wrong = [_][]const []const u8{
         &.{"polish"},
         &.{"notes.txt"},
         &.{"run"},
         &.{"luce"},
         &.{"edit"},
-        &.{ "edit", "one.txt", "two.txt" },
     };
     for (wrong) |arguments| {
         var ran = try runLoom(gpa, &install, arguments, null, null);
@@ -396,7 +408,7 @@ test "every form loom does not have answers with usage, and every usage names th
         for ([_][]const u8{
             "loom run PROGRAM.lc",
             "loom luce PROGRAM.luc",
-            "loom edit FILE",
+            "loom edit FILE [FILE ...]",
         }) |form| {
             try testing.expect(ran.saysErr(form));
         }

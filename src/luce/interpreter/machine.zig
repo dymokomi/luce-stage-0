@@ -1720,6 +1720,17 @@ pub const Machine = struct {
                     return .none;
                 return self.runtime.ownValue(.ofString(found));
             },
+            .shell_run => {
+                const host = try self.service();
+                const callback = host.shell_run orelse
+                    return self.runtime.fail(.host_unavailable);
+                const command = registers[arguments[0]].asString();
+                const output = (try callback(host.context, self.arena, command)) orelse {
+                    self.runtime.raiseIo(.run, command, self.placeOf(site));
+                    return .ofString("");
+                };
+                return self.runtime.ownValue(.ofString(output));
+            },
             .file_exists => {
                 const host = try self.service();
                 const callback = host.file_exists orelse return self.runtime.fail(.host_unavailable);

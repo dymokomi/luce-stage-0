@@ -41,12 +41,28 @@ only *runs* Luce programs needs none at all.  `cc` is a prerequisite
 of building at all, because compiling a bundled program is a link:
 
 ```sh
-./build.sh         # installs build/luce, build/loom, build/lib/libluce_rt.a, build/examples/<name>/<name>.lc
+./build.sh         # installs build/luce, build/loom, build/editor, libraries, and bundled examples
+./install.sh       # builds ReleaseSafe and installs a user-local snapshot
 zig build test     # ~5 min: the executable specification (every program
                    # run on both the compiled path and the test suite's
                    # reference implementation, and compared) + language,
                    # compiler, terminal and documentation-site suites
 ```
+
+`VERSION` is the shared public release label, currently `0.18`. During the
+0.x series it intentionally has two numeric components: increment the second
+component for each release, and reserve `1.0` for the point where the public
+interface is considered stable. `luce --version` and `loom --version` report
+the same label; it is separate from the serialized module format and host ABI
+versions.
+
+For daily use on macOS or Linux, `./install.sh` copies `luce`, `loom`,
+`editor`, `libluce_rt.a`, and `libluce_start.a` to `~/.local/bin` and `~/.local/lib`,
+then adds the bin directory to the appropriate user shell profile. It never
+needs `sudo`. Use `./install.sh --no-build` to install an existing `build/`
+tree, or `--no-path` to leave shell profiles unchanged. Tests and benchmarks
+continue to invoke `build/luce` and `build/loom` explicitly, so installing a
+snapshot cannot change what repository development exercises.
 
 ## Try it
 
@@ -55,11 +71,13 @@ build/luce build examples/hello/hello.luc   # hello.luc -> hello.lc (machine cod
 build/loom run examples/hello/hello.lc you  # hello, you
 build/loom                            # the interactive shell
 build/loom edit examples/editor/editor.luc  # the editor, written in Luce
+build/editor examples/editor/editor.luc       # standalone editor command
 ```
 
 The compiler:
 
 ```text
+luce --version                     print the release label
 luce build FILE.luc [-o OUT] [--release] [--emit=WHAT]
                                    compile and write an artifact
 luce check FILE.luc                compile, report, write nothing
@@ -111,7 +129,8 @@ The terminal:
 loom                        interactive shell (help lists commands)
 loom run PROGRAM.lc [ARGS]  run a compiled program
 loom luce PROGRAM.luc [..]  compile a source file and run it
-loom edit FILE              open the Luce editor
+loom edit FILE              open the embedded Luce editor
+editor FILE                 open the standalone editor
 loom PROGRAM.lc [ARGS]      shorthand for run
 ```
 
@@ -155,9 +174,10 @@ func main(args: list(string)):
 ## The editor
 
 `examples/editor/editor.luc` is a full-screen terminal editor written
-entirely in Luce: movement, editing, scrolling, line numbers, a status
-bar, and per-line Luce syntax highlighting.  Its source ships embedded
-in the loom binary (`loom edit` always works); set
+entirely in Luce: movement, editing, scrolling, line numbers, panes, a
+status bar, and per-line Luce syntax highlighting.  Its source ships
+embedded in the loom binary (`loom edit` always works), and `./build.sh`
+also produces the standalone `build/editor` command.  Set
 `LOOM_EDITOR=path/to/editor.luc` to hack on your own copy without
 rebuilding loom.  `Ctrl-S` saves, `Ctrl-Q` quits.
 
@@ -202,6 +222,7 @@ tools/vscode-luce/        VS Code syntax highlighting for .luc,
 docs/                     the decision records and references, indexed
                           by docs/README.md; v1/ preserves the Fabric
                           era, audit/ holds point-in-time reviews
+VERSION   install.sh      the shared release label and user-local installer
 build.sh  build.zig       ./build.sh installs, zig build test proves
 vendor-llvm.sh            build a pinned libLLVM from source, for when
                           the system one is not the one you want

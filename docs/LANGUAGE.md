@@ -1073,6 +1073,8 @@ print_error(text)            a line to standard error
 read_line(prompt)            # string?  — none at end of input
 env(name)                    # string?  — none when unset
 
+shell_run(command)           # string! — host shell transcript and exit status
+
 clock_ms()                   # long, monotonic, unspecified origin
 sleep_ms(milliseconds)       # waits at least that long
 
@@ -1094,6 +1096,7 @@ exit(status)                 # never returns; the run ends `exited`
 os_total_memory()            # long — bytes the machine has
 os_available_memory()        # long — bytes it could still hand out
 os_cpu_count()               # long — logical processors
+shell_run(command)           # string! — captured output and exit status
 ```
 
 `file_open` is the primitive under `std.files.open`, `create`, and

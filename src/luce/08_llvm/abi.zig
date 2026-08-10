@@ -167,7 +167,11 @@ const trace = @import("../runtime/trace.zig");
 /// so the whole of concurrency's machine surface is "start this C
 /// function on a thread" and "wait for it".  Both fail-closed; a host
 /// that answers neither traps `host_unavailable` at the `spawn`.
-pub const version: u32 = 13;
+/// 14 — `shell_run` is appended: a host can run one shell command,
+/// capture its output and return it to a Luce program.  A command's
+/// non-zero exit is data in the captured text; only failure to start
+/// the shell answers `no` and becomes `io_failed`.
+pub const version: u32 = 14;
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the
@@ -346,6 +350,19 @@ pub const ExitedFn = *const fn (
 pub const MachineFactFn = *const fn (
     context: ?*anyopaque,
     answer: *i64,
+) callconv(.c) Answer;
+
+/// Run one command through the host shell.  `yes` fills `text` and
+/// `length` with captured stdout/stderr plus the command's exit status;
+/// `no` means the shell itself could not be started and the program
+/// raises `io_failed` for the command.  The bytes are borrowed for the
+/// duration of the call, like every text out-parameter in this table.
+pub const ShellRunFn = *const fn (
+    context: ?*anyopaque,
+    command: [*]const u8,
+    command_length: i64,
+    text: *[*]const u8,
+    length: *i64,
 ) callconv(.c) Answer;
 
 /// Read a whole file.  `yes` fills `text`/`length` with bytes borrowed
@@ -708,6 +725,9 @@ pub const Host = extern struct {
     /// same sentence a host with no `print` says at a `print`.
     worker_spawn: ?WorkerSpawnFn = null,
     worker_join: ?WorkerJoinFn = null,
+    /// Version 14: one host-shell command, captured as text. Appended
+    /// so every earlier table field keeps its address.
+    shell_run: ?ShellRunFn = null,
 };
 
 /// The index of each `Host` field, as the generated code addresses it.
@@ -753,6 +773,7 @@ pub const Slot = enum(u32) {
     handle_close = 36,
     worker_spawn = 37,
     worker_join = 38,
+    shell_run = 39,
 
     pub const count = @typeInfo(Slot).@"enum".fields.len;
 };

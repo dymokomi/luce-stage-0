@@ -458,9 +458,10 @@ instruction removal, compacts the pool, and remaps the indices.  An
 unused table therefore emits neither data nor startup work.  The pool,
 the instruction, their wire tags, and `immutable_object` moved the
 serialized module to **format 33**; none is a host service, so
-`abi.version` remains **13**.  The later appended `ownership_cycle`
-trap moves the current module format to **34** without moving that host
-ABI.
+`abi.version` remains **13** at that point in the format history. The
+later appended `ownership_cycle` trap moves the module format to **34**;
+the subsequent `shell_run` host service moves the current format to
+**35** and the ABI to **14**.
 
 Every generated entry path calls one private `luce.constants`
 materializer before user code.  It constructs rows through the same
@@ -525,8 +526,8 @@ convention: a store performed before an error remains visible while
 the error unwinds.  It is also entirely internal.  `call_inout` and
 the local flag first moved the serialized module to format 32;
 program-root constants then moved it to 33, and the appended
-`ownership_cycle` trap moved the current format to **34**.  None changed
-a `LuceHost` slot, so the published host ABI remains **13**.
+`ownership_cycle` trap moved the module format to **34**. The current
+`shell_run` service moves the format to **35** and the host ABI to **14**.
 
 ## Call depth, and the trace a trap carries
 
@@ -1033,7 +1034,7 @@ fits; generated code only ever *writes* the other form, and reads both
 ## The published host ABI
 
 `src/luce/08_llvm/abi.zig` is the contract and the only authority on
-it; `abi.version` is the number a loader checks, currently **13**.  A compiled artifact
+it; `abi.version` is the number a loader checks, currently **14**.  A compiled artifact
 exports one symbol:
 
 ```c
@@ -1181,6 +1182,12 @@ clears both out-parameters before the call: a host that answers `no`
 may leave them untouched, and the payload of a key that never came is
 `""` and not the one before it.
 
+**13** appended the worker spawn and join slots, the whole machine
+surface needed by Luce's worker values. **14** appended `shell_run`: one
+host-shell command returns captured standard output and standard error,
+with the exit status included in the transcript. A non-zero command exit
+is data; only failure to start the shell is an I/O error.
+
 Two shapes the version-8 slots settled, both of which stayed inside
 the conventions already there rather than inventing new ones:
 
@@ -1195,7 +1202,7 @@ the conventions already there rather than inventing new ones:
   first.**  `read_line` and `env` answer a `string?`, and their `no`
   side leaves `text`/`length` untouched — so the lowering stores a
   null and a zero before the call and hands the answer to
-  `luce_rt_maybe_text` as a `present` flag.  Two stores in front of a
+`luce_rt_maybe_text` as a `present` flag.  Two stores in front of a
   blocking call, and what they buy is that the load after it is never
   of whatever the stack happened to hold.  The runtime parks
   `Value.none` for absence, which is byte for byte what the

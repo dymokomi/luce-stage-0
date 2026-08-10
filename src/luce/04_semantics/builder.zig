@@ -10651,6 +10651,11 @@ pub const FunctionBuilder = struct {
                     return self.failIntrinsic(call, "this builtin takes a string");
                 result = .none;
             },
+            .shell_run => {
+                if (arguments[0].value_type != .string)
+                    return self.failIntrinsic(call, "shell_run takes a string command");
+                result = .string;
+            },
             .file_read => {
                 if (arguments[0].value_type != .string)
                     return self.failIntrinsic(call, "file_read takes a string path");

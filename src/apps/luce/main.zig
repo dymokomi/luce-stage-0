@@ -34,6 +34,7 @@
 //! which host services actually exist.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const luce = @import("luce");
 const files = @import("files");
 const native = @import("native");
@@ -61,6 +62,12 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     var out_buffer: [4096]u8 = undefined;
     var out_writer = streams.output(io, &out_buffer);
     const out = &out_writer.interface;
+
+    if (arguments.len == 2 and std.mem.eql(u8, arguments[1], "--version")) {
+        try out.print("luce {s}\n", .{build_options.version});
+        try out.flush();
+        return 0;
+    }
 
     if (arguments.len < 3) return usage(err);
     const command = arguments[1];
@@ -200,6 +207,7 @@ fn refuse(err: *std.Io.Writer, comptime reason: []const u8, arguments: anytype) 
 fn usage(err: *std.Io.Writer) !u8 {
     try err.print(
         "usage:\n" ++
+            "  luce --version\n" ++
             "  luce build FILE [-o OUT] [--release] [--emit=WHAT]\n" ++
             "  luce check FILE\n" ++
             "  luce ir FILE [--full]\n" ++

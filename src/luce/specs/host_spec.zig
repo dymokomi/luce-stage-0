@@ -134,6 +134,26 @@ test "a host with no arguments to offer hands main an empty list, not a trap" {
     , .console_only, "0\n");
 }
 
+test "std.os shell.run crosses the host boundary as captured text" {
+    try agree.printsGiven(
+        \\import std.os
+        \\
+        \\func main() -> !:
+        \\    print(try os.shell.run("echo hi"))
+        \\
+    , .{}, "mock shell: echo hi\nexit status: 0\n\n");
+}
+
+test "std.os shell.run traps when the host withholds the shell" {
+    try agree.trapGiven(
+        \\import std.os
+        \\
+        \\func main() -> !:
+        \\    print(try os.shell.run("echo hi"))
+        \\
+    , .{ .shell = false }, .host_unavailable);
+}
+
 test "reading past the end of args is the language's own bounds trap" {
     var world: agree.World = .{};
     world.arguments = &one_argument;

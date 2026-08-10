@@ -139,6 +139,8 @@ pub const FileAct = enum(i32) {
     /// `luce_rt_raise_io`.
     open,
     flush,
+    /// A host shell could not be started for `std.os.shell.run`.
+    run,
 
     /// A static string, with its trailing space; the caller owns
     /// nothing.
@@ -152,6 +154,7 @@ pub const FileAct = enum(i32) {
             .list => "cannot list ",
             .open => "cannot open ",
             .flush => "cannot flush ",
+            .run => "cannot run ",
         };
     }
 };

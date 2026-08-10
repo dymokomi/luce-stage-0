@@ -61,10 +61,10 @@ unscheduled union design, and three measured performance gaps.**
 | Two build modes that differ only in what a trap can say | shipped |
 | map lookups O(1); sort O(n log n) and stable by guarantee | shipped |
 
-The compiler-internal serialized module is format **34**. Program-root
+The compiler-internal serialized module is format **35**. Program-root
 containers moved it to 33 by adding a pool, instruction and trap code;
 the later `ownership_cycle` trap moved it once more. The published host
-ABI remains **13** because neither change added a host slot.
+ABI is **14** because `std.os.shell.run` adds the `shell_run` host slot.
 
 ## What is measured
 

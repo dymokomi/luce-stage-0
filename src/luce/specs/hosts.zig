@@ -101,6 +101,11 @@ pub const World = struct {
     total_memory: i64 = 8 * 1024 * 1024 * 1024,
     available_memory: i64 = 3 * 1024 * 1024 * 1024,
     cpu_count: i64 = 4,
+    /// A deterministic transcript for the shell seam.  Specs do not
+    /// launch a real process; they prove the call crosses both host
+    /// tables and returns owned text.
+    shell_output: [1024]u8 = undefined,
+    shell_output_length: usize = 0,
     /// A machine this world cannot measure: every fact answers `no`,
     /// which is the host saying it cannot tell and the program meeting
     /// `host_unavailable` — the refusal a null slot gives, arriving
@@ -189,6 +194,16 @@ pub const World = struct {
 
     fn cpuCount(self: *World) ?i64 {
         return if (self.unmeasurable) null else self.cpu_count;
+    }
+
+    fn shellRun(self: *World, command: []const u8) ?[]const u8 {
+        const rendered = std.fmt.bufPrint(
+            &self.shell_output,
+            "mock shell: {s}\nexit status: 0\n",
+            .{command},
+        ) catch return null;
+        self.shell_output_length = rendered.len;
+        return self.shell_output[0..self.shell_output_length];
     }
 
     fn append(self: *World, path: []const u8, content: []const u8) bool {
@@ -637,6 +652,8 @@ pub const Provided = struct {
     /// refusals arrive at the same trap by different roads, and both
     /// are worth a spec.
     machine: bool = true,
+    /// Whether this host can launch the shell behind `std.os.shell.run`.
+    shell: bool = true,
     /// Whether this host can thread (docs/THREADS.md D8).  A host that
     /// cannot is the fail-closed row: a `spawn` traps
     /// `host_unavailable` at the keyword, on both engines, having
@@ -662,6 +679,7 @@ pub const Provided = struct {
         .environment = false,
         .exit = false,
         .machine = false,
+        .shell = false,
         .threads = false,
     };
 
@@ -841,6 +859,7 @@ pub const Capture = struct {
             .os_total_memory = if (provided.machine) totalMemory else null,
             .os_available_memory = if (provided.machine) availableMemory else null,
             .os_cpu_count = if (provided.machine) cpuCount else null,
+            .shell_run = if (provided.shell) shellRun else null,
             .handle_open = if (provided.files) Handles.open else null,
             .handle_read = if (provided.files) Handles.read else null,
             .handle_write = if (provided.files) Handles.write else null,
@@ -1136,6 +1155,19 @@ pub const Capture = struct {
         return told(of(context).world.cpuCount(), answer);
     }
 
+    fn shellRun(
+        context: ?*anyopaque,
+        command: [*]const u8,
+        command_length: i64,
+        text: *[*]const u8,
+        length: *i64,
+    ) callconv(.c) abi.Answer {
+        const output = of(context).world.shellRun(command[0..@intCast(command_length)]) orelse return .no;
+        text.* = output.ptr;
+        length.* = @intCast(output.len);
+        return .yes;
+    }
+
     fn told(fact: ?i64, answer: *i64) abi.Answer {
         answer.* = fact orelse return .no;
         return .yes;
@@ -1241,6 +1273,7 @@ pub const Reference = struct {
             .os_total_memory = if (self.provided.machine) totalMemory else null,
             .os_available_memory = if (self.provided.machine) availableMemory else null,
             .os_cpu_count = if (self.provided.machine) cpuCount else null,
+            .shell_run = if (self.provided.shell) shellRun else null,
             .arg_count = if (self.provided.arguments) argCount else null,
             .arg = if (self.provided.arguments) argAt else null,
             .terminal = if (self.provided.terminal) .{
@@ -1391,6 +1424,15 @@ pub const Reference = struct {
 
     fn cpuCount(context: *anyopaque) ?i64 {
         return of(context).world.cpuCount();
+    }
+
+    fn shellRun(
+        context: *anyopaque,
+        arena: Allocator,
+        command: []const u8,
+    ) error{OutOfMemory}!?[]const u8 {
+        const output = of(context).world.shellRun(command) orelse return null;
+        return try arena.dupe(u8, output);
     }
 
     pub fn run(self: *Reference, compiled: *const mir.Program) !void {

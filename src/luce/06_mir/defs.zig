@@ -261,6 +261,11 @@ pub const Intrinsic = enum {
     os_total_memory,
     os_available_memory,
     os_cpu_count,
+    /// `shell_run(command)` — run one host-shell command, capture its
+    /// output, and hand the text back to the caller. The standard
+    /// library presents this as `std.os.shell.run`; the raw builtin is
+    /// reserved so the host boundary stays in one place.
+    shell_run,
     /// The two halves of value storage (docs/STRINGS.md).  A string's
     /// bytes and a struct's field run have exactly one owner, so
     /// `own_storage` takes the copy every store into a place that
@@ -327,6 +332,7 @@ pub const Intrinsic = enum {
             .os_total_memory,
             .os_available_memory,
             .os_cpu_count,
+            .shell_run,
             => true,
 
             // `key_text` reads the slot the last `key_read` filled,
@@ -435,6 +441,7 @@ pub const Intrinsic = enum {
             // (docs/THREADS.md D4).  Yes here means "may", which is
             // what both readers of this table need it to mean.
             .task_wait,
+            .shell_run,
             => true,
 
             .abs,
@@ -539,6 +546,7 @@ pub const Intrinsic = enum {
             .key_read,
             .read_line,
             .env_get,
+            .shell_run,
             .pop_value,
             .copy_object,
             .own_storage,
@@ -736,6 +744,7 @@ pub const Intrinsic = enum {
             .handle_flush,
             .task_wait,
             .os_cpu_count,
+            .shell_run,
             .own_storage,
             .drop_storage,
             .export_storage,

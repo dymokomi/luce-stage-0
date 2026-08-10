@@ -27,6 +27,19 @@
 # exhaustion with a code; that is what a program checks against, and
 # this module is what a program prints.
 
+# A command runner for tools that deliberately belong to the host rather
+# than to Luce's semantics. `shell.run` captures standard output and
+# standard error and appends the command's exit status to the returned
+# text. A shell command is intentionally one string: callers that need
+# argument boundaries should quote them for the host shell.
+#
+# This is the seam used by the Luce editor for Ctrl-B. Keeping it here
+# means programs do not have to know the raw host builtin or its ABI
+# shape, and gives future process helpers one standard home.
+struct shell:
+    static func run(command: string) -> string!:
+        return try shell_run(command)
+
 # Bytes of physical memory the machine has.  Fixed for the life of the
 # run — this is the hardware's size, not a quota and not a limit the
 # program is held to.

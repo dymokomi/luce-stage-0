@@ -5,14 +5,17 @@
 # highlighting for Luce: keywords, capitalized type names, builtins,
 # strings, numbers, and comments.
 #
-#   loom edit FILE          (or: loom run editor.lc FILE)
-#   Ctrl-S save             Ctrl-Q quit (twice to discard changes)
+#   loom edit FILE [FILE ...] (or: loom run editor.lc FILE [FILE ...])
+#   Ctrl-S save   Ctrl-B build/run   Ctrl-Q quit (twice to discard changes)
+#   Ctrl-E files  Ctrl-O output     Ctrl-W focus next pane
 #
 # Nothing here is reachable from another module, so everything but
 # `main` is `private` (docs/VISIBILITY.md): the file is the unit, and
 # what a program's insides are called is nobody else's business.
 
+import editor_model
 import std.files
+import std.os
 import std.strings
 
 private struct Theme:
@@ -29,6 +32,9 @@ private struct Theme:
     status_fg: long
     status_bg: long
     alert: long
+    pane_border: long
+    pane_active: long
+    pane_active_bg: long
 
 # One file-scope constant instead of a function per color.
 private const theme = Theme(
@@ -45,6 +51,9 @@ private const theme = Theme(
     status_fg = 252,
     status_bg = 237,
     alert = 215,
+    pane_border = 238,
+    pane_active = 255,
+    pane_active_bg = 236,
 )
 
 # Luce's lexer uses the same four-column step, and the editor writes
@@ -59,6 +68,9 @@ private struct Bytes:
 
     static func is_digit(byte: byte) -> bool:
         return byte >= 48 and byte <= 57
+
+    static func is_hex_digit(byte: byte) -> bool:
+        return Bytes.is_digit(byte) or (byte >= 65 and byte <= 70) or (byte >= 97 and byte <= 102)
 
     static func is_upper(byte: byte) -> bool:
         return byte >= 65 and byte <= 90
@@ -142,6 +154,20 @@ private struct Text:
             at = at + 1
         return not quoted and last == 58
 
+    static func quoted_end(value: string, finish: long, opening: long) -> long:
+        var close = opening + 1
+        var closed = false
+        while close < finish and not closed:
+            let byte = value.byte_at(close)
+            if byte == 92:
+                close = close + 2
+            elif byte == 34:
+                closed = true
+                close = close + 1
+            else:
+                close = close + 1
+        return min(close, finish)
+
     static func line_of(value: string, cursor: long) -> long:
         var line = 0
         for at in range(0, cursor):
@@ -209,7 +235,7 @@ private struct Editing:
 # the compiler's own tables, which `tools/grammar.zig` reads for the
 # VS Code grammar:
 # `02_lex/token.zig`'s `keywords` (thirty-three words) and
-# `04_semantics/builtins.zig`'s `builtins` (forty-five), plus `range`,
+# `04_semantics/builtins.zig`'s `builtins` (forty-six), plus `range`,
 # which is syntax the parser recognises only inside a `for`.
 #
 # Two words came *out*.  `slice` is a name the language does not have
@@ -236,6 +262,17 @@ private const keyword_words = {
     "while": true,
 }
 
+# The language's lowercase builtin types are types too.  The original
+# editor only treated capitalized user declarations as types, which left
+# the current spellings in `std.os` signatures (`string!`, `long`, and
+# `list(string)`) looking like ordinary identifiers.
+private const type_words = {
+    "bool": true, "byte": true, "short": true, "int": true,
+    "long": true, "half": true, "float": true, "double": true,
+    "string": true, "list": true, "map": true, "array": true,
+    "builder": true, "file": true, "task": true,
+}
+
 private const builtin_words = {
     "abs": true, "assert": true, "ceil": true, "chr": true,
     "clamp": true, "clock_ms": true, "dir_list": true, "env": true,
@@ -247,7 +284,7 @@ private const builtin_words = {
     "os_cpu_count": true, "os_total_memory": true, "parse_float": true,
     "parse_int": true, "parse_string": true, "print": true,
     "print_error": true, "range": true, "read_line": true,
-    "sleep_ms": true, "sqrt": true, "term_clear": true, "term_cols": true,
+    "shell_run": true, "sleep_ms": true, "sqrt": true, "term_clear": true, "term_cols": true,
     "term_flush": true, "term_move": true, "term_rows": true,
     "term_style": true, "term_write": true, "trap": true, "trunc": true,
 }
@@ -277,6 +314,8 @@ private enum Word:
     static func of(text: string) -> Word:
         if keyword_words.has(text):
             return Word.keyword
+        if type_words.has(text):
+            return Word.type_name
         if len(text) > 0 and Bytes.is_upper(text.byte_at(0)):
             return Word.type_name
         if builtin_words.has(text):
@@ -325,6 +364,11 @@ private enum Intent:
     # that answer to them (`luce.sema.reserved`).
     insert_text
     save
+    build
+    toggle_files
+    toggle_output
+    next_pane
+    escape
     quit
     # Every other key the terminal can send — `escape`, `ctrl_a`, a
     # control the editor has no use for.  It is a member, so the
@@ -363,6 +407,16 @@ private enum Intent:
             return Intent.insert_text
         if name == "ctrl_s":
             return Intent.save
+        if name == "ctrl_b":
+            return Intent.build
+        if name == "ctrl_e":
+            return Intent.toggle_files
+        if name == "ctrl_o":
+            return Intent.toggle_output
+        if name == "ctrl_w":
+            return Intent.next_pane
+        if name == "escape":
+            return Intent.escape
         if name == "ctrl_q":
             return Intent.quit
         return Intent.ignored
@@ -378,15 +432,234 @@ private enum Intent:
 #
 # `State` happens to carry only string, long and bool; receiver syntax
 # does not expose that representation fact at the call site.
+private enum Focus:
+    editor
+    files
+    output
+
 private struct State:
     path: string
     content: string
     message: string
+    buffers: list(editor_model.Buffer)
+    file_names: list(string)
+    active: long = 0
+    file_selected: long = 0
+    output: string = ""
+    output_scroll: long = 0
+    file_pane: bool = false
+    output_pane: bool = false
+    focus: Focus = Focus.editor
     cursor: long = 0
     scroll: long = 0
     dirty: bool = false
     quit_pending: bool = false
     quit: bool = false
+
+    # Park the active view before changing files.  Keeping this copy in
+    # the module-owned buffer list is what lets two unsaved files live in
+    # one editor session without making the terminal host know anything
+    # about editor state.
+    func remember():
+        self.buffers[self.active].path = self.path
+        self.buffers[self.active].content = self.content
+        self.buffers[self.active].message = self.message
+        self.buffers[self.active].cursor = self.cursor
+        self.buffers[self.active].scroll = self.scroll
+        self.buffers[self.active].dirty = self.dirty
+
+    func restore():
+        let buffer = self.buffers[self.active]
+        self.path = buffer.path
+        self.content = buffer.content
+        self.message = buffer.message
+        self.cursor = buffer.cursor
+        self.scroll = buffer.scroll
+        self.dirty = buffer.dirty
+        self.quit_pending = false
+
+    # Refresh the optional left pane from the current directory.  The
+    # active path is retained even when it was opened as a new file and
+    # therefore is not in the directory listing yet.
+    func refresh_files():
+        self.file_names = files.list(".") catch reason:
+            self.message = reason
+            return
+        if not self.file_names.contains(self.path):
+            self.file_names.append(self.path)
+        self.file_selected = 0
+        for index in range(0, len(self.file_names)):
+            if self.file_names[index] == self.path:
+                self.file_selected = index
+                return
+
+    func open_selected():
+        if len(self.file_names) == 0:
+            return
+        let wanted = self.file_names[self.file_selected]
+        if wanted == self.path:
+            self.focus = Focus.editor
+            return
+        self.remember()
+        for index in range(0, len(self.buffers)):
+            if self.buffers[index].path == wanted:
+                self.active = index
+                self.restore()
+                self.focus = Focus.editor
+                return
+        var content = ""
+        content = files.read(wanted) catch reason:
+            self.message = reason
+            return
+        self.buffers.append(editor_model.Buffer(path = wanted, content = content))
+        self.active = len(self.buffers) - 1
+        self.restore()
+        self.focus = Focus.editor
+
+    # One shell word, including paths with spaces or shell punctuation.
+    static func shell_quote(value: string) -> string:
+        return "'" + strings.replace(value, "'", "'\\''") + "'"
+
+    func build():
+        self.save()
+        if self.dirty:
+            self.output = "build skipped: " + self.message + "\n"
+        else:
+            let command = "loom luce " + State.shell_quote(self.path)
+            var command_output = ""
+            command_output = os.shell.run(command) catch reason:
+                self.output = reason
+            if len(command_output) > 0:
+                self.output = command_output
+            self.message = "build/run finished"
+        self.output_scroll = 0
+        self.output_pane = true
+        self.focus = Focus.output
+
+    func toggle_files():
+        self.file_pane = not self.file_pane
+        if self.file_pane:
+            self.refresh_files()
+        elif self.focus == Focus.files:
+            self.focus = Focus.editor
+
+    func toggle_output():
+        self.output_pane = not self.output_pane
+        if self.output_pane:
+            self.focus = Focus.output
+        elif self.focus == Focus.output:
+            self.focus = Focus.editor
+
+    func next_pane():
+        if self.focus == Focus.editor:
+            if self.file_pane:
+                self.focus = Focus.files
+            elif self.output_pane:
+                self.focus = Focus.output
+        elif self.focus == Focus.files:
+            if self.output_pane:
+                self.focus = Focus.output
+            else:
+                self.focus = Focus.editor
+        else:
+            if self.file_pane:
+                self.focus = Focus.files
+            else:
+                self.focus = Focus.editor
+
+    func file_key(intent: Intent):
+        let total = len(self.file_names)
+        if total == 0:
+            return
+        match intent:
+            move_up:
+                self.file_selected = max(self.file_selected - 1, 0)
+            move_down:
+                self.file_selected = min(self.file_selected + 1, total - 1)
+            page_up:
+                self.file_selected = max(self.file_selected - 8, 0)
+            page_down:
+                self.file_selected = min(self.file_selected + 8, total - 1)
+            newline:
+                self.open_selected()
+            move_left:
+                self.focus = Focus.editor
+            escape:
+                self.focus = Focus.editor
+            ignored:
+                return
+            move_right:
+                return
+            line_start:
+                return
+            line_end:
+                return
+            erase_left:
+                return
+            erase_right:
+                return
+            indent:
+                return
+            insert_text:
+                return
+            save:
+                return
+            build:
+                return
+            toggle_files:
+                return
+            toggle_output:
+                return
+            next_pane:
+                return
+            quit:
+                return
+
+    func output_key(intent: Intent):
+        let total = Text.count_lines(self.output)
+        match intent:
+            move_up:
+                self.output_scroll = max(self.output_scroll - 1, 0)
+            move_down:
+                self.output_scroll = min(self.output_scroll + 1, max(total - 1, 0))
+            page_up:
+                self.output_scroll = max(self.output_scroll - 8, 0)
+            page_down:
+                self.output_scroll = min(self.output_scroll + 8, max(total - 1, 0))
+            move_left:
+                return
+            move_right:
+                return
+            line_start:
+                return
+            line_end:
+                return
+            erase_left:
+                return
+            erase_right:
+                return
+            newline:
+                return
+            indent:
+                return
+            insert_text:
+                return
+            save:
+                return
+            build:
+                return
+            toggle_files:
+                return
+            toggle_output:
+                return
+            next_pane:
+                return
+            escape:
+                return
+            quit:
+                return
+            ignored:
+                return
 
     func vertical(target_line: long):
         let total = Text.count_lines(self.content)
@@ -408,12 +681,43 @@ private struct State:
             return
         self.dirty = false
         self.message = f"saved {self.path}"
+        self.remember()
 
     func key(intent: Intent, inserted: string, visible: long):
+        if intent == Intent.save:
+            self.save()
+            return
+        if intent == Intent.quit:
+            if self.dirty and not self.quit_pending:
+                self.quit_pending = true
+                self.message = "unsaved changes; Ctrl-Q again to discard"
+            else:
+                self.quit = true
+            return
+        if intent == Intent.build:
+            self.build()
+            return
+        if intent == Intent.toggle_files:
+            self.toggle_files()
+            return
+        if intent == Intent.toggle_output:
+            self.toggle_output()
+            return
+        if intent == Intent.next_pane:
+            self.next_pane()
+            return
+        if intent == Intent.escape:
+            self.focus = Focus.editor
+            return
+        if self.focus == Focus.files:
+            self.file_key(intent)
+            return
+        if self.focus == Focus.output:
+            self.output_key(intent)
+            return
         let line = Text.line_of(self.content, self.cursor)
-        if intent != Intent.quit:
-            self.quit_pending = false
-        if len(self.message) > 0 and intent != Intent.quit and intent != Intent.save:
+        self.quit_pending = false
+        if len(self.message) > 0:
             self.message = ""
 
         match intent:
@@ -471,13 +775,19 @@ private struct State:
                 self.cursor = self.cursor + len(inserted)
                 self.dirty = true
             save:
-                self.save()
+                return
+            build:
+                return
+            toggle_files:
+                return
+            toggle_output:
+                return
+            next_pane:
+                return
+            escape:
+                return
             quit:
-                if self.dirty and not self.quit_pending:
-                    self.quit_pending = true
-                    self.message = "unsaved changes; Ctrl-Q again to discard"
-                else:
-                    self.quit = true
+                return
             ignored:
                 return
 
@@ -500,7 +810,13 @@ private struct State:
         var left = f" {self.path}{flag}  {line + 1}:{column + 1}"
         if len(self.message) > 0:
             left = left + f"  — {self.message}"
-        let hint = "Ctrl-S save  Ctrl-Q quit "
+        if self.focus == Focus.files:
+            left = left + "  [files]"
+        elif self.focus == Focus.output:
+            left = left + "  [output]"
+        else:
+            left = left + "  [editor]"
+        let hint = "Ctrl-B build/run  Ctrl-W focus  Ctrl-S save  Ctrl-Q quit "
         # Padded in one call rather than one append per column: the
         # loop this replaces built a fresh string per space, every
         # frame.  `repeat` answers "" for a width already overrun.
@@ -511,9 +827,33 @@ private struct State:
     func frame():
         let rows = max(term_rows(), 2)
         let cols = max(term_cols(), 10)
-        let visible = rows - 1
-        let side = 5
-        let text_width = max(cols - side, 1)
+        var output_height: long = 0
+        if self.output_pane:
+            output_height = long(rows / 3)
+            if output_height < 3:
+                output_height = 3
+            if output_height > 8:
+                output_height = 8
+            if output_height > rows - 2:
+                output_height = rows - 2
+            if output_height < 0:
+                output_height = 0
+        let editor_height = max(rows - 1 - output_height, 1)
+        let visible = editor_height
+        let side: long = 5
+        var file_width: long = 0
+        if self.file_pane:
+            file_width = long(cols / 4)
+            if file_width < 18:
+                file_width = 18
+            if file_width > 24:
+                file_width = 24
+            if file_width + side + 1 >= cols:
+                file_width = max(cols - side - 1, 1)
+        var text_start = side
+        if self.file_pane:
+            text_start = file_width + 1 + side
+        let text_width = max(cols - text_start, 1)
         let cursor_line = Text.line_of(self.content, self.cursor)
         let cursor_column = Text.column_of(self.content, self.cursor)
         let total = Text.count_lines(self.content)
@@ -523,22 +863,103 @@ private struct State:
         for row in range(0, visible):
             let line_index = self.scroll + row
             term_move(row, 0)
+            if self.file_pane:
+                Draw.file_line(
+                    self.file_names,
+                    row,
+                    self.file_selected,
+                    file_width,
+                    active = self.focus == Focus.files,
+                )
+                term_move(row, file_width)
+                Draw.pane_style(self.focus == Focus.files)
+                if row == 0:
+                    term_write("+")
+                else:
+                    term_write("|")
+                term_move(row, file_width + 1)
             if line_index < total:
-                Draw.gutter(line_index + 1, current = line_index == cursor_line)
+                Draw.gutter(
+                    line_index + 1,
+                    current = line_index == cursor_line,
+                    active = self.focus == Focus.editor,
+                )
                 let finish = Text.line_end(self.content, at)
                 Draw.line(self.content, from = at, to = finish, width = text_width)
                 at = finish + 1
             else:
                 term_style(theme.gutter)
                 term_write("   ~")
+        if self.output_pane:
+            var split: long = 0
+            if self.file_pane:
+                split = file_width
+            self.output_frame(
+                start = editor_height,
+                finish = rows - 1,
+                cols = cols,
+                split = split,
+            )
         self.status(rows = rows, cols = cols, line = cursor_line, column = cursor_column)
-        term_move(
-            clamp(cursor_line - self.scroll, 0, visible - 1),
-            clamp(side + cursor_column, 0, cols - 1),
-        )
+        if self.focus == Focus.files:
+            term_move(clamp(self.file_selected, 0, visible - 1), 0)
+        elif self.focus == Focus.output:
+            term_move(editor_height, 0)
+        else:
+            term_move(
+                clamp(cursor_line - self.scroll, 0, visible - 1),
+                clamp(text_start + cursor_column, 0, cols - 1),
+            )
         term_flush()
 
+    func output_frame(start: long, finish: long, cols: long, split: long):
+        let total = Text.count_lines(self.output)
+        for row in range(start, finish):
+            term_move(row, 0)
+            if row == start:
+                Draw.horizontal_border(
+                    cols,
+                    split,
+                    "output",
+                    active = self.focus == Focus.output,
+                )
+            else:
+                let line_index = self.output_scroll + row - start - 1
+                if line_index < total:
+                    let line_start = Text.line_at(self.output, line_index)
+                    let line_finish = Text.line_end(self.output, line_start)
+                    term_style(theme.plain)
+                    let ignored = Draw.emit(
+                        self.output,
+                        from = line_start,
+                        to = line_finish,
+                        remaining = cols,
+                    )
+
 private struct Draw:
+    static func pane_style(active: bool):
+        if active:
+            term_style(theme.pane_active, theme.pane_active_bg, bold = true)
+        else:
+            term_style(theme.pane_border)
+
+    static func horizontal_border(width: long, split: long, label: string, active: bool):
+        Draw.pane_style(active)
+        let title = " " + label + " "
+        var title_at: long = 2
+        if split > 0:
+            title_at = split + 2
+        if title_at + len(title) >= width - 1:
+            title_at = -1
+        for column in range(0, width):
+            if column == 0 or column == width - 1 or (split > 0 and column == split):
+                term_write("+")
+            elif title_at >= 0 and column >= title_at and column < title_at + len(title):
+                let offset = column - title_at
+                term_write(title[offset:offset + 1])
+            else:
+                term_write("-")
+
     # Write [from, to) clipped to `remaining` display columns; returns
     # the columns actually used.
     static func emit(value: string, from: long, to: long, remaining: long) -> long:
@@ -551,6 +972,33 @@ private struct Draw:
             used = used + 1
         return used
 
+    static func file_line(names: list(string), row: long, selected: long, width: long, active: bool):
+        if row == 0:
+            Draw.pane_style(active)
+            term_write("+")
+            let title = " files "
+            let room = max(width - 1, 0)
+            let shown = min(len(title), room)
+            term_write(title[0:shown])
+            if shown < room:
+                term_write(strings.repeat("-", room - shown))
+            return
+        Draw.pane_style(active and row == selected + 1)
+        term_write("|")
+        let room = max(width - 1, 0)
+        let index = row - 1
+        if index < len(names):
+            if index == selected:
+                term_style(theme.status_fg, theme.status_bg, bold = true)
+            else:
+                term_style(theme.plain)
+            let name = names[index]
+            let used = Draw.emit(name, from = 0, to = len(name), remaining = room)
+            if used < room:
+                term_write(strings.repeat(" ", room - used))
+        else:
+            term_write(strings.repeat(" ", room))
+
     # One source line with Luce highlighting, clipped to `width`.
     static func line(content: string, from: long, to: long, width: long):
         var at = from
@@ -561,26 +1009,39 @@ private struct Draw:
                 term_style(theme.comment)
                 used = used + Draw.emit(content, from = at, to = to, remaining = width - used)
                 at = to
+            elif byte == 102 and at + 1 < to and content.byte_at(at + 1) == 34 and (at == from or not Bytes.is_word(content.byte_at(at - 1))):
+                let close = Text.quoted_end(content, to, at + 1)
+                term_style(theme.text)
+                used = used + Draw.emit(content, from = at, to = close, remaining = width - used)
+                at = close
             elif byte == 34:
-                var close = at + 1
-                var closed = false
-                while close < to and not closed:
-                    let inner = content.byte_at(close)
-                    if inner == 92:
-                        close = close + 2
-                    elif inner == 34:
-                        closed = true
-                        close = close + 1
-                    else:
-                        close = close + 1
-                close = min(close, to)
+                let close = Text.quoted_end(content, to, at)
                 term_style(theme.text)
                 used = used + Draw.emit(content, from = at, to = close, remaining = width - used)
                 at = close
             elif Bytes.is_digit(byte):
                 var stop = at + 1
-                while stop < to and (Bytes.is_digit(content.byte_at(stop)) or content.byte_at(stop) == 46):
+                if stop < to and (content.byte_at(stop) == 120 or content.byte_at(stop) == 88):
                     stop = stop + 1
+                    while stop < to and (Bytes.is_hex_digit(content.byte_at(stop)) or content.byte_at(stop) == 95):
+                        stop = stop + 1
+                elif stop < to and (content.byte_at(stop) == 98 or content.byte_at(stop) == 66):
+                    stop = stop + 1
+                    while stop < to and (content.byte_at(stop) == 48 or content.byte_at(stop) == 49 or content.byte_at(stop) == 95):
+                        stop = stop + 1
+                else:
+                    while stop < to and (Bytes.is_digit(content.byte_at(stop)) or content.byte_at(stop) == 95):
+                        stop = stop + 1
+                    if stop < to and content.byte_at(stop) == 46:
+                        stop = stop + 1
+                        while stop < to and (Bytes.is_digit(content.byte_at(stop)) or content.byte_at(stop) == 95):
+                            stop = stop + 1
+                    if stop < to and (content.byte_at(stop) == 101 or content.byte_at(stop) == 69):
+                        stop = stop + 1
+                        if stop < to and (content.byte_at(stop) == 43 or content.byte_at(stop) == 45):
+                            stop = stop + 1
+                        while stop < to and (Bytes.is_digit(content.byte_at(stop)) or content.byte_at(stop) == 95):
+                            stop = stop + 1
                 term_style(theme.number)
                 used = used + Draw.emit(content, from = at, to = stop, remaining = width - used)
                 at = stop
@@ -599,30 +1060,47 @@ private struct Draw:
                 used = used + Draw.emit(content, from = at, to = stop, remaining = width - used)
                 at = stop
 
-    static func gutter(number: long, current: bool):
-        if current:
+    static func gutter(number: long, current: bool, active: bool):
+        if current and active:
             term_style(theme.gutter_current)
         else:
             term_style(theme.gutter)
         term_write(strings.pad_left(string(number), 4) + " ")
 
 func main(args: list(string)):
-    if len(args) != 1:
-        print("usage: editor FILE")
+    if len(args) == 0:
+        print("usage: editor FILE [FILE ...]")
         return
-    let path = args[0]
-    # One read, and what it answers decides the greeting.  The
-    # exists-then-read this used to write had a window between the two
-    # calls that nothing could close, and it could not tell "not
-    # there" from "would not open" either (docs/FAILURE.md).
-    var opening = ""
-    var greeting = ""
-    opening = files.read(path) catch:
-        greeting = "new file"
-    # The five fields that start at the zero of their type live on the
-    # declaration now (docs/ARGS.md): a second construction site could
-    # not get them wrong.
-    var state = State(path = path, content = opening, message = greeting)
+    var buffers = new list(editor_model.Buffer)
+    for path in args:
+        # One read, and what it answers decides the greeting.  The
+        # exists-then-read this used to write had a window between the two
+        # calls that nothing could close, and it could not tell "not
+        # there" from "would not open" either (docs/FAILURE.md).
+        var opening = ""
+        var greeting = ""
+        opening = files.read(path) catch:
+            greeting = "new file"
+        buffers.append(editor_model.Buffer(
+            path = path,
+            content = opening,
+            message = greeting,
+        ))
+    let first = buffers[0]
+    # The active view is a small cache of the selected module-owned
+    # buffer.  `remember` and `restore` make switching explicit and keep
+    # all editing operations on the same simple fields as before.
+    var state = State(
+        path = first.path,
+        content = first.content,
+        message = first.message,
+            buffers = give buffers,
+        file_names = new list(string),
+        cursor = first.cursor,
+        scroll = first.scroll,
+        dirty = first.dirty,
+    )
+    state.refresh_files()
     while not state.quit:
         let visible = max(term_rows() - 1, 1)
         state.adjust(visible)

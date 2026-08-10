@@ -1385,6 +1385,11 @@ fn verifyIntrinsic(
             try expectType(arguments[0], .string);
             try expectType(result, .none);
         },
+        .shell_run => {
+            try exactly(arguments, 1);
+            try expectType(arguments[0], .string);
+            try expectType(result, .string);
+        },
         .file_read => {
             try exactly(arguments, 1);
             try expectType(arguments[0], .string);

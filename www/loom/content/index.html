@@ -168,10 +168,12 @@ links neither.</p>
 
 <p>The build installs <code>build/loom</code>, <code>build/luce</code>,
 <code>build/lib/libluce_rt.a</code> (Luce's semantics as a linkable library,
-which every compiled artifact carries) and <code>build/examples/&lt;name&gt;/&lt;name&gt;.lc</code>. Put
-<code>build/</code> on your <code>PATH</code> and the two binaries find each
-other: loom looks for the compiler beside its own executable first and on
-<code>PATH</code> after, which is how a toolchain finds its tools.</p>
+which every compiled artifact carries) and <code>build/examples/&lt;name&gt;/&lt;name&gt;.lc</code>.
+Those paths are the repository's development snapshot; development tests and
+benchmarks use them explicitly. For daily use on macOS or Linux, run
+<code>./install.sh</code>. It copies both tools and both static libraries to a
+user-owned <code>~/.local</code> prefix, adds <code>~/.local/bin</code> to the
+user shell profile, and needs no <code>sudo</code>.</p>
 
 <hr>
 

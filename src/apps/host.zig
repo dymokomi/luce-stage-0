@@ -21,6 +21,7 @@
 //! its own host now (docs/ENGINE.md).
 
 const std = @import("std");
+const builtin = @import("builtin");
 const luce = @import("luce");
 const key_mod = @import("key.zig");
 const machine = @import("machine.zig");
@@ -95,6 +96,9 @@ pub const Host = struct {
     /// One directory listing, NUL-joined, which is the shape the ABI's
     /// `dir_list` hands out (`luce_rt_names_list` splits it).
     listed_names: std.ArrayList(u8) = .empty,
+    /// Captured stdout/stderr from the last `std.os.shell.run` call.
+    /// Borrowed by the generated program until the next command.
+    shell_output: std.ArrayList(u8) = .empty,
     /// Every file the byte channel has open (docs/BYTES.md R5).  A
     /// handle is this table's index plus one, so zero is never a
     /// handle; a closed row stays in place and is reused, which is what
@@ -172,6 +176,7 @@ pub const Host = struct {
         self.read_line_buffer.deinit(self.gpa);
         self.sanitized.deinit(self.gpa);
         self.listed_names.deinit(self.gpa);
+        self.shell_output.deinit(self.gpa);
         self.closeOpenFiles();
         self.open_files.deinit(self.gpa);
         self.* = undefined;
@@ -266,6 +271,7 @@ pub const Host = struct {
             .handle_close = cHandleClose,
             .worker_spawn = cWorkerSpawn,
             .worker_join = cWorkerJoin,
+            .shell_run = cShellRun,
         };
     }
 
@@ -692,6 +698,44 @@ pub const Host = struct {
     fn lookUpEnvironment(self: *Host, name: []const u8) error{OutOfMemory}!?[]const u8 {
         _ = self;
         return processEnvironment().getPosix(name);
+    }
+
+    /// Run one shell command for `std.os.shell.run`, keeping the two
+    /// output streams and a final status line together as one Luce
+    /// string. A non-zero command status is data the caller can show;
+    /// only failure to start the shell answers `null`.
+    fn runShell(self: *Host, command: []const u8) error{OutOfMemory}!?[]const u8 {
+        const shell = if (builtin.os.tag == .windows) "cmd.exe" else "/bin/sh";
+        const flag = if (builtin.os.tag == .windows) "/C" else "-c";
+        const ran = std.process.run(self.gpa, self.io, .{
+            .argv = &.{ shell, flag, command },
+        }) catch |mistake| switch (mistake) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return null,
+        };
+        defer self.gpa.free(ran.stdout);
+        defer self.gpa.free(ran.stderr);
+
+        self.shell_output.clearRetainingCapacity();
+        try self.shell_output.appendSlice(self.gpa, ran.stdout);
+        if (ran.stdout.len != 0 and ran.stderr.len != 0 and
+            ran.stdout[ran.stdout.len - 1] != '\n')
+        {
+            try self.shell_output.append(self.gpa, '\n');
+        }
+        try self.shell_output.appendSlice(self.gpa, ran.stderr);
+        if (self.shell_output.items.len != 0 and
+            self.shell_output.items[self.shell_output.items.len - 1] != '\n')
+        {
+            try self.shell_output.append(self.gpa, '\n');
+        }
+        var status: [64]u8 = undefined;
+        const line = switch (ran.term) {
+            .exited => |code| std.fmt.bufPrint(&status, "exit status: {d}\n", .{code}) catch unreachable,
+            else => |term| std.fmt.bufPrint(&status, "terminated: {s}\n", .{@tagName(term)}) catch unreachable,
+        };
+        try self.shell_output.appendSlice(self.gpa, line);
+        return self.shell_output.items;
     }
 
     // -- the screen ----------------------------------------------------
@@ -1282,6 +1326,21 @@ pub const Host = struct {
             return .exhausted) orelse return .no;
         text.* = found.ptr;
         length.* = @intCast(found.len);
+        return .yes;
+    }
+
+    fn cShellRun(
+        context: ?*anyopaque,
+        command: [*]const u8,
+        command_length: i64,
+        text: *[*]const u8,
+        length: *i64,
+    ) callconv(.c) abi.Answer {
+        const self = of(context);
+        const output = (self.runShell(command[0..@intCast(command_length)]) catch
+            return .exhausted) orelse return .no;
+        text.* = output.ptr;
+        length.* = @intCast(output.len);
         return .yes;
     }
 

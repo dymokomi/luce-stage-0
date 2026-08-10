@@ -78,8 +78,8 @@ owner identity, not merely its current value, so MIR gained
 slot; LLVM passes an internal pointer/owner descriptor and forwards it
 through nested writers.  Cleanup remains the caller's, and replacing an
 object-carrying receiver does not invent a second owner.  This moved the
-serialized module to **format 32**.  It added no host service and no
-runtime export, so the published host ABI remains **13**.
+serialized module to **format 32** and added no host service at that
+point; the current host ABI is **14** after the later `shell_run` slot.
 
 That representation also fixes the failure rule: mutation is in place,
 so every write completed before an error remains visible while the

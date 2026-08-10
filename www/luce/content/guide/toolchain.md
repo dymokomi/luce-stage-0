@@ -17,14 +17,18 @@ front end's hand-over to the back end, not something to ship; that is
 how `loom` gets a program compiled without carrying a code generator,
 by running this binary over the module it already has.
 
-The current `.lcm` format is **34**. Format 33 introduced the
+The current `.lcm` format is **35**. Format 33 introduced the
 program-root constant-container pool, its load instruction and
-`immutable_object`; 34 appends `ownership_cycle`. The earlier
+`immutable_object`; 34 appends `ownership_cycle`; 35 appends the
+`shell_run` intrinsic behind `std.os.shell.run`. The earlier
 `call_inout` edge used by writing methods first moved it to 32. The
-published host ABI is **13** and did not move: none of these features
-added a host service.
+published host ABI is **14**: version 14 appends the `shell_run` host
+slot.
 
-Current version pair: `format_version = 34`; `abi.version = 13`.
+Current release label: `0.18` (`luce --version`, `loom --version`). The
+release label is intentionally separate from `format_version = 35` and
+`abi.version = 14`: the latter two describe artifact compatibility, while
+the former names the user-facing toolchain release.
 
 `FILE` may also be `-`, to read the program from standard input.
 Imports then resolve beside the current directory, and `build` needs

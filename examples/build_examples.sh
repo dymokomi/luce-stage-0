@@ -2,7 +2,7 @@
 # Build every runnable example as a standalone native executable.
 #
 #   ./build.sh
-#   examples/build_programs.sh
+#   examples/build_examples.sh
 #
 # The source for each example lives in examples/NAME/NAME.luc.  The
 # executable goes under build/examples/NAME/NAME, keeping generated files

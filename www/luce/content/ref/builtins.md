@@ -97,6 +97,17 @@ just nothing more — so `read_line` answers `T?` and
 `func main(args: list(string)):` and read `args` like any other list
 ([S44](../ownership/#s44)).
 
+### The shell
+
+| Signature | Notes |
+|---|---|
+| `shell_run(command: string) -> string!` | runs one command through the host shell, captures standard output and standard error, and appends the exit status. The returned text is a transcript, not a separate status value; quote paths and other arguments for the shell. |
+
+Use [`std.os.shell.run`](/std/os/) rather than naming this host builtin
+directly. It is intended for host tools such as an editor's build action,
+not as a portable process API: a host that cannot launch the shell refuses
+the call and a failed launch is an `io_failed` error.
+
 ### The clock
 
 | Signature | Notes |

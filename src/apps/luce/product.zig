@@ -32,6 +32,7 @@ const io = std.testing.io;
 const Allocator = std.mem.Allocator;
 const Install = harness.Install;
 const Ran = harness.Ran;
+const expected_version = std.fmt.comptimePrint("luce {s}\n", .{build_options.version});
 
 // ---------------------------------------------------------------------------
 // A miniature install tree
@@ -77,6 +78,18 @@ const greeting =
 // ---------------------------------------------------------------------------
 // Saying no
 // ---------------------------------------------------------------------------
+
+test "luce reports the project version" {
+    const gpa = testing.allocator;
+    var tree = try installTree(gpa);
+    defer tree.deinit(gpa);
+
+    var ran = try runLuce(gpa, &tree, &.{"--version"}, null);
+    defer ran.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), ran.status);
+    try testing.expectEqualStrings(expected_version, ran.out);
+    try testing.expectEqualStrings("", ran.err);
+}
 
 test "a command line with nothing to do prints usage and fails" {
     const gpa = testing.allocator;
