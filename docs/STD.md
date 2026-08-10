@@ -161,9 +161,16 @@ the module is fast enough to stay written in Luce (docs/CODEGEN.md
 ```text
 import std.strings
 
-strings.find(s, needle, start = 0)  # first occurrence at or after
-                                    # start, or -1 (docs/ARGS.md)
+strings.find(s, needle, start = 0)  # long? — first occurrence at or
+                                    # after start, or absence; the
+                                    # fallback form is
+                                    # find(...) else -1 (docs/ARGS.md)
 strings.contains(s, needle)      # bool
+strings.is_digit(b)  strings.is_alpha(b)  strings.is_alnum(b)
+strings.is_upper(b)  strings.is_lower(b)  strings.is_space(b)
+                                 # the ASCII classes, on the byte
+                                 # byte_at answers; bytes above 127
+                                 # are in none of them
 strings.starts_with(s, prefix)   strings.ends_with(s, suffix)
 strings.count(s, needle)         # non-overlapping occurrences
 strings.trim(s)                  # ASCII whitespace off both ends
@@ -421,10 +428,11 @@ which traps on exhaustion with a code of its own; that is what a
 program is actually held up by, and this module is what a program
 prints.
 
-`cpu_count()` is here although Luce has no threads — a fact to report
-rather than one to act on.  It is in because the machine's facts are
-one subject and one ABI version: asking for it a release later would
-have cost every artifact in the world a rebuild to learn one number.
+`cpu_count()` went in before Luce had threads, because the machine's
+facts are one subject and one ABI version: asking for it a release
+later would have cost every artifact in the world a rebuild to learn
+one number.  Since workers landed (`docs/THREADS.md`) it is the number
+that sizes a spawn count.
 
 ---
 

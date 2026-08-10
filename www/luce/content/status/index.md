@@ -260,16 +260,10 @@ wart standing: item 1.
     ([the operator rules](/ref/lexical/#operators-and-punctuation)).
 12. **No codepoint iteration.** `for c in "abc"` is refused; every
     UTF-8 walk is hand-written, and the same function is copied across
-    two namespaces in one file.
-13. **`m.get(k) -> V?` does not exist**, so `has` then index is three
-    hash lookups on the hit path. The counting case no longer needs
-    it — `counts[word] += 1` defines a missing key at the value
-    type's zero — but a lookup that must tell a stored `0` from an
-    absent one still has nothing better than `has`.
-14. **`strings.find` returns `-1`** because `long?` did not exist when
-    it was written. It does now, so the sentinel is a
-    wart with nothing holding it up — and it also returns `-1` for an
-    *argument* error, which is not the same fact as "absent".
+    two namespaces in one file.  (This is the one remaining absence
+    here: `m.get(k)` now answers `V?`, and `strings.find` and
+    `xs.find` answer absence instead of a `-1` sentinel, so the two
+    library warts that used to sit beside it are gone.)
 
 ## Tooling
 

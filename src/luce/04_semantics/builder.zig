@@ -9181,7 +9181,7 @@ pub const FunctionBuilder = struct {
             .map => |pair| blk: {
                 if (std.mem.eql(u8, name, "has") or
                     std.mem.eql(u8, name, "remove")) break :blk try self.typeList(&.{pair.key});
-                if (std.mem.eql(u8, name, "get")) break :blk try self.typeList(&.{ pair.key, pair.value });
+                if (std.mem.eql(u8, name, "get")) break :blk try self.typeList(&.{pair.key});
                 if (std.mem.eql(u8, name, "keys") or
                     std.mem.eql(u8, name, "values") or
                     std.mem.eql(u8, name, "clear")) break :blk &.{};
@@ -9624,7 +9624,13 @@ pub const FunctionBuilder = struct {
                 }
                 if (std.mem.eql(u8, name, "get")) {
                     if (!try self.methodTakes(method, arguments, receiver)) return null;
-                    return .{ .kind = .map_get, .result = pair.value };
+                    // `m.get(k)` answers `V?`: absence is the honest
+                    // shape for "not there", and `m.get(k) else d` is
+                    // the old fallback form spelled with the
+                    // language's own absence machinery.  A map value
+                    // cannot itself be optional, so the wrap always
+                    // exists.
+                    return .{ .kind = .map_get, .result = Type.optionalOf(pair.value).? };
                 }
                 if (std.mem.eql(u8, name, "clear")) {
                     if (!try self.methodTakes(method, arguments, receiver)) return null;
@@ -9777,7 +9783,10 @@ pub const FunctionBuilder = struct {
         }
         if (std.mem.eql(u8, name, "find")) {
             if (!try self.methodTakes(method, arguments, receiver)) return null;
-            return .{ .kind = .list_find, .result = .long };
+            // `xs.find(v)` answers `long?`, not a -1 sentinel: the
+            // same absence rule `m.get` and `strings.find` follow, so
+            // a package corpus never bakes the sentinel in.
+            return .{ .kind = .list_find, .result = .{ .optional = .long } };
         }
         if (std.mem.eql(u8, name, "contains")) {
             if (!try self.methodTakes(method, arguments, receiver)) return null;

@@ -14,7 +14,7 @@ func main():
 
     print(f"{len(ages)} people")
     print(f"has grace: {ages.has("grace")}")
-    print(f"get nobody: {ages.get("nobody", -1)}")
+    print(f"get nobody: {ages.get("nobody") else -1}")
 
     ages.remove("alan")
     ages.remove("nobody")            # absent: a no-op, not an error

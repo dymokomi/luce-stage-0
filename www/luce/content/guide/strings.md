@@ -143,7 +143,7 @@ func main():
     var at: long = 0
     var found = 0
     while true:
-        let next = haystack.find(";", at)
+        let next = haystack.find(";", at) else -1
         if next < 0:
             break
         found += 1

@@ -6709,7 +6709,6 @@ const Body = struct {
                 rt,
                 try self.boxedRegister(of[0], "target"),
                 try self.boxedRegister(of[1], "key"),
-                try self.boxedRegister(of[2], "fallback"),
             }),
             .map_place => try self.callAnswering(register, .luce_rt_map_place, &.{
                 rt,

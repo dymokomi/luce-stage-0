@@ -278,22 +278,23 @@ test "math: the generator is deterministic, in range, and covers its die" {
 test "strings: find (with its start default), contains, starts_with, ends_with, count" {
     // `find_from` merged into `find(s, needle, start = 0)`
     // (docs/ARGS.md §9): one declaration, one answer to a `start`
-    // outside the string — -1, the argument error the old wrapper
-    // could never reach.
+    // outside the string — absence, like a match that never comes;
+    // `find(...) else -1` is how a caller who wants the sentinel
+    // spells it.
     try agreeOk(
         \\import std.strings
         \\
         \\func main():
         \\    let s = "hello world"
-        \\    assert(strings.find(s, "world") == 6)
-        \\    assert(strings.find(s, "xyz") == -1)
-        \\    assert(strings.find(s, "") == 0)
-        \\    assert(strings.find(s, "o", 5) == 7)
-        \\    assert(strings.find(s, "o", start = 8) == -1)
-        \\    assert(strings.find(s, "", 3) == 3)
-        \\    assert(strings.find(s, "o", -1) == -1)
-        \\    assert(strings.find(s, "o", 99) == -1)
-        \\    assert("hello world".find("o", 5) == 7)
+        \\    assert((strings.find(s, "world") else -1) == 6)
+        \\    assert(strings.find(s, "xyz") == none)
+        \\    assert((strings.find(s, "") else -1) == 0)
+        \\    assert((strings.find(s, "o", 5) else -1) == 7)
+        \\    assert(strings.find(s, "o", start = 8) == none)
+        \\    assert((strings.find(s, "", 3) else -1) == 3)
+        \\    assert(strings.find(s, "o", -1) == none)
+        \\    assert(strings.find(s, "o", 99) == none)
+        \\    assert(("hello world".find("o", 5) else -1) == 7)
         \\    assert(strings.contains(s, "lo w"))
         \\    assert(not strings.contains(s, "zzz"))
         \\    assert(strings.starts_with(s, "hello"))
@@ -305,6 +306,30 @@ test "strings: find (with its start default), contains, starts_with, ends_with, 
         \\    assert(strings.count("aaaa", "aa") == 2)
         \\    assert(strings.count("a.b.c", ".") == 2)
         \\    assert(strings.count("abc", "") == 0)
+        \\
+    );
+}
+
+test "strings: the ASCII character classes answer bytes, not codepoints" {
+    try agreeOk(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let s = "aZ3 _\té"
+        \\    assert(strings.is_lower(s.byte_at(0)))
+        \\    assert(not strings.is_upper(s.byte_at(0)))
+        \\    assert(strings.is_upper(s.byte_at(1)))
+        \\    assert(strings.is_alpha(s.byte_at(0)) and strings.is_alpha(s.byte_at(1)))
+        \\    assert(strings.is_digit(s.byte_at(2)))
+        \\    assert(not strings.is_alpha(s.byte_at(2)))
+        \\    assert(strings.is_alnum(s.byte_at(0)) and strings.is_alnum(s.byte_at(2)))
+        \\    assert(strings.is_space(s.byte_at(3)))
+        \\    assert(strings.is_space(s.byte_at(5)))
+        \\    assert(not strings.is_alnum(s.byte_at(4)))
+        \\    assert(not strings.is_space(s.byte_at(4)))
+        \\    # A UTF-8 lead byte is not a letter: the classes are ASCII.
+        \\    assert(not strings.is_alpha(s.byte_at(6)))
+        \\    assert(not strings.is_alnum(s.byte_at(6)))
         \\
     );
 }

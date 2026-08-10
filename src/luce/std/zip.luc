@@ -801,7 +801,7 @@ func deflate(data: list(byte)) -> list(byte):
         var best_distance: long = 0
         if at + 3 <= len(data):
             let key = data[at] << 16 | data[at + 1] << 8 | data[at + 2]
-            var candidate = recent.get(key, -1)
+            var candidate = recent.get(key) else -1
             var tries: long = 0
             while candidate >= 0 and tries < 24:
                 let distance = at - candidate
@@ -816,7 +816,7 @@ func deflate(data: list(byte)) -> list(byte):
                         best_distance = distance
                     candidate = earlier[candidate]
                     tries += 1
-            earlier[at] = recent.get(key, -1)
+            earlier[at] = recent.get(key) else -1
             recent[key] = at
         if best_length >= 3:
             let code = code_for(lengths, best_length)
@@ -830,7 +830,7 @@ func deflate(data: list(byte)) -> list(byte):
                 let position = at + step
                 if position + 3 <= len(data):
                     let key = data[position] << 16 | data[position + 1] << 8 | data[position + 2]
-                    earlier[position] = recent.get(key, -1)
+                    earlier[position] = recent.get(key) else -1
                     recent[key] = position
             at += best_length
         else:

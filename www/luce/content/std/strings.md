@@ -22,20 +22,22 @@ match positions of valid UTF-8 needles.
 
 | Signature | Returns |
 |---|---|
-| `strings.find(s, needle, start = 0) -> long` | first occurrence at or after `start`, or `-1` |
+| `strings.find(s, needle, start = 0) -> long?` | first occurrence at or after `start`, or absence |
 | `strings.contains(s, needle) -> bool` | |
 | `strings.starts_with(s, prefix) -> bool` | |
 | `strings.ends_with(s, suffix) -> bool` | |
 | `strings.count(s, needle) -> long` | non-overlapping occurrences |
+| `strings.is_digit(b) -> bool` | the ASCII classes, on the byte `byte_at` answers |
+| `strings.is_alpha(b)`, `is_alnum(b)`, `is_upper(b)`, `is_lower(b)`, `is_space(b)` | bytes above 127 are in none of them |
 
 ```luce run
 import std.strings
 
 func main():
     let path = "src/luce/std/strings.luc"
-    print(string(path.find("/")))
-    print(string(path.find("/", 4)))
-    print(string(path.find("nowhere")))
+    print(string(path.find("/") else -1))
+    print(string(path.find("/", 4) else -1))
+    print(string(path.find("nowhere") else -1))
     print(f"{path.contains("std")} {path.starts_with("src")} {path.ends_with(".luc")}")
     print(string(path.count("/")))
 ```

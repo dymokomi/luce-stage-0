@@ -2283,8 +2283,8 @@ test "named arguments: all four spellings of a user call take them" {
         \\    assert(p.plus(twice = true, other = 5) == 20)
         \\    assert(Point.added(right = 5, left = 10) == 15)
         \\    assert(multiplied(right = 4, left = 3) == 12)
-        \\    assert(strings.find(s = "abcb", needle = "b") == 1)
-        \\    assert(strings.find(needle = "b", s = "abcb") == 1)
+        \\    assert((strings.find(s = "abcb", needle = "b") else -1) == 1)
+        \\    assert((strings.find(needle = "b", s = "abcb") else -1) == 1)
         \\
     );
 }
@@ -2836,8 +2836,9 @@ test "maps: for key, value iteration, values(), and get with default" {
         \\        total += v
         \\    assert(keys.build() == "abc")
         \\    assert(total == 6)
-        \\    assert(m.get("b", 0) == 2)
-        \\    assert(m.get("missing", 99) == 99)
+        \\    assert((m.get("b") else 0) == 2)
+        \\    assert(m.get("missing") == none)
+        \\    assert((m.get("missing") else 99) == 99)
         \\    var vs = m.values()
         \\    assert(len(vs) == 3)
         \\    assert(vs[0] == 1 and vs[2] == 3)
@@ -3213,9 +3214,9 @@ test "strings: find, contains, starts_with, ends_with" {
         \\
         \\func main():
         \\    let s = "hello world"
-        \\    assert(s.find("world") == 6)
-        \\    assert(s.find("xyz") == 0 - 1)
-        \\    assert(s.find("hello") == 0)
+        \\    assert((s.find("world") else -1) == 6)
+        \\    assert(s.find("xyz") == none)
+        \\    assert((s.find("hello") else -1) == 0)
         \\    assert(s.contains("lo w"))
         \\    assert(not s.contains("zzz"))
         \\    assert(s.starts_with("hello"))
@@ -3438,8 +3439,8 @@ test "lists: reverse, find, contains, clear" {
         \\    var xs = [1, 2, 3, 4]
         \\    xs.reverse()
         \\    assert(xs[0] == 4 and xs[3] == 1)
-        \\    assert(xs.find(3) == 1)
-        \\    assert(xs.find(99) == 0 - 1)
+        \\    assert((xs.find(3) else -1) == 1)
+        \\    assert(xs.find(99) == none)
         \\    assert(xs.contains(2))
         \\    assert(not xs.contains(99))
         \\    xs.clear()
@@ -3580,8 +3581,8 @@ test "maps: hundreds of keys keep insertion order and every lookup hits" {
         \\    for key in m:
         \\        assert(key == "k" + string(next))
         \\        next += 2
-        \\    assert(m.get("k5", 0 - 1) == 5)
-        \\    assert(m.get("k4", 0 - 1) == 0 - 1)
+        \\    assert((m.get("k5") else 0 - 1) == 5)
+        \\    assert(m.get("k4") == none)
         \\
     );
 }
@@ -3655,7 +3656,7 @@ test "arrays: rank-1 sort, reverse, find, contains" {
         \\    row[3] = 2
         \\    row.sort()
         \\    assert(row[0] == 1 and row[3] == 4)
-        \\    assert(row.find(4) == 3)
+        \\    assert((row.find(4) else -1) == 3)
         \\    assert(row.contains(2))
         \\    assert(not row.contains(99))
         \\    row.reverse()
@@ -4525,7 +4526,7 @@ test "bounds: a map answers for a key it holds and traps for one it does not" {
         \\    assert(m["a"] == 1)
         \\    assert(m.has("a"))
         \\    assert(not m.has("b"))
-        \\    assert(m.get("b", 9) == 9)
+        \\    assert((m.get("b") else 9) == 9)
         \\    m.remove("b")
         \\    assert(len(m) == 1)
         \\
@@ -5037,8 +5038,8 @@ test "string methods: search, case, trim, replace, repeat, split" {
         \\    let text = "  Hello, Luce World  "
         \\    let cleaned = text.trim()
         \\    assert(cleaned == "Hello, Luce World")
-        \\    assert(cleaned.find("Luce") == 7)
-        \\    assert(cleaned.find("zig") == -1)
+        \\    assert((cleaned.find("Luce") else -1) == 7)
+        \\    assert(cleaned.find("zig") == none)
         \\    assert(cleaned.contains("World"))
         \\    assert(cleaned.starts_with("Hello"))
         \\    assert(cleaned.ends_with("World"))
@@ -5072,8 +5073,8 @@ test "list and array methods: sort, reverse, find, contains, fill, clear" {
         \\    assert(xs[4] == 5)
         \\    xs.reverse()
         \\    assert(xs[0] == 5)
-        \\    assert(xs.find(4) == 1)
-        \\    assert(xs.find(9) == -1)
+        \\    assert((xs.find(4) else -1) == 1)
+        \\    assert(xs.find(9) == none)
         \\    assert(xs.contains(3))
         \\    assert(not xs.contains(9))
         \\    xs.clear()

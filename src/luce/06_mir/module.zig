@@ -98,7 +98,7 @@ pub const magic = "LUCE";
 ///
 /// 36 — `term_event_data` joins the intrinsic set behind `term.io`'s
 /// mouse and resize accessors.
-pub const format_version: u32 = 36;
+pub const format_version: u32 = 37;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -1629,7 +1629,12 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // moved this number and left the hash alone.  A version bump is
     // still required for that, and this test is not what will remind
     // you.
-    try testing.expectEqual(@as(u32, 36), format_version);
+    // 36 -> 37: `map_get` lost its fallback operand and answers `V?`;
+    // `list_find` answers `long?` — the instruction *names* are
+    // unchanged (the hash below did not move), which is exactly the
+    // shape-changed case the paragraph above warns the hash cannot
+    // catch.
+    try testing.expectEqual(@as(u32, 37), format_version);
     try testing.expectEqual(@as(u64, 11437522259294766851), hasher.final());
 }
 

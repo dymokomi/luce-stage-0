@@ -26,8 +26,8 @@ import std.strings
 
 func main():
     let path = "src/luce/06_mir/module.zig"
-    print(f"find '/': {path.find("/")}")
-    print(f"find '/' after 4: {path.find("/", 4)}")
+    print(f"find '/': {path.find("/") else -1}")
+    print(f"find '/' after 4: {path.find("/", 4) else -1}")
     print(f"contains 'mir': {path.contains("mir")}")
     print(f"starts_with 'src': {path.starts_with("src")}")
     print(f"ends_with '.zig': {path.ends_with(".zig")}")

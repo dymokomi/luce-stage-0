@@ -12,17 +12,19 @@
 # byte, so a match never starts or ends mid-character).
 
 # The byte offset of the first occurrence of needle at or after
-# `start`, or -1 — for a match that never comes, and for a `start`
-# outside the string, which is an argument error and not a missing
-# needle.  An empty needle matches at `start`.  `start` defaults to
-# the whole string: `find(s, needle)` is the everyday call, and
-# `find_from` was this function wearing the default as a second
-# declaration (docs/ARGS.md §9).
-func find(s: string, needle: string, start: long = 0) -> long:
+# `start`, or absence — for a match that never comes, and for a
+# `start` outside the string, where no match can begin.  Absence, not
+# a -1 sentinel: `find(s, x) else -1` spells the sentinel for anyone
+# who wants one, and nobody compares against a magic number by
+# accident (docs/FAILURE.md).  An empty needle matches at `start`.
+# `start` defaults to the whole string: `find(s, needle)` is the
+# everyday call, and `find_from` was this function wearing the
+# default as a second declaration (docs/ARGS.md §9).
+func find(s: string, needle: string, start: long = 0) -> long?:
     let size = len(s)
     let needle_size = len(needle)
     if start < 0 or start > size:
-        return -1
+        return none
     if needle_size == 0:
         return start
     # The needle's first byte is located with the scanning primitive —
@@ -35,17 +37,17 @@ func find(s: string, needle: string, start: long = 0) -> long:
     while at <= limit:
         let hit = s.find_byte(head, at)
         if hit < 0 or hit > limit:
-            return -1
+            return none
         var i = 1
         while i < needle_size and s.byte_at(hit + i) == needle.byte_at(i):
             i += 1
         if i == needle_size:
             return hit
         at = hit + 1
-    return -1
+    return none
 
 func contains(s: string, needle: string) -> bool:
-    return find(s, needle) >= 0
+    return find(s, needle) != none
 
 func starts_with(s: string, prefix: string) -> bool:
     if len(prefix) > len(s):
@@ -62,22 +64,44 @@ func count(s: string, needle: string) -> long:
     if len(needle) == 0:
         return 0
     var found = 0
-    var at = find(s, needle)
+    # The loops below carry the position as a plain long, unwrapping
+    # each answer at the call: -1 is spelled once, at the `else`, and
+    # means only "stop".
+    var at = find(s, needle) else -1
     while at >= 0:
         found += 1
-        at = find(s, needle, at + len(needle))
+        at = find(s, needle, at + len(needle)) else -1
     return found
 
-private func is_space_byte(byte: byte) -> bool:
-    return byte == 32 or byte == 9 or byte == 13 or byte == 10
+# The ASCII character classes, on the byte the primitives answer
+# (`s.byte_at(i)`).  Bytes above 127 are in none of them: these are
+# the classes a lexer or a validator asks about, and a UTF-8
+# continuation byte is not a letter.
+func is_digit(b: byte) -> bool:
+    return b >= 48 and b <= 57
+
+func is_upper(b: byte) -> bool:
+    return b >= 65 and b <= 90
+
+func is_lower(b: byte) -> bool:
+    return b >= 97 and b <= 122
+
+func is_alpha(b: byte) -> bool:
+    return is_upper(b) or is_lower(b)
+
+func is_alnum(b: byte) -> bool:
+    return is_alpha(b) or is_digit(b)
+
+func is_space(b: byte) -> bool:
+    return b == 32 or b == 9 or b == 13 or b == 10
 
 # ASCII whitespace off both ends.
 func trim(s: string) -> string:
     var first = 0
-    while first < len(s) and is_space_byte(s.byte_at(first)):
+    while first < len(s) and is_space(s.byte_at(first)):
         first += 1
     var last = len(s)
-    while last > first and is_space_byte(s.byte_at(last - 1)):
+    while last > first and is_space(s.byte_at(last - 1)):
         last -= 1
     return s[first:last]
 
@@ -118,12 +142,12 @@ func replace(s: string, old: string, replacement: string) -> string:
         return s
     var out = new builder()
     var run: long = 0
-    var at = find(s, old)
+    var at = find(s, old) else -1
     while at >= 0:
         out.append(s[run:at])
         out.append(replacement)
         run = at + len(old)
-        at = find(s, old, run)
+        at = find(s, old, run) else -1
     if run == 0:
         return s
     out.append(s[run:])
@@ -146,21 +170,21 @@ func split(s: string, separator: string) -> list(string):
     if len(separator) == 0:
         var at = 0
         while at < len(s):
-            while at < len(s) and is_space_byte(s.byte_at(at)):
+            while at < len(s) and is_space(s.byte_at(at)):
                 at += 1
             var word_end = at
-            while word_end < len(s) and not is_space_byte(s.byte_at(word_end)):
+            while word_end < len(s) and not is_space(s.byte_at(word_end)):
                 word_end += 1
             if word_end > at:
                 pieces.append(s[at:word_end])
             at = word_end
         return pieces
     var run: long = 0
-    var at = find(s, separator)
+    var at = find(s, separator) else -1
     while at >= 0:
         pieces.append(s[run:at])
         run = at + len(separator)
-        at = find(s, separator, run)
+        at = find(s, separator, run) else -1
     pieces.append(s[run:])
     return pieces
 

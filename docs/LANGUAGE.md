@@ -850,8 +850,9 @@ sugar for a plain function with the receiver first, not dispatch):
   container or resource handles stores each slot separately); every
   array has `dim(axis)`.
 - `map(K, V)`: `K` is `long` or `string`.  Index get (traps on a
-  missing key), index set (insert or update), `has(k)`, `get(k,
-  default) -> V` (the value or the default — no trap), `remove(k)`
+  missing key), index set (insert or update), `has(k)`, `get(k) -> V?`
+  (the value or absence — no trap, and `m.get(k) else d` is the
+  fallback form), `remove(k)`
   (no-op when absent), `keys() -> list(K)`, `values() -> list(V)`,
   `clear()`, `len`.  `values()` copies each value into its fresh list
   and is therefore admitted only when `V` carries no `file` or `task`.
@@ -1096,13 +1097,14 @@ file_open(path, mode)         # file! — 0 read, 1 write, 2 append
 term_rows()   term_cols()   term_clear()   term_move(row, col)
 term_style(fg, bg, bold)   term_write(text)   term_flush()
 key_read()   key_text()          # key_read is string?
+term_event_data(field)       # long — row/col/button/modifiers/wheel of
+                             #   the event key_read just answered; 0 for keys
 
 exit(status)                 # never returns; the run ends `exited`
 
 os_total_memory()            # long — bytes the machine has
 os_available_memory()        # long — bytes it could still hand out
 os_cpu_count()               # long — logical processors
-shell_run(command)           # string! — captured output and exit status
 ```
 
 `file_open` is the primitive under `std.files.open`, `create`, and
@@ -1420,8 +1422,9 @@ defines what it is plainly told to write is how a map has always
 grown.  It is the distinction an operating system draws when it maps a
 page of zeroes on the first *write* and faults on a wild read.
 
-Use `get(key, default)` for a read with an explicit fallback; it never
-traps and never defines.
+Use `get(key)` for a read that answers `V?` — absence instead of a
+trap, and it never defines; `m.get(k) else d` spells the explicit
+fallback with the ordinary absence machinery.
 
 **Maps only.**  A list or an array index keeps its bounds trap under
 every operator — `xs[0] += 1` on an empty list is `index_bounds`.  An

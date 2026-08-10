@@ -1179,9 +1179,8 @@ pub export fn luce_rt_find(
     wanted: *const Value,
     out: *Value,
 ) callconv(.c) i32 {
-    const at = containers.find(runtime, target.*, wanted.*) catch |mistake|
+    out.* = containers.find(runtime, target.*, wanted.*) catch |mistake|
         return failed(runtime, mistake);
-    out.* = Value.ofLong(at);
     return survived;
 }
 
@@ -1193,7 +1192,7 @@ pub export fn luce_rt_contains(
 ) callconv(.c) i32 {
     const at = containers.find(runtime, target.*, wanted.*) catch |mistake|
         return failed(runtime, mistake);
-    out.* = Value.ofBoolean(at != -1);
+    out.* = Value.ofBoolean(!at.isNone());
     return survived;
 }
 
@@ -1232,10 +1231,9 @@ pub export fn luce_rt_map_get(
     runtime: *Runtime,
     target: *const Value,
     key: *const Value,
-    fallback: *const Value,
     out: *Value,
 ) callconv(.c) i32 {
-    out.* = containers.mapGet(runtime, target.*, key.*, fallback.*) catch |mistake|
+    out.* = containers.mapGet(runtime, target.*, key.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }

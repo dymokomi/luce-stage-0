@@ -12,7 +12,7 @@ func main():
     for value in values:
         pieces.append(string(value))
     print(pieces.join(" "))
-    assert(values.find(13) == 6)
+    assert((values.find(13) else -1) == 6)
     assert(values.contains(99))
     assert(values[0] == -40)
     assert(values[9] == 99)

@@ -97,7 +97,7 @@ test "a packed list still slices, sorts, finds and pops" {
         \\    xs.append(byte(1))
         \\    xs.append(byte(2))
         \\    xs.insert(0, byte(9))
-        \\    print(string(xs.find(byte(2))))
+        \\    print(string(xs.find(byte(2)) else -1))
         \\    print(string(xs.contains(byte(7))))
         \\    let part = xs[1:3]
         \\    print(string(len(part)) + " " + string(int(part[0])))

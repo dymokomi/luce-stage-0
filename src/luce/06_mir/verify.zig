@@ -1271,7 +1271,10 @@ fn verifyIntrinsic(
                 else => return error.BadIntrinsic,
             };
             try expectType(arguments[1], element);
-            try expectType(result, if (call.kind == .list_find) .long else .boolean);
+            try expectType(result, if (call.kind == .list_find)
+                Type{ .optional = .long }
+            else
+                .boolean);
         },
         .clear_object => {
             try exactly(arguments, 1);
@@ -1300,12 +1303,14 @@ fn verifyIntrinsic(
             }
         },
         .map_get => {
-            try exactly(arguments, 3);
+            try exactly(arguments, 2);
             switch (try heapShape(program, arguments[0])) {
                 .map => |pair| {
                     try expectType(arguments[1], pair.key);
-                    try expectType(arguments[2], pair.value);
-                    try expectType(result, pair.value);
+                    // A map value cannot itself be optional, so the
+                    // wrap always exists (stage 4 refuses `map(K, V?)`).
+                    try expectType(result, Type.optionalOf(pair.value) orelse
+                        return error.BadIntrinsic);
                 },
                 else => return error.BadIntrinsic,
             }

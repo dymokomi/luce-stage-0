@@ -248,7 +248,7 @@ and a larger file answers the same failure as an unreadable one.
 | `sort()` | in place, **stable**, O(n log n); `long`, `double` or `string` elements |
 | `sort_by(before: func(T, T) -> bool)` | in place, **stable**, O(n log n); every element type; requires `import std.lists` |
 | `reverse()` | in place |
-| `find(value) -> long` | `-1` when absent |
+| `find(value) -> long?` | absence when not found; `xs.find(v) else -1` is the sentinel form |
 | `contains(value) -> bool` | |
 | `clear()` | frees all owned elements |
 
@@ -267,7 +267,7 @@ them rather than copying.
 | Method | Notes |
 |---|---|
 | `has(key) -> bool` | |
-| `get(key, default) -> V` | never traps |
+| `get(key) -> V?` | absence when missing — never traps; `m.get(k) else d` is the fallback form |
 | `remove(key)` | a no-op when absent |
 | `keys() -> list(K)` | a fresh list the receiver owns |
 | `values() -> list(V)` | a fresh list the receiver owns; refused when `V` carries `file` or `task` |

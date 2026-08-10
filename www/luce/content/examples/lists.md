@@ -17,7 +17,7 @@ func main():
     xs.reverse()
     print(f"largest {xs[0]}, smallest {xs[len(xs) - 1]}")
 
-    print(f"find(4) = {xs.find(4)}, find(77) = {xs.find(77)}")
+    print(f"find(4) = {xs.find(4) else -1}, find(77) = {xs.find(77) else -1}")
     print(f"contains(5) = {xs.contains(5)}")
 
     let last = xs.pop()

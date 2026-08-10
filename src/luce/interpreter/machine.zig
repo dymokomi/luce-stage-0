@@ -1481,16 +1481,16 @@ pub const Machine = struct {
                 try containers.reverse(&self.runtime, registers[arguments[0]]);
                 return .none;
             },
-            .list_find => return .ofLong(try containers.find(
+            .list_find => return containers.find(
                 &self.runtime,
                 registers[arguments[0]],
                 registers[arguments[1]],
-            )),
-            .list_contains => return .ofBoolean(try containers.find(
+            ),
+            .list_contains => return .ofBoolean(!(try containers.find(
                 &self.runtime,
                 registers[arguments[0]],
                 registers[arguments[1]],
-            ) != -1),
+            )).isNone()),
             .clear_object => {
                 try containers.clear(&self.runtime, registers[arguments[0]]);
                 return .none;
@@ -1509,7 +1509,6 @@ pub const Machine = struct {
                 &self.runtime,
                 registers[arguments[0]],
                 registers[arguments[1]],
-                registers[arguments[2]],
             ),
             .map_place => return containers.mapPlace(
                 &self.runtime,

@@ -502,7 +502,7 @@ it still hits.
     UTF-8 walk is hand-written.  The editor's two copies of the same
     continuation-byte test — `Text.continuation` and
     `Words.continuation_byte`, one per namespace — are down to one
-    (`editor.luc:53`, `Bytes.continuation`), but the walk itself is
+    (`editor.luc:67`, `Bytes.continuation`), but the walk itself is
     still spelled out by hand in six functions.
 13. ~~**`catch` cannot see the reason.**~~  **Closed.**  `CALL catch
     NAME:` binds the error's message to an immutable `string` scoped
@@ -715,7 +715,7 @@ improvement the audit exposed:
 - **Build modes are settled, not pending.**  Luce is always
   `ReleaseSafe`; `--release` is closer to `-fstrip`.
 - Also shipped: f-strings, compound assignment, nested place
-  assignment, the eight std modules, per-stage fuzzing.
+  assignment, the nine std modules, per-stage fuzzing.
 
 ---
 
@@ -1038,10 +1038,14 @@ Completed chronology lives in the tiers above.  The current queue is:
    `send(give x)` direction only; endpoint construction, capacity,
    receive and close behavior, and the failure surface remain to be
    ratified.  The ownership-cycle prerequisite is closed above.
-2. **The cheap library slice** — character classes first; add a
-   dedicated `set` only if a constant map stops answering the corpus.
-   A `V?`-returning `m.get` and the old `strings.find` sentinel are the
-   other small API questions.
+2. ~~**The cheap library slice**~~ — **landed 2026-08-10, before the
+   first packages could bake the warts in**: the six ASCII character
+   classes in `std.strings`; `m.get(k)` answering `V?`; and
+   `strings.find` and `xs.find` answering `long?`, with
+   `... else -1` as the spelled-out sentinel for callers who want
+   one.  What remains of the entry is only the `set` question: add a
+   dedicated `set` type when a constant map stops answering the
+   corpus, and not before.
 3. **Cross-compilation** — `--target`, and one `libluce_rt` per target.
 4. **Share one `libluce_rt` between artifacts** instead of copying it
    into each.

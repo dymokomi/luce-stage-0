@@ -768,7 +768,7 @@ pub fn describe(service: Service) Effect {
         },
         .luce_rt_map_get => .{
             .memory = reads_heap,
-            .parameters = &.{ .run, .value_in, .value_in, .value_in, .value_out },
+            .parameters = &.{ .run, .value_in, .value_in, .value_out },
         },
 
         // -- containers that change something -------------------------

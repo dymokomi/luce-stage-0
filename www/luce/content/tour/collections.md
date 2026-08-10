@@ -31,7 +31,7 @@ func main():
 
     xs.sort()                    # in place, stable, O(n log n)
     print(f"sorted first {xs[0]} then {xs[1]}")
-    print(f"find(3) = {xs.find(3)}, contains(42) = {xs.contains(42)}")
+    print(f"find(3) = {xs.find(3) else -1}, contains(42) = {xs.contains(42)}")
 
     let taken = xs.pop()
     print(f"popped {taken}, {len(xs)} left")
@@ -120,7 +120,7 @@ func main():
         print(f"{name}: {count}")
 
     print(f"has apple: {stock.has("apple")}")
-    print(f"get apple: {stock.get("apple", -1)}")
+    print(f"get apple: {stock.get("apple") else -1}")
     stock.remove("plum")
     print(f"{len(stock)} kinds left")
 ```

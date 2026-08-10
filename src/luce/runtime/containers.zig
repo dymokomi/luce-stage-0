@@ -302,19 +302,21 @@ pub fn reverse(runtime: *Runtime, target: Value) Error!void {
     }
 }
 
-/// `xs.find(v)` — the index of the first equal element, or -1.
-pub fn find(runtime: *Runtime, target: Value, wanted: Value) Error!i64 {
+/// `xs.find(v) -> long?` — the index of the first equal element, or
+/// absence: the same rule `m.get` follows, so no caller ever compares
+/// against a sentinel.
+pub fn find(runtime: *Runtime, target: Value, wanted: Value) Error!Value {
     const object = try runtime.resolve(target);
     switch (object.data) {
         .list, .array => {
             const stored = object.elements;
             for (0..stored.count) |at| {
-                if (operators.compare(.equal, stored.at(at), wanted)) return @intCast(at);
+                if (operators.compare(.equal, stored.at(at), wanted)) return Value.ofLong(@intCast(at));
             }
         },
         else => unreachable,
     }
-    return -1;
+    return Value.none;
 }
 
 /// Luce's ordering on one element kind's own cells.  `sort` is the
@@ -518,12 +520,17 @@ pub fn mapValues(runtime: *Runtime, target: Value, zero: Value) Error!Value {
 
 /// `m.get(key, fallback)` — a borrow of the stored value (like
 /// m[key]), or the caller's default when the key is absent.
-pub fn mapGet(runtime: *Runtime, target: Value, key: Value, fallback: Value) Error!Value {
+/// `m.get(k) -> V?` — the value, or absence.  Absence is the honest
+/// answer for "not there" (docs/FAILURE.md), and `m.get(k) else d`
+/// spells the old fallback form with the language's own machinery;
+/// a plain `m[k]` keeps its `key_missing` trap, because indexing is
+/// asking for something the program believes is present.
+pub fn mapGet(runtime: *Runtime, target: Value, key: Value) Error!Value {
     const object = try runtime.resolve(target);
     if (object.data.map.find(&key)) |at| {
         return object.data.map.entries.items[at].value;
     }
-    return fallback;
+    return Value.none;
 }
 
 /// `m[key] OP= v` — the place a compound store reads, brought into
