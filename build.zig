@@ -44,26 +44,47 @@ pub fn build(b: *std.Build) void {
             .pic = true,
         }),
     });
-    // The final .lc/exe link is driven by the host's `cc`, so it does not
-    // automatically supply Zig's compiler-rt symbols to this archive.
-    // The final .lc/exe link is driven by the host's `cc`.  On Linux
-    // that link does not supply Zig's compiler-rt symbols to this
-    // archive, so there the archive must carry them.  On macOS it
-    // must NOT: Apple's link resolves everything the archive needs,
-    // and bundling was measured at ~+50% on every runtime-call-heavy
-    // benchmark row (strings, lists, stats; matmul's row walks too —
-    // bench/compare.sh against 545b028, 2026-08-10), consistent with
-    // compiler-rt's generic helpers winning the static link over
-    // libSystem's optimized ones.  If a Linux host shows the same
-    // shape, the fix is supplying the missing symbols narrowly, not
-    // un-bundling — the missing-symbol failure is a broken build,
-    // which is worse than a slow one.
-    runtime_library.bundle_compiler_rt = target.result.os.tag != .macos;
+    // The final .lc/exe link is driven by the host's `cc`.  Apple's
+    // link resolves everything the archive needs; a Linux `cc` supplies
+    // libgcc and glibc but not the compiler-ABI symbols only Zig's
+    // compiler-rt defines (`__zig_probe_stack`, and the half-float
+    // conversions older libgccs lack), so there the archive must carry
+    // compiler-rt or the link is broken.
+    const bundles_compiler_rt = target.result.os.tag != .macos;
+    runtime_library.bundle_compiler_rt = bundles_compiler_rt;
+
+    // A bundled compiler-rt also defines the C library's public names
+    // — memcpy, memset, bcmp, and the whole libm surface — and a
+    // definition in a linked archive beats the dynamic libc, so every
+    // artifact would trade the platform's optimized routines for
+    // generic ones: measured at +52% strings, +58% lists, +65% stats
+    // when it happened on macOS (docs/CODEGEN.md, "The benchmark
+    // snapshot").  `tools/localize_rt.zig` confines the bundle to the
+    // compiler's own namespace — `__*` and `luce_rt_*` stay global,
+    // libc's names go local — using the LLVM tools that install
+    // beside the `llvm-config` found above, so bundling supplies
+    // exactly the missing builtins and can shadow nothing.
+    const runtime_archive: std.Build.LazyPath = if (bundles_compiler_rt) confined: {
+        const localize = b.addExecutable(.{
+            .name = "localize_rt",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("tools/localize_rt.zig"),
+                .target = b.graph.host,
+                .optimize = .Debug,
+            }),
+        });
+        const confine = b.addRunArtifact(localize);
+        confine.addArg(b.pathJoin(&.{ llvm.bin_dir, "llvm-nm" }));
+        confine.addArg(b.pathJoin(&.{ llvm.bin_dir, "llvm-objcopy" }));
+        confine.addFileArg(runtime_library.getEmittedBin());
+        break :confined confine.addOutputFileArg("libluce_rt.a");
+    } else runtime_library.getEmittedBin();
+
     // Installed rather than only built, and named here, because the
     // bundled programs below are linked against the *installed* copy:
     // compiling one is a link, and a link needs a library on a path
     // `luce` can find (`apps/native.zig`, `LUCE_LIB`).
-    const install_runtime = b.addInstallArtifact(runtime_library, .{});
+    const install_runtime = b.addInstallFile(runtime_archive, "lib/libluce_rt.a");
     b.getInstallStep().dependOn(&install_runtime.step);
 
     // Luce: the language — lexer through IR lowering, the interpreter,
@@ -152,7 +173,7 @@ pub fn build(b: *std.Build) void {
     // harness drives `cc` itself, because the link is part of what it
     // proves.
     const runtime_path = b.addOptions();
-    runtime_path.addOptionPath("luce_rt_library", runtime_library.getEmittedBin());
+    runtime_path.addOptionPath("luce_rt_library", runtime_archive);
     specs.addOptions("build_options", runtime_path);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = specs })).step);
 
@@ -195,6 +216,16 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = spelling_guard })).step);
+
+    // The compiler-rt confinement tool's namespace rule, tested on
+    // every host — macOS never runs the tool (no bundling), so without
+    // this its code could rot into the next Linux build.
+    const localize_guard = b.createModule(.{
+        .root_source_file = b.path("tools/localize_rt.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = localize_guard })).step);
 
     // The guard on the documentation: every Luce sample in every living
     // document is compiled by the compiler this build just made
@@ -356,7 +387,15 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    b.installArtifact(start_library);
+    // A named install step rather than the anonymous one, because the
+    // editor's `--emit=exe` compile below resolves libluce_start.a
+    // through LUCE_LIB at the *installed* path — depending only on the
+    // build left `zig build test` finding the file solely when a past
+    // plain `zig build` had leaked one into zig-out, which is how this
+    // passed on the dev machine and failed on the first clean Linux
+    // tree.
+    const install_start = b.addInstallArtifact(start_library, .{});
+    b.getInstallStep().dependOn(&install_start.step);
 
     // The luce compiler executable: the one binary with a code
     // generator in it, and so the one that links libLLVM.
@@ -379,7 +418,7 @@ pub fn build(b: *std.Build) void {
     // links, loads and runs, not that a private one does.
     const installed_libraries = b.addOptions();
     installed_libraries.addOption([]const u8, "version", project_version);
-    installed_libraries.addOptionPath("luce_rt_library", runtime_library.getEmittedBin());
+    installed_libraries.addOptionPath("luce_rt_library", runtime_archive);
     installed_libraries.addOptionPath("luce_start_library", start_library.getEmittedBin());
     compiler_module.addOptions("build_options", installed_libraries);
 
@@ -425,7 +464,7 @@ pub fn build(b: *std.Build) void {
     const compiler_pieces = b.addOptions();
     compiler_pieces.addOption([]const u8, "version", project_version);
     compiler_pieces.addOptionPath("luce_binary", compiler.getEmittedBin());
-    compiler_pieces.addOptionPath("luce_rt_library", runtime_library.getEmittedBin());
+    compiler_pieces.addOptionPath("luce_rt_library", runtime_archive);
     compiler_pieces.addOptionPath("luce_start_library", start_library.getEmittedBin());
     compiler_product.addOptions("build_options", compiler_pieces);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = compiler_product })).step);
@@ -483,7 +522,7 @@ pub fn build(b: *std.Build) void {
     binaries.addOption([]const u8, "version", project_version);
     binaries.addOptionPath("loom_binary", terminal.getEmittedBin());
     binaries.addOptionPath("luce_binary", compiler.getEmittedBin());
-    binaries.addOptionPath("luce_rt_library", runtime_library.getEmittedBin());
+    binaries.addOptionPath("luce_rt_library", runtime_archive);
     product_module.addOptions("build_options", binaries);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = product_module })).step);
 
@@ -544,7 +583,7 @@ pub fn build(b: *std.Build) void {
         for (program.deps) |dependency| {
             compile_program.addFileInput(b.path(b.fmt("examples/{s}/{s}.luc", .{ program.name, dependency })));
         }
-        linkAgainstRuntime(compile_program, install_runtime, runtime_directory, runtime_library);
+        linkAgainstRuntime(compile_program, install_runtime, runtime_directory, runtime_archive);
         const install_program = b.addInstallFile(
             artifact_file,
             b.fmt("examples/{s}/{s}.lc", .{ program.name, program.name }),
@@ -570,9 +609,9 @@ pub fn build(b: *std.Build) void {
     const editor_executable = compile_editor.addOutputFileArg("editor");
     compile_editor.addFileInput(b.path("examples/editor/editor_model.luc"));
     compile_editor.addFileInput(b.path("src/luce/std/os.luc"));
-    compile_editor.step.dependOn(&start_library.step);
+    compile_editor.step.dependOn(&install_start.step);
     compile_editor.addFileInput(start_library.getEmittedBin());
-    linkAgainstRuntime(compile_editor, install_runtime, runtime_directory, runtime_library);
+    linkAgainstRuntime(compile_editor, install_runtime, runtime_directory, runtime_archive);
     const install_editor = b.addInstallFile(editor_executable, "editor");
     const install_editor_example = b.addInstallFile(editor_executable, "examples/editor/editor");
     b.getInstallStep().dependOn(&install_editor.step);
@@ -600,7 +639,7 @@ pub fn build(b: *std.Build) void {
         compile_bench.addFileArg(b.path(b.fmt("bench/{s}.luc", .{name})));
         compile_bench.addArg("-o");
         _ = compile_bench.addOutputFileArg(b.fmt("{s}.lc", .{name}));
-        linkAgainstRuntime(compile_bench, install_runtime, runtime_directory, runtime_library);
+        linkAgainstRuntime(compile_bench, install_runtime, runtime_directory, runtime_archive);
         test_step.dependOn(&compile_bench.step);
     }
 }
@@ -611,13 +650,13 @@ pub fn build(b: *std.Build) void {
 /// thrown away when the runtime changes.
 fn linkAgainstRuntime(
     run: *std.Build.Step.Run,
-    install_runtime: *std.Build.Step.InstallArtifact,
+    install_runtime: *std.Build.Step.InstallFile,
     directory: []const u8,
-    runtime_library: *std.Build.Step.Compile,
+    runtime_archive: std.Build.LazyPath,
 ) void {
     run.setEnvironmentVariable("LUCE_LIB", directory);
     run.step.dependOn(&install_runtime.step);
-    run.addFileInput(runtime_library.getEmittedBin());
+    run.addFileInput(runtime_archive);
 }
 
 /// The public toolchain release is intentionally a two-component number
@@ -681,6 +720,9 @@ const Llvm = struct {
     /// identity below.
     version: []const u8,
     host_target: []const u8,
+    /// `--bindir`: where llvm-nm and llvm-objcopy live, for the
+    /// compiler-rt confinement step above.
+    bin_dir: []const u8,
 };
 
 fn discoverLlvm(b: *std.Build) Llvm {
@@ -736,6 +778,7 @@ fn discoverLlvm(b: *std.Build) Llvm {
             "stdc++",
         .version = ask(b, program, "--version"),
         .host_target = ask(b, program, "--host-target"),
+        .bin_dir = ask(b, program, "--bindir"),
     };
 }
 

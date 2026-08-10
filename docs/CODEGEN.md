@@ -1257,19 +1257,32 @@ and says which column it is.
 Two stories separate this snapshot from 2026-08-07's, and both are
 worth keeping.  First, "Fix linux compile" (`c2fa6ae`) set
 `bundle_compiler_rt` on `libluce_rt` unconditionally, and the bundled
-generic helpers won the `cc`-driven static link over libSystem's
-optimized ones — measured at +52% on `strings`, +58% on `lists`,
-+65% on `stats` and +15–23% on the matmuls (interleaved A/B against
-`545b028`), sitting undetected for a day because the commit ran no
-benchmark.  Bundling is now Linux-only in `build.zig`, where the
-missing-symbol failure it fixes actually occurs, and every row above
-is back within noise of its 2026-08-07 value except one.  Second,
-that one: **`stats` (1.05x → 1.32x) is the recorded price of the
+object defines the C library's public names — `memcpy`, `memset`,
+`bcmp`, the whole libm surface — which won the `cc`-driven static
+link over the platform's optimized ones: measured at +52% on
+`strings`, +58% on `lists`, +65% on `stats` and +15–23% on the
+matmuls on macOS (interleaved A/B against `545b028`), and the same
+shape on Linux the day the `tools/linux-check` rig ran the first
+Linux benchmark (strings 9.27x → 6.91x, stats 1.63x → 1.23x, lists
+3.97x → 2.49x, matmul 1.13x → 0.98x, unconfined vs confined).  It
+sat undetected for a day because the commit ran no benchmark.  The
+fix is one mechanism on every OS: bundling stays wherever the link
+needs Zig's compiler-ABI symbols (`__zig_probe_stack`, the
+half-float conversions — Linux, where the unbundled link is simply
+broken), and `tools/localize_rt.zig` confines the bundled object to
+the compiler's namespace, so `memcpy` stays an undefined reference
+that binds to the real libc at load.  macOS needs no bundle and
+carries none.  One Linux observation is parked for its own
+investigation: the `strings` row's C twin is ~28% faster against
+glibc than against libSystem while the Luce side is slower, so that
+row reads 6.91x there — a baseline difference that predates
+everything above.  Second, the one row still off its 2026-08-07
+value here: **`stats` (1.05x → 1.32x) is the recorded price of the
 parked `llvm.minimumnum` vectorization** ("The extrema, and a
 vectorization that is parked" above) — the extremum reduction is
-scalar compare/select again until the intrinsic's x86-64 lowering can
-be trusted, and the two extremum passes are a third of the row's
-work.
+scalar compare/select again until the intrinsic's x86-64 lowering
+can be trusted, and the two extremum passes are a third of the
+row's work.
 
 **The interleaved A/B, twice, against `822382a`** — the authoritative
 form, because absolute times move with the host.  `compute`:
