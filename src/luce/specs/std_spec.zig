@@ -684,6 +684,23 @@ test "os: the machine's numbers cross the boundary intact, on both engines" {
     );
 }
 
+test "os.term.ui: Unicode borders keep their junctions intact" {
+    try agreeOk(
+        \\import std.os
+        \\
+        \\func main():
+        \\    assert(os.term.ui.horizontal() == "─")
+        \\    assert(os.term.ui.vertical() == "│")
+        \\    assert(os.term.ui.top_left() == "┌")
+        \\    assert(os.term.ui.bottom_right() == "┘")
+        \\    assert(os.term.ui.junction(top = true, right = true, bottom = true, left = true) == "┼")
+        \\    assert(os.term.ui.junction(top = true, right = true, bottom = false, left = true) == "┴")
+        \\    assert(os.term.ui.junction(top = false, right = true, bottom = true, left = true) == "┬")
+        \\    assert(os.term.ui.shadow() == "░")
+        \\
+    );
+}
+
 test "os: available fits inside total, and used is a part of the whole" {
     // The relations the module promises on *any* machine, written the
     // way a program would check them rather than against the seeded

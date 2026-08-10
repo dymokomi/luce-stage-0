@@ -50,6 +50,31 @@ printed them.
 process API. It runs one command string through the host shell, and a
 host that cannot start that shell reports `io_failed`.
 
+## Terminal facade and Unicode UI geometry
+
+Terminal programs use the same module for the screen and keyboard:
+
+```luce
+import std.os
+
+let rows = os.term.rows()
+let cols = os.term.cols()
+os.term.move(0, 0)
+os.term.style(80, bold = true)
+os.term.write(os.term.ui.junction(top = true, right = true, bottom = true, left = true))
+os.term.flush()
+let key = os.term.key()
+let inserted = os.term.text()
+```
+
+`os.term` wraps the hosted terminal operations. Loom still owns raw mode,
+the alternate screen, frame buffering, sanitization and escape sequences.
+`os.term.ui` is pure and supplies Unicode box geometry: horizontal and
+vertical lines, corners, all junction combinations, and light/dark
+one-cell shadows. `junction(top, right, bottom, left)` describes which
+lines continue through a cell, allowing panes to meet cleanly at `┬`, `┴`,
+`├`, `┤` and `┼` instead of relying on ASCII `+` everywhere.
+
 Note what it does *not* claim: that `used_memory()` equals
 `total - available` for the `available` read a line earlier. It takes
 its own two readings, and the machine moved in between. This page said

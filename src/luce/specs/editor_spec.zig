@@ -193,7 +193,7 @@ test "Ctrl-B saves, runs the current file and shows the host transcript" {
     defer testing.allocator.free(shown);
     try testing.expect(std.mem.indexOf(u8, shown, "mock shell: loom luce 'notes.txt'") != null);
     try testing.expect(std.mem.indexOf(u8, shown, "exit status: 0") != null);
-    try testing.expect(std.mem.indexOf(u8, shown, "+- output ") != null);
+    try testing.expect(std.mem.indexOf(u8, shown, "─ output ") != null);
 }
 
 test "the file pane is optional and receives focus through the pane cycle" {
@@ -214,7 +214,7 @@ test "the file pane is optional and receives focus through the pane cycle" {
     defer testing.allocator.free(shown);
     try testing.expect(std.mem.indexOf(u8, shown, "alpha.txt") != null);
     try testing.expect(std.mem.indexOf(u8, shown, "[files]") != null);
-    try testing.expect(std.mem.indexOf(u8, shown, "+ files") != null);
+    try testing.expect(std.mem.indexOf(u8, shown, "┌ files") != null);
 }
 
 /// The characters a transcript put on the screen, with the frame

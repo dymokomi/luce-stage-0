@@ -352,6 +352,33 @@ shell. It is host-gated and fallible: a shell the host cannot start is an
 `io_failed` error. This is a tool boundary, not a portable process or
 argument-vector API.
 
+### `os.term` and `os.term.ui`
+
+Terminal operations now have a Luce-owned home instead of making every
+program call the flat `term_*` and `key_*` builtins directly:
+
+```
+import std.os
+
+let rows = os.term.rows()
+let cols = os.term.cols()
+os.term.move(0, 0)
+os.term.style(80, bold = true)
+os.term.write(os.term.ui.junction(top = true, right = true, bottom = true, left = true))
+os.term.flush()
+let name = os.term.key()
+let text = os.term.text()
+```
+
+The `os.term` methods are hosted and retain the existing raw-mode,
+alternate-screen, frame-buffering and sanitization rules. `os.term.ui` is
+pure Unicode geometry: `horizontal()`, `vertical()`, the four corners,
+`junction(top, right, bottom, left)`, and light/dark one-cell shadows. The
+four booleans describe the lines that continue through a cell, so a layout
+can draw uninterrupted borders and correct intersections rather than
+overwriting a corner with a generic plus sign. The existing flat builtins
+remain the compiler/ABI seam underneath this facade.
+
 Nothing here answers `?` or `!`.  A fact the host knows is a number; a
 fact it does not know is a **refusal** — `host_unavailable`, the same
 trap a withheld service gives — because the alternative is a host

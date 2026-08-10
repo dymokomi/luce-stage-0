@@ -40,6 +40,114 @@ struct shell:
     static func run(command: string) -> string!:
         return try shell_run(command)
 
+# The terminal facade.  The raw names remain compiler-owned host services;
+# this value gives Luce programs one stable home for them and leaves room for
+# mouse, resize, alternate-screen and event APIs without adding another flat
+# family of globals.
+struct Term:
+    ui: UI
+
+    func rows() -> long:
+        return term_rows()
+
+    func cols() -> long:
+        return term_cols()
+
+    func clear():
+        term_clear()
+
+    func move(row: long, column: long):
+        term_move(row, column)
+
+    func style(foreground: long, background: long = -1, bold: bool = false):
+        term_style(fg = foreground, bg = background, bold = bold)
+
+    func write(text: string):
+        term_write(text)
+
+    func flush():
+        term_flush()
+
+    func key() -> string?:
+        return key_read()
+
+    func text() -> string:
+        return key_text()
+
+# Unicode terminal geometry belongs here rather than in every program that
+# draws a pane.  `junction` takes the four sides that continue through the
+# cell, so a layout compositor can choose the correct intersection instead of
+# overwriting one border with another.  All returned glyphs occupy one normal
+# terminal cell.
+struct UI:
+    private:
+        token: long
+
+    func horizontal() -> string:
+        return "─"
+
+    func vertical() -> string:
+        return "│"
+
+    func top_left() -> string:
+        return "┌"
+
+    func top_right() -> string:
+        return "┐"
+
+    func bottom_left() -> string:
+        return "└"
+
+    func bottom_right() -> string:
+        return "┘"
+
+    func junction(top: bool, right: bool, bottom: bool, left: bool) -> string:
+        if top and right and bottom and left:
+            return "┼"
+        if top and right and bottom:
+            return "├"
+        if top and bottom and left:
+            return "┤"
+        if top and right and left:
+            return "┴"
+        if right and bottom and left:
+            return "┬"
+        if top and bottom:
+            return "│"
+        if right and left:
+            return "─"
+        if top and right:
+            return "└"
+        if top and left:
+            return "┘"
+        if right and bottom:
+            return "┌"
+        if bottom and left:
+            return "┐"
+        if top:
+            return "╵"
+        if bottom:
+            return "╷"
+        if right:
+            return "╶"
+        if left:
+            return "╴"
+        return " "
+
+    # A light block makes a reliable one-cell shadow even on terminals that
+    # do not render faint background colours consistently.  Programs can
+    # combine it with a dim style for a softer shadow.
+    func shadow() -> string:
+        return "░"
+
+    func shadow_dark() -> string:
+        return "▒"
+
+# One immutable facade value gives callers the requested `os.term.ui` path.
+# The token makes UI an ordinary object-free struct while remaining invisible
+# to callers; all useful state lives in the terminal host, not in this value.
+const term = Term(ui = UI(token = 0))
+
 # Bytes of physical memory the machine has.  Fixed for the life of the
 # run — this is the hardware's size, not a quota and not a limit the
 # program is held to.

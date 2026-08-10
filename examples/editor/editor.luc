@@ -325,13 +325,13 @@ private enum Word:
     func style():
         match self:
             keyword:
-                term_style(theme.keyword, bold = true)
+                os.term.style(theme.keyword, bold = true)
             type_name:
-                term_style(theme.type_name)
+                os.term.style(theme.type_name)
             builtin:
-                term_style(theme.builtin)
+                os.term.style(theme.builtin)
             plain:
-                term_style(theme.plain)
+                os.term.style(theme.plain)
 
 # What a keystroke means to the editor.
 #
@@ -803,7 +803,7 @@ private struct State:
     # in `Draw` operates on text and columns rather than on the editor,
     # and remains a static namespace function.
     func status(rows: long, cols: long, line: long, column: long):
-        term_move(rows - 1, 0)
+        os.term.move(rows - 1, 0)
         var flag = ""
         if self.dirty:
             flag = " +"
@@ -821,12 +821,12 @@ private struct State:
         # loop this replaces built a fresh string per space, every
         # frame.  `repeat` answers "" for a width already overrun.
         let bar = left + strings.repeat(" ", cols - Text.width(left) - Text.width(hint)) + hint
-        term_style(theme.status_fg, theme.status_bg)
+        os.term.style(theme.status_fg, theme.status_bg)
         let ignored = Draw.emit(bar, from = 0, to = len(bar), remaining = cols)
 
     func frame():
-        let rows = max(term_rows(), 2)
-        let cols = max(term_cols(), 10)
+        let rows = max(os.term.rows(), 2)
+        let cols = max(os.term.cols(), 10)
         var output_height: long = 0
         if self.output_pane:
             output_height = long(rows / 3)
@@ -858,11 +858,11 @@ private struct State:
         let cursor_column = Text.column_of(self.content, self.cursor)
         let total = Text.count_lines(self.content)
 
-        term_clear()
+        os.term.clear()
         var at = Text.line_at(self.content, self.scroll)
         for row in range(0, visible):
             let line_index = self.scroll + row
-            term_move(row, 0)
+            os.term.move(row, 0)
             if self.file_pane:
                 Draw.file_line(
                     self.file_names,
@@ -871,13 +871,13 @@ private struct State:
                     file_width,
                     active = self.focus == Focus.files,
                 )
-                term_move(row, file_width)
+                os.term.move(row, file_width)
                 Draw.pane_style(self.focus == Focus.files)
                 if row == 0:
-                    term_write("+")
+                    os.term.write(os.term.ui.junction(top = false, right = false, bottom = true, left = true))
                 else:
-                    term_write("|")
-                term_move(row, file_width + 1)
+                    os.term.write(os.term.ui.vertical())
+                os.term.move(row, file_width + 1)
             if line_index < total:
                 Draw.gutter(
                     line_index + 1,
@@ -888,8 +888,8 @@ private struct State:
                 Draw.line(self.content, from = at, to = finish, width = text_width)
                 at = finish + 1
             else:
-                term_style(theme.gutter)
-                term_write("   ~")
+                os.term.style(theme.gutter)
+                os.term.write("   ~")
         if self.output_pane:
             var split: long = 0
             if self.file_pane:
@@ -902,20 +902,21 @@ private struct State:
             )
         self.status(rows = rows, cols = cols, line = cursor_line, column = cursor_column)
         if self.focus == Focus.files:
-            term_move(clamp(self.file_selected, 0, visible - 1), 0)
+            os.term.move(clamp(self.file_selected, 0, visible - 1), 0)
         elif self.focus == Focus.output:
-            term_move(editor_height, 0)
+            os.term.move(editor_height, 0)
         else:
-            term_move(
+            os.term.move(
                 clamp(cursor_line - self.scroll, 0, visible - 1),
                 clamp(text_start + cursor_column, 0, cols - 1),
             )
-        term_flush()
+        os.term.flush()
 
     func output_frame(start: long, finish: long, cols: long, split: long):
         let total = Text.count_lines(self.output)
+        let interior = max(cols - 2, 0)
         for row in range(start, finish):
-            term_move(row, 0)
+            os.term.move(row, 0)
             if row == start:
                 Draw.horizontal_border(
                     cols,
@@ -924,24 +925,32 @@ private struct State:
                     active = self.focus == Focus.output,
                 )
             else:
+                Draw.pane_style(self.focus == Focus.output)
+                os.term.write(os.term.ui.vertical())
                 let line_index = self.output_scroll + row - start - 1
+                var used: long = 0
                 if line_index < total:
                     let line_start = Text.line_at(self.output, line_index)
                     let line_finish = Text.line_end(self.output, line_start)
-                    term_style(theme.plain)
-                    let ignored = Draw.emit(
+                    os.term.style(theme.plain)
+                    used = Draw.emit(
                         self.output,
                         from = line_start,
                         to = line_finish,
-                        remaining = cols,
+                        remaining = interior,
                     )
+                if used < interior:
+                    os.term.write(strings.repeat(" ", interior - used))
+                os.term.move(row, cols - 1)
+                Draw.pane_style(self.focus == Focus.output)
+                os.term.write(os.term.ui.vertical())
 
 private struct Draw:
     static func pane_style(active: bool):
         if active:
-            term_style(theme.pane_active, theme.pane_active_bg, bold = true)
+            os.term.style(theme.pane_active, theme.pane_active_bg, bold = true)
         else:
-            term_style(theme.pane_border)
+            os.term.style(theme.pane_border)
 
     static func horizontal_border(width: long, split: long, label: string, active: bool):
         Draw.pane_style(active)
@@ -952,13 +961,20 @@ private struct Draw:
         if title_at + len(title) >= width - 1:
             title_at = -1
         for column in range(0, width):
-            if column == 0 or column == width - 1 or (split > 0 and column == split):
-                term_write("+")
+            if column == 0:
+                if split > 0:
+                    os.term.write(os.term.ui.junction(top = true, right = true, bottom = true, left = false))
+                else:
+                    os.term.write(os.term.ui.junction(top = false, right = true, bottom = true, left = false))
+            elif column == width - 1:
+                os.term.write(os.term.ui.junction(top = false, right = false, bottom = true, left = true))
+            elif split > 0 and column == split:
+                os.term.write(os.term.ui.junction(top = true, right = true, bottom = false, left = true))
             elif title_at >= 0 and column >= title_at and column < title_at + len(title):
                 let offset = column - title_at
-                term_write(title[offset:offset + 1])
+                os.term.write(title[offset:offset + 1])
             else:
-                term_write("-")
+                os.term.write(os.term.ui.horizontal())
 
     # Write [from, to) clipped to `remaining` display columns; returns
     # the columns actually used.
@@ -967,7 +983,7 @@ private struct Draw:
         var used = 0
         while at < to and used < remaining:
             let stop = Text.next_boundary(value, at)
-            term_write(value[at:stop])
+            os.term.write(value[at:stop])
             at = stop
             used = used + 1
         return used
@@ -975,29 +991,29 @@ private struct Draw:
     static func file_line(names: list(string), row: long, selected: long, width: long, active: bool):
         if row == 0:
             Draw.pane_style(active)
-            term_write("+")
+            os.term.write(os.term.ui.junction(top = false, right = true, bottom = true, left = false))
             let title = " files "
             let room = max(width - 1, 0)
             let shown = min(len(title), room)
-            term_write(title[0:shown])
+            os.term.write(title[0:shown])
             if shown < room:
-                term_write(strings.repeat("-", room - shown))
+                os.term.write(strings.repeat(os.term.ui.horizontal(), room - shown))
             return
         Draw.pane_style(active and row == selected + 1)
-        term_write("|")
+        os.term.write(os.term.ui.vertical())
         let room = max(width - 1, 0)
         let index = row - 1
         if index < len(names):
             if index == selected:
-                term_style(theme.status_fg, theme.status_bg, bold = true)
+                os.term.style(theme.status_fg, theme.status_bg, bold = true)
             else:
-                term_style(theme.plain)
+                os.term.style(theme.plain)
             let name = names[index]
             let used = Draw.emit(name, from = 0, to = len(name), remaining = room)
             if used < room:
-                term_write(strings.repeat(" ", room - used))
+                os.term.write(strings.repeat(" ", room - used))
         else:
-            term_write(strings.repeat(" ", room))
+            os.term.write(strings.repeat(" ", room))
 
     # One source line with Luce highlighting, clipped to `width`.
     static func line(content: string, from: long, to: long, width: long):
@@ -1006,17 +1022,17 @@ private struct Draw:
         while at < to and used < width:
             let byte = content.byte_at(at)
             if byte == 35:
-                term_style(theme.comment)
+                os.term.style(theme.comment)
                 used = used + Draw.emit(content, from = at, to = to, remaining = width - used)
                 at = to
             elif byte == 102 and at + 1 < to and content.byte_at(at + 1) == 34 and (at == from or not Bytes.is_word(content.byte_at(at - 1))):
                 let close = Text.quoted_end(content, to, at + 1)
-                term_style(theme.text)
+                os.term.style(theme.text)
                 used = used + Draw.emit(content, from = at, to = close, remaining = width - used)
                 at = close
             elif byte == 34:
                 let close = Text.quoted_end(content, to, at)
-                term_style(theme.text)
+                os.term.style(theme.text)
                 used = used + Draw.emit(content, from = at, to = close, remaining = width - used)
                 at = close
             elif Bytes.is_digit(byte):
@@ -1042,7 +1058,7 @@ private struct Draw:
                             stop = stop + 1
                         while stop < to and (Bytes.is_digit(content.byte_at(stop)) or content.byte_at(stop) == 95):
                             stop = stop + 1
-                term_style(theme.number)
+                os.term.style(theme.number)
                 used = used + Draw.emit(content, from = at, to = stop, remaining = width - used)
                 at = stop
             elif Bytes.is_word_start(byte):
@@ -1056,16 +1072,16 @@ private struct Draw:
             else:
                 var stop = Text.next_boundary(content, at)
                 stop = min(stop, to)
-                term_style(theme.punct)
+                os.term.style(theme.punct)
                 used = used + Draw.emit(content, from = at, to = stop, remaining = width - used)
                 at = stop
 
     static func gutter(number: long, current: bool, active: bool):
         if current and active:
-            term_style(theme.gutter_current)
+            os.term.style(theme.gutter_current)
         else:
-            term_style(theme.gutter)
-        term_write(strings.pad_left(string(number), 4) + " ")
+            os.term.style(theme.gutter)
+        os.term.write(strings.pad_left(string(number), 4) + " ")
 
 func main(args: list(string)):
     if len(args) == 0:
@@ -1102,14 +1118,14 @@ func main(args: list(string)):
     )
     state.refresh_files()
     while not state.quit:
-        let visible = max(term_rows() - 1, 1)
+        let visible = max(os.term.rows() - 1, 1)
         state.adjust(visible)
         state.frame()
         # `key_read` answers `string?`: `none` is the keyboard running
         # dry — a pipe that ended, a terminal that closed — and there
         # is no one left to ask what to do about unsaved work, so the
         # editor stops rather than asking forever.
-        let name = key_read()
+        let name = os.term.key()
         if name == none:
             break
-        state.key(Intent.of(name), key_text(), visible)
+        state.key(Intent.of(name), os.term.text(), visible)
