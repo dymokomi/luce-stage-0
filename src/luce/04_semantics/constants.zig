@@ -137,12 +137,17 @@ fn evaluate(analyzer: *Analyzer, index: u32) Error!?TypedConstant {
     analyzer.fold_container_file = analyzer.modules[module].file;
     analyzer.fold_container_origin = @intCast(declaration.name_span.start);
     analyzer.folding_container = false;
+    // Restored by defer, so an error return out of the fold cannot
+    // leave a dependent constant's context speaking as this one —
+    // the sibling save/restore in declarations.zig does the same.
+    defer {
+        analyzer.fold_subject = previous_subject;
+        analyzer.fold_container_name = previous_name;
+        analyzer.fold_container_file = previous_file;
+        analyzer.fold_container_origin = previous_origin;
+        analyzer.folding_container = previous_nesting;
+    }
     const folded = try fold(analyzer, module, declaration.value, annotated);
-    analyzer.fold_subject = previous_subject;
-    analyzer.fold_container_name = previous_name;
-    analyzer.fold_container_file = previous_file;
-    analyzer.fold_container_origin = previous_origin;
-    analyzer.folding_container = previous_nesting;
     // The map may have grown while folding dependencies; re-find.
     const settled = &analyzer.constant_infos.items[index];
     var result = folded orelse {

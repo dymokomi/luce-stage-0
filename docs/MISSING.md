@@ -1050,62 +1050,13 @@ Completed chronology lives in the tiers above.  The current queue is:
    run.
 6. **Stage 5 (HIR)** — required by `fmt`, by an LSP, and by keeping
    array operations whole.
-7. **A retained terminal UI (`os.term.ui`)** — queued as the next
-   terminal-specific design pass, not as a second collection of drawing
-   helpers. The current `std.os` terminal namespace (`os.term.ui`, also
-   reachable through `std.term`) is the right low-level seam: Unicode
-   glyphs, hosted output, and decoded keyboard/mouse/resize events. The
-   next layer should make panes and widgets composable.
-
-   Textual is useful inspiration here because it treats a widget as a
-   rectangular component, composes widgets into a tree, separates layout
-   from rendering, and routes input through focus and bubbling messages.
-   See its [repository](https://github.com/textualize/textual), [widget
-   guide](https://textual.textualize.io/guide/widgets/), [layout
-   guide](https://textual.textualize.io/guide/layout/), [events and
-   messages](https://textual.textualize.io/guide/events/), and [input
-   guide](https://textual.textualize.io/guide/input/).
-
-   The LuciaOS adaptation should keep the useful boundaries and leave the
-   Python/web machinery behind:
-
-   - **Geometry and cells:** `Point`, `Size`, `Rect`, clipping, Unicode
-     borders, styles, and a retained cell/frame buffer with dirty-region
-     diffing. `os.term.ui` remains the small glyph/geometry vocabulary
-     underneath it.
-   - **Widget tree:** a small `Widget`/container model with parent,
-     children, rectangle, visibility, focusability, and a render method.
-     Panes, the editor, file list, status bar, and output log become
-     ordinary components instead of one monolithic draw function.
-   - **Layout:** vertical, horizontal, split, overlay, and eventually grid
-     containers with explicit minimum/preferred sizes. Layout computes
-     rectangles; widgets render only inside the rectangle they receive.
-   - **Input:** translate `os.term.io` events once at the root, hit-test
-     mouse coordinates, maintain keyboard focus, and route events to the
-     focused or hovered widget before allowing them to bubble to parents.
-     Mouse capture belongs here for future drag-to-resize splitters.
-   - **State and repaint:** a widget marks itself dirty when its state
-     changes; the compositor lays out and redraws only the affected frame.
-     This gives us stable snapshots for tests and avoids making each
-     editor pane know about cursor movement or terminal escape sequences.
-
-   The first implementation slice should be deterministic and editor-led:
-   `Rect`/cell buffer, a vertical-plus-horizontal split container, focus and
-   click routing, and snapshot tests; then migrate the editor's file pane,
-   source pane, output pane, borders, and active styling. Add scrolling,
-   drag resizing, overlays, themes, and a command palette only after that
-   path is useful. Do not add async tasks per widget, a CSS parser, or a
-   dynamic class hierarchy: Luce wants explicit state, host I/O only at
-   the boundary, and a renderer that can run identically in the oracle and
-   compiled paths.
 
 ---
 
 **The honest summary:** the shipped core is locked and the front end is
 in genuinely good shape.  Typed channels are the approved next
 design-and-implementation run; tagged unions are drafted but
-unscheduled, and the retained terminal UI is queued as a later design
-pass. A short list of library questions remains.  The host surface is closed:
+unscheduled, and a short list of library questions remains.  The host surface is closed:
 the last two names on its gap list, `exit` and path manipulation, both
 shipped — `exit` as a gated builtin and paths as `std.paths` over
 `strings`.  Three benchmark rows remain behind their C twins for three

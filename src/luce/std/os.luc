@@ -69,15 +69,6 @@ struct Term:
     func flush():
         term_flush()
 
-    # Compatibility aliases for programs that used the first facade draft.
-    # New terminal programs should read through `term.io`, which keeps input
-    # beside the mouse and resize data that belongs to the same event.
-    func key() -> string?:
-        return self.io.read()
-
-    func text() -> string:
-        return self.io.text()
-
 # Terminal input is one event stream.  `read()` answers a stable event name:
 # text, enter, ctrl_s, mouse_press, mouse_release, mouse_drag, mouse_move,
 # mouse_wheel, resize, or none at end of input.  The accessors read numeric
