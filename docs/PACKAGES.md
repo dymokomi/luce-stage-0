@@ -46,10 +46,10 @@ What holds, unchanged, after this design:
   refused; package resolution adds new ways for that to happen, each
   named below, and D2 adds the remedy.
 
-## D1. The project file: `luce.zon` marks the root and names the needs
+## D1. The project file: `luce.yaml` marks the root and names the needs
 
 Resolution needs an anchor better than "the directory of the file the
-user typed" the moment subfolders exist.  A file named **`luce.zon`**
+user typed" the moment subfolders exist.  A file named **`luce.yaml`**
 in the project root is that anchor.
 
 - **Found by walking up** from the root source file's directory — the
@@ -59,10 +59,10 @@ in the project root is that anchor.
   case: a stop condition that depends on an environment variable is a
   resolution that differs between machines.  The discovered root is
   printed in every resolution diagnostic (D6), so an accidental
-  capture by a stray `luce.zon` is observable the moment it changes
+  capture by a stray `luce.yaml` is observable the moment it changes
   anything.
 - **A pathless root gets no discovery.**  `luce build -` (stdin)
-  anchors to the cwd only if a `luce.zon` is found by walking from the
+  anchors to the cwd only if a `luce.yaml` is found by walking from the
   cwd; the in-memory loader loom uses for the embedded editor
   (`files.zig`'s `MemoryLoader`) does no discovery at all — `loom
   edit` inside somebody's project must not resolve the editor's own
@@ -70,42 +70,46 @@ in the project root is that anchor.
 - **Absent is fine and means the current behaviour**: no project file,
   no subfolder imports, no packages — a single directory of `.luc`
   files stays exactly as cheap as it is today.
-- **One anchor per mode.**  When a `luce.zon` governs, *every*
+- **One anchor per mode.**  When a `luce.yaml` governs, *every*
   project-tree import is project-root-relative — `import geo` from
   `src/tools/x.luc` and from `src/main.luc` mean the same file, which
   is the point of having a root.  Sibling-relative resolution survives
   only for rootless programs.  (First-draft blocker: two anchors in
   one mode reintroduced the disagreement the root exists to kill.)
-- **Shape** (ZON — the notation the toolchain already speaks; one
-  small parser, no new format dependency):
+- **Shape** (owner's call, 2026-08-10: YAML — but a **strictly
+  defined subset**, not the specification.  Scalars, one level of
+  nesting, string values, `#` comments; no anchors, no aliases, no
+  flow style, no multi-document, no type tags.  The subset fits a
+  ~200-line hand-written Zig parser in the toolchain, and `std.yaml`
+  will later speak the same subset from Luce plus whatever more it
+  wants; a manifest that uses YAML the subset refuses is refused by
+  name, never half-read):
 
-```zon
-.{
-    .name = "atlas",
-    .version = "0.3.0",
-    .packages = .{
-        .geo = .{ .version = "1.2.0" },
-        .ansi = .{ .version = "0.4.1", .hash = "..." },
-        .mathx = .{ .version = "1.1.0", .path = "../mathx" },
-    },
-}
+```yaml
+name: atlas
+version: 0.3.0
+
+packages:
+  geo: 1.2.0
+  ansi: 0.4.1 sha256:9f2a...        # hash verified when present
+  mathx: 1.1.0 path:../mathx       # development override (D3)
 ```
 
-- `.name`/`.version` are the project's own identity — required.
-- `.packages` is the *want list*: **a version is exact**.  No ranges,
+- `name`/`version` are the project's own identity — required.
+- `packages` is the *want list*: **a version is exact**.  No ranges,
   no `^`/`~`: ranges are a solver, a solver needs registry metadata,
   and both belong to the publishing half.  Upgrading is editing the
   number.
-- `.hash` is optional and **verified when present** — the content hash
+- The hash is optional and **verified when present** — the content hash
   of the package directory, computed the way `artifact.zig` already
   hashes (one algorithm, stated in the manifest value's prefix).
-  Hand-vendoring stays cheap without it; with it, `luce.zon` + a
+  Hand-vendoring stays cheap without it; with it, `luce.yaml` + a
   populated store *is* reproducible.  Without it the build is
   reproducible only as far as the store's bytes are — said plainly
   here because the first draft claimed more than it checked.  The
   publishing half will make hashes mandatory for fetched packages;
   the field exists from day one so it never has to be retrofitted.
-- `.path` is the development override, Cargo's `[patch]` / Go's
+- The path entry is the development override, Cargo's `[patch]` / Go's
   `replace` in Luce shape: resolve this package from a directory
   instead of the store, loudly (D6).  It keeps every resolution
   decision in the one file — an environment variable is not allowed
@@ -113,7 +117,7 @@ in the project root is that anchor.
 
 ## D2. Subfolder imports: `import geo.shapes` maps dots to directories
 
-- `import geo` — under a `luce.zon`: `geo.luc` under the project root,
+- `import geo` — under a `luce.yaml`: `geo.luc` under the project root,
   or the entry module of package `geo` (D4).  Rootless: a sibling
   `geo.luc`, as today.
 - `import geo.shapes` — `geo/shapes.luc` under the project root, or
@@ -138,7 +142,7 @@ in the project root is that anchor.
 
 ## D3. Resolution: probe everything, one answer or refuse
 
-For each import under a `luce.zon`, the loader probes **all** of:
+For each import under a `luce.yaml`, the loader probes **all** of:
 
 1. the project's own tree (root-relative file or directory),
 2. the store: `<project>/.luce/packages/<name>-<version>/` for a
@@ -159,12 +163,12 @@ A package resolved from `LUCE_LIB` or through `.path` says so, one
 line to standard error, every build: those bytes are outside the
 project's control, and a resolution the project file alone cannot
 predict must at least be visible.  The want list stays the gate
-everywhere: a package not named in `luce.zon` is unresolvable from
+everywhere: a package not named in `luce.yaml` is unresolvable from
 any store or shelf, so a stray install cannot change what a program
 means — and neither can a stray file, because a stray file that
 collides with a declared package is refused, not preferred.
 
-## D4. What a package is on disk: a directory with its own `luce.zon`
+## D4. What a package is on disk: a directory with its own `luce.yaml`
 
 ```text
 geo-1.2.0/
@@ -173,7 +177,7 @@ geo-1.2.0/
 └── shapes.luc        # `import geo.shapes` reads this
 ```
 
-- **The directory name carries `name-version`**, and the `luce.zon`
+- **The directory name carries `name-version`**, and the `luce.yaml`
   inside must agree with both halves, or the package is refused by
   name — the artifact tag's tell-the-truth-or-be-refused rule.
 - A package's own internal imports resolve **inside the package
@@ -188,11 +192,11 @@ geo-1.2.0/
   file tree" is fiction, so a package-level export boundary
   (entry-file-only, or a module-level `private`) is a *named
   deferral* to the publishing memo, not an oversight.
-- A package's `luce.zon` may name its own `.packages`.  **v1 resolves
+- A package's `luce.yaml` may name its own `.packages`.  **v1 resolves
   the transitive set with exact versions and refuses diamonds that
   disagree** — with the remedy in the *consumer's* hands: an
-  `.override = .{ .mathx = .{ .version = "1.1.0" } }` entry in the
-  root `luce.zon` resolves a named diamond by stated decision, loudly
+  `override:` section in the root `luce.yaml` resolves a named
+  diamond by stated decision, loudly
   (D6).  No auto-pick, no highest-wins — but no fork-to-fix either,
   because the person hitting the refusal owns neither manifest.
   (First-draft gap: refusal with no consumer remedy breaks the first
@@ -228,7 +232,7 @@ geo-1.2.0/
 - **`cache/` takes over the compile cache** for projects.  The keying
   already works unchanged: `artifact.sourceHash` hashes the encoded
   module, which the front end rebuilds from *all* loaded sources —
-  so a changed package file, or a `luce.zon` edit that changes
+  so a changed package file, or a `luce.yaml` edit that changes
   resolution, changes the key.  Beside-the-source caching survives
   for rootless programs, and loom's distinct-name-per-writer
   discipline (`runner.zig`) carries over to the shared directory.
@@ -243,7 +247,7 @@ geo-1.2.0/
 Every refusal says what was looked for, every place probed, and what
 was found — verbatim paths, and the project root that governed the
 probe.  `luce.import.*` gains: `ambiguous` (every answering path
-named), `version` (store/`luce.zon`/manifest disagreement, all
+named), `version` (store/`luce.yaml`/manifest disagreement, all
 numbers named), `diamond` (both requiring edges named, `.override`
 named as the remedy).  The collision family stays, its message
 growing the alias remedy (D2) and a package-aware variant (a package
@@ -277,8 +281,16 @@ The review's second blocker, adopted as the implementation contract:
 ## Deliberately absent from this memo
 
 - **Fetching** — no network, no registry, no lockfile (exact versions
-  plus optional hashes in `luce.zon` are the lock until transitive
-  ranges exist).
+  plus optional hashes in `luce.yaml` are the lock until transitive
+  ranges exist).  The direction is on record (owner, 2026-08-10):
+  the client is **`luce install` / `luce update` / `luce init`** —
+  toolchain subcommands in the `luce` binary's own Zig, so fetching,
+  hashing and unpacking need no Luce networking and no TLS story —
+  and the registry speaks a static-file protocol first (Go's proxy
+  precedent), so packages.luciaos.com can begin as files behind the
+  edge server and be replaced by the Luce-written registry server
+  with no client change.  That memo is written when this one is
+  built.
 - **Authoring/publishing** — manifests beyond the fields above,
   mandatory hashes, signatures, yanking, scoped names, the package
   export boundary: each named above at the decision that defers it.
@@ -287,7 +299,7 @@ The review's second blocker, adopted as the implementation contract:
 
 ## Implementation order (each step lands green on its own)
 
-1. `luce.zon` discovery + parse; the D7 seam changes land **first and
+1. `luce.yaml` discovery + parse; the D7 seam changes land **first and
    alone** — root tokens threaded, registry re-keyed, `.ambiguous`
    added — with today's behaviour proven unchanged for rootless
    programs (the whole existing suite is that proof) plus new
