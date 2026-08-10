@@ -23,7 +23,7 @@ discovery, a synthesized entry, and a report — and no new semantic.
 
 ## D1. A test is `func test_*()` in an ordinary `.luc` file
 
-```luce
+```text
 import geo
 
 func test_area_of_unit_square():

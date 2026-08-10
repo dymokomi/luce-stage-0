@@ -2321,22 +2321,23 @@ test "luce.sema.method: a method must exist on its receiver type" {
     try expectRejected("func main():\n    let a = 5.append(1)\n", "luce.sema.method");
 }
 
-test "luce.sema.method: map get takes (key, default) of the right types" {
-    // Too few is a count mistake and says both counts.
+test "luce.sema.method: map get takes exactly its key" {
+    // The old fallback parameter is spelled `m.get(k) else d` now, so
+    // a second argument is a count mistake and says both counts.
     try expectSayingAt(
         \\func main():
         \\    var m = new map(string, long)
-        \\    let x = m.get("k")
+        \\    let x = m.get("k", 0)
         \\
-    , "luce.sema.method", "get takes 2 arguments, got 1", 3, 13);
-    // The wrong type in the second slot is a *type* mistake, and is
-    // reported as one, at the argument rather than at the call.
+    , "luce.sema.method", "get takes 1 argument, got 2", 3, 13);
+    // The wrong key type is a *type* mistake, and is reported as one,
+    // at the argument rather than at the call.
     try expectSayingAt(
         \\func main():
         \\    var m = new map(string, long)
-        \\    let x = m.get("k", "wrong")
+        \\    let x = m.get(7)
         \\
-    , "luce.sema.type", "argument 2 of get is long, got string", 3, 24);
+    , "luce.sema.type", "argument 1 of get is string, got int", 3, 19);
 }
 
 test "luce.sema.loop: two-name for needs a map or a sequence" {
@@ -5536,7 +5537,7 @@ test "luce.sema.method: a count mistake names the method and both counts" {
         \\    var m = new map(string, long)
         \\    let x = m.get("a", 1, 2)
         \\
-    , "luce.sema.method", "get takes 2 arguments, got 3", 3, 13);
+    , "luce.sema.method", "get takes 1 argument, got 3", 3, 13);
 }
 
 test "luce.sema.type: a wrong argument type names the position, both types, and underlines the argument" {
@@ -5565,7 +5566,7 @@ test "luce.sema.type: a wrong argument type names the position, both types, and 
     try expectSayingAt(
         \\func main():
         \\    var m = new map(string, long)
-        \\    let x = m.get(1, 2)
+        \\    let x = m.get(1)
         \\
     , "luce.sema.type", "argument 1 of get is string, got int", 3, 19);
 }

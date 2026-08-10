@@ -340,7 +340,7 @@ test "strings: the method sugar routes to the module" {
         \\
         \\func main():
         \\    let s = "hello world"
-        \\    assert(s.find("world") == strings.find(s, "world"))
+        \\    assert((s.find("world") else -1) == (strings.find(s, "world") else -2))
         \\    assert(s.trim() == strings.trim(s))
         \\    assert(s.count("l") == 3)
         \\    let parts = s.split(" ")

@@ -1048,13 +1048,13 @@ test "lists, maps, strings, and ownership agree with the interpreter" {
         \\    xs.sort()
         \\    print(string(xs[0]) + "," + string(xs[5]) + "," + string(len(xs)))
         \\    print(string(total(xs)))
-        \\    print(string(xs.find(9)) + " " + string(xs.contains(7)))
+        \\    print(string(xs.find(9) else -1) + " " + string(xs.contains(7)))
         \\
         \\    let names = new map(string, long)
         \\    names["one"] = 1
         \\    names["two"] = 2
         \\    names["one"] = 11
-        \\    print(string(len(names)) + " " + string(names["one"]) + " " + string(names.get("three", -1)))
+        \\    print(string(len(names)) + " " + string(names["one"]) + " " + string(names.get("three") else -1))
         \\    for name, count in names:
         \\        print(name + "=" + string(count))
         \\    print(string(names.has("two")) + " " + string(len(names.keys())))

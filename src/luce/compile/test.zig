@@ -504,7 +504,7 @@ test "functions unreachable from the entry are pruned from the artifact" {
         \\import std.strings
         \\
         \\func main():
-        \\    print(string("abc".find("b")))
+        \\    print(string("abc".find("b") else -1))
         \\
     , .{ .allow_host = true });
     defer used.deinit();

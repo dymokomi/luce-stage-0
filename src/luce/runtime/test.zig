@@ -1922,8 +1922,8 @@ test "lists index, append, pop, insert, remove, and bound-check" {
     );
 
     try containers.indexSet(runtime, held, &.{Value.ofLong(0)}, Value.ofLong(-1));
-    try testing.expectEqual(@as(i64, 1), try containers.find(runtime, held, Value.ofLong(20)));
-    try testing.expectEqual(@as(i64, -1), try containers.find(runtime, held, Value.ofLong(99)));
+    try testing.expectEqual(@as(i64, 1), (try containers.find(runtime, held, Value.ofLong(20))).asLong());
+    try testing.expect((try containers.find(runtime, held, Value.ofLong(99))).isNone());
 
     try testing.expectEqual(@as(i64, 30), (try containers.pop(runtime, held)).asLong());
     try containers.remove(runtime, held, Value.ofLong(0));
@@ -2073,14 +2073,13 @@ test "maps keep insertion order and answer for missing keys three ways" {
     try testing.expectEqualStrings("b", (try containers.keyAt(runtime, held, 0)).asString());
     try testing.expectEqual(@as(i64, 1), (try containers.valueAt(runtime, held, 1)).asLong());
 
-    // has_key answers false, get answers the default, m[key] traps.
+    // has_key answers false, get answers absence, m[key] traps.
     try testing.expect(!(try containers.hasKey(runtime, held, Value.ofString("c"))).asBoolean());
-    try testing.expectEqual(@as(i64, 9), (try containers.mapGet(
-        runtime,
-        held,
-        Value.ofString("c"),
-        Value.ofLong(9),
-    )).asLong());
+    try testing.expect((try containers.mapGet(runtime, held, Value.ofString("c"))).isNone());
+    try testing.expectEqual(
+        @as(i64, 2),
+        (try containers.mapGet(runtime, held, Value.ofString("b"))).asLong(),
+    );
     try expectTrap(
         .key_missing,
         runtime,
