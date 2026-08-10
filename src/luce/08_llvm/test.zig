@@ -1332,6 +1332,9 @@ test "float arithmetic, comparison, and formatting agree over the special values
         \\    values.append(1.0 / 0.0)
         \\    values.append(-1.0 / 0.0)
         \\    values.append(0.0 / 0.0)
+        \\    values.append((1.0 / 0.0) - (1.0 / 0.0))
+        \\    values.append(0.0 * (1.0 / 0.0))
+        \\    values.append((1.0 / 0.0) / (1.0 / 0.0))
         \\    var i = 0
         \\    while i < len(values):
         \\        var j = 0

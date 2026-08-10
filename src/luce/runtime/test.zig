@@ -2425,6 +2425,20 @@ test "the conversions round trip and refuse what they cannot represent" {
         "1000000000000000000000",
         bench.made(try text.str(runtime, Value.ofDouble(1e21))).asString(),
     );
+    // Every NaN renders as "nan", whichever sign bit the hardware
+    // chose — the formatter is the one place the sign could ever be
+    // observed, and it declines to show it (both bit patterns, so a
+    // host that produces the other one cannot regress this silently).
+    try testing.expectEqualStrings(
+        "nan",
+        bench.made(try text.str(runtime, Value.ofDouble(@bitCast(@as(u64, 0x7ff8000000000000))))).asString(),
+    );
+    try testing.expectEqualStrings(
+        "nan",
+        bench.made(try text.str(runtime, Value.ofDouble(@bitCast(@as(u64, 0xfff8000000000000))))).asString(),
+    );
+    try testing.expectEqualStrings("inf", bench.made(try text.str(runtime, Value.ofDouble(std.math.inf(f64)))).asString());
+    try testing.expectEqualStrings("-inf", bench.made(try text.str(runtime, Value.ofDouble(-std.math.inf(f64)))).asString());
 
     // The parsers answer absence rather than trapping: "not a number"
     // is the same reason every time and the name says it already.

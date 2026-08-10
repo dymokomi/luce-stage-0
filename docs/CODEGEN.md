@@ -741,47 +741,37 @@ are worth writing down:
 call-worthy.  Neither is `find_byte`, which is a vectorized `memchr` in
 the runtime and would be slower unrolled here.
 
-## The extrema, and why a `min` reduction vectorizes
+## The extrema, and a vectorization that is parked
 
-`min`, `max` and `clamp` on the float types are generated too — `f64`
-and `f32` alike, `llvm.minimumnum.f64` and `llvm.minimumnum.f32`, one
-declaration interned per width — and *which* intrinsic they are
-generated as is a decision about meaning before it is one about speed.
+`min`, `max` and `clamp` on the float types are generated too — an
+explicit compare-and-select sequence per element (`emitExtremum` in
+`lower.zig`) that spells out the one semantic `operators.pick` in
+`libluce_rt` states: keep the non-NaN operand, answer an ordered pair
+by comparison, and order the signs on a tie, so `min` is negative when
+either zero is and `max` only when both are.  `clamp` is the two
+composed in the runtime's order.  The runtime writes that sentence out
+rather than leaning on Zig's `@min`/`@max`, because those lower to
+`llvm.minnum`/`llvm.maxnum`, which leave the signed-zero order to the
+target — a zero tie decided by the host's instruction set is not a
+semantics — and the spec "min and max reductions over an array agree,
+signed zeros and all" holds both engines to the written one.
 
-LLVM offers three, and only one of them says anything definite.
-`llvm.minnum` leaves `(-0.0, +0.0)` unspecified, so its constant
-folder answers the first operand while every target's instruction
-answers `-0.0` — one value computed two ways, differing by whether an
-optimizer reached it, which is not a semantics at all.  `llvm.minimum`
-is specified there but propagates NaN, where Luce answers the operand
-that is a number.  `llvm.minimumnum` — IEEE 754-2019 `minimumNumber` —
-is both at once: `-0.0` below `+0.0`, and a NaN as an identity rather
-than an absorber.  That is what Luce's `min` means and what the
-interpreter's `@min` does, so that is what is emitted, and `clamp` is
-the two composed in the interpreter's order.  It is declared by name
-rather than through `builder.Intrinsic`, whose table in the pinned
-standard library predates the 2019 pair; LLVM recognizes an
-`llvm.`-prefixed name as the intrinsic it spells and attaches that
-intrinsic's own attributes, so the module is the one the enum would
-have built.
-
-The speed then follows from the meaning rather than the other way
-round.  NaN-as-identity makes `minimumNumber` associative and
-commutative exactly, so LLVM's vectorizer may reduce an extremum loop
-four lanes at a time — no fast-math, no reassociation of anything, and
-the same value the sequential loop would have accumulated, down to
-which zero it kept.  `math.vmin` over two million elements becomes
-`fminnm.2d`.  A C twin written the ordinary way, `a < b ? a : b`, gets
-no such licence: that expression decides a NaN by operand order, so
-clang is stuck with a scalar compare-and-select chain.  A min-and-max
-microbenchmark went from 2.96x the C twin to 0.54x, and `bench/stats`
-— where the extrema are two of eleven passes over the data — from
-1.23x to 1.08x.
-
-The composition this replaced was `llvm.minimum` with the two NaN
-cases selected around it.  It was correct, and it cost three dependent
-floating-point instructions per element where the reduction needs one,
-none of which the vectorizer would touch.
+This section used to be called "why a `min` reduction vectorizes",
+and recorded the previous lowering: `llvm.minimumnum` — IEEE 754-2019
+`minimumNumber`, `-0.0` below `+0.0` and NaN as an identity — which
+says Luce's exact sentence as one intrinsic, is associative and
+commutative exactly because of it, and therefore let the vectorizer
+reduce an extremum loop four lanes at a time with no fast-math
+(`math.vmin` over two million elements became `fminnm.2d`; a
+min-and-max microbenchmark went from 2.96x the C twin to 0.54x, and
+`bench/stats` from 1.23x to 1.08x).  It was retired when its x86-64
+lowering was observed choosing the other zero on a tie — and able to
+reverse an ordinary ordered pair — which is a miscompile, not a
+slowness.  **The meaning is not negotiable per target, so the win is
+parked, not abandoned**: the intrinsic is the right emission again the
+day its lowering can be trusted on every target `luce` builds for,
+and the compare/select chain is the portable spelling until then.
+The snapshot table below is the current price in `stats`.
 
 ## What the module tells LLVM about the runtime
 

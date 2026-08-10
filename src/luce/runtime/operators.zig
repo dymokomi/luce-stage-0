@@ -686,8 +686,34 @@ pub fn extremum(wants_minimum: bool, left: Value, right: Value) Value {
     };
 }
 
+/// The one statement of what `min` and `max` answer.  The float
+/// semantic is written out rather than inherited from `@min`/`@max`,
+/// because Zig's builtins lower to `llvm.minnum`/`llvm.maxnum`, whose
+/// signed-zero ordering is target-dependent — relying on them made the
+/// zero-tie rule a property of the host's instruction set instead of
+/// the language.  The rule: a NaN loses to any number, an ordered pair
+/// answers by comparison, and a tie orders the signs (`-0.0` below
+/// `+0.0`), so `min` is negative when either operand is and `max` only
+/// when both are.  `emitExtremum` in `08_llvm/lower.zig` lowers to
+/// exactly this; the spec "min and max reductions over an array agree,
+/// signed zeros and all" holds the two to it.
 fn pick(wants_minimum: bool, left: anytype, right: @TypeOf(left)) @TypeOf(left) {
-    return if (wants_minimum) @min(left, right) else @max(left, right);
+    const T = @TypeOf(left);
+    if (@typeInfo(T) == .int) return if (wants_minimum) @min(left, right) else @max(left, right);
+    if (std.math.isNan(left)) return right;
+    if (std.math.isNan(right)) return left;
+    if (left == right) {
+        // Only zeros of opposite sign meet here as different values,
+        // but the sign arithmetic answers correctly for every equal
+        // pair, so nothing checks for zero by name.
+        const negative = if (wants_minimum)
+            std.math.signbit(left) or std.math.signbit(right)
+        else
+            std.math.signbit(left) and std.math.signbit(right);
+        return if (negative) -@abs(left) else @abs(left);
+    }
+    if (wants_minimum) return if (left < right) left else right;
+    return if (left > right) left else right;
 }
 
 test "float extrema choose the canonical signed zero" {
@@ -703,12 +729,23 @@ test "float extrema choose the canonical signed zero" {
     }
 }
 
+test "float extrema keep the number when one operand is NaN" {
+    const nan = std.math.nan(f64);
+    try std.testing.expectEqual(@as(f64, 1.5), extremum(true, Value.ofDouble(nan), Value.ofDouble(1.5)).asDouble());
+    try std.testing.expectEqual(@as(f64, 1.5), extremum(false, Value.ofDouble(1.5), Value.ofDouble(nan)).asDouble());
+    try std.testing.expect(std.math.isNan(extremum(true, Value.ofDouble(nan), Value.ofDouble(nan)).asDouble()));
+    try std.testing.expect(std.math.isNan(extremum(false, Value.ofDouble(nan), Value.ofDouble(nan)).asDouble()));
+}
+
+/// `min(max(middle, low), high)`, in that order — the order decides the
+/// answer when the bounds cross — composed from `pick` so a NaN bound
+/// or a signed-zero bound clamps the same way `min` and `max` answer.
 pub fn clamp(held: Value, low: Value, high: Value) Value {
     return switch (held.view()) {
-        .int => |middle| Value.ofInt(@min(@max(middle, low.asInt()), high.asInt())),
-        .long => |middle| Value.ofLong(@min(@max(middle, low.asLong()), high.asLong())),
-        .float => |middle| Value.ofFloat(@min(@max(middle, low.asFloat()), high.asFloat())),
-        .double => |middle| Value.ofDouble(@min(@max(middle, low.asDouble()), high.asDouble())),
+        .int => |middle| Value.ofInt(pick(true, pick(false, middle, low.asInt()), high.asInt())),
+        .long => |middle| Value.ofLong(pick(true, pick(false, middle, low.asLong()), high.asLong())),
+        .float => |middle| Value.ofFloat(pick(true, pick(false, middle, low.asFloat()), high.asFloat())),
+        .double => |middle| Value.ofDouble(pick(true, pick(false, middle, low.asDouble()), high.asDouble())),
         else => unreachable,
     };
 }

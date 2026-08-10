@@ -5683,27 +5683,15 @@ const Body = struct {
             .greater_equal,
             => return self.fail("a comparison on the arithmetic path"),
         };
-        const result = try self.wip.bin(tag, left, right, "float");
-        if (operation != .divide) return result;
-
-        // The sign of the NaN produced by 0.0 / 0.0 is target-dependent
-        // in LLVM's fdiv lowering.  Zig's floating operation, which is
-        // the oracle's behavior, answers a positive quiet NaN, so make
-        // that invalid case explicit while leaving ordinary division
-        // as the hardware operation it is.
-        const zero = try self.zeroValue(of);
-        const both_zero = try self.wip.bin(
-            .@"and",
-            try self.wip.fcmp(.normal, .oeq, left, zero, "left.zero"),
-            try self.wip.fcmp(.normal, .oeq, right, zero, "right.zero"),
-            "both.zero",
-        );
-        const positive_nan = switch (of) {
-            .float => try self.module.builder.floatValue(@bitCast(@as(u32, 0x7fc00000))),
-            .double => try self.module.builder.doubleValue(@bitCast(@as(u64, 0x7ff8000000000000))),
-            else => unreachable,
-        };
-        return self.wip.select(.normal, both_zero, positive_nan, result, "float");
+        // The sign of the NaN an invalid operation produces is
+        // target-dependent (`0.0 / 0.0` answers a positive quiet NaN on
+        // aarch64 and a negative one on x86-64), and generated code and
+        // the oracle both take whatever the hardware gives: the sign is
+        // unobservable in Luce, because the one surface that could show
+        // it — `string(x)`, in `libluce_rt` — renders every NaN "nan".
+        // So every arithmetic tag is exactly its instruction here, with
+        // no canonicalizing select on the hot path.
+        return self.wip.bin(tag, left, right, "float");
     }
 
     /// `llvm.s*.with.overflow`, then the trap the interpreter raises.
@@ -7115,15 +7103,16 @@ const Body = struct {
     ///
     /// A long is `llvm.smin`/`llvm.smax`, which mean exactly one thing.
     ///
-    /// Floating extrema spell Zig's `@min`/`@max` semantics explicitly.
-    /// The LLVM `minimumnum`/`maximumnum` intrinsics are not a portable
-    /// substitute here: their lowering can choose a different signed zero
-    /// on x86-64, and the resulting instruction sequence can even reverse
-    /// an ordinary `min`/`max` when the operands are ordered.  Luce keeps
-    /// the non-NaN operand, uses an inclusive comparison for equal numbers,
-    /// and canonicalizes a zero tie to the runtime's `@min`/`@max` behavior:
-    /// `min` is negative if either zero is negative, while `max` is negative
-    /// only when both zeros are negative.
+    /// Floating extrema spell out the semantic `operators.pick` in
+    /// `libluce_rt` defines: keep the non-NaN operand, answer an ordered
+    /// pair by comparison, and order the signs on a tie — `min` is
+    /// negative when either zero is, `max` only when both are.  No LLVM
+    /// min/max intrinsic is a portable spelling of that sentence:
+    /// `minnum`/`maxnum` leave the signed-zero order to the target, and
+    /// `minimumnum`/`maximumnum`, which promise it, have an x86-64
+    /// lowering that can choose the other zero and even reverse an
+    /// ordinary ordered pair (the vectorization it bought is recorded as
+    /// parked in docs/CODEGEN.md until that lowering can be trusted).
     fn emitExtremum(
         self: *Body,
         wants_minimum: bool,

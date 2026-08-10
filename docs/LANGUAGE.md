@@ -1009,6 +1009,12 @@ range.  `trunc(x)` is truncation toward zero, so `floor`, `ceil`,
 width, a `bool` or a `string`; it gives an enum member's name and a
 function value's name.  Container objects, resources, and structs are
 not accepted: a `builder` hands over its text with `b.build()`.
+A float prints as the shortest text that round-trips at its own
+width; the infinities print `inf` and `-inf`, and **every NaN prints
+`nan`** — IEEE gives a NaN's sign bit no meaning and hardware
+disagrees about which sign an invalid operation produces, so the sign
+is unobservable: comparisons already answer `false`, `parse_float`
+refuses NaN, `long(NaN)` traps, and the formatter declines to show it.
 An f-string hole is a `string(...)` the reader did not write, so the
 same rule decides what may stand in one.
 

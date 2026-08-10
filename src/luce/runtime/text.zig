@@ -138,8 +138,18 @@ fn digitsOf(number: anytype) Value {
     ) catch unreachable);
 }
 
-/// A float's shortest round-tripping text, at either width.
+/// A float's shortest round-tripping text, at either width.  Every NaN
+/// renders as "nan", whatever its sign bit says: IEEE 754 gives the
+/// sign of a NaN no meaning, hardware disagrees about which sign an
+/// invalid operation produces (`0.0 / 0.0` is a positive quiet NaN on
+/// aarch64 and the negative "real indefinite" on x86-64), and this
+/// formatter is the one place a Luce program could ever observe the
+/// difference — comparisons answer false, `parse_float` refuses NaN,
+/// and `long(NaN)` traps.  Canonicalizing here makes every
+/// NaN-producing operation print identically on every host, so the
+/// backend needs no per-operation canonicalization at all.
 fn floatText(runtime: *Runtime, number: anytype) Error!Value {
+    if (std.math.isNan(number)) return Value.ofInlineText(.string, "nan");
     var written: [64]u8 = undefined;
     const rendered = std.fmt.bufPrint(&written, "{d}", .{number}) catch
         return Value.ofString(try std.fmt.allocPrint(

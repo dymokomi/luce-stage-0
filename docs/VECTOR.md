@@ -136,10 +136,11 @@ a plain integer reduction, which LLVM vectorizes with **no fast-math,
 no `nsw`, and no reassociation licence of any kind** — because
 two's-complement addition is exactly associative and exactly
 commutative, so the vectorizer needs no permission it does not already
-have.  This is the same reason `llvm.minimumnum` lets an extremum
-reduction vectorize (`docs/CODEGEN.md`, "why a `min` reduction
-vectorizes"): the operation is associative on the nose, so lane-wise
-regrouping computes the identical value.
+have.  This is the same reason `llvm.minimumnum` let an extremum
+reduction vectorize while it was the emission (`docs/CODEGEN.md`,
+"The extrema, and a vectorization that is parked"): the operation is
+associative on the nose, so lane-wise regrouping computes the
+identical value.
 
 ## Where the proof lives, and why not where it was expected to
 
@@ -697,14 +698,20 @@ ever be emitted; that is a semantics mode wearing a compiler option
 and bit-reproducibility across engines and against the C twins.  Not
 decided here.
 
-**Float `min`/`max` already vectorize** and the reason is instructive
-for this whole memo: `llvm.minimumnum` is exactly associative and
-exactly commutative because NaN is an identity rather than an
-absorber, so the vectorizer regroups it with no licence needed.
-`math.vmin` over two million elements becomes `fminnm.2d`, and
-`bench/stats` went 1.23× → 1.08× (`docs/CODEGEN.md`, "why a `min`
-reduction vectorizes").  **Meaning first, speed as a consequence** —
-which is the same argument Layer 1 makes for two's-complement addition.
+**Float `min`/`max` vectorized once, and the licence is parked.**  The
+reason is instructive for this whole memo: `llvm.minimumnum` is exactly
+associative and exactly commutative because NaN is an identity rather
+than an absorber, so the vectorizer regroups it with no licence needed
+— `math.vmin` over two million elements became `fminnm.2d`, and
+`bench/stats` went 1.23× → 1.08×.  The intrinsic was then retired
+because its x86-64 lowering could choose the other signed zero on a
+tie, which is a miscompile; the extrema are a scalar compare/select
+chain again until that lowering can be trusted, and the win waits on
+LLVM, not on Luce (`docs/CODEGEN.md`, "The extrema, and a
+vectorization that is parked").  **Meaning first, speed as a
+consequence** — which is the same argument Layer 1 makes for
+two's-complement addition, and here it cuts the other way: the meaning
+held, so the speed was given back.
 
 **Multiply reductions are scoped out, and here is the witness that
 does exist.**  `prod *= xs[i]` is associative once unchecked, so the
