@@ -59,6 +59,8 @@ pub const records = [_][]const u8{
     "docs/THREADS.md",
     "docs/LINKING_RESEARCH.md",
     "docs/FUNCTIONS.md",
+    "docs/PACKAGES.md",
+    "docs/TESTING.md",
     "docs/SELF.md",
     "docs/CONSTANTS.md",
 };
