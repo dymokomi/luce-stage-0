@@ -690,6 +690,19 @@ fn pick(wants_minimum: bool, left: anytype, right: @TypeOf(left)) @TypeOf(left) 
     return if (wants_minimum) @min(left, right) else @max(left, right);
 }
 
+test "float extrema choose the canonical signed zero" {
+    const zeros = [_]f64{ 0.0, -0.0 };
+    for (zeros) |left| {
+        for (zeros) |right| {
+            const smallest = extremum(true, Value.ofDouble(left), Value.ofDouble(right)).asDouble();
+            try std.testing.expectEqual(std.math.signbit(left) or std.math.signbit(right), std.math.signbit(smallest));
+
+            const largest = extremum(false, Value.ofDouble(left), Value.ofDouble(right)).asDouble();
+            try std.testing.expectEqual(std.math.signbit(left) and std.math.signbit(right), std.math.signbit(largest));
+        }
+    }
+}
+
 pub fn clamp(held: Value, low: Value, high: Value) Value {
     return switch (held.view()) {
         .int => |middle| Value.ofInt(@min(@max(middle, low.asInt()), high.asInt())),

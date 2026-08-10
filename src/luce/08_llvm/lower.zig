@@ -5688,7 +5688,7 @@ const Body = struct {
 
         // The sign of the NaN produced by 0.0 / 0.0 is target-dependent
         // in LLVM's fdiv lowering.  Zig's floating operation, which is
-        // the oracle's behavior, answers a negative quiet NaN, so make
+        // the oracle's behavior, answers a positive quiet NaN, so make
         // that invalid case explicit while leaving ordinary division
         // as the hardware operation it is.
         const zero = try self.zeroValue(of);
@@ -5698,12 +5698,12 @@ const Body = struct {
             try self.wip.fcmp(.normal, .oeq, right, zero, "right.zero"),
             "both.zero",
         );
-        const negative_nan = switch (of) {
-            .float => try self.module.builder.floatValue(@bitCast(@as(u32, 0xffc00000))),
-            .double => try self.module.builder.doubleValue(@bitCast(@as(u64, 0xfff8000000000000))),
+        const positive_nan = switch (of) {
+            .float => try self.module.builder.floatValue(@bitCast(@as(u32, 0x7fc00000))),
+            .double => try self.module.builder.doubleValue(@bitCast(@as(u64, 0x7ff8000000000000))),
             else => unreachable,
         };
-        return self.wip.select(.normal, both_zero, negative_nan, result, "float");
+        return self.wip.select(.normal, both_zero, positive_nan, result, "float");
     }
 
     /// `llvm.s*.with.overflow`, then the trap the interpreter raises.
@@ -7120,8 +7120,10 @@ const Body = struct {
     /// substitute here: their lowering can choose a different signed zero
     /// on x86-64, and the resulting instruction sequence can even reverse
     /// an ordinary `min`/`max` when the operands are ordered.  Luce keeps
-    /// the non-NaN operand, then uses an inclusive comparison so equal
-    /// values retain the left operand, including its sign bit.
+    /// the non-NaN operand, uses an inclusive comparison for equal numbers,
+    /// and canonicalizes a zero tie to the runtime's `@min`/`@max` behavior:
+    /// `min` is negative if either zero is negative, while `max` is negative
+    /// only when both zeros are negative.
     fn emitExtremum(
         self: *Body,
         wants_minimum: bool,
@@ -7150,7 +7152,60 @@ const Body = struct {
             "left.extremum",
         );
         const ordered = try self.wip.select(.normal, left_wins, left, right, "ordered.extremum");
-        const right_is_number = try self.wip.select(.normal, right_is_nan, left, ordered, "right.extremum");
+        const positive_zero = try self.zeroValue(kind);
+        const both_zero = try self.wip.bin(
+            .@"and",
+            try self.wip.fcmp(.normal, .oeq, left, positive_zero, "left.zero"),
+            try self.wip.fcmp(.normal, .oeq, right, positive_zero, "right.zero"),
+            "both.zero",
+        );
+        const sign_type = switch (kind) {
+            .float => Builder.Type.i32,
+            .double => Builder.Type.i64,
+            else => unreachable,
+        };
+        const sign_mask = switch (kind) {
+            .float => try self.module.builder.intValue(sign_type, @as(i32, @bitCast(@as(u32, 0x80000000)))),
+            .double => try self.module.builder.intValue(sign_type, @as(i64, @bitCast(@as(u64, 0x8000000000000000)))),
+            else => unreachable,
+        };
+        const integer_zero = try self.module.builder.intValue(sign_type, 0);
+        const left_negative = try self.wip.icmp(
+            .ne,
+            try self.wip.bin(
+                .@"and",
+                try self.wip.cast(.bitcast, left, sign_type, "left.bits"),
+                sign_mask,
+                "left.sign",
+            ),
+            integer_zero,
+            "left.negative",
+        );
+        const right_negative = try self.wip.icmp(
+            .ne,
+            try self.wip.bin(
+                .@"and",
+                try self.wip.cast(.bitcast, right, sign_type, "right.bits"),
+                sign_mask,
+                "right.sign",
+            ),
+            integer_zero,
+            "right.negative",
+        );
+        const negative_zero = switch (kind) {
+            .float => try self.module.builder.floatValue(@bitCast(@as(u32, 0x80000000))),
+            .double => try self.module.builder.doubleValue(@bitCast(@as(u64, 0x8000000000000000))),
+            else => unreachable,
+        };
+        const negative_zero_tie = try self.wip.bin(
+            if (wants_minimum) .@"or" else .@"and",
+            left_negative,
+            right_negative,
+            "negative.zero",
+        );
+        const zero = try self.wip.select(.normal, negative_zero_tie, negative_zero, positive_zero, "zero.tie");
+        const ordered_or_zero = try self.wip.select(.normal, both_zero, zero, ordered, "zero.extremum");
+        const right_is_number = try self.wip.select(.normal, right_is_nan, left, ordered_or_zero, "right.extremum");
         return self.wip.select(.normal, left_is_nan, right, right_is_number, "extremum");
     }
 
