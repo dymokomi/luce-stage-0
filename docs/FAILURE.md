@@ -340,8 +340,9 @@ outcome channel already has room: `1` is trapped, `2` becomes errored,
 and the value still travels in `%out`. Compare Zig, which sret-returns
 every payload-carrying `!T` — even an 8-byte one — through memory.
 
-> **Corrected once built.** Half of that paragraph held and half of it
-> did not.
+> **Corrected once built (2026-08-03).** Half of that paragraph held
+> and half of it did not.  The version numbers below are of that day;
+> `docs/CODEGEN.md` carries the current ones.
 >
 > The channel *did* have room, and the numbers are the ones written
 > here — but the channel was an `i1`, so making room meant widening

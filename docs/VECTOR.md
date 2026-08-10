@@ -7,7 +7,8 @@ would cost.
 
 The occasion is one row.  `bench/arrays32` sits at **8.14× its C twin
 on the compute column** (`docs/CODEGEN.md` is the one place that
-number is written down), and the cause is not the 32-bit width, not
+number is written down) [8.66× in that table as of 2026-08-10 — the
+row has drifted with the tree, the cause has not], and the cause is not the 32-bit width, not
 the row resolution, and not allocation.  It is that every `+` and
 every `*` in Luce carries an overflow test, a checked reduction
 therefore has a value-dependent exit on every element, and a loop with
@@ -891,7 +892,8 @@ cross-compilation (item 8) is the largest backend item outstanding.  This work g
 **after the two small in-flight items and before cross-compilation**,
 because `docs/MISSING.md`'s own summary says the runtime's outstanding
 item is speed and names `strings` at 2.74× — and `arrays32` at 8.14×
-is now the worse row by a factor of three.
+is now the worse row by a factor of three [2.67× and 8.66× in the
+2026-08-10 table; the ranking stands].
 
 **Step 0 — the ceiling. Half a day. Gates everything.**
 Remove the overflow checks from `emitIntArithmetic` in a throwaway
@@ -904,7 +906,9 @@ Extract `08_llvm/cfg.zig` from `loops.zig` (`Graph`, `Loop`, `loops`,
 `preheader`; a pure move, `loops.zig`'s five tests must stay green).
 Add `08_llvm/reduce.zig`: the recognizer, the comptime width table
 computed in `i128` from `heap.maxElements(element)`, and the
-table-recomputation test.  Add `heap.maxElements`.  Teach `lower.zig`
+table-recomputation test.  Add `heap.maxElements` [shipped since this
+was written — `runtime/heap.zig`'s `maxElements` is the allocation
+ceiling; the rest of this step is not].  Teach `lower.zig`
 to emit plain arithmetic for a planned reduction (~40 lines).  Add
 `specs/vector_spec.zig` with the qualifying and refusal specs.  Add
 `bench/arrays16.{luc,c}` and a `docs/CODEGEN.md` row, because
@@ -928,7 +932,7 @@ to Step 2's emitter, and the first integer whole-array operations in
 `std.math` become worth writing.
 
 **What success is.**  `arrays32` at ≈3× its C twin on the compute
-column instead of 8.14×; `arrays16` at parity; every other row inside
+column instead of 8.14× [8.66× today]; `arrays16` at parity; every other row inside
 2% under `bench/compare.sh`; 1187 tests plus the new specs green; and
 the oracle still trapping on every element it traps on today, which is
 the only number that was never negotiable.

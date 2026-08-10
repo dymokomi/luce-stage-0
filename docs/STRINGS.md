@@ -843,7 +843,10 @@ store a borrow and now duplicates twelve bytes into the element cell,
 (*"the copy is free and the allocation is not"*), and the memo's
 estimate of it — 0.1 ms, "beneath notice" — was the number that was
 wrong, by about thirty times. Removing it would need step 6, not a
-larger threshold.
+larger threshold. [Since retracted — see "Where the design met the
+code" below: the copy is the borrow's one necessary copy, it measures
+1.3 ms rather than the ~3 ms this table attributed to it, and step 6
+could not have removed it.]
 
 The parity benchmarks did not move.
 

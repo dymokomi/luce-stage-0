@@ -20,7 +20,8 @@
 > may declare a default — `func find(s: string, needle: string, start:
 > long = 0)` — and a default is a **folded compile-time constant**,
 > evaluated once at the declaration by the folder that already folds
-> file-scope `let`. Defaults are trailing: a parameter with one may be
+> file-scope `let` (today `const` — top-level `let` has since been
+> retired). Defaults are trailing: a parameter with one may be
 > followed only by parameters with one. **Struct fields take the same
 > clause**, which is what finally makes `struct` the options record it
 > has been one clause away from being. Arguments are evaluated in the
@@ -988,7 +989,8 @@ parameter. §2 says why for each.
 ### The folder already exists and is most of the implementation
 
 `constants.fold` (`04_semantics/constants.zig`) folds file-scope
-`let` today, with a landing type, lazy evaluation, cross-module
+`let` today (since the retirement of top-level `let`, file-scope
+`const`), with a landing type, lazy evaluation, cross-module
 references and cycle detection (`ConstantInfo.state`,
 `04_semantics/context.zig:314-322`). Its doc comment is already the
 specification for what a default may be:

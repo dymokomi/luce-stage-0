@@ -245,12 +245,14 @@ thing that catches the format being right and the *world* disagreeing.
 
 ## Sequencing
 
-After run four (enums + match) merges: both runs move
+After run four (enums + match) merges **(done)**: both runs move
 `format_version` and this one moves `abi.version`; racing two runs
 through the same seams is the one way to lose both (the BITWISE.md
 lesson, again).  Then: part one (runtime + codegen, no surface
 change, benchmarked — `bench/` has the harness and `list` rows will
-move), part two (ABI + runtime + hosts + both engines), part three
-(std + zip's payoff), specs at every step — two-engine rows for byte
+move) **(done)**, part two (ABI + runtime + hosts + both engines)
+**(done)**, part three (std + zip's payoff) **(done)**, specs at every
+step **(done — `specs/bytes_spec.zig`)** — two-engine rows for byte
 round-trips including bytes that are not text, and the artifact-refusal
-row for the version bump.
+row for the version bump.  The As built section above (2026-08-07) is
+the record.

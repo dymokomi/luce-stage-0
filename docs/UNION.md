@@ -1,5 +1,10 @@
 # Unions — one of these, and the language always knows which
 
+> **Status (2026-08-10): drafted, not scheduled.**  The design below is
+> taken and priced, but no run is underway and none is on the board.
+> The three questions that genuinely need the owner are held in "For
+> ratification", each with a recommendation already written.
+
 Run five of the ratified roadmap (`docs/MISSING.md` Tier 2), and the
 last of it: after this the owner's *"and I think we're good"* is the
 whole remaining language.  Its one deciding question was answered
@@ -524,10 +529,11 @@ the specs are there to keep honest.
 
 ## Sequencing
 
-**After the list-speed run**, which is in flight: that run is changing
-how a `list` element is reached from generated code
-(`docs/CODEGEN.md`'s `bench/lists` row, 29.10x and the worst in the
-table), and union's motivating program is a tree of lists and maps.
+**After the list-speed run** — in flight when this was written, and
+since landed: it changed how a `list` element is reached from
+generated code (`docs/CODEGEN.md`'s `bench/lists` row, 29.10x then,
+2.60x now), and union's motivating program is a tree of lists and
+maps.
 Racing two runs through `lower.zig`'s container path is the one way to
 lose both — the BITWISE.md lesson, and BYTES.md took it too.  Union
 moves `format_version` and no ABI; the list run moves neither; they do

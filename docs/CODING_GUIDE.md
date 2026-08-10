@@ -114,7 +114,7 @@ src/luce/                     the language, one numbered surface per stage:
   support/                    types and diagnostics, used by every stage
   specs/                      the executable specification — its own module
 src/apps/luce/                the compiler CLI (build, check, ir)
-src/apps/loom/                only what is loom's: main, shell, runner, palette, product
+src/apps/loom/                only what is loom's: main, shell, runner, palette, product, zipping
 src/apps/*.zig                shared by both binaries, because a program's behaviour
                               must not depend on who started it: host (the real host),
                               key, machine, native, report, sanitize, start, streams,

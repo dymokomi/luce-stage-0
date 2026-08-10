@@ -1224,25 +1224,24 @@ and `(`, `)`, `,` already land in `Draw.line`'s final `else` arm as
 §6 — and that rewrite is build-gated by the compile test in
 `src/apps/loom/shell.zig` and by `build.zig`.)
 
-**The VS Code grammar has one rule that is genuinely wrong**, in a file
-that is hand-maintained and already stale.
-`tools/vscode-luce/syntaxes/luce.tmLanguage.json` matches a return type
-with `(:|->)\s*([A-Za-z_][A-Za-z0-9_]*)\b`, which `(` blocks; the
-visible damage is small, because `Int` is still caught by the builtin
-type alternation. It should be fixed — and while it is open, the file
-still lists **removed v1 Fabric builtins** (`create_image`,
-`create_texel`, `texel_*`) and an `input`/`output` rule for a deleted
-feature, and its keyword list is missing `give`, `copy`, `free`, `new`,
-`import`, `try`, `catch` and `none`. (`let` is there, but only inside
-the `(let|var)\s+NAME` binding rule at `:100` — which this feature's
-comma list also walks past, so the one wrong rule is really two.) Its
-README names
-`02_lex/token.zig` and the reserved-name list as its source of truth,
-and **nothing enforces that**. Fixing the one rule this feature breaks
-without fixing the rest would be a stopgap; the honest scope is one
-commit that re-derives the whole file from the two lists it claims to
-follow, and the honest note is that a generator with a test is what
-would stop it rotting again. That is filed, not scheduled here.
+**The VS Code grammar had one rule that was genuinely wrong**, in a
+file that was then hand-maintained and already stale:
+`tools/vscode-luce/syntaxes/luce.tmLanguage.json` matched a return type
+with `(:|->)\s*([A-Za-z_][A-Za-z0-9_]*)\b`, which `(` blocks, and it
+still listed removed v1 Fabric builtins (`create_image`,
+`create_texel`, `texel_*`) while its keyword list was missing `give`,
+`copy`, `free`, `new`, `import`, `try`, `catch` and `none`. Fixing the
+one rule this feature breaks without fixing the rest would have been a
+stopgap; the honest scope was one commit that re-derives the whole file
+from the tables it claims to follow, and a generator with a test is
+what would stop it rotting again.
+
+> **Since built (2026-08-10).** `tools/grammar.zig` now generates the
+> grammar from the compiler's own tables — the lexer's keywords, the
+> builtin and method tables, the type names — and
+> `test "the committed grammar is what the generator emits"` pins the
+> committed file byte for byte, so the drift this paragraph describes
+> cannot recur.
 
 ---
 

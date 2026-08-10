@@ -1,5 +1,9 @@
 # What Luce could mean by "at the same time"
 
+> **Superseded 2026-08-07 by `docs/THREADS.md`**: candidate B —
+> workers owning their world — is what the owner ratified and what
+> shipped.  This file remains the survey that framed the choice.
+
 > **This is not a decision, and it must not be read as one.**  The
 > owner's instruction is the whole warrant: *"we'll pause and think
 > about threads — I think we'll need to really think about this

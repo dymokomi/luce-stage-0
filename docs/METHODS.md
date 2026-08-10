@@ -15,7 +15,8 @@
 > receiver as a convention in the first parameter's *name* and says
 > `self`. Nothing else changes: `x.foo()` is still sugar for a plain
 > call with the receiver first, and there is still no dispatch, no
-> reference type, and no function value.
+> reference type, and no function value.  [The last clause has since
+> lapsed — `docs/FUNCTIONS.md`; see the supersession note at the end.]
 
 `docs/MISSING.md`'s **"The order to work down"** item 10 reads
 *"Decide receivers and multiple returns — one memo each."*  (This memo
@@ -766,3 +767,7 @@ remain, and borrowed object-content mutation remains a read.  Methods
 are neither values nor worker targets and cannot be called through the
 type; static members can do all three.  `docs/SELF.md`'s as-built
 appendix records the format-32 / ABI-13 implementation seam.
+Separately, the rule's "no function value" is superseded by
+`docs/FUNCTIONS.md`: named functions and capture-free lambdas are
+values now, while methods still are not — that exclusion is the
+surviving half of the sentence.
