@@ -217,6 +217,24 @@ test "the file pane is optional and receives focus through the pane cycle" {
     try testing.expect(std.mem.indexOf(u8, shown, "┌ files") != null);
 }
 
+test "a mouse click lands the cursor before editing" {
+    const keys = [_]agree.World.Key{
+        .{ .name = "mouse_press", .row = 1, .column = 6, .button = 0 },
+        .{ .name = "text", .text = "Z" },
+        .{ .name = "ctrl_s" },
+        .{ .name = "ctrl_q" },
+    };
+    var world: agree.World = .withFile("notes.txt", "hello\nworld\n");
+    world.arguments = &[_][]const u8{"notes.txt"};
+    world.keys = &keys;
+    var program = try agree.project(editor, &editor_files);
+    defer program.deinit();
+    var session = try agree.compareProgram(&program, .{ .world = world });
+    defer session.deinit();
+
+    try testing.expectEqualStrings("hello\nwZorld\n", session.file().?.content);
+}
+
 /// The characters a transcript put on the screen, with the frame
 /// bookkeeping taken out.
 ///
