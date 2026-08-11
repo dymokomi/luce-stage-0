@@ -210,7 +210,11 @@ pub fn runScript(
         },
     };
 
-    var loader: files.FileLoader = .{ .io = io, .directory = std.fs.path.dirname(path) orelse "" };
+    var loader: files.FileLoader = .{
+        .io = io,
+        .directory = std.fs.path.dirname(path) orelse "",
+        .project_root = source_root,
+    };
     return runSource(gpa, io, out, err, policy, path, source, loader.loader(), source_root, arguments);
 }
 

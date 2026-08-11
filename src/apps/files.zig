@@ -1,8 +1,10 @@
 //! File access shared by the luce and loom executables: whole-file
 //! reads and writes, reading a source file, the import loader that
-//! resolves `import name` as NAME.luc beside the root source file,
-//! and project discovery — the walk that finds the `luce.yaml`
-//! governing a root source file (docs/PACKAGES.md D1).  One copy, so
+//! resolves `import name` as NAME.luc — beside the root source file
+//! for a rootless program, under the project root when a `luce.yaml`
+//! governs, with `import a.b` mapping dots to folders under that root
+//! (docs/PACKAGES.md D1, D2) — and project discovery, the walk that
+//! finds the `luce.yaml` governing a root source file.  One copy, so
 //! the two programs can never drift on how imports resolve or on what
 //! counts as an unreadable file.
 //!
@@ -144,6 +146,7 @@ fn failure(mistake: anyerror) luce.source.Found {
     return switch (mistake) {
         error.FileNotFound => .missing,
         error.IsDir => .{ .unreadable = "it is a directory" },
+        error.NotDir => .{ .unreadable = "part of the path is not a directory" },
         error.AccessDenied, error.PermissionDenied => .{ .unreadable = "permission denied" },
         error.NameTooLong => .{ .unreadable = "the path is too long" },
         error.SymLinkLoop => .{ .unreadable = "the path loops through symbolic links" },
@@ -305,20 +308,76 @@ fn matchName(
     return .absent;
 }
 
-/// Loads `import name` as NAME.luc next to the root source file.
+/// Loads `import name` as NAME.luc — next to the root source file for
+/// a rootless program, under the project root when one governs.
+///
+/// **One anchor per mode** (docs/PACKAGES.md D1): under a `luce.yaml`
+/// every import is project-root-relative, the single-segment form
+/// included, so `import geo` means the same file from every file in
+/// the tree.  `import a.b` maps dots to folders under that root and
+/// keeps both Loader obligations at every level — the match exact,
+/// and only the last segment a regular file.  Without a root the
+/// sibling behaviour is exactly what it always was, single segment
+/// only: a folder path needs the anchor, and the refusal names
+/// `luce.yaml` as what provides one.
 pub const FileLoader = struct {
     io: std.Io,
+    /// The root source file's directory — where a *rootless* program's
+    /// imports resolve.
     directory: []const u8,
+    /// The discovered project root (`discoverProject`'s token), or ""
+    /// when no `luce.yaml` governs.  The same string the compile got
+    /// as `CompileOptions.source_root`.
+    project_root: []const u8 = "",
 
     fn load(context: *anyopaque, arena: Allocator, name: []const u8, from_root: []const u8) error{OutOfMemory}!luce.source.Found {
         const self: *FileLoader = @ptrCast(@alignCast(context));
-        const wanted = try std.fmt.allocPrint(arena, "{s}.luc", .{name});
-        const path = if (self.directory.len == 0)
+        const rooted = self.project_root.len != 0;
+        var where: []const u8 = if (rooted) self.project_root else self.directory;
+
+        // The folder half of a dotted import, walked one level at a
+        // time so the exact-case obligation holds per directory.
+        var rest = name;
+        if (!rooted and std.mem.indexOfScalar(u8, name, '.') != null) {
+            return .{
+                .unreadable = "subfolder imports need a project root, " ++
+                    "and no luce.yaml governs this program",
+            };
+        }
+        while (std.mem.indexOfScalar(u8, rest, '.')) |dot| {
+            const segment = rest[0..dot];
+            rest = rest[dot + 1 ..];
+            switch (try matchName(self.io, arena, where, segment)) {
+                .exact, .unknown => {},
+                .absent => return .missing,
+                .case_variant => |real| return .{ .unreadable = try std.fmt.allocPrint(
+                    arena,
+                    "the folder is named {s}; module names are case-sensitive " ++
+                        "even where the filesystem is not",
+                    .{real},
+                ) },
+            }
+            where = if (where.len == 0)
+                segment
+            else
+                try std.fmt.allocPrint(arena, "{s}/{s}", .{ where, segment });
+            // The segment must really be a folder — asked directly,
+            // because what a failed descent errors with differs by
+            // platform.  A stat the race gods deny is left to the
+            // final open to explain.
+            const info = std.Io.Dir.cwd().statFile(self.io, where, .{}) catch continue;
+            if (info.kind != .directory) {
+                return .{ .unreadable = "part of the path is not a directory" };
+            }
+        }
+
+        const wanted = try std.fmt.allocPrint(arena, "{s}.luc", .{rest});
+        const path = if (where.len == 0)
             wanted
         else
-            try std.fmt.allocPrint(arena, "{s}/{s}", .{ self.directory, wanted });
+            try std.fmt.allocPrint(arena, "{s}/{s}", .{ where, wanted });
 
-        switch (try matchName(self.io, arena, self.directory, wanted)) {
+        switch (try matchName(self.io, arena, where, wanted)) {
             .exact, .unknown => {},
             .absent => return .missing,
             .case_variant => |real| return .{ .unreadable = try std.fmt.allocPrint(
@@ -541,6 +600,131 @@ test "an import matches the directory entry exactly, whatever the filesystem thi
     const exact = try resolver.load(resolver.context, arena.allocator(), "util", "");
     try testing.expect(exact == .text);
     try testing.expect(std.mem.indexOf(u8, exact.text.bytes, "v * 2") != null);
+}
+
+test "under a project root, dots map to folders and every import is root-relative" {
+    // The one-anchor rule (docs/PACKAGES.md D1, D2): with a root, both
+    // `import geo.shapes` and the single-segment `import util` resolve
+    // against the project root, wherever the importing file sits —
+    // this loader's `directory` (the root file's own) plays no part.
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpPrefix(&tmp.sub_path);
+    defer testing.allocator.free(root);
+    try tmp.dir.createDir(io, "geo", .default_dir);
+    try tmp.dir.createDir(io, "src", .default_dir);
+    const shapes_path = try std.fmt.allocPrint(testing.allocator, "{s}/geo/shapes.luc", .{root});
+    defer testing.allocator.free(shapes_path);
+    try writeWhole(io, shapes_path, "func area() -> long:\n    return 4\n");
+    const util_path = try std.fmt.allocPrint(testing.allocator, "{s}/util.luc", .{root});
+    defer testing.allocator.free(util_path);
+    try writeWhole(io, util_path, "func twice(v: long) -> long:\n    return v * 2\n");
+
+    // The root file lives in src/, which holds neither module.
+    const nested = try std.fmt.allocPrint(testing.allocator, "{s}/src", .{root});
+    defer testing.allocator.free(nested);
+    var loader: FileLoader = .{ .io = io, .directory = nested, .project_root = root };
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const resolver = loader.loader();
+
+    const shapes = try resolver.load(resolver.context, arena.allocator(), "geo.shapes", root);
+    try testing.expect(shapes == .text);
+    try testing.expect(std.mem.indexOf(u8, shapes.text.bytes, "return 4") != null);
+    try testing.expect(std.mem.endsWith(u8, shapes.text.path, "/geo/shapes.luc"));
+
+    const util = try resolver.load(resolver.context, arena.allocator(), "util", root);
+    try testing.expect(util == .text);
+    try testing.expect(std.mem.indexOf(u8, util.text.bytes, "v * 2") != null);
+
+    // The folder exists and the file does not: an ordinary missing
+    // module, reported by the caller with the full path it probed.
+    const absent = try resolver.load(resolver.context, arena.allocator(), "geo.circles", root);
+    try testing.expect(absent == .missing);
+
+    // A folder that is not there is missing too, not an error.
+    const nowhere = try resolver.load(resolver.context, arena.allocator(), "maps.tiles", root);
+    try testing.expect(nowhere == .missing);
+}
+
+test "a dotted import checks the folder's case at every level" {
+    // `import geo.shapes` with a folder really named Geo: a
+    // case-folding filesystem would descend happily and the next
+    // machine would not, so the directory entry is checked per level
+    // and the refusal names the real spelling.
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpPrefix(&tmp.sub_path);
+    defer testing.allocator.free(root);
+    try tmp.dir.createDir(io, "Geo", .default_dir);
+    const shapes_path = try std.fmt.allocPrint(testing.allocator, "{s}/Geo/shapes.luc", .{root});
+    defer testing.allocator.free(shapes_path);
+    try writeWhole(io, shapes_path, "func area() -> long:\n    return 4\n");
+
+    var loader: FileLoader = .{ .io = io, .directory = root, .project_root = root };
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const resolver = loader.loader();
+
+    const found = try resolver.load(resolver.context, arena.allocator(), "geo.shapes", root);
+    try testing.expect(found == .unreadable);
+    try testing.expect(std.mem.indexOf(u8, found.unreadable, "Geo") != null);
+    try testing.expect(std.mem.indexOf(u8, found.unreadable, "case-sensitive") != null);
+}
+
+test "a dotted import without a project root is refused, naming luce.yaml" {
+    // Rootless programs keep exactly the sibling behaviour, single
+    // segment only: a folder path needs the anchor a luce.yaml
+    // provides (docs/PACKAGES.md D1), and the refusal says so rather
+    // than resolving against an anchor nobody chose.
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const directory = try tmpPrefix(&tmp.sub_path);
+    defer testing.allocator.free(directory);
+    try tmp.dir.createDir(io, "geo", .default_dir);
+    const shapes_path = try std.fmt.allocPrint(testing.allocator, "{s}/geo/shapes.luc", .{directory});
+    defer testing.allocator.free(shapes_path);
+    try writeWhole(io, shapes_path, "func area() -> long:\n    return 4\n");
+
+    var loader: FileLoader = .{ .io = io, .directory = directory };
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const resolver = loader.loader();
+
+    // The file is right there; without the anchor it is still refused,
+    // because sibling-relative folder walks are the two-anchor mistake
+    // the root exists to kill.
+    const found = try resolver.load(resolver.context, arena.allocator(), "geo.shapes", "");
+    try testing.expect(found == .unreadable);
+    try testing.expect(std.mem.indexOf(u8, found.unreadable, "luce.yaml") != null);
+
+    // Single segments are untouched: today's behaviour exactly.
+    const missing = try resolver.load(resolver.context, arena.allocator(), "shapes", "");
+    try testing.expect(missing == .missing);
+}
+
+test "a middle segment that is a file, not a folder, is unreadable by name" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const root = try tmpPrefix(&tmp.sub_path);
+    defer testing.allocator.free(root);
+    // `geo` exists, but as a file — the walk cannot descend into it.
+    const geo_path = try std.fmt.allocPrint(testing.allocator, "{s}/geo", .{root});
+    defer testing.allocator.free(geo_path);
+    try writeWhole(io, geo_path, "not a folder");
+
+    var loader: FileLoader = .{ .io = io, .directory = root, .project_root = root };
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const resolver = loader.loader();
+
+    const found = try resolver.load(resolver.context, arena.allocator(), "geo.shapes", root);
+    try testing.expect(found == .unreadable);
+    try testing.expectEqualStrings("part of the path is not a directory", found.unreadable);
 }
 
 test "an import must be a regular file, not a device or a fifo" {

@@ -2344,8 +2344,8 @@ test "std is a namespace, not a reserved name: a sibling module may be called ma
         return error.TestUnexpectedResult;
     }
 
-    // Both at once is one binding for two modules, and there is no
-    // `as` to tell them apart: the message names the file to rename.
+    // Both at once is one binding for two modules: refused, and the
+    // message offers the alias on the import that can move.
     var collision = try compile_mod.compileProject(testing.allocator,
         \\import std.math
         \\import math
@@ -2358,7 +2358,127 @@ test "std is a namespace, not a reserved name: a sibling module may be called ma
     try testing.expect(collision == .failure);
     try testing.expectEqualStrings("luce.import.collision", collision.failure.at(0).?.code);
     try testing.expect(std.mem.indexOf(u8, collision.failure.at(0).?.message, "std.math") != null);
-    try testing.expect(std.mem.indexOf(u8, collision.failure.at(0).?.message, "math.luc") != null);
+    try testing.expect(std.mem.indexOf(u8, collision.failure.at(0).?.message, "import math as NAME") != null);
+
+    // The remedy works: the sibling aliased out of the way, both
+    // modules answer under their own bindings.
+    var aliased = try compile_mod.compileProject(testing.allocator,
+        \\import std.math
+        \\import math as m2
+        \\
+        \\func main():
+        \\    assert(m2.answer() == 42)
+        \\    assert(math.ipow(2, 5) == 32)
+        \\
+    , files.loader(), script);
+    defer aliased.deinit();
+    if (aliased == .failure) {
+        printDiagnostics(&aliased);
+        return error.TestUnexpectedResult;
+    }
+}
+
+test "two imports may not share a last segment, and the alias is the named remedy" {
+    // Week one of subfolders: geo/shapes.luc and blocks/shapes.luc
+    // both want the binding `shapes` (docs/PACKAGES.md D2).  The
+    // refusal offers `as`, and taking the offer compiles.
+    const script: types.CompileOptions = .{};
+    var files: TestLoader = .{ .modules = &.{
+        .{ .name = "geo.shapes", .source = "func area() -> long:\n    return 4\n" },
+        .{ .name = "blocks.shapes", .source = "func area() -> long:\n    return 9\n" },
+    } };
+
+    var collision = try compile_mod.compileProject(testing.allocator,
+        \\import geo.shapes
+        \\import blocks.shapes
+        \\
+        \\func main():
+        \\    assert(shapes.area() == 4)
+        \\
+    , files.loader(), script);
+    defer collision.deinit();
+    try testing.expect(collision == .failure);
+    try testing.expectEqualStrings("luce.import.collision", collision.failure.at(0).?.code);
+    try testing.expect(std.mem.indexOf(u8, collision.failure.at(0).?.message, "both bind the name shapes") != null);
+    try testing.expect(std.mem.indexOf(u8, collision.failure.at(0).?.message, "import blocks.shapes as NAME") != null);
+
+    var aliased = try compile_mod.compileProject(testing.allocator,
+        \\import geo.shapes
+        \\import blocks.shapes as blocks
+        \\
+        \\func main():
+        \\    assert(shapes.area() == 4)
+        \\    assert(blocks.area() == 9)
+        \\
+    , files.loader(), script);
+    defer aliased.deinit();
+    if (aliased == .failure) {
+        printDiagnostics(&aliased);
+        return error.TestUnexpectedResult;
+    }
+}
+
+test "one module, one binding: a program cannot import geo.shapes under two names" {
+    const script: types.CompileOptions = .{};
+    var files: TestLoader = .{ .modules = &.{
+        .{ .name = "geo.shapes", .source = "func area() -> long:\n    return 4\n" },
+        .{ .name = "user", .source = "import geo.shapes as gs\n\nfunc go() -> long:\n    return gs.area()\n" },
+    } };
+
+    var result = try compile_mod.compileProject(testing.allocator,
+        \\import geo.shapes
+        \\import user
+        \\
+        \\func main():
+        \\    assert(user.go() == shapes.area())
+        \\
+    , files.loader(), script);
+    defer result.deinit();
+    try testing.expect(result == .failure);
+    const first = result.failure.at(0).?;
+    try testing.expectEqualStrings("luce.import.collision", first.code);
+    try testing.expect(std.mem.indexOf(u8, first.message, "already imported as shapes") != null);
+}
+
+test "an aliased module's hint spells the import with its alias" {
+    // user binds geo.shapes as gs; the root uses gs without importing
+    // it.  Any other spelling would bind something else, so the hint
+    // carries the alias too.
+    const script: types.CompileOptions = .{};
+    var files: TestLoader = .{ .modules = &.{
+        .{ .name = "geo.shapes", .source = "func area() -> long:\n    return 4\n" },
+        .{ .name = "user", .source = "import geo.shapes as gs\n\nfunc go() -> long:\n    return gs.area()\n" },
+    } };
+
+    var result = try compile_mod.compileProject(testing.allocator,
+        \\import user
+        \\
+        \\func main():
+        \\    assert(gs.area() == user.go())
+        \\
+    , files.loader(), script);
+    defer result.deinit();
+    try testing.expect(result == .failure);
+    const first = result.failure.at(0).?;
+    try testing.expectEqualStrings("luce.sema.import", first.code);
+    try testing.expect(std.mem.indexOf(u8, first.message, "import geo.shapes as gs") != null);
+}
+
+test "a dotted import that is missing names the folder path it was probed as" {
+    const script: types.CompileOptions = .{};
+    var files: TestLoader = .{ .modules = &.{} };
+    var result = try compile_mod.compileProject(testing.allocator,
+        \\import geo.shapes
+        \\
+        \\func main():
+        \\    return
+        \\
+    , files.loader(), script);
+    defer result.deinit();
+    try testing.expect(result == .failure);
+    const first = result.failure.at(0).?;
+    try testing.expectEqualStrings("luce.import.missing", first.code);
+    try testing.expect(std.mem.indexOf(u8, first.message, "geo/shapes.luc") != null);
 }
 
 test "the routed list comparator requires std lists, not a sibling named lists" {

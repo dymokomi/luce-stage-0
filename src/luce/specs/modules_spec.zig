@@ -149,3 +149,41 @@ test "constants reach across modules through imports" {
     defer program.deinit();
     try agree.okProgram(&program, .{});
 }
+
+test "subfolder modules run: dots map to folders, and as picks the binding" {
+    // docs/PACKAGES.md D2, the half that runs: `import geo.shapes`
+    // binds its last segment, `as` moves only the binding, and both
+    // namespaces resolve like any other module — types, functions and
+    // constants crossing the same way.  The last segments collide on
+    // purpose (`shapes` twice), which is exactly what the alias is
+    // for.
+    const shapes: agree.File = .{ .name = "geo.shapes", .source =
+        \\struct Rect:
+        \\    width: double
+        \\    height: double
+        \\
+        \\func area(r: Rect) -> double:
+        \\    return r.width * r.height
+        \\
+    };
+    const blocks: agree.File = .{ .name = "blocks.shapes", .source =
+        \\const faces = 6
+        \\
+        \\func volume(edge: double) -> double:
+        \\    return edge * edge * edge
+        \\
+    };
+    var program = try agree.project(
+        \\import geo.shapes
+        \\import blocks.shapes as blocks
+        \\
+        \\func main():
+        \\    let r = shapes.Rect(width = 3.0, height = 4.0)
+        \\    assert(shapes.area(r) == 12.0)
+        \\    assert(blocks.volume(2.0) == 8.0)
+        \\    assert(blocks.faces == 6)
+        \\
+    , &.{ shapes, blocks });
+    defer program.deinit();
+    try agree.okProgram(&program, .{});
+}

@@ -16,10 +16,12 @@
 //!   ```console               a shell transcript; `$ ` lines are run
 //!
 //! Attributes: `file=NAME.luc` names the file written (default
-//! `main.luc`), `include=PATH` shows a file from the repository
-//! instead of the fence body, and `args=...` takes the rest of the
-//! info string as the program's arguments — split on spaces, with
-//! `"..."` holding one argument together.
+//! `main.luc`) and may carry a folder (`file=geo/shapes.luc`), made
+//! on demand — which is also how a page stages a `luce.yaml` for the
+//! project-root samples; `include=PATH` shows a file from the
+//! repository instead of the fence body; and `args=...` takes the
+//! rest of the info string as the program's arguments — split on
+//! spaces, with `"..."` holding one argument together.
 //!
 //! Each of the first three requires an immediately following
 //! ```output fence, and the build fails unless it matches byte for
@@ -538,6 +540,13 @@ fn makeSampleDirectory(self: *Verifier) ![]u8 {
 fn write(self: *Verifier, directory: []const u8, name: []const u8, source: []const u8) !void {
     const path = try std.fs.path.join(self.gpa, &.{ directory, name });
     defer self.gpa.free(path);
+    // A sample file may live in a subfolder (`file=geo/shapes.luc`,
+    // the subfolder-import pages); the folder is made on demand.
+    if (std.fs.path.dirname(name)) |parent| {
+        const nested = try std.fs.path.join(self.gpa, &.{ directory, parent });
+        defer self.gpa.free(nested);
+        try Io.Dir.cwd().createDirPath(self.io, nested);
+    }
     try Io.Dir.cwd().writeFile(self.io, .{ .sub_path = path, .data = source });
 }
 

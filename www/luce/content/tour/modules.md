@@ -51,7 +51,7 @@ is checked rather than the open — a program that builds on a Mac
 builds on the machine that ships it.
 
 Deliberately absent: package managers, search paths, conditional
-imports, re-exports, and any `as` clause.
+imports, and re-exports.
 
 ## The standard library lives under std
 
@@ -95,7 +95,7 @@ Three rules keep it honest:
 |---|---|
 | `import std.nope` | `luce.import.standard` — and the error lists the modules that do exist |
 | `import std` | `luce.import.reserved` — the namespace is not a module, so no `std.luc` beside your program can ever be imported |
-| `import std.math` **and** `import math` | `luce.import.collision` — one name for two modules; rename the file |
+| `import std.math` **and** `import math` | `luce.import.collision` — one name for two modules; alias the sibling: `import math as m2` |
 
 ```luce fail
 import std.nope
@@ -138,3 +138,38 @@ oversized file (`luce.source.too_large`).
 A program may also come from standard input: `luce check -`, or any
 pipe. Diagnostics then name it `<stdin>`, and imports resolve beside
 the current directory.
+
+## Projects: subfolders and as
+
+A file named `luce.yaml` beside your source marks a **project root**
+— just a name and a version. Under one, dots map to folders:
+`import geo.shapes` reads `geo/shapes.luc` under the root, binds
+`shapes`, and resolves the same from every file in the tree. When two
+imports' last segments collide, **`as`** picks the binding.
+
+```luce module file=luce.yaml
+name: tour
+version: 0.1.0
+```
+
+```luce module file=geo/shapes.luc
+func area(width: double, height: double) -> double:
+    return width * height
+```
+
+```luce run
+import geo.shapes as gs
+
+func main():
+    print(string(gs.area(3.0, 4.0)))
+```
+
+```output
+12
+```
+
+Without a `luce.yaml` nothing changes: sibling imports stay single
+segment, and a dotted import is refused with the manifest named as
+what enables it. The [reference](/ref/modules/#projects-and-subfolders)
+works the whole feature through — the collisions, the one-anchor rule,
+and what the manifest does and does not govern yet.

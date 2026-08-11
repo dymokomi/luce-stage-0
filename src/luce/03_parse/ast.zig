@@ -540,11 +540,15 @@ pub const FuncDecl = struct {
 };
 
 /// An import, in either namespace: `import geo` binds the sibling
-/// file geo.luc, `import std.math` binds the standard library's math.
-/// `name` is the module's name and the namespace it takes at the call
-/// site both — the two spellings differ only in `origin`.
+/// file geo.luc, `import std.math` binds the standard library's math,
+/// and `import geo.shapes` binds geo/shapes.luc under the project
+/// root (docs/PACKAGES.md D2).  `name` is the module as written after
+/// `import`, without the std head — "geo", "geo.shapes", "math" —
+/// and `binding` is the namespace call sites use: the last segment,
+/// or the alias when the import says `as`.
 pub const Import = struct {
     name: []const u8,
+    binding: []const u8,
     origin: source_mod.Origin,
     span: Span,
 };

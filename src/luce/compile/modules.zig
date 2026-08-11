@@ -2,8 +2,10 @@
 //! root source and every module it reaches.
 //!
 //! A file is a module: `import geo` loads `geo.luc` beside the
-//! program and `import std.math` loads the embedded library, both
-//! binding the bare name.  Resolution itself is stage 1's
+//! program (under the project root, when one governs), `import
+//! geo.shapes` a file the host finds by mapping dots to folders, and
+//! `import std.math` the embedded library — each binding its last
+//! segment unless an `as` chose otherwise.  Resolution itself is stage 1's
 //! (`01_source/load.zig` answers "what are the bytes of module X",
 //! std and host alike, and refuses two modules under one binding);
 //! what this file adds is the *graph*: breadth-first from the root,
@@ -119,13 +121,17 @@ pub fn loadAll(
             loader,
             wanted.from,
             name,
+            wanted.import.binding,
             wanted.import.origin,
             wanted.import.span,
         )) orelse continue;
         if (isLoaded(modules.items, file)) continue;
 
         const tree = try parseModule(gpa, scaffold, file, diagnostics);
-        const prefix = try scaffold.dupe(u8, name);
+        // The namespace call sites use — resolution has already made
+        // sure a re-import agrees on it, so the first spelling is the
+        // only spelling.
+        const prefix = try scaffold.dupe(u8, wanted.import.binding);
         try modules.append(gpa, .{ .prefix = prefix, .tree = tree, .file = file });
         for (tree.imports) |onward| try pending.append(gpa, .{ .from = file, .import = onward });
     }

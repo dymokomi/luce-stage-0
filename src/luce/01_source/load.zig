@@ -38,10 +38,14 @@
 //!
 //! What *is* refused is one name meaning two modules.  `import
 //! std.math` binds `math` (Rust's shape: `use std::fs` then
-//! `fs::read`), so a program that also imports a sibling `math.luc`
-//! has two modules under one binding and every call site is
-//! ambiguous — `luce.import.collision`, reported the moment the
-//! second one resolves.
+//! `fs::read`), and so do `import math` and `import geo.math` — an
+//! import binds its last segment unless an `as` chose another name —
+//! so two of them in one program put two modules under one binding
+//! and every call site is ambiguous: `luce.import.collision`,
+//! reported the moment the second one resolves, with the alias as
+//! the named remedy (docs/PACKAGES.md D2).  The mirror image is
+//! refused too: one module under two bindings cannot be recorded,
+//! because the binding is the prefix its declarations are known by.
 //!
 //! **What a host guarantees.**  The `Loader` seam resolves a *name*;
 //! everything about *how* is the host's.  Two obligations come with
@@ -233,7 +237,7 @@ pub fn openRoot(
     const display = if (path.len != 0) path else "main.luc";
     const prepared = try encoding.prepare(diagnostics.sources.allocator, bytes);
     switch (prepared) {
-        .text => |text| return try diagnostics.sources.add(.root, root, "", display, text),
+        .text => |text| return try diagnostics.sources.add(.root, root, "", "", display, text),
         .problem => |problem| {
             // Nothing is registered, so there is no file to point at
             // and the message has to name it itself.
@@ -245,20 +249,26 @@ pub fn openRoot(
 
 /// Resolve and register an import written at `span` in `from`.
 ///
-/// `name` is the module's name in both namespaces and the binding it
-/// takes at the call site: `import std.math` and `import math` both
-/// arrive here as "math", told apart by `origin`.
+/// `name` is the module as the import spells it — "math" for both
+/// `import std.math` and `import math`, told apart by `origin`, and
+/// "geo.shapes" for the subfolder form.  `binding` is the namespace
+/// the import claims at call sites: the name's last segment, or the
+/// alias an `import ... as` chose (docs/PACKAGES.md D2).
 ///
 /// Answers the id of an already-loaded module when the pair
 /// (importing file's root, name) is one — which is what makes an
 /// import cycle terminate rather than recurse, and what keeps two
 /// roots' same-named modules from answering for each other.  Reports
-/// and answers null when the module cannot be loaded.
+/// and answers null when the module cannot be loaded, when the
+/// binding already means another module, or when the module is
+/// already bound under another name — one module holds one binding,
+/// because the binding is the prefix its declarations are known by.
 pub fn openImport(
     diagnostics: *Diagnostics,
     loader: ?Loader,
     from: FileId,
     name: []const u8,
+    binding: []const u8,
     origin: Origin,
     span: Span,
 ) Error!?FileId {
@@ -266,32 +276,40 @@ pub fn openImport(
     diagnostics.scope = from;
     defer diagnostics.scope = previous_scope;
 
-    const path = try std.fmt.allocPrint(diagnostics.allocator, "{s}.luc", .{name});
+    // How a message names what was looked for: dots map to folders
+    // (docs/PACKAGES.md D2), so "geo.shapes" was probed as a path.
+    const path = try probedPath(diagnostics.allocator, name);
     defer diagnostics.allocator.free(path);
 
-    // The import binds `name` in the importing file's namespace, and a
-    // namespace is a root: every registry question below asks with the
-    // pair, so collision is per-importing-namespace and never reaches
-    // across roots.
+    // The module's identity in the registry: its name with the std
+    // namespace back on the front, so `import std.math` and a
+    // sibling math.luc are two entries that never dedup to each
+    // other — the binding, not the identity, is what they fight over.
+    const spelled = switch (origin) {
+        .standard => try std.fmt.allocPrint(diagnostics.allocator, "{s}.{s}", .{ standard_namespace, name }),
+        .sibling => name,
+    };
+    defer if (origin == .standard) diagnostics.allocator.free(spelled);
+
+    // The import binds `binding` in the importing file's namespace,
+    // and a namespace is a root: every registry question below asks
+    // with the pair, so collision is per-importing-namespace and
+    // never reaches across roots.
     const from_root = diagnostics.sources.rootOf(from);
 
-    if (diagnostics.sources.find(from_root, name)) |already| {
-        const loaded = diagnostics.sources.at(already).?;
-        const wanted: sources_mod.Kind = switch (origin) {
-            .standard => .standard,
-            .sibling => .imported,
-        };
-        // One binding, two modules: the program says `math` and there
-        // is no answer to which one it means.  The sibling is the one
-        // that can be renamed, so the message names its file.
-        if (loaded.kind != wanted) {
-            const sibling = if (loaded.kind == .imported) loaded.path else path;
+    if (diagnostics.sources.find(from_root, spelled)) |already| {
+        // The module is loaded; the question left is the binding.  A
+        // second spelling cannot be recorded — the first one is the
+        // prefix every qualified name was built from — so it is
+        // refused rather than half-honored.
+        const held = diagnostics.sources.bindingOf(already);
+        if (!std.mem.eql(u8, held, binding)) {
             try diagnostics.add(
                 "luce.import.collision",
                 span,
-                "import {s}.{s} and import {s} both bind the name {s}; " ++
-                    "rename {s} so the two modules have different names",
-                .{ standard_namespace, name, name, name, sibling },
+                "module {s} is already imported as {s}; a module has one binding " ++
+                    "for the whole program, so use {s} here too",
+                .{ spelled, held, held },
             );
             return null;
         }
@@ -308,6 +326,7 @@ pub fn openImport(
             );
             return null;
         };
+        if (try bindingHeld(diagnostics, from_root, spelled, binding, origin, span)) return null;
         const inside = try std.fmt.allocPrint(
             diagnostics.allocator,
             "{s}/{s}",
@@ -317,7 +336,7 @@ pub fn openImport(
         // The library is embedded, so no host chose a token for it; it
         // registers under the importing file's root, because that is
         // the namespace the binding `math` lives in.
-        return try open(diagnostics, .standard, from_root, name, inside, embedded, span);
+        return try open(diagnostics, .standard, from_root, spelled, binding, inside, embedded, span);
     }
 
     // `std` is the namespace, so it is not a module and std.luc is a
@@ -333,6 +352,8 @@ pub fn openImport(
         );
         return null;
     }
+
+    if (try bindingHeld(diagnostics, from_root, spelled, binding, origin, span)) return null;
 
     // The host's loader gets a scratch arena of its own: whatever it
     // allocates to answer is copied into the registry and dropped
@@ -363,7 +384,7 @@ pub fn openImport(
                 );
                 return null;
             }
-            return try open(diagnostics, .imported, source.root, name, opened, source.bytes, span);
+            return try open(diagnostics, .imported, source.root, spelled, binding, opened, source.bytes, span);
         },
         .missing => {
             try diagnostics.add(
@@ -401,6 +422,41 @@ pub fn openImport(
     }
 }
 
+/// The relative path an import's name was probed as: dots map to
+/// folders (docs/PACKAGES.md D2), so module geo.shapes was looked for
+/// at geo/shapes.luc.  Allocated from `allocator`; the caller frees.
+fn probedPath(allocator: Allocator, name: []const u8) Error![]u8 {
+    const path = try std.fmt.allocPrint(allocator, "{s}.luc", .{name});
+    std.mem.replaceScalar(u8, path[0 .. path.len - ".luc".len], '.', '/');
+    return path;
+}
+
+/// True when `binding` already means another module in `root` — one
+/// binding, two modules, and every call site ambiguous.  Reported as
+/// `luce.import.collision` with the alias as the named remedy
+/// (docs/PACKAGES.md D2); the import offered for aliasing is the one
+/// that can move, which is never the standard library's.
+fn bindingHeld(
+    diagnostics: *Diagnostics,
+    root: []const u8,
+    spelled: []const u8,
+    binding: []const u8,
+    origin: Origin,
+    span: Span,
+) Error!bool {
+    const holder = diagnostics.sources.findBinding(root, binding) orelse return false;
+    const other = diagnostics.sources.at(holder).?;
+    const aliasable = if (origin == .standard) other.name else spelled;
+    try diagnostics.add(
+        "luce.import.collision",
+        span,
+        "import {s} and import {s} both bind the name {s}; " ++
+            "give one its own name: import {s} as NAME",
+        .{ other.name, spelled, binding, aliasable },
+    );
+    return true;
+}
+
 /// Prepare and register bytes that have been found; report and answer
 /// null when they cannot be source.  `span` points at the import that
 /// asked for them.
@@ -409,13 +465,14 @@ fn open(
     kind: sources_mod.Kind,
     root: []const u8,
     name: []const u8,
+    binding: []const u8,
     path: []const u8,
     bytes: []const u8,
     span: Span,
 ) Error!?FileId {
     const prepared = try encoding.prepare(diagnostics.sources.allocator, bytes);
     switch (prepared) {
-        .text => |text| return try diagnostics.sources.add(kind, root, name, path, text),
+        .text => |text| return try diagnostics.sources.add(kind, root, name, binding, path, text),
         .problem => |problem| {
             try report(diagnostics, span, path, bytes, problem);
             return null;
@@ -655,7 +712,7 @@ test "the two namespaces are disjoint: std.math is embedded, math is the file" {
     defer diagnostics.deinit();
     _ = (try openRoot(&diagnostics, "main.luc", "", "import std.math\n")).?;
 
-    const math = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", .standard, nowhere)).?;
+    const math = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", "math", .standard, nowhere)).?;
     try testing.expectEqual(sources_mod.Kind.standard, diagnostics.sources.at(math).?.kind);
     // Named by the namespace it came from, so no diagnostic inside the
     // library can be mistaken for one in a file called math.luc.
@@ -663,12 +720,12 @@ test "the two namespaces are disjoint: std.math is embedded, math is the file" {
     try testing.expect(std.mem.indexOf(u8, diagnostics.sources.textOf(math), "func local") == null);
     try testing.expect(isStandard("math") and isStandard("lists") and !isStandard("geo"));
 
-    const geo = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo", .sibling, nowhere)).?;
+    const geo = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo", "geo", .sibling, nowhere)).?;
     try testing.expectEqual(sources_mod.Kind.imported, diagnostics.sources.at(geo).?.kind);
     try testing.expectEqualStrings("geo.luc", diagnostics.sources.pathOf(geo));
 
     // Asking twice answers the same file rather than loading again.
-    try testing.expectEqual(geo, (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo", .sibling, nowhere)).?);
+    try testing.expectEqual(geo, (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo", "geo", .sibling, nowhere)).?);
     try testing.expectEqual(@as(usize, 3), diagnostics.sources.count());
     try testing.expectEqual(@as(usize, 0), diagnostics.count());
 }
@@ -684,16 +741,17 @@ test "a sibling module is reached by its own name, whatever the library is calle
     defer diagnostics.deinit();
     _ = (try openRoot(&diagnostics, "main.luc", "", "import math\n")).?;
 
-    const math = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", .sibling, nowhere)).?;
+    const math = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", "math", .sibling, nowhere)).?;
     try testing.expectEqual(sources_mod.Kind.imported, diagnostics.sources.at(math).?.kind);
     try testing.expect(std.mem.indexOf(u8, diagnostics.sources.textOf(math), "func local") != null);
     try testing.expectEqual(@as(usize, 0), diagnostics.count());
 }
 
-test "one name cannot mean two modules" {
+test "one name cannot mean two modules, and the remedy is the alias" {
     // `import std.math` binds `math`, and so does `import math`.  The
     // second one to resolve is refused, whichever order they are in,
-    // and the message names the file that can be renamed.
+    // and the message offers `as` on the import that can move — which
+    // is never the standard library's (docs/PACKAGES.md D2).
     const orders = [_][2]Origin{ .{ .standard, .sibling }, .{ .sibling, .standard } };
     for (orders) |order| {
         var table: TableLoader = .{ .entries = &.{
@@ -703,13 +761,69 @@ test "one name cannot mean two modules" {
         defer diagnostics.deinit();
         _ = (try openRoot(&diagnostics, "main.luc", "", "import std.math\nimport math\n")).?;
 
-        try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", order[0], nowhere)) != null);
-        try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", order[1], nowhere)) == null);
+        try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", "math", order[0], nowhere)) != null);
+        try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", "math", order[1], nowhere)) == null);
         try testing.expectEqualStrings("luce.import.collision", diagnostics.at(0).?.code);
         try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "std.math") != null);
-        try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "math.luc") != null);
+        try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "both bind the name math") != null);
+        // Whichever came second, the alias lands on the sibling.
+        try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "import math as NAME") != null);
         try testing.expectEqual(@as(usize, 1), diagnostics.count());
     }
+}
+
+test "an alias frees the binding: std.math and math coexist as sm and math" {
+    // The collision above, resolved the way its message says: the
+    // sibling keeps `math` and the library answers under `sm` — or the
+    // other way around, since only the binding moves, never the name.
+    var table: TableLoader = .{ .entries = &.{
+        .{ .name = "math", .text = "func local() -> long:\n    return 7\n" },
+    } };
+    var diagnostics = Diagnostics.init(testing.allocator);
+    defer diagnostics.deinit();
+    _ = (try openRoot(&diagnostics, "main.luc", "", "import std.math\nimport math as m2\n")).?;
+
+    const library = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", "math", .standard, nowhere)).?;
+    const sibling = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", "m2", .sibling, nowhere)).?;
+    try testing.expect(library != sibling);
+    try testing.expectEqualStrings("math", diagnostics.sources.bindingOf(library));
+    try testing.expectEqualStrings("m2", diagnostics.sources.bindingOf(sibling));
+    try testing.expectEqualStrings("std.math", diagnostics.sources.at(library).?.name);
+    try testing.expectEqualStrings("math", diagnostics.sources.at(sibling).?.name);
+    try testing.expectEqual(@as(usize, 0), diagnostics.count());
+}
+
+test "a module has one binding: a second spelling is refused, naming the first" {
+    // `import geo.shapes` in one file and `import geo.shapes as gs` in
+    // another want two prefixes for one module, and qualified names
+    // can carry only one.  The refusal names the binding that holds.
+    var table: TableLoader = .{ .entries = &.{
+        .{ .name = "geo.shapes", .text = "func area() -> long:\n    return 4\n" },
+    } };
+    var diagnostics = Diagnostics.init(testing.allocator);
+    defer diagnostics.deinit();
+    _ = (try openRoot(&diagnostics, "main.luc", "", "import geo.shapes\n")).?;
+
+    const first = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo.shapes", "shapes", .sibling, nowhere)).?;
+    try testing.expectEqualStrings("shapes", diagnostics.sources.bindingOf(first));
+
+    try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo.shapes", "gs", .sibling, nowhere)) == null);
+    try testing.expectEqualStrings("luce.import.collision", diagnostics.at(0).?.code);
+    try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "already imported as shapes") != null);
+    try testing.expectEqual(@as(usize, 1), diagnostics.count());
+}
+
+test "a dotted module that is missing names the folder path it was probed as" {
+    var diagnostics = Diagnostics.init(testing.allocator);
+    defer diagnostics.deinit();
+    _ = (try openRoot(&diagnostics, "main.luc", "", "import geo.shapes\n")).?;
+
+    var table: TableLoader = .{};
+    try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo.shapes", "shapes", .sibling, nowhere)) == null);
+    try testing.expectEqualStrings("luce.import.missing", diagnostics.at(0).?.code);
+    // Dots map to folders (docs/PACKAGES.md D2): the message says
+    // geo/shapes.luc, not geo.shapes.luc.
+    try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "geo/shapes.luc") != null);
 }
 
 test "the registry keys modules by (root, name): one name, two roots, two modules" {
@@ -727,11 +841,11 @@ test "the registry keys modules by (root, name): one name, two roots, two module
     defer diagnostics.deinit();
     _ = (try openRoot(&diagnostics, "main.luc", "", "import geo\nimport helper\n")).?;
 
-    const geo = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo", .sibling, nowhere)).?;
+    const geo = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo", "geo", .sibling, nowhere)).?;
     try testing.expectEqualStrings("pkg", diagnostics.sources.rootOf(geo));
 
-    const ours = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "helper", .sibling, nowhere)).?;
-    const theirs = (try openImport(&diagnostics, table.loader(), geo, "helper", .sibling, nowhere)).?;
+    const ours = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "helper", "helper", .sibling, nowhere)).?;
+    const theirs = (try openImport(&diagnostics, table.loader(), geo, "helper", "helper", .sibling, nowhere)).?;
     try testing.expect(ours != theirs);
     try testing.expect(std.mem.indexOf(u8, diagnostics.sources.textOf(ours), "func ours") != null);
     try testing.expect(std.mem.indexOf(u8, diagnostics.sources.textOf(theirs), "func theirs") != null);
@@ -739,8 +853,8 @@ test "the registry keys modules by (root, name): one name, two roots, two module
     // Asking again answers the module already loaded *for that root* —
     // dedup and cycle termination moved to the pair with everything
     // else.
-    try testing.expectEqual(ours, (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "helper", .sibling, nowhere)).?);
-    try testing.expectEqual(theirs, (try openImport(&diagnostics, table.loader(), geo, "helper", .sibling, nowhere)).?);
+    try testing.expectEqual(ours, (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "helper", "helper", .sibling, nowhere)).?);
+    try testing.expectEqual(theirs, (try openImport(&diagnostics, table.loader(), geo, "helper", "helper", .sibling, nowhere)).?);
     try testing.expectEqual(@as(usize, 4), diagnostics.sources.count());
     try testing.expectEqual(@as(usize, 0), diagnostics.count());
 }
@@ -759,15 +873,15 @@ test "collision is per importing namespace, not program-global" {
     defer diagnostics.deinit();
     _ = (try openRoot(&diagnostics, "main.luc", "", "import std.math\nimport geo\nimport math\n")).?;
 
-    _ = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", .standard, nowhere)).?;
-    const geo = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo", .sibling, nowhere)).?;
+    _ = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", "math", .standard, nowhere)).?;
+    const geo = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo", "geo", .sibling, nowhere)).?;
 
     // geo's own `import math` binds math in geo's namespace: fine.
-    try testing.expect((try openImport(&diagnostics, table.loader(), geo, "math", .sibling, nowhere)) != null);
+    try testing.expect((try openImport(&diagnostics, table.loader(), geo, "math", "math", .sibling, nowhere)) != null);
     try testing.expectEqual(@as(usize, 0), diagnostics.count());
 
     // The root's `import math` claims a binding std.math holds: refused.
-    try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", .sibling, nowhere)) == null);
+    try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", "math", .sibling, nowhere)) == null);
     try testing.expectEqualStrings("luce.import.collision", diagnostics.at(0).?.code);
     try testing.expectEqual(@as(usize, 1), diagnostics.count());
 }
@@ -783,7 +897,7 @@ test "luce.import.ambiguous: a name that answers twice is refused with every pat
     defer diagnostics.deinit();
     _ = (try openRoot(&diagnostics, "main.luc", "", "import geo\n")).?;
 
-    try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo", .sibling, nowhere)) == null);
+    try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo", "geo", .sibling, nowhere)) == null);
     try testing.expectEqualStrings("luce.import.ambiguous", diagnostics.at(0).?.code);
     try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "geo.luc") != null);
     try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, ".luce/packages/geo-1.2.0/geo.luc") != null);
@@ -798,14 +912,14 @@ test "the std namespace holds exactly the library, and nothing else" {
     _ = (try openRoot(&diagnostics, "main.luc", "", "import std.nope\n")).?;
 
     // A module the library does not have: say what it does have.
-    try testing.expect((try openImport(&diagnostics, null, sources_mod.root_file, "nope", .standard, nowhere)) == null);
+    try testing.expect((try openImport(&diagnostics, null, sources_mod.root_file, "nope", "nope", .standard, nowhere)) == null);
     try testing.expectEqualStrings("luce.import.standard", diagnostics.at(0).?.code);
     try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "std.math") != null);
     try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "std.strings") != null);
 
     // `import std` names the namespace, which is not a module — and no
     // std.luc beside the program can claim it either.
-    try testing.expect((try openImport(&diagnostics, null, sources_mod.root_file, "std", .sibling, nowhere)) == null);
+    try testing.expect((try openImport(&diagnostics, null, sources_mod.root_file, "std", "std", .sibling, nowhere)) == null);
     try testing.expectEqualStrings("luce.import.reserved", diagnostics.at(1).?.code);
     try testing.expect(std.mem.indexOf(u8, diagnostics.at(1).?.message, "std.luc") != null);
     // Nothing was registered by either: the root is still the only file.
@@ -821,10 +935,10 @@ test "an imported module is named by the path the host really opened" {
     defer diagnostics.deinit();
     _ = (try openRoot(&diagnostics, "src/main.luc", "", "import geo\n")).?;
 
-    const geo = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo", .sibling, nowhere)).?;
+    const geo = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo", "geo", .sibling, nowhere)).?;
     try testing.expectEqualStrings("lib/geo.luc", diagnostics.sources.pathOf(geo));
     // A loader with no path to offer still gets the old fallback.
-    const util = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "util", .sibling, nowhere)).?;
+    const util = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "util", "util", .sibling, nowhere)).?;
     try testing.expectEqualStrings("util.luc", diagnostics.sources.pathOf(util));
 }
 
@@ -837,15 +951,15 @@ test "missing and unreadable modules are different diagnostics" {
     defer diagnostics.deinit();
     _ = (try openRoot(&diagnostics, "main.luc", "", "import ghost\n")).?;
 
-    try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "ghost", .sibling, nowhere)) == null);
+    try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "ghost", "ghost", .sibling, nowhere)) == null);
     try testing.expectEqualStrings("luce.import.missing", diagnostics.at(0).?.code);
 
-    try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "secret", .sibling, nowhere)) == null);
+    try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "secret", "secret", .sibling, nowhere)) == null);
     try testing.expectEqualStrings("luce.import.unreadable", diagnostics.at(1).?.code);
     try testing.expect(std.mem.indexOf(u8, diagnostics.at(1).?.message, "permission denied") != null);
 
     // Without a loader nothing but std can resolve at all.
-    try testing.expect((try openImport(&diagnostics, null, sources_mod.root_file, "geo", .sibling, nowhere)) == null);
+    try testing.expect((try openImport(&diagnostics, null, sources_mod.root_file, "geo", "geo", .sibling, nowhere)) == null);
     try testing.expectEqualStrings("luce.import.missing", diagnostics.at(2).?.code);
 }
 
@@ -858,7 +972,7 @@ test "an imported module that is not text is refused where it was imported" {
     _ = (try openRoot(&diagnostics, "main.luc", "", "import broken\n")).?;
 
     const at: Span = .{ .start = 7, .end = 13 };
-    try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "broken", .sibling, at)) == null);
+    try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "broken", "broken", .sibling, at)) == null);
     try testing.expectEqualStrings("luce.source.binary", diagnostics.at(0).?.code);
     // The span points at the import statement in the file that wrote
     // it, since the broken file has no positions to point at.
@@ -876,7 +990,7 @@ test "an import that resolves back to the importing file is a self-import" {
     defer diagnostics.deinit();
     _ = (try openRoot(&diagnostics, "sub/main.luc", "", "import main\n")).?;
 
-    try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "main", .sibling, nowhere)) == null);
+    try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "main", "main", .sibling, nowhere)) == null);
     try testing.expectEqualStrings("luce.import.self", diagnostics.at(0).?.code);
     try testing.expectEqual(@as(usize, 1), diagnostics.sources.count());
 }
@@ -923,7 +1037,7 @@ fn loadAnything(_: void, smith: *testing.Smith) anyerror!void {
         try testing.expectEqual(@as(usize, 0), diagnostics.sources.count());
         return;
     }
-    _ = try openImport(&diagnostics, table.loader(), root.?, "geo", .sibling, nowhere);
+    _ = try openImport(&diagnostics, table.loader(), root.?, "geo", "geo", .sibling, nowhere);
     // Whatever happened, every file that made it into the registry is
     // one later stages may trust, and every diagnostic still renders.
     for (0..diagnostics.sources.count()) |index| {

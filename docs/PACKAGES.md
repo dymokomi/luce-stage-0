@@ -1,6 +1,8 @@
 # Packages: using and loading (design)
 
-**Status: PROPOSED — nothing below is built.**  This memo designs the
+**Status: IN PROGRESS — implementation-order steps 1–2 are built (the
+manifest, discovery and the D7 seam; subfolder imports and `import ...
+as`); the stores of steps 3–5 are not.**  This memo designs the
 consuming half of packages — how a program *finds and loads* code it
 did not write — and deliberately stops before authoring and
 publishing.  The machinery for using packages has to be solid before a
@@ -349,6 +351,24 @@ The review's second blocker, adopted as the implementation contract:
    root token in this step; resolution is unchanged until steps 2–3.*
 2. Subfolder imports + `import ... as` (D2) inside the project tree,
    with the collision/ambiguity diagnostics and site/docs pages.
+   *As built (2026-08-10), three decisions D2 left open:* **std is
+   excluded from `as`** — `import std.math as m` is refused at parse
+   time, because the library's names are language surface (`s.split`
+   routes to `std.strings` by name, `sort_by` to `std.lists`) and the
+   collision that motivates aliasing always has a sibling side to
+   alias; `as` itself is contextual, not a keyword.  **One module,
+   one binding**: a module's binding is the prefix its qualified
+   declaration names carry, so a program importing `geo.shapes` under
+   two spellings is refused (`luce.import.collision` naming the
+   binding that holds) rather than analysed twice under two prefixes.
+   The registry keys modules by their spelled name (`std.math`,
+   `geo.shapes`) and collision is decided on the binding, one rule
+   for the std/sibling and dotted/dotted fights alike.  The
+   per-level directory listings are scanned per import, not cached
+   per compile: the loader's answer arena is per-load scratch, a
+   cache would add owned state and a deinit to the host loader, and
+   at ≤64 modules a compile the scan is not measurable — revisit
+   with step 3's tiers, where one resolution probes several roots.
 3. The store, `LUCE_LIB`, `.path` and `.hash` (D3/D4): hand-vendored
    packages resolve end to end, package-internal isolation proven by
    two packages shipping same-named files, diamond + `.override`,

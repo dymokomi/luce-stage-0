@@ -363,10 +363,12 @@ pub const Analyzer = struct {
         };
     }
 
-    /// True when `module` imports `name`.
+    /// True when `module` imports something *bound* as `name` — the
+    /// namespace a call site writes, which is an import's last segment
+    /// unless an `as` chose otherwise.
     pub fn importsModule(self: *const Analyzer, module: usize, name: []const u8) bool {
         for (self.modules[module].tree.imports) |imported| {
-            if (std.mem.eql(u8, imported.name, name)) return true;
+            if (std.mem.eql(u8, imported.binding, name)) return true;
         }
         return false;
     }
@@ -390,8 +392,11 @@ pub const Analyzer = struct {
     }
 
     /// The import that would make `name` reachable, spelled the way
-    /// the author has to write it: `std.math` for the library,
-    /// `geo` for a file beside the program.
+    /// the author has to write it: `std.math` for the library, `geo`
+    /// for a file beside the program, `geo.shapes` for one in a
+    /// project subfolder — with the alias appended when the module is
+    /// bound under a name that is not its own last segment, because
+    /// any other spelling of the import would bind something else.
     ///
     /// A module already in the program answers for itself — a
     /// sibling `math.luc` that another file imports is reached with
@@ -401,9 +406,14 @@ pub const Analyzer = struct {
     pub fn importSpelling(self: *Analyzer, name: []const u8) Error![]const u8 {
         for (self.modules) |module| {
             if (!std.mem.eql(u8, module.prefix, name)) continue;
-            const kind = self.diagnostics.sources.at(module.file).?.kind;
-            if (kind != .standard) return name;
-            return self.qualify(source_mod.standard_namespace, name);
+            const spelled = self.diagnostics.sources.at(module.file).?.name;
+            const is_tail = spelled.len >= name.len and tail: {
+                const at = spelled.len - name.len;
+                break :tail std.mem.eql(u8, spelled[at..], name) and
+                    (at == 0 or spelled[at - 1] == '.');
+            };
+            if (is_tail) return spelled;
+            return std.fmt.allocPrint(self.arena, "{s} as {s}", .{ spelled, name });
         }
         if (!source_mod.isStandard(name)) return name;
         return self.qualify(source_mod.standard_namespace, name);
@@ -1306,26 +1316,28 @@ pub const Analyzer = struct {
     // -- pass one: struct layouts -----------------------------------------
 
     fn collectStructs(self: *Analyzer) Error!void {
-        // Imports first: names must be usable and free of collisions.
+        // Imports first: bindings must be usable and free of
+        // collisions — the binding, not the module's name, because the
+        // binding is the word that has to coexist with declarations.
         for (self.modules, 0..) |module, module_index| {
             self.diagnostics.scope = module.file;
             for (module.tree.imports) |imported| {
-                if (isReserved(imported.name) or std.mem.eql(u8, imported.name, "evaluate")) {
-                    try self.fail("luce.sema.reserved", imported.span, "{s} is a reserved name", .{imported.name});
+                if (isReserved(imported.binding) or std.mem.eql(u8, imported.binding, "evaluate")) {
+                    try self.fail("luce.sema.reserved", imported.span, "{s} is a reserved name", .{imported.binding});
                 }
                 for (module.tree.structs) |declaration| {
-                    if (std.mem.eql(u8, declaration.name, imported.name)) {
-                        try self.fail("luce.sema.duplicate", imported.span, "import {s} collides with a struct of the same name", .{imported.name});
+                    if (std.mem.eql(u8, declaration.name, imported.binding)) {
+                        try self.fail("luce.sema.duplicate", imported.span, "import {s} collides with a struct of the same name", .{imported.binding});
                     }
                 }
                 for (module.tree.enums) |declaration| {
-                    if (std.mem.eql(u8, declaration.name, imported.name)) {
-                        try self.fail("luce.sema.duplicate", imported.span, "import {s} collides with an enum of the same name", .{imported.name});
+                    if (std.mem.eql(u8, declaration.name, imported.binding)) {
+                        try self.fail("luce.sema.duplicate", imported.span, "import {s} collides with an enum of the same name", .{imported.binding});
                     }
                 }
                 for (module.tree.unions) |declaration| {
-                    if (std.mem.eql(u8, declaration.name, imported.name)) {
-                        try self.fail("luce.sema.duplicate", imported.span, "import {s} collides with a union of the same name", .{imported.name});
+                    if (std.mem.eql(u8, declaration.name, imported.binding)) {
+                        try self.fail("luce.sema.duplicate", imported.span, "import {s} collides with a union of the same name", .{imported.binding});
                     }
                 }
             }

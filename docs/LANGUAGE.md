@@ -1823,6 +1823,20 @@ checked rather than the open: a program that builds on a Mac builds
 on the machine that ships it.  Deliberately absent: package managers,
 search paths, conditional imports, re-exports.
 
+**Projects** (docs/PACKAGES.md D1–D2, built): a `luce.yaml` above the
+root source file marks the project root, and under one, dots map to
+folders — `import geo.shapes` reads `geo/shapes.luc` under the root,
+binds `shapes`, and resolves the same from every file in the tree,
+single-segment imports included (one anchor per mode).  The exact-case
+and regular-file obligations hold at every segment.  **`import ... as
+name`** picks the binding — the remedy `luce.import.collision` names
+when two imports' last segments collide — read contextually, so `as`
+is not a keyword; the alias moves only the binding, one module holds
+one binding per program, and a standard module keeps its own name
+(`import std.math as m` is refused).  Rootless programs keep exactly
+the sibling behaviour, single segment only, with the dotted form
+refused naming `luce.yaml` as what enables it.
+
 **The standard library lives under `std.`** — `import std.math`,
 `import std.strings`, `import std.files` reach modules embedded in the
 compiler itself, so they work everywhere with no install path (see

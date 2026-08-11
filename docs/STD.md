@@ -17,8 +17,10 @@ sites are `math.sqrt(x)`, exactly as before, and only the import line
 records where the module came from (Rust's `use std::fs;` then
 `fs::read`).  A program that writes both `import std.math` and
 `import math` therefore has two modules under one binding and is
-refused (`luce.import.collision`); rename the file, since there is no
-`as` clause.  `import std.nope` lists the modules that do exist
+refused (`luce.import.collision`); the remedy is aliasing the sibling
+(`import math as m2`, docs/PACKAGES.md D2) — a standard module keeps
+its own name, so `import std.math as m` is refused at parse time.
+`import std.nope` lists the modules that do exist
 (`luce.import.standard`), and `import std` is refused because the
 namespace is not a module — no `std.luc` can be imported
 (`luce.import.reserved`).

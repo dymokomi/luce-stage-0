@@ -747,36 +747,29 @@ pub const Parser = struct {
     }
 
     /// import name — the sibling module `name.luc`; import std.name —
-    /// the standard library's.  `std` is the one namespace the grammar
-    /// knows, and *what* it contains is stage 1's to say.
+    /// the standard library's; import a.b — the file b.luc in folder
+    /// a under the project root (docs/PACKAGES.md D2, resolved by the
+    /// host).  `std` is the one namespace the grammar knows, and
+    /// *what* it contains is stage 1's to say.  An optional trailing
+    /// `as name` picks the binding; `as` is read contextually — after
+    /// the module path only an alias can follow, so the word stays an
+    /// ordinary identifier everywhere else.
     fn importDecl(self: *Parser, imports: *std.ArrayList(ast.Import)) Error!void {
         const start = self.advance(); // import
         const head = (try self.expect(.identifier, "a module name after import")) orelse {
             self.recover();
             return;
         };
-        var name = head;
+        var name = self.text(head);
+        var last = head;
         var origin: source_mod.Origin = .sibling;
-        if (self.peekKind() == .dot) {
-            // import a.b — there are no import paths, and only the
-            // standard library is namespaced (docs/LANGUAGE.md).
-            if (!std.mem.eql(u8, self.text(head), source_mod.standard_namespace)) {
-                try self.report(
-                    "luce.parse.expected",
-                    self.peek().span,
-                    "there are no import paths: only the standard library is namespaced, " ++
-                        "so write 'import {s}.NAME' for it and 'import {s}' for a module " ++
-                        "beside this one",
-                    .{ source_mod.standard_namespace, self.text(head) },
-                );
-                self.recover();
-                return;
-            }
+        if (std.mem.eql(u8, name, source_mod.standard_namespace) and self.peekKind() == .dot) {
             _ = self.advance(); // dot
-            name = (try self.expect(.identifier, "a standard module name after std.")) orelse {
+            last = (try self.expect(.identifier, "a standard module name after std.")) orelse {
                 self.recover();
                 return;
             };
+            name = self.text(last);
             origin = .standard;
             // import std.a.b — the namespace is one level deep.
             if (self.peekKind() == .dot) {
@@ -784,17 +777,54 @@ pub const Parser = struct {
                     "luce.parse.expected",
                     self.peek().span,
                     "'import {s}.{s}' names one standard module: there are no deeper paths",
-                    .{ source_mod.standard_namespace, self.text(name) },
+                    .{ source_mod.standard_namespace, name },
                 );
                 self.recover();
                 return;
             }
+        } else while (self.peekKind() == .dot) {
+            // import a.b maps dots to folders under the project root;
+            // the path is rebuilt because a dot may carry spaces.
+            _ = self.advance(); // dot
+            last = (try self.expect(.identifier, "a module name after the dot")) orelse {
+                self.recover();
+                return;
+            };
+            name = try std.fmt.allocPrint(self.arena, "{s}.{s}", .{ name, self.text(last) });
+        }
+        var bound = self.text(last);
+        var end = last.span.end;
+        if (self.peekKind() == .identifier and std.mem.eql(u8, self.text(self.peek()), "as")) {
+            _ = self.advance(); // as
+            const alias = (try self.expect(.identifier, "a binding name after as")) orelse {
+                self.recover();
+                return;
+            };
+            if (origin == .standard) {
+                // The library's names are part of the language surface
+                // — `s.split(",")` routes to std.strings by that name —
+                // so a standard module keeps its own binding, and the
+                // import that collides with it is the one to alias.
+                try self.report(
+                    "luce.parse.expected",
+                    alias.span,
+                    "a standard module keeps its name: import {s}.{s} always binds {s}; " ++
+                        "alias the import that collides with it instead",
+                    .{ source_mod.standard_namespace, name, name },
+                );
+                self.recover();
+                return;
+            }
+            try self.refuseWildcardName(alias);
+            bound = self.text(alias);
+            end = alias.span.end;
         }
         try self.endOfStatement("end of line after the import");
         try imports.append(self.arena, .{
-            .name = self.text(name),
+            .name = name,
+            .binding = bound,
             .origin = origin,
-            .span = .{ .start = start.span.start, .end = name.span.end },
+            .span = .{ .start = start.span.start, .end = end },
         });
     }
 

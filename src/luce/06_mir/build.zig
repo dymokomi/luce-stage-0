@@ -1048,7 +1048,7 @@ test "build resolves a container declaration's final source origin" {
     var sources = source_mod.Sources.init(std.testing.allocator);
     defer sources.deinit();
     const text = try std.testing.allocator.dupe(u8, "line one\nconst table = []\n");
-    const file = try sources.add(.root, "", "", "tables.luc", text);
+    const file = try sources.add(.root, "", "", "", "tables.luc", text);
 
     var pool: ConstantPool = .{ .arena = arena, .scratch = std.testing.allocator };
     defer pool.deinit();

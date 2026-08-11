@@ -45,8 +45,16 @@ pub const File = struct {
     /// host's loader on every load this file causes.  "" is the
     /// rootless program, and today's only value.
     root: []u8,
-    /// The name it is imported by; "" for the root.
+    /// The module's full name as an import spells it — "geo",
+    /// "geo.shapes", "std.math" — and its identity within `root`;
+    /// "" for the root file.
     name: []u8,
+    /// The namespace call sites use for it: the name's last segment,
+    /// or the alias an `import ... as` chose.  One module holds one
+    /// binding for the whole program — the prefix every qualified
+    /// declaration name is built from — so resolution refuses a
+    /// second spelling rather than recording it.  "" for the root.
+    binding: []u8,
     /// How a diagnostic names it: the root's display name as the host
     /// gave it ("editor.luc"), or NAME.luc for a module.
     path: []u8,
@@ -73,6 +81,7 @@ pub const Sources = struct {
         for (self.list.items) |file| {
             self.allocator.free(file.root);
             self.allocator.free(file.name);
+            self.allocator.free(file.binding);
             self.allocator.free(file.path);
             self.allocator.free(file.text);
             self.allocator.free(file.line_starts);
@@ -83,14 +92,16 @@ pub const Sources = struct {
 
     /// Register a prepared source text and answer its id.  The
     /// registry takes ownership of `text` (allocated by the same
-    /// allocator) and copies `root`, `name` and `path`.  Ownership
-    /// transfers even when this fails: a caller that hands text over
-    /// never has to free it, so there is one rule rather than two.
+    /// allocator) and copies `root`, `name`, `binding` and `path`.
+    /// Ownership transfers even when this fails: a caller that hands
+    /// text over never has to free it, so there is one rule rather
+    /// than two.
     pub fn add(
         self: *Sources,
         kind: Kind,
         root: []const u8,
         name: []const u8,
+        binding: []const u8,
         path: []const u8,
         text: []u8,
     ) Error!FileId {
@@ -99,6 +110,8 @@ pub const Sources = struct {
         errdefer self.allocator.free(owned_root);
         const owned_name = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(owned_name);
+        const owned_binding = try self.allocator.dupe(u8, binding);
+        errdefer self.allocator.free(owned_binding);
         const owned_path = try self.allocator.dupe(u8, path);
         errdefer self.allocator.free(owned_path);
         const line_starts = try indexLines(self.allocator, text);
@@ -107,6 +120,7 @@ pub const Sources = struct {
             .kind = kind,
             .root = owned_root,
             .name = owned_name,
+            .binding = owned_binding,
             .path = owned_path,
             .text = text,
             .line_starts = line_starts,
@@ -128,18 +142,35 @@ pub const Sources = struct {
         return &self.list.items[file];
     }
 
-    /// The id of the module imported as `name` within `root`, or
-    /// null.  The pair is the key (docs/PACKAGES.md D7): one name may
-    /// bind different modules under different roots, so dedup, cycle
-    /// termination and collision all ask with the importing file's
-    /// root.  Linear over a list that a project keeps to a few dozen
-    /// entries.
+    /// The id of the module named `name` within `root`, or null.  The
+    /// pair is the key (docs/PACKAGES.md D7): one name may mean
+    /// different modules under different roots, so dedup and cycle
+    /// termination ask with the importing file's root.  Linear over a
+    /// list that a project keeps to a few dozen entries.
     pub fn find(self: *const Sources, root: []const u8, name: []const u8) ?FileId {
         for (self.list.items, 0..) |file, index| {
             if (std.mem.eql(u8, file.root, root) and
                 std.mem.eql(u8, file.name, name)) return @intCast(index);
         }
         return null;
+    }
+
+    /// The id of the module *bound* as `binding` within `root`, or
+    /// null — the question collision asks: whichever module it names,
+    /// a binding may hold only one (`luce.import.collision`).
+    pub fn findBinding(self: *const Sources, root: []const u8, binding: []const u8) ?FileId {
+        for (self.list.items, 0..) |file, index| {
+            if (std.mem.eql(u8, file.root, root) and
+                std.mem.eql(u8, file.binding, binding)) return @intCast(index);
+        }
+        return null;
+    }
+
+    /// The binding this file was registered under; "" when unknown,
+    /// which is also the root file's binding.
+    pub fn bindingOf(self: *const Sources, file: FileId) []const u8 {
+        const found = self.at(file) orelse return "";
+        return found.binding;
     }
 
     /// The opaque root token this file was registered under; "" when
@@ -218,9 +249,10 @@ const testing = std.testing;
 
 fn addText(sources: *Sources, kind: Kind, name: []const u8, path: []const u8, text: []const u8) !FileId {
     // add() takes ownership even on failure, so there is nothing to
-    // clean up here.
+    // clean up here.  The binding defaults to the name, which is what
+    // an alias-free import produces.
     const owned = try testing.allocator.dupe(u8, text);
-    return sources.add(kind, "", name, path, owned);
+    return sources.add(kind, "", name, name, path, owned);
 }
 
 test "the registry owns what it holds and hands back identity" {
@@ -250,9 +282,9 @@ test "one name under two roots is two modules, found by the pair" {
     defer sources.deinit();
 
     const project_text = try testing.allocator.dupe(u8, "func here() -> long:\n    return 1\n");
-    const ours = try sources.add(.imported, "", "util", "util.luc", project_text);
+    const ours = try sources.add(.imported, "", "util", "util", "util.luc", project_text);
     const package_text = try testing.allocator.dupe(u8, "func there() -> long:\n    return 2\n");
-    const theirs = try sources.add(.imported, "pkg", "util", "pkg/util.luc", package_text);
+    const theirs = try sources.add(.imported, "pkg", "util", "util", "pkg/util.luc", package_text);
 
     try testing.expect(ours != theirs);
     try testing.expectEqual(ours, sources.find("", "util").?);
@@ -262,6 +294,27 @@ test "one name under two roots is two modules, found by the pair" {
     try testing.expectEqualStrings("pkg", sources.rootOf(theirs));
     // An unknown file's root is the rootless token, like its path.
     try testing.expectEqualStrings("", sources.rootOf(9999));
+}
+
+test "a binding is its own key: an aliased module is found by either question" {
+    // `import geo.shapes as gs`: identity answers dedup, the binding
+    // answers collision, and the two are different columns.
+    var sources = Sources.init(testing.allocator);
+    defer sources.deinit();
+
+    const text = try testing.allocator.dupe(u8, "func area() -> long:\n    return 4\n");
+    const shapes = try sources.add(.imported, "", "geo.shapes", "gs", "geo/shapes.luc", text);
+
+    try testing.expectEqual(shapes, sources.find("", "geo.shapes").?);
+    try testing.expectEqual(shapes, sources.findBinding("", "gs").?);
+    // Neither question answers the other's key.
+    try testing.expectEqual(@as(?FileId, null), sources.find("", "gs"));
+    try testing.expectEqual(@as(?FileId, null), sources.findBinding("", "geo.shapes"));
+    // The binding is scoped to the root like everything else.
+    try testing.expectEqual(@as(?FileId, null), sources.findBinding("pkg", "gs"));
+    try testing.expectEqualStrings("gs", sources.bindingOf(shapes));
+    // An unknown file's binding is the root file's, like its path.
+    try testing.expectEqualStrings("", sources.bindingOf(9999));
 }
 
 test "place resolves an offset against the file it belongs to" {

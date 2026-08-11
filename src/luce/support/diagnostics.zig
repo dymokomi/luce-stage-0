@@ -362,7 +362,7 @@ const testing = std.testing;
 
 fn register(diagnostics: *Diagnostics, kind: source_mod.Kind, name: []const u8, path: []const u8, text: []const u8) !FileId {
     const owned = try testing.allocator.dupe(u8, text);
-    return diagnostics.sources.add(kind, "", name, path, owned);
+    return diagnostics.sources.add(kind, "", name, name, path, owned);
 }
 
 test "diagnostics own their messages and render places" {

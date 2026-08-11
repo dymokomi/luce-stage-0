@@ -176,14 +176,59 @@ test "every declaration form at file scope parses into its own list" {
     try testing.expectEqual(@as(usize, 2), parsed.program.imports.len);
     // Both spellings bind the bare name; only the origin differs.
     try testing.expectEqualStrings("math", parsed.program.imports[0].name);
+    try testing.expectEqualStrings("math", parsed.program.imports[0].binding);
     try testing.expectEqual(source_mod.Origin.standard, parsed.program.imports[0].origin);
     try testing.expectEqualStrings("geo", parsed.program.imports[1].name);
+    try testing.expectEqualStrings("geo", parsed.program.imports[1].binding);
     try testing.expectEqual(source_mod.Origin.sibling, parsed.program.imports[1].origin);
     try testing.expectEqual(@as(usize, 2), parsed.program.constants.len);
     try testing.expect(parsed.program.constants[0].annotation == null);
     try testing.expectEqualStrings("string", parsed.program.constants[1].annotation.?.name);
     try testing.expectEqual(@as(usize, 2), parsed.program.structs[0].fields.len);
     try testing.expectEqual(@as(usize, 1), parsed.program.structs[0].functions.len);
+    try testing.expectEqual(@as(usize, 1), parsed.program.functions.len);
+}
+
+test "dotted imports and the as alias parse: the binding is the last segment or the alias" {
+    var parsed = try expectClean(
+        \\import geo.shapes
+        \\import geo.solids as gs
+        \\import tools.text.wrap
+        \\import util as helpers
+        \\
+        \\func main():
+        \\    return
+        \\
+    );
+    defer parsed.deinit();
+    try testing.expectEqual(@as(usize, 4), parsed.program.imports.len);
+    // Dots map to folders; the module keeps its full name and binds
+    // its last segment (docs/PACKAGES.md D2).
+    try testing.expectEqualStrings("geo.shapes", parsed.program.imports[0].name);
+    try testing.expectEqualStrings("shapes", parsed.program.imports[0].binding);
+    try testing.expectEqual(source_mod.Origin.sibling, parsed.program.imports[0].origin);
+    // `as` moves only the binding, never the name.
+    try testing.expectEqualStrings("geo.solids", parsed.program.imports[1].name);
+    try testing.expectEqualStrings("gs", parsed.program.imports[1].binding);
+    // Depth is the filesystem's business, not the grammar's.
+    try testing.expectEqualStrings("tools.text.wrap", parsed.program.imports[2].name);
+    try testing.expectEqualStrings("wrap", parsed.program.imports[2].binding);
+    // A single segment takes an alias the same way.
+    try testing.expectEqualStrings("util", parsed.program.imports[3].name);
+    try testing.expectEqualStrings("helpers", parsed.program.imports[3].binding);
+}
+
+test "as is a word, not a keyword: a binding named as still parses" {
+    // The alias marker is read contextually, after the module path
+    // only — so nothing is taken from programs, and a variable called
+    // `as` keeps working.
+    var parsed = try expectClean(
+        \\func main():
+        \\    let as = 2
+        \\    print(string(as))
+        \\
+    );
+    defer parsed.deinit();
     try testing.expectEqual(@as(usize, 1), parsed.program.functions.len);
 }
 
@@ -1331,12 +1376,8 @@ test "the ordinary mistakes name themselves and point at the offending token" {
             .source = "func main():\n    f(1, , 2)\n",
             .wanted = .{ .code = "luce.parse.expression", .line = 2, .column = 10, .contains = "found ','" },
         },
-        // Imports name one module, not a path: `std.` is the one
-        // namespace, and it is one level deep.
-        .{
-            .source = "import a.b\n\nfunc main():\n    return\n",
-            .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 9, .contains = "no import paths" },
-        },
+        // The std namespace is one level deep; only sibling imports
+        // may walk folders (docs/PACKAGES.md D2).
         .{
             .source = "import std.math.pi\n\nfunc main():\n    return\n",
             .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 16, .contains = "no deeper paths" },
@@ -1344,6 +1385,27 @@ test "the ordinary mistakes name themselves and point at the offending token" {
         .{
             .source = "import std.\n\nfunc main():\n    return\n",
             .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 12, .contains = "after std." },
+        },
+        // A dotted import ending in a dot wants the next segment.
+        .{
+            .source = "import geo.\n\nfunc main():\n    return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 12, .contains = "a module name after the dot" },
+        },
+        // `as` opens an alias and needs the name.
+        .{
+            .source = "import geo as\n\nfunc main():\n    return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 14, .contains = "a binding name after as" },
+        },
+        // The wildcard is not a name here either (VISIBILITY.md D9).
+        .{
+            .source = "import geo as _\n\nfunc main():\n    return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 15, .contains = "a binding needs a name" },
+        },
+        // A standard module keeps its own name: the alias belongs on
+        // the import that collides with it (docs/PACKAGES.md D2).
+        .{
+            .source = "import std.math as m\n\nfunc main():\n    return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 1, .column = 20, .contains = "keeps its name" },
         },
         // range is two bounds, and says so instead of "expected ')'".
         .{

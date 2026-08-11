@@ -412,7 +412,11 @@ fn compilePathPruned(
     // The path as the user wrote it, not its basename: `luce check
     // sub/bad.luc` that answers `bad.luc:1:1` is a location nothing
     // can jump to, and there may be a bad.luc in three directories.
-    var loader: files.FileLoader = .{ .io = io, .directory = std.fs.path.dirname(path) orelse "" };
+    var loader: files.FileLoader = .{
+        .io = io,
+        .directory = std.fs.path.dirname(path) orelse "",
+        .project_root = source_root,
+    };
     var result = try luce.compile.compileProject(gpa, source, loader.loader(), .{
         .allow_host = true,
         .source_name = files.displayName(path),

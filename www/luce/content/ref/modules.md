@@ -5,12 +5,19 @@ A file is a module.
 ## import
 
 ```
-import name          binds the sibling file `name.luc`
-import std.name      binds a module embedded in the compiler
+import name             binds the sibling file `name.luc`
+import std.name         binds a module embedded in the compiler
+import folder.name      binds `folder/name.luc` under the project root
+import folder.name as other   the same file, bound as `other`
 ```
 
-Both bind the **bare name**, so call sites read `math.sqrt(x)` and
-only the import line records where the module came from.
+An import binds the **last segment** — `import std.math` and
+`import geo.math` both bind `math` — so call sites read `math.sqrt(x)`
+and only the import line records where the module came from.  An
+`as` clause picks a different binding; the [projects
+section](#projects-and-subfolders) below covers the dotted form, which
+needs a project root.  `as` is read contextually, so it is not a
+keyword and stays usable as an ordinary name.
 
 An import reaches the imported file's top level:
 
@@ -232,7 +239,7 @@ main.luc:1:1: cannot load module geometry (looked for geometry.luc) [luce.import
 ```
 
 Deliberately absent: package managers, search paths, conditional
-imports, re-exports, and any `as` clause.
+imports, and re-exports.
 
 ## The `std.` namespace
 
@@ -247,7 +254,7 @@ Three rules keep it honest.
 |---|---|
 | `import std.nope` | `luce.import.standard` — the error lists the modules that exist |
 | `import std` | `luce.import.reserved` — the namespace is not a module, so no `std.luc` can ever be imported |
-| `import std.math` and `import math` together | `luce.import.collision` — one binding, two modules; rename the file |
+| `import std.math` and `import math` together | `luce.import.collision` — one binding, two modules; alias the sibling (`import math as m2`), because a standard module keeps its own name and `import std.math as m` is refused |
 
 ```luce fail
 import std.nope
@@ -301,3 +308,115 @@ func main():
 ```output
 3x3 area 9 unit 1
 ```
+
+## Projects and subfolders
+
+A file named **`luce.yaml`** marks a project root.  It is found by
+walking up from the root source file's directory, it needs only the
+project's own identity —
+
+```
+name: sample
+version: 0.1.0
+```
+
+— and it changes resolution in two ways.  First, dots map to folders:
+`import geo.shapes` reads `geo/shapes.luc` under the project root, at
+any depth, still binding the last segment.  Second, **every** import
+is root-relative — the single-segment `import util` included — so
+`import geo.shapes` means the same file from every file in the tree.
+There is exactly one anchor per program: without a `luce.yaml` a
+program keeps today's sibling resolution, single segment only, and a
+dotted import is refused by name.
+
+```luce fail
+import geo.shapes
+
+func main():
+    print(string(shapes.area(3.0, 4.0)))
+```
+
+```output
+luce: compile failed
+main.luc:1:1: cannot read geo/shapes.luc for module geo.shapes: subfolder imports need a project root, and no luce.yaml governs this program [luce.import.unreadable]
+    import geo.shapes
+    ^~~~~~~~~~~~~~~~~
+```
+
+With the manifest in place, the same import resolves:
+
+```luce module file=luce.yaml
+name: sample
+version: 0.1.0
+```
+
+```luce module file=geo/shapes.luc
+func area(width: double, height: double) -> double:
+    return width * height
+```
+
+```luce run
+import geo.shapes
+
+func main():
+    print(string(shapes.area(3.0, 4.0)))
+```
+
+```output
+12
+```
+
+Exact case and regular files are checked at **every** segment, the way
+they always were for the file itself: a folder really named `Geo`
+refuses `import geo.shapes` with the real spelling in the message,
+whatever the filesystem would have tolerated.
+
+Two imports whose last segments agree want one binding for two
+modules.  That is `luce.import.collision`, and the remedy is in the
+message: **`as`** binds a module under a name of your choosing.
+
+```luce module file=blocks/shapes.luc
+func volume(edge: double) -> double:
+    return edge * edge * edge
+```
+
+```luce fail
+import geo.shapes
+import blocks.shapes
+
+func main():
+    print(string(shapes.area(3.0, 4.0)))
+```
+
+```output
+luce: compile failed
+main.luc:2:1: import geo.shapes and import blocks.shapes both bind the name shapes; give one its own name: import blocks.shapes as NAME [luce.import.collision]
+    import blocks.shapes
+    ^~~~~~~~~~~~~~~~~~~~
+```
+
+```luce run
+import geo.shapes
+import blocks.shapes as blocks
+
+func main():
+    print(string(shapes.area(3.0, 4.0)))
+    print(string(blocks.volume(2.0)))
+```
+
+```output
+12
+8
+```
+
+The alias moves only the binding, never the file: the module is still
+`geo.shapes`, and one module holds one binding for the whole program —
+a second import of the same module must agree with the first, or alias
+it the same way.  A standard module keeps its own name (`import
+std.math as m` is refused at parse time); when a sibling collides with
+one, the sibling takes the alias.
+
+The manifest's `packages:` want list is parsed and validated today,
+but **packages themselves are not built yet**: there is no store, no
+search path, and no fetching — `luce.yaml` currently governs exactly
+what this section shows, the project's own tree.
