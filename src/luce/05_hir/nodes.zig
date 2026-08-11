@@ -173,6 +173,12 @@ pub const Expression = union(enum) {
     index_get: IndexGet,
     /// A use of a folded file-scope constant, inlined at this site.
     constant_ref: ConstantRef,
+    /// A folded container constant — a flat list, map or rank-1 array
+    /// built at compile time — materialized as its interned
+    /// program-root row (`const_container`).  Reached only through a
+    /// defaulted construction operand; a *named* constant use records
+    /// `constant_ref`, the source-level identity, instead.
+    container_ref: ContainerRef,
     /// The reload of the hidden slot a fallible call's result crosses
     /// its branch in — the recorded form of the walker's `carried`
     /// link.  The value is the *call's* value; the slot only ferries
@@ -191,6 +197,14 @@ pub const Expression = union(enum) {
     /// reach its landing type (docs/TYPES.md §1).  A node rather than
     /// a property, so operand trees say where every conversion stands.
     convert: Convert,
+    /// The `T <: T?` widening (OWNERSHIP.md S43) — `convert`'s twin on
+    /// the optional ladder, recorded at `fit`, the one place promotion
+    /// is spelled.  A node rather than a property of the place,
+    /// because the wrap emits a real instruction whose result is a
+    /// *new* value with a storage answer of its own (`plain`, never
+    /// the operand's), and a tree that passed the operand through
+    /// whole would claim the operand's provenance for it.
+    wrap_optional: WrapOptional,
     unary: Unary,
     /// `and` / `or`, which evaluate their right side conditionally and
     /// so are control flow, not `binary`.
@@ -223,8 +237,10 @@ pub const Expression = union(enum) {
 
     // Construction ----------------------------------------------------------
 
-    /// A struct built whole, every field in layout order (defaults
-    /// already filled in).
+    /// A struct built whole: the operands in evaluation order with the
+    /// field slot each fills (named fields permute, exactly as named
+    /// arguments do), defaults appended after the written operands in
+    /// the order they materialize.
     struct_make: StructMake,
     /// A struct built out of an existing one with named fields
     /// replaced — kept structured so lower, not check, spells the
@@ -346,6 +362,14 @@ pub const Expression = union(enum) {
         park: ?Park = null,
     };
 
+    pub const ContainerRef = struct {
+        /// The interned program-root container row (`const_container`).
+        row: u32,
+        result: Type,
+        span: Span,
+        park: ?Park = null,
+    };
+
     pub const CarriedGet = struct {
         /// The hidden slot the value crossed the branch in.
         slot: LocalId,
@@ -367,6 +391,14 @@ pub const Expression = union(enum) {
     };
 
     pub const Convert = struct {
+        operand: NodeRef,
+        result: Type,
+        span: Span,
+        park: ?Park = null,
+    };
+
+    pub const WrapOptional = struct {
+        /// The payload, already at the optional's held type.
         operand: NodeRef,
         result: Type,
         span: Span,
@@ -448,8 +480,13 @@ pub const Expression = union(enum) {
 
     pub const StructMake = struct {
         layout: u32,
-        /// Every field in layout order, defaults filled in.
-        fields: []const NodeRef,
+        /// The batch convention is a call's exactly (`OperandBatch`):
+        /// operands in evaluation order — written fields as written,
+        /// then one entry per defaulted field in materialization order
+        /// — and `slots` are the layout's field indices, each present
+        /// exactly once.  Lower evaluates in this order and permutes
+        /// into layout order at the `struct_make`.
+        operands: OperandBatch,
         result: Type,
         span: Span,
         park: ?Park = null,
@@ -469,14 +506,20 @@ pub const Expression = union(enum) {
     pub const VariantMake = struct {
         variant: u32,
         member: u32,
-        fields: []const NodeRef,
+        /// `StructMake`'s convention over the member's payload fields;
+        /// empty for a bare member (docs/UNION.md D4).
+        operands: OperandBatch,
         result: Type,
         span: Span,
         park: ?Park = null,
     };
 
     pub const ListLiteral = struct {
-        elements: []const NodeRef,
+        /// Written order, which is evaluation order — a bracket
+        /// literal permutes nothing.  The result type says whether
+        /// the literal landed as a list or a rank-1 array; the node
+        /// stays the written form either way.
+        elements: []const Operand,
         result: Type,
         span: Span,
         park: ?Park = null,
@@ -488,14 +531,17 @@ pub const Expression = union(enum) {
         span: Span,
         park: ?Park = null,
 
-        pub const Entry = struct { key: NodeRef, value: NodeRef };
+        /// One written pair.  Keys and values are one interleaved
+        /// operand run in the emission (key, value, key, value…), so
+        /// each carries its own rewrite flags.
+        pub const Entry = struct { key: Operand, value: Operand };
     };
 
     pub const Slice = struct {
-        target: NodeRef,
+        target: Operand,
         /// Null is the defaulted bound: start 0, stop `len(target)`.
-        start: ?NodeRef,
-        stop: ?NodeRef,
+        start: ?Operand,
+        stop: ?Operand,
         result: Type,
         span: Span,
         park: ?Park = null,
@@ -505,7 +551,7 @@ pub const Expression = union(enum) {
         /// The interned heap-type row of the object being made.
         heap_type: u32,
         /// Dimension sizes for an array; empty otherwise.
-        operands: []const NodeRef,
+        operands: []const Operand,
         result: Type,
         span: Span,
         park: ?Park = null,
@@ -605,11 +651,14 @@ pub const ResolvedCallee = union(enum) {
     pub const Indirect = struct { local: LocalId, signature: u32 };
 };
 
-/// A call's operands in **evaluation order** — the written arguments
-/// first, as written, then one entry per defaulted slot in the order
-/// the defaults are materialized (docs/ARGS.md D2) — with the
-/// declaration slot each one fills and the two per-operand facts the
-/// walk decides while lowering them.
+/// A call's — or a construction's — operands in **evaluation order**:
+/// the written arguments first, as written, then one entry per
+/// defaulted slot in the order the defaults are materialized
+/// (docs/ARGS.md D2), with the declaration slot each one fills and the
+/// two per-operand facts the walk decides while lowering them.
+/// `struct_make` and `variant_make` carry the same batch with field
+/// indices for slots, because named-field construction *is* the
+/// named-argument call shape (docs/ARGS.md D8).
 ///
 /// **The operand nodes are the written expressions, pre-rewrite.**  A
 /// spill reload or a defensive borrow copy replaces the operand's
@@ -636,6 +685,25 @@ pub const OperandBatch = struct {
     /// storage a later writing operand in the same batch may replace
     /// (`f(s, s.change())` — docs/STRINGS.md).
     borrow_copy: []const bool,
+};
+
+/// One lowered operand with `OperandBatch`'s two per-operand rewrite
+/// facts, spelled per operand instead of as parallel arrays — for the
+/// families whose operands land where they stand and permute nothing:
+/// a literal's elements, a map entry's halves, an array's dimensions,
+/// a slice's parts.  The spills and copies happen at these sites
+/// exactly as they do before a call — the emission runs every batch
+/// through the same walk — so the runs carry the same flags, under the
+/// same pre-rewrite convention: a spill reload or a defensive borrow
+/// copy replaces the operand's *register*, never its node.
+pub const Operand = struct {
+    node: NodeRef,
+    /// Spilled across a block split before use (coupling #4's
+    /// conservative guess, recorded until the guess is deleted).
+    spilled: bool = false,
+    /// Took the defensive borrow copy in front of a later
+    /// container-mutating operand in the same run (docs/STRINGS.md).
+    copied: bool = false,
 };
 
 // ---------------------------------------------------------------------------
@@ -832,6 +900,8 @@ pub fn provenance(expression: *const Expression) Provenance {
         // default is built whole and owns its run; everything else is
         // a constant.
         .constant_ref => |payload| zeroOf(payload.result),
+        // A program-root container row is a handle, not storage.
+        .container_ref => .plain,
         // The slot only ferries the call's value across the branch;
         // the storage question belongs to the call.
         .carried_get => |payload| provenance(payload.origin),
@@ -839,6 +909,10 @@ pub fn provenance(expression: *const Expression) Provenance {
         // answers a scalar.
         .binary => |payload| if (payload.result == .string) .fresh else .plain,
         .convert, .unary, .compare => .plain,
+        // The wrapped value is a new scalar-shaped `T?`; the storage a
+        // string payload views keeps its owner (the tape reads
+        // `optional_wrap` as neither fresh nor borrowed).
+        .wrap_optional => .plain,
         // Both answer a reload of the hidden slot their arms stored
         // into — a view of what the slot holds.
         .short_circuit, .coalesce => .view,
@@ -1062,15 +1136,29 @@ test "provenance mirrors the storage categories the walk stamps" {
     // an object, not storage; the duplicate is nobody's yet.
     const fields = try arena.alloc(NodeRef, 1);
     fields[0] = text;
-    const built = try node(arena, .{ .struct_make = .{ .layout = 0, .fields = fields, .result = .{ .strukt = 0 }, .span = test_span } });
+    const field_slots = try arena.alloc(u32, 1);
+    field_slots[0] = 0;
+    const no_rewrites = try arena.alloc(bool, 1);
+    no_rewrites[0] = false;
+    const one_field: OperandBatch = .{
+        .operands = fields,
+        .slots = field_slots,
+        .spill = no_rewrites,
+        .borrow_copy = no_rewrites,
+    };
+    const built = try node(arena, .{ .struct_make = .{ .layout = 0, .operands = one_field, .result = .{ .strukt = 0 }, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(built));
-    const member = try node(arena, .{ .variant_make = .{ .variant = 0, .member = 0, .fields = &.{}, .result = .{ .variant = 0 }, .span = test_span } });
+    const member = try node(arena, .{ .variant_make = .{ .variant = 0, .member = 0, .operands = batch, .result = .{ .variant = 0 }, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(member));
-    const listed = try node(arena, .{ .list_literal = .{ .elements = &.{}, .result = .{ .heap = 0 }, .span = test_span } });
+    const elements = try arena.alloc(Operand, 1);
+    elements[0] = .{ .node = text, .spilled = true };
+    const listed = try node(arena, .{ .list_literal = .{ .elements = elements, .result = .{ .heap = 0 }, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(listed));
+    try testing.expect(listed.list_literal.elements[0].spilled);
+    try testing.expect(!listed.list_literal.elements[0].copied);
     const fresh_object = try node(arena, .{ .new_object = .{ .heap_type = 0, .operands = &.{}, .result = .{ .heap = 0 }, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(fresh_object));
-    const sliced = try node(arena, .{ .slice = .{ .target = name, .start = null, .stop = null, .result = .string, .span = test_span } });
+    const sliced = try node(arena, .{ .slice = .{ .target = .{ .node = name }, .start = null, .stop = null, .result = .string, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(sliced));
     const given = try node(arena, .{ .give = .{ .operand = name, .result = .{ .heap = 0 }, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(given));
@@ -1080,4 +1168,14 @@ test "provenance mirrors the storage categories the walk stamps" {
     try testing.expectEqual(Provenance.plain, provenance(worker));
     const named = try node(arena, .{ .function_value = .{ .function = 2, .result = .{ .function = 0 }, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(named));
+    const synthesized = try node(arena, .{ .lambda_ref = .{ .function = 3, .result = .{ .function = 0 }, .span = test_span } });
+    try testing.expectEqual(Provenance.plain, provenance(synthesized));
+
+    // The two folded/widened materializations that ride construction:
+    // a wrapped optional is a new plain value whatever its payload
+    // was, and a program-root container row is a handle.
+    const wrapped = try node(arena, .{ .wrap_optional = .{ .operand = name, .result = .{ .optional = .string }, .span = test_span } });
+    try testing.expectEqual(Provenance.plain, provenance(wrapped));
+    const rooted = try node(arena, .{ .container_ref = .{ .row = 4, .result = .{ .heap = 0 }, .span = test_span } });
+    try testing.expectEqual(Provenance.plain, provenance(rooted));
 }

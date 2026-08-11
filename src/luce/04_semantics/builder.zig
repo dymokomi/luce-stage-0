@@ -1617,12 +1617,17 @@ pub const FunctionBuilder = struct {
     // the operators — binary, compare (the exact cross-ladder and
     // absence forms included), unary, short-circuit, coalesce — and
     // the implicit numeric widening, recorded as `convert` at
-    // `widenNumeric`, the one place widening is spelled; and the
-    // calls: every call-shaped arm records one `call` node with its
-    // resolved callee and its operand batch (`recordCallNode`), and a
-    // fallible call's branch-crossing reload records as `carried_get`
-    // at `openFallible`, where the try/catch family will find the
-    // link already in place.
+    // `widenNumeric`, the one place widening is spelled; the calls:
+    // every call-shaped arm records one `call` node with its resolved
+    // callee and its operand batch (`recordCallNode`), and a fallible
+    // call's branch-crossing reload records as `carried_get` at
+    // `openFallible`, where the try/catch family will find the link
+    // already in place; and construction — struct and union members
+    // (`struct_make`/`variant_make`, carrying a call's OperandBatch
+    // because named-field construction is the named-argument call
+    // shape), list and map literals, `new`, slices, `give`/`copy`,
+    // `spawn`, function values and lambdas, and every constant shape
+    // `emitConstantValue` materializes.
     //
     // Three call decisions, stated once.  **Identity conversions
     // record no call node**: `long(x)` on a `long` (and `string(s)`)
@@ -1633,12 +1638,30 @@ pub const FunctionBuilder = struct {
     // not a `.conversion`, because a function's name is a borrowless
     // constant of the program where conversion-to-string means fresh
     // bytes (`str_value`).  **A defaulted argument records the
-    // constant the declaration supplies** (`recordDefaultOperand`),
-    // spanned at the call site that omitted it, appended to the batch
-    // after the written operands in the order the defaults
-    // materialize — a default whose value is construction-shaped
-    // records with the construction family, and until then leaves the
-    // call node null.
+    // constant the declaration supplies**, spanned at the call site
+    // that omitted it, appended to the batch after the written
+    // operands in the order the defaults materialize — the node rides
+    // the `Typed` `emitConstantValue` answers, which is the single
+    // spelling point for every constant shape, construction-shaped
+    // defaults included.
+    //
+    // And three construction decisions.  **Operand runs carry their
+    // rewrite flags everywhere a batch is lowered**: the spill across
+    // a block split and the defensive borrow copy happen at a
+    // literal's elements and a slice's bounds exactly as before a
+    // call's arguments — one walk lowers every batch — so the
+    // construction nodes record the same per-operand flags a call's
+    // batch does (`nodes.Operand`), and a run without them could not
+    // be replayed byte for byte.  **The `T <: T?` widening is a node
+    // of its own** (`wrap_optional`), recorded at `fit`, the one place
+    // promotion is spelled — the wrap emits a real instruction whose
+    // value has a storage answer of its own, so passing the operand's
+    // node through would claim the operand's provenance for it.
+    // **Parks stay unrecorded** (`Expression.park` is null throughout):
+    // a park is retracted by a later adopting store (`takeStorage`),
+    // so the honest recording is the settled ledger, which is coupling
+    // #3's store family — recording the pre-retraction guess here
+    // would write a tree the emission then contradicts.
 
     /// Record one node of the typed tree.  Nodes live in the compile
     /// arena beside the tape they mirror — `self.code` records through
@@ -1673,20 +1696,17 @@ pub const FunctionBuilder = struct {
         copied: bool = false,
     };
 
-    /// Record one `call` node from its resolved callee and assembled
-    /// operand entries — written operands first, in evaluation order,
-    /// then one entry per defaulted slot in the order the defaults
-    /// are materialized.  Answers null, leaving the call unrecorded,
-    /// when any entry's node is missing: `childrenRecorded`'s rule,
-    /// extended to batches.
-    fn recordCallNode(
+    /// Assemble one recorded operand batch — written operands first,
+    /// in evaluation order, then one entry per defaulted slot in the
+    /// order the defaults are materialized.  Answers null, leaving the
+    /// whole node unrecorded, when any entry's node is missing:
+    /// `childrenRecorded`'s rule, extended to batches.  Shared by the
+    /// call node and the two named-field constructions, whose batch
+    /// convention is the call's (nodes.OperandBatch).
+    fn recordOperandBatch(
         self: *FunctionBuilder,
-        callee: nodes.ResolvedCallee,
         entries: []const RecordedOperand,
-        fallible: bool,
-        result: Type,
-        span: Span,
-    ) Error!?nodes.NodeRef {
+    ) Error!?nodes.OperandBatch {
         for (entries) |entry| if (entry.node == null) return null;
         const operands = try self.arena().alloc(nodes.NodeRef, entries.len);
         const slots = try self.arena().alloc(u32, entries.len);
@@ -1698,66 +1718,51 @@ pub const FunctionBuilder = struct {
             spilled.* = entry.spilled;
             copied.* = entry.copied;
         }
+        return .{
+            .operands = operands,
+            .slots = slots,
+            .spill = spill,
+            .borrow_copy = borrow_copy,
+        };
+    }
+
+    /// Record one `call` node from its resolved callee and assembled
+    /// operand entries, or null when the batch cannot be recorded.
+    fn recordCallNode(
+        self: *FunctionBuilder,
+        callee: nodes.ResolvedCallee,
+        entries: []const RecordedOperand,
+        fallible: bool,
+        result: Type,
+        span: Span,
+    ) Error!?nodes.NodeRef {
+        const batch = (try self.recordOperandBatch(entries)) orelse return null;
         return try self.recordNode(.{ .call = .{
             .callee = callee,
-            .operands = .{
-                .operands = operands,
-                .slots = slots,
-                .spill = spill,
-                .borrow_copy = borrow_copy,
-            },
+            .operands = batch,
             .fallible = fallible,
             .result = result,
             .span = span,
         } });
     }
 
-    /// The node a defaulted argument materializes as, spanned at the
-    /// call site that omitted it: the scalar shapes `emitConstantValue`
-    /// emits directly, or null for a construction-shaped default — a
-    /// struct, a container row, or a wrapped optional payload — whose
-    /// recording is the construction family's, and which leaves the
-    /// whole call node null until that family lands.
-    fn recordDefaultOperand(
+    /// The recorded form of one non-permuting operand run — a
+    /// literal's elements, an array's dimensions, a slice's parts —
+    /// with the batch flags beside each operand's pre-rewrite node
+    /// (nodes.Operand), or null when any operand's family has not
+    /// converted: `childrenRecorded`'s rule again.
+    fn recordOperandRun(
         self: *FunctionBuilder,
-        value: ConstantValue,
-        value_type: Type,
-        span: Span,
-    ) Error!?nodes.NodeRef {
-        // A present payload emits through `optional_wrap`, which the
-        // tree spells no node for (the rule at `fit`).
-        if (value_type == .optional and value != .absent) return null;
-        return switch (value) {
-            .long => |folded| try self.recordNode(.{ .const_long = .{
-                .value = folded,
-                .result = value_type,
-                .span = span,
-            } }),
-            .double => |folded| try self.recordNode(.{ .const_double = .{
-                .value = folded,
-                .result = value_type,
-                .span = span,
-            } }),
-            .boolean => |folded| try self.recordNode(.{ .const_boolean = .{
-                .value = folded,
-                .result = value_type,
-                .span = span,
-            } }),
-            .string => |folded| try self.recordNode(.{
-                .const_string = .{
-                    // Interning is idempotent, so this answers the same
-                    // pool slot the emission took (coupling #6).
-                    .constant = try self.analyzer.pool.intern(folded),
-                    .result = value_type,
-                    .span = span,
-                },
-            }),
-            .absent => try self.recordNode(.{ .absent = .{
-                .result = value_type,
-                .span = span,
-            } }),
-            .strukt, .container => null,
-        };
+        values: []const Typed,
+        spilled: []const bool,
+        copied: []const bool,
+    ) Error!?[]nodes.Operand {
+        if (!childrenRecorded(values)) return null;
+        const run = try self.arena().alloc(nodes.Operand, values.len);
+        for (values, spilled, copied, run) |value, was_spilled, was_copied, *slot| {
+            slot.* = .{ .node = value.node.?, .spilled = was_spilled, .copied = was_copied };
+        }
+        return run;
     }
 
     /// **Migration scaffolding, Debug only** (the seam's landing
@@ -1932,6 +1937,89 @@ pub const FunctionBuilder = struct {
                 std.debug.assert(instruction == .local_get);
                 std.debug.assert(self.code.localType(instruction.local_get).eql(node.result()));
             },
+            .wrap_optional => |wrapped| {
+                // The `T <: T?` widening, spelled once at `fit` (and
+                // by `emitConstantValue` for a folded payload): one
+                // wrap of an operand already at the held type.
+                std.debug.assert(instruction.intrinsic.kind == .optional_wrap);
+                std.debug.assert(instruction.intrinsic.arguments.len == 1);
+                std.debug.assert(wrapped.result == .optional);
+                std.debug.assert(wrapped.operand.result().eql(wrapped.result.held().?));
+            },
+            .container_ref => |folded| std.debug.assert(instruction.const_container == folded.row),
+            .struct_make => |built| {
+                // The batch holds evaluation order; the emission holds
+                // the layout-ordered registers, one per field, written
+                // and defaulted alike — so the counts agree and the
+                // slots are the permutation between the two.
+                const batch = built.operands;
+                std.debug.assert(batch.operands.len == batch.slots.len);
+                std.debug.assert(batch.operands.len == batch.spill.len);
+                std.debug.assert(batch.operands.len == batch.borrow_copy.len);
+                std.debug.assert(instruction.struct_make.layout == built.layout);
+                std.debug.assert(instruction.struct_make.fields.len == batch.operands.len);
+            },
+            .variant_make => |built| {
+                std.debug.assert(instruction.variant_make.variant == built.variant);
+                std.debug.assert(instruction.variant_make.member == built.member);
+                std.debug.assert(instruction.variant_make.fields.len == built.operands.operands.len);
+            },
+            // A literal's value is the `heap_new` its elements were
+            // stored into; the per-element stores follow it on the
+            // tape and stay the emission's own until the flip makes
+            // lower spell them.  A bracket literal that landed as a
+            // rank-1 array keeps the same node — the result type
+            // carries the landing — and spells its one dimension on
+            // the emission.
+            .list_literal => |literal| {
+                std.debug.assert(literal.result == .heap);
+                std.debug.assert(instruction.heap_new.heap == literal.result.heap);
+                std.debug.assert(instruction.heap_new.dims.len <= 1);
+            },
+            .map_literal => |literal| {
+                std.debug.assert(literal.result == .heap);
+                std.debug.assert(instruction.heap_new.heap == literal.result.heap);
+                std.debug.assert(instruction.heap_new.dims.len == 0);
+            },
+            .new_object => |made| {
+                std.debug.assert(instruction.heap_new.heap == made.heap_type);
+                std.debug.assert(instruction.heap_new.dims.len == made.operands.len);
+            },
+            .slice => |sliced| {
+                // Three arguments always: the defaulted bounds the
+                // node spells as null are materialized registers on
+                // the emission (0 and `len`), re-derived by lower.
+                std.debug.assert(instruction.intrinsic.arguments.len == 3);
+                std.debug.assert(switch (instruction.intrinsic.kind) {
+                    .string_slice => sliced.result == .string,
+                    .list_slice => sliced.result == .heap,
+                    else => false,
+                });
+            },
+            .give => {
+                // The intrinsic names the owning binding as a hidden
+                // second argument; the node's operand carries the
+                // local, so lower re-derives it — `free_object`'s
+                // convention at the `.intrinsic` callee above.
+                std.debug.assert(instruction.intrinsic.kind == .give_object);
+                std.debug.assert(instruction.intrinsic.arguments.len == 2);
+            },
+            .copy => {
+                std.debug.assert(instruction.intrinsic.kind == .copy_object);
+                std.debug.assert(instruction.intrinsic.arguments.len == 1);
+            },
+            .spawn => |worker| {
+                // The inner call's emission IS the spawn instruction:
+                // one instruction, the callee and every argument
+                // register on it, the task as its result.
+                std.debug.assert(worker.call.* == .call);
+                const inner = worker.call.call;
+                std.debug.assert(inner.callee == .function);
+                std.debug.assert(instruction.spawn.function == inner.callee.function);
+                std.debug.assert(instruction.spawn.arguments.len == inner.operands.operands.len);
+            },
+            .function_value => |named| std.debug.assert(instruction.const_function == named.function),
+            .lambda_ref => |synthesized| std.debug.assert(instruction.const_function == synthesized.function),
             // A folded constant materializes in whatever shape its
             // value takes; the type and provenance checks above are
             // the whole of what the node duplicates.  `absent` inlines
@@ -2811,19 +2899,33 @@ pub const FunctionBuilder = struct {
         const inner = (try self.fit(value, payload)) orelse return null;
         const arguments = try self.arena().alloc(Register, 1);
         arguments[0] = inner.register;
-        return .{
+        const wrapped: Typed = .{
             .register = try self.code.emit(
                 .{ .intrinsic = .{ .kind = .optional_wrap, .arguments = arguments } },
                 expected,
             ),
             .value_type = expected,
             .root = inner.root,
-            // The `T <: T?` wrap has no node kind: the typed tree
-            // spells no optional_wrap, so this path answers no node
-            // rather than an invented one — the family that models
-            // the wrap closes it (05_hir.zig).
-            .node = null,
+            // The `T <: T?` widening is a node of its own
+            // (`wrap_optional`), recorded here at the one place
+            // promotion is spelled — as `convert` is at
+            // `widenNumeric` — so every site that wraps records
+            // without knowing it.  Null when the operand's family has
+            // not converted (the rule at `childrenRecorded`).
+            .node = if (inner.node) |operand|
+                try self.recordNode(.{ .wrap_optional = .{
+                    .operand = operand,
+                    .result = expected,
+                    .span = operand.span(),
+                } })
+            else
+                null,
         };
+        // A wrapped value usually replaces its operand in place rather
+        // than answering through `lowerExpression`, so the node oracle
+        // runs here.
+        self.debugNodeOnTape(wrapped);
+        return wrapped;
     }
 
     /// Widen a number to a wider one along `Type.widensTo` — the whole
@@ -3094,6 +3196,11 @@ pub const FunctionBuilder = struct {
         return .{
             .register = try self.code.emit(.{ .const_function = index }, value),
             .value_type = value,
+            .node = try self.recordNode(.{ .function_value = .{
+                .function = index,
+                .result = value,
+                .span = span,
+            } }),
         };
     }
 
@@ -6774,6 +6881,14 @@ pub const FunctionBuilder = struct {
         return .{
             .register = try self.code.emit(.{ .const_function = named }, value),
             .value_type = value,
+            // A function value that remembers it was written in place
+            // (nodes.LambdaRef); everything else about it is the
+            // named case, synthesized declaration included.
+            .node = try self.recordNode(.{ .lambda_ref = .{
+                .function = named,
+                .result = value,
+                .span = written.span,
+            } }),
         };
     }
 
@@ -7332,6 +7447,24 @@ pub const FunctionBuilder = struct {
                 given_type,
             );
         }
+        // The operand is a bare owning name by the refusals above —
+        // read as its narrowed payload where the binding is a proved
+        // `T?` (the unwrap just emitted is `narrowed_get`'s shape).
+        // Built here rather than through `lowerExpression`, because
+        // the give reads its binding itself.
+        const operand: nodes.NodeRef = if (local_type == .optional)
+            try self.recordNode(.{ .narrowed_get = .{
+                .local = local,
+                .payload = given_type,
+                .result = given_type,
+                .span = give.operand.name.span,
+            } })
+        else
+            try self.recordNode(.{ .local_get = .{
+                .local = local,
+                .result = local_type,
+                .span = give.operand.name.span,
+            } });
         // Every class but `.owned` was refused above, so the give
         // always names its binding and the runtime always has an owner
         // to check it against.  The intrinsic still accepts the
@@ -7348,6 +7481,14 @@ pub const FunctionBuilder = struct {
                 given_type,
             ),
             .value_type = given_type,
+            // The hidden owning-binding argument stays the emission's:
+            // lower re-derives it from the operand's own local, the
+            // `free_object` convention.
+            .node = try self.recordNode(.{ .give = .{
+                .operand = operand,
+                .result = given_type,
+                .span = give.span,
+            } }),
         };
     }
 
@@ -7356,7 +7497,7 @@ pub const FunctionBuilder = struct {
     fn emitConstant(self: *FunctionBuilder, index: u32, span: Span) Error!?Typed {
         const info = self.analyzer.constant_infos.items[index];
         if (info.state != .ready) return null; // already diagnosed
-        const made = try self.emitConstantValue(info.value, info.value_type);
+        const made = try self.emitConstantValue(info.value, info.value_type, span);
         return .{
             .register = made.register,
             .value_type = info.value_type,
@@ -7373,24 +7514,40 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    fn emitConstantValue(self: *FunctionBuilder, value: ConstantValue, value_type: Type) Error!Typed {
+    /// Materialize a folded constant, recording its node beside the
+    /// emission — **the single spelling point for every constant
+    /// shape**, which is what lets a defaulted argument or field of
+    /// any shape record without its call site knowing (the batch
+    /// convention at `recordOperandBatch`).  `span` is the use site's
+    /// — the call or construction that omitted the value — which is
+    /// what the recorded node points at.  The node is never null: every
+    /// arm below records, recursion included.
+    fn emitConstantValue(self: *FunctionBuilder, value: ConstantValue, value_type: Type, span: Span) Error!Typed {
         // A present folded payload carries no separate union tag in
         // `ConstantValue`; its optional landing type is the decision.
         // Build the payload at T, then wrap it exactly as ordinary
-        // expression lowering does.  `.absent` remains the zero value
-        // handled below.
+        // expression lowering does (`fit`'s node ruling included).
+        // `.absent` remains the zero value handled below.
         if (value_type == .optional and value != .absent) {
+            const payload = try self.emitConstantValue(value, value_type.optional.asType(), span);
             const arguments = try self.arena().alloc(Register, 1);
-            arguments[0] = (try self.emitConstantValue(value, value_type.optional.asType())).register;
-            return .{
+            arguments[0] = payload.register;
+            const wrapped: Typed = .{
                 .register = try self.code.emit(
                     .{ .intrinsic = .{ .kind = .optional_wrap, .arguments = arguments } },
                     value_type,
                 ),
                 .value_type = value_type,
+                .node = try self.recordNode(.{ .wrap_optional = .{
+                    .operand = payload.node.?,
+                    .result = value_type,
+                    .span = span,
+                } }),
             };
+            self.debugNodeOnTape(wrapped);
+            return wrapped;
         }
-        return switch (value) {
+        const made: Typed = switch (value) {
             // The width is the constant's own, not the widest of its
             // family: a folded constant carries its value at the
             // family's widest member and its `value_type` says where
@@ -7398,14 +7555,29 @@ pub const FunctionBuilder = struct {
             .long => |folded| .{
                 .register = try self.code.emit(.{ .const_long = folded }, value_type),
                 .value_type = value_type,
+                .node = try self.recordNode(.{ .const_long = .{
+                    .value = folded,
+                    .result = value_type,
+                    .span = span,
+                } }),
             },
             .double => |folded| .{
                 .register = try self.code.emit(.{ .const_double = folded }, value_type),
                 .value_type = value_type,
+                .node = try self.recordNode(.{ .const_double = .{
+                    .value = folded,
+                    .result = value_type,
+                    .span = span,
+                } }),
             },
             .boolean => |folded| .{
                 .register = try self.code.emit(.{ .const_boolean = folded }, .boolean),
                 .value_type = value_type,
+                .node = try self.recordNode(.{ .const_boolean = .{
+                    .value = folded,
+                    .result = value_type,
+                    .span = span,
+                } }),
             },
             .string => |folded| blk: {
                 const constant = try self.analyzer.pool.intern(folded);
@@ -7419,17 +7591,27 @@ pub const FunctionBuilder = struct {
                         .string,
                     ),
                     .value_type = .string,
+                    .node = try self.recordNode(.{ .const_string = .{
+                        .constant = constant,
+                        .result = .string,
+                        .span = span,
+                    } }),
                 };
             },
             .strukt => |folded| blk: {
                 const layout = self.analyzer.structs.items[folded.layout];
                 const fields = try self.arena().alloc(Register, folded.fields.len);
-                for (folded.fields, layout.fields, fields) |field, field_layout, *slot| {
-                    const made = try self.emitConstantValue(field, field_layout.field_type);
-                    slot.* = try self.ownedForStore(made);
+                const entries = try self.arena().alloc(RecordedOperand, folded.fields.len);
+                for (folded.fields, layout.fields, fields, entries, 0..) |field, field_layout, *slot, *entry, field_index| {
+                    const filled = try self.emitConstantValue(field, field_layout.field_type, span);
+                    slot.* = try self.ownedForStore(filled);
+                    entry.* = .{ .node = filled.node, .slot = @intCast(field_index) };
                 }
                 // A struct default materializes as a built value that
-                // owns its run, exactly as a written construction does.
+                // owns its run, exactly as a written construction
+                // does — and records the same node: layout order is
+                // its evaluation order, so the slots are the identity
+                // and nothing spills or copies.
                 break :blk .{
                     .register = try self.code.emit(
                         .{ .struct_make = .{ .layout = folded.layout, .fields = fields } },
@@ -7437,11 +7619,25 @@ pub const FunctionBuilder = struct {
                     ),
                     .value_type = value_type,
                     .provenance = .fresh,
+                    .node = if (try self.recordOperandBatch(entries)) |batch|
+                        try self.recordNode(.{ .struct_make = .{
+                            .layout = folded.layout,
+                            .operands = batch,
+                            .result = value_type,
+                            .span = span,
+                        } })
+                    else
+                        null,
                 };
             },
             .container => |row| .{
                 .register = try self.code.emit(.{ .const_container = row }, value_type),
                 .value_type = value_type,
+                .node = try self.recordNode(.{ .container_ref = .{
+                    .row = row,
+                    .result = value_type,
+                    .span = span,
+                } }),
             },
             // The typed absence a `T?` place gives a bare `none`: the
             // constant's type is the whole of its value (docs/ARGS.md
@@ -7450,8 +7646,17 @@ pub const FunctionBuilder = struct {
                 .register = try self.code.zeroOf(value_type),
                 .value_type = value_type,
                 .provenance = zeroProvenance(value_type),
+                .node = try self.recordNode(.{ .absent = .{
+                    .result = value_type,
+                    .span = span,
+                } }),
             },
         };
+        // A materialized default answers a batch directly rather than
+        // passing through `lowerExpression`, so the node oracle runs
+        // here.
+        self.debugNodeOnTape(made);
+        return made;
     }
 
     /// copy EXPR — a deep, independent duplicate of a readable object.
@@ -7543,12 +7748,23 @@ pub const FunctionBuilder = struct {
             .value_type = value.value_type,
             // The duplicate is storage nobody owns yet.
             .provenance = .fresh,
+            .node = if (value.node) |operand|
+                try self.recordNode(.{ .copy = .{
+                    .operand = operand,
+                    .result = value.value_type,
+                    .span = copied.span,
+                } })
+            else
+                null,
         };
     }
 
     fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Typed {
         var object_type: Type = undefined;
         var dims: []Register = &.{};
+        // The recorded dimension run — empty for everything but an
+        // array, null when a dimension's family has not converted.
+        var recorded_dims: ?[]nodes.Operand = &.{};
         if (types.builtinNamed(new.type_name.name) == .array) {
             if (new.dims.len == 0 or new.dims.len > 4) {
                 try self.fail("luce.sema.new", new.span, "new array takes 1 to 4 dimension sizes: new array(long, 5, 5)", .{});
@@ -7565,7 +7781,8 @@ pub const FunctionBuilder = struct {
                 .array = .{ .element = element, .rank = @intCast(new.dims.len) },
             });
             dims = try self.arena().alloc(Register, new.dims.len);
-            const dimensions = (try self.lowerOperands(new.dims)) orelse return null;
+            const run = (try self.lowerOperandsIntoTracking(new.dims, .nothing, null)) orelse return null;
+            const dimensions = run.values;
             for (dimensions, new.dims, dims) |*dimension, expression, *register| {
                 if (!try self.widensInto(dimension, .long)) {
                     try self.fail("luce.sema.new", expression.span(), "array dimensions are long", .{});
@@ -7573,6 +7790,7 @@ pub const FunctionBuilder = struct {
                 }
                 register.* = dimension.register;
             }
+            recorded_dims = try self.recordOperandRun(dimensions, run.spilled, run.copied);
         } else {
             object_type = (try self.analyzer.resolveType(self.module, new.type_name)) orelse return null;
             if (object_type != .heap) {
@@ -7607,6 +7825,15 @@ pub const FunctionBuilder = struct {
         return .{
             .register = try self.code.emit(.{ .heap_new = .{ .heap = object_type.heap, .dims = dims } }, object_type),
             .value_type = object_type,
+            .node = if (recorded_dims) |operands|
+                try self.recordNode(.{ .new_object = .{
+                    .heap_type = object_type.heap,
+                    .operands = operands,
+                    .result = object_type,
+                    .span = new.span,
+                } })
+            else
+                null,
         };
     }
 
@@ -7657,8 +7884,9 @@ pub const FunctionBuilder = struct {
             @memset(places, element);
             break :places .{ .places = places };
         } else .nothing;
-        const elements = (try self.lowerOperandsInto(literal.elements, landing)) orelse
+        const run = (try self.lowerOperandsIntoTracking(literal.elements, landing, null)) orelse
             return null;
+        const elements = run.values;
         const element_type = wanted_element orelse unified: {
             // The elements meet where two operands of an operator meet
             // and for the same reason: `[1, 2.5]` and `[2.5, 1]` are
@@ -7724,7 +7952,23 @@ pub const FunctionBuilder = struct {
                 _ = try self.code.emit(.{ .intrinsic = .{ .kind = .append_value, .arguments = arguments } }, .none);
             }
         }
-        return .{ .register = object, .value_type = object_type };
+        return .{
+            .register = object,
+            .value_type = object_type,
+            // One node whichever container the literal landed as: the
+            // result type carries the list-or-array decision, and the
+            // per-element stores stay the emission's own (the
+            // element-store adopt/copy is coupling #3's, like every
+            // store).
+            .node = if (try self.recordOperandRun(elements, run.spilled, run.copied)) |operands|
+                try self.recordNode(.{ .list_literal = .{
+                    .elements = operands,
+                    .result = object_type,
+                    .span = literal.span,
+                } })
+            else
+                null,
+        };
     }
 
     /// `{key: value, ...}`.  Keys and values are evaluated once in
@@ -7754,7 +7998,8 @@ pub const FunctionBuilder = struct {
             places[index * 2] = wanted_key orelse .long;
             places[index * 2 + 1] = wanted_value;
         }
-        const lowered = (try self.lowerOperandsInto(expressions, .{ .maybe_places = places })) orelse return null;
+        const run = (try self.lowerOperandsIntoTracking(expressions, .{ .maybe_places = places }, null)) orelse return null;
+        const lowered = run.values;
 
         const key_type: Type = wanted_key orelse inferred: {
             const first = lowered[0].value_type;
@@ -7817,7 +8062,32 @@ pub const FunctionBuilder = struct {
             arguments[2] = try self.ownedForStore(lowered[index * 2 + 1]);
             _ = try self.code.emit(.{ .intrinsic = .{ .kind = .index_set, .arguments = arguments } }, .none);
         }
-        return .{ .register = map, .value_type = object_type };
+        // The written pairs, each half with its own rewrite flags —
+        // keys and values are one interleaved run in the emission.
+        const node: ?nodes.NodeRef = node: {
+            if (!childrenRecorded(lowered)) break :node null;
+            const entries = try self.arena().alloc(nodes.Expression.MapLiteral.Entry, literal.entries.len);
+            for (entries, 0..) |*entry, index| {
+                entry.* = .{
+                    .key = .{
+                        .node = lowered[index * 2].node.?,
+                        .spilled = run.spilled[index * 2],
+                        .copied = run.copied[index * 2],
+                    },
+                    .value = .{
+                        .node = lowered[index * 2 + 1].node.?,
+                        .spilled = run.spilled[index * 2 + 1],
+                        .copied = run.copied[index * 2 + 1],
+                    },
+                };
+            }
+            break :node try self.recordNode(.{ .map_literal = .{
+                .entries = entries,
+                .result = object_type,
+                .span = literal.span,
+            } });
+        };
+        return .{ .register = map, .value_type = object_type, .node = node };
     }
 
     fn lowerIndex(self: *FunctionBuilder, index: ast.Index) Error!?Typed {
@@ -7863,7 +8133,8 @@ pub const FunctionBuilder = struct {
         try whole_sequence.append(self.temporary(), slice.target);
         if (slice.start) |expression| try whole_sequence.append(self.temporary(), expression);
         if (slice.end) |expression| try whole_sequence.append(self.temporary(), expression);
-        const sequence = (try self.lowerOperandsInto(whole_sequence.items, .subscripts)) orelse return null;
+        const run = (try self.lowerOperandsIntoTracking(whole_sequence.items, .subscripts, null)) orelse return null;
+        const sequence = run.values;
         const target = sequence[0];
         const is_string = target.value_type == .string;
         const descriptor = self.analyzer.heapOf(target.value_type);
@@ -7925,9 +8196,45 @@ pub const FunctionBuilder = struct {
         arguments[1] = start;
         arguments[2] = end;
         const kind: mir.Intrinsic = if (is_string) .string_slice else .list_slice;
+        // A null bound is the defaulted end (nodes.Slice); the 0 and
+        // `len` registers just emitted for one stay the emission's
+        // own, re-derived by lower.
+        const node: ?nodes.NodeRef = node: {
+            if (!childrenRecorded(sequence)) break :node null;
+            var at: usize = 1;
+            var start_operand: ?nodes.Operand = null;
+            if (slice.start != null) {
+                start_operand = .{
+                    .node = sequence[at].node.?,
+                    .spilled = run.spilled[at],
+                    .copied = run.copied[at],
+                };
+                at += 1;
+            }
+            var stop_operand: ?nodes.Operand = null;
+            if (slice.end != null) {
+                stop_operand = .{
+                    .node = sequence[at].node.?,
+                    .spilled = run.spilled[at],
+                    .copied = run.copied[at],
+                };
+            }
+            break :node try self.recordNode(.{ .slice = .{
+                .target = .{
+                    .node = sequence[0].node.?,
+                    .spilled = run.spilled[0],
+                    .copied = run.copied[0],
+                },
+                .start = start_operand,
+                .stop = stop_operand,
+                .result = target.value_type,
+                .span = slice.span,
+            } });
+        };
         return .{
             .register = try self.code.emit(.{ .intrinsic = .{ .kind = kind, .arguments = arguments } }, target.value_type),
             .value_type = target.value_type,
+            .node = node,
         };
     }
 
@@ -8078,6 +8385,20 @@ pub const FunctionBuilder = struct {
                 // A union value is built whole and owns its run
                 // (docs/UNION.md D8).
                 .provenance = .fresh,
+                // A bare member is a construction with nothing to
+                // fill in (D4): the batch is empty, never missing.
+                .node = try self.recordNode(.{ .variant_make = .{
+                    .variant = index,
+                    .member = member_index,
+                    .operands = .{
+                        .operands = &.{},
+                        .slots = &.{},
+                        .spill = &.{},
+                        .borrow_copy = &.{},
+                    },
+                    .result = of,
+                    .span = field.span,
+                } }),
             },
         };
     }
@@ -9666,11 +9987,11 @@ pub const FunctionBuilder = struct {
         for (info.parameter_defaults, seen, 0..) |maybe_default, given, slot| {
             if (given) continue;
             const filled = maybe_default.?;
-            const made = try self.emitConstantValue(filled.value, filled.value_type);
+            const made = try self.emitConstantValue(filled.value, filled.value_type, span);
             try self.parkFreshStorage(made);
             registers[slot] = made.register;
             entries[next_entry] = .{
-                .node = try self.recordDefaultOperand(filled.value, filled.value_type, span),
+                .node = made.node,
                 .slot = @intCast(slot),
             };
             next_entry += 1;
@@ -9689,11 +10010,31 @@ pub const FunctionBuilder = struct {
                 .{ .spawn = .{ .function = function_index, .arguments = registers } },
                 carried,
             );
-            // A spawn's node is a `spawn` wrapping the call, whose
-            // emission is the spawn instruction rather than a `call`
-            // — a shape of its own, recorded with the spawn family
-            // rather than half-recorded here (05_hir.zig).
-            return .{ .register = started, .value_type = carried };
+            // A spawn's node wraps the resolved call, and the inner
+            // call's emission IS the spawn instruction — one
+            // instruction carrying the callee and the batch, the task
+            // as its result.  The call node keeps the callee's own
+            // facts (its fallibility, its answer type), because the
+            // join is where they surface (docs/THREADS.md D4).
+            const inner = try self.recordCallNode(
+                .{ .function = function_index },
+                entries,
+                info.fallible,
+                info.return_type,
+                span,
+            );
+            return .{
+                .register = started,
+                .value_type = carried,
+                .node = if (inner) |made|
+                    try self.recordNode(.{ .spawn = .{
+                        .call = made,
+                        .result = carried,
+                        .span = span,
+                    } })
+                else
+                    null,
+            };
         }
         // A return shape is received by a destructuring let/var or
         // existing-name assignment, or discarded as a statement.  It
@@ -10327,11 +10668,11 @@ pub const FunctionBuilder = struct {
         for (info.parameter_defaults, seen, 0..) |maybe_default, given, slot| {
             if (given) continue;
             const filled = maybe_default.?;
-            const made = try self.emitConstantValue(filled.value, filled.value_type);
+            const made = try self.emitConstantValue(filled.value, filled.value_type, method.span);
             try self.parkFreshStorage(made);
             if (slot != 0) explicit[slot - 1] = made.register;
             entries[next_entry] = .{
-                .node = try self.recordDefaultOperand(filled.value, filled.value_type, method.span),
+                .node = made.node,
                 .slot = @intCast(slot),
             };
             next_entry += 1;
@@ -10984,11 +11325,11 @@ pub const FunctionBuilder = struct {
         // defaulted `start` (docs/ARGS.md D2, D3).
         for (info.parameter_defaults[values.len..], values.len..) |maybe_default, slot| {
             const filled = maybe_default.?;
-            const made = try self.emitConstantValue(filled.value, filled.value_type);
+            const made = try self.emitConstantValue(filled.value, filled.value_type, span);
             try self.parkFreshStorage(made);
             registers[slot] = made.register;
             entries[slot] = .{
-                .node = try self.recordDefaultOperand(filled.value, filled.value_type, span),
+                .node = made.node,
                 .slot = @intCast(slot),
             };
         }
@@ -11334,8 +11675,14 @@ pub const FunctionBuilder = struct {
             field.* = field_index;
             wanted.* = layout.fields[field_index].field_type;
         }
-        const values = (try self.lowerOperandsInto(expressions, .{ .places = expected_types })) orelse return null;
-        for (call_arguments, values, fields, expected_types) |argument, value, field_index, expected| {
+        const run = (try self.lowerOperandsIntoTracking(expressions, .{ .places = expected_types }, null)) orelse return null;
+        const values = run.values;
+        // The recorded batch: written fields in evaluation order with
+        // the field slot each fills, then defaults in materialization
+        // order — a call's convention, because named-field
+        // construction is the named-argument call shape (D8).
+        const entries = try self.arena().alloc(RecordedOperand, layout.fields.len);
+        for (call_arguments, values, fields, expected_types, 0..) |argument, value, field_index, expected, index| {
             const name = argument.name.?;
             const fitted = (try self.fit(value, expected)) orelse {
                 try self.fail("luce.sema.type", argument.span, "{s}.{s} is {s}, got {s}{s}", .{
@@ -11346,6 +11693,12 @@ pub const FunctionBuilder = struct {
                     try self.mismatchAdvice(expected, value.value_type, argument.value),
                 });
                 return null;
+            };
+            entries[index] = .{
+                .node = fitted.node,
+                .slot = field_index,
+                .spilled = run.spilled[index],
+                .copied = run.copied[index],
             };
             // Object fields follow the verb rule at construction
             // (S24): the binding that receives the struct owns them.
@@ -11374,12 +11727,15 @@ pub const FunctionBuilder = struct {
         // the constant register the written value would have produced,
         // and the same store it would have taken — so only the
         // required fields can be missing.
+        var next_entry = call_arguments.len;
         for (seen, 0..) |given, field_index| {
             if (given) continue;
             if (!self.analyzer.fieldHasDefault(layout_index, field_index)) continue;
             const filled = (try self.analyzer.fieldDefault(layout_index, field_index)) orelse return null;
-            const made = try self.emitConstantValue(filled.value, filled.value_type);
+            const made = try self.emitConstantValue(filled.value, filled.value_type, span);
             registers[field_index] = try self.ownedForStore(made);
+            entries[next_entry] = .{ .node = made.node, .slot = @intCast(field_index) };
+            next_entry += 1;
             seen[field_index] = true;
         }
         // A still-missing field has no default.  Missing and *private*
@@ -11422,6 +11778,17 @@ pub const FunctionBuilder = struct {
             .value_type = result_type,
             // A built struct value owns its run (docs/STRINGS.md).
             .provenance = .fresh,
+            // Every field is accounted for by now — written or
+            // defaulted — so the batch covers the layout exactly.
+            .node = if (try self.recordOperandBatch(entries[0..next_entry])) |batch|
+                try self.recordNode(.{ .struct_make = .{
+                    .layout = layout_index,
+                    .operands = batch,
+                    .result = result_type,
+                    .span = span,
+                } })
+            else
+                null,
         };
     }
 
@@ -11540,8 +11907,12 @@ pub const FunctionBuilder = struct {
             field.* = field_index;
             wanted.* = member.fields[field_index].field_type;
         }
-        const values = (try self.lowerOperandsInto(expressions, .{ .places = expected_types })) orelse return null;
-        for (call_arguments, values, fields, expected_types) |argument, value, field_index, expected| {
+        const run = (try self.lowerOperandsIntoTracking(expressions, .{ .places = expected_types }, null)) orelse return null;
+        const values = run.values;
+        // The recorded batch is `lowerConstruct`'s exactly: a union
+        // member is built the way a struct is (docs/UNION.md D4).
+        const entries = try self.arena().alloc(RecordedOperand, member.fields.len);
+        for (call_arguments, values, fields, expected_types, 0..) |argument, value, field_index, expected, index| {
             const name = argument.name.?;
             const fitted = (try self.fit(value, expected)) orelse {
                 try self.fail("luce.sema.type", argument.span, "{s}.{s}.{s} is {s}, got {s}{s}", .{
@@ -11553,6 +11924,12 @@ pub const FunctionBuilder = struct {
                     try self.mismatchAdvice(expected, value.value_type, argument.value),
                 });
                 return null;
+            };
+            entries[index] = .{
+                .node = fitted.node,
+                .slot = field_index,
+                .spilled = run.spilled[index],
+                .copied = run.copied[index],
             };
             // Object fields follow the verb rule at construction
             // (S24): the binding that receives the union owns them.
@@ -11583,13 +11960,16 @@ pub const FunctionBuilder = struct {
         }
         // A field nobody wrote takes its default (docs/UNION.md D4):
         // the constant register the written value would have produced.
+        var next_entry = call_arguments.len;
         for (seen, 0..) |given, field_index| {
             if (given) continue;
             if (!self.analyzer.variantFieldHasDefault(variant_index, member_index, field_index)) continue;
             const filled = (try self.analyzer.variantFieldDefault(variant_index, member_index, field_index)) orelse
                 return null;
-            const made = try self.emitConstantValue(filled.value, filled.value_type);
+            const made = try self.emitConstantValue(filled.value, filled.value_type, span);
             registers[field_index] = try self.ownedForStore(made);
+            entries[next_entry] = .{ .node = made.node, .slot = @intCast(field_index) };
+            next_entry += 1;
             seen[field_index] = true;
         }
         for (seen) |given| {
@@ -11620,6 +12000,16 @@ pub const FunctionBuilder = struct {
             // A union value is built whole and owns its run
             // (docs/UNION.md D8).
             .provenance = .fresh,
+            .node = if (try self.recordOperandBatch(entries[0..next_entry])) |batch|
+                try self.recordNode(.{ .variant_make = .{
+                    .variant = variant_index,
+                    .member = member_index,
+                    .operands = batch,
+                    .result = result_type,
+                    .span = span,
+                } })
+            else
+                null,
         };
     }
 
@@ -12191,8 +12581,7 @@ pub const FunctionBuilder = struct {
         for (matched.parameters, seen, 0..) |parameter, given, slot| {
             if (given) continue;
             const filled = parameter.default.?;
-            arguments[slot] = try self.emitConstantValue(filled.value, filled.value_type);
-            arguments[slot].node = try self.recordDefaultOperand(filled.value, filled.value_type, call.span);
+            arguments[slot] = try self.emitConstantValue(filled.value, filled.value_type, call.span);
         }
 
         // Argument and result typing per builtin.
