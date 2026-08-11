@@ -392,10 +392,20 @@ pub const Expression = union(enum) {
 
     pub const Coalesce = struct {
         value: NodeRef,
-        fallback: NodeRef,
+        fallback: Fallback,
         result: Type,
         span: Span,
         park: ?Park = null,
+
+        /// What stands after `else`: an ordinary fallback **value**
+        /// stored into the merge slot, or a **leaving** call — `x else
+        /// trap("…")`, the assert-unwrap (docs/FAILURE.md) — which is
+        /// evaluated for its exit and stores nothing, so the coalesce
+        /// has no fallback value at all.  A union rather than a bare
+        /// `NodeRef`, because a tree that filed the leaving call as a
+        /// value would oblige lower to store a value that never
+        /// exists.
+        pub const Fallback = union(enum) { value: NodeRef, leaving: NodeRef };
     };
 
     pub const Compare = struct {
@@ -562,26 +572,61 @@ pub const Expression = union(enum) {
     }
 };
 
-/// What a call site resolved to — the four things a written call can
-/// name once checking is done.
+/// What a call site resolved to — the things a written call can name
+/// once checking is done.
 pub const ResolvedCallee = union(enum) {
     /// A declared function or method, by function table index.
     function: u32,
+    /// A call through a function value held in a local
+    /// (docs/FUNCTIONS.md D2, D5): the slot the callee is read from —
+    /// *after* the operands, the order the emission keeps — and the
+    /// interned signature the call is checked against.
+    indirect: Indirect,
     /// A builtin that lowers to one MIR intrinsic — the resolved name
     /// of the operation, shared with stage 6 so it cannot drift.
+    /// `string(f)` records here as `function_name` rather than as a
+    /// `.conversion`, because a function's name is a constant of the
+    /// program's own, not the fresh bytes `.conversion` to string
+    /// means (docs/FUNCTIONS.md D3).
     intrinsic: mir.Intrinsic,
     /// A conversion constructor (docs/NUMERICS.md §7), by the type it
-    /// produces.
+    /// produces.  Never the identity: `long(x)` on a `long` passes the
+    /// operand through whole, node included, so no call node exists
+    /// to claim freshness the value does not have.
     conversion: Type,
     /// The structural enum text pair — `string(m)` and `Method(n)` —
     /// by enum table index; lower emits the member chain.
     enum_name: u32,
+    /// The union half of the text pair — `string(u)` — by union table
+    /// index; lower emits the member chain over the tag
+    /// (docs/UNION.md D16).
+    variant_name: u32,
+
+    pub const Indirect = struct { local: LocalId, signature: u32 };
 };
 
-/// A call's operands in evaluation order, with the two per-operand
-/// facts the walk decides while lowering them.
+/// A call's operands in **evaluation order** — the written arguments
+/// first, as written, then one entry per defaulted slot in the order
+/// the defaults are materialized (docs/ARGS.md D2) — with the
+/// declaration slot each one fills and the two per-operand facts the
+/// walk decides while lowering them.
+///
+/// **The operand nodes are the written expressions, pre-rewrite.**  A
+/// spill reload or a defensive borrow copy replaces the operand's
+/// *register*, never its node, so the flags below beside the pre-copy
+/// nodes are the full story lower replays.  A defaulted entry's node
+/// is the constant the declaration supplies, spanned at the call site
+/// that omitted it.  The keep-copy a *writing receiver* forces on its
+/// storage-owning arguments is deliberately not a flag here: it is a
+/// property of the resolved callee — receiver mode and parameter type
+/// — that lower re-derives, not a decision of this batch.
 pub const OperandBatch = struct {
     operands: []const NodeRef,
+    /// The declaration slot each operand fills — permuted where named
+    /// arguments reorder (docs/ARGS.md D5), the receiver at slot 0 in
+    /// the method form — so lower evaluates in this order and still
+    /// lands every value on its parameter.
+    slots: []const u32,
     /// Which operands were spilled across a block split before the
     /// call — coupling #4's conservative guess, recorded so lower
     /// reproduces the tape byte for byte until the guess is deleted
@@ -800,13 +845,13 @@ pub fn provenance(expression: *const Expression) Provenance {
         .call => |payload| switch (payload.callee) {
             // A function's result is the caller's (S16): fresh storage
             // whichever way the callee was named (docs/FUNCTIONS.md D2).
-            .function => .fresh,
+            .function, .indirect => .fresh,
             .intrinsic => |kind| ofIntrinsic(kind),
             // `string(x)` allocates its text; the numeric conversions
             // answer scalars.
             .conversion => |produced| if (produced == .string) .fresh else .plain,
             // The member chains answer a reload of their result slot.
-            .enum_name => .view,
+            .enum_name, .variant_name => .view,
         },
         // `try` hands back the call's own value through the carried
         // slot.
@@ -984,18 +1029,28 @@ test "provenance mirrors the storage categories the walk stamps" {
     // Both slot-merging operators answer a reload of the slot.
     const either = try node(arena, .{ .short_circuit = .{ .op = .logic_or, .left = name, .right = name, .result = .boolean, .span = test_span } });
     try testing.expectEqual(Provenance.view, provenance(either));
-    const fallback = try node(arena, .{ .coalesce = .{ .value = narrowed, .fallback = text, .result = .string, .span = test_span } });
+    const fallback = try node(arena, .{ .coalesce = .{ .value = narrowed, .fallback = .{ .value = text }, .result = .string, .span = test_span } });
     try testing.expectEqual(Provenance.view, provenance(fallback));
+    const asserted = try node(arena, .{ .coalesce = .{ .value = narrowed, .fallback = .{ .leaving = text }, .result = .string, .span = test_span } });
+    try testing.expectEqual(Provenance.view, provenance(asserted));
 
-    // A call's answer is the caller's; an intrinsic answers what its
-    // table row says; the carried reload and `try` follow the call.
-    const batch: OperandBatch = .{ .operands = &.{}, .spill = &.{}, .borrow_copy = &.{} };
+    // A call's answer is the caller's — through a name or a function
+    // value alike; an intrinsic answers what its table row says; the
+    // member chains answer a reload; the carried reload and `try`
+    // follow the call.
+    const batch: OperandBatch = .{ .operands = &.{}, .slots = &.{}, .spill = &.{}, .borrow_copy = &.{} };
     const called = try node(arena, .{ .call = .{ .callee = .{ .function = 0 }, .operands = batch, .fallible = true, .result = .string, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(called));
+    const through = try node(arena, .{ .call = .{ .callee = .{ .indirect = .{ .local = 1, .signature = 0 } }, .operands = batch, .fallible = false, .result = .string, .span = test_span } });
+    try testing.expectEqual(Provenance.fresh, provenance(through));
     const looked_up = try node(arena, .{ .call = .{ .callee = .{ .intrinsic = .map_get }, .operands = batch, .fallible = false, .result = .string, .span = test_span } });
     try testing.expectEqual(Provenance.view, provenance(looked_up));
     const made_text = try node(arena, .{ .call = .{ .callee = .{ .intrinsic = .str_value }, .operands = batch, .fallible = false, .result = .string, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(made_text));
+    const member_name = try node(arena, .{ .call = .{ .callee = .{ .enum_name = 0 }, .operands = batch, .fallible = false, .result = .string, .span = test_span } });
+    try testing.expectEqual(Provenance.view, provenance(member_name));
+    const union_name = try node(arena, .{ .call = .{ .callee = .{ .variant_name = 0 }, .operands = batch, .fallible = false, .result = .string, .span = test_span } });
+    try testing.expectEqual(Provenance.view, provenance(union_name));
     const carried = try node(arena, .{ .carried_get = .{ .slot = 4, .origin = called, .result = .string, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(carried));
     const attempted = try node(arena, .{ .try_call = .{ .call = called, .result = .string, .span = test_span } });

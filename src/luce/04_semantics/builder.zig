@@ -1617,10 +1617,28 @@ pub const FunctionBuilder = struct {
     // the operators — binary, compare (the exact cross-ladder and
     // absence forms included), unary, short-circuit, coalesce — and
     // the implicit numeric widening, recorded as `convert` at
-    // `widenNumeric`, the one place widening is spelled.  The explicit
-    // conversion constructors (`lowerConvert`) are *calls* in the
-    // tree's vocabulary (`nodes.ResolvedCallee.conversion`) and record
-    // with the calls family, not here.
+    // `widenNumeric`, the one place widening is spelled; and the
+    // calls: every call-shaped arm records one `call` node with its
+    // resolved callee and its operand batch (`recordCallNode`), and a
+    // fallible call's branch-crossing reload records as `carried_get`
+    // at `openFallible`, where the try/catch family will find the
+    // link already in place.
+    //
+    // Three call decisions, stated once.  **Identity conversions
+    // record no call node**: `long(x)` on a `long` (and `string(s)`)
+    // emits nothing and answers the operand's own value, so the
+    // operand's node passes through whole — a call node there would
+    // make `nodes.provenance` claim fresh storage an identity never
+    // makes.  **`string(f)` records the `function_name` intrinsic**,
+    // not a `.conversion`, because a function's name is a borrowless
+    // constant of the program where conversion-to-string means fresh
+    // bytes (`str_value`).  **A defaulted argument records the
+    // constant the declaration supplies** (`recordDefaultOperand`),
+    // spanned at the call site that omitted it, appended to the batch
+    // after the written operands in the order the defaults
+    // materialize — a default whose value is construction-shaped
+    // records with the construction family, and until then leaves the
+    // call node null.
 
     /// Record one node of the typed tree.  Nodes live in the compile
     /// arena beside the tape they mirror — `self.code` records through
@@ -1642,6 +1660,104 @@ pub const FunctionBuilder = struct {
     fn childrenRecorded(values: []const Typed) bool {
         for (values) |value| if (value.node == null) return false;
         return true;
+    }
+
+    /// One operand of a call node while its arm assembles the batch:
+    /// the operand's node — the written expression, or a default's
+    /// materialized constant — the declaration slot it fills, and the
+    /// batch's two per-operand decisions (nodes.OperandBatch).
+    const RecordedOperand = struct {
+        node: ?nodes.NodeRef,
+        slot: u32,
+        spilled: bool = false,
+        copied: bool = false,
+    };
+
+    /// Record one `call` node from its resolved callee and assembled
+    /// operand entries — written operands first, in evaluation order,
+    /// then one entry per defaulted slot in the order the defaults
+    /// are materialized.  Answers null, leaving the call unrecorded,
+    /// when any entry's node is missing: `childrenRecorded`'s rule,
+    /// extended to batches.
+    fn recordCallNode(
+        self: *FunctionBuilder,
+        callee: nodes.ResolvedCallee,
+        entries: []const RecordedOperand,
+        fallible: bool,
+        result: Type,
+        span: Span,
+    ) Error!?nodes.NodeRef {
+        for (entries) |entry| if (entry.node == null) return null;
+        const operands = try self.arena().alloc(nodes.NodeRef, entries.len);
+        const slots = try self.arena().alloc(u32, entries.len);
+        const spill = try self.arena().alloc(bool, entries.len);
+        const borrow_copy = try self.arena().alloc(bool, entries.len);
+        for (entries, operands, slots, spill, borrow_copy) |entry, *operand, *slot, *spilled, *copied| {
+            operand.* = entry.node.?;
+            slot.* = entry.slot;
+            spilled.* = entry.spilled;
+            copied.* = entry.copied;
+        }
+        return try self.recordNode(.{ .call = .{
+            .callee = callee,
+            .operands = .{
+                .operands = operands,
+                .slots = slots,
+                .spill = spill,
+                .borrow_copy = borrow_copy,
+            },
+            .fallible = fallible,
+            .result = result,
+            .span = span,
+        } });
+    }
+
+    /// The node a defaulted argument materializes as, spanned at the
+    /// call site that omitted it: the scalar shapes `emitConstantValue`
+    /// emits directly, or null for a construction-shaped default — a
+    /// struct, a container row, or a wrapped optional payload — whose
+    /// recording is the construction family's, and which leaves the
+    /// whole call node null until that family lands.
+    fn recordDefaultOperand(
+        self: *FunctionBuilder,
+        value: ConstantValue,
+        value_type: Type,
+        span: Span,
+    ) Error!?nodes.NodeRef {
+        // A present payload emits through `optional_wrap`, which the
+        // tree spells no node for (the rule at `fit`).
+        if (value_type == .optional and value != .absent) return null;
+        return switch (value) {
+            .long => |folded| try self.recordNode(.{ .const_long = .{
+                .value = folded,
+                .result = value_type,
+                .span = span,
+            } }),
+            .double => |folded| try self.recordNode(.{ .const_double = .{
+                .value = folded,
+                .result = value_type,
+                .span = span,
+            } }),
+            .boolean => |folded| try self.recordNode(.{ .const_boolean = .{
+                .value = folded,
+                .result = value_type,
+                .span = span,
+            } }),
+            .string => |folded| try self.recordNode(.{
+                .const_string = .{
+                    // Interning is idempotent, so this answers the same
+                    // pool slot the emission took (coupling #6).
+                    .constant = try self.analyzer.pool.intern(folded),
+                    .result = value_type,
+                    .span = span,
+                },
+            }),
+            .absent => try self.recordNode(.{ .absent = .{
+                .result = value_type,
+                .span = span,
+            } }),
+            .strukt, .container => null,
+        };
     }
 
     /// **Migration scaffolding, Debug only** (the seam's landing
@@ -1727,6 +1843,84 @@ pub const FunctionBuilder = struct {
                 std.debug.assert(self.code.result_types.items[value.register].eql(conversion.result));
             },
             .unary => |operation| std.debug.assert(instruction.unary.op == operation.op),
+            .call => |called| {
+                // The batch's arrays stay index-aligned by
+                // construction (`recordCallNode`).  The per-operand
+                // spill and borrow-copy flags are recorded at the act
+                // itself (`lowerOperandsIntoTracking` sets each flag
+                // in the same statement that emits the rewrite), so
+                // there is no second reading of the tape to hold them
+                // against here — the operand *registers* are not on
+                // the node, which is the point of the pre-copy
+                // convention (nodes.OperandBatch).
+                const batch = called.operands;
+                std.debug.assert(batch.operands.len == batch.slots.len);
+                std.debug.assert(batch.operands.len == batch.spill.len);
+                std.debug.assert(batch.operands.len == batch.borrow_copy.len);
+                switch (called.callee) {
+                    .function => |index| switch (instruction) {
+                        .call => |emitted| {
+                            std.debug.assert(emitted.function == index);
+                            std.debug.assert(emitted.arguments.len == batch.operands.len);
+                        },
+                        // A writing method's receiver travels as a
+                        // place, not an argument, so the emission is
+                        // one shorter than the batch — which keeps
+                        // the receiver at slot 0.
+                        .call_inout => |emitted| {
+                            std.debug.assert(emitted.function == index);
+                            std.debug.assert(emitted.arguments.len + 1 == batch.operands.len);
+                        },
+                        else => unreachable, // no other instruction answers a direct call
+                    },
+                    .indirect => |through| {
+                        std.debug.assert(instruction.call_indirect.signature == through.signature);
+                        std.debug.assert(instruction.call_indirect.arguments.len == batch.operands.len);
+                    },
+                    .intrinsic => |kind| {
+                        std.debug.assert(instruction.intrinsic.kind == kind);
+                        // `free` names its owning binding as a hidden
+                        // trailing argument (S6, S23); the node's
+                        // operand run carries only what was written,
+                        // and lower re-derives the local from the
+                        // operand's own `local_get`.
+                        const hidden: usize = if (kind == .free_object) 1 else 0;
+                        std.debug.assert(instruction.intrinsic.arguments.len == batch.operands.len + hidden);
+                    },
+                    .conversion => |produced| switch (instruction) {
+                        // The numeric constructors, `int(m)` included:
+                        // one `convert` into the type the callee
+                        // names, from a number or an enum.
+                        .convert => {
+                            std.debug.assert(called.result.eql(produced));
+                            std.debug.assert(self.code.result_types.items[value.register].eql(produced));
+                            const operand = batch.operands[0].result();
+                            std.debug.assert(operand.isNumeric() or operand == .enumeration);
+                        },
+                        // `string(x)` — fresh bytes for a scalar.
+                        .intrinsic => |emitted| std.debug.assert(emitted.kind == .str_value and produced == .string),
+                        else => unreachable, // no other instruction answers a conversion
+                    },
+                    // The member chains answer a reload of their
+                    // result slot; the comparisons and branches live
+                    // in instructions and blocks the node does not
+                    // point at, and stay the emission's own until the
+                    // flip makes lower spell them.
+                    .enum_name, .variant_name => {
+                        std.debug.assert(instruction == .local_get);
+                        std.debug.assert(self.code.localType(instruction.local_get).eql(called.result));
+                    },
+                }
+            },
+            .carried_get => |carried| {
+                // The reload of the slot a fallible call's answer
+                // crossed its branch in (`openFallible`): the slot
+                // matches, the origin is the call, and the value is
+                // the call's own.
+                std.debug.assert(instruction.local_get == carried.slot);
+                std.debug.assert(carried.origin.* == .call);
+                std.debug.assert(carried.origin.result().eql(carried.result));
+            },
             // The two slot-merging operators: the value is the reload
             // of the hidden slot both arms stored into, so what is
             // honestly assertable here is the reload — a `local_get`
@@ -3132,19 +3326,34 @@ pub const FunctionBuilder = struct {
         expressions: []const *ast.Expression,
         landing: Landing,
     ) Error!?[]Typed {
-        return self.lowerOperandsIntoTracking(expressions, landing, null);
+        const run = (try self.lowerOperandsIntoTracking(expressions, landing, null)) orelse return null;
+        return run.values;
     }
+
+    /// One lowered operand batch: the values in written order, and the
+    /// batch's two per-operand rewrites — which operands were reloaded
+    /// from a spill slot across a block split, and which took the
+    /// defensive borrow copy in front of a later container-mutating
+    /// operand.  The flags are what the call nodes record
+    /// (nodes.OperandBatch); the values' nodes stay the written
+    /// expressions, pre-rewrite, per that batch's convention.
+    /// Arena-owned, because the recorded batch outlives the statement.
+    const OperandRun = struct {
+        values: []Typed,
+        spilled: []bool,
+        copied: []bool,
+    };
 
     /// The ordinary operand walk, optionally recording the revision of
     /// each bare owning name at the moment that operand is staged.  Only
     /// shaped returns need the observation; all other callers use the
-    /// wrapper above and pay no allocation or bookkeeping cost.
+    /// wrapper above and pay no bookkeeping cost.
     fn lowerOperandsIntoTracking(
         self: *FunctionBuilder,
         expressions: []const *ast.Expression,
         landing: Landing,
         staged_owners: ?[]?StagedOperandOwner,
-    ) Error!?[]Typed {
+    ) Error!?OperandRun {
         if (staged_owners) |owners| {
             std.debug.assert(owners.len == expressions.len);
             @memset(owners, null);
@@ -3154,6 +3363,10 @@ pub const FunctionBuilder = struct {
         const wide = expressions.len > inline_operands;
 
         const values = try self.arena().alloc(Typed, expressions.len);
+        const spilled = try self.arena().alloc(bool, expressions.len);
+        @memset(spilled, false);
+        const copied = try self.arena().alloc(bool, expressions.len);
+        @memset(copied, false);
         const spills = if (wide)
             try self.temporary().alloc(?LocalId, expressions.len)
         else
@@ -3244,6 +3457,11 @@ pub const FunctionBuilder = struct {
                 // The copy is storage this statement allocated and
                 // nobody owns yet, whatever the borrow it closed was.
                 values[index].provenance = .fresh;
+                // Recorded in the same statement as the rewrite, so
+                // the flag and the emission cannot disagree; the
+                // operand's node stays the written expression
+                // (nodes.OperandBatch's pre-copy convention).
+                copied[index] = true;
                 try self.parkFreshStorage(values[index]);
             }
             spills[index] = null;
@@ -3259,9 +3477,12 @@ pub const FunctionBuilder = struct {
                 // freshness, exactly as the tape predicates read it,
                 // so the store that receives it copies.
                 values[index].provenance = .view;
+                // Recorded beside the reload, as the copy flag is
+                // beside its rewrite above.
+                spilled[index] = true;
             }
         }
-        return values;
+        return .{ .values = values, .spilled = spilled, .copied = copied };
     }
 
     // Statements -----------------------------------------------------------
@@ -6019,11 +6240,11 @@ pub const FunctionBuilder = struct {
         // One walk, so an operand that splits blocks cannot strand the
         // ones before it — the same rule every other operand run keeps.
         const staged_owners = try self.arena().alloc(?StagedOperandOwner, returned.values.len);
-        const values = (try self.lowerOperandsIntoTracking(
+        const values = ((try self.lowerOperandsIntoTracking(
             returned.values,
             .{ .places = self.results },
             staged_owners,
-        )) orelse return;
+        )) orelse return).values;
         const fitted_values = try self.arena().alloc(Typed, values.len);
         const registers = try self.arena().alloc(Register, values.len);
         // Type errors retain precedence over cross-operand ownership
@@ -6589,7 +6810,27 @@ pub const FunctionBuilder = struct {
     /// reload, and leave the lowering on the side where the call
     /// returned.  The failing side is an empty block waiting for
     /// whoever asked for it.
-    fn openFallible(self: *FunctionBuilder, call: Register, result_type: Type) Error!Typed {
+    ///
+    /// `origin` is the call's own recorded node, or null while an
+    /// operand family has not converted; the reload records as
+    /// `carried_get` around it, which is where the try/catch family
+    /// will find the branch-crossing link already in place.  `answer`
+    /// is the provenance the call's *direct* answer carries — `.fresh`
+    /// for a user function (S16), the intrinsic's table row otherwise
+    /// — which is also what `nodes.provenance` computes through the
+    /// carried hop, so the stamp and the node property agree by
+    /// construction.  For storage-owning results it is always `.fresh`
+    /// (every storage-answering fallible callee allocates), so this
+    /// stamp changes nothing the ownership questions read; the
+    /// scalar-result stamps it reconciles were never consulted, since
+    /// every provenance consumer is gated on `ownsStorage`.
+    fn openFallible(
+        self: *FunctionBuilder,
+        call: Register,
+        result_type: Type,
+        origin: ?nodes.NodeRef,
+        answer: Provenance,
+    ) Error!Typed {
         const failed = try self.code.errored(call);
         // What the call answered has to survive the branch on its
         // outcome, and it arrives owning something — so the slot that
@@ -6614,7 +6855,14 @@ pub const FunctionBuilder = struct {
         // and this slot was never stored into on that path.
         self.opened = .{ .handler = handler, .temps_floor = self.temps.items.len };
 
-        const carried = slot orelse return .{ .register = call, .value_type = .none };
+        // A callee answering nothing has no value to carry: the
+        // "value" is the call itself, and so is its node.
+        const carried = slot orelse return .{
+            .register = call,
+            .value_type = .none,
+            .provenance = answer,
+            .node = origin,
+        };
         const reload = try self.code.load(carried);
         try self.carried.append(self.temporary(), .{ .register = reload, .origin = call });
         // The binding waits for this side too: on the failing side the
@@ -6638,11 +6886,21 @@ pub const FunctionBuilder = struct {
         // branch: the storage is the call's fresh answer, and the slot
         // only ferries it (the temporary above is non-disownable, so
         // `takeStorage` still answers no and every store still
-        // copies).
+        // copies).  The node says the same thing in the tree's
+        // vocabulary: a `carried_get` whose origin is the call.
         return .{
             .register = reload,
             .value_type = result_type,
-            .provenance = if (storage) .fresh else .plain,
+            .provenance = answer,
+            .node = if (origin) |made|
+                try self.recordNode(.{ .carried_get = .{
+                    .slot = carried,
+                    .origin = made,
+                    .result = result_type,
+                    .span = made.span(),
+                } })
+            else
+                null,
         };
     }
 
@@ -8497,19 +8755,21 @@ pub const FunctionBuilder = struct {
         );
         const either = try self.code.openCoalesce(absent, present, payload);
         var root = left.root;
-        var fallback_node: ?nodes.NodeRef = null;
+        var fallback: ?nodes.Expression.Coalesce.Fallback = null;
         if (isLeavingCall(binary.right)) {
             // `x else trap("…")` is the assert-unwrap, and it is
             // greppable — which is why Luce has no force-unwrap sigil
             // (docs/FAILURE.md).  The fallback leaves nothing behind
-            // because it never comes back — and no fallback *value*
-            // either, so the node stays unrecorded until the calls
-            // family decides how a leaving call sits in the tree.
-            _ = try self.lowerExpression(binary.right, true);
-        } else if (try self.lowerTyped(binary.right, payload, binary.span, "the else fallback")) |fallback| {
-            try self.code.store(either.result, fallback.value.register);
-            root = joinedRoot(left.root, fallback.value.root);
-            fallback_node = fallback.value.node;
+            // because it never comes back — no fallback *value*, so
+            // the node files the call under `.leaving`, the union arm
+            // that stores nothing (nodes.Coalesce.Fallback).
+            if (try self.lowerExpression(binary.right, true)) |gone| {
+                if (gone.node) |leaving| fallback = .{ .leaving = leaving };
+            }
+        } else if (try self.lowerTyped(binary.right, payload, binary.span, "the else fallback")) |landed| {
+            try self.code.store(either.result, landed.value.register);
+            root = joinedRoot(left.root, landed.value.root);
+            if (landed.value.node) |stored| fallback = .{ .value = stored };
         }
         return .{
             .register = try self.code.closeShortCircuit(either),
@@ -8520,10 +8780,10 @@ pub const FunctionBuilder = struct {
             .provenance = .view,
             // Null when either side's family has not converted
             // (`childrenRecorded`'s rule).
-            .node = if (left.node != null and fallback_node != null)
+            .node = if (left.node != null and fallback != null)
                 try self.recordNode(.{ .coalesce = .{
                     .value = left.node.?,
-                    .fallback = fallback_node.?,
+                    .fallback = fallback.?,
                     .result = payload,
                     .span = binary.span,
                 } })
@@ -9053,8 +9313,10 @@ pub const FunctionBuilder = struct {
             expression.* = argument.value;
             place.* = parameter.value_type;
         }
-        const values = (try self.lowerOperandsInto(expressions, .{ .places = places })) orelse return null;
+        const run = (try self.lowerOperandsIntoTracking(expressions, .{ .places = places }, null)) orelse return null;
+        const values = run.values;
         const registers = try self.arena().alloc(Register, values.len);
+        const entries = try self.arena().alloc(RecordedOperand, values.len);
         for (values, signature.parameters, registers, 0..) |value, parameter, *slot, index| {
             const fitted = (try self.fit(value, parameter.value_type)) orelse {
                 try self.fail("luce.sema.type", call.arguments[index].span, "argument {d} of {s} is {s}, got {s}{s}", .{
@@ -9077,6 +9339,14 @@ pub const FunctionBuilder = struct {
                 return null;
             }
             slot.* = fitted.register;
+            // A function type has no names and no defaults, so the
+            // batch is positional whole: slot i is operand i.
+            entries[index] = .{
+                .node = fitted.node,
+                .slot = @intCast(index),
+                .spilled = run.spilled[index],
+                .copied = run.copied[index],
+            };
         }
         if (signature.result == .none and !as_statement) {
             try self.fail("luce.sema.call", call.span, "{s} returns nothing", .{call.callee});
@@ -9084,7 +9354,8 @@ pub const FunctionBuilder = struct {
         }
         // The callee is read *after* the arguments, so an argument that
         // frees or reassigns is already done with when the value is
-        // loaded — the same order a direct call's arguments run in.
+        // loaded — the same order a direct call's arguments run in,
+        // and the order `nodes.ResolvedCallee.indirect` states.
         const callee = try self.code.load(found.info.local);
         return .{
             .register = try self.code.emit(.{ .call_indirect = .{
@@ -9096,6 +9367,13 @@ pub const FunctionBuilder = struct {
             // A function's result is the caller's (S16): fresh storage
             // whichever way the callee was named (docs/FUNCTIONS.md D2).
             .provenance = .fresh,
+            .node = try self.recordCallNode(
+                .{ .indirect = .{ .local = found.info.local, .signature = local_type.function } },
+                entries,
+                false,
+                signature.result,
+                call.span,
+            ),
         };
     }
 
@@ -9326,8 +9604,14 @@ pub const FunctionBuilder = struct {
             expression.* = argument.value;
             place.* = info.parameter_types[slot];
         }
-        const values = (try self.lowerOperandsInto(expressions, .{ .places = places })) orelse return null;
+        const run = (try self.lowerOperandsIntoTracking(expressions, .{ .places = places }, null)) orelse return null;
+        const values = run.values;
         const registers = try self.arena().alloc(Register, info.parameter_types.len);
+        var defaulted: usize = 0;
+        for (seen) |given| {
+            if (!given) defaulted += 1;
+        }
+        const entries = try self.arena().alloc(RecordedOperand, values.len + defaulted);
         for (values, slots, 0..) |value, slot, index| {
             const fitted = (try self.fit(value, info.parameter_types[slot])) orelse {
                 // A type mistake points at the argument, spelled the
@@ -9365,6 +9649,12 @@ pub const FunctionBuilder = struct {
                 return null;
             }
             registers[slot] = fitted.register;
+            entries[index] = .{
+                .node = fitted.node,
+                .slot = slot,
+                .spilled = run.spilled[index],
+                .copied = run.copied[index],
+            };
         }
         // A slot nobody filled takes its default: the constant
         // register the same literal would have produced at the call
@@ -9372,12 +9662,18 @@ pub const FunctionBuilder = struct {
         // entry point.  A struct default owns the field run it just
         // made, so it is parked as the statement temporary a written
         // construction would be (S3).
+        var next_entry = values.len;
         for (info.parameter_defaults, seen, 0..) |maybe_default, given, slot| {
             if (given) continue;
             const filled = maybe_default.?;
             const made = try self.emitConstantValue(filled.value, filled.value_type);
             try self.parkFreshStorage(made);
             registers[slot] = made.register;
+            entries[next_entry] = .{
+                .node = try self.recordDefaultOperand(filled.value, filled.value_type, span),
+                .slot = @intCast(slot),
+            };
+            next_entry += 1;
         }
         // A spawn always answers something — the task — so the
         // "returns nothing" sentence is not about it.
@@ -9393,6 +9689,10 @@ pub const FunctionBuilder = struct {
                 .{ .spawn = .{ .function = function_index, .arguments = registers } },
                 carried,
             );
+            // A spawn's node is a `spawn` wrapping the call, whose
+            // emission is the spawn instruction rather than a `call`
+            // — a shape of its own, recorded with the spawn family
+            // rather than half-recorded here (05_hir.zig).
             return .{ .register = started, .value_type = carried };
         }
         // A return shape is received by a destructuring let/var or
@@ -9416,9 +9716,16 @@ pub const FunctionBuilder = struct {
             .{ .call = .{ .function = function_index, .arguments = registers } },
             info.return_type,
         );
-        if (info.fallible) return try self.openFallible(call, info.return_type);
+        const node = try self.recordCallNode(
+            .{ .function = function_index },
+            entries,
+            info.fallible,
+            info.return_type,
+            span,
+        );
+        if (info.fallible) return try self.openFallible(call, info.return_type, node, .fresh);
         // A function's result is the caller's (S16): fresh storage.
-        return .{ .register = call, .value_type = info.return_type, .provenance = .fresh };
+        return .{ .register = call, .value_type = info.return_type, .provenance = .fresh, .node = node };
     }
 
     /// target.name(args): a namespaced call when the target chain is
@@ -9578,10 +9885,11 @@ pub const FunctionBuilder = struct {
         for (method.arguments, 0..) |argument, index| {
             expressions[index + 1] = argument.value;
         }
-        const values = (try self.lowerOperandsInto(expressions, .{ .method = .{
+        const run = (try self.lowerOperandsIntoTracking(expressions, .{ .method = .{
             .name = method.name,
             .arguments = method.arguments,
-        } })) orelse return null;
+        } }, null)) orelse return null;
+        const values = run.values;
         const receiver = values[0];
         const arguments = values[1..];
         if (try self.refusesAbsence(receiver, "a method's receiver", method.span, method.target)) {
@@ -9599,7 +9907,7 @@ pub const FunctionBuilder = struct {
                     if (!try self.methodTakes(method, arguments, receiver.value_type)) return null;
                     break :blk .{ .kind = primitive.kind, .result = primitive.result };
                 }
-                return self.stringsCall(method, values, as_statement);
+                return self.stringsCall(method, run, as_statement);
             }
             if (self.analyzer.heapOf(receiver.value_type)) |descriptor| {
                 // join belongs to the strings module too: it makes a
@@ -9607,14 +9915,14 @@ pub const FunctionBuilder = struct {
                 if (descriptor == .list and descriptor.list == .string and
                     std.mem.eql(u8, method.name, "join"))
                 {
-                    return self.stringsCall(method, values, as_statement);
+                    return self.stringsCall(method, run, as_statement);
                 }
                 // Comparator sorting is ordinary std Luce, routed from
                 // list method sugar and specialized at the receiver's
                 // monomorphic element type (FUNCTIONS.md D6).
                 if (descriptor == .list and std.mem.eql(u8, method.name, "sort_by")) {
                     if (try self.refuseConstantWrite(receiver.root, method.span, "sort_by")) return null;
-                    return self.listsCall(method, values, descriptor.list, as_statement);
+                    return self.listsCall(method, run, descriptor.list, as_statement);
                 }
                 if (try self.refuseNamedMethodArguments(method)) return null;
                 if (try self.objectMethod(method, receiver.value_type, descriptor, arguments)) |found| {
@@ -9637,7 +9945,7 @@ pub const FunctionBuilder = struct {
             // `m.compressed()` resolves its non-static member by the
             // same lookup (docs/ENUMS.md D7, docs/SELF.md D1-D2).
             if (self.declaredName(receiver.value_type) != null) {
-                return self.lowerReceiverCall(method, values, as_statement, fallible_allowed, shape_position);
+                return self.lowerReceiverCall(method, run, as_statement, fallible_allowed, shape_position);
             }
             try self.fail("luce.sema.method", method.span, "{s} has no methods", .{
                 try self.analyzer.typeName(receiver.value_type),
@@ -9708,8 +10016,22 @@ pub const FunctionBuilder = struct {
         // A list keeps what it is appended, so the element is a store
         // and takes or copies its storage here; a builder copies bytes
         // into a buffer of its own and borrows (docs/STRINGS.md).
+        // That take-or-copy is a *store* decision the batch does not
+        // flag: it is the ledger's answer (coupling #3), recorded when
+        // the parks family lands, not a fact of this batch.
         if (self.storedElement(found.kind, receiver.value_type)) |position| {
             registers[position] = try self.ownedForStore(values[position]);
+        }
+        // The receiver is operand zero of its own batch, so the node's
+        // operand run is the whole of `values`, positionally.
+        const entries = try self.arena().alloc(RecordedOperand, values.len);
+        for (values, entries, 0..) |value, *entry, index| {
+            entry.* = .{
+                .node = value.node,
+                .slot = @intCast(index),
+                .spilled = run.spilled[index],
+                .copied = run.copied[index],
+            };
         }
         const emitted = try self.code.emit(
             .{ .intrinsic = .{ .kind = found.kind, .arguments = registers } },
@@ -9739,6 +10061,13 @@ pub const FunctionBuilder = struct {
             self.taskShape(receiver.value_type).?.fallible
         else
             found.kind.isFallible();
+        const node = try self.recordCallNode(
+            .{ .intrinsic = found.kind },
+            entries,
+            may_fail,
+            found.result,
+            method.span,
+        );
         if (may_fail) {
             if (!fallible_allowed) {
                 try self.fail(
@@ -9749,12 +10078,13 @@ pub const FunctionBuilder = struct {
                 );
                 return null;
             }
-            return try self.openFallible(emitted, found.result);
+            return try self.openFallible(emitted, found.result, node, intrinsicProvenance(found.kind));
         }
         return .{
             .register = emitted,
             .value_type = found.result,
             .provenance = intrinsicProvenance(found.kind),
+            .node = node,
         };
     }
 
@@ -9817,18 +10147,19 @@ pub const FunctionBuilder = struct {
     }
 
     /// `x.f(a, b)` where `x` is a value of a declared type — a struct
-    /// or an enum.  `values` is the whole operand run with the receiver
+    /// or an enum.  `run` is the whole operand batch with the receiver
     /// at zero, already lowered by `lowerValueMethod`; a method's
     /// arguments take their types from the values, exactly as every
     /// other method's do.
     fn lowerReceiverCall(
         self: *FunctionBuilder,
         method: ast.Method,
-        values: []Typed,
+        run: OperandRun,
         as_statement: bool,
         fallible_allowed: bool,
         shape_position: ShapePosition,
     ) Error!?Typed {
+        const values = run.values;
         const receiver_type = values[0].value_type;
         const declared = self.declaredName(receiver_type).?;
         const qualified = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ declared, method.name });
@@ -9904,7 +10235,21 @@ pub const FunctionBuilder = struct {
         // The inout call carries the receiver's *place* separately;
         // its argument run contains only the values written between
         // parentheses.  A read method remains an ordinary call with
-        // the receiver value at logical parameter zero.
+        // the receiver value at logical parameter zero.  The recorded
+        // batch keeps the receiver at slot 0 either way — the tree
+        // says what was written, and which emission drops the
+        // receiver register is the callee's own fact.
+        var defaulted: usize = 0;
+        for (seen) |given| {
+            if (!given) defaulted += 1;
+        }
+        const entries = try self.arena().alloc(RecordedOperand, values.len + defaulted);
+        entries[0] = .{
+            .node = values[0].node,
+            .slot = 0,
+            .spilled = run.spilled[0],
+            .copied = run.copied[0],
+        };
         const explicit = try self.arena().alloc(Register, info.parameter_types.len - 1);
         for (method.arguments, slots, 0..) |argument, slot, index| {
             const value = values[index + 1];
@@ -9953,6 +10298,10 @@ pub const FunctionBuilder = struct {
             // bytes.  Keep a caller-owned storage copy through the
             // call.  Objects inside a copied struct intentionally stay
             // aliases: D6 keeps ordinary object borrowing unchanged.
+            // The keep-copy is deliberately not a batch flag: it
+            // follows from the resolved callee — receiver mode and
+            // parameter type — so lower re-derives it
+            // (nodes.OperandBatch).
             if (info.receiver == .writes and self.analyzer.ownsStorage(want)) {
                 const kept: Typed = .{
                     .register = try self.code.ownStorage(fitted.register),
@@ -9965,15 +10314,27 @@ pub const FunctionBuilder = struct {
             } else {
                 explicit[slot - 1] = fitted.register;
             }
+            entries[index + 1] = .{
+                .node = fitted.node,
+                .slot = slot,
+                .spilled = run.spilled[index + 1],
+                .copied = run.copied[index + 1],
+            };
         }
         // A slot nobody filled takes its default (docs/ARGS.md D2),
         // parked like the written construction it stands in for (S3).
+        var next_entry = values.len;
         for (info.parameter_defaults, seen, 0..) |maybe_default, given, slot| {
             if (given) continue;
             const filled = maybe_default.?;
             const made = try self.emitConstantValue(filled.value, filled.value_type);
             try self.parkFreshStorage(made);
             if (slot != 0) explicit[slot - 1] = made.register;
+            entries[next_entry] = .{
+                .node = try self.recordDefaultOperand(filled.value, filled.value_type, method.span),
+                .slot = @intCast(slot),
+            };
+            next_entry += 1;
         }
         if (info.results.len == 0 and !as_statement) {
             try self.fail("luce.sema.call", method.span, "{s} returns nothing", .{method.name});
@@ -10023,11 +10384,18 @@ pub const FunctionBuilder = struct {
                 receiver.info.revision +%= 1;
             }
         }
+        const node = try self.recordCallNode(
+            .{ .function = function_index },
+            entries,
+            info.fallible,
+            info.return_type,
+            method.span,
+        );
         const answered: Typed = if (info.fallible)
-            try self.openFallible(call, info.return_type)
+            try self.openFallible(call, info.return_type, node, .fresh)
         else
             // A function's result is the caller's (S16): fresh storage.
-            .{ .register = call, .value_type = info.return_type, .provenance = .fresh };
+            .{ .register = call, .value_type = info.return_type, .provenance = .fresh, .node = node };
         return answered;
     }
 
@@ -10386,7 +10754,7 @@ pub const FunctionBuilder = struct {
     fn stringsCall(
         self: *FunctionBuilder,
         method: ast.Method,
-        values: []const Typed,
+        run: OperandRun,
         as_statement: bool,
     ) Error!?Typed {
         const local_module = std.mem.eql(u8, self.prefix, "strings");
@@ -10451,7 +10819,7 @@ pub const FunctionBuilder = struct {
         // A `strings` routing is a call like any other, and the
         // module's functions do not fail, so nothing is permitted
         // here: `s.split(",")` can never need a `try`.
-        return self.callUser(function_index, qualified, values, method.span, as_statement, false);
+        return self.callUser(function_index, qualified, run, method.span, as_statement, false);
     }
 
     /// Route `xs.sort_by(before)` to the checked Luce implementation
@@ -10466,7 +10834,7 @@ pub const FunctionBuilder = struct {
     fn listsCall(
         self: *FunctionBuilder,
         method: ast.Method,
-        values: []const Typed,
+        run: OperandRun,
         element: Type,
         as_statement: bool,
     ) Error!?Typed {
@@ -10502,7 +10870,7 @@ pub const FunctionBuilder = struct {
         }
 
         const comparator = (try self.sequenceParameters("sort_by", element, true)).?[0];
-        const receiver_type = values[0].value_type;
+        const receiver_type = run.values[0].value_type;
         const element_name = try self.analyzer.typeName(element);
         const specialized_name = try std.fmt.allocPrint(
             self.arena(),
@@ -10522,7 +10890,7 @@ pub const FunctionBuilder = struct {
             );
             return null;
         };
-        return self.callUser(function_index, "lists.sort_by", values, method.span, as_statement, false);
+        return self.callUser(function_index, "lists.sort_by", run, method.span, as_statement, false);
     }
 
     /// The emitting half of a user call, for callers that already
@@ -10532,11 +10900,12 @@ pub const FunctionBuilder = struct {
         self: *FunctionBuilder,
         function_index: u32,
         name: []const u8,
-        values: []const Typed,
+        run: OperandRun,
         span: Span,
         as_statement: bool,
         fallible_allowed: bool,
     ) Error!?Typed {
+        const values = run.values;
         // The method sugar routes to the same declaration and the same
         // refusal, so the leak has no second door (VISIBILITY.md §1):
         // `s.fold_case(…)` arrives here as `strings.fold_case`.
@@ -10588,6 +10957,7 @@ pub const FunctionBuilder = struct {
             return null;
         }
         const registers = try self.arena().alloc(Register, total);
+        const entries = try self.arena().alloc(RecordedOperand, total);
         for (values, 0..) |value, index| {
             const fitted = (try self.fit(value, info.parameter_types[index])) orelse {
                 try self.fail("luce.sema.type", span, "argument {d} of {s} is {s}, got {s}{s}", .{
@@ -10600,6 +10970,14 @@ pub const FunctionBuilder = struct {
                 return null;
             };
             registers[index] = fitted.register;
+            // The routed spelling is positional whole: slot i is
+            // operand i, the receiver first.
+            entries[index] = .{
+                .node = fitted.node,
+                .slot = @intCast(index),
+                .spilled = run.spilled[index],
+                .copied = run.copied[index],
+            };
         }
         // The suffix the call omitted takes its defaults — how the
         // routed spelling `s.find(x)` reaches a `find` with a
@@ -10609,6 +10987,10 @@ pub const FunctionBuilder = struct {
             const made = try self.emitConstantValue(filled.value, filled.value_type);
             try self.parkFreshStorage(made);
             registers[slot] = made.register;
+            entries[slot] = .{
+                .node = try self.recordDefaultOperand(filled.value, filled.value_type, span),
+                .slot = @intCast(slot),
+            };
         }
         if (info.return_type == .none and !as_statement) {
             try self.fail("luce.sema.call", span, "{s} returns nothing", .{name});
@@ -10618,9 +11000,16 @@ pub const FunctionBuilder = struct {
             .{ .call = .{ .function = function_index, .arguments = registers } },
             info.return_type,
         );
-        if (info.fallible) return try self.openFallible(call, info.return_type);
+        const node = try self.recordCallNode(
+            .{ .function = function_index },
+            entries,
+            info.fallible,
+            info.return_type,
+            span,
+        );
+        if (info.fallible) return try self.openFallible(call, info.return_type, node, .fresh);
         // A function's result is the caller's (S16): fresh storage.
-        return .{ .register = call, .value_type = info.return_type, .provenance = .fresh };
+        return .{ .register = call, .value_type = info.return_type, .provenance = .fresh, .node = node };
     }
 
     /// `descriptor` is the receiver's *shape*, which is everything the
@@ -11335,7 +11724,22 @@ pub const FunctionBuilder = struct {
             try frames.append(self.temporary(), arms);
         }
         while (frames.pop()) |arms| try self.code.closeIf(arms);
-        return .{ .register = try self.code.load(result), .value_type = answer, .provenance = .view };
+        return .{
+            .register = try self.code.load(result),
+            .value_type = answer,
+            .provenance = .view,
+            // `Method(n)` is the other half of the `.enum_name` pair
+            // (nodes.ResolvedCallee): same chain, same reload, told
+            // apart by the result type.  The operand is the written
+            // number, post-widening.
+            .node = try self.recordCallNode(
+                .{ .enum_name = enum_index },
+                &.{.{ .node = widened.node, .slot = 0 }},
+                false,
+                answer,
+                span,
+            ),
+        };
     }
 
     fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Typed {
@@ -11371,7 +11775,7 @@ pub const FunctionBuilder = struct {
         // which is a different act from printing a number, and the one
         // an f-string hole performs for a reader who wrote none.
         if (value.value_type == .enumeration) {
-            if (produces == .string) return self.lowerEnumName(value);
+            if (produces == .string) return self.lowerEnumName(value, call.span);
             return self.lowerEnumToNumber(call, value, produces);
         }
         // `string(u)` is the member's **name**, by the enum mechanism
@@ -11379,13 +11783,16 @@ pub const FunctionBuilder = struct {
         // formatted: that is a formatting protocol, which is a
         // different feature, refused here by being absent.
         if (value.value_type == .variant) {
-            if (produces == .string) return self.lowerVariantName(value);
+            if (produces == .string) return self.lowerVariantName(value, call.span);
             return self.failConvert(call, value);
         }
         // `string(f)` is the function's **name** (docs/FUNCTIONS.md
         // D3) — the enum arm above, one type later, and the same act:
         // a value that is a number underneath answers with the word it
-        // stands for.
+        // stands for.  Recorded as the `function_name` intrinsic it
+        // resolved to, not as a `.conversion`: the name is a
+        // borrowless constant of the program, where conversion to
+        // string means fresh bytes (the section comment above).
         if (value.value_type == .function and produces == .string) {
             const arguments = try self.arena().alloc(Register, 1);
             arguments[0] = value.register;
@@ -11395,10 +11802,21 @@ pub const FunctionBuilder = struct {
                     .string,
                 ),
                 .value_type = .string,
+                .node = try self.recordCallNode(
+                    .{ .intrinsic = .function_name },
+                    &.{.{ .node = value.node, .slot = 0 }},
+                    false,
+                    .string,
+                    call.span,
+                ),
             };
         }
         if (produces == .string) {
             switch (value.value_type) {
+                // The identity: `string(s)` emits nothing and answers
+                // the operand whole, node included — no call node, so
+                // `nodes.provenance` never claims fresh bytes an
+                // identity does not make (the section comment above).
                 .string => return value,
                 .byte, .short, .int, .long, .half, .float, .double, .boolean => {},
                 .heap => {
@@ -11424,7 +11842,18 @@ pub const FunctionBuilder = struct {
             );
             // Fresh bytes nothing parked: the statement's end reclaims
             // them unless a place adopts them (docs/STRINGS.md).
-            const answer: Typed = .{ .register = made, .value_type = .string, .provenance = .fresh };
+            const answer: Typed = .{
+                .register = made,
+                .value_type = .string,
+                .provenance = .fresh,
+                .node = try self.recordCallNode(
+                    .{ .conversion = .string },
+                    &.{.{ .node = value.node, .slot = 0 }},
+                    false,
+                    .string,
+                    call.span,
+                ),
+            };
             try self.parkFreshStorage(answer);
             return answer;
         }
@@ -11444,11 +11873,20 @@ pub const FunctionBuilder = struct {
             .double => .double,
             .boolean, .string, .list, .map, .array, .builder, .file, .task => unreachable, // answered above
         };
+        // The identity again: nothing emitted, the operand's value and
+        // node pass through whole (the section comment above).
         if (value.value_type.eql(target)) return value;
         if (!value.value_type.isNumeric()) return self.failConvert(call, value);
         return .{
             .register = try self.code.emit(.{ .convert = value.register }, target),
             .value_type = target,
+            .node = try self.recordCallNode(
+                .{ .conversion = target },
+                &.{.{ .node = value.node, .slot = 0 }},
+                false,
+                target,
+                call.span,
+            ),
         };
     }
 
@@ -11477,10 +11915,18 @@ pub const FunctionBuilder = struct {
             .double => .double,
             .boolean, .string, .list, .map, .array, .builder, .file, .task => unreachable, // answered by the caller
         };
-        _ = call;
         return .{
             .register = try self.code.emit(.{ .convert = value.register }, target),
             .value_type = target,
+            // The same node shape as the numeric constructors: one
+            // `.conversion` call whose operand happens to be an enum.
+            .node = try self.recordCallNode(
+                .{ .conversion = target },
+                &.{.{ .node = value.node, .slot = 0 }},
+                false,
+                target,
+                call.span,
+            ),
         };
     }
 
@@ -11495,7 +11941,17 @@ pub const FunctionBuilder = struct {
     /// MIR, which is the whole of D10's promise — and no table of
     /// pointers has to be emitted into an artifact and kept honest by
     /// something other than the program itself.
-    fn lowerEnumName(self: *FunctionBuilder, value: Typed) Error!?Typed {
+    fn lowerEnumName(self: *FunctionBuilder, value: Typed, span: Span) Error!?Typed {
+        // The chain answers a reload of its result slot; the node is
+        // the `.enum_name` call around the written operand, and the
+        // comparisons stay the emission's own (`debugNodeOnTape`).
+        const node = try self.recordCallNode(
+            .{ .enum_name = value.value_type.enumeration.index },
+            &.{.{ .node = value.node, .slot = 0 }},
+            false,
+            .string,
+            span,
+        );
         const declared = self.analyzer.enums.items[value.value_type.enumeration.index];
         const result = try self.code.spill(
             try self.code.emit(
@@ -11505,7 +11961,7 @@ pub const FunctionBuilder = struct {
             .string,
         );
         if (declared.members.len == 1) {
-            return .{ .register = try self.code.load(result), .value_type = .string, .provenance = .view };
+            return .{ .register = try self.code.load(result), .value_type = .string, .provenance = .view, .node = node };
         }
         const held = try self.code.spill(value.register, value.value_type);
 
@@ -11531,7 +11987,7 @@ pub const FunctionBuilder = struct {
             try frames.append(self.temporary(), arms);
         }
         while (frames.pop()) |arms| try self.code.closeIf(arms);
-        return .{ .register = try self.code.load(result), .value_type = .string, .provenance = .view };
+        return .{ .register = try self.code.load(result), .value_type = .string, .provenance = .view, .node = node };
     }
 
     /// `string(u)` — the member's name (docs/UNION.md D16), by
@@ -11539,7 +11995,17 @@ pub const FunctionBuilder = struct {
     /// tree over the tag answering an interned constant, nothing new
     /// in `libluce_rt`.  The tag is the member *index* (D8), so the
     /// tree compares indices where the enum tree compares values.
-    fn lowerVariantName(self: *FunctionBuilder, value: Typed) Error!?Typed {
+    fn lowerVariantName(self: *FunctionBuilder, value: Typed, span: Span) Error!?Typed {
+        // As `lowerEnumName`, one table over: the `.variant_name`
+        // callee row exists because the two indices name different
+        // tables and one number must not wear both hats.
+        const node = try self.recordCallNode(
+            .{ .variant_name = value.value_type.variant },
+            &.{.{ .node = value.node, .slot = 0 }},
+            false,
+            .string,
+            span,
+        );
         const declared = self.analyzer.variants.items[value.value_type.variant];
         const result = try self.code.spill(
             try self.code.emit(
@@ -11549,7 +12015,7 @@ pub const FunctionBuilder = struct {
             .string,
         );
         if (declared.members.len == 1) {
-            return .{ .register = try self.code.load(result), .value_type = .string, .provenance = .view };
+            return .{ .register = try self.code.load(result), .value_type = .string, .provenance = .view, .node = node };
         }
         const held = try self.code.spill(value.register, value.value_type);
 
@@ -11579,7 +12045,7 @@ pub const FunctionBuilder = struct {
             try frames.append(self.temporary(), arms);
         }
         while (frames.pop()) |arms| try self.code.closeIf(arms);
-        return .{ .register = try self.code.load(result), .value_type = .string, .provenance = .view };
+        return .{ .register = try self.code.load(result), .value_type = .string, .provenance = .view, .node = node };
     }
 
     /// One sentence for all three constructors, naming what each takes.
@@ -11636,9 +12102,18 @@ pub const FunctionBuilder = struct {
             call.arguments[0].value.* == .string_literal)
         {
             if (helpers.ordOfLiteral(call.arguments[0].value.string_literal.decoded)) |codepoint| {
+                // The fold hands lower a constant, so the tree says
+                // constant — the same shape a folded file-scope
+                // constant records (`emitConstant`), at the call's
+                // span.
                 return .{ .value = .{
                     .register = try self.code.emit(.{ .const_long = codepoint }, .long),
                     .value_type = .long,
+                    .node = try self.recordNode(.{ .const_long = .{
+                        .value = codepoint,
+                        .result = .long,
+                        .span = call.span,
+                    } }),
                 } };
             }
         }
@@ -11695,26 +12170,29 @@ pub const FunctionBuilder = struct {
         // builtin names its own operand types and takes no landing;
         // the polymorphic landing is one type for every slot, so a
         // reordered name cannot land a literal differently.
-        const written = written: {
+        const run = written: {
             const landing = if (matched.polymorphic) context.literalLandingType(wanted orelse .none) else null;
             if (landing) |place| {
                 const places = try self.arena().alloc(Type, expressions.len);
                 @memset(places, place);
-                break :written (try self.lowerOperandsInto(expressions, .{ .places = places })) orelse
+                break :written (try self.lowerOperandsIntoTracking(expressions, .{ .places = places }, null)) orelse
                     return .failed;
             }
-            break :written (try self.lowerOperands(expressions)) orelse return .failed;
+            break :written (try self.lowerOperandsIntoTracking(expressions, .nothing, null)) orelse return .failed;
         };
+        const written = run.values;
         // Written values land on the slots they resolved to, and a
         // slot nobody filled takes its default from the table — the
         // constant register the written literal would have been
-        // (docs/ARGS.md D2, D10).
+        // (docs/ARGS.md D2, D10).  A default's node rides its Typed
+        // so a widening below wraps it like any written operand's.
         const arguments = try self.arena().alloc(Typed, surface.len);
         for (written, slots) |value, slot| arguments[slot] = value;
         for (matched.parameters, seen, 0..) |parameter, given, slot| {
             if (given) continue;
             const filled = parameter.default.?;
             arguments[slot] = try self.emitConstantValue(filled.value, filled.value_type);
+            arguments[slot].node = try self.recordDefaultOperand(filled.value, filled.value_type, call.span);
         }
 
         // Argument and result typing per builtin.
@@ -12156,9 +12634,37 @@ pub const FunctionBuilder = struct {
         const registers = try self.arena().alloc(Register, register_count);
         for (arguments, registers[0..arguments.len]) |value, *register| register.* = value.register;
         if (extra_argument) |extra| registers[register_count - 1] = extra;
+        // The recorded batch: written operands in written order — each
+        // read back off the slot it landed on, so the widenings above
+        // ride along — then the defaulted slots, ascending, as they
+        // were materialized.  `free`'s hidden trailing argument is
+        // derived from the operand's own binding and is not an
+        // operand (`debugNodeOnTape`).
+        const entries = try self.arena().alloc(RecordedOperand, arguments.len);
+        for (slots, 0..) |slot, index| {
+            entries[index] = .{
+                .node = arguments[slot].node,
+                .slot = slot,
+                .spilled = run.spilled[index],
+                .copied = run.copied[index],
+            };
+        }
+        var next_entry = written.len;
+        for (matched.parameters, seen, 0..) |_, given, slot| {
+            if (given) continue;
+            entries[next_entry] = .{ .node = arguments[slot].node, .slot = @intCast(slot) };
+            next_entry += 1;
+        }
         const emitted = try self.code.emit(
             .{ .intrinsic = .{ .kind = matched.kind, .arguments = registers } },
             result,
+        );
+        const node = try self.recordCallNode(
+            .{ .intrinsic = matched.kind },
+            entries,
+            matched.kind.isFallible(),
+            result,
+            call.span,
         );
 
         // Two host services can be told no by the world, and one
@@ -12171,7 +12677,7 @@ pub const FunctionBuilder = struct {
             try self.emitTempReleases(0);
             try self.emitScopeReleases(0, &.{});
             try self.code.unwind();
-            return .{ .value = .{ .register = emitted, .value_type = .none } };
+            return .{ .value = .{ .register = emitted, .value_type = .none, .node = node } };
         }
         if (matched.kind.isFallible()) {
             if (!fallible_allowed) {
@@ -12183,12 +12689,13 @@ pub const FunctionBuilder = struct {
                 );
                 return .failed;
             }
-            return .{ .value = try self.openFallible(emitted, result) };
+            return .{ .value = try self.openFallible(emitted, result, node, intrinsicProvenance(matched.kind)) };
         }
         return .{ .value = .{
             .register = emitted,
             .value_type = result,
             .provenance = intrinsicProvenance(matched.kind),
+            .node = node,
         } };
     }
 
