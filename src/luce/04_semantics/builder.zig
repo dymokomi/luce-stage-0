@@ -307,6 +307,31 @@ pub const FunctionBuilder = struct {
     /// asked about where a value came from has to look through the
     /// link, or a call's fresh string would be nobody's to free.
     carried: std.ArrayList(Carried) = .empty,
+    /// The typed tree's statement recorder (05_hir.zig): one frame per
+    /// open block, appended by each statement's arm as it records.  A
+    /// statement whose children carry no node records nothing —
+    /// `lowerBlock` counts the gap — and the final flip is gated on a
+    /// gapless tree.
+    recorded_blocks: std.ArrayList(StatementFrame) = .empty,
+    /// The one-hop hand-over of the `Block` `lowerBlock` just closed:
+    /// the caller that owns the surrounding statement consumes it, the
+    /// way `opened` travels.
+    recorded_block: ?nodes.Block = null,
+    /// The tree's per-body locals table (nodes.Body.locals), recorded
+    /// beside stage 6's as each slot is made — named and hidden alike
+    /// — so the tree's `LocalId`s stay the tape's until the flip walks
+    /// this table instead (05_hir.zig, coupling #5).
+    recorded_locals: std.ArrayList(nodes.LocalDecl) = .empty,
+    /// Statements the walk could not record (nodes.Body.gaps).
+    recorded_gaps: u32 = 0,
+    /// The assembled typed tree of this body (`finishBody`), null until
+    /// the walk completes.  Nothing consumes it yet — the flip's lower
+    /// pass will — and until then it exists so the recording is proven
+    /// live over the whole suite.
+    recorded_body: ?nodes.Body = null,
+
+    /// One open block's recorded statements, while its scope is open.
+    const StatementFrame = struct { statements: std.ArrayList(nodes.Statement) };
 
     /// A fallible call whose failing side is still an empty block.
     const Opened = struct {
@@ -339,6 +364,10 @@ pub const FunctionBuilder = struct {
         /// one owner, so the second store of the same register — if a
         /// shape that does that ever exists — copies.
         taken: bool = false,
+        /// The recorded node of the parked value, when its family has
+        /// converted: the settled ledger is written onto it as `park`
+        /// at `flushTemps` (05_hir.zig, coupling #3).
+        node: ?nodes.NodeRef = null,
     };
 
     fn arena(self: *FunctionBuilder) Allocator {
@@ -360,6 +389,9 @@ pub const FunctionBuilder = struct {
         self.undeclared.deinit(self.temporary());
         self.narrowed.deinit(self.temporary());
         self.carried.deinit(self.temporary());
+        for (self.recorded_blocks.items) |*frame| frame.statements.deinit(self.temporary());
+        self.recorded_blocks.deinit(self.temporary());
+        self.recorded_locals.deinit(self.temporary());
     }
 
     // Narrowing ------------------------------------------------------------
@@ -1277,19 +1309,24 @@ pub const FunctionBuilder = struct {
     /// Park a fresh value in a hidden local so the end of the statement
     /// can release it if nothing adopted it (S3, S19): the object it
     /// carries when `objects` is set, its freshly allocated storage
-    /// when `storage` is (docs/STRINGS.md).
+    /// when `storage` is (docs/STRINGS.md).  `span` is the parked
+    /// expression's, for the hidden slot's row in the tree's locals
+    /// table.
     fn registerTemp(
         self: *FunctionBuilder,
         value: Typed,
         objects: bool,
         storage: bool,
+        span: Span,
     ) Error!void {
         const local = try self.code.park(value.register, value.value_type, objects, storage);
+        try self.recordLocal(null, value.value_type, storage, span);
         try self.temps.append(self.temporary(), .{
             .local = local,
             .register = value.register,
             .objects = objects,
             .storage = storage,
+            .node = value.node,
         });
     }
 
@@ -1330,7 +1367,22 @@ pub const FunctionBuilder = struct {
 
     /// Release and forget the temporaries above `from`: the end of the
     /// statement (or of a condition) that created them.
+    ///
+    /// This is also where the settled ledger reaches the tree
+    /// (coupling #3): every claim an adopting store was going to
+    /// retract has been retracted by now, so what each temporary still
+    /// owns is written onto its value's node as the recorded park —
+    /// including a fully retracted one, whose release frees nothing
+    /// but whose slot was still made and stored.
     fn flushTemps(self: *FunctionBuilder, from: usize) Error!void {
+        for (self.temps.items[from..]) |temp| {
+            const node = temp.node orelse continue;
+            setPark(node, .{
+                .local = temp.local,
+                .objects = temp.objects,
+                .storage = temp.storage,
+            });
+        }
         try self.emitTempReleases(from);
         self.temps.shrinkRetainingCapacity(from);
     }
@@ -1445,6 +1497,7 @@ pub const FunctionBuilder = struct {
         const carries = self.analyzer.carriesObjects(local_type);
         const owns_storage = storage_class == .owns and self.analyzer.ownsStorage(local_type);
         const local = try self.code.addLocal(name, local_type, owns_storage);
+        try self.recordLocal(name, local_type, owns_storage, span);
         const scope = &self.scopes.items[self.scopes.items.len - 1];
         try scope.names.put(self.temporary(), name, .{
             .local = local,
@@ -1486,6 +1539,7 @@ pub const FunctionBuilder = struct {
             try self.code.addInoutLocal("self", receiver_type, owns_storage)
         else
             try self.code.addLocal("self", receiver_type, false);
+        try self.recordLocal("self", receiver_type, writes and owns_storage, span);
         const carries = self.analyzer.carriesObjects(receiver_type);
         const scope = &self.scopes.items[self.scopes.items.len - 1];
         try scope.names.put(self.temporary(), "self", .{
@@ -1657,11 +1711,30 @@ pub const FunctionBuilder = struct {
     // promotion is spelled — the wrap emits a real instruction whose
     // value has a storage answer of its own, so passing the operand's
     // node through would claim the operand's provenance for it.
-    // **Parks stay unrecorded** (`Expression.park` is null throughout):
-    // a park is retracted by a later adopting store (`takeStorage`),
-    // so the honest recording is the settled ledger, which is coupling
-    // #3's store family — recording the pre-retraction guess here
-    // would write a tree the emission then contradicts.
+    //
+    // The fallible family: `try` records `try_call` around the
+    // operand's carried link, `catch` records `catch_expr` with its
+    // fallback filed as a value or a leaving call (the `else`
+    // treatment, at the fallible merge), each carrying the ledger
+    // floor its failing side releases down to, and the statement form
+    // records `guarded` with the attempt whole.  The statements: every
+    // `lowerStatement` arm records its node into the open block frame
+    // (`recordStatement`), blocks close with their scope's releases
+    // (`closeStatementFrame`), and `finishBody` assembles
+    // `nodes.Body` with the locals table `recordLocal` mirrors row
+    // for row off stage 6's (coupling #5).
+    //
+    // And coupling #3, the store family.  **Every store site records
+    // `ownedForStoreKind`'s decision where it is made** — declare
+    // inits, the four assign shapes, compound forms, return values —
+    // and **parks are recorded settled**: `flushTemps` writes each
+    // temporary's surviving claims onto its value's node after any
+    // adopting store has retracted the storage half, so the tree
+    // carries the ledger's answer, never the pre-retraction guess the
+    // emission then contradicts.  Container element stores at
+    // append/insert and literal fills deliberately record no per-batch
+    // flag: the settled park plus the node-kind provenance *is* the
+    // take-or-copy answer there.
 
     /// Record one node of the typed tree.  Nodes live in the compile
     /// arena beside the tape they mirror — `self.code` records through
@@ -1763,6 +1836,123 @@ pub const FunctionBuilder = struct {
             slot.* = .{ .node = value.node.?, .spilled = was_spilled, .copied = was_copied };
         }
         return run;
+    }
+
+    /// Open one statement frame: the recorded statements of the block
+    /// whose scope the caller just pushed.
+    fn openStatementFrame(self: *FunctionBuilder) Error!void {
+        try self.recorded_blocks.append(self.temporary(), .{ .statements = .empty });
+    }
+
+    /// How many statements the innermost open frame holds — the number
+    /// `lowerBlock` reads around each statement to count the gaps.
+    fn recordedStatementCount(self: *const FunctionBuilder) usize {
+        const frames = self.recorded_blocks.items;
+        return frames[frames.len - 1].statements.items.len;
+    }
+
+    /// Append one recorded statement to the innermost open frame.
+    fn recordStatement(self: *FunctionBuilder, statement: nodes.Statement) Error!void {
+        std.debug.assert(self.recorded_blocks.items.len != 0);
+        const frame = &self.recorded_blocks.items[self.recorded_blocks.items.len - 1];
+        try frame.statements.append(self.temporary(), statement);
+    }
+
+    /// Close the innermost frame into a recorded `Block`, with the
+    /// innermost scope's releases in emission order — reverse
+    /// declaration order, exactly `emitScopeEnd`'s, read from the same
+    /// list at the same moment so the two cannot disagree.
+    fn closeStatementFrame(self: *FunctionBuilder, span: Span) Error!nodes.Block {
+        var frame = self.recorded_blocks.pop().?;
+        defer frame.statements.deinit(self.temporary());
+        const owned = self.scopes.items[self.scopes.items.len - 1].owned.items;
+        const releases = try self.arena().alloc(nodes.Release, owned.len);
+        for (releases, 0..) |*slot, index| {
+            const release = owned[owned.len - 1 - index];
+            slot.* = .{ .local = release.local, .objects = release.objects, .storage = release.storage };
+        }
+        return .{
+            .statements = try self.arena().dupe(nodes.Statement, frame.statements.items),
+            .releases = releases,
+            .span = span,
+        };
+    }
+
+    /// Close a frame that captured exactly one statement — the guarded
+    /// form's attempt — answering it, or null when its family left a
+    /// gap.  No scope belongs to this frame, so there are no releases
+    /// to read.
+    fn closeCaptureFrame(self: *FunctionBuilder) ?nodes.Statement {
+        var frame = self.recorded_blocks.pop().?;
+        defer frame.statements.deinit(self.temporary());
+        if (frame.statements.items.len != 1) return null;
+        return frame.statements.items[0];
+    }
+
+    /// Record one slot of the tree's locals table (nodes.Body.locals)
+    /// beside the stage-6 local the caller just made — the same row in
+    /// the same order, which is what lets the tree's `LocalId`s be the
+    /// tape's (05_hir.zig, coupling #5).  In Debug the lockstep is
+    /// asserted here, row by row, so a slot-making site this walk
+    /// forgot to mirror fails the suite instead of drifting silently.
+    fn recordLocal(
+        self: *FunctionBuilder,
+        name: ?[]const u8,
+        local_type: Type,
+        owns_storage: bool,
+        span: Span,
+    ) Error!void {
+        try self.recorded_locals.append(self.temporary(), .{
+            .name = name,
+            .local_type = local_type,
+            .owns_storage = owns_storage,
+            .span = span,
+        });
+        if (debug_checks) {
+            // Row-for-row lockstep with stage 6's table: a helper that
+            // makes several slots at once (`openIteration`) records
+            // them one after the other, so the check is against the
+            // row *at this record's own index* — never ahead of the
+            // tape, and `finishBody` asserts the counts meet.
+            const index = self.recorded_locals.items.len - 1;
+            const table = self.code.locals.items;
+            std.debug.assert(index < table.len);
+            const row = table[index];
+            std.debug.assert(row.local_type.eql(local_type));
+            std.debug.assert(row.owns_storage == owns_storage);
+            if (name) |written| std.debug.assert(std.mem.eql(u8, row.name, written));
+        }
+    }
+
+    /// Write the settled ledger onto a parked value's node (S3): the
+    /// hidden slot and which of its two claims the statement's end
+    /// releases — after any adopting store has retracted the storage
+    /// half (coupling #3), which is why this runs at `flushTemps` and
+    /// never at the park.
+    fn setPark(node: nodes.NodeRef, parked: nodes.Park) void {
+        switch (node.*) {
+            inline else => |*payload| payload.park = parked,
+        }
+    }
+
+    /// Assemble the typed tree's `Body` from the walk that just
+    /// finished: the body block's statements and releases, the locals
+    /// table, and the gap count the flip gates on.  Called by
+    /// `lowerFunction` once the body block is lowered; nothing
+    /// consumes the result yet — the flip's lower pass will.
+    pub fn finishBody(self: *FunctionBuilder) Error!void {
+        const block = self.recorded_block orelse return;
+        if (debug_checks) {
+            // Coupling #5's lockstep, at the end where a missed
+            // slot-making site cannot hide behind a later one.
+            std.debug.assert(self.recorded_locals.items.len == self.code.locals.items.len);
+        }
+        self.recorded_body = .{
+            .statements = block.statements,
+            .releases = block.releases,
+            .locals = try self.arena().dupe(nodes.LocalDecl, self.recorded_locals.items),
+            .gaps = self.recorded_gaps,
+        };
     }
 
     /// **Migration scaffolding, Debug only** (the seam's landing
@@ -2020,6 +2210,32 @@ pub const FunctionBuilder = struct {
             },
             .function_value => |named| std.debug.assert(instruction.const_function == named.function),
             .lambda_ref => |synthesized| std.debug.assert(instruction.const_function == synthesized.function),
+            .try_call => |wrapped| {
+                // `try` hands back exactly what the call answered: the
+                // carried reload for a value, the call itself for a
+                // callee answering nothing.  The result is the call's
+                // own, and the failing side's blocks stay the
+                // emission's until the flip makes lower spell them.
+                switch (wrapped.call.*) {
+                    .carried_get => |carried| std.debug.assert(instruction.local_get == carried.slot),
+                    .call => std.debug.assert(wrapped.result == .none),
+                    else => unreachable, // nothing else stands behind a try
+                }
+                std.debug.assert(wrapped.call.result().eql(wrapped.result));
+            },
+            .catch_expr => |caught| {
+                // Both sides store into a hidden merge slot and the
+                // answer is its reload, so the honestly assertable
+                // fact is the slot's type — the arms, the branch and
+                // the merge live in blocks the node does not point at.
+                // A `.none` call has no slot, and the "value" is the
+                // call itself.
+                std.debug.assert(caught.call.* == .carried_get or caught.call.* == .call);
+                if (caught.result != .none) {
+                    std.debug.assert(instruction == .local_get);
+                    std.debug.assert(self.code.localType(instruction.local_get).eql(caught.result));
+                }
+            },
             // A folded constant materializes in whatever shape its
             // value takes; the type and provenance checks above are
             // the whole of what the node duplicates.  `absent` inlines
@@ -2065,6 +2281,13 @@ pub const FunctionBuilder = struct {
             if (!temp.storage) continue;
             if (!temp.disownable or temp.objects) return false;
             self.code.disownStorage(temp.local);
+            // The tree's locals table mirrors the retraction: the
+            // settled answer is that the place, not the slot, owns the
+            // storage (coupling #3), and the recorded row is stage 6's
+            // row (coupling #5).
+            if (temp.local < self.recorded_locals.items.len) {
+                self.recorded_locals.items[temp.local].owns_storage = false;
+            }
             // Emptied rather than forgotten: the record is what keeps
             // one value from being parked twice, and every index into
             // this list is a floor some other unwinding path recorded.
@@ -2076,23 +2299,55 @@ pub const FunctionBuilder = struct {
         return true;
     }
 
+    /// A store's decided form (nodes.StoreKind) beside the register
+    /// the store takes.  The decision is *made* here — the one place —
+    /// and the store sites the statement tree spells it on record the
+    /// kind, so lower emits the decided form once instead of
+    /// performing surgery on emitted code (05_hir.zig, coupling #3).
+    const StoredValue = struct { register: Register, kind: nodes.StoreKind };
+
     /// The register a store site is handed: this one when its storage
-    /// can move into the place, a copy of it otherwise.
+    /// can move into the place, a copy of it otherwise — and which of
+    /// the three that was.
     ///
     /// **Every store goes through here** — a binding, a reassignment, a
     /// list element, a map value, a struct field, a return — because
     /// `libluce_rt` never copies at a store: the copy is written once,
     /// here, where the decision that elides it can be seen
     /// (docs/STRINGS.md).
-    fn ownedForStore(self: *FunctionBuilder, value: Typed) Error!Register {
-        if (!self.analyzer.ownsStorage(value.value_type)) return value.register;
+    fn ownedForStoreKind(self: *FunctionBuilder, value: Typed) Error!StoredValue {
+        if (!self.analyzer.ownsStorage(value.value_type)) {
+            return .{ .register = value.register, .kind = .plain };
+        }
         if (debug_checks) {
             // Migration scaffolding (05_hir.zig, coupling #2): the
             // stamped provenance must say what the tape would have.
             std.debug.assert(value.provenance == self.debugProvenanceOnTape(value.register));
         }
-        if (self.takeStorage(value)) return value.register;
-        return self.code.ownStorage(value.register);
+        if (self.takeStorage(value)) {
+            // Move-instead-of-copy: the place adopts storage this
+            // statement made and nothing else claims (docs/STRINGS.md).
+            if (debug_checks) std.debug.assert(value.provenance == .fresh);
+            return .{ .register = value.register, .kind = .take };
+        }
+        const copied = try self.code.ownStorage(value.register);
+        if (debug_checks) {
+            // Migration oracle (coupling #3): `copy` is exactly the
+            // decision that emits `own_storage`, and the other two
+            // kinds emit nothing — the one 1:1 fact a recorded
+            // StoreKind can be held to on the tape.
+            const instruction = self.code.instructions.items[copied];
+            std.debug.assert(instruction.intrinsic.kind == .own_storage);
+            std.debug.assert(instruction.intrinsic.arguments[0] == value.register);
+        }
+        return .{ .register = copied, .kind = .copy };
+    }
+
+    /// `ownedForStoreKind` for the sites whose statement family does
+    /// not spell the decision — the kind is still decided (and parked
+    /// ledgers settled) identically.
+    fn ownedForStore(self: *FunctionBuilder, value: Typed) Error!Register {
+        return (try self.ownedForStoreKind(value)).register;
     }
 
     /// Whether a value of this type can be text in its own right —
@@ -2108,19 +2363,28 @@ pub const FunctionBuilder = struct {
     }
 
     /// Store into a local, taking or copying the value's storage in
-    /// when the local is the one that will have to give it back.
+    /// when the local is the one that will have to give it back —
+    /// answering which of the three the store was, for the statement
+    /// families that record it.
+    fn storeOwnedKind(self: *FunctionBuilder, local: LocalId, value: Typed) Error!nodes.StoreKind {
+        if (!self.code.localOwnsStorage(local)) {
+            try self.code.store(local, value.register);
+            return .plain;
+        }
+        const stored = try self.ownedForStoreKind(value);
+        try self.code.store(local, stored.register);
+        return stored.kind;
+    }
+
+    /// `storeOwnedKind` for the sites that do not spell the decision.
     fn storeOwned(self: *FunctionBuilder, local: LocalId, value: Typed) Error!void {
-        const register = if (self.code.localOwnsStorage(local))
-            try self.ownedForStore(value)
-        else
-            value.register;
-        try self.code.store(local, register);
+        _ = try self.storeOwnedKind(local, value);
     }
 
     /// Park a freshly allocated string or struct value that was not
     /// produced through `lowerExpression` — a compound assignment's
     /// concatenation, say — so the statement's end reclaims it.
-    fn parkFreshStorage(self: *FunctionBuilder, value: Typed) Error!void {
+    fn parkFreshStorage(self: *FunctionBuilder, value: Typed, span: Span) Error!void {
         if (!self.analyzer.ownsStorage(value.value_type)) return;
         if (debug_checks) {
             // Migration scaffolding (05_hir.zig, coupling #2): the
@@ -2129,7 +2393,7 @@ pub const FunctionBuilder = struct {
         }
         if (value.provenance != .fresh) return;
         if (self.parkedForStorage(value.register)) return;
-        try self.registerTemp(value, false, true);
+        try self.registerTemp(value, false, true, span);
     }
 
     /// How deep `splitsBlocks` will look before answering yes on
@@ -3569,11 +3833,12 @@ pub const FunctionBuilder = struct {
                 // operand's node stays the written expression
                 // (nodes.OperandBatch's pre-copy convention).
                 copied[index] = true;
-                try self.parkFreshStorage(values[index]);
+                try self.parkFreshStorage(values[index], expression.span());
             }
             spills[index] = null;
             if (later_splits[index] and values[index].value_type != .none) {
                 spills[index] = try self.code.spill(values[index].register, values[index].value_type);
+                try self.recordLocal(null, values[index].value_type, false, expression.span());
             }
         }
         for (spills, 0..) |spill, index| {
@@ -3596,15 +3861,22 @@ pub const FunctionBuilder = struct {
 
     pub fn lowerBlock(self: *FunctionBuilder, block: ast.Block) Error!void {
         try self.pushScope();
+        try self.openStatementFrame();
         try self.refuseUnreachable(block);
         for (block.statements) |statement| {
             // Fresh objects nothing adopted die with their statement
             // (S3); the release is a no-op for everything adopted.
             const temps_floor = self.temps.items.len;
+            const recorded_floor = self.recordedStatementCount();
             try self.lowerStatement(statement);
             try self.flushTemps(temps_floor);
+            // A statement that recorded nothing — a child's family
+            // answers no node yet, or a diagnostic abandoned it — is a
+            // gap the flip gates on (nodes.Body.gaps).
+            if (self.recordedStatementCount() == recorded_floor) self.recorded_gaps += 1;
         }
         try self.emitScopeEnd();
+        self.recorded_block = try self.closeStatementFrame(block.span);
         self.popScope();
     }
 
@@ -3672,6 +3944,7 @@ pub const FunctionBuilder = struct {
                         binding.name,
                         binding.name_span,
                         binding.annotation.?,
+                        binding.span,
                     );
                 }
             },
@@ -3694,6 +3967,11 @@ pub const FunctionBuilder = struct {
                 try self.emitTempReleases(frame.temps_depth);
                 try self.emitScopeReleases(frame.scope_depth, &.{});
                 try self.code.jump(frame.exit_block);
+                try self.recordStatement(.{ .break_ = .{
+                    .unwind = @intCast(self.scopes.items.len - frame.scope_depth),
+                    .temps_floor = @intCast(frame.temps_depth),
+                    .span = broke.span,
+                } });
             },
             .continue_statement => |continued| {
                 if (self.loops.items.len == 0) {
@@ -3704,9 +3982,21 @@ pub const FunctionBuilder = struct {
                 try self.emitTempReleases(frame.temps_depth);
                 try self.emitScopeReleases(frame.scope_depth, &.{});
                 try self.code.jump(frame.continue_block);
+                try self.recordStatement(.{ .continue_ = .{
+                    .unwind = @intCast(self.scopes.items.len - frame.scope_depth),
+                    .temps_floor = @intCast(frame.temps_depth),
+                    .span = continued.span,
+                } });
             },
             .expression => |expression| {
-                _ = try self.lowerExpression(expression.value, true);
+                if (try self.lowerExpression(expression.value, true)) |value| {
+                    if (value.node) |made| {
+                        try self.recordStatement(.{ .expression = .{
+                            .value = made,
+                            .span = expression.span,
+                        } });
+                    }
+                }
             },
             .guarded => |guarded| try self.lowerGuarded(guarded),
             .match => |matched| try self.lowerMatch(matched),
@@ -3819,6 +4109,7 @@ pub const FunctionBuilder = struct {
         // The scrutinee is read once and carried in a slot: a register
         // never crosses a block, and every arm's test is a block.
         const held = try self.code.spill(scrutinee.register, scrutinee.value_type);
+        try self.recordLocal(null, scrutinee.value_type, false, matched.scrutinee.span());
         try self.flushTemps(temps_floor);
 
         // Facts an arm proves are the arm's own, and one that assigns
@@ -3837,9 +4128,11 @@ pub const FunctionBuilder = struct {
         const fallthrough = matched.else_block == null;
         const tested = if (fallthrough) matched.arms.len - 1 else matched.arms.len;
 
+        const recorded_arms = try self.arena().alloc(nodes.Statement.Match.Arm, matched.arms.len);
+        var else_recorded: ?nodes.Block = null;
         var frames: std.ArrayList(mir.build.Lowering.Conditional) = .empty;
         defer frames.deinit(self.temporary());
-        for (matched.arms[0..tested], chosen[0..tested]) |arm, member| {
+        for (matched.arms[0..tested], chosen[0..tested], recorded_arms[0..tested]) |arm, member, *recorded_arm| {
             const value = try self.code.emit(
                 .{ .const_long = declared.members[member].value },
                 scrutinee.value_type,
@@ -3854,6 +4147,7 @@ pub const FunctionBuilder = struct {
             try self.narrowRestore(entry);
             self.rootRestore(root_entry);
             try self.lowerBlock(arm.body);
+            recorded_arm.* = .{ .member = member, .bindings = &.{}, .body = self.recorded_block.? };
             if (!helpers.alwaysExits(arm.body)) {
                 if (has_continuing_root) self.rootJoinInto(joined_roots) else self.rootCaptureInto(joined_roots);
                 has_continuing_root = true;
@@ -3865,6 +4159,7 @@ pub const FunctionBuilder = struct {
         self.rootRestore(root_entry);
         if (matched.else_block) |otherwise| {
             try self.lowerBlock(otherwise);
+            else_recorded = self.recorded_block.?;
             if (!helpers.alwaysExits(otherwise)) {
                 if (has_continuing_root) self.rootJoinInto(joined_roots) else self.rootCaptureInto(joined_roots);
                 has_continuing_root = true;
@@ -3872,6 +4167,11 @@ pub const FunctionBuilder = struct {
         } else {
             const last = matched.arms[matched.arms.len - 1].body;
             try self.lowerBlock(last);
+            recorded_arms[matched.arms.len - 1] = .{
+                .member = chosen[matched.arms.len - 1],
+                .bindings = &.{},
+                .body = self.recorded_block.?,
+            };
             if (!helpers.alwaysExits(last)) {
                 if (has_continuing_root) self.rootJoinInto(joined_roots) else self.rootCaptureInto(joined_roots);
                 has_continuing_root = true;
@@ -3883,6 +4183,16 @@ pub const FunctionBuilder = struct {
         for (matched.arms) |arm| self.widenAssignedIn(arm.body);
         if (matched.else_block) |otherwise| self.widenAssignedIn(otherwise);
         if (has_continuing_root) self.rootRestore(joined_roots) else self.rootRestore(root_entry);
+
+        if (scrutinee.node) |made| {
+            try self.recordStatement(.{ .match = .{
+                .scrutinee = made,
+                .held = held,
+                .arms = recorded_arms,
+                .else_body = else_recorded,
+                .span = matched.span,
+            } });
+        }
     }
 
     /// `match j:` over a union — ENUMS R1 extended, not forked
@@ -3956,6 +4266,7 @@ pub const FunctionBuilder = struct {
         // The scrutinee is read once and carried in a slot: a register
         // never crosses a block, and every arm's test is a block.
         const held = try self.code.spill(scrutinee.register, scrutinee.value_type);
+        try self.recordLocal(null, scrutinee.value_type, false, matched.scrutinee.span());
         try self.flushTemps(temps_floor);
 
         // What an arm's payload aliases, for S23's sentence: the
@@ -3980,9 +4291,12 @@ pub const FunctionBuilder = struct {
         const fallthrough = matched.else_block == null;
         const tested = if (fallthrough) matched.arms.len - 1 else matched.arms.len;
 
+        const recorded_arms = try self.arena().alloc(nodes.Statement.Match.Arm, matched.arms.len);
+        var arms_recorded = true;
+        var else_recorded: ?nodes.Block = null;
         var frames: std.ArrayList(mir.build.Lowering.Conditional) = .empty;
         defer frames.deinit(self.temporary());
-        for (matched.arms[0..tested], chosen[0..tested]) |arm, member_index| {
+        for (matched.arms[0..tested], chosen[0..tested], recorded_arms[0..tested]) |arm, member_index, *recorded_arm| {
             const tag = try self.code.emit(
                 .{ .variant_tag = .{ .target = try self.code.load(held) } },
                 .long,
@@ -3997,7 +4311,9 @@ pub const FunctionBuilder = struct {
             const arms = try self.code.openIf(same, true);
             try self.narrowRestore(entry);
             self.rootRestore(root_entry);
-            try self.lowerVariantArm(variant_index, member_index, arm, held, owner_name);
+            if (try self.lowerVariantArm(variant_index, member_index, arm, held, owner_name)) |lowered_arm| {
+                recorded_arm.* = lowered_arm;
+            } else arms_recorded = false;
             if (!helpers.alwaysExits(arm.body)) {
                 if (has_continuing_root) self.rootJoinInto(joined_roots) else self.rootCaptureInto(joined_roots);
                 has_continuing_root = true;
@@ -4009,13 +4325,16 @@ pub const FunctionBuilder = struct {
         self.rootRestore(root_entry);
         if (matched.else_block) |otherwise| {
             try self.lowerBlock(otherwise);
+            else_recorded = self.recorded_block.?;
             if (!helpers.alwaysExits(otherwise)) {
                 if (has_continuing_root) self.rootJoinInto(joined_roots) else self.rootCaptureInto(joined_roots);
                 has_continuing_root = true;
             }
         } else {
             const last = matched.arms[matched.arms.len - 1];
-            try self.lowerVariantArm(variant_index, chosen[matched.arms.len - 1], last, held, owner_name);
+            if (try self.lowerVariantArm(variant_index, chosen[matched.arms.len - 1], last, held, owner_name)) |lowered_arm| {
+                recorded_arms[matched.arms.len - 1] = lowered_arm;
+            } else arms_recorded = false;
             if (!helpers.alwaysExits(last.body)) {
                 if (has_continuing_root) self.rootJoinInto(joined_roots) else self.rootCaptureInto(joined_roots);
                 has_continuing_root = true;
@@ -4027,6 +4346,18 @@ pub const FunctionBuilder = struct {
         for (matched.arms) |arm| self.widenAssignedIn(arm.body);
         if (matched.else_block) |otherwise| self.widenAssignedIn(otherwise);
         if (has_continuing_root) self.rootRestore(joined_roots) else self.rootRestore(root_entry);
+
+        if (arms_recorded) {
+            if (scrutinee.node) |made| {
+                try self.recordStatement(.{ .match = .{
+                    .scrutinee = made,
+                    .held = held,
+                    .arms = recorded_arms,
+                    .else_body = else_recorded,
+                    .span = matched.span,
+                } });
+            }
+        }
     }
 
     /// One arm's binding list against its member's field list
@@ -4106,6 +4437,10 @@ pub const FunctionBuilder = struct {
     /// is an alias of what the scrutinee owns (D10): reading through
     /// it is free, keeping it needs `copy`, and a value payload is an
     /// ordinary copy taken by the store.
+    ///
+    /// Answers the recorded arm for the match node — the member, the
+    /// bindings with their payload reads, the body — or null when a
+    /// binding could not be declared, which gaps the whole match.
     fn lowerVariantArm(
         self: *FunctionBuilder,
         variant_index: u32,
@@ -4113,12 +4448,14 @@ pub const FunctionBuilder = struct {
         arm: ast.MatchArm,
         held: LocalId,
         owner_name: ?[]const u8,
-    ) Error!void {
+    ) Error!?nodes.Statement.Match.Arm {
         if (arm.bindings.len == 0) {
             try self.lowerBlock(arm.body);
-            return;
+            return .{ .member = member_index, .bindings = &.{}, .body = self.recorded_block.? };
         }
         const member = self.analyzer.variants.items[variant_index].members[member_index];
+        const recorded_bindings = try self.arena().alloc(nodes.Statement.Match.Binding, member.fields.len);
+        var bindings_recorded = true;
         try self.pushScope();
         for (member.fields, 0..) |field, field_index| {
             // The binding's own span, for "already declared" messages
@@ -4163,15 +4500,22 @@ pub const FunctionBuilder = struct {
                 false,
                 .alias,
                 declared_at,
-            )) orelse continue;
+            )) orelse {
+                bindings_recorded = false;
+                continue;
+            };
+            recorded_bindings[field_index] = .{ .local = local, .payload = value.node.? };
             try self.storeOwned(local, value);
             if (owner_name != null) {
                 if (self.findLocal(field.name)) |bound| bound.info.owner_name = owner_name;
             }
         }
         try self.lowerBlock(arm.body);
+        const body = self.recorded_block.?;
         try self.emitScopeEnd();
         self.popScope();
+        if (!bindings_recorded) return null;
+        return .{ .member = member_index, .bindings = recorded_bindings, .body = body };
     }
 
     /// The members a union match with no `else` left out, named — all
@@ -4367,7 +4711,7 @@ pub const FunctionBuilder = struct {
             name_span,
         )) orelse return self.forgetName(name);
         self.setRoot(local, value.root);
-        try self.storeOwned(local, value);
+        const store = try self.storeOwnedKind(local, value);
         if (owns) {
             try self.code.bind(local, value.register);
         } else if (value_expression.* == .name) {
@@ -4379,6 +4723,14 @@ pub const FunctionBuilder = struct {
         // fact, and the reader should not have to test what they just
         // wrote.
         if (widened) try self.narrow(local);
+        if (value.node) |made| {
+            try self.recordStatement(.{ .declare = .{
+                .local = local,
+                .value = made,
+                .store = store,
+                .span = span,
+            } });
+        }
     }
 
     const ReceivedShape = struct { value: Typed, layout: StructLayout };
@@ -4439,6 +4791,9 @@ pub const FunctionBuilder = struct {
         // (S16 per value, S1 per name, S45).  The struct the values
         // rode in is a statement temporary and dies with the
         // statement; it owns nothing once the fields are out.
+        const locals = try self.arena().alloc(LocalId, bind.names.len);
+        const stores = try self.arena().alloc(nodes.StoreKind, bind.names.len);
+        var complete = true;
         for (bind.names, received.layout.fields, 0..) |name, field, position| {
             const held = try self.code.emit(.{ .struct_get = .{
                 .target = received.value.register,
@@ -4452,17 +4807,31 @@ pub const FunctionBuilder = struct {
                 bind.mutable,
                 if (carried) .owned else .alias,
                 name.span,
-            )) orelse continue;
+            )) orelse {
+                complete = false;
+                continue;
+            };
             // A field read is a view into the shape's run, so the
             // store copies it out (docs/STRINGS.md).
             const stored: Typed = .{ .register = held, .value_type = field.field_type, .provenance = .view };
-            try self.storeOwned(local, stored);
+            locals[position] = local;
+            stores[position] = try self.storeOwnedKind(local, stored);
             if (carried) try self.code.bind(local, held);
         }
         // The shape itself never owned the objects its fields carried —
         // each name did, from the moment it was bound — so the
         // temporary must not release them a second time.
         try self.disownShape(received.value.register);
+        if (complete) {
+            if (received.value.node) |made| {
+                try self.recordStatement(.{ .destructure = .{
+                    .locals = locals,
+                    .value = made,
+                    .stores = stores,
+                    .span = bind.span,
+                } });
+            }
+        }
     }
 
     const ExistingTarget = struct {
@@ -4561,6 +4930,7 @@ pub const FunctionBuilder = struct {
 
         const prepared = try self.temporary().alloc(PreparedTarget, targets.len);
         defer self.temporary().free(prepared);
+        const stores = try self.arena().alloc(nodes.StoreKind, targets.len);
         for (targets, received.layout.fields, 0..) |target, field, position| {
             const held = try self.code.emit(.{ .struct_get = .{
                 .target = received.value.register,
@@ -4587,10 +4957,13 @@ pub const FunctionBuilder = struct {
                 );
                 return;
             };
-            const register = if (target.owns_storage)
-                try self.ownedForStore(fitted)
-            else
-                fitted.register;
+            var store: nodes.StoreKind = .plain;
+            const register = if (target.owns_storage) staged: {
+                const stored = try self.ownedForStoreKind(fitted);
+                store = stored.kind;
+                break :staged stored.register;
+            } else fitted.register;
+            stores[position] = store;
             prepared[position] = .{
                 .target = target,
                 .register = register,
@@ -4614,6 +4987,16 @@ pub const FunctionBuilder = struct {
         // The targets now own every object the return shape carried;
         // its statement temporary keeps only its own field storage.
         try self.disownShape(received.value.register);
+        if (received.value.node) |made| {
+            const target_locals = try self.arena().alloc(LocalId, targets.len);
+            for (targets, target_locals) |target, *slot| slot.* = target.local;
+            try self.recordStatement(.{ .assign_many = .{
+                .targets = target_locals,
+                .value = made,
+                .stores = stores,
+                .span = assign.span,
+            } });
+        }
     }
 
     /// A destructured call's struct temporary hands its objects to the
@@ -4653,6 +5036,7 @@ pub const FunctionBuilder = struct {
         name: []const u8,
         name_span: Span,
         written: ast.TypeName,
+        span: Span,
     ) Error!void {
         const declared = (try self.analyzer.resolveType(self.module, written)) orelse
             return self.forgetName(name);
@@ -4674,11 +5058,19 @@ pub const FunctionBuilder = struct {
         // scope owns whatever a later assignment fills in (S36, S40).
         const local = (try self.declareLocal(name, declared, true, .owned, name_span)) orelse
             return self.forgetName(name);
-        try self.storeOwned(local, .{
+        const store = try self.storeOwnedKind(local, .{
             .register = zero,
             .value_type = declared,
             .provenance = zeroProvenance(declared),
         });
+        // A null value is the recorded form of the zero fill (S40):
+        // lower re-derives the zero from the slot's type.
+        try self.recordStatement(.{ .declare = .{
+            .local = local,
+            .value = null,
+            .store = store,
+            .span = span,
+        } });
     }
 
     // Assignment, and the three shapes of place it can name -------------------
@@ -4802,9 +5194,13 @@ pub const FunctionBuilder = struct {
         // Descend, reading the current value at each step and caching
         // what the rebuild needs.
         const accessors = try self.arena().alloc(mir.build.Lowering.Step, steps.items.len);
+        // The recorded mirror of the descent (nodes.Place.Chain): one
+        // step per accessor, with subscript nodes pre-rewrite.
+        const recorded_steps = try self.arena().alloc(nodes.Place.Step, steps.items.len);
+        var steps_recorded = true;
         var current = try self.code.load(root_local);
         var current_type = root_type;
-        for (steps.items, accessors) |node, *accessor| {
+        for (steps.items, accessors, recorded_steps) |node, *accessor, *recorded_step| {
             switch (node.*) {
                 .field => |field| {
                     if (current_type != .strukt) {
@@ -4821,6 +5217,7 @@ pub const FunctionBuilder = struct {
                     };
                     if (!try self.fieldReachable(layout_index, field_index, field.span)) return;
                     accessor.* = .{ .field = .{ .parent = current, .layout = layout_index, .field_index = field_index } };
+                    recorded_step.* = .{ .field = .{ .layout = layout_index, .field = field_index } };
                     current = try self.code.emit(.{ .struct_get = .{
                         .target = current,
                         .layout = layout_index,
@@ -4844,6 +5241,14 @@ pub const FunctionBuilder = struct {
                     const subscripts = try self.arena().alloc(Register, lowered.len);
                     for (lowered, subscripts) |value_operand, *slot| slot.* = value_operand.register;
                     accessor.* = .{ .index = .{ .object = current, .subscripts = subscripts } };
+                    const subscript_nodes = try self.arena().alloc(nodes.NodeRef, lowered.len);
+                    recorded_step.* = .{ .index = subscript_nodes };
+                    for (lowered, subscript_nodes) |value_operand, *slot| {
+                        slot.* = value_operand.node orelse {
+                            steps_recorded = false;
+                            break;
+                        };
+                    }
                     // **Always an ordinary read, never a defining
                     // one**, and the parser is what guarantees it: a
                     // target ending in `[...]` becomes an `.index`
@@ -4897,7 +5302,29 @@ pub const FunctionBuilder = struct {
         // The leaf is a store into whatever the chain descended to, so
         // it takes or copies its storage here; every step above it
         // moves the value the step below just built (docs/STRINGS.md).
-        try self.code.rebuild(root_local, accessors, try self.ownedForStore(stored));
+        const stored_leaf = try self.ownedForStoreKind(stored);
+        try self.code.rebuild(root_local, accessors, stored_leaf.register);
+        if (steps_recorded) {
+            if (placed.node) |made| {
+                const place: nodes.Place = .{ .chain = .{ .root = root_local, .steps = recorded_steps } };
+                if (assign.compound) |op| {
+                    try self.recordStatement(.{ .compound_assign = .{
+                        .place = place,
+                        .op = compoundOperation(op),
+                        .value = made,
+                        .store = stored_leaf.kind,
+                        .span = assign.span,
+                    } });
+                } else {
+                    try self.recordStatement(.{ .assign = .{
+                        .place = place,
+                        .value = made,
+                        .store = stored_leaf.kind,
+                        .span = assign.span,
+                    } });
+                }
+            }
+        }
     }
 
     /// The read at the head of a compound store into `object[...]`,
@@ -4945,6 +5372,27 @@ pub const FunctionBuilder = struct {
             .{ .intrinsic = .{ .kind = .index_get, .arguments = arguments } },
             element_type,
         );
+    }
+
+    /// The resolved operator a compound assignment combines under —
+    /// the parser's spellings onto stage 6's vocabulary, spelled once
+    /// for `compoundCombine` and for the recorded statement
+    /// (nodes.Statement.CompoundAssign).
+    fn compoundOperation(op: ast.BinaryOp) mir.BinaryOp {
+        return switch (op) {
+            .add => .add,
+            .subtract => .subtract,
+            .multiply => .multiply,
+            .divide => .divide,
+            .floor_divide => .floor_divide,
+            .modulo => .modulo,
+            .bit_and => .bit_and,
+            .bit_or => .bit_or,
+            .bit_xor => .bit_xor,
+            .shift_left => .shift_left,
+            .shift_right => .shift_right,
+            else => unreachable, // the parser only builds these ten
+        };
     }
 
     /// Combine the current value of a compound-assignment place with
@@ -5016,20 +5464,7 @@ pub const FunctionBuilder = struct {
             },
             else => {},
         }
-        const operation: mir.BinaryOp = switch (op) {
-            .add => .add,
-            .subtract => .subtract,
-            .multiply => .multiply,
-            .divide => .divide,
-            .floor_divide => .floor_divide,
-            .modulo => .modulo,
-            .bit_and => .bit_and,
-            .bit_or => .bit_or,
-            .bit_xor => .bit_xor,
-            .shift_left => .shift_left,
-            .shift_right => .shift_right,
-            else => unreachable, // the parser only builds these ten
-        };
+        const operation = compoundOperation(op);
         // **The combine happens at the type the operator computes at,
         // and the answer comes back to the place's own width** (D5).
         // No operator computes at a storage width, so `b += 1` on a
@@ -5071,7 +5506,7 @@ pub const FunctionBuilder = struct {
         // behind (docs/STRINGS.md).  Parking it makes the statement's
         // end reclaim it either way.
         if (string_concat) {
-            try self.parkFreshStorage(answer);
+            try self.parkFreshStorage(answer, span);
         }
         return answer;
     }
@@ -5209,12 +5644,15 @@ pub const FunctionBuilder = struct {
             stored = (try self.fit(combined, local_type)) orelse return;
         }
         var store = stored.register;
+        var store_kind: nodes.StoreKind = .plain;
         // The copy comes first, because the value being stored may be
         // a view of the storage the release is about to give back:
         // `s = s[1:]` is legal (docs/STRINGS.md).
         const owns_storage = self.code.localOwnsStorage(local);
         if (owns_storage) {
-            store = try self.ownedForStore(stored);
+            const owned = try self.ownedForStoreKind(stored);
+            store = owned.register;
+            store_kind = owned.kind;
         }
         // Reassigning an owning var frees the old object immediately
         // (S5); the very first assignment finds only the null object.
@@ -5233,6 +5671,27 @@ pub const FunctionBuilder = struct {
         }
         info.root = value.root;
         info.revision +%= 1;
+        // The recorded statement: the sugar as written — the compound
+        // form keeps its operator and its right side, and lower spells
+        // the read-combine-narrow (05_hir.zig's own picture).
+        if (assign.compound) |op| {
+            if (value.node) |made| {
+                try self.recordStatement(.{ .compound_assign = .{
+                    .place = .{ .local = local },
+                    .op = compoundOperation(op),
+                    .value = made,
+                    .store = store_kind,
+                    .span = assign.span,
+                } });
+            }
+        } else if (stored.node) |made| {
+            try self.recordStatement(.{ .assign = .{
+                .place = .{ .local = local },
+                .value = made,
+                .store = store_kind,
+                .span = assign.span,
+            } });
+        }
     }
 
     fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast.Assign) Error!void {
@@ -5340,11 +5799,12 @@ pub const FunctionBuilder = struct {
         }
         // The new field is a store into the run `struct_set` builds;
         // the fields it copies out of `current` belong to `current`.
+        const stored_field = try self.ownedForStoreKind(stored);
         const updated = try self.code.emit(.{ .struct_set = .{
             .target = current,
             .layout = layout_index,
             .field = field_index,
-            .value = try self.ownedForStore(stored),
+            .value = stored_field.register,
         } }, local_type);
         // `struct_set` built a whole new value that owns everything in
         // it, copying out of the old one; the old run and its value
@@ -5356,6 +5816,24 @@ pub const FunctionBuilder = struct {
             try self.code.bind(local, stored.register);
         }
         info.revision +%= 1;
+        if (assign.compound) |op| {
+            if (value.node) |made| {
+                try self.recordStatement(.{ .compound_assign = .{
+                    .place = .{ .field = .{ .base = local, .layout = layout_index, .field = field_index } },
+                    .op = compoundOperation(op),
+                    .value = made,
+                    .store = stored_field.kind,
+                    .span = assign.span,
+                } });
+            }
+        } else if (value.node) |made| {
+            try self.recordStatement(.{ .assign = .{
+                .place = .{ .field = .{ .base = local, .layout = layout_index, .field = field_index } },
+                .value = made,
+                .store = stored_field.kind,
+                .span = assign.span,
+            } });
+        }
     }
 
     /// place[i] = v, grid[r, c] = v, m[key] = v.  The base may be any
@@ -5419,8 +5897,39 @@ pub const FunctionBuilder = struct {
         for (values, arguments) |lowered, *slot| slot.* = lowered.register;
         // The element is a store; the key beside it is not — a map
         // looks a key up before it keeps one (docs/STRINGS.md).
-        arguments[arguments.len - 1] = try self.ownedForStore(stored);
+        const stored_element = try self.ownedForStoreKind(stored);
+        arguments[arguments.len - 1] = stored_element.register;
         _ = try self.code.emit(.{ .intrinsic = .{ .kind = .index_set, .arguments = arguments } }, .none);
+        // The recorded place: the container expression and the written
+        // subscripts, pre-rewrite (nodes.Place.Index); the value is
+        // the right side as written, with the compound form keeping
+        // its operator.
+        record: {
+            if (object.node == null) break :record;
+            const subscript_nodes = try self.arena().alloc(nodes.NodeRef, indices.len);
+            for (indices, subscript_nodes) |index_value, *slot| {
+                slot.* = index_value.node orelse break :record;
+            }
+            const place: nodes.Place = .{ .index = .{ .base = object.node.?, .indices = subscript_nodes } };
+            if (assign.compound) |op| {
+                const made = value.node orelse break :record;
+                try self.recordStatement(.{ .compound_assign = .{
+                    .place = place,
+                    .op = compoundOperation(op),
+                    .value = made,
+                    .store = stored_element.kind,
+                    .span = assign.span,
+                } });
+            } else {
+                const made = value.node orelse break :record;
+                try self.recordStatement(.{ .assign = .{
+                    .place = place,
+                    .value = made,
+                    .store = stored_element.kind,
+                    .span = assign.span,
+                } });
+            }
+        }
     }
 
     /// Type-check lowered index values against a heap object: lists
@@ -5537,6 +6046,7 @@ pub const FunctionBuilder = struct {
         const arms = try self.code.openIf(condition.register, conditional.else_block != null);
         try self.applyFacts(conditional.condition, true, split_search_depth);
         try self.lowerBlock(conditional.then_block);
+        const then_recorded = self.recorded_block.?;
         const after_then = try self.narrowSave();
         defer self.temporary().free(after_then);
         const roots_after_then = try self.rootSave();
@@ -5550,6 +6060,15 @@ pub const FunctionBuilder = struct {
             try self.lowerBlock(else_block);
         }
         try self.code.closeIf(arms);
+        const else_recorded: ?nodes.Block = if (conditional.else_block != null) self.recorded_block.? else null;
+        if (condition.node) |made| {
+            try self.recordStatement(.{ .if_else = .{
+                .condition = made,
+                .then_body = then_recorded,
+                .else_body = else_recorded,
+                .span = conditional.span,
+            } });
+        }
 
         const then_leaves = helpers.alwaysExits(conditional.then_block);
         const else_leaves = if (conditional.else_block) |else_block|
@@ -5603,6 +6122,13 @@ pub const FunctionBuilder = struct {
         // After the loop nothing the body proved still holds: it may
         // have run zero times, and `break` leaves from anywhere.
         try self.narrowRestore(entry);
+        if (condition.node) |made| {
+            try self.recordStatement(.{ .while_loop = .{
+                .condition = made,
+                .body = self.recorded_block.?,
+                .span = loop.span,
+            } });
+        }
     }
 
     fn lowerForRange(self: *FunctionBuilder, loop: ast.ForRange) Error!void {
@@ -5630,6 +6156,9 @@ pub const FunctionBuilder = struct {
         defer self.popScope();
         const index_local = (try self.declareLocal(loop.name, .long, false, .alias, loop.span)) orelse return;
         const shape = try self.code.openCountedLoop(index_local, start.register, end.register);
+        // The loop's hidden limit slot (`openCountedLoop`), mirrored
+        // into the tree's locals table in creation order.
+        try self.recordLocal(null, .long, false, loop.span);
 
         try self.loops.append(self.temporary(), .{
             .continue_block = shape.step,
@@ -5641,6 +6170,15 @@ pub const FunctionBuilder = struct {
         _ = self.loops.pop();
         try self.code.closeCountedLoop(shape);
         try self.narrowRestore(entry);
+        if (start.node != null and end.node != null) {
+            try self.recordStatement(.{ .for_range = .{
+                .counter = index_local,
+                .start = start.node.?,
+                .stop = end.node.?,
+                .body = self.recorded_block.?,
+                .span = loop.span,
+            } });
+        }
     }
 
     /// One iteration's binding of a loop name: a plain store when the
@@ -5717,6 +6255,10 @@ pub const FunctionBuilder = struct {
         try self.pushScope();
         defer self.popScope();
         var shape = try self.code.openIteration(iterable.value_type);
+        // The iteration's two hidden slots (`openIteration`): the
+        // collection, then the position, in creation order.
+        try self.recordLocal(null, iterable.value_type, false, loop.span);
+        try self.recordLocal(null, .long, false, loop.span);
 
         // Which intrinsic and type each declared name binds to.
         const two_names = loop.value_name != null;
@@ -5805,10 +6347,24 @@ pub const FunctionBuilder = struct {
         }
         _ = self.loops.pop();
         try self.code.closeIteration(shape);
+        const body_recorded = self.recorded_block.?;
         // The loop names live in the scope pushed above, so the copy
         // the last iteration (or a `break`) left behind goes back here.
         try self.emitScopeEnd();
         try self.narrowRestore(entry);
+        // The getter bindings ride the locals table — B2a stamped
+        // their provenance, and `owns_storage` carries the keeps-view
+        // decision — so the statement records the names and the
+        // sequence and lower re-derives the iteration machinery.
+        if (iterable.node) |made| {
+            try self.recordStatement(.{ .for_in = .{
+                .sequence = made,
+                .first = name_local,
+                .second = value_local,
+                .body = body_recorded,
+                .span = loop.span,
+            } });
+        }
     }
 
     /// Refuse a named object that this frame does not own from leaving
@@ -6154,6 +6710,21 @@ pub const FunctionBuilder = struct {
                 try self.emitTempReleases(0);
                 try self.emitScopeReleases(0, &.{});
                 try self.code.ret(absent.value.register);
+                // `return none` hands the absence over whole — no
+                // store decision is made, so the recorded kind is
+                // `.plain`.
+                if (absent.value.node) |made| {
+                    const values = try self.arena().alloc(nodes.NodeRef, 1);
+                    values[0] = made;
+                    const stores = try self.arena().alloc(nodes.StoreKind, 1);
+                    stores[0] = .plain;
+                    try self.recordStatement(.{ .return_ = .{
+                        .values = values,
+                        .moved = &.{},
+                        .stores = stores,
+                        .span = returned.span,
+                    } });
+                }
                 return;
             }
             if (self.results.len >= 2) {
@@ -6252,7 +6823,8 @@ pub const FunctionBuilder = struct {
             // release, and Luce has no annotation that tells them
             // apart — so `ret` copies, except where the value is
             // provably this statement's own (docs/STRINGS.md).
-            var handed_out = try self.ownedForStore(value);
+            const handed = try self.ownedForStoreKind(value);
+            var handed_out = handed.register;
             // And whatever it is by then has to be able to leave: short
             // text lives in the value, a value lives in a slot, and
             // this frame's slots are about to go (docs/STRINGS.md).  A
@@ -6265,6 +6837,18 @@ pub const FunctionBuilder = struct {
             try self.emitTempReleases(0);
             try self.emitScopeReleases(0, moved);
             try self.code.ret(handed_out);
+            if (value.node) |made| {
+                const values = try self.arena().alloc(nodes.NodeRef, 1);
+                values[0] = made;
+                const stores = try self.arena().alloc(nodes.StoreKind, 1);
+                stores[0] = handed.kind;
+                try self.recordStatement(.{ .return_ = .{
+                    .values = values,
+                    .moved = try self.arena().dupe(LocalId, moved),
+                    .stores = stores,
+                    .span = returned.span,
+                } });
+            }
             return;
         }
         if (self.code.return_type != .none) {
@@ -6276,6 +6860,12 @@ pub const FunctionBuilder = struct {
         try self.emitTempReleases(0);
         try self.emitScopeReleases(0, &.{});
         try self.code.ret(null);
+        try self.recordStatement(.{ .return_ = .{
+            .values = &.{},
+            .moved = &.{},
+            .stores = &.{},
+            .span = returned.span,
+        } });
     }
 
     /// `return a, b` applies the ordinary per-value S16/S17 move rules,
@@ -6400,9 +6990,11 @@ pub const FunctionBuilder = struct {
 
         var moved: std.ArrayList(LocalId) = .empty;
         defer moved.deinit(self.temporary());
+        const stores = try self.arena().alloc(nodes.StoreKind, fitted_values.len);
         for (fitted_values, returned.values, 0..) |value, expression, position| {
-            if (try self.movesOut(expression, value, &moved, resource_conflicts[position])) |register| {
-                registers[position] = register;
+            if (try self.movesOut(expression, value, &moved, resource_conflicts[position])) |stored| {
+                registers[position] = stored.register;
+                stores[position] = stored.kind;
             } else return;
         }
 
@@ -6421,6 +7013,16 @@ pub const FunctionBuilder = struct {
         try self.emitTempReleases(0);
         try self.emitScopeReleases(0, moved.items);
         try self.code.ret(handed_out);
+        if (childrenRecorded(fitted_values)) {
+            const value_nodes = try self.arena().alloc(nodes.NodeRef, fitted_values.len);
+            for (fitted_values, value_nodes) |value, *slot| slot.* = value.node.?;
+            try self.recordStatement(.{ .return_ = .{
+                .values = value_nodes,
+                .moved = try self.arena().dupe(LocalId, moved.items),
+                .stores = stores,
+                .span = returned.span,
+            } });
+        }
     }
 
     /// One position of a `return a, b`: check that this value may
@@ -6432,9 +7034,9 @@ pub const FunctionBuilder = struct {
         value: Typed,
         moved: *std.ArrayList(LocalId),
         resource_conflict: bool,
-    ) Error!?Register {
+    ) Error!?StoredValue {
         if (!self.analyzer.carriesObjects(value.value_type)) {
-            return try self.ownedForStore(value);
+            return try self.ownedForStoreKind(value);
         }
         if (try self.refuseConstantEscape(value.root, expression.span(), "return")) return null;
         switch (expression.*) {
@@ -6485,7 +7087,7 @@ pub const FunctionBuilder = struct {
                 self.disownTemp(value.register);
             },
         }
-        return try self.ownedForStore(value);
+        return try self.ownedForStoreKind(value);
     }
 
     /// A fresh value this return is handing over: the object moves to
@@ -6558,7 +7160,7 @@ pub const FunctionBuilder = struct {
         const storage = self.analyzer.ownsStorage(value.value_type) and
             value.provenance == .fresh and
             !self.parkedAlready(value.register);
-        if (objects or storage) try self.registerTemp(value, objects, storage);
+        if (objects or storage) try self.registerTemp(value, objects, storage, expression.span());
         return value;
     }
 
@@ -6945,6 +7547,7 @@ pub const FunctionBuilder = struct {
         result_type: Type,
         origin: ?nodes.NodeRef,
         answer: Provenance,
+        span: Span,
     ) Error!Typed {
         const failed = try self.code.errored(call);
         // What the call answered has to survive the branch on its
@@ -6956,10 +7559,11 @@ pub const FunctionBuilder = struct {
         // answered into (docs/STRINGS.md).
         const objects = self.analyzer.carriesObjects(result_type);
         const storage = self.analyzer.ownsStorage(result_type);
-        const slot: ?LocalId = if (result_type == .none)
-            null
-        else
-            try self.code.carry(call, result_type, storage);
+        const slot: ?LocalId = if (result_type == .none) null else carried_slot: {
+            const carried = try self.code.carry(call, result_type, storage);
+            try self.recordLocal(null, result_type, storage, span);
+            break :carried_slot carried;
+        };
 
         const handler = try self.code.reserveBlock();
         const returned = try self.code.reserveBlock();
@@ -6984,6 +7588,19 @@ pub const FunctionBuilder = struct {
         // call answered no object, and naming one would name whatever
         // the slot happens to hold.
         if (objects) try self.code.bind(carried, reload);
+        // The node says what the reload is in the tree's vocabulary —
+        // a `carried_get` whose origin is the call — built before the
+        // ledger row below so the row can carry it and `flushTemps`
+        // can settle its park onto it (coupling #3).
+        const node: ?nodes.NodeRef = if (origin) |made|
+            try self.recordNode(.{ .carried_get = .{
+                .slot = carried,
+                .origin = made,
+                .result = result_type,
+                .span = made.span(),
+            } })
+        else
+            null;
         if (objects or storage) {
             try self.temps.append(self.temporary(), .{
                 .local = carried,
@@ -6995,27 +7612,19 @@ pub const FunctionBuilder = struct {
                 // the register shape, and short text does not survive
                 // that (docs/STRINGS.md).
                 .disownable = false,
+                .node = node,
             });
         }
         // The reload carries the *call's* provenance across the
         // branch: the storage is the call's fresh answer, and the slot
         // only ferries it (the temporary above is non-disownable, so
         // `takeStorage` still answers no and every store still
-        // copies).  The node says the same thing in the tree's
-        // vocabulary: a `carried_get` whose origin is the call.
+        // copies).
         return .{
             .register = reload,
             .value_type = result_type,
             .provenance = answer,
-            .node = if (origin) |made|
-                try self.recordNode(.{ .carried_get = .{
-                    .slot = carried,
-                    .origin = made,
-                    .result = result_type,
-                    .span = made.span(),
-                } })
-            else
-                null,
+            .node = node,
         };
     }
 
@@ -7100,7 +7709,21 @@ pub const FunctionBuilder = struct {
         try self.emitScopeReleases(0, &.{});
         try self.code.unwind();
         self.code.switchTo(resume_at);
-        return attempted.value;
+        var value = attempted.value orelse return null;
+        // The tree wraps what the operand answered — the carried
+        // reload, or the call itself for a callee answering nothing —
+        // in the node form of the `try`, with the ledger floor the
+        // failing side released down to (nodes.TryCall).
+        value.node = if (value.node) |inner|
+            try self.recordNode(.{ .try_call = .{
+                .call = inner,
+                .temps_floor = @intCast(attempted.opened.temps_floor),
+                .result = value.value_type,
+                .span = attempt.span,
+            } })
+        else
+            null;
+        return value;
     }
 
     /// `CALL catch FALLBACK` — the fallback runs only where the call
@@ -7129,11 +7752,33 @@ pub const FunctionBuilder = struct {
             self.code.switchTo(attempted.opened.handler);
             try self.code.forget();
             const floor = self.temps.items.len;
-            _ = try self.lowerExpression(binary.right, true);
+            var fallback: ?nodes.Expression.CatchExpr.Fallback = null;
+            if (try self.lowerExpression(binary.right, true)) |handled| {
+                if (handled.node) |made| {
+                    fallback = if (isLeavingCall(binary.right)) .{ .leaving = made } else .{ .value = made };
+                }
+            }
             try self.flushTemps(floor);
             try self.code.jump(merge);
             self.code.switchTo(merge);
-            return .{ .register = value.register, .value_type = .none };
+            return .{
+                .register = value.register,
+                .value_type = .none,
+                // Consulted by nothing — a `.none` owns no storage —
+                // and stamped to agree with the node-kind property
+                // (`nodes.provenance`), as `short_circuit`'s is.
+                .provenance = .view,
+                .node = if (value.node != null and fallback != null)
+                    try self.recordNode(.{ .catch_expr = .{
+                        .call = value.node.?,
+                        .fallback = fallback.?,
+                        .temps_floor = @intCast(attempted.opened.temps_floor),
+                        .result = .none,
+                        .span = binary.span,
+                    } })
+                else
+                    null,
+            };
         }
 
         // Both sides must agree on ownership, for the reason `else`
@@ -7152,26 +7797,49 @@ pub const FunctionBuilder = struct {
         }
 
         const result = try self.code.hiddenLocal(value.value_type, false);
+        try self.recordLocal(null, value.value_type, false, binary.span);
         const merge = try self.code.reserveBlock();
         try self.code.store(result, value.register);
         try self.code.jump(merge);
 
         self.code.switchTo(attempted.opened.handler);
         try self.code.forget();
+        var fallback: ?nodes.Expression.CatchExpr.Fallback = null;
         if (isLeavingCall(binary.right)) {
             // `f() catch trap("…")` and `f() catch error("…")` never
             // come back, so they leave nothing to store — the same
-            // shape `x else trap("…")` has.
-            _ = try self.lowerExpression(binary.right, true);
-        } else if (try self.lowerTyped(binary.right, value.value_type, binary.span, "the catch fallback")) |fallback| {
-            try self.code.store(result, fallback.value.register);
+            // shape `x else trap("…")` has, and the node files the
+            // call under `.leaving`, the union arm that stores nothing
+            // (nodes.CatchExpr.Fallback).
+            if (try self.lowerExpression(binary.right, true)) |gone| {
+                if (gone.node) |leaving| fallback = .{ .leaving = leaving };
+            }
+        } else if (try self.lowerTyped(binary.right, value.value_type, binary.span, "the catch fallback")) |landed| {
+            try self.code.store(result, landed.value.register);
+            if (landed.value.node) |stored| fallback = .{ .value = stored };
         }
         try self.code.jump(merge);
 
         self.code.switchTo(merge);
         // The answer is a reload of the hidden slot — a view of what
         // the slot holds, exactly as the tape predicates read it.
-        return .{ .register = try self.code.load(result), .value_type = value.value_type, .provenance = .view };
+        return .{
+            .register = try self.code.load(result),
+            .value_type = value.value_type,
+            .provenance = .view,
+            // Null when either side's family has not converted
+            // (`childrenRecorded`'s rule).
+            .node = if (value.node != null and fallback != null)
+                try self.recordNode(.{ .catch_expr = .{
+                    .call = value.node.?,
+                    .fallback = fallback.?,
+                    .temps_floor = @intCast(attempted.opened.temps_floor),
+                    .result = value.value_type,
+                    .span = binary.span,
+                } })
+            else
+                null,
+        };
     }
 
     /// `CALL catch:` and an indented handler — the statement form, for
@@ -7192,7 +7860,11 @@ pub const FunctionBuilder = struct {
         // itself, or the value side of `place = call()`.
         self.opened = null;
         self.allow_fallible = true;
+        // The attempt records into a frame of its own, so the guarded
+        // node — not the surrounding block — carries it whole.
+        try self.openStatementFrame();
         try self.lowerStatement(guarded.attempt.*);
+        const attempt_recorded = self.closeCaptureFrame();
         self.allow_fallible = false;
         const opened = self.opened orelse {
             // The binding is named in the refusal when there is one:
@@ -7241,10 +7913,12 @@ pub const FunctionBuilder = struct {
         // nulls a pointer and the arena holding them goes with the run
         // — writing it this way means nothing here depends on that.
         // The channel is read, copied, and only then emptied.
+        var error_local: ?LocalId = null;
         if (guarded.binding) |binding| {
             try self.pushScope();
             const words = try self.code.errorMessage();
             if (try self.declareLocal(binding.text, .string, false, .alias, binding.span)) |local| {
+                error_local = local;
                 try self.storeOwned(local, .{ .register = words, .value_type = .string });
             }
             try self.code.forget();
@@ -7255,8 +7929,24 @@ pub const FunctionBuilder = struct {
             try self.code.forget();
             try self.lowerBlock(guarded.handler);
         }
+        const handler_recorded = self.recorded_block.?;
         try self.code.jump(merge);
         self.code.switchTo(merge);
+
+        // The recorded statement: the attempt whole, the handler, and
+        // the error binding when one was written.  The binding scope's
+        // storage release is re-derived from the locals table, as a
+        // match arm's is (nodes.Statement.Match.Binding).
+        if (attempt_recorded) |attempt_statement| {
+            const kept = try self.arena().create(nodes.Statement);
+            kept.* = attempt_statement;
+            try self.recordStatement(.{ .guarded = .{
+                .attempt = kept,
+                .handler = handler_recorded,
+                .error_local = error_local,
+                .span = guarded.span,
+            } });
+        }
 
         if (helpers.alwaysExits(guarded.handler)) {
             // Only the successful call reaches the merge.
@@ -8290,10 +8980,21 @@ pub const FunctionBuilder = struct {
             try self.failUnknownMember(declared, field.name, field.span);
             return .reported;
         };
-        return .{ .value = .{
-            .register = try self.code.emit(.{ .const_long = declared.members[member].value }, of),
-            .value_type = of,
-        } };
+        return .{
+            .value = .{
+                .register = try self.code.emit(.{ .const_long = declared.members[member].value }, of),
+                .value_type = of,
+                // The resolved member is its number at the enum's own type
+                // — MIR's reading exactly (`Type.storage()`), and the
+                // member identity is recoverable from value and type, so
+                // the constant node is the whole of it.
+                .node = try self.recordNode(.{ .const_long = .{
+                    .value = declared.members[member].value,
+                    .result = of,
+                    .span = field.span,
+                } }),
+            },
+        };
     }
 
     /// What a dotted access turned out to be: not an enum member at
@@ -9075,6 +9776,7 @@ pub const FunctionBuilder = struct {
             payload,
         );
         const either = try self.code.openCoalesce(absent, present, payload);
+        try self.recordLocal(null, payload, false, binary.span);
         var root = left.root;
         var fallback: ?nodes.Expression.Coalesce.Fallback = null;
         if (isLeavingCall(binary.right)) {
@@ -9132,6 +9834,7 @@ pub const FunctionBuilder = struct {
         // `and` evaluates its right side when the left is true, `or`
         // when it is false.
         const either = try self.code.openShortCircuit(left.register, binary.op == .logic_and);
+        try self.recordLocal(null, .boolean, false, binary.span);
         // Inside the right operand, the left one has already decided:
         // `x != none and x > 3` narrows `x` for the comparison, which
         // is the shape this feature exists for.  Nothing inside an
@@ -9988,7 +10691,7 @@ pub const FunctionBuilder = struct {
             if (given) continue;
             const filled = maybe_default.?;
             const made = try self.emitConstantValue(filled.value, filled.value_type, span);
-            try self.parkFreshStorage(made);
+            try self.parkFreshStorage(made, span);
             registers[slot] = made.register;
             entries[next_entry] = .{
                 .node = made.node,
@@ -10064,7 +10767,7 @@ pub const FunctionBuilder = struct {
             info.return_type,
             span,
         );
-        if (info.fallible) return try self.openFallible(call, info.return_type, node, .fresh);
+        if (info.fallible) return try self.openFallible(call, info.return_type, node, .fresh, span);
         // A function's result is the caller's (S16): fresh storage.
         return .{ .register = call, .value_type = info.return_type, .provenance = .fresh, .node = node };
     }
@@ -10419,7 +11122,7 @@ pub const FunctionBuilder = struct {
                 );
                 return null;
             }
-            return try self.openFallible(emitted, found.result, node, intrinsicProvenance(found.kind));
+            return try self.openFallible(emitted, found.result, node, intrinsicProvenance(found.kind), method.span);
         }
         return .{
             .register = emitted,
@@ -10650,7 +11353,7 @@ pub const FunctionBuilder = struct {
                     // The taken copy is storage nobody owns yet.
                     .provenance = .fresh,
                 };
-                try self.parkFreshStorage(kept);
+                try self.parkFreshStorage(kept, method.span);
                 explicit[slot - 1] = kept.register;
             } else {
                 explicit[slot - 1] = fitted.register;
@@ -10669,7 +11372,7 @@ pub const FunctionBuilder = struct {
             if (given) continue;
             const filled = maybe_default.?;
             const made = try self.emitConstantValue(filled.value, filled.value_type, method.span);
-            try self.parkFreshStorage(made);
+            try self.parkFreshStorage(made, method.span);
             if (slot != 0) explicit[slot - 1] = made.register;
             entries[next_entry] = .{
                 .node = made.node,
@@ -10733,7 +11436,7 @@ pub const FunctionBuilder = struct {
             method.span,
         );
         const answered: Typed = if (info.fallible)
-            try self.openFallible(call, info.return_type, node, .fresh)
+            try self.openFallible(call, info.return_type, node, .fresh, method.span)
         else
             // A function's result is the caller's (S16): fresh storage.
             .{ .register = call, .value_type = info.return_type, .provenance = .fresh, .node = node };
@@ -11326,7 +12029,7 @@ pub const FunctionBuilder = struct {
         for (info.parameter_defaults[values.len..], values.len..) |maybe_default, slot| {
             const filled = maybe_default.?;
             const made = try self.emitConstantValue(filled.value, filled.value_type, span);
-            try self.parkFreshStorage(made);
+            try self.parkFreshStorage(made, span);
             registers[slot] = made.register;
             entries[slot] = .{
                 .node = made.node,
@@ -11348,7 +12051,7 @@ pub const FunctionBuilder = struct {
             info.return_type,
             span,
         );
-        if (info.fallible) return try self.openFallible(call, info.return_type, node, .fresh);
+        if (info.fallible) return try self.openFallible(call, info.return_type, node, .fresh, span);
         // A function's result is the caller's (S16): fresh storage.
         return .{ .register = call, .value_type = info.return_type, .provenance = .fresh, .node = node };
     }
@@ -12083,6 +12786,7 @@ pub const FunctionBuilder = struct {
         else
             try self.widenNumeric(number, .long);
         const held = try self.code.spill(widened.register, .long);
+        try self.recordLocal(null, .long, false, span);
 
         // Absence first, so the slot has a value on every path; each
         // arm that matches overwrites it.
@@ -12091,6 +12795,7 @@ pub const FunctionBuilder = struct {
             answer,
         );
         const result = try self.code.spill(absent, answer);
+        try self.recordLocal(null, answer, false, span);
 
         var frames: std.ArrayList(mir.build.Lowering.Conditional) = .empty;
         defer frames.deinit(self.temporary());
@@ -12244,7 +12949,7 @@ pub const FunctionBuilder = struct {
                     call.span,
                 ),
             };
-            try self.parkFreshStorage(answer);
+            try self.parkFreshStorage(answer, call.span);
             return answer;
         }
         // Every other constructor is named for a numeric type and
@@ -12350,10 +13055,12 @@ pub const FunctionBuilder = struct {
             ),
             .string,
         );
+        try self.recordLocal(null, .string, false, span);
         if (declared.members.len == 1) {
             return .{ .register = try self.code.load(result), .value_type = .string, .provenance = .view, .node = node };
         }
         const held = try self.code.spill(value.register, value.value_type);
+        try self.recordLocal(null, value.value_type, false, span);
 
         var frames: std.ArrayList(mir.build.Lowering.Conditional) = .empty;
         defer frames.deinit(self.temporary());
@@ -12404,10 +13111,12 @@ pub const FunctionBuilder = struct {
             ),
             .string,
         );
+        try self.recordLocal(null, .string, false, span);
         if (declared.members.len == 1) {
             return .{ .register = try self.code.load(result), .value_type = .string, .provenance = .view, .node = node };
         }
         const held = try self.code.spill(value.register, value.value_type);
+        try self.recordLocal(null, value.value_type, false, span);
 
         var frames: std.ArrayList(mir.build.Lowering.Conditional) = .empty;
         defer frames.deinit(self.temporary());
@@ -13078,7 +13787,7 @@ pub const FunctionBuilder = struct {
                 );
                 return .failed;
             }
-            return .{ .value = try self.openFallible(emitted, result, node, intrinsicProvenance(matched.kind)) };
+            return .{ .value = try self.openFallible(emitted, result, node, intrinsicProvenance(matched.kind), call.span) };
         }
         return .{ .value = .{
             .register = emitted,

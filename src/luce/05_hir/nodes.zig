@@ -118,16 +118,33 @@ pub const LocalDecl = struct {
     /// itself — a spill, a loop counter, a statement temporary.
     name: ?[]const u8,
     local_type: Type,
+    /// Whether the slot owns the string bytes and struct field runs it
+    /// holds — stage 6's own column (docs/STRINGS.md), recorded because
+    /// it embeds check-side analysis a re-derivation would have to
+    /// repeat (a loop name owns a copy exactly when the body could
+    /// mutate the container under it).  **Settled**: a park retracted
+    /// by an adopting store (`takeStorage`) is recorded post-
+    /// retraction, per coupling #3.
+    owns_storage: bool,
     /// The declaring name's span, or the making expression's for a
     /// hidden slot.
     span: Span,
 };
 
-/// A checked function body: its statements and every local slot the
-/// tree names, in declaration order.
+/// A checked function body: its statements, the body block's own
+/// scope-exit releases, and every local slot the tree names, in
+/// declaration order.
 pub const Body = struct {
     statements: []const Statement,
+    /// The body block's scope-exit releases (`Block.releases`), here
+    /// because the body has no `Block` wrapper of its own.
+    releases: []const Release = &.{},
     locals: []const LocalDecl,
+    /// **Migration only**: statements the walk could not record —
+    /// whole or nested — because a child's family answers no node yet.
+    /// The final flip is gated on zero everywhere; the flip deletes
+    /// the field.
+    gaps: u32 = 0,
 };
 
 // ---------------------------------------------------------------------------
@@ -464,18 +481,42 @@ pub const Expression = union(enum) {
     };
 
     pub const TryCall = struct {
+        /// The operand's carried link: the `carried_get` reload of the
+        /// slot the call's answer crossed its branch in, or the call
+        /// itself for a callee answering nothing.
         call: NodeRef,
+        /// The statement-temporary ledger's length when the call's
+        /// branch was taken (`Opened.temps_floor`): parks below it
+        /// belong to the statement's earlier operands and are released
+        /// on the failing side; parks at or above it live only where
+        /// the call returned, and their slots were never stored into
+        /// where it did not.
+        temps_floor: u32,
         result: Type,
         span: Span,
         park: ?Park = null,
     };
 
     pub const CatchExpr = struct {
+        /// The operand's carried link — `TryCall.call`'s convention.
         call: NodeRef,
-        fallback: NodeRef,
+        fallback: Fallback,
+        /// `TryCall.temps_floor`, for the same failing side.
+        temps_floor: u32,
         result: Type,
         span: Span,
         park: ?Park = null,
+
+        /// What stands after `catch`: an ordinary fallback **value**
+        /// stored into the merge slot, or a **leaving** call — `f()
+        /// catch trap("…")` (docs/FAILURE.md) — evaluated for its exit
+        /// and storing nothing.  `Coalesce.Fallback`'s rule, at the
+        /// fallible merge: a tree that filed the leaving call as a
+        /// value would oblige lower to store a value that never
+        /// exists.  A call answering nothing files its fallback under
+        /// `.value` too — `result` being `.none` already says neither
+        /// side stores.
+        pub const Fallback = union(enum) { value: NodeRef, leaving: NodeRef };
     };
 
     pub const StructMake = struct {
@@ -745,7 +786,14 @@ pub const Statement = union(enum) {
     /// `let` / `var`: the slot and its initializer — null when the
     /// declaration zero-fills (`var x: T`).
     declare: Declare,
+    /// `let a, b = f()` — one call answering a return shape declares
+    /// one name per value (docs/RETURNS.md).
+    destructure: Destructure,
     assign: Assign,
+    /// `low, high = minmax(xs)` — one call replacing two or more
+    /// existing mutable names, every result prepared before any old
+    /// value is released (docs/RETURNS.md).
+    assign_many: AssignMany,
     /// `x += v` and its family, kept as the sugar the reader wrote —
     /// the node `05_hir.zig`'s header draws as the stage's picture.
     compound_assign: CompoundAssign,
@@ -762,10 +810,18 @@ pub const Statement = union(enum) {
     break_: Break,
     continue_: Continue,
     return_: Return,
-    /// `CALL catch:` / a guarded receive — the statement forms whose
-    /// failing side runs a handler and performs none of the stores.
-    /// Provisional until the fallible family lands.
+    /// `CALL catch:` — the statement form: the guarded statement, and
+    /// a handler that runs only where its one call raised, performing
+    /// none of the statement's stores (docs/RETURNS.md).
     guarded: Guarded,
+    /// `match m:` — dispatch over an enum or a union (docs/ENUMS.md
+    /// R1, docs/UNION.md D5), kept whole: the arms in written order
+    /// with the member each names resolved.  Lower spells the
+    /// compare-and-branch tree, and the last arm is the fallthrough
+    /// exactly when `else_body` is null — the arms then cover every
+    /// member, so a value that matched nothing above must be the last
+    /// one's.
+    match: Match,
     /// A bare scope: arm bodies and every other place a `Block` stands
     /// as a statement of its own.
     block: Block,
@@ -773,6 +829,29 @@ pub const Statement = union(enum) {
     pub const Declare = struct {
         local: LocalId,
         value: ?NodeRef,
+        /// How the store into the slot took the value's storage —
+        /// `ownedForStore`'s decision (05_hir.zig, coupling #3), made
+        /// for the zero fill too.
+        store: StoreKind,
+        span: Span,
+    };
+
+    pub const Destructure = struct {
+        /// One declared slot per value, in written order.
+        locals: []const LocalId,
+        /// The call whose return shape is being received.
+        value: NodeRef,
+        /// The per-name store decisions, parallel to `locals`.
+        stores: []const StoreKind,
+        span: Span,
+    };
+
+    pub const AssignMany = struct {
+        /// The existing slots being replaced, in written order.
+        targets: []const LocalId,
+        value: NodeRef,
+        /// The per-target store decisions, parallel to `targets`.
+        stores: []const StoreKind,
         span: Span,
     };
 
@@ -789,6 +868,8 @@ pub const Statement = union(enum) {
         place: Place,
         op: BinaryOp,
         value: NodeRef,
+        /// `Assign.store`, for the combined value's write-back.
+        store: StoreKind,
         span: Span,
     };
 
@@ -829,14 +910,21 @@ pub const Statement = union(enum) {
     };
 
     /// The recorded home for a break's unwinding: how many open scopes
-    /// it releases through on the way to the loop's exit.
+    /// it releases through on the way to the loop's exit, and the
+    /// temporary ledger floor it releases down to (`LoopFrame`'s two
+    /// depths, made context-free).
     pub const Break = struct {
         unwind: u32,
+        /// The ledger's length as the loop began: temporaries parked
+        /// above it belong to the body's current statement and are
+        /// released on the way out.
+        temps_floor: u32,
         span: Span,
     };
 
     pub const Continue = struct {
         unwind: u32,
+        temps_floor: u32,
         span: Span,
     };
 
@@ -846,19 +934,54 @@ pub const Statement = union(enum) {
         /// slots whose value leaves with the return, so the unwind
         /// releases every open scope *except* what these carry.
         moved: []const LocalId,
+        /// The per-value store decisions, parallel to `values` — how
+        /// the return channel took each value's storage
+        /// (`ownedForStore`, coupling #3).
+        stores: []const StoreKind,
         span: Span,
     };
 
     pub const Guarded = struct {
-        call: NodeRef,
-        /// The stores the succeeding side performs — none of which the
-        /// failing side may perform (docs/RETURNS.md).
-        targets: []const Place,
-        /// The handler block, with its error name bound when one was
-        /// written.
-        handler: ?Block,
+        /// The guarded statement itself — the call written as a
+        /// statement, or the store receiving it — whose failing side
+        /// performs none of its replacement stores (docs/RETURNS.md).
+        attempt: *const Statement,
+        /// The handler block, run only where the call raised.
+        handler: Block,
+        /// The binding of `catch NAME:`, holding the error's words —
+        /// null when no name was written.
         error_local: ?LocalId,
         span: Span,
+    };
+
+    pub const Match = struct {
+        scrutinee: NodeRef,
+        /// The hidden slot the scrutinee is spilled into — every arm's
+        /// test reloads it, because a register never crosses a block.
+        held: LocalId,
+        /// The arms in written order, each resolved to its member.
+        arms: []const Arm,
+        /// Null when the arms cover every member: the last arm is then
+        /// the fallthrough and needs no test (docs/ENUMS.md R1).
+        else_body: ?Block,
+        span: Span,
+
+        /// One arm: the member it names, its payload bindings (a union
+        /// arm's, in member-field order — empty for a bare-member
+        /// arm), and its body.
+        pub const Arm = struct {
+            member: u32,
+            bindings: []const Binding,
+            body: Block,
+        };
+
+        /// One payload binding: the arm-scoped local and the payload
+        /// read stored into it — the recorded `variant_payload`, whose
+        /// target is the reload of `held` (docs/UNION.md D10).  The
+        /// binding scope's storage releases are re-derived from
+        /// `Body.locals`, since a binding is always an alias and never
+        /// claims objects.
+        pub const Binding = struct { local: LocalId, payload: NodeRef };
     };
 
     pub fn span(self: *const Statement) Span {
@@ -1026,13 +1149,20 @@ test "nodes build, and the accessors answer every payload" {
     // A statement tree: a block that releases its slot on the way out,
     // a break that unwinds two scopes, a return that moves one local.
     const statements = try arena.alloc(Statement, 3);
-    statements[0] = .{ .declare = .{ .local = 3, .value = element, .span = test_span } };
-    statements[1] = .{ .break_ = .{ .unwind = 2, .span = test_span } };
+    statements[0] = .{ .declare = .{ .local = 3, .value = element, .store = .take, .span = test_span } };
+    statements[1] = .{ .break_ = .{ .unwind = 2, .temps_floor = 1, .span = test_span } };
     const moved = try arena.alloc(LocalId, 1);
     moved[0] = 3;
     const returned = try arena.alloc(NodeRef, 1);
     returned[0] = narrowed;
-    statements[2] = .{ .return_ = .{ .values = returned, .moved = moved, .span = test_span } };
+    const returned_stores = try arena.alloc(StoreKind, 1);
+    returned_stores[0] = .copy;
+    statements[2] = .{ .return_ = .{
+        .values = returned,
+        .moved = moved,
+        .stores = returned_stores,
+        .span = test_span,
+    } };
     const releases = try arena.alloc(Release, 1);
     releases[0] = .{ .local = 3, .objects = true, .storage = false };
     const block: Statement = .{ .block = .{
@@ -1043,15 +1173,65 @@ test "nodes build, and the accessors answer every payload" {
 
     try testing.expectEqual(test_span.end, block.span().end);
     try testing.expectEqual(@as(u32, 2), statements[1].break_.unwind);
+    try testing.expectEqual(@as(u32, 1), statements[1].break_.temps_floor);
     try testing.expectEqual(@as(LocalId, 3), block.block.releases[0].local);
     try testing.expectEqual(@as(LocalId, 3), statements[2].return_.moved[0]);
+    try testing.expectEqual(StoreKind.copy, statements[2].return_.stores[0]);
 
-    // A body lists every slot, named and hidden, in declaration order.
+    // The guarded statement wraps its attempt whole, and a match's
+    // arms carry their resolved members and payload bindings.
+    const attempt = try arena.create(Statement);
+    attempt.* = statements[0];
+    const guarded: Statement = .{ .guarded = .{
+        .attempt = attempt,
+        .handler = block.block,
+        .error_local = 4,
+        .span = test_span,
+    } };
+    try testing.expectEqual(@as(LocalId, 3), guarded.guarded.attempt.declare.local);
+    try testing.expectEqual(@as(LocalId, 4), guarded.guarded.error_local.?);
+
+    const bindings = try arena.alloc(Statement.Match.Binding, 1);
+    bindings[0] = .{ .local = 6, .payload = narrowed };
+    const arms = try arena.alloc(Statement.Match.Arm, 1);
+    arms[0] = .{ .member = 1, .bindings = bindings, .body = block.block };
+    const matched: Statement = .{ .match = .{
+        .scrutinee = narrowed,
+        .held = 5,
+        .arms = arms,
+        .else_body = null,
+        .span = test_span,
+    } };
+    try testing.expectEqual(@as(u32, 1), matched.match.arms[0].member);
+    try testing.expectEqual(@as(LocalId, 6), matched.match.arms[0].bindings[0].local);
+    try testing.expectEqual(test_span.start, matched.span().start);
+
+    // A destructuring bind declares one slot per value, each with its
+    // own store decision.
+    const bound = try arena.alloc(LocalId, 2);
+    bound[0] = 7;
+    bound[1] = 8;
+    const bind_stores = try arena.alloc(StoreKind, 2);
+    bind_stores[0] = .plain;
+    bind_stores[1] = .copy;
+    const destructured: Statement = .{ .destructure = .{
+        .locals = bound,
+        .value = element,
+        .stores = bind_stores,
+        .span = test_span,
+    } };
+    try testing.expectEqual(@as(LocalId, 8), destructured.destructure.locals[1]);
+    try testing.expectEqual(StoreKind.copy, destructured.destructure.stores[1]);
+
+    // A body lists every slot, named and hidden, in declaration order,
+    // and carries the flip's gap gate.
     const locals = try arena.alloc(LocalDecl, 2);
-    locals[0] = .{ .name = "xs", .local_type = .{ .heap = 2 }, .span = test_span };
-    locals[1] = .{ .name = null, .local_type = .string, .span = test_span };
+    locals[0] = .{ .name = "xs", .local_type = .{ .heap = 2 }, .owns_storage = false, .span = test_span };
+    locals[1] = .{ .name = null, .local_type = .string, .owns_storage = true, .span = test_span };
     const body: Body = .{ .statements = statements, .locals = locals };
     try testing.expect(body.locals[1].name == null);
+    try testing.expect(body.locals[1].owns_storage);
+    try testing.expectEqual(@as(u32, 0), body.gaps);
 }
 
 test "provenance mirrors the storage categories the walk stamps" {
@@ -1127,10 +1307,12 @@ test "provenance mirrors the storage categories the walk stamps" {
     try testing.expectEqual(Provenance.view, provenance(union_name));
     const carried = try node(arena, .{ .carried_get = .{ .slot = 4, .origin = called, .result = .string, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(carried));
-    const attempted = try node(arena, .{ .try_call = .{ .call = called, .result = .string, .span = test_span } });
+    const attempted = try node(arena, .{ .try_call = .{ .call = carried, .temps_floor = 0, .result = .string, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(attempted));
-    const caught = try node(arena, .{ .catch_expr = .{ .call = called, .fallback = text, .result = .string, .span = test_span } });
+    const caught = try node(arena, .{ .catch_expr = .{ .call = carried, .fallback = .{ .value = text }, .temps_floor = 0, .result = .string, .span = test_span } });
     try testing.expectEqual(Provenance.view, provenance(caught));
+    const asserted_catch = try node(arena, .{ .catch_expr = .{ .call = carried, .fallback = .{ .leaving = text }, .temps_floor = 1, .result = .string, .span = test_span } });
+    try testing.expectEqual(Provenance.view, provenance(asserted_catch));
 
     // Construction: built values own their runs; a fresh container is
     // an object, not storage; the duplicate is nobody's yet.

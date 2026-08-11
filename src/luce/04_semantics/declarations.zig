@@ -3493,6 +3493,11 @@ pub const Analyzer = struct {
         }
 
         try builder.lowerBlock(info.declaration.body);
+        // The typed tree's `Body` (05_hir.zig): assembled here so the
+        // recording is proven live over the whole suite; the flip's
+        // lower pass is its consumer.  Behavior-neutral — nothing is
+        // emitted or checked by it.
+        try builder.finishBody();
         try builder.emitScopeEnd();
         builder.popScope();
 
