@@ -5,13 +5,18 @@
 //! straight on to MIR, so this stage is a pass-through in the literal
 //! sense — the driver names it and does not call it.
 //!
-//! What the stage *holds* is `05_hir/nodes.zig`: the typed tree's node
-//! vocabulary, which stage 4's walk records beside its emission, one
-//! expression family at a time, while the tape below keeps every
-//! landing byte-identical.  The pass that consumes the tree is written
-//! only when the whole tree is recorded; until then the driver still
-//! does not call this stage, and this header remains its decision
-//! record.
+//! What the stage *holds* is `05_hir/nodes.zig` — the typed tree's
+//! node vocabulary, which stage 4's walk records beside its emission —
+//! and `05_hir/lower.zig`, the pass that consumes it: a mechanical,
+//! diagnostic-free replay of a recorded body into stage 6's tape.
+//! The recording is whole and the replay is proven **byte-identical**
+//! against the fused walk's emissions, function by function, by the
+//! Debug dual-emission gate in `04_semantics/declarations.zig` over
+//! the entire suite and corpus.  What remains for the flip is the
+//! *retirement*: the driver still reaches MIR through stage 4's fused
+//! walk, and the fused emissions leave `builder.zig` only when the
+//! flip makes this pass the one emission.  Until then this header
+//! remains the decision record.
 //!
 //! **What an HIR is for: sugar stays a node until one pass removes it.**
 //!
@@ -175,6 +180,13 @@
 /// per-body local table, and the computed `provenance` property.
 pub const nodes = @import("05_hir/nodes.zig");
 
+/// The lower half of the seam: replay a recorded `Body` into stage
+/// 6's tape, byte-identically — proven by the dual-emission gate in
+/// `04_semantics/declarations.zig` until the flip makes this the one
+/// emission.
+pub const lower = @import("05_hir/lower.zig");
+
 test {
     _ = nodes;
+    _ = lower;
 }

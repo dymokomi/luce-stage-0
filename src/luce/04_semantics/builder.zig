@@ -1321,6 +1321,16 @@ pub const FunctionBuilder = struct {
     ) Error!void {
         const local = try self.code.park(value.register, value.value_type, objects, storage);
         try self.recordLocal(null, value.value_type, storage, span);
+        // The park records at the park (coupling #3): the at-park
+        // claims are what the park emitted, and the released halves
+        // settle in place as adopting stores retract them.
+        if (value.node) |node| setPark(node, .{
+            .local = local,
+            .objects = objects,
+            .storage = storage,
+            .released_objects = objects,
+            .released_storage = storage,
+        });
         try self.temps.append(self.temporary(), .{
             .local = local,
             .register = value.register,
@@ -1375,13 +1385,17 @@ pub const FunctionBuilder = struct {
     /// including a fully retracted one, whose release frees nothing
     /// but whose slot was still made and stored.
     fn flushTemps(self: *FunctionBuilder, from: usize) Error!void {
-        for (self.temps.items[from..]) |temp| {
-            const node = temp.node orelse continue;
-            setPark(node, .{
-                .local = temp.local,
-                .objects = temp.objects,
-                .storage = temp.storage,
-            });
+        if (debug_checks) {
+            // The park was recorded at the park and settled at every
+            // retraction; the ledger's answer here must already be on
+            // the tree (coupling #3).
+            for (self.temps.items[from..]) |temp| {
+                const node = temp.node orelse continue;
+                const parked = node.park().?;
+                std.debug.assert(parked.local == temp.local);
+                std.debug.assert(parked.released_objects == temp.objects);
+                std.debug.assert(parked.released_storage == temp.storage);
+            }
         }
         try self.emitTempReleases(from);
         self.temps.shrinkRetainingCapacity(from);
@@ -1779,6 +1793,7 @@ pub const FunctionBuilder = struct {
     fn recordOperandBatch(
         self: *FunctionBuilder,
         entries: []const RecordedOperand,
+        written: usize,
     ) Error!?nodes.OperandBatch {
         for (entries) |entry| if (entry.node == null) return null;
         const operands = try self.arena().alloc(nodes.NodeRef, entries.len);
@@ -1792,6 +1807,7 @@ pub const FunctionBuilder = struct {
             copied.* = entry.copied;
         }
         return .{
+            .written = @intCast(written),
             .operands = operands,
             .slots = slots,
             .spill = spill,
@@ -1801,15 +1817,18 @@ pub const FunctionBuilder = struct {
 
     /// Record one `call` node from its resolved callee and assembled
     /// operand entries, or null when the batch cannot be recorded.
+    /// `written` is how many leading entries the call site wrote — the
+    /// batch the walk lowered as one — before the defaulted suffix.
     fn recordCallNode(
         self: *FunctionBuilder,
         callee: nodes.ResolvedCallee,
         entries: []const RecordedOperand,
+        written: usize,
         fallible: bool,
         result: Type,
         span: Span,
     ) Error!?nodes.NodeRef {
-        const batch = (try self.recordOperandBatch(entries)) orelse return null;
+        const batch = (try self.recordOperandBatch(entries, written)) orelse return null;
         return try self.recordNode(.{ .call = .{
             .callee = callee,
             .operands = batch,
@@ -1924,14 +1943,28 @@ pub const FunctionBuilder = struct {
         }
     }
 
-    /// Write the settled ledger onto a parked value's node (S3): the
-    /// hidden slot and which of its two claims the statement's end
-    /// releases — after any adopting store has retracted the storage
-    /// half (coupling #3), which is why this runs at `flushTemps` and
-    /// never at the park.
+    /// Write a park onto its value's node (S3), at the park itself:
+    /// the at-park claims say what the park emitted, and the released
+    /// halves start equal and settle in place as the ledger's
+    /// retractions land (coupling #3) — so the tree carries both the
+    /// emission and the ledger's final answer.
     fn setPark(node: nodes.NodeRef, parked: nodes.Park) void {
         switch (node.*) {
             inline else => |*payload| payload.park = parked,
+        }
+    }
+
+    /// Settle one retraction onto a parked node — the recording half
+    /// of `takeStorage`, `disownShape` and `disownTemp`.
+    fn settlePark(node: ?nodes.NodeRef, objects: bool, storage: bool) void {
+        const parked_node = node orelse return;
+        switch (parked_node.*) {
+            inline else => |*payload| {
+                if (payload.park) |*parked| {
+                    if (!objects) parked.released_objects = false;
+                    if (!storage) parked.released_storage = false;
+                }
+            },
         }
     }
 
@@ -2294,6 +2327,7 @@ pub const FunctionBuilder = struct {
             // A temporary that owns neither releases nothing.
             temp.storage = false;
             temp.taken = true;
+            settlePark(temp.node, true, false);
             return true;
         }
         return true;
@@ -5009,7 +5043,9 @@ pub const FunctionBuilder = struct {
             if (self.temps.items[index].register != register) continue;
             if (self.temps.items[index].storage) {
                 self.temps.items[index].objects = false;
+                settlePark(self.temps.items[index].node, false, true);
             } else {
+                settlePark(self.temps.items[index].node, false, false);
                 _ = self.temps.orderedRemove(index);
             }
             return;
@@ -5187,7 +5223,8 @@ pub const FunctionBuilder = struct {
             }
         }
         try operand_list.append(self.temporary(), assign.value);
-        const operands = (try self.lowerOperands(operand_list.items)) orelse return;
+        const run = (try self.lowerOperandsIntoTracking(operand_list.items, .nothing, null)) orelse return;
+        const operands = run.values;
         const value = operands[operands.len - 1];
         var next_operand: usize = 0;
 
@@ -5241,12 +5278,16 @@ pub const FunctionBuilder = struct {
                     const subscripts = try self.arena().alloc(Register, lowered.len);
                     for (lowered, subscripts) |value_operand, *slot| slot.* = value_operand.register;
                     accessor.* = .{ .index = .{ .object = current, .subscripts = subscripts } };
-                    const subscript_nodes = try self.arena().alloc(nodes.NodeRef, lowered.len);
+                    const subscript_nodes = try self.arena().alloc(nodes.Operand, lowered.len);
                     recorded_step.* = .{ .index = subscript_nodes };
-                    for (lowered, subscript_nodes) |value_operand, *slot| {
-                        slot.* = value_operand.node orelse {
-                            steps_recorded = false;
-                            break;
+                    for (lowered, 0..) |value_operand, at_subscript| {
+                        subscript_nodes[at_subscript] = .{
+                            .node = value_operand.node orelse {
+                                steps_recorded = false;
+                                break;
+                            },
+                            .spilled = run.spilled[next_operand - lowered.len + at_subscript],
+                            .copied = run.copied[next_operand - lowered.len + at_subscript],
                         };
                     }
                     // **Always an ordinary read, never a defining
@@ -5307,6 +5348,8 @@ pub const FunctionBuilder = struct {
         if (steps_recorded) {
             if (placed.node) |made| {
                 const place: nodes.Place = .{ .chain = .{ .root = root_local, .steps = recorded_steps } };
+                const value_spilled = run.spilled[run.spilled.len - 1];
+                const value_copied = run.copied[run.copied.len - 1];
                 if (assign.compound) |op| {
                     try self.recordStatement(.{ .compound_assign = .{
                         .place = place,
@@ -5314,6 +5357,8 @@ pub const FunctionBuilder = struct {
                         .value = made,
                         .store = stored_leaf.kind,
                         .span = assign.span,
+                        .value_spilled = value_spilled,
+                        .value_copied = value_copied,
                     } });
                 } else {
                     try self.recordStatement(.{ .assign = .{
@@ -5321,6 +5366,8 @@ pub const FunctionBuilder = struct {
                         .value = made,
                         .store = stored_leaf.kind,
                         .span = assign.span,
+                        .value_spilled = value_spilled,
+                        .value_copied = value_copied,
                     } });
                 }
             }
@@ -5844,7 +5891,8 @@ pub const FunctionBuilder = struct {
         expressions[0] = target.base;
         @memcpy(expressions[1 .. 1 + target.indices.len], target.indices);
         expressions[expressions.len - 1] = assign.value;
-        const values = (try self.lowerOperandsInto(expressions, .stored_element)) orelse return;
+        const run = (try self.lowerOperandsIntoTracking(expressions, .stored_element, null)) orelse return;
+        const values = run.values;
 
         const object = values[0];
         const indices = values[1 .. values.len - 1];
@@ -5906,11 +5954,20 @@ pub const FunctionBuilder = struct {
         // its operator.
         record: {
             if (object.node == null) break :record;
-            const subscript_nodes = try self.arena().alloc(nodes.NodeRef, indices.len);
-            for (indices, subscript_nodes) |index_value, *slot| {
-                slot.* = index_value.node orelse break :record;
+            const subscript_nodes = try self.arena().alloc(nodes.Operand, indices.len);
+            for (indices, run.spilled[1 .. 1 + indices.len], run.copied[1 .. 1 + indices.len], subscript_nodes) |index_value, was_spilled, was_copied, *slot| {
+                slot.* = .{
+                    .node = index_value.node orelse break :record,
+                    .spilled = was_spilled,
+                    .copied = was_copied,
+                };
             }
-            const place: nodes.Place = .{ .index = .{ .base = object.node.?, .indices = subscript_nodes } };
+            const place: nodes.Place = .{ .index = .{
+                .base = .{ .node = object.node.?, .spilled = run.spilled[0], .copied = run.copied[0] },
+                .indices = subscript_nodes,
+            } };
+            const value_spilled = run.spilled[run.spilled.len - 1];
+            const value_copied = run.copied[run.copied.len - 1];
             if (assign.compound) |op| {
                 const made = value.node orelse break :record;
                 try self.recordStatement(.{ .compound_assign = .{
@@ -5919,6 +5976,8 @@ pub const FunctionBuilder = struct {
                     .value = made,
                     .store = stored_element.kind,
                     .span = assign.span,
+                    .value_spilled = value_spilled,
+                    .value_copied = value_copied,
                 } });
             } else {
                 const made = value.node orelse break :record;
@@ -5927,6 +5986,8 @@ pub const FunctionBuilder = struct {
                     .value = made,
                     .store = stored_element.kind,
                     .span = assign.span,
+                    .value_spilled = value_spilled,
+                    .value_copied = value_copied,
                 } });
             }
         }
@@ -6139,7 +6200,8 @@ pub const FunctionBuilder = struct {
         defer self.temporary().free(root_entry);
         defer self.rootRestore(root_entry);
         const temps_floor = self.temps.items.len;
-        const bounds = (try self.lowerOperands(&.{ loop.start, loop.end })) orelse return;
+        const bounds_run = (try self.lowerOperandsIntoTracking(&.{ loop.start, loop.end }, .nothing, null)) orelse return;
+        const bounds = bounds_run.values;
         // Widened *before* the registers are read: a bound written as
         // an `int` reaches a `long` loop by widening, and the counted
         // loop the IR opens is a `long` one (docs/TYPES.md §2).
@@ -6177,6 +6239,7 @@ pub const FunctionBuilder = struct {
                 .stop = end.node.?,
                 .body = self.recorded_block.?,
                 .span = loop.span,
+                .start_spilled = bounds_run.spilled[0],
             } });
         }
     }
@@ -6808,7 +6871,9 @@ pub const FunctionBuilder = struct {
                             if (self.temps.items[index].register == lowered.register) {
                                 if (self.temps.items[index].storage) {
                                     self.temps.items[index].objects = false;
+                                    settlePark(self.temps.items[index].node, false, true);
                                 } else {
+                                    settlePark(self.temps.items[index].node, false, false);
                                     _ = self.temps.orderedRemove(index);
                                 }
                                 break;
@@ -6937,11 +7002,12 @@ pub const FunctionBuilder = struct {
         // One walk, so an operand that splits blocks cannot strand the
         // ones before it — the same rule every other operand run keeps.
         const staged_owners = try self.arena().alloc(?StagedOperandOwner, returned.values.len);
-        const values = ((try self.lowerOperandsIntoTracking(
+        const shaped_run = (try self.lowerOperandsIntoTracking(
             returned.values,
             .{ .places = self.results },
             staged_owners,
-        )) orelse return).values;
+        )) orelse return;
+        const values = shaped_run.values;
         const fitted_values = try self.arena().alloc(Typed, values.len);
         const registers = try self.arena().alloc(Register, values.len);
         // Type errors retain precedence over cross-operand ownership
@@ -7021,6 +7087,8 @@ pub const FunctionBuilder = struct {
                 .moved = try self.arena().dupe(LocalId, moved.items),
                 .stores = stores,
                 .span = returned.span,
+                .spilled = shaped_run.spilled,
+                .copied = shaped_run.copied,
             } });
         }
     }
@@ -7101,7 +7169,9 @@ pub const FunctionBuilder = struct {
             if (self.temps.items[index].register != register) continue;
             if (self.temps.items[index].storage) {
                 self.temps.items[index].objects = false;
+                settlePark(self.temps.items[index].node, false, true);
             } else {
+                settlePark(self.temps.items[index].node, false, false);
                 _ = self.temps.orderedRemove(index);
             }
             return;
@@ -7602,6 +7672,15 @@ pub const FunctionBuilder = struct {
         else
             null;
         if (objects or storage) {
+            // The carried slot's park is recorded like every other
+            // (coupling #3): at the park, settled at retractions.
+            if (node) |made| setPark(made, .{
+                .local = carried,
+                .objects = objects,
+                .storage = storage,
+                .released_objects = objects,
+                .released_storage = storage,
+            });
             try self.temps.append(self.temporary(), .{
                 .local = carried,
                 .register = reload,
@@ -8309,7 +8388,7 @@ pub const FunctionBuilder = struct {
                     ),
                     .value_type = value_type,
                     .provenance = .fresh,
-                    .node = if (try self.recordOperandBatch(entries)) |batch|
+                    .node = if (try self.recordOperandBatch(entries, 0)) |batch|
                         try self.recordNode(.{ .struct_make = .{
                             .layout = folded.layout,
                             .operands = batch,
@@ -8784,22 +8863,28 @@ pub const FunctionBuilder = struct {
         const expressions = try self.arena().alloc(*ast.Expression, index.indices.len + 1);
         expressions[0] = index.target;
         @memcpy(expressions[1..], index.indices);
-        const values = (try self.lowerOperandsInto(expressions, .subscripts)) orelse return null;
+        const run = (try self.lowerOperandsIntoTracking(expressions, .subscripts, null)) orelse return null;
+        const values = run.values;
         const element_type = (try self.checkIndex(values[0], values[1..], index.span)) orelse return null;
         const arguments = try self.arena().alloc(Register, values.len);
         for (values, arguments) |value, *slot| slot.* = value.register;
         // The node needs the target's and every subscript's, which
         // exist only once their families have converted — until then
         // this read stays unrecorded rather than recorded broken
-        // (05_hir.zig).
+        // (05_hir.zig).  The whole read is one operand run, so each
+        // position carries its batch rewrites (nodes.Operand).
         const node: ?nodes.NodeRef = node: {
             const target = values[0].node orelse break :node null;
-            const subscripts = try self.arena().alloc(nodes.NodeRef, values.len - 1);
-            for (values[1..], subscripts) |value, *slot| {
-                slot.* = value.node orelse break :node null;
+            const subscripts = try self.arena().alloc(nodes.Operand, values.len - 1);
+            for (values[1..], run.spilled[1..], run.copied[1..], subscripts) |value, was_spilled, was_copied, *slot| {
+                slot.* = .{
+                    .node = value.node orelse break :node null,
+                    .spilled = was_spilled,
+                    .copied = was_copied,
+                };
             }
             break :node try self.recordNode(.{ .index_get = .{
-                .target = target,
+                .target = .{ .node = target, .spilled = run.spilled[0], .copied = run.copied[0] },
                 .indices = subscripts,
                 .result = element_type,
                 .span = index.span,
@@ -9272,11 +9357,19 @@ pub const FunctionBuilder = struct {
         }
     }
 
+    /// A lowered operator pair with the evaluation facts the tree
+    /// records (nodes.Expression.Sides): the typed-side-first order,
+    /// and the batch rewrites of the left operand.
+    const BinarySides = struct {
+        values: []Typed,
+        sides: nodes.Expression.Sides = .{},
+    };
+
     fn lowerBinaryOperands(
         self: *FunctionBuilder,
         binary: ast.Binary,
         wanted: ?Type,
-    ) Error!?[]Typed {
+    ) Error!?BinarySides {
         // **An operand with no type of its own takes the other's.**
         // Two kinds have none: a numeric literal (docs/TYPES.md D3) and
         // a bare function name, which is not a value until something
@@ -9292,10 +9385,18 @@ pub const FunctionBuilder = struct {
                 if (wanted) |place| self.wantPlace(place);
                 values[index] = (try self.lowerExpression(expression, false)) orelse return null;
             }
-            return values;
+            return .{ .values = values };
         }
         if (left_untyped == right_untyped) {
-            return self.lowerOperands(&.{ binary.left, binary.right });
+            const run = (try self.lowerOperandsIntoTracking(
+                &.{ binary.left, binary.right },
+                .nothing,
+                null,
+            )) orelse return null;
+            return .{ .values = run.values, .sides = .{
+                .left_spilled = run.spilled[0],
+                .left_copied = run.copied[0],
+            } };
         }
         const values = try self.arena().alloc(Typed, 2);
         const written_first: usize = if (left_untyped) 1 else 0;
@@ -9306,7 +9407,7 @@ pub const FunctionBuilder = struct {
         self.wantPlace(values[written_first].value_type);
         values[written_second] =
             (try self.lowerExpression(expressions[written_second], false)) orelse return null;
-        return values;
+        return .{ .values = values, .sides = .{ .right_first = left_untyped } };
     }
 
     fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Error!?Typed {
@@ -9329,9 +9430,9 @@ pub const FunctionBuilder = struct {
             );
             return null;
         }
-        const sides = (try self.lowerBinaryOperands(binary, wanted)) orelse return null;
-        var left = sides[0];
-        var right = sides[1];
+        const pair = (try self.lowerBinaryOperands(binary, wanted)) orelse return null;
+        var left = pair.values[0];
+        var right = pair.values[1];
 
         const operation: mir.BinaryOp = switch (binary.op) {
             .add => .add,
@@ -9370,7 +9471,7 @@ pub const FunctionBuilder = struct {
         if (left.value_type.isNumeric() and right.value_type.isNumeric()) {
             const crosses = left.value_type.isInteger() != right.value_type.isInteger();
             if (crosses and operation.isComparison()) {
-                return self.lowerExactCompare(operation, left, right, binary.span);
+                return self.lowerExactCompare(operation, left, right, pair.sides, binary.span);
             }
             _ = try self.unifyNumeric(&left, &right);
         }
@@ -9470,6 +9571,7 @@ pub const FunctionBuilder = struct {
                         .right = right.node.?,
                         .result = operand_type,
                         .span = binary.span,
+                        .sides = pair.sides,
                     } })
                 else
                     null,
@@ -9546,6 +9648,7 @@ pub const FunctionBuilder = struct {
                     .right = right.node.?,
                     .result = .boolean,
                     .span = binary.span,
+                    .sides = pair.sides,
                 } })
             else
                 null,
@@ -9577,6 +9680,7 @@ pub const FunctionBuilder = struct {
         operation: mir.BinaryOp,
         left: Typed,
         right: Typed,
+        sides: nodes.Expression.Sides,
         span: Span,
     ) Error!?Typed {
         const int_first = left.value_type.isInteger();
@@ -9595,7 +9699,7 @@ pub const FunctionBuilder = struct {
                 try self.emitCompare(operation, widened, fraction)
             else
                 try self.emitCompare(operation, fraction, widened);
-            ordered.node = try self.exactCompareNode(operation, int_first, widened, fraction, span);
+            ordered.node = try self.exactCompareNode(operation, int_first, widened, fraction, sides, span);
             return ordered;
         }
 
@@ -9613,7 +9717,7 @@ pub const FunctionBuilder = struct {
                 .boolean,
             ),
             .value_type = .boolean,
-            .node = try self.exactCompareNode(operation, int_first, whole, fraction, span),
+            .node = try self.exactCompareNode(operation, int_first, whole, fraction, sides, span),
         };
     }
 
@@ -9627,6 +9731,7 @@ pub const FunctionBuilder = struct {
         int_first: bool,
         whole: Typed,
         fraction: Typed,
+        sides: nodes.Expression.Sides,
         span: Span,
     ) Error!?nodes.NodeRef {
         if (!childrenRecorded(&.{ whole, fraction })) return null;
@@ -9638,6 +9743,7 @@ pub const FunctionBuilder = struct {
             .right = written_right.node.?,
             .result = .boolean,
             .span = span,
+            .sides = sides,
         } });
     }
 
@@ -10394,6 +10500,7 @@ pub const FunctionBuilder = struct {
             .node = try self.recordCallNode(
                 .{ .indirect = .{ .local = found.info.local, .signature = local_type.function } },
                 entries,
+                entries.len,
                 false,
                 signature.result,
                 call.span,
@@ -10722,6 +10829,7 @@ pub const FunctionBuilder = struct {
             const inner = try self.recordCallNode(
                 .{ .function = function_index },
                 entries,
+                values.len,
                 info.fallible,
                 info.return_type,
                 span,
@@ -10763,6 +10871,7 @@ pub const FunctionBuilder = struct {
         const node = try self.recordCallNode(
             .{ .function = function_index },
             entries,
+            values.len,
             info.fallible,
             info.return_type,
             span,
@@ -11108,6 +11217,7 @@ pub const FunctionBuilder = struct {
         const node = try self.recordCallNode(
             .{ .intrinsic = found.kind },
             entries,
+            values.len,
             may_fail,
             found.result,
             method.span,
@@ -11431,6 +11541,7 @@ pub const FunctionBuilder = struct {
         const node = try self.recordCallNode(
             .{ .function = function_index },
             entries,
+            values.len,
             info.fallible,
             info.return_type,
             method.span,
@@ -12047,6 +12158,7 @@ pub const FunctionBuilder = struct {
         const node = try self.recordCallNode(
             .{ .function = function_index },
             entries,
+            values.len,
             info.fallible,
             info.return_type,
             span,
@@ -12483,7 +12595,7 @@ pub const FunctionBuilder = struct {
             .provenance = .fresh,
             // Every field is accounted for by now — written or
             // defaulted — so the batch covers the layout exactly.
-            .node = if (try self.recordOperandBatch(entries[0..next_entry])) |batch|
+            .node = if (try self.recordOperandBatch(entries[0..next_entry], call_arguments.len)) |batch|
                 try self.recordNode(.{ .struct_make = .{
                     .layout = layout_index,
                     .operands = batch,
@@ -12703,7 +12815,7 @@ pub const FunctionBuilder = struct {
             // A union value is built whole and owns its run
             // (docs/UNION.md D8).
             .provenance = .fresh,
-            .node = if (try self.recordOperandBatch(entries[0..next_entry])) |batch|
+            .node = if (try self.recordOperandBatch(entries[0..next_entry], call_arguments.len)) |batch|
                 try self.recordNode(.{ .variant_make = .{
                     .variant = variant_index,
                     .member = member_index,
@@ -12830,6 +12942,7 @@ pub const FunctionBuilder = struct {
             .node = try self.recordCallNode(
                 .{ .enum_name = enum_index },
                 &.{.{ .node = widened.node, .slot = 0 }},
+                1,
                 false,
                 answer,
                 span,
@@ -12900,6 +13013,7 @@ pub const FunctionBuilder = struct {
                 .node = try self.recordCallNode(
                     .{ .intrinsic = .function_name },
                     &.{.{ .node = value.node, .slot = 0 }},
+                    1,
                     false,
                     .string,
                     call.span,
@@ -12944,6 +13058,7 @@ pub const FunctionBuilder = struct {
                 .node = try self.recordCallNode(
                     .{ .conversion = .string },
                     &.{.{ .node = value.node, .slot = 0 }},
+                    1,
                     false,
                     .string,
                     call.span,
@@ -12978,6 +13093,7 @@ pub const FunctionBuilder = struct {
             .node = try self.recordCallNode(
                 .{ .conversion = target },
                 &.{.{ .node = value.node, .slot = 0 }},
+                1,
                 false,
                 target,
                 call.span,
@@ -13018,6 +13134,7 @@ pub const FunctionBuilder = struct {
             .node = try self.recordCallNode(
                 .{ .conversion = target },
                 &.{.{ .node = value.node, .slot = 0 }},
+                1,
                 false,
                 target,
                 call.span,
@@ -13043,6 +13160,7 @@ pub const FunctionBuilder = struct {
         const node = try self.recordCallNode(
             .{ .enum_name = value.value_type.enumeration.index },
             &.{.{ .node = value.node, .slot = 0 }},
+            1,
             false,
             .string,
             span,
@@ -13099,6 +13217,7 @@ pub const FunctionBuilder = struct {
         const node = try self.recordCallNode(
             .{ .variant_name = value.value_type.variant },
             &.{.{ .node = value.node, .slot = 0 }},
+            1,
             false,
             .string,
             span,
@@ -13760,6 +13879,7 @@ pub const FunctionBuilder = struct {
         const node = try self.recordCallNode(
             .{ .intrinsic = matched.kind },
             entries,
+            written.len,
             matched.kind.isFallible(),
             result,
             call.span,

@@ -82,15 +82,33 @@ pub const Provenance = enum {
 };
 
 /// A statement temporary this expression's value was parked in (S3):
-/// the hidden slot, and which of its two claims — the objects in the
-/// value, the storage under it — the statement's end releases.  Null on
-/// an expression nothing parked.  Recording it is what lets lower emit
-/// the park without re-deriving the ownership walk (05_hir.zig,
-/// coupling #3: the ledger of statement temporaries becomes this).
+/// the hidden slot, the claims the park itself made, and the claims
+/// the statement's end still releases.  Null on an expression nothing
+/// parked.  Recording it is what lets lower emit the park without
+/// re-deriving the ownership walk (05_hir.zig, coupling #3: the
+/// ledger of statement temporaries becomes this).
+///
+/// **Both halves of the ledger's history are recorded**, because both
+/// are emissions.  `objects`/`storage` are the claims at the park —
+/// they decide what the park emits (an `object_bind` exactly when
+/// `objects`, an owning hidden slot exactly when `storage`) and what
+/// an unwinding path *between* the park and any adopting store
+/// releases (a `try`'s failing side).  The `released_*` pair is the
+/// settled answer after adopting stores retracted their halves — what
+/// the statement's end releases.  A park nothing retracted records the
+/// two pairs equal.
 pub const Park = struct {
     local: LocalId,
+    /// The claims at the park: an `object_bind` was emitted exactly
+    /// when `objects`; the hidden slot was made owning storage exactly
+    /// when `storage`.
     objects: bool,
     storage: bool,
+    /// The claims the statement's end still releases, post-retraction
+    /// (coupling #3): an adopting store takes the storage half; a
+    /// destructure or a return move takes the objects half.
+    released_objects: bool,
+    released_storage: bool,
 };
 
 /// How a store takes the value's storage (docs/STRINGS.md): `plain`
@@ -363,9 +381,13 @@ pub const Expression = union(enum) {
     };
 
     pub const IndexGet = struct {
-        target: NodeRef,
+        /// The container, with its batch rewrite flags: the read is one
+        /// operand run (`Operand`'s convention), so the target and every
+        /// subscript carry the spill and borrow-copy facts a replay
+        /// needs.
+        target: Operand,
         /// One per written subscript, in evaluation order.
-        indices: []const NodeRef,
+        indices: []const Operand,
         result: Type,
         span: Span,
         park: ?Park = null,
@@ -405,6 +427,25 @@ pub const Expression = union(enum) {
         result: Type,
         span: Span,
         park: ?Park = null,
+        /// The operand pair's evaluation and rewrite facts (`Sides`):
+        /// recorded because neither the typed-side-first evaluation
+        /// order nor the conservative spill guess is derivable from the
+        /// resolved tree (05_hir.zig, coupling #4).
+        sides: Sides = .{},
+    };
+
+    /// The recorded evaluation facts of a two-operand batch — an
+    /// arithmetic or comparison operator's pair.  `right_first` is the
+    /// typed-side-first evaluation order the untyped-literal rule takes
+    /// (docs/TYPES.md D3: the typed side is lowered first so the
+    /// literal can land on it, and that reorders the emission);
+    /// `left_spilled`/`left_copied` are the batch rewrites the paired
+    /// walk performs on the left operand (the right operand is last in
+    /// its batch and never takes either).
+    pub const Sides = struct {
+        right_first: bool = false,
+        left_spilled: bool = false,
+        left_copied: bool = false,
     };
 
     pub const Convert = struct {
@@ -466,6 +507,8 @@ pub const Expression = union(enum) {
         result: Type,
         span: Span,
         park: ?Park = null,
+        /// `Binary.sides`, for the same pair walk.
+        sides: Sides = .{},
     };
 
     pub const Call = struct {
@@ -711,6 +754,12 @@ pub const ResolvedCallee = union(enum) {
 /// property of the resolved callee — receiver mode and parameter type
 /// — that lower re-derives, not a decision of this batch.
 pub const OperandBatch = struct {
+    /// How many leading entries are *written* operands — lowered as
+    /// one batch, spills and copies included — before the defaulted
+    /// suffix, whose entries materialize one by one at the fill point.
+    /// Zero for a batch that is all defaults (a folded constant's
+    /// construction), whose fields materialize sequentially.
+    written: u32 = 0,
     operands: []const NodeRef,
     /// The declaration slot each operand fills — permuted where named
     /// arguments reorder (docs/ARGS.md D5), the receiver at slot 0 in
@@ -774,11 +823,15 @@ pub const Place = union(enum) {
     chain: Chain,
 
     pub const Field = struct { base: LocalId, layout: u32, field: u32 };
-    pub const Index = struct { base: NodeRef, indices: []const NodeRef };
+    /// The base and subscripts carry their batch rewrite flags
+    /// (`Operand`): the indexed store lowers one operand run — base,
+    /// subscripts, value — and a replay needs the spill and borrow-copy
+    /// facts for every position (the value's ride on the statement).
+    pub const Index = struct { base: Operand, indices: []const Operand };
     pub const Chain = struct { root: LocalId, steps: []const Step };
     pub const Step = union(enum) {
         field: struct { layout: u32, field: u32 },
-        index: []const NodeRef,
+        index: []const Operand,
     };
 };
 
@@ -862,6 +915,12 @@ pub const Statement = union(enum) {
         /// check, emitted once by lower (05_hir.zig, coupling #3).
         store: StoreKind,
         span: Span,
+        /// The value's own batch rewrites, where the place's shape puts
+        /// it in an operand run (an indexed or chained store): a spill
+        /// or borrow copy of the stored value is an emission the place
+        /// nodes cannot carry.
+        value_spilled: bool = false,
+        value_copied: bool = false,
     };
 
     pub const CompoundAssign = struct {
@@ -871,6 +930,9 @@ pub const Statement = union(enum) {
         /// `Assign.store`, for the combined value's write-back.
         store: StoreKind,
         span: Span,
+        /// `Assign`'s value rewrites, for the same runs.
+        value_spilled: bool = false,
+        value_copied: bool = false,
     };
 
     pub const ExpressionStatement = struct {
@@ -897,6 +959,10 @@ pub const Statement = union(enum) {
         stop: NodeRef,
         body: Block,
         span: Span,
+        /// The bounds are one two-operand batch, so the first may be
+        /// spilled across a split in the second (`Sides`' left half;
+        /// bounds are `long`s, so the borrow copy never applies).
+        start_spilled: bool = false,
     };
 
     pub const ForIn = struct {
@@ -939,6 +1005,11 @@ pub const Statement = union(enum) {
         /// (`ownedForStore`, coupling #3).
         stores: []const StoreKind,
         span: Span,
+        /// A shaped return's values are one operand batch; these are
+        /// the batch's per-value rewrites, parallel to `values` (empty
+        /// for the single-value form, which lowers no batch).
+        spilled: []const bool = &.{},
+        copied: []const bool = &.{},
     };
 
     pub const Guarded = struct {
@@ -1118,15 +1189,21 @@ test "nodes build, and the accessors answer every payload" {
     right.* = .{ .const_long = .{ .value = 1, .result = .long, .span = test_span } };
     const sum = try arena.create(Expression);
     sum.* = .{ .binary = .{ .op = .add, .left = left, .right = right, .result = .long, .span = test_span } };
-    const indices = try arena.alloc(NodeRef, 1);
-    indices[0] = sum;
+    const indices = try arena.alloc(Operand, 1);
+    indices[0] = .{ .node = sum, .spilled = true };
     const element = try arena.create(Expression);
     element.* = .{ .index_get = .{
-        .target = target,
+        .target = .{ .node = target },
         .indices = indices,
         .result = .string,
         .span = test_span,
-        .park = .{ .local = 5, .objects = false, .storage = true },
+        .park = .{
+            .local = 5,
+            .objects = false,
+            .storage = true,
+            .released_objects = false,
+            .released_storage = true,
+        },
     } };
 
     try testing.expect(element.result() == .string);
@@ -1264,8 +1341,8 @@ test "provenance mirrors the storage categories the walk stamps" {
     try testing.expectEqual(Provenance.view, provenance(field));
     const payload = try node(arena, .{ .variant_payload = .{ .target = name, .variant = 0, .member = 1, .field = 0, .result = .string, .span = test_span } });
     try testing.expectEqual(Provenance.view, provenance(payload));
-    const indices = try arena.alloc(NodeRef, 0);
-    const element = try node(arena, .{ .index_get = .{ .target = name, .indices = indices, .result = .string, .span = test_span } });
+    const indices = try arena.alloc(Operand, 0);
+    const element = try node(arena, .{ .index_get = .{ .target = .{ .node = name }, .indices = indices, .result = .string, .span = test_span } });
     try testing.expectEqual(Provenance.view, provenance(element));
 
     // A folded constant materializes as its value does.
