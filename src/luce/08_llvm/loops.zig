@@ -300,7 +300,37 @@ fn collect(
                         else => {},
                     }
                 },
-                else => {},
+                // Nothing else can put a value in a local: a call writes
+                // only through `call_inout`'s receiver, and everything
+                // left works in registers.  Listed rather than
+                // defaulted, because a missing assignment here is a
+                // hoisted row read after the local that named it moved.
+                .const_boolean,
+                .const_long,
+                .const_double,
+                .const_string,
+                .const_container,
+                .const_function,
+                .local_get,
+                .binary,
+                .unary,
+                .convert,
+                .struct_make,
+                .struct_get,
+                .struct_set,
+                .variant_make,
+                .variant_tag,
+                .variant_field,
+                .call,
+                .spawn,
+                .call_indirect,
+                .heap_new,
+                .jump,
+                .branch,
+                .ret,
+                .trap,
+                .unwind,
+                => {},
             }
         }
     }

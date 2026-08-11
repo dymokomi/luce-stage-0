@@ -1,6 +1,6 @@
 # The standard library
 
-Eight modules, written in ordinary Luce and **embedded in the
+Nine modules, written in ordinary Luce and **embedded in the
 compiler** — the way Zig ships `lib/std` with its compiler, minus the
 install path. Wherever the compiler runs, `import std.math` just
 works. There is no package manager, no search path and nothing to

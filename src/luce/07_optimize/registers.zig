@@ -166,7 +166,36 @@ pub fn localUse(instruction: Instruction) LocalUse {
         .call_inout => |call| .{ .read_write = call.receiver },
         .object_bind => |bind| .{ .name = bind.local },
         .object_unbind => |unbind| .{ .name = unbind.local },
-        else => .none,
+        // Everything else works in registers.  Listed rather than
+        // defaulted, as `markOperands` lists its own: an instruction
+        // added later that names a local would otherwise answer "no
+        // local" here and have the stores to that slot deleted.
+        .const_boolean,
+        .const_long,
+        .const_double,
+        .const_string,
+        .const_container,
+        .const_function,
+        .binary,
+        .unary,
+        .convert,
+        .struct_make,
+        .struct_get,
+        .struct_set,
+        .variant_make,
+        .variant_tag,
+        .variant_field,
+        .call,
+        .spawn,
+        .call_indirect,
+        .intrinsic,
+        .heap_new,
+        .jump,
+        .branch,
+        .ret,
+        .trap,
+        .unwind,
+        => .none,
     };
 }
 

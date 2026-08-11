@@ -6,8 +6,10 @@
 //! Produces: instructions on a `mir.build.Lowering` — **the one
 //! emission there is**.  The dual-emission gate that held this pass
 //! byte-identical to the fused walk's emissions retired with those
-//! emissions; the corpus dumps it validated against remain the
-//! regression net.
+//! emissions, and the recorded corpus it was checked against went with
+//! it; what proves the pass now is the suite — every spec program runs
+//! on both engines and the two are compared on prints, traps, traces
+//! and leaks (docs/ENGINE.md).
 //!
 //! **This pass is mechanical and diagnostic-free.**  Its error set is
 //! `error{OutOfMemory}` and nothing else, by design: every decision —
@@ -17,8 +19,9 @@
 //! tree that under-records, and the fix is the *recording*
 //! (`builder.zig`), never a widened error set.
 //!
-//! What is re-derived rather than recorded, per the derived-emission
-//! checklist (B2e): the zero fill of a late declaration from the
+//! What is re-derived rather than recorded — the whole list, so a
+//! reader can tell a deliberate derivation from a tree that
+//! under-records: the zero fill of a late declaration from the
 //! slot's type; a `for x in xs:` loop's iteration machinery and
 //! per-iteration binding from the sequence's shape and the recorded
 //! name rows; a match or catch binding scope's storage releases from
@@ -270,21 +273,6 @@ const Replay = struct {
     fn heapOf(self: *const Replay, of: Type) ?types.HeapType {
         if (of != .heap) return null;
         return self.deps.heap_types[of.heap];
-    }
-
-    fn intrinsicProvenance(kind: mir.Intrinsic) nodes.Provenance {
-        if (kind.makesFreshStorage()) return .fresh;
-        return switch (kind) {
-            .index_get, .map_get, .key_at, .value_at => .view,
-            else => .plain,
-        };
-    }
-
-    fn zeroProvenance(of: Type) nodes.Provenance {
-        return switch (of) {
-            .strukt, .variant => .fresh,
-            else => .plain,
-        };
     }
 
     // -- locals: the lockstep -----------------------------------------------
@@ -549,7 +537,6 @@ const Replay = struct {
             .try_call => |attempt| try self.replayTry(attempt),
             .catch_expr => |caught| try self.replayCatch(caught),
             .struct_make => |built| try self.replayStructMake(built),
-            .struct_with => |built| replayStructWith(built),
             .variant_make => |built| try self.replayVariantMake(built),
             .list_literal => |literal| try self.replayListLiteral(literal),
             .map_literal => |literal| try self.replayMapLiteral(literal),
@@ -569,13 +556,6 @@ const Replay = struct {
             .function_value => |named| try self.code.emit(.{ .const_function = named.function }, named.result),
             .lambda_ref => |made| try self.code.emit(.{ .const_function = made.function }, made.result),
         };
-    }
-
-    /// `struct_with` has no producing arm yet — the recording never
-    /// constructs one, so a tree carrying it is malformed.
-    fn replayStructWith(built: nodes.Expression.StructWith) Register {
-        _ = built;
-        unreachable; // no arm records struct_with yet
     }
 
     // -- operand runs: the batch walk --------------------------------------
@@ -1123,7 +1103,7 @@ const Replay = struct {
             _ = try self.code.emit(.unwind, .none);
             return emitted;
         }
-        return self.finishFallible(emitted, called, intrinsicProvenance(kind));
+        return self.finishFallible(emitted, called, nodes.ofIntrinsic(kind));
     }
 
     fn slotLessThan(slots: []const u32, left: usize, right: usize) bool {
@@ -1660,7 +1640,7 @@ const Replay = struct {
             },
             .absent => .{
                 .register = try self.code.zeroOf(value_type),
-                .provenance = zeroProvenance(value_type),
+                .provenance = nodes.zeroOf(value_type),
             },
         };
     }
@@ -1740,7 +1720,7 @@ const Replay = struct {
         const zero = try self.code.zeroOf(row.local_type);
         const local = try self.makeRecordedLocal(declared.local);
         self.classes[local] = .owned;
-        try self.storeOwned(local, zero, row.local_type, zeroProvenance(row.local_type), declared.store);
+        try self.storeOwned(local, zero, row.local_type, nodes.zeroOf(row.local_type), declared.store);
         try self.noteOwned(local, self.carriesObjects(row.local_type));
     }
 

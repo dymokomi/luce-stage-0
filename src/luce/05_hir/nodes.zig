@@ -273,10 +273,6 @@ pub const Expression = union(enum) {
     /// arguments do), defaults appended after the written operands in
     /// the order they materialize.
     struct_make: StructMake,
-    /// A struct built out of an existing one with named fields
-    /// replaced — kept structured so lower, not check, spells the
-    /// copy-and-replace.
-    struct_with: StructWith,
     /// A union member built whole (docs/UNION.md D8).
     variant_make: VariantMake,
     /// `[a, b, c]` at its landing container type.
@@ -570,17 +566,6 @@ pub const Expression = union(enum) {
         result: Type,
         span: Span,
         park: ?Park = null,
-    };
-
-    pub const StructWith = struct {
-        base: NodeRef,
-        layout: u32,
-        replacements: []const Replacement,
-        result: Type,
-        span: Span,
-        park: ?Park = null,
-
-        pub const Replacement = struct { field: u32, value: NodeRef };
     };
 
     pub const VariantMake = struct {
@@ -1072,7 +1057,7 @@ pub fn provenance(expression: *const Expression) Provenance {
         // Constants own nothing and view nothing.
         .const_long, .const_double, .const_boolean, .const_string => .plain,
         // A struct or union zero is a built value that owns its run;
-        // every other absence is a constant (`zeroProvenance`'s rule).
+        // every other absence is a constant (`zeroOf`'s rule).
         .absent => |payload| zeroOf(payload.result),
         // A name reads as a view of what its slot holds.
         .local_get => .view,
@@ -1118,7 +1103,7 @@ pub fn provenance(expression: *const Expression) Provenance {
         // The answer is a reload of the slot both arms stored into.
         .catch_expr => .view,
         // Built whole; each owns its run (docs/UNION.md D8).
-        .struct_make, .struct_with, .variant_make => .fresh,
+        .struct_make, .variant_make => .fresh,
         // These answer fresh *objects*, which the objects park tracks;
         // the storage question the tape asks of them answers no.
         .list_literal, .map_literal, .new_object => .plain,
@@ -1136,21 +1121,22 @@ pub fn provenance(expression: *const Expression) Provenance {
     };
 }
 
-/// The provenance of a materialized zero or folded constant of `of` —
-/// `builder.zig`'s `zeroProvenance`, spelled once here for the two node
-/// kinds that inline one.
-fn zeroOf(of: Type) Provenance {
+/// The provenance of a materialized zero or folded constant of `of`: a
+/// struct or union zero is built whole and owns its run, every other
+/// absence is a constant.  Public because `lower.zig` materializes zeros
+/// of its own — for a late declaration's fill — and there is one answer.
+pub fn zeroOf(of: Type) Provenance {
     return switch (of) {
         .strukt, .variant => .fresh,
         else => .plain,
     };
 }
 
-/// The provenance an intrinsic's result carries — `builder.zig`'s
-/// `intrinsicProvenance`, which the seam landing retires in favor of
-/// this one: the allocators answer fresh storage, the readers answer a
-/// view, and the rest answer no storage question at all.
-fn ofIntrinsic(kind: mir.Intrinsic) Provenance {
+/// The provenance an intrinsic's result carries: the allocators answer
+/// fresh storage, the readers answer a view, and the rest answer no
+/// storage question at all.  Public for the same reason `zeroOf` is —
+/// `lower.zig` asks it of a fallible intrinsic call.
+pub fn ofIntrinsic(kind: mir.Intrinsic) Provenance {
     if (kind.makesFreshStorage()) return .fresh;
     return switch (kind) {
         .index_get, .map_get, .key_at, .value_at => .view,

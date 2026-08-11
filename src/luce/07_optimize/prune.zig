@@ -40,20 +40,8 @@ pub fn prune(arena: Allocator, program: *Program) Allocator.Error!void {
     reachable[program.entry_function] = true;
     try pending.append(arena, program.entry_function);
     while (pending.pop()) |index| {
-        for (program.functions[index].instructions) |instruction| {
-            const called = switch (instruction) {
-                .call, .spawn => |call| call.function,
-                .call_inout => |call| call.function,
-                // **Naming a function reaches it.**  A function value
-                // is a call that has not happened yet, and the call
-                // that will happen is a `call_indirect` naming no
-                // function at all — so if this arm were missing, a
-                // comparator passed to `sort_by` would be pruned out
-                // from under the value that names it
-                // (docs/FUNCTIONS.md D2).
-                .const_function => |named| named,
-                else => continue,
-            };
+        for (program.functions[index].instructions) |*instruction| {
+            const called = (functionSlot(instruction) orelse continue).*;
             if (reachable[called]) continue;
             reachable[called] = true;
             try pending.append(arena, called);
@@ -74,17 +62,106 @@ pub fn prune(arena: Allocator, program: *Program) Allocator.Error!void {
         if (!live) continue;
         const function = program.functions[index];
         for (function.instructions) |*instruction| {
-            switch (instruction.*) {
-                .call, .spawn => |*call| call.function = renumbered[call.function],
-                .call_inout => |*call| call.function = renumbered[call.function],
-                .const_function => |*named| named.* = renumbered[named.*],
-                else => {},
-            }
+            if (functionSlot(instruction)) |slot| slot.* = renumbered[slot.*];
         }
         functions[renumbered[index]] = function;
     }
     program.functions = functions;
     program.entry_function = renumbered[program.entry_function];
+}
+
+/// The function index an instruction names, or null — **the one place
+/// that knows which instructions carry one.**  Both walks above read it,
+/// so an instruction added later has a single switch to answer, and it
+/// is a compile error rather than a silence: a function index nobody
+/// marks is pruned out from under its only reference, and one nobody
+/// renumbers points at whatever moved into its old slot.
+///
+/// The pointer borrows the instruction and dies with it.
+fn functionSlot(instruction: *Instruction) ?*u32 {
+    return switch (instruction.*) {
+        .call, .spawn => |*call| &call.function,
+        .call_inout => |*call| &call.function,
+        // **Naming a function reaches it.**  A function value is a call
+        // that has not happened yet, and the call that will happen is a
+        // `call_indirect` naming no function at all — so without this
+        // arm a comparator passed to `sort_by` would be pruned out from
+        // under the value that names it (docs/FUNCTIONS.md D2).
+        .const_function => |*named| named,
+        // Everything else: `call_indirect` carries its callee in a
+        // register, and the rest is data, storage or control flow.
+        .const_boolean,
+        .const_long,
+        .const_double,
+        .const_string,
+        .const_container,
+        .local_get,
+        .local_set,
+        .binary,
+        .unary,
+        .convert,
+        .struct_make,
+        .struct_get,
+        .struct_set,
+        .variant_make,
+        .variant_tag,
+        .variant_field,
+        .call_indirect,
+        .intrinsic,
+        .heap_new,
+        .object_bind,
+        .object_unbind,
+        .jump,
+        .branch,
+        .ret,
+        .trap,
+        .unwind,
+        => null,
+    };
+}
+
+/// The constant row an instruction names, or null — the one place that
+/// knows which instructions carry one, for the reason `functionSlot` is
+/// the one place for functions.  The pointer borrows the instruction.
+const ConstantSlot = union(enum) { container: *u32, string: *u32 };
+
+fn constantSlot(instruction: *Instruction) ?ConstantSlot {
+    return switch (instruction.*) {
+        .const_container => |*index| .{ .container = index },
+        .const_string => |*index| .{ .string = index },
+        // A container's own contents name strings too, but they are
+        // reached through the row rather than through an instruction
+        // (`markStrings`).
+        .const_boolean,
+        .const_long,
+        .const_double,
+        .const_function,
+        .local_get,
+        .local_set,
+        .binary,
+        .unary,
+        .convert,
+        .struct_make,
+        .struct_get,
+        .struct_set,
+        .variant_make,
+        .variant_tag,
+        .variant_field,
+        .call,
+        .call_inout,
+        .spawn,
+        .call_indirect,
+        .intrinsic,
+        .heap_new,
+        .object_bind,
+        .object_unbind,
+        .jump,
+        .branch,
+        .ret,
+        .trap,
+        .unwind,
+        => null,
+    };
 }
 
 /// Drop container rows no surviving block names, remap their
@@ -108,11 +185,13 @@ pub fn compactConstants(arena: Allocator, program: *Program) Allocator.Error!voi
     // only their items keep a pool row alive.
     for (program.functions) |function| {
         for (function.blocks) |block| {
-            for (block.items) |item| switch (function.instructions[item]) {
-                .const_container => |index| used_containers[index] = true,
-                .const_string => |index| used_strings[index] = true,
-                else => {},
-            };
+            for (block.items) |item| {
+                const slot = constantSlot(&function.instructions[item]) orelse continue;
+                switch (slot) {
+                    .container => |index| used_containers[index.*] = true,
+                    .string => |index| used_strings[index.*] = true,
+                }
+            }
         }
     }
 
@@ -144,10 +223,13 @@ pub fn compactConstants(arena: Allocator, program: *Program) Allocator.Error!voi
         program.container_constants = constants;
         for (program.functions) |function| {
             for (function.blocks) |block| {
-                for (block.items) |item| switch (function.instructions[item]) {
-                    .const_container => |*index| index.* = moved_containers[index.*],
-                    else => {},
-                };
+                for (block.items) |item| {
+                    const slot = constantSlot(&function.instructions[item]) orelse continue;
+                    switch (slot) {
+                        .container => |index| index.* = moved_containers[index.*],
+                        .string => {},
+                    }
+                }
             }
         }
     }
@@ -169,10 +251,13 @@ pub fn compactConstants(arena: Allocator, program: *Program) Allocator.Error!voi
         program.constants = constants;
         for (program.functions) |function| {
             for (function.blocks) |block| {
-                for (block.items) |item| switch (function.instructions[item]) {
-                    .const_string => |*index| index.* = moved_strings[index.*],
-                    else => {},
-                };
+                for (block.items) |item| {
+                    const slot = constantSlot(&function.instructions[item]) orelse continue;
+                    switch (slot) {
+                        .string => |index| index.* = moved_strings[index.*],
+                        .container => {},
+                    }
+                }
             }
         }
         for (program.container_constants) |*constant| switch (constant.payload) {

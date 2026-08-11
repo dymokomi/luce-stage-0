@@ -675,14 +675,6 @@ pub const Lowering = struct {
         self.switchTo(loop.exit);
     }
 
-    /// Give up on a loop whose condition did not check out: the header
-    /// still has to terminate, and the code after it still has to be
-    /// somewhere.
-    pub fn abandonLoop(self: *Lowering, exit: BlockId) Error!void {
-        try self.jump(exit);
-        self.switchTo(exit);
-    }
-
     pub const CountedLoop = struct {
         index: LocalId,
         limit: LocalId,

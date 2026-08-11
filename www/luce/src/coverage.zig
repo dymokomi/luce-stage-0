@@ -161,6 +161,26 @@ fn isPlainName(text: []const u8) bool {
     return true;
 }
 
+/// The value of `pub const NAME... = <digits>;` in a repository source
+/// — how the tree writes a version number.  The declaration must be at
+/// column zero and its value a plain integer, which is what makes a
+/// renamed or restructured declaration an error here rather than a
+/// number that quietly stops being read.
+fn declaredNumber(repository: Repository, path: []const u8, name: []const u8) !u32 {
+    const source = try repository.read(path);
+    defer repository.gpa.free(source);
+
+    const opening = try std.fmt.allocPrint(repository.gpa, "\npub const {s}", .{name});
+    defer repository.gpa.free(opening);
+    const written = between(source, opening, ";") orelse {
+        std.debug.print("coverage: {s} declares no {s}\n", .{ path, name });
+        return error.DeclarationNotFound;
+    };
+    const equals = std.mem.indexOfScalar(u8, written, '=') orelse return error.DeclarationNotFound;
+    const digits = std.mem.trim(u8, written[equals + 1 ..], " ");
+    return std.fmt.parseInt(u32, digits, 10) catch error.DeclarationNotFound;
+}
+
 /// A line's leading identifier, when the line is `    name,` — how a
 /// Zig enum spells its members.
 fn enumMember(line: []const u8) ?[]const u8 {
@@ -949,12 +969,40 @@ test "the reference keeps implied self and static visible" {
 
     const toolchain = try repository.read("www/luce/content/guide/toolchain.md");
     defer gpa.free(toolchain);
-    for ([_][]const u8{
-        "Current release label:",
-        "`format_version = 38`",
-        "`abi.version = 15`",
-    }) |claim| {
-        try std.testing.expect(std.mem.indexOf(u8, toolchain, claim) != null);
+    try std.testing.expect(std.mem.indexOf(u8, toolchain, "Current release label:") != null);
+}
+
+test "the toolchain page carries the module format and host ABI the tree has" {
+    // **Derived, never pinned.**  A literal here would enforce whatever
+    // the page said on the day it was written: the numbers were 38 and
+    // 15 while the tree said 39, and this check was what kept the page
+    // saying so.  Both numbers are read out of the sources that declare
+    // them, so the page can only disagree with the compiler by failing
+    // the build.
+    const gpa = std.testing.allocator;
+    const repository = try open(gpa, std.testing.io);
+    defer gpa.free(repository.prefix);
+
+    const toolchain = try repository.read("www/luce/content/guide/toolchain.md");
+    defer gpa.free(toolchain);
+
+    const format = try declaredNumber(repository, "src/luce/06_mir/module.zig", "format_version");
+    const published = try declaredNumber(repository, "src/luce/08_llvm/abi.zig", "version");
+
+    const claims = [_][]u8{
+        try std.fmt.allocPrint(gpa, "`format_version = {d}`", .{format}),
+        try std.fmt.allocPrint(gpa, "`abi.version = {d}`", .{published}),
+        // The number is written twice on the page — once as prose,
+        // once as the split from the release label — and both are the
+        // compiler's.
+        try std.fmt.allocPrint(gpa, "current `.lcm` format is **{d}**", .{format}),
+        try std.fmt.allocPrint(gpa, "published host ABI is **{d}**", .{published}),
+    };
+    defer for (claims) |claim| gpa.free(claim);
+    for (claims) |claim| {
+        if (std.mem.indexOf(u8, toolchain, claim) != null) continue;
+        std.debug.print("guide/toolchain.md does not say {s}\n", .{claim});
+        return error.TestUnexpectedResult;
     }
 }
 

@@ -438,6 +438,30 @@ that sizes a spawn count.
 
 ---
 
+## term
+
+The same terminal, without the rest of the machine.  `std.term` is a
+thin re-export of `os.term`: `rows`, `cols`, `clear`, `move`, `style`,
+`write` and `flush` forward one call each, and `term.ui` and `term.io`
+*are* `os.term.ui` and `os.term.io` — the same immutable facades under
+a second name, not a second implementation.
+
+```
+import std.term
+
+term.move(0, 0)
+term.style(80, bold = true)
+term.write(term.ui.horizontal())
+term.flush()
+let name = term.io.read()
+```
+
+It exists so a terminal program does not have to reach through the
+system namespace for the one facility it uses; the rules, the host
+gate and the event vocabulary are `os.term`'s, written once above.
+
+---
+
 ## zip
 
 ZIP archives and DEFLATE, in pure Luce — and the module that says out

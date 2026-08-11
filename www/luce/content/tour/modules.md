@@ -112,11 +112,11 @@ main.luc:1:1: there is no standard module std.nope; the standard library is std.
     ^~~~~~~~~~~~~~~
 ```
 
-There are eight standard modules today: [`math`](/std/math/),
+There are nine standard modules today: [`math`](/std/math/),
 [`strings`](/std/strings/), [`files`](/std/files/),
 [`lists`](/std/lists/), [`paths`](/std/paths/), [`os`](/std/os/),
-[`zip`](/std/zip/) and [`json`](/std/json/). They are ordinary Luce
-source and they obey
+[`term`](/std/term/), [`zip`](/std/zip/) and [`json`](/std/json/).
+They are ordinary Luce source and they obey
 every language rule, including the host gate — `import std.files`
 inside a host-less program is a compile error, because file access
 genuinely does not exist there.

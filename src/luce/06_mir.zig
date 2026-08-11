@@ -74,5 +74,6 @@ pub const module = @import("06_mir/module.zig");
 test {
     _ = build;
     _ = module;
+    _ = @import("06_mir/verify.zig");
     _ = @import("06_mir/test.zig");
 }

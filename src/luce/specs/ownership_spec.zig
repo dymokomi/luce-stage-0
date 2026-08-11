@@ -1924,6 +1924,40 @@ test "S43: an unfilled slot frees nothing; a filled one frees normally" {
 }
 
 // ---------------------------------------------------------------------------
+// G3b. The entry's own binding (S44)
+// ---------------------------------------------------------------------------
+//
+// `main`'s `args` arrives owning its list, from a caller that is the
+// runtime rather than a call site — which is the whole of what is
+// special about it.  Every rule from S15 up then reads unchanged, and
+// the census is what says the scope gave the list back.  The refusal of
+// a verb on the signature is pinned in `errors_spec.zig`.
+
+test "S44: args is an owned binding, read and sliced like any other" {
+    try agreeClean(
+        \\func main(args: list(string)):
+        \\    var total: long = 0
+        \\    for name in args:
+        \\        total += len(name)
+        \\    let tail = args[1:len(args)]
+        \\    assert(len(tail) == 1)
+        \\    assert(total == 9)
+        \\
+    );
+}
+
+test "S44: args may be given away, and the receiving scope frees it" {
+    try agreeClean(
+        \\func count(names: give list(string)) -> long:
+        \\    return len(names)
+        \\
+        \\func main(args: list(string)):
+        \\    assert(count(give args) == 2)
+        \\
+    );
+}
+
+// ---------------------------------------------------------------------------
 // G4. Optionals change nothing (S1, S5, S16, S43; docs/FAILURE.md)
 // ---------------------------------------------------------------------------
 //

@@ -1114,6 +1114,13 @@ pub fn writeWhole(io: std.Io, path: []const u8, content: []const u8) !void {
 
 const testing = std.testing;
 
+// The loader is the manifest's only consumer, so the manifest's own
+// tests run with it: naming an import is what puts a file's tests in
+// the binary, and using its declarations is not.
+test {
+    _ = manifest;
+}
+
 /// tmpDir lives under .zig-cache/tmp/<sub>; files.zig resolves paths
 /// relative to cwd, so tests build the cwd-relative prefix.
 fn tmpPrefix(sub_path: []const u8) ![]u8 {

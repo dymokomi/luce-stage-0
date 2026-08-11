@@ -83,9 +83,6 @@ pub const Host = struct {
     err: *std.Io.Writer,
     arguments: []const []const u8,
     screen: Screen,
-    /// Where `file_read` puts a file's bytes for the C table, which
-    /// hands out borrows rather than allocations.  Reused per call.
-    loaded_file: std.ArrayList(u8) = .empty,
     /// The line `read_line` last read, without its newline — borrowed
     /// until the next call, like every other answer this host gives.
     read_line_buffer: std.ArrayList(u8) = .empty,
@@ -174,7 +171,6 @@ pub const Host = struct {
         self.threads.deinit(self.gpa);
         self.restoreScreen();
         self.screen.buffer.deinit(self.gpa);
-        self.loaded_file.deinit(self.gpa);
         self.read_line_buffer.deinit(self.gpa);
         self.sanitized.deinit(self.gpa);
         self.listed_names.deinit(self.gpa);
@@ -453,8 +449,8 @@ pub const Host = struct {
             .write => std.Io.Dir.cwd().createFile(self.io, path, .{ .truncate = true }) catch
                 return null,
             // No `O_APPEND` in the `Io` file API, so an append handle
-            // is a create-without-truncate positioned at the end; the
-            // position is this host's, exactly as `appendFile`'s is.
+            // is a create-without-truncate positioned at the end, and
+            // the position is this host's rather than the descriptor's.
             .append => std.Io.Dir.cwd().createFile(self.io, path, .{ .truncate = false }) catch
                 return null,
             else => return null,
@@ -493,75 +489,9 @@ pub const Host = struct {
         self.open_files.clearRetainingCapacity();
     }
 
-    /// A whole file's bytes, or null when it could not be read.  The
-    /// bytes live in this Host and are borrowed until the next read,
-    /// which is what the C table hands out; generated code copies them
-    /// into the run's own arena before the next call can move them.
-    ///
-    /// **The bytes must be valid UTF-8**, because they become a Luce
-    /// `string` and the language promises that `s[a:b]` is checked
-    /// against character boundaries and `len` counts characters.  A
-    /// half-read JPEG would make both of those lies, and the trap they
-    /// are supposed to raise would fire — or not — on the *contents*
-    /// of a file rather than on anything the program did.  Source
-    /// bytes have been through `01_source.prepare` since stage 1 was
-    /// written; nothing was checking data.  A file that is not text
-    /// answers null and the program traps `file_read_failed`, which is
-    /// true: it could not be read *as a string*.
-    ///
-    /// Unlike source, data is **not** normalized: no BOM is stripped
-    /// and no CRLF is rewritten.  `file_read` hands back the file, and
-    /// a program that reads a CSV and writes it again must get the
-    /// same bytes out.
-    ///
-    /// **There is a size cap** (`max_file_size`, 64 MB), and a file
-    /// over it answers null and traps like any other unreadable one.
-    /// It is a host policy, not a language limit: `file_read` reads a
-    /// whole file into one buffer, so the cap is what stops a program
-    /// from being handed the machine's memory by naming a path.  A
-    /// program that needs more wants a streaming read, which is a
-    /// service the host does not offer yet.
-    fn loadFile(self: *Host, path: []const u8) error{OutOfMemory}!?[]const u8 {
-        const file = std.Io.Dir.cwd().openFile(self.io, path, .{}) catch return null;
-        defer file.close(self.io);
-        const size: usize = @intCast(file.length(self.io) catch return null);
-        if (size > max_file_size) return null;
-        self.loaded_file.clearRetainingCapacity();
-        try self.loaded_file.resize(self.gpa, size);
-        const loaded = file.readPositionalAll(self.io, self.loaded_file.items, 0) catch
-            return null;
-        if (loaded != size) return null;
-        if (!std.unicode.utf8ValidateSlice(self.loaded_file.items)) return null;
-        return self.loaded_file.items;
-    }
-
-    fn writeFile(self: *Host, path: []const u8, content: []const u8) bool {
-        const file = std.Io.Dir.cwd().createFile(self.io, path, .{ .truncate = true }) catch return false;
-        defer file.close(self.io);
-        file.writePositionalAll(self.io, content, 0) catch return false;
-        file.sync(self.io) catch return false;
-        return true;
-    }
-
     fn fileExists(self: *Host, path: []const u8) bool {
         const file = std.Io.Dir.cwd().openFile(self.io, path, .{}) catch return false;
         file.close(self.io);
-        return true;
-    }
-
-    /// Add to the end of a file, creating it if it is not there.
-    ///
-    /// Read the length and write past it, because the `Io` file API
-    /// exposes no O_APPEND: one process appending to its own log is
-    /// what this is for, and two writers racing for the same tail is
-    /// not something a flag here would fix anyway.
-    fn appendFile(self: *Host, path: []const u8, content: []const u8) bool {
-        const file = std.Io.Dir.cwd().createFile(self.io, path, .{ .truncate = false }) catch
-            return false;
-        defer file.close(self.io);
-        const end = file.length(self.io) catch return false;
-        file.writePositionalAll(self.io, content, end) catch return false;
-        file.sync(self.io) catch return false;
         return true;
     }
 
@@ -1062,35 +992,6 @@ pub const Host = struct {
         return call_depth;
     }
 
-    fn cFileRead(
-        context: ?*anyopaque,
-        path: [*]const u8,
-        path_length: i64,
-        text: *[*]const u8,
-        length: *i64,
-    ) callconv(.c) abi.Answer {
-        const self = of(context);
-        const found = (self.loadFile(path[0..@intCast(path_length)]) catch
-            return .exhausted) orelse return .no;
-        text.* = found.ptr;
-        length.* = @intCast(found.len);
-        return .yes;
-    }
-
-    fn cFileWrite(
-        context: ?*anyopaque,
-        path: [*]const u8,
-        path_length: i64,
-        content: [*]const u8,
-        content_length: i64,
-    ) callconv(.c) abi.Answer {
-        const wrote = of(context).writeFile(
-            path[0..@intCast(path_length)],
-            content[0..@intCast(content_length)],
-        );
-        return if (wrote) .yes else .no;
-    }
-
     fn cFileExists(
         context: ?*anyopaque,
         path: [*]const u8,
@@ -1381,20 +1282,6 @@ pub const Host = struct {
         return .yes;
     }
 
-    fn cFileAppend(
-        context: ?*anyopaque,
-        path: [*]const u8,
-        path_length: i64,
-        content: [*]const u8,
-        content_length: i64,
-    ) callconv(.c) abi.Answer {
-        const added = of(context).appendFile(
-            path[0..@intCast(path_length)],
-            content[0..@intCast(content_length)],
-        );
-        return if (added) .yes else .no;
-    }
-
     fn cFileDelete(
         context: ?*anyopaque,
         path: [*]const u8,
@@ -1451,8 +1338,6 @@ const OpenFile = struct {
     /// is refused, instead of naming whoever moved in.
     shut: bool = false,
 };
-
-const max_file_size = 64 * 1024 * 1024;
 
 /// Numeric data belonging to the most recent terminal input event.
 /// Coordinates are zero based; keyboard and resize events use row/column
@@ -1585,6 +1470,14 @@ fn windowSize() Size {
 // ---------------------------------------------------------------------------
 
 const testing = std.testing;
+
+// The two files this host is the only consumer of, so their own tests
+// run with it: naming an import is what puts a file's tests in the
+// binary, and using its declarations is not.
+test {
+    _ = key_mod;
+    _ = machine;
+}
 
 test "worker registry publishes and joins sibling nested threads under contention" {
     const Stress = struct {
@@ -1794,98 +1687,6 @@ test "styles render 256-color SGR runs and clamp to defaults" {
     );
 }
 
-test "file_read refuses bytes that cannot be a string, and normalizes nothing" {
-    var written: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer written.deinit();
-
-    var scratch = testing.tmpDir(.{});
-    defer scratch.cleanup();
-    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
-    const directory = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
-
-    var reported: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer reported.deinit();
-
-    var host: Host = undefined;
-    host.setup(testing.allocator, testing.io, &written.writer, &reported.writer, &.{});
-    defer host.deinit();
-
-    const cases = [_]struct { name: []const u8, content: []const u8, readable: bool }{
-        // Every shape the language would then be lying about: a lone
-        // continuation byte, a truncated sequence, a NUL-riddled
-        // binary, an overlong encoding.
-        .{ .name = "loose.bin", .content = "ok\x80\n", .readable = false },
-        .{ .name = "cut.bin", .content = "caf\xC3", .readable = false },
-        .{ .name = "photo.jpg", .content = "\xFF\xD8\xFF\xE0\x00\x10", .readable = false },
-        .{ .name = "overlong.bin", .content = "\xC0\xAF", .readable = false },
-        // And what data is allowed to be, untouched: a BOM, CRLF, a
-        // lone CR, an empty file.  Source normalizes these; data must
-        // not, or a program that reads a file and writes it back
-        // changes it.
-        .{ .name = "windows.csv", .content = "\xEF\xBB\xBFa,b\r\nc,d\r\n", .readable = true },
-        .{ .name = "classic.txt", .content = "one\rtwo\r", .readable = true },
-        .{ .name = "empty.txt", .content = "", .readable = true },
-        .{ .name = "unicode.txt", .content = "héllo — ok\n", .readable = true },
-    };
-    for (cases) |case| {
-        const path = try std.fs.path.join(testing.allocator, &.{ directory, case.name });
-        defer testing.allocator.free(path);
-        try testing.expect(Host.writeFile(&host, path, case.content));
-
-        const found = try host.loadFile(path);
-        if (!case.readable) {
-            try testing.expect(found == null);
-            continue;
-        }
-        // Byte for byte: no BOM stripped, no CRLF rewritten.
-        try testing.expectEqualStrings(case.content, found.?);
-    }
-}
-
-test "file_read stops exactly at the ceiling it documents" {
-    // The cap is what stops a program from being handed the machine's
-    // memory by naming a path, so both sides of it have to be the
-    // documented number: a file of exactly 64 MiB is a file, and one
-    // byte more is refused the way any unreadable file is.
-    //
-    // The bytes are never written.  A single byte at the last offset
-    // gives the file its length and the filesystem stores a hole, so
-    // this costs a `resize` and a read of zeros — which are, as it
-    // happens, perfectly good UTF-8.
-    var out: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer out.deinit();
-    var reported: std.Io.Writer.Allocating = .init(testing.allocator);
-    defer reported.deinit();
-
-    var scratch = testing.tmpDir(.{});
-    defer scratch.cleanup();
-    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
-    const directory = path_storage[0..try scratch.dir.realPath(testing.io, &path_storage)];
-
-    var host: Host = undefined;
-    host.setup(testing.allocator, testing.io, &out.writer, &reported.writer, &.{});
-    defer host.deinit();
-
-    const cases = [_]struct { name: []const u8, length: u64, readable: bool }{
-        .{ .name = "brim.bin", .length = max_file_size, .readable = true },
-        .{ .name = "over.bin", .length = max_file_size + 1, .readable = false },
-    };
-    for (cases) |case| {
-        const path = try std.fs.path.join(testing.allocator, &.{ directory, case.name });
-        defer testing.allocator.free(path);
-        const file = try std.Io.Dir.cwd().createFile(testing.io, path, .{ .truncate = true });
-        try file.writePositionalAll(testing.io, "\x00", case.length - 1);
-        file.close(testing.io);
-
-        const found = try host.loadFile(path);
-        if (!case.readable) {
-            try testing.expect(found == null);
-            continue;
-        }
-        try testing.expectEqual(@as(usize, max_file_size), found.?.len);
-    }
-}
-
 test "a program may name any path the process itself can" {
     // **The deliberate non-rule** (docs/LANGUAGE.md, "The host").  Loom
     // runs programs the way a shell runs processes: `allow_host` is the
@@ -1913,11 +1714,27 @@ test "a program may name any path the process itself can" {
     host.setup(testing.allocator, testing.io, &out.writer, &reported.writer, &.{});
     defer host.deinit();
 
+    // Through the byte channel, which is the path a program's file
+    // services take (docs/BYTES.md R2).
+    const table = host.table();
+    var handle: i64 = 0;
+    var moved_bytes: i64 = 0;
+
     // An absolute path, anywhere the process can reach.
     const absolute = try std.fs.path.join(testing.allocator, &.{ directory, "notes.txt" });
     defer testing.allocator.free(absolute);
-    try testing.expect(host.writeFile(absolute, "kept"));
-    try testing.expectEqualStrings("kept", (try host.loadFile(absolute)).?);
+    try testing.expectEqual(abi.Answer.yes, table.handle_open.?(
+        table.context,
+        absolute.ptr,
+        @intCast(absolute.len),
+        @intFromEnum(luce.runtime.files.Mode.write),
+        &handle,
+    ));
+    try testing.expectEqual(
+        abi.Answer.yes,
+        table.handle_write.?(table.context, handle, "kept", 4, &moved_bytes),
+    );
+    try testing.expectEqual(abi.Answer.yes, table.handle_close.?(table.context, handle));
 
     // And a relative one that climbs out of where it started: the
     // directory's own name, reached through its parent.
@@ -1929,7 +1746,24 @@ test "a program may name any path the process itself can" {
     });
     defer testing.allocator.free(climbing);
     try testing.expect(host.fileExists(climbing));
-    try testing.expectEqualStrings("kept", (try host.loadFile(climbing)).?);
+    var read_back: [16]u8 = undefined;
+    var filled: i64 = 0;
+    try testing.expectEqual(abi.Answer.yes, table.handle_open.?(
+        table.context,
+        climbing.ptr,
+        @intCast(climbing.len),
+        @intFromEnum(luce.runtime.files.Mode.read),
+        &handle,
+    ));
+    try testing.expectEqual(abi.Answer.yes, table.handle_read.?(
+        table.context,
+        handle,
+        &read_back,
+        read_back.len,
+        &filled,
+    ));
+    try testing.expectEqualStrings("kept", read_back[0..@intCast(filled)]);
+    try testing.expectEqual(abi.Answer.yes, table.handle_close.?(table.context, handle));
 }
 
 test "a program cannot smuggle terminal controls onto stderr or into a prompt" {
@@ -2241,7 +2075,22 @@ test "the C table offers every service, over the same implementation" {
         &moved_bytes,
     ));
     try testing.expectEqual(abi.Answer.yes, table.handle_close.?(table.context, handle));
-    try testing.expectEqualStrings("kept more", (try host.loadFile(path)).?);
+    try testing.expectEqual(abi.Answer.yes, table.handle_open.?(
+        table.context,
+        path.ptr,
+        @intCast(path.len),
+        @intFromEnum(luce.runtime.files.Mode.read),
+        &handle,
+    ));
+    try testing.expectEqual(abi.Answer.yes, table.handle_read.?(
+        table.context,
+        handle,
+        &read_back,
+        read_back.len,
+        &filled,
+    ));
+    try testing.expectEqualStrings("kept more", read_back[0..@intCast(filled)]);
+    try testing.expectEqual(abi.Answer.yes, table.handle_close.?(table.context, handle));
     try testing.expectEqual(abi.Answer.yes, table.file_rename.?(
         table.context,
         path.ptr,

@@ -10,15 +10,18 @@
 //! conversion that missed it would move the cursor by the wrong number
 //! of bytes and nothing would have noticed.
 //!
-//! So this drives the editor through every key it handles and compares
-//! the whole terminal transcript byte for byte, on **both engines**
-//! (`specs/agree.zig`).  The transcript below was recorded from the
-//! editor as it stood before the merge into `struct State`; the same
-//! bytes after it are the proof the memo asked for.
+//! So the scripts here drive the editor through every key it handles
+//! and compare the whole terminal transcript byte for byte, on **both
+//! engines** (`specs/agree.zig`).  The transcript below was recorded
+//! from the editor as it stood before the merge into `struct State`;
+//! the same bytes after it are the proof the memo asked for.
 //!
-//! It is deliberately one long script rather than several short ones:
-//! what is under test is a state machine, and the interesting bugs are
-//! the ones where an earlier key changes what a later one does.
+//! The first script is deliberately one long one rather than several
+//! short ones: what is under test is a state machine, and the
+//! interesting bugs are the ones where an earlier key changes what a
+//! later one does.  The scripts after it are the keys that cannot be
+//! reached from where the long one ends, or that need a world of their
+//! own — a pane, a refused write, a mouse.
 
 const std = @import("std");
 const agree = @import("agree.zig");
@@ -215,6 +218,33 @@ test "the file pane is optional and receives focus through the pane cycle" {
     try testing.expect(std.mem.indexOf(u8, shown, "alpha.txt") != null);
     try testing.expect(std.mem.indexOf(u8, shown, "[files]") != null);
     try testing.expect(std.mem.indexOf(u8, shown, "┌ files") != null);
+}
+
+test "Ctrl-O opens the output pane, and Escape hands focus back to the text" {
+    // The three keys the long script cannot reach: it ends in the
+    // editor with a file to save, and these move focus somewhere else
+    // first.  `escape` is answered before pane dispatch, so what proves
+    // it is where the next character lands.
+    const keys = [_]agree.World.Key{
+        .{ .name = "ctrl_o" },
+        .{ .name = "page_up" },
+        .{ .name = "escape" },
+        .{ .name = "text", .text = "Z" },
+        .{ .name = "ctrl_s" },
+        .{ .name = "ctrl_q" },
+    };
+    var world: agree.World = .withFile("notes.txt", "hello\n");
+    world.arguments = &[_][]const u8{"notes.txt"};
+    world.keys = &keys;
+    var program = try agree.project(editor, &editor_files);
+    defer program.deinit();
+    var session = try agree.compareProgram(&program, .{ .world = world });
+    defer session.deinit();
+
+    const shown = try screenText(session.printed());
+    defer testing.allocator.free(shown);
+    try testing.expect(std.mem.indexOf(u8, shown, "[output]") != null);
+    try testing.expectEqualStrings("Zhello\n", session.file().?.content);
 }
 
 test "a mouse click lands the cursor before editing" {

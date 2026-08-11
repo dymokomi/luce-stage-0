@@ -13,7 +13,7 @@ every `file:line` here was re-derived rather than carried forward.
 
 ## Scorecard
 
-The **shipped language core is locked.**  Ten conceptual stages, seven
+The **shipped language core is locked.**  Ten conceptual stages, eight
 stage folders, and a front end whose diagnostics mostly name the fix
 rather than the parser's predicament — mostly, because the ownership,
 optional and failure families set a standard that fifteen other places
@@ -761,17 +761,27 @@ improvement the audit exposed:
 
 ## Tier 5 — stage and tooling distance
 
-- **Stage 5 (HIR) is unwritten.**  Desugaring is scattered across
-  stages 3 and 4.  The file carries one warning that outranks the
-  cleanup: **whole-array operations must survive as single nodes** —
-  `std.math`'s BLAS-1 functions are already scalar loops by the time
-  MIR exists, and LLVM 22 fuses adjacent elementwise loops under *no*
-  configuration of `-O3`.  That is a performance item decided in a
-  language stage, and it cannot be taken back.
+- ~~**Stage 5 (HIR) is unwritten.**~~ — **landed 2026-08-10**
+  (`src/luce/05_hir/`): stage 4's walk checks and records a typed tree
+  and emits nothing, and `05_hir/lower.zig` is the one emission — a
+  mechanical, diagnostic-free lowering whose error set is
+  `OutOfMemory` alone.  Compound assignment, `for x in xs`, `match`,
+  the short-circuits and the fallible forms all reach it as structured
+  nodes and are desugared there.  **One desugaring is still upstream of
+  the tree**: `03_parse` expands f-strings into `string(x) + ...` and
+  `elif` chains into nested `if`s while it still has nothing but
+  syntax, so those two arrive pre-expanded; moving them down changes
+  stage 3's output and is its own landing.  The warning the stage
+  carries outranks all of that and is unchanged: **whole-array
+  operations must survive as single nodes** — `std.math`'s BLAS-1
+  functions are already scalar loops by the time MIR exists, and LLVM
+  22 fuses adjacent elementwise loops under *no* configuration of
+  `-O3`.  That is a performance item decided in a language stage, and
+  it cannot be taken back.
 - **No `luce fmt`, no `luce test`, no LSP, no debugger.**  A `luce test`
   discovering `func test_*():` would be cheap and very Zig.  `fmt` and
-  an LSP both want stage 5's faithful tree first — an argument for
-  writing it.
+  an LSP both wanted stage 5's faithful tree first and now have it —
+  what is left for them is the tooling itself.
 - **Packages: the consuming half is built; producing and fetching are
   not.**  A program under a `luce.yaml` resolves dotted imports,
   hand-vendored packages in `.luce/packages/`, `LUCE_LIB` shelves and
@@ -1086,10 +1096,10 @@ Completed chronology lives in the tiers above.  The current queue is:
    `std.json` — written without unions as a lazy flat document — is
    now writable against a real `union Json` if that proves the better
    shape.
-6. **Stage 5 (HIR)** — required by `fmt`, by an LSP, and by keeping
-   array operations whole.  Union added the two builder couplings its
-   memo priced (`variant_make`/`variant_field` arms in the
-   tape-reading predicates), which the eventual move carries.
+6. ~~**Stage 5 (HIR)**~~ — **landed 2026-08-10**, the seam built and
+   the scaffolding taken down (`src/luce/05_hir/`).  The checker
+   records a typed tree and emits nothing; one pass lowers it.  What
+   `fmt`, an LSP and whole-array operations were waiting on is there.
 
 ---
 

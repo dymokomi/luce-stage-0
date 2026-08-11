@@ -1646,14 +1646,20 @@ test "ord of a literal is a compile-time constant" {
         \\
     );
     defer compiled.deinit();
+    var folded = false;
     for (compiled.functions) |function| {
         for (function.instructions) |instruction| {
             if (instruction == .intrinsic and instruction.intrinsic.kind == .ord_text) {
                 std.debug.print("ord survived to run time\n", .{});
                 return error.TestUnexpectedResult;
             }
+            // `(` is 40, and the fold has to have left it somewhere: a
+            // scan that only looks for what must be absent passes on an
+            // empty program, which proves nothing.
+            if (instruction == .const_long and instruction.const_long == 40) folded = true;
         }
     }
+    try testing.expect(folded);
 }
 
 test "ord folds in a file-scope constant, and an empty one still traps at run time" {

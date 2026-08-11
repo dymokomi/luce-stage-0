@@ -1423,11 +1423,30 @@ const Module = struct {
         return @intCast(count);
     }
 
+    /// Whether a folded atom of this type has storage the row must own
+    /// a copy of — bytes or a field run.  A union's run is freed exactly
+    /// as a struct's, so it answers the same; no `ConstantValue` builds
+    /// one today, and the answer is here rather than in a default so
+    /// that stays true by construction and not by luck.
     fn constantOwnsStorage(of: types.Type) bool {
         return switch (of) {
-            .string, .strukt => true,
+            .string, .strukt, .variant => true,
             .optional => |payload| constantOwnsStorage(payload.asType()),
-            else => false,
+            // Scalars are their own storage; an object is a handle the
+            // row's container call takes.
+            .none,
+            .boolean,
+            .byte,
+            .short,
+            .int,
+            .long,
+            .half,
+            .float,
+            .double,
+            .heap,
+            .enumeration,
+            .function,
+            => false,
         };
     }
 

@@ -162,7 +162,21 @@ fn verifyType(program: *const Program, of: Type) VerifyError!void {
         // A payload is a type in its own right and is bounded the same
         // way; it can never be optional itself, so this is one step.
         .optional => |payload| try verifyType(program, payload.asType()),
-        else => {},
+        // The scalars index no table, so there is nothing to bound.
+        // Listed rather than defaulted because this switch sits on the
+        // trust boundary: a type added later that names a row would
+        // otherwise pass a crafted `.lcm` straight through `decode`.
+        .none,
+        .boolean,
+        .byte,
+        .short,
+        .int,
+        .long,
+        .half,
+        .float,
+        .double,
+        .string,
+        => {},
     }
 }
 

@@ -73,8 +73,8 @@
 //! `a * b + c` are unnamed, statement-scoped, and unobservable.  The
 //! legal precondition exists; only the representation is missing.
 //!
-//! This matters now, while the stage is unwritten, because it is the
-//! one decision here that cannot be taken back.  Sugar that gets
+//! This binds every arm added here, because it is the one decision the
+//! stage cannot take back.  Sugar that gets
 //! expanded too early is a refactor.  An array operation expanded into
 //! a scalar loop is information destroyed, and no later pass, second
 //! IR, or dialect recovers it — it forecloses the array-compute and GPU

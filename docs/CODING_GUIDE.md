@@ -104,8 +104,8 @@ build.zig  build.zig.zon      zig build test runs everything; ./build.sh install
 src/luce/                     the language, one numbered surface per stage:
   compile.zig                 the driver: the stage sequence, in order
   01_source 02_lex 03_parse   bytes to tokens to tree
-  04_semantics                resolve + type-check + validate (and, still, the MIR lowering)
-  05_hir                      a named seam; nothing in it yet
+  04_semantics                resolve + type-check + validate, recording a typed tree
+  05_hir                      that tree, and the one pass that lowers it to MIR
   06_mir                      the typed MIR, verifier, printer, module format
   07_optimize                 three MIR passes: prune, ownership, dead
   08_llvm                     MIR to LLVM IR to an object; the host ABI
@@ -118,7 +118,8 @@ src/apps/loom/                only what is loom's: main, shell, runner, palette,
 src/apps/*.zig                shared by both binaries, because a program's behaviour
                               must not depend on who started it: host (the real host),
                               key, machine, native, report, sanitize, start, streams,
-                              files — plus harness, the install tree both product suites drive
+                              files, manifest — plus harness, the install tree both
+                              product suites drive
 examples/                     userland, written in Luce; editor/editor.luc is embedded in loom
 docs/                         V2.md LANGUAGE.md OWNERSHIP.md CODEGEN.md; v1/ is history
 ```

@@ -22,7 +22,7 @@
 //!                    switch on.
 //!   heap.zig       — `Runtime` (the two allocators a run draws on,
 //!                    the object table, serials, the trap channel),
-//!                    objects, and the ownership walks S1–S43 are
+//!                    objects, and the ownership walks S1–S46 are
 //!                    written in terms of.
 //!   containers.zig — List, Map, Array, Builder, and the `free`/`give`/
 //!                    `copy` verbs.
@@ -123,6 +123,8 @@ test {
     _ = @import("runtime/containers.zig");
     _ = @import("runtime/operators.zig");
     _ = @import("runtime/text.zig");
+    _ = @import("runtime/files.zig");
+    _ = @import("runtime/workers.zig");
     _ = @import("runtime/trace.zig");
     _ = @import("runtime/exports.zig");
     _ = @import("runtime/test.zig");
