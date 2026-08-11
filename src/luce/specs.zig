@@ -32,6 +32,9 @@ pub const ownership = @import("specs/ownership_spec.zig");
 /// Enums and the match statement, decision by decision
 /// (docs/ENUMS.md).
 pub const enums = @import("specs/enums_spec.zig");
+/// Tagged unions: construction, dispatch, payload aliasing, the zero,
+/// and ownership of what a member carries (docs/UNION.md).
+pub const unions = @import("specs/union_spec.zig");
 /// What the compiler must refuse, by stable diagnostic code.  The one
 /// spec that runs nothing: a program that does not compile has no
 /// engine to disagree about.
@@ -81,6 +84,7 @@ test {
     _ = behavior;
     _ = ownership;
     _ = enums;
+    _ = unions;
     _ = errors;
     _ = standard;
     _ = zip;

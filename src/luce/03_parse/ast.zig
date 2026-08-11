@@ -332,15 +332,15 @@ pub const Guarded = struct { attempt: *Statement, binding: ?Name, handler: Block
 /// (docs/ENUMS.md R3).  The scrutinee's type is known and the arm
 /// namespace is closed, so the name needs no qualification.
 ///
-/// **Where union extends this.**  A payload arm is written
-/// `circle(r):` — the same name, followed by the names it binds — so
-/// the extension is a `bindings: []Name` field here and a loop in the
-/// arm's scope, not a second statement.  It is left unwritten rather
-/// than declared empty: a field nothing fills is a field nothing
-/// checks (docs/ENUMS.md R1).
+/// `bindings` is the union extension (docs/UNION.md D5): a payload arm
+/// is written `circle(radius):` — the member's name, then the fields it
+/// binds, each by the field's own name.  Empty for a bare arm, which is
+/// the whole of what an enum's arms may be and is also legal on a
+/// payload-carrying union member — the arm that only cares which one.
 pub const MatchArm = struct {
     name: []const u8,
     name_span: Span,
+    bindings: []Name = &.{},
     body: Block,
     span: Span,
 };
@@ -460,6 +460,33 @@ pub const EnumDecl = struct {
     span: Span,
 };
 
+/// One member of a union: a snake_case name and, where the member
+/// carries a payload, the parenthesized field list it was declared
+/// with (docs/UNION.md D1).  Fields are named always — a positional
+/// payload is refused where it is written — and take the same `= EXPR`
+/// default clause a struct field takes (D4).  A bare member has an
+/// empty list; `circle()` is refused, so empty never means "wrote
+/// parentheses".
+pub const UnionMember = struct {
+    name: []const u8,
+    name_span: Span,
+    fields: []Field = &.{},
+    span: Span,
+};
+
+/// `union Shape:` — one of a closed set of members, at least one of
+/// which carries a payload (docs/UNION.md D1, D2 — the all-bare form
+/// is an enum, and stage 4 says so).  Takes the methods and namespace
+/// functions a struct takes (D17).
+pub const UnionDecl = struct {
+    name: []const u8,
+    name_span: Span,
+    members: []UnionMember,
+    functions: []FuncDecl,
+    visibility: Visibility = .none,
+    span: Span,
+};
+
 /// How a parameter receives objects: borrowed (the default — the
 /// callee may read and mutate contents but not keep) or given (the
 /// callee takes ownership; the call site must say `give`/`copy` or
@@ -538,5 +565,6 @@ pub const Program = struct {
     constants: []ConstDecl,
     structs: []StructDecl,
     enums: []EnumDecl = &.{},
+    unions: []UnionDecl = &.{},
     functions: []FuncDecl,
 };

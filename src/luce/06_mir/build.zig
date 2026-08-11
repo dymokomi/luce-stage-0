@@ -146,6 +146,11 @@ pub const Lowering = struct {
     /// (docs/ENUMS.md), which is a fact about the declaration and not
     /// about the width.
     enums: []const types.EnumType = &.{},
+    /// The program's unions, settled with the structs.  Read for the
+    /// same one thing: the zero of a union-typed slot is its first
+    /// declared member with every payload field at its own zero
+    /// (docs/UNION.md D13).
+    variants: []const types.VariantType = &.{},
 
     name: []const u8,
     parameter_count: u32 = 0,
@@ -467,6 +472,31 @@ pub const Lowering = struct {
                 }
                 break :blk try self.emit(
                     .{ .struct_make = .{ .layout = layout_index, .fields = fields } },
+                    of,
+                );
+            },
+            // **A union's zero is its first declared member, with
+            // every payload field at its own zero** (docs/UNION.md
+            // D13) — ENUMS A3 one level up.  The recursion terminates
+            // for every union stage 4 accepted, because the only
+            // recursion D12 lets through goes through a `?` or a
+            // container, and neither recurses.
+            .variant => |variant_index| blk: {
+                const member = self.variants[variant_index].members[0];
+                const fields = try self.arena.alloc(Register, member.fields.len);
+                for (member.fields, fields) |field, *slot| {
+                    const zero = try self.zeroOf(field.field_type);
+                    slot.* = switch (field.field_type) {
+                        .string => try self.ownStorage(zero),
+                        else => zero,
+                    };
+                }
+                break :blk try self.emit(
+                    .{ .variant_make = .{
+                        .variant = variant_index,
+                        .member = 0,
+                        .fields = fields,
+                    } },
                     of,
                 );
             },
@@ -890,6 +920,8 @@ pub const Lowered = struct {
     structs: []StructLayout,
     heap_types: []types.HeapType,
     enums: []types.EnumType = &.{},
+    /// One row per declared union (docs/UNION.md D18).
+    variants: []types.VariantType = &.{},
     /// One row per distinct function type the program writes
     /// (docs/FUNCTIONS.md S2).
     signatures: []types.Signature = &.{},
@@ -941,6 +973,7 @@ pub fn build(
     program.structs = lowered.structs;
     program.heap_types = lowered.heap_types;
     program.enums = lowered.enums;
+    program.variants = lowered.variants;
     program.signatures = lowered.signatures;
     program.functions = functions;
     program.constants = lowered.constants;

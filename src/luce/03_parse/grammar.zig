@@ -505,6 +505,8 @@ pub const Parser = struct {
         defer structs.deinit(self.arena);
         var enums: std.ArrayList(ast.EnumDecl) = .empty;
         defer enums.deinit(self.arena);
+        var unions: std.ArrayList(ast.UnionDecl) = .empty;
+        defer unions.deinit(self.arena);
         var functions: std.ArrayList(ast.FuncDecl) = .empty;
         defer functions.deinit(self.arena);
 
@@ -535,6 +537,13 @@ pub const Parser = struct {
                 .keyword_enum => {
                     if (try self.enumDecl()) |declaration| {
                         try enums.append(self.arena, declaration);
+                    } else {
+                        self.recover();
+                    }
+                },
+                .keyword_union => {
+                    if (try self.unionDecl()) |declaration| {
+                        try unions.append(self.arena, declaration);
                     } else {
                         self.recover();
                     }
@@ -581,7 +590,7 @@ pub const Parser = struct {
                     self.recover();
                 },
                 .keyword_public, .keyword_private => {
-                    try self.markedDeclaration(&constants, &structs, &enums, &functions);
+                    try self.markedDeclaration(&constants, &structs, &enums, &unions, &functions);
                 },
                 else => {
                     // A file-scope name is never valid, so a word that
@@ -609,7 +618,7 @@ pub const Parser = struct {
                     try self.report(
                         "luce.parse.top",
                         self.peek().span,
-                        "expected import, const, struct, enum, or func at file scope, found {s}",
+                        "expected import, const, struct, enum, union, or func at file scope, found {s}",
                         .{try self.found()},
                     );
                     self.recover();
@@ -621,6 +630,7 @@ pub const Parser = struct {
             .constants = try constants.toOwnedSlice(self.arena),
             .structs = try structs.toOwnedSlice(self.arena),
             .enums = try enums.toOwnedSlice(self.arena),
+            .unions = try unions.toOwnedSlice(self.arena),
             .functions = try functions.toOwnedSlice(self.arena),
         };
     }
@@ -635,6 +645,7 @@ pub const Parser = struct {
         constants: *std.ArrayList(ast.ConstDecl),
         structs: *std.ArrayList(ast.StructDecl),
         enums: *std.ArrayList(ast.EnumDecl),
+        unions: *std.ArrayList(ast.UnionDecl),
         functions: *std.ArrayList(ast.FuncDecl),
     ) Error!void {
         const marker = self.advance();
@@ -714,11 +725,20 @@ pub const Parser = struct {
                     self.recover();
                 }
             },
+            .keyword_union => {
+                if (try self.unionDecl()) |declaration| {
+                    var marked = declaration;
+                    marked.visibility = visibility;
+                    try unions.append(self.arena, marked);
+                } else {
+                    self.recover();
+                }
+            },
             else => {
                 try self.report(
                     "luce.parse.top",
                     marker.span,
-                    "'{s}' marks a declaration: expected func, const, struct, or enum after it, found {s}",
+                    "'{s}' marks a declaration: expected func, const, struct, enum, or union after it, found {s}",
                     .{ keywordWord(marker.kind).?, try self.found() },
                 );
                 self.recover();
@@ -1352,6 +1372,211 @@ pub const Parser = struct {
         };
     }
 
+    // -- declarations: unions -----------------------------------------------
+
+    /// `union Shape:` — the declaration form that mirrors enum's
+    /// (docs/UNION.md D1): a name, then one indented member per line,
+    /// each optionally carrying a parenthesized **named** field list,
+    /// with the methods and namespace functions a struct body takes
+    /// (D17).
+    ///
+    /// What a union does *not* take, and where each refusal lands: no
+    /// backing width and no discriminant in parentheses after the name
+    /// (R2 — the enum is declared separately and matched on), no
+    /// `= value` on a member (a member is not a number, D1), and no
+    /// positional payload (a field is named, always).
+    fn unionDecl(self: *Parser) Error!?ast.UnionDecl {
+        const start = self.advance(); // union
+        const name = (try self.expect(.identifier, "a union name")) orelse return null;
+        try self.refuseWildcardName(name);
+        if (self.peekKind() == .left_paren) {
+            try self.report(
+                "luce.parse.expected",
+                self.peek().span,
+                "a union names no discriminant: declare the enum on its own and match on it",
+                .{},
+            );
+            return null;
+        }
+        if (!try self.colonOrLayout("':' after the union name")) return null;
+        if ((try self.expect(.newline, "end of line after ':'")) == null) return null;
+        if ((try self.blockBody("union")) == null) return null;
+
+        var members: std.ArrayList(ast.UnionMember) = .empty;
+        defer members.deinit(self.arena);
+        var functions: std.ArrayList(ast.FuncDecl) = .empty;
+        defer functions.deinit(self.arena);
+        while (self.peekKind() != .dedent and self.peekKind() != .end_of_file) {
+            if (self.accept(.newline) != null) continue;
+            if (self.peekKind() == .indent) {
+                try self.unexpectedIndent();
+                continue;
+            }
+            var visibility: ast.Visibility = .none;
+            if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
+                visibility = (try self.unionMarker()) orelse continue;
+            }
+            if (self.peekKind() == .keyword_func or self.peekKind() == .keyword_static) {
+                const declaration = if (self.peekKind() == .keyword_static)
+                    try self.staticFuncDecl()
+                else
+                    try self.funcDecl();
+                if (declaration) |parsed| {
+                    var marked = parsed;
+                    marked.visibility = visibility;
+                    try functions.append(self.arena, marked);
+                } else {
+                    self.recover();
+                }
+                continue;
+            }
+            if (try self.unionMember()) |member| {
+                try members.append(self.arena, member);
+            } else {
+                self.recover();
+            }
+        }
+        _ = self.accept(.dedent);
+        return .{
+            .name = self.text(name),
+            .name_span = name.span,
+            .members = try members.toOwnedSlice(self.arena),
+            .functions = try functions.toOwnedSlice(self.arena),
+            .span = .{ .start = start.span.start, .end = name.span.end },
+        };
+    }
+
+    /// A visibility word inside a union body — `enumMarker`'s rule,
+    /// one keyword over: a function may carry one, a member may not,
+    /// because a union's members are what the type is and a match arm
+    /// cannot name one the file it stands in cannot see.
+    fn unionMarker(self: *Parser) Error!?ast.Visibility {
+        const marker = self.advance();
+        const word = keywordWord(marker.kind).?;
+        if (self.peekKind() == .colon) {
+            try self.report(
+                "luce.parse.expected",
+                .{ .start = marker.span.start, .end = self.peek().span.end },
+                "'{s}:' opens a region inside a struct; a union's members are the type and are always visible",
+                .{word},
+            );
+            _ = self.advance(); // the colon
+            self.recover();
+            return null;
+        }
+        if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
+            try self.report(
+                "luce.parse.expected",
+                self.peek().span,
+                "one visibility word per declaration",
+                .{},
+            );
+            self.recover();
+            return null;
+        }
+        if (self.peekKind() == .keyword_func or self.peekKind() == .keyword_static) {
+            return if (marker.kind == .keyword_private) .private else .public;
+        }
+        try self.report(
+            "luce.parse.expected",
+            marker.span,
+            "a union member is part of the type and is always visible; write '{s} union' to withhold the whole set",
+            .{word},
+        );
+        return .none;
+    }
+
+    /// One member line: `null`, or `circle(radius: double)` — a
+    /// snake_case name and an optional parenthesized field list whose
+    /// fields are named always and take the default clause a struct
+    /// field takes (docs/UNION.md D1, D4).
+    fn unionMember(self: *Parser) Error!?ast.UnionMember {
+        const name = (try self.expect(.identifier, "a union member name")) orelse return null;
+        try self.refuseWildcardName(name);
+        // `circle = 1` — an enum habit.  A union member is not a
+        // number and has no second identity to assign (D1).
+        if (self.peekKind() == .assign) {
+            try self.report(
+                "luce.parse.expected",
+                self.peek().span,
+                "a union member holds no number: write '{s}', or '{s}(field: type)' for a payload",
+                .{ self.text(name), self.text(name) },
+            );
+            return null;
+        }
+        // `circle: double` — the struct field's colon, in the one body
+        // that spells a payload with parentheses.
+        if (self.peekKind() == .colon) {
+            try self.report(
+                "luce.parse.expected",
+                self.peek().span,
+                "a union member's payload is parenthesized: write '{s}(field: type)'",
+                .{self.text(name)},
+            );
+            return null;
+        }
+        var fields: std.ArrayList(ast.Field) = .empty;
+        defer fields.deinit(self.arena);
+        var written_end = name.span.end;
+        if (self.peekKind() == .left_paren) {
+            const opener = self.advance();
+            if (self.peekKind() == .right_paren) {
+                try self.report(
+                    "luce.parse.expected",
+                    .{ .start = opener.span.start, .end = self.peek().span.end },
+                    "parentheses mean a payload: name at least one field, or write '{s}' bare",
+                    .{self.text(name)},
+                );
+                return null;
+            }
+            var previous_end = opener.span.end;
+            while (!expr.endsList(self.peekKind(), .right_paren)) {
+                const field_name = (try self.expect(.identifier, "a field name")) orelse return null;
+                try self.refuseWildcardName(field_name);
+                // `circle(double)` — a positional payload, which is a
+                // tuple with a name in front of it (docs/RETURNS.md);
+                // payload fields are named, always (D1).
+                if (self.peekKind() != .colon) {
+                    try self.report(
+                        "luce.parse.expected",
+                        field_name.span,
+                        "a payload field is named, always: write {s}(name: {s})",
+                        .{ self.text(name), self.text(field_name) },
+                    );
+                    return null;
+                }
+                _ = self.advance(); // the colon
+                const field_type = (try self.typeName()) orelse return null;
+                var default_value: ?*ast.Expression = null;
+                var field_end = field_type.span.end;
+                if (self.accept(.assign) != null) {
+                    const written = (try self.expression()) orelse return null;
+                    default_value = written;
+                    field_end = written.span().end;
+                }
+                try fields.append(self.arena, .{
+                    .name = self.text(field_name),
+                    .name_span = field_name.span,
+                    .type_name = field_type,
+                    .default = default_value,
+                    .span = .{ .start = field_name.span.start, .end = field_end },
+                });
+                previous_end = field_end;
+                if (self.accept(.comma) == null) break;
+            }
+            if (try self.missingSeparator(previous_end)) return null;
+            const closing = (try self.expectClose(.right_paren, opener)) orelse return null;
+            written_end = closing.span.end;
+        }
+        try self.endOfStatement("end of line after the member");
+        return .{
+            .name = self.text(name),
+            .name_span = name.span,
+            .fields = try fields.toOwnedSlice(self.arena),
+            .span = .{ .start = name.span.start, .end = written_end },
+        };
+    }
+
     // -- declarations: functions ------------------------------------------
 
     /// `static func` is a member-only declaration.  Visibility has
@@ -1659,7 +1884,7 @@ pub const Parser = struct {
                 );
                 return null;
             },
-            .keyword_func, .keyword_struct, .keyword_enum, .keyword_import => {
+            .keyword_func, .keyword_struct, .keyword_enum, .keyword_union, .keyword_import => {
                 const word = keywordWord(self.peekKind()).?;
                 try self.report(
                     "luce.parse.expected",
@@ -2062,7 +2287,9 @@ pub const Parser = struct {
         } };
     }
 
-    /// One arm: a bare member name, then the block its colon opens.
+    /// One arm: a member name, an optional parenthesized field-name
+    /// list — the union payload extension (docs/UNION.md D5), names
+    /// only, no types — then the block its colon opens.
     fn matchArm(self: *Parser) Error!?ast.MatchArm {
         // `case stored:` — Python's second keyword, carrying nothing
         // the colon does not (docs/ENUMS.md Q3).
@@ -2094,12 +2321,51 @@ pub const Parser = struct {
             );
             return null;
         }
+        var bindings: std.ArrayList(ast.Name) = .empty;
+        defer bindings.deinit(self.arena);
+        var written_end = name.span.end;
+        if (self.peekKind() == .left_paren) {
+            const opener = self.advance();
+            if (self.peekKind() == .right_paren) {
+                try self.report(
+                    "luce.parse.expected",
+                    .{ .start = opener.span.start, .end = self.peek().span.end },
+                    "parentheses bind payload fields: name at least one, or write '{s}:' bare",
+                    .{self.text(name)},
+                );
+                return null;
+            }
+            var previous_end = opener.span.end;
+            while (!expr.endsList(self.peekKind(), .right_paren)) {
+                const bound = (try self.expect(.identifier, "a field name to bind")) orelse return null;
+                try self.refuseWildcardName(bound);
+                // `circle(radius: double)` — the declaration's field
+                // list where the arm's binding list belongs.  An arm
+                // binds by name alone; the types were declared once.
+                if (self.peekKind() == .colon) {
+                    try self.report(
+                        "luce.parse.expected",
+                        self.peek().span,
+                        "an arm binds fields by name alone: write {s}({s})",
+                        .{ self.text(name), self.text(bound) },
+                    );
+                    return null;
+                }
+                try bindings.append(self.arena, .{ .text = self.text(bound), .span = bound.span });
+                previous_end = bound.span.end;
+                if (self.accept(.comma) == null) break;
+            }
+            if (try self.missingSeparator(previous_end)) return null;
+            const closing = (try self.expectClose(.right_paren, opener)) orelse return null;
+            written_end = closing.span.end;
+        }
         const body = (try self.block(self.text(name))) orelse return null;
         return .{
             .name = self.text(name),
             .name_span = name.span,
+            .bindings = try bindings.toOwnedSlice(self.arena),
             .body = body,
-            .span = .{ .start = name.span.start, .end = name.span.end },
+            .span = .{ .start = name.span.start, .end = written_end },
         };
     }
 
@@ -2497,6 +2763,7 @@ pub fn describe(kind: Kind) []const u8 {
         .keyword_static => "the keyword 'static'",
         .keyword_struct => "the keyword 'struct'",
         .keyword_enum => "the keyword 'enum'",
+        .keyword_union => "the keyword 'union'",
         .keyword_match => "the keyword 'match'",
         .keyword_const => "the keyword 'const'",
         .keyword_let => "the keyword 'let'",

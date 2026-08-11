@@ -36,6 +36,27 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
         }
     }
 
+    // A union prints its members with their payload fields: the member
+    // *index* is what `variant_make` and the compare trees below carry,
+    // so the declaration order here is the key to reading them.
+    for (program.variants) |declared| {
+        try appendPrint(&text, allocator, "union {s}:\n", .{declared.name});
+        for (declared.members) |member| {
+            try appendPrint(&text, allocator, "    {s}", .{member.name});
+            if (member.fields.len != 0) {
+                try text.append(allocator, '(');
+                for (member.fields, 0..) |field, index| {
+                    if (index != 0) try text.appendSlice(allocator, ", ");
+                    const field_type_name = try typeName(allocator, program, field.field_type);
+                    defer allocator.free(field_type_name);
+                    try appendPrint(&text, allocator, "{s}: {s}", .{ field.name, field_type_name });
+                }
+                try text.append(allocator, ')');
+            }
+            try text.append(allocator, '\n');
+        }
+    }
+
     for (program.container_constants, 0..) |constant, index| {
         const constant_type_name = try typeName(allocator, program, .{ .heap = constant.heap });
         defer allocator.free(constant_type_name);
@@ -104,7 +125,7 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
 }
 
 fn typeName(allocator: Allocator, program: *const Program, of: Type) error{OutOfMemory}![]u8 {
-    return types.typeName(allocator, program.structs, program.heap_types, program.enums, program.signatures, of);
+    return types.typeName(allocator, program.structs, program.heap_types, program.enums, program.variants, program.signatures, of);
 }
 
 fn appendPrint(
@@ -192,6 +213,20 @@ fn printInstruction(
             program.structs[set.layout].name,
             program.structs[set.layout].fields[set.field].name,
             set.value,
+        }),
+        .variant_make => |make| {
+            try appendPrint(text, allocator, "variant_make {s}.{s}", .{
+                program.variants[make.variant].name,
+                program.variants[make.variant].members[make.member].name,
+            });
+            for (make.fields) |field| try appendPrint(text, allocator, ", r{d}", .{field});
+        },
+        .variant_tag => |tag| try appendPrint(text, allocator, "variant_tag r{d}", .{tag.target}),
+        .variant_field => |get| try appendPrint(text, allocator, "variant_field r{d}, {s}.{s}.{s}", .{
+            get.target,
+            program.variants[get.variant].name,
+            program.variants[get.variant].members[get.member].name,
+            program.variants[get.variant].members[get.member].fields[get.field].name,
         }),
         .call => |call| {
             try appendPrint(text, allocator, "call {s}", .{program.functions[call.function].name});

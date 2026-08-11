@@ -76,6 +76,14 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     for (program.structs) |layout| {
         for (layout.fields) |field| try verifyType(program, field.field_type);
     }
+    for (program.variants) |declared| {
+        // A union with no members has no zero and no tag to dispatch
+        // on; stage 4 cannot write one, so this is decode defense.
+        if (declared.members.len == 0) return error.BadStruct;
+        for (declared.members) |member| {
+            for (member.fields) |field| try verifyType(program, field.field_type);
+        }
+    }
     if (try typeTableCycle(allocator, program)) |cycle| return switch (cycle) {
         .heap => error.BadStruct,
         .function => error.BadFunction,
@@ -137,6 +145,7 @@ fn isCommandLine(program: *const Program, of: Type) bool {
 fn verifyType(program: *const Program, of: Type) VerifyError!void {
     switch (of) {
         .strukt => |index| if (index >= program.structs.len) return error.BadStruct,
+        .variant => |index| if (index >= program.variants.len) return error.BadStruct,
         .heap => |index| if (index >= program.heap_types.len) return error.BadStruct,
         .function => |index| if (index >= program.signatures.len) return error.BadFunction,
         // An enum names a row of the enum table, and the width it
@@ -263,9 +272,11 @@ fn typeTableNode(program: *const Program, of: Type) ?usize {
 // Struct layouts, and the one question that can hang a decoder
 // ---------------------------------------------------------------------------
 
-/// Does any struct contain itself, directly or through another?  Such
-/// a layout has no finite value and nothing downstream may assume one
-/// exists.
+/// Does any struct or union contain itself, directly or through
+/// another?  Such a layout has no finite value and nothing downstream
+/// may assume one exists — a union joins the same graph as a struct
+/// because only one member is ever live but every member is counted
+/// (docs/UNION.md D12).
 ///
 /// One linear pass over the containment graph — Tarjan's strongly
 /// connected components, with an explicit stack.  Asking the question
@@ -279,7 +290,7 @@ fn typeTableNode(program: *const Program, of: Type) ?usize {
 /// declarations.zig` answers the same question the same way, and also
 /// sums each layout's shape while it is there.)
 fn anyStructContainsItself(allocator: Allocator, program: *const Program) VerifyError!bool {
-    const count = program.structs.len;
+    const count = program.structs.len + program.variants.len;
     if (count == 0) return false;
 
     const unvisited = std.math.maxInt(u32);
@@ -295,8 +306,7 @@ fn anyStructContainsItself(allocator: Allocator, program: *const Program) Verify
     // Tarjan's component stack, and the explicit depth-first one.
     var pending: std.ArrayList(u32) = .empty;
     defer pending.deinit(allocator);
-    const Step = struct { layout: u32, field: u32 };
-    var path: std.ArrayList(Step) = .empty;
+    var path: std.ArrayList(GraphStep) = .empty;
     defer path.deinit(allocator);
 
     var next_order: u32 = 0;
@@ -307,7 +317,7 @@ fn anyStructContainsItself(allocator: Allocator, program: *const Program) Verify
         next_order += 1;
         open[root] = true;
         try pending.append(allocator, @intCast(root));
-        try path.append(allocator, .{ .layout = @intCast(root), .field = 0 });
+        try path.append(allocator, .{ .layout = @intCast(root) });
 
         while (path.items.len != 0) {
             // `step` points into `path`, which the descent below may
@@ -315,12 +325,7 @@ fn anyStructContainsItself(allocator: Allocator, program: *const Program) Verify
             // append, and nothing is read after.
             const step = &path.items[path.items.len - 1];
             const layout = step.layout;
-            const fields = program.structs[layout].fields;
-            if (step.field < fields.len) {
-                const field_type = fields[step.field].field_type;
-                step.field += 1;
-                if (field_type != .strukt) continue;
-                const held = field_type.strukt;
+            if (containedLayoutAt(program, step)) |held| {
                 // `verifyType` has already bounded every field index.
                 if (held == layout) return true;
                 if (order[held] == unvisited) {
@@ -329,7 +334,7 @@ fn anyStructContainsItself(allocator: Allocator, program: *const Program) Verify
                     next_order += 1;
                     open[held] = true;
                     try pending.append(allocator, held);
-                    try path.append(allocator, .{ .layout = held, .field = 0 });
+                    try path.append(allocator, .{ .layout = held });
                 } else if (open[held]) {
                     lowest[layout] = @min(lowest[layout], order[held]);
                 }
@@ -356,6 +361,54 @@ fn anyStructContainsItself(allocator: Allocator, program: *const Program) Verify
         }
     }
     return false;
+}
+
+/// One node of the combined containment graph with the cursor of the
+/// depth-first walk over its fields: structs advance `field` alone,
+/// variants advance `member` and `field` together, so resuming a scan
+/// never re-reads a field it already passed.
+const GraphStep = struct { layout: u32, member: u32 = 0, field: u32 = 0 };
+
+/// The next combined containment-graph node one of the step's fields
+/// names, advancing the step's cursor past it — skipping fields that
+/// hold no layout — or null once the node's fields run out.  Nodes are
+/// structs first, then variants at `program.structs.len +`; a
+/// variant's fields are its members' payload fields in declaration
+/// order, because every member counts for the cycle question
+/// (docs/UNION.md D12).
+fn containedLayoutAt(program: *const Program, step: *GraphStep) ?u32 {
+    if (step.layout < program.structs.len) {
+        const fields = program.structs[step.layout].fields;
+        while (step.field < fields.len) {
+            const held = fields[step.field].field_type;
+            step.field += 1;
+            if (graphNode(program, held)) |node| return node;
+        }
+        return null;
+    }
+    const members = program.variants[step.layout - program.structs.len].members;
+    while (step.member < members.len) {
+        const fields = members[step.member].fields;
+        while (step.field < fields.len) {
+            const held = fields[step.field].field_type;
+            step.field += 1;
+            if (graphNode(program, held)) |node| return node;
+        }
+        step.member += 1;
+        step.field = 0;
+    }
+    return null;
+}
+
+/// The combined-graph node a field type expands into, or null for a
+/// type that stops the walk — a container is a handle, and a handle's
+/// contents already have an owner and a finite size of their own.
+fn graphNode(program: *const Program, of: Type) ?u32 {
+    return switch (of) {
+        .strukt => |index| index,
+        .variant => |index| @intCast(program.structs.len + index),
+        else => null,
+    };
 }
 
 // ---------------------------------------------------------------------------
@@ -428,7 +481,7 @@ fn fitsFloat(held: f64, at: Type) bool {
         .double => true,
         .float => std.math.isNan(held) or @as(f64, @as(f32, @floatCast(held))) == held,
         .half => std.math.isNan(held) or @as(f64, @as(f16, @floatCast(held))) == held,
-        .none, .boolean, .byte, .short, .int, .long, .string, .strukt, .heap, .enumeration, .function, .optional => false,
+        .none, .boolean, .byte, .short, .int, .long, .string, .strukt, .heap, .enumeration, .variant, .function, .optional => false,
     };
 }
 
@@ -797,6 +850,38 @@ fn verifyInstruction(
             const value = try operandType(function, defined, set.value);
             try expectType(value, layout.fields[set.field].field_type);
             try expectType(result, .{ .strukt = set.layout });
+        },
+        // The variant trio reads `program.variants` and only that
+        // table, exactly as the struct trio reads `program.structs`
+        // (docs/UNION.md D8, D18).  A member index out of range is
+        // refused the way `isMember` refuses a number no enum member
+        // holds — it is where the fallthrough promise is defended.
+        .variant_make => |make| {
+            if (make.variant >= program.variants.len) return error.BadStruct;
+            const declared = program.variants[make.variant];
+            if (make.member >= declared.members.len) return error.BadStruct;
+            const member = declared.members[make.member];
+            if (make.fields.len != member.fields.len) return error.BadStruct;
+            for (make.fields, member.fields) |field_register, field| {
+                const value = try operandType(function, defined, field_register);
+                try expectType(value, field.field_type);
+            }
+            try expectType(result, .{ .variant = make.variant });
+        },
+        .variant_tag => |tag| {
+            const target = try operandType(function, defined, tag.target);
+            if (target != .variant) return error.TypeMismatch;
+            try expectType(result, .long);
+        },
+        .variant_field => |get| {
+            if (get.variant >= program.variants.len) return error.BadStruct;
+            const declared = program.variants[get.variant];
+            if (get.member >= declared.members.len) return error.BadStruct;
+            const member = declared.members[get.member];
+            if (get.field >= member.fields.len) return error.BadStruct;
+            const target = try operandType(function, defined, get.target);
+            try expectType(target, .{ .variant = get.variant });
+            try expectType(result, member.fields[get.field].field_type);
         },
         .call => |call| {
             if (call.function >= program.functions.len) return error.BadFunction;
@@ -1240,13 +1325,18 @@ fn verifyIntrinsic(
         },
         .give_object => {
             if (arguments.len < 1 or arguments.len > 2) return error.BadIntrinsic;
-            if (arguments[0] != .heap and arguments[0] != .strukt) return error.BadIntrinsic;
+            // A union value is a field run with a tag in slot 0, so it
+            // travels the verbs exactly as a struct value does
+            // (docs/UNION.md D8, D9).
+            if (arguments[0] != .heap and arguments[0] != .strukt and arguments[0] != .variant)
+                return error.BadIntrinsic;
             if (arguments.len == 2) try expectType(arguments[1], .long);
             try expectType(result, arguments[0]);
         },
         .copy_object => {
             try exactly(arguments, 1);
-            if (arguments[0] != .heap and arguments[0] != .strukt) return error.BadIntrinsic;
+            if (arguments[0] != .heap and arguments[0] != .strukt and arguments[0] != .variant)
+                return error.BadIntrinsic;
             try expectType(result, arguments[0]);
         },
         .list_sort, .list_reverse => {

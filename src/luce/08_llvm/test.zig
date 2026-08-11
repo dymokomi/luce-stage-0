@@ -169,6 +169,49 @@ test "floats, structs, and the host services all lower" {
     }
 }
 
+test "a union builds through the struct path and is read inline" {
+    const gpa = std.testing.allocator;
+    const rendered = (try render(
+        \\union Shape:
+        \\    empty
+        \\    circle(radius: double)
+        \\    rect(width: double, height: double)
+        \\
+        \\func kind(s: Shape) -> long:
+        \\    match s:
+        \\        empty:
+        \\            return 0
+        \\        circle(radius):
+        \\            return long(radius)
+        \\        rect:
+        \\            return 2
+        \\
+        \\func main():
+        \\    var cells = new array(Shape, 2)
+        \\    cells[1] = Shape.circle(radius = 4.0)
+        \\    print(string(kind(cells[1])))
+        \\
+    )).?;
+    defer gpa.free(rendered);
+
+    // Construction is `luce_rt_struct_make` with one more slot in
+    // front — no union-shaped export exists to call (docs/UNION.md
+    // D8).  Exactly one declaration and one call site: the one
+    // `variant_make` in `main`.  The match in `kind` reads the tag
+    // and the payload as a `gep` and a load, so if a read ever became
+    // a runtime call this count is what moves.
+    try std.testing.expect(std.mem.indexOf(u8, rendered, "declare i32 @luce_rt_struct_make") != null);
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        std.mem.count(u8, rendered, "@luce_rt_struct_make"),
+    );
+    // The array element zero is one private constant run per union
+    // (D13), padded to the union's static run length: one slot for
+    // the tag and two for `rect`, the widest member (D8, D12).
+    const zero_at = std.mem.indexOf(u8, rendered, "@luce.zero.Shape").?;
+    try std.testing.expect(std.mem.indexOf(u8, rendered[zero_at..@min(zero_at + 80, rendered.len)], "[3 x") != null);
+}
+
 test "the runtime library is called, not reimplemented" {
     const gpa = std.testing.allocator;
     // A Map, because a Map is the container that stays a call: a hash

@@ -6177,7 +6177,7 @@ test "luce.sema.match: the scrutinee is an enum and nothing else" {
         \\
     ,
         "luce.sema.match",
-        "match dispatches over an enum, and int is not one",
+        "match dispatches over an enum or a union, and int is neither",
     );
 }
 

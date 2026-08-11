@@ -304,6 +304,11 @@ const Module = struct {
     /// shares one template per layout.
     struct_zeros: []?Builder.Constant = &.{},
 
+    /// The same, one per union (docs/UNION.md D13): the first declared
+    /// member with every payload field at its own zero, padded to the
+    /// union's one static run length.
+    variant_zeros: []?Builder.Constant = &.{},
+
     /// Interned `{ ptr, i64 }` constants for text, keyed by content.
     /// Keys are borrowed from the program's arena or from static
     /// storage, both of which outlive this module.
@@ -347,6 +352,7 @@ const Module = struct {
         self.gpa.free(self.spawned);
         self.gpa.free(self.functions);
         self.gpa.free(self.struct_zeros);
+        self.gpa.free(self.variant_zeros);
         self.texts.deinit(self.gpa);
         self.* = undefined;
     }
@@ -413,6 +419,9 @@ const Module = struct {
                 .normal,
                 &.{ try self.valueType(payload.asType()), .i1 },
             ),
+            // A union value is a struct value whose field 0 is the tag
+            // (docs/UNION.md D8): a pointer to its run of `Value`s.
+            .variant => .ptr,
             .enumeration => unreachable, // answered by storage() above
             .function => unreachable, // answered by storage() above
         };
@@ -565,6 +574,7 @@ const Module = struct {
             .double,
             .string,
             .strukt,
+            .variant,
             .heap,
             .optional,
             => Builder.Alignment.fromByteUnits(8),
@@ -835,6 +845,47 @@ const Module = struct {
         return made;
     }
 
+    /// A pointer to the zero value of union `which` (docs/UNION.md
+    /// D13): slot 0 holds member index zero — the first declared
+    /// member — then that member's field zeros, then `none` padding up
+    /// to the union's one static run length.  D12 has already refused
+    /// every member that could make this recurse, so it bottoms out
+    /// for every union stage 4 accepted.
+    fn variantZero(self: *Module, which: u32) Error!Builder.Constant {
+        if (self.variant_zeros.len == 0) {
+            self.variant_zeros = try self.gpa.alloc(?Builder.Constant, self.program.variants.len);
+            @memset(self.variant_zeros, null);
+        }
+        if (self.variant_zeros[which]) |found| return found;
+
+        const declared = self.program.variants[which];
+        const span = declared.runLength();
+        var slots: std.ArrayList(Builder.Constant) = .empty;
+        defer slots.deinit(self.gpa);
+        // Member index zero boxes exactly as a `long` zero does, which
+        // is what the interpreter parks in the same slot.
+        try slots.append(self.gpa, try self.zeroField(.long));
+        for (declared.members[0].fields) |field| {
+            try slots.append(self.gpa, try self.zeroField(field.field_type));
+        }
+        while (slots.items.len < span) {
+            try slots.append(self.gpa, try self.zeroField(.none));
+        }
+
+        const run_type = try self.builder.arrayType(span, self.value_type);
+        const initializer = try self.builder.arrayConst(run_type, slots.items);
+        const name = try self.builder.strtabStringFmt("luce.zero.{s}", .{declared.name});
+        const variable = try self.builder.addVariable(name, run_type, .default);
+        try variable.setInitializer(initializer, self.builder);
+        variable.setMutability(.constant, self.builder);
+        const global = variable.ptrConst(self.builder).global;
+        global.setLinkage(.private, self.builder);
+
+        const made = variable.toConst(self.builder);
+        self.variant_zeros[which] = made;
+        return made;
+    }
+
     /// An integer's bits at the width it is stored at, zero-extended
     /// into the word a `runtime.Value` carries — what boxing a narrow
     /// number does, said for a constant one.
@@ -888,11 +939,20 @@ const Module = struct {
             // tag with no payload — the very `Value` the interpreter
             // parks in the same field (S43).
             .optional => .{ .none, try self.builder.intConst(.i64, 0) },
+            // A union field zeroes at its own table's first member
+            // (docs/UNION.md D13), never a struct row's — and boxes as
+            // the field run it is (D8).
+            .variant => |nested| .{ .strukt, try self.builder.castConst(
+                .ptrtoint,
+                try self.variantZero(nested),
+                .i64,
+            ) },
             .enumeration => unreachable, // answered by storage() above
             .function => unreachable, // answered by storage() above
         };
         const length: u64 = switch (of) {
             .strukt => |nested| self.program.structs[nested].fields.len,
+            .variant => |nested| self.program.variants[nested].runLength(),
             else => 0,
         };
         // An empty String's zero says its bytes are outside, at the
@@ -1871,7 +1931,7 @@ const Module = struct {
                 try wip.addParamAttr(index + 3, .noundef, self.builder);
                 continue;
             }
-            if (parameter.local_type != .strukt) continue;
+            if (parameter.local_type != .strukt and parameter.local_type != .variant) continue;
             const at = index + 3;
             try wip.addParamAttr(at, .readonly, self.builder);
             try wip.addParamAttr(at, .nonnull, self.builder);
@@ -1910,7 +1970,7 @@ const Module = struct {
             .boolean, .byte => 1,
             .short, .half => 2,
             .int, .float => 4,
-            .long, .double, .strukt, .heap => 8,
+            .long, .double, .strukt, .variant, .heap => 8,
             // `{ ptr, i64 }` — how a String travels.
             .string => 16,
             // `{T, i1}`: the payload, then one byte for the bit,
@@ -1925,7 +1985,7 @@ const Module = struct {
                 // {i32, i1} and {float, i1} align to 4, so eight
                 // bytes rather than sixteen.
                 .int, .float => 8,
-                .long, .double, .strukt, .heap => 16,
+                .long, .double, .strukt, .variant, .heap => 16,
                 .string => 24,
                 .none, .enumeration, .function, .optional => unreachable, // a payload is a value of a width
             },
@@ -2710,6 +2770,9 @@ const Body = struct {
                 .struct_make,
                 .struct_get,
                 .struct_set,
+                .variant_make,
+                .variant_tag,
+                .variant_field,
                 .call,
                 .call_inout,
                 .intrinsic,
@@ -2869,6 +2932,9 @@ const Body = struct {
             // using it traps rather than touching anything.
             .heap => try self.module.builder.intValue(.i64, runtime.null_index),
             .strukt => |layout| (try self.module.structZero(layout)).toValue(),
+            // A union's zero is the first declared member's run
+            // (docs/UNION.md D13), one private constant per union.
+            .variant => |index| (try self.module.variantZero(index)).toValue(),
             .none => self.fail("a local of type None"),
             // **A slot's fill, not a value of the type.**  A function
             // value has no zero — every value of the type names a
@@ -2902,7 +2968,9 @@ const Body = struct {
     /// `luce_rt_drop_storage` answers for.
     fn emptyValue(self: *Body, of: types.Type) Error!Builder.Value {
         return switch (of) {
-            .strukt => try self.module.builder.nullValue(.ptr),
+            // A union value's run empties exactly as a struct's does:
+            // a null run, which `luce_rt_drop_storage` answers for.
+            .strukt, .variant => try self.module.builder.nullValue(.ptr),
             else => self.zeroValue(of),
         };
     }
@@ -2997,6 +3065,31 @@ const Body = struct {
         try self.fillBoxValue(address, of, held);
     }
 
+    /// Element `index` of a run, filled with the whole `none` value —
+    /// the padding a union's run carries past its live member's fields
+    /// (docs/UNION.md D8, D12).  Every word is a constant, so the fill
+    /// sits in the entry block beside the shapes and runs once however
+    /// often the site is visited; the bits and length are written too,
+    /// so the run the runtime copies carries no uninitialized words.
+    fn noneAt(self: *Body, run: Builder.Value, index: usize) Error!void {
+        const builder = self.module.builder;
+        const resume_at = self.enterEntry();
+        defer self.leaveEntry(resume_at);
+        const address = try self.wip.gep(
+            .inbounds,
+            self.module.value_type,
+            run,
+            &.{try builder.intValue(.i64, index)},
+            "box.none",
+        );
+        try self.storeBoxByte(address, box_tag, try builder.intValue(
+            .i8,
+            @intFromEnum(runtime.Tag.none),
+        ));
+        try self.storeBoxField(address, box_bits, try builder.intValue(.i64, 0));
+        try self.storeBoxField(address, box_length, try builder.intValue(.i64, 0));
+    }
+
     /// Element `index` of a run, filled with a value the run is going
     /// to **keep**.
     ///
@@ -3064,7 +3157,7 @@ const Body = struct {
                 .i64,
                 "box.bits",
             ),
-            .strukt => try self.wip.cast(.ptrtoint, held, .i64, "box.bits"),
+            .strukt, .variant => try self.wip.cast(.ptrtoint, held, .i64, "box.bits"),
             .string => try self.wip.cast(
                 .ptrtoint,
                 try self.wip.extractValue(held, &.{0}, "box.text"),
@@ -3098,6 +3191,16 @@ const Body = struct {
             .strukt => |layout| try builder.intValue(
                 .i64,
                 self.module.program.structs[layout].fields.len,
+            ),
+            // A union's run length is a fact about the type, exactly
+            // as a struct's is: every run of union `U` spans
+            // `runLength` slots, the live member's fields first and
+            // `none` padding after (docs/UNION.md D8, D12).  It must
+            // be — a call's result is a bare pointer, and its box is
+            // re-derived from the static type alone.
+            .variant => |index| try builder.intValue(
+                .i64,
+                self.module.program.variants[index].runLength(),
             ),
             .string => try self.wip.extractValue(held, &.{1}, "box.length"),
             .optional => self.fail("the length of a T? read from its type"),
@@ -3256,7 +3359,7 @@ const Body = struct {
             .string => try self.unboxedText(slot, bits, name),
             // The field count is a compile-time fact, so only the
             // address of the run travels back.
-            .strukt => try self.wip.cast(.inttoptr, bits, .ptr, name),
+            .strukt, .variant => try self.wip.cast(.inttoptr, bits, .ptr, name),
             .none, .optional => unreachable, // answered above
             .enumeration => unreachable, // answered by storage() above
             .function => unreachable, // answered by storage() above
@@ -3533,7 +3636,7 @@ const Body = struct {
         // (docs/ENUMS.md D9).
         return switch (written.storage()) {
             .boolean, .byte, .short, .int, .long, .half, .float, .double => true,
-            .none, .string, .strukt, .heap, .optional => false,
+            .none, .string, .strukt, .variant, .heap, .optional => false,
             .enumeration => unreachable, // answered by storage() above
             .function => unreachable, // answered by storage() above
         };
@@ -3783,7 +3886,7 @@ const Body = struct {
             .byte, .boolean => .i8,
             // Everything whose tag or length is not settled by the
             // type keeps the 24-byte slot.
-            .none, .string, .strukt, .heap, .optional => self.module.value_type,
+            .none, .string, .strukt, .variant, .heap, .optional => self.module.value_type,
             .enumeration => unreachable, // answered by storage() above
             .function => unreachable, // answered by storage() above
         };
@@ -3799,6 +3902,7 @@ const Body = struct {
             .double,
             .string,
             .strukt,
+            .variant,
             .heap,
             .optional,
             => Builder.Alignment.fromByteUnits(8),
@@ -3824,7 +3928,7 @@ const Body = struct {
             .long, .double => 8,
             // The boxed slot, whose size is `runtime.Value`'s and is
             // asserted against it by `runtime/test.zig`.
-            .none, .string, .strukt, .heap, .optional => @sizeOf(runtime.Value),
+            .none, .string, .strukt, .variant, .heap, .optional => @sizeOf(runtime.Value),
             .enumeration => unreachable, // answered by storage() above
             .function => unreachable, // answered by storage() above
         };
@@ -4128,7 +4232,7 @@ const Body = struct {
             ),
             // A boxed cell: the tag and the length are already the
             // element type's, so only the payload words are read.
-            .none, .string, .strukt, .heap, .optional => try self.unboxed(
+            .none, .string, .strukt, .variant, .heap, .optional => try self.unboxed(
                 element,
                 address,
                 "element",
@@ -4159,7 +4263,7 @@ const Body = struct {
                 address,
                 cellAlignment(element),
             ),
-            .none, .string, .strukt, .heap, .optional => try self.fillBoxValue(
+            .none, .string, .strukt, .variant, .heap, .optional => try self.fillBoxValue(
                 address,
                 element,
                 held,
@@ -5127,6 +5231,44 @@ const Body = struct {
                 );
                 self.produced[register].box = address;
             },
+            .variant_make => |make| try self.emitVariantMake(
+                register,
+                make.variant,
+                make.member,
+                make.fields,
+            ),
+            // The tag is slot 0 of the run, read the way `struct_get`
+            // reads a `long` field (docs/UNION.md D8).
+            .variant_tag => |tag| {
+                const address = try self.wip.gep(
+                    .inbounds,
+                    self.module.value_type,
+                    self.produced[tag.target].value,
+                    &.{try self.module.builder.intValue(.i64, 0)},
+                    "tag.at",
+                );
+                self.produced[register].value = try self.unboxed(.long, address, "tag");
+                self.produced[register].box = address;
+            },
+            // A payload field is slot `1 + field`, read exactly as
+            // `struct_get` reads one — the verifier has already proven
+            // the member and the field against `Program.variants`.
+            .variant_field => |get| {
+                const member = self.module.program.variants[get.variant].members[get.member];
+                const address = try self.wip.gep(
+                    .inbounds,
+                    self.module.value_type,
+                    self.produced[get.target].value,
+                    &.{try self.module.builder.intValue(.i64, 1 + get.field)},
+                    "payload.at",
+                );
+                self.produced[register].value = try self.unboxed(
+                    member.fields[get.field].field_type,
+                    address,
+                    "payload",
+                );
+                self.produced[register].box = address;
+            },
             .struct_set => |set| try self.callAnswering(register, .luce_rt_struct_set, &.{
                 self.runtime,
                 try self.boxedRegister(set.target, "target"),
@@ -5160,9 +5302,12 @@ const Body = struct {
                     // Whatever this frame still owned in the returned
                     // value moves to the caller (S16): loose until
                     // something there binds it.  A struct is walked too,
-                    // because its fields may hold objects.
+                    // because its fields may hold objects — and a union
+                    // is that walk with the tag in front (docs/UNION.md
+                    // D8, D9).
                     if (self.function.return_type == .heap or
-                        self.function.return_type == .strukt)
+                        self.function.return_type == .strukt or
+                        self.function.return_type == .variant)
                     {
                         _ = try self.callRuntime(.luce_rt_loosen_from_frame, .void, &.{
                             self.runtime,
@@ -5447,6 +5592,41 @@ const Body = struct {
         });
     }
 
+    /// A union value is built by the struct path with one more slot in
+    /// front (docs/UNION.md D8): slot 0 is the member index as a boxed
+    /// `long`, the member's payload fields follow, and the tail is
+    /// `none` padding up to the union's one static run length — so a
+    /// value's box can be re-derived from its type alone, exactly as a
+    /// struct's is (`types.VariantType.runLength`).
+    fn emitVariantMake(
+        self: *Body,
+        register: mir.Register,
+        variant: u32,
+        member: u32,
+        fields: []const mir.Register,
+    ) Error!void {
+        const declared = self.module.program.variants[variant];
+        const span = declared.runLength();
+        const run = try self.scratchRun(
+            self.module.value_type,
+            span,
+            value_alignment,
+            "variant",
+        );
+        try self.boxAt(run, 0, .long, try self.module.builder.intValue(.i64, member));
+        for (fields, 0..) |field, index| {
+            try self.storedAt(run, 1 + index, field);
+        }
+        for (1 + fields.len..span) |index| {
+            try self.noneAt(run, index);
+        }
+        try self.callAnswering(register, .luce_rt_struct_make, &.{
+            self.runtime,
+            run,
+            try self.module.builder.intValue(.i64, span),
+        });
+    }
+
     // -- arithmetic and comparison -------------------------------------
 
     fn emitBinary(self: *Body, register: mir.Register, operation: mir.Instruction.Binary) Error!void {
@@ -5489,6 +5669,10 @@ const Body = struct {
             .none,
             .boolean,
             .strukt,
+            // A union is compared by match and nothing else
+            // (docs/UNION.md D16): the analyzer refuses every operator
+            // on one.
+            .variant,
             .heap,
             // An enum is a set of names (docs/ENUMS.md D6): the
             // analyzer refuses `m + 1` and the verifier refuses the IR
@@ -5887,6 +6071,9 @@ const Body = struct {
                 => return self.fail("arithmetic on the comparison path"),
             },
             .float, .double, .string, .strukt, .enumeration, .function => unreachable, // answered above
+            // A union is compared by match and nothing else
+            // (docs/UNION.md D16): the analyzer refuses `==` on one.
+            .variant => return self.fail("a comparison of two unions"),
             // As in `emitBinary`: a comparison unifies its operands
             // first, and no storage width survives that (D5).
             .byte,
@@ -5946,6 +6133,7 @@ const Body = struct {
                 .boolean,
                 .string,
                 .strukt,
+                .variant,
                 .heap,
                 .enumeration,
                 .function,
@@ -6310,6 +6498,7 @@ const Body = struct {
             .float,
             .double,
             .strukt,
+            .variant,
             .heap,
             .enumeration,
             .function,
@@ -7090,6 +7279,7 @@ const Body = struct {
             .boolean,
             .string,
             .strukt,
+            .variant,
             .heap,
             .enumeration,
             .function,

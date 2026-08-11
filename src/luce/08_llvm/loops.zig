@@ -263,7 +263,7 @@ fn writesPlainElement(
         .double,
         .string,
         => true,
-        .none, .strukt, .heap, .optional => false,
+        .none, .strukt, .variant, .heap, .optional => false,
         .enumeration => unreachable, // answered by storage() above
         .function => unreachable, // answered by storage() above
     };

@@ -147,6 +147,19 @@ pub const Analyzer = struct {
     enums: std.ArrayList(types.EnumType) = .empty,
     enum_decls: std.ArrayList(context.EnumDeclInfo) = .empty,
     enum_names: std.StringHashMapUnmanaged(u32) = .empty,
+    /// The declared unions, in declaration order (docs/UNION.md).  They
+    /// share the type-name space with structs and enums — one name, one
+    /// declaration, whichever keyword wrote it — so `firstDeclarationOf`
+    /// reads all three.
+    variants: std.ArrayList(types.VariantType) = .empty,
+    variant_decls: std.ArrayList(context.VariantDeclInfo) = .empty,
+    variant_names: std.StringHashMapUnmanaged(u32) = .empty,
+    /// One entry per union, filled by the same graph walk that settles
+    /// `struct_shapes`: whether any member's field transitively holds
+    /// an object (D9's OR over the members), and the type's
+    /// unconditional expansion — one for the tag plus the largest
+    /// member's (D12).
+    variant_shapes: std.ArrayList(StructShape) = .empty,
     functions: std.ArrayList(FunctionDeclInfo) = .empty,
     function_names: std.StringHashMapUnmanaged(u32) = .empty,
     standard_specializations: std.ArrayList(StandardSpecialization) = .empty,
@@ -183,6 +196,9 @@ pub const Analyzer = struct {
         self.struct_names.deinit(self.temporary);
         self.enum_decls.deinit(self.temporary);
         self.enum_names.deinit(self.temporary);
+        self.variant_decls.deinit(self.temporary);
+        self.variant_names.deinit(self.temporary);
+        self.variant_shapes.deinit(self.temporary);
         self.function_names.deinit(self.temporary);
         self.pool.deinit();
         self.constant_infos.deinit(self.temporary);
@@ -212,17 +228,22 @@ pub const Analyzer = struct {
     }
 
     fn run(self: *Analyzer) Error!?Analyzed {
-        // Enum *names* first: a struct field, a parameter or a
-        // constant's annotation may name one, and a name has to be
-        // resolvable before any type is (docs/ENUMS.md).  Their member
-        // *values* are folded after the constant names are registered,
-        // because `= base + 1` may name a constant.
-        try self.collectEnumNames();
+        // Enum and union *names* first: a struct field, a parameter or
+        // a constant's annotation may name one, and a name has to be
+        // resolvable before any type is (docs/ENUMS.md, docs/UNION.md).
+        // Enum member *values* are folded after the constant names are
+        // registered, because `= base + 1` may name a constant; union
+        // member *fields* are resolved after the struct names are,
+        // because a payload may hold one.
+        try self.collectTypeNames();
         try self.collectStructs();
+        try self.settleVariantMembers();
+        try self.settleTypeShapes();
         try self.registerConstants();
         try self.settleEnumMembers();
         try constants.foldAll(self);
         try self.settleFieldDefaults();
+        try self.settleVariantDefaults();
         try self.collectFunctions();
         try self.inferReceiverWrites();
         try self.synthesizeShapes();
@@ -248,6 +269,7 @@ pub const Analyzer = struct {
             .heap_types = try self.heap_types.toOwnedSlice(self.arena),
             .signatures = try self.signatures.toOwnedSlice(self.arena),
             .enums = try self.enums.toOwnedSlice(self.arena),
+            .variants = try self.variants.toOwnedSlice(self.arena),
             .functions = try lowered.toOwnedSlice(self.arena),
             .constants = try self.pool.items.toOwnedSlice(self.arena),
             .container_constants = try self.pool.containers.toOwnedSlice(self.arena),
@@ -310,6 +332,10 @@ pub const Analyzer = struct {
                 null,
             .enumeration => |reference| if (self.enum_decls.items[reference.index].declaration.visibility == .private)
                 self.enum_decls.items[reference.index].declaration.name
+            else
+                null,
+            .variant => |index| if (self.variant_decls.items[index].declaration.visibility == .private)
+                self.variant_decls.items[index].declaration.name
             else
                 null,
             .heap => |index| switch (self.heap_types.items[index]) {
@@ -497,6 +523,18 @@ pub const Analyzer = struct {
                         );
                         return null;
                     }
+                    // A union has no number and no key form at all
+                    // (docs/UNION.md D15): the sentence offers the one
+                    // move that exists — keep it in the value.
+                    if (key == .variant) {
+                        try self.fail(
+                            "luce.sema.type",
+                            written.arguments[0].span,
+                            "map keys are long or string; a union has no key form — keep {s} in the value and key by what identifies it",
+                            .{try self.typeName(key)},
+                        );
+                        return null;
+                    }
                     try self.fail("luce.sema.type", written.arguments[0].span, "map keys are long or string", .{});
                     return null;
                 }
@@ -563,6 +601,18 @@ pub const Analyzer = struct {
         // to the module it appears in.
         if (std.mem.indexOfScalar(u8, written.name, '.')) |dot| {
             const head = written.name[0..dot];
+            // `let c: Shape.circle` — a union member is not a type
+            // (docs/UNION.md D3, docs/RETURNS.md's reason): every
+            // member is one of the union, and the union is the type.
+            if (self.variant_names.get(try self.qualify(self.modules[module].prefix, head))) |index| {
+                try self.fail(
+                    "luce.sema.union",
+                    written.span,
+                    "a member is not a type: every member of {s} is a {s}, so write {s}",
+                    .{ self.variant_decls.items[index].declaration.name, self.variant_decls.items[index].declaration.name, head },
+                );
+                return null;
+            }
             if (!self.importsModule(module, head)) {
                 try self.fail("luce.sema.import", written.span, "unknown module {s}; import {s} to use its types", .{ head, try self.importSpelling(head) });
                 return null;
@@ -595,12 +645,26 @@ pub const Analyzer = struct {
                 }
                 return self.enumType(index);
             }
+            if (self.variant_names.get(written.name)) |index| {
+                const info = self.variant_decls.items[index];
+                if (!reachable(info.module, info.declaration.visibility, module)) {
+                    try self.fail(
+                        "luce.sema.private",
+                        written.span,
+                        "{s} is private to {s}",
+                        .{ info.declaration.name, self.moduleName(info.module) },
+                    );
+                    return null;
+                }
+                return .{ .variant = index };
+            }
             try self.failUnknownType(module, written);
             return null;
         }
         const local = try self.qualify(self.modules[module].prefix, written.name);
         if (self.struct_names.get(local)) |index| return .{ .strukt = index };
         if (self.enum_names.get(local)) |index| return self.enumType(index);
+        if (self.variant_names.get(local)) |index| return .{ .variant = index };
         try self.failUnknownType(module, written);
         return null;
     }
@@ -678,7 +742,7 @@ pub const Analyzer = struct {
         const prefix = self.modules[module].prefix;
         var suggestion = helpers.Suggestion.init(written.name);
         suggestion.offerAll(&builtin_types);
-        for ([_]*const std.StringHashMapUnmanaged(u32){ &self.struct_names, &self.enum_names }) |declared| {
+        for ([_]*const std.StringHashMapUnmanaged(u32){ &self.struct_names, &self.enum_names, &self.variant_names }) |declared| {
             var keys = declared.keyIterator();
             while (keys.next()) |key| {
                 if (prefix.len == 0) {
@@ -738,6 +802,12 @@ pub const Analyzer = struct {
         return switch (of) {
             .heap => true,
             .strukt => |layout_index| self.struct_shapes.items[layout_index].carries,
+            // The OR over the members' fields (docs/UNION.md D9): the
+            // predicate is static and type-level, so `Json` carries
+            // objects unconditionally and `Json.number` pays the verb
+            // anyway — S27's own rule, stated there and priced in the
+            // memo.
+            .variant => |index| self.variant_shapes.items[index].carries,
             // A `list(T)?` holding an object owns it exactly as the
             // unwrapped type would; holding `none` owns nothing (S43),
             // and every ownership walk already no-ops on absence.
@@ -766,6 +836,10 @@ pub const Analyzer = struct {
         defer self.temporary.free(seen_heaps);
         @memset(seen_heaps, false);
 
+        const seen_variants = try self.temporary.alloc(bool, self.variants.items.len);
+        defer self.temporary.free(seen_variants);
+        @memset(seen_variants, false);
+
         var pending: std.ArrayList(Type) = .empty;
         defer pending.deinit(self.temporary);
         try pending.append(self.temporary, of);
@@ -793,6 +867,15 @@ pub const Analyzer = struct {
                         .array => |shape| try pending.append(self.temporary, shape.element),
                         .builder => {},
                         .file, .task => return true,
+                    }
+                },
+                .variant => |index| {
+                    if (seen_variants[index]) continue;
+                    seen_variants[index] = true;
+                    for (self.variants.items[index].members) |member| {
+                        for (member.fields) |field| {
+                            try pending.append(self.temporary, field.field_type);
+                        }
                     }
                 },
                 .none,
@@ -826,8 +909,10 @@ pub const Analyzer = struct {
         return switch (of) {
             // A struct owns its field run whatever is in it, so this
             // needs no shape lookup — an all-long struct still has a
-            // run to give back.
-            .string, .strukt => true,
+            // run to give back.  A union value is a run whose slot 0
+            // is the tag, and owns it exactly the same way
+            // (docs/UNION.md D8, D9).
+            .string, .strukt, .variant => true,
             .optional => |payload| self.ownsStorage(payload.asType()),
             else => false,
         };
@@ -860,137 +945,279 @@ pub const Analyzer = struct {
     fn valueCount(self: *const Analyzer, of: Type) u32 {
         return switch (of) {
             .strukt => |layout_index| self.struct_shapes.items[layout_index].values,
+            .variant => |index| self.variant_shapes.items[index].values,
             else => 1,
         };
     }
 
-    // -- pass one: enums, names then values -------------------------------
+    // -- pass one: enums and unions, names then contents -------------------
 
-    /// Register every declared enum's name and backing width
-    /// (docs/ENUMS.md D1, D2).  The members are collected here too,
-    /// with their names and their *positions*; the values are folded by
-    /// `settleEnumMembers` below, once every name in the program
-    /// exists.
-    fn collectEnumNames(self: *Analyzer) Error!void {
+    /// Register every declared enum's and union's name, in source
+    /// order per module, so a duplicate between the two kinds reports
+    /// at whichever stands second in the file — the same promise the
+    /// struct-above check keeps one kind at a time.
+    fn collectTypeNames(self: *Analyzer) Error!void {
         for (self.modules, 0..) |module, module_index| {
             self.diagnostics.scope = module.file;
-            for (module.tree.enums) |*declaration| {
-                if (isReserved(declaration.name)) {
-                    try self.fail("luce.sema.reserved", declaration.name_span, "{s} is a reserved name", .{declaration.name});
-                    continue;
+            var next_enum: usize = 0;
+            var next_union: usize = 0;
+            while (next_enum < module.tree.enums.len or next_union < module.tree.unions.len) {
+                const take_enum = next_union >= module.tree.unions.len or
+                    (next_enum < module.tree.enums.len and
+                        module.tree.enums[next_enum].name_span.start <
+                            module.tree.unions[next_union].name_span.start);
+                if (take_enum) {
+                    try self.collectEnumName(module, module_index, &module.tree.enums[next_enum]);
+                    next_enum += 1;
+                } else {
+                    try self.collectUnionName(module, module_index, &module.tree.unions[next_union]);
+                    next_union += 1;
                 }
-                if (types.builtinNamed(declaration.name) != null) {
-                    try self.fail(
-                        "luce.sema.reserved",
-                        declaration.name_span,
-                        "{s} is a builtin type; an enum of your own takes a name of its own",
-                        .{declaration.name},
-                    );
-                    continue;
-                }
-                const qualified = try self.qualify(module.prefix, declaration.name);
-                if (try self.firstDeclarationOf(qualified)) |where| {
-                    try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}; the first is{s}", .{
-                        declaration.name,
-                        where,
-                    });
-                    continue;
-                }
-                // **Whichever was written first is the first.**  Enums
-                // are collected before structs — a struct field may name
-                // one — so a struct of the same name is still invisible
-                // here; the one this file *reads* first is decided by
-                // where the two stand, not by which table filled first.
-                // A struct above this enum reports here; a struct below
-                // it lets the enum register and reports there.
-                if (structDeclaredAbove(module.tree.*, declaration)) |first| {
-                    try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}; the first is{s}", .{
-                        declaration.name,
-                        try self.declaredAt(module.file, first.name_span),
-                    });
-                    continue;
-                }
-                // The width, before the members: it is what says which
-                // of them fit, and the default is `int` (D2).
-                var backing: types.Type.EnumRef.Backing = .int;
-                if (declaration.backing) |written| {
-                    const resolved = (try self.resolveType(module_index, written)) orelse continue;
-                    backing = types.Type.EnumRef.Backing.of(resolved) orelse {
-                        try self.fail(
-                            "luce.sema.enum",
-                            written.span,
-                            "an enum is stored at an integer width: byte, short, int, or long — not {s}",
-                            .{try self.typeName(resolved)},
-                        );
-                        continue;
-                    };
-                }
-                if (declaration.members.len == 0) {
-                    try self.fail(
-                        "luce.sema.enum",
-                        declaration.span,
-                        "enum {s} names no members; an enum is the set of names it declares",
-                        .{declaration.name},
-                    );
-                    continue;
-                }
-                var members: std.ArrayList(types.EnumMember) = .empty;
-                defer members.deinit(self.arena);
-                for (declaration.members) |member| {
-                    if (isReserved(member.name)) {
-                        try self.fail("luce.sema.reserved", member.name_span, "{s} is a reserved name", .{member.name});
-                        continue;
-                    }
-                    var duplicate = false;
-                    for (members.items) |existing| {
-                        if (std.mem.eql(u8, existing.name, member.name)) duplicate = true;
-                    }
-                    if (duplicate) {
-                        try self.fail(
-                            "luce.sema.duplicate",
-                            member.name_span,
-                            "duplicate member {s} of enum {s}",
-                            .{ member.name, declaration.name },
-                        );
-                        continue;
-                    }
-                    // A function of the enum may not wear a member's
-                    // name: `Method.stored` would mean two things, and
-                    // the head-names-a-declaration path answers one.
-                    for (declaration.functions) |function| {
-                        if (!std.mem.eql(u8, function.name, member.name)) continue;
-                        try self.fail(
-                            "luce.sema.duplicate",
-                            function.span,
-                            "enum {s} already has member {s}",
-                            .{ declaration.name, function.name },
-                        );
-                    }
-                    try members.append(self.arena, .{ .name = try self.arena.dupe(u8, member.name), .value = 0 });
-                }
-                if (members.items.len == 0) continue; // every member was refused
-                const index: u32 = @intCast(self.enums.items.len);
-                try self.enum_names.put(self.temporary, qualified, index);
-                try self.enum_decls.append(self.temporary, .{
-                    .declaration = declaration,
-                    .module = module_index,
-                });
-                try self.enums.append(self.arena, .{
-                    .name = try self.arena.dupe(u8, qualified),
-                    .backing = backing,
-                    .members = try members.toOwnedSlice(self.arena),
-                });
             }
         }
         self.diagnostics.scope = source_mod.root_file;
     }
 
-    /// The struct of this module that takes `declaration`'s name and
-    /// stands above it in the file, or null.
-    fn structDeclaredAbove(tree: ast.Program, declaration: *const ast.EnumDecl) ?*const ast.StructDecl {
+    /// Register one declared enum's name and backing width
+    /// (docs/ENUMS.md D1, D2).  The members are collected here too,
+    /// with their names and their *positions*; the values are folded by
+    /// `settleEnumMembers` below, once every name in the program
+    /// exists.
+    fn collectEnumName(
+        self: *Analyzer,
+        module: ModuleTree,
+        module_index: usize,
+        declaration: *const ast.EnumDecl,
+    ) Error!void {
+        if (isReserved(declaration.name)) {
+            try self.fail("luce.sema.reserved", declaration.name_span, "{s} is a reserved name", .{declaration.name});
+            return;
+        }
+        if (types.builtinNamed(declaration.name) != null) {
+            try self.fail(
+                "luce.sema.reserved",
+                declaration.name_span,
+                "{s} is a builtin type; an enum of your own takes a name of its own",
+                .{declaration.name},
+            );
+            return;
+        }
+        const qualified = try self.qualify(module.prefix, declaration.name);
+        if (try self.firstDeclarationOf(qualified)) |where| {
+            try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}; the first is{s}", .{
+                declaration.name,
+                where,
+            });
+            return;
+        }
+        // **Whichever was written first is the first.**  Enums are
+        // collected before structs — a struct field may name one — so
+        // a struct of the same name is still invisible here; the one
+        // this file *reads* first is decided by where the two stand,
+        // not by which table filled first.  A struct above this enum
+        // reports here; a struct below it lets the enum register and
+        // reports there.
+        if (structDeclaredAbove(module.tree.*, declaration.name, declaration.name_span)) |first| {
+            try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}; the first is{s}", .{
+                declaration.name,
+                try self.declaredAt(module.file, first.name_span),
+            });
+            return;
+        }
+        // The width, before the members: it is what says which of them
+        // fit, and the default is `int` (D2).
+        var backing: types.Type.EnumRef.Backing = .int;
+        if (declaration.backing) |written| {
+            const resolved = (try self.resolveType(module_index, written)) orelse return;
+            backing = types.Type.EnumRef.Backing.of(resolved) orelse {
+                try self.fail(
+                    "luce.sema.enum",
+                    written.span,
+                    "an enum is stored at an integer width: byte, short, int, or long — not {s}",
+                    .{try self.typeName(resolved)},
+                );
+                return;
+            };
+        }
+        if (declaration.members.len == 0) {
+            try self.fail(
+                "luce.sema.enum",
+                declaration.span,
+                "enum {s} names no members; an enum is the set of names it declares",
+                .{declaration.name},
+            );
+            return;
+        }
+        var members: std.ArrayList(types.EnumMember) = .empty;
+        defer members.deinit(self.arena);
+        for (declaration.members) |member| {
+            if (isReserved(member.name)) {
+                try self.fail("luce.sema.reserved", member.name_span, "{s} is a reserved name", .{member.name});
+                continue;
+            }
+            var duplicate = false;
+            for (members.items) |existing| {
+                if (std.mem.eql(u8, existing.name, member.name)) duplicate = true;
+            }
+            if (duplicate) {
+                try self.fail(
+                    "luce.sema.duplicate",
+                    member.name_span,
+                    "duplicate member {s} of enum {s}",
+                    .{ member.name, declaration.name },
+                );
+                continue;
+            }
+            // A function of the enum may not wear a member's name:
+            // `Method.stored` would mean two things, and the
+            // head-names-a-declaration path answers one.
+            for (declaration.functions) |function| {
+                if (!std.mem.eql(u8, function.name, member.name)) continue;
+                try self.fail(
+                    "luce.sema.duplicate",
+                    function.span,
+                    "enum {s} already has member {s}",
+                    .{ declaration.name, function.name },
+                );
+            }
+            try members.append(self.arena, .{ .name = try self.arena.dupe(u8, member.name), .value = 0 });
+        }
+        if (members.items.len == 0) return; // every member was refused
+        const index: u32 = @intCast(self.enums.items.len);
+        try self.enum_names.put(self.temporary, qualified, index);
+        try self.enum_decls.append(self.temporary, .{
+            .declaration = declaration,
+            .module = module_index,
+        });
+        try self.enums.append(self.arena, .{
+            .name = try self.arena.dupe(u8, qualified),
+            .backing = backing,
+            .members = try members.toOwnedSlice(self.arena),
+        });
+    }
+
+    /// Register one declared union's name and its members' names
+    /// (docs/UNION.md D1).  The member *field types* are resolved by
+    /// `settleVariantMembers` below, once the struct names exist —
+    /// a payload may hold one, and a struct field may hold a union.
+    fn collectUnionName(
+        self: *Analyzer,
+        module: ModuleTree,
+        module_index: usize,
+        declaration: *const ast.UnionDecl,
+    ) Error!void {
+        if (isReserved(declaration.name)) {
+            try self.fail("luce.sema.reserved", declaration.name_span, "{s} is a reserved name", .{declaration.name});
+            return;
+        }
+        if (types.builtinNamed(declaration.name) != null) {
+            try self.fail(
+                "luce.sema.reserved",
+                declaration.name_span,
+                "{s} is a builtin type; a union of your own takes a name of its own",
+                .{declaration.name},
+            );
+            return;
+        }
+        const qualified = try self.qualify(module.prefix, declaration.name);
+        if (try self.firstDeclarationOf(qualified)) |where| {
+            try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}; the first is{s}", .{
+                declaration.name,
+                where,
+            });
+            return;
+        }
+        if (structDeclaredAbove(module.tree.*, declaration.name, declaration.name_span)) |first| {
+            try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}; the first is{s}", .{
+                declaration.name,
+                try self.declaredAt(module.file, first.name_span),
+            });
+            return;
+        }
+        if (declaration.members.len == 0) {
+            try self.fail(
+                "luce.sema.union",
+                declaration.span,
+                "union {s} names no members; a union is the set of members it declares",
+                .{declaration.name},
+            );
+            return;
+        }
+        // **At least one member must carry a payload** (D2): a union
+        // of bare members is an enum — cheaper in every way, with a
+        // backing width, `int(m)`, `{s}(n)` and no allocation.
+        var carries_payload = false;
+        for (declaration.members) |member| {
+            if (member.fields.len != 0) carries_payload = true;
+        }
+        if (!carries_payload) {
+            try self.fail(
+                "luce.sema.union",
+                declaration.span,
+                "no member of union {s} carries a payload; a set of bare names is an enum — write enum {s}:",
+                .{ declaration.name, declaration.name },
+            );
+            return;
+        }
+        var members: std.ArrayList(types.VariantMember) = .empty;
+        defer members.deinit(self.arena);
+        for (declaration.members) |member| {
+            if (isReserved(member.name)) {
+                try self.fail("luce.sema.reserved", member.name_span, "{s} is a reserved name", .{member.name});
+                continue;
+            }
+            var duplicate = false;
+            for (members.items) |existing| {
+                if (std.mem.eql(u8, existing.name, member.name)) duplicate = true;
+            }
+            if (duplicate) {
+                try self.fail(
+                    "luce.sema.duplicate",
+                    member.name_span,
+                    "duplicate member {s} of union {s}",
+                    .{ member.name, declaration.name },
+                );
+                continue;
+            }
+            // A function of the union may not wear a member's name:
+            // `Shape.circle` would mean two things (D17).
+            for (declaration.functions) |function| {
+                if (!std.mem.eql(u8, function.name, member.name)) continue;
+                try self.fail(
+                    "luce.sema.duplicate",
+                    function.span,
+                    "union {s} already has member {s}",
+                    .{ declaration.name, function.name },
+                );
+            }
+            // Field slots are allocated now, in member order, and
+            // typed by `settleVariantMembers`; a field refused there
+            // keeps its slot so the member's arity stays the
+            // declaration's.
+            try members.append(self.arena, .{
+                .name = try self.arena.dupe(u8, member.name),
+                .fields = try self.arena.alloc(types.StructField, member.fields.len),
+            });
+        }
+        if (members.items.len == 0) return; // every member was refused
+        const index: u32 = @intCast(self.variants.items.len);
+        try self.variant_names.put(self.temporary, qualified, index);
+        try self.variant_decls.append(self.temporary, .{
+            .declaration = declaration,
+            .module = module_index,
+        });
+        try self.variants.append(self.arena, .{
+            .name = try self.arena.dupe(u8, qualified),
+            .members = try members.toOwnedSlice(self.arena),
+        });
+    }
+
+    /// The struct of this module that takes `name` and stands above
+    /// `span` in the file, or null.
+    fn structDeclaredAbove(tree: ast.Program, name: []const u8, span: Span) ?*const ast.StructDecl {
         for (tree.structs) |*strukt| {
-            if (!std.mem.eql(u8, strukt.name, declaration.name)) continue;
-            if (strukt.name_span.start < declaration.name_span.start) return strukt;
+            if (!std.mem.eql(u8, strukt.name, name)) continue;
+            if (strukt.name_span.start < span.start) return strukt;
         }
         return null;
     }
@@ -1094,6 +1321,11 @@ pub const Analyzer = struct {
                 for (module.tree.enums) |declaration| {
                     if (std.mem.eql(u8, declaration.name, imported.name)) {
                         try self.fail("luce.sema.duplicate", imported.span, "import {s} collides with an enum of the same name", .{imported.name});
+                    }
+                }
+                for (module.tree.unions) |declaration| {
+                    if (std.mem.eql(u8, declaration.name, imported.name)) {
+                        try self.fail("luce.sema.duplicate", imported.span, "import {s} collides with a union of the same name", .{imported.name});
                     }
                 }
             }
@@ -1240,10 +1472,17 @@ pub const Analyzer = struct {
             self.struct_decls.items[index].field_visibility = try field_visibility.toOwnedSlice(self.arena);
         }
 
-        // A struct containing itself (directly or through another
-        // struct) would have no finite value; and what every struct
-        // carries and costs is settled in the same walk.
-        const cyclic = try self.temporary.alloc(bool, self.structs.items.len);
+        self.diagnostics.scope = source_mod.root_file;
+    }
+
+    /// A struct or union containing itself (directly or through
+    /// another) would have no finite value; and what every one carries
+    /// and costs is settled in the same walk (docs/UNION.md D12 —
+    /// unions join the same graph as structs, every member counted).
+    /// Runs after `settleVariantMembers`, because the graph's edges
+    /// are the resolved field types.
+    fn settleTypeShapes(self: *Analyzer) Error!void {
+        const cyclic = try self.temporary.alloc(bool, self.structs.items.len + self.variants.items.len);
         defer self.temporary.free(cyclic);
         @memset(cyclic, false);
         try self.settleStructGraph(cyclic);
@@ -1257,12 +1496,123 @@ pub const Analyzer = struct {
                 try self.reportStructTooWide(@intCast(index));
             }
         }
+        for (0..self.variants.items.len) |index| {
+            if (cyclic[self.structs.items.len + index]) continue;
+            const info = self.variant_decls.items[index];
+            self.diagnostics.scope = self.modules[info.module].file;
+            if (self.variant_shapes.items[index].values > helpers.max_struct_values) {
+                try self.fail(
+                    "luce.sema.union",
+                    info.declaration.span,
+                    "union {s} always holds more than {d} values once its largest member is counted; bulk data belongs in a list, map, or array, which is one reference",
+                    .{ self.variants.items[index].name, helpers.max_struct_values },
+                );
+            }
+        }
         self.diagnostics.scope = source_mod.root_file;
     }
 
-    /// One step of a containment chain: a layout, and the field of it
-    /// that holds the next layout along.
-    const ChainStep = struct { layout: u32, field: u32 };
+    // -- pass one: union member fields --------------------------------------
+
+    /// Resolve every union member's payload field types (docs/UNION.md
+    /// D1) — after `collectStructs`, because a payload may hold a
+    /// struct, and before the shape walk, whose edges these are.
+    /// Member field types resolve exactly like struct fields: same
+    /// duplicate rule, same function-type deferral, same D4 exposure
+    /// check, same trailing-defaults rule (D4).
+    fn settleVariantMembers(self: *Analyzer) Error!void {
+        for (0..self.variant_decls.items.len) |index| {
+            const info = self.variant_decls.items[index];
+            self.diagnostics.scope = self.modules[info.module].file;
+            const declaration = info.declaration;
+            const collected = self.variants.items[index].members;
+            const member_defaults = try self.arena.alloc([]context.FieldDefault, collected.len);
+            const settled = try self.temporary.alloc(bool, collected.len);
+            defer self.temporary.free(settled);
+            @memset(settled, false);
+            // Declared and collected members differ where one was
+            // refused, so they are matched by name — first written
+            // occupant wins, exactly as collection kept it; a refused
+            // duplicate must not settle the survivor's slot again.
+            for (declaration.members) |written| {
+                const slot = self.variants.items[index].findMember(written.name) orelse continue;
+                if (settled[slot]) continue;
+                settled[slot] = true;
+                const member = collected[slot];
+                const defaults = try self.arena.alloc(context.FieldDefault, written.fields.len);
+                member_defaults[slot] = defaults;
+                var first_defaulted: ?[]const u8 = null;
+                for (written.fields, member.fields, defaults) |field, *resolved_slot, *default_slot| {
+                    default_slot.* = .{ .expression = field.default };
+                    // The slot stays well-formed whatever the checks
+                    // below decide, so a refused field costs one
+                    // message and never an undefined read.
+                    resolved_slot.* = .{
+                        .name = try self.arena.dupe(u8, field.name),
+                        .field_type = .long,
+                    };
+                    if (field.default == null) {
+                        if (first_defaulted) |earlier| {
+                            try self.fail(
+                                "luce.sema.union",
+                                field.span,
+                                "{s} has a default, so {s} needs one too — the fields with defaults come last",
+                                .{ earlier, field.name },
+                            );
+                            continue;
+                        }
+                    } else if (first_defaulted == null) {
+                        first_defaulted = field.name;
+                    }
+                    var duplicate = false;
+                    for (written.fields) |other| {
+                        if (other.name_span.start >= field.name_span.start) break;
+                        if (std.mem.eql(u8, other.name, field.name)) duplicate = true;
+                    }
+                    if (duplicate) {
+                        try self.fail(
+                            "luce.sema.duplicate",
+                            field.name_span,
+                            "duplicate field {s} of {s}.{s}",
+                            .{ field.name, declaration.name, written.name },
+                        );
+                        continue;
+                    }
+                    const field_type = (try self.resolveType(info.module, field.type_name)) orelse continue;
+                    if (try self.refuseFunctionPart(field_type, field.type_name.span, "union payload field")) continue;
+                    // D4's rule for a member field: a union's members
+                    // are always as visible as the union, so a
+                    // reachable union may not publish a hidden type
+                    // through one (docs/VISIBILITY.md D4).
+                    if (declaration.visibility != .private) {
+                        if (self.privateMentioned(field_type)) |hidden| {
+                            try self.fail(
+                                "luce.sema.private",
+                                field.type_name.span,
+                                "{s} of {s} is public and holds {s}, which is marked private in {s}; mark {s} private or remove the mark on {s}",
+                                .{
+                                    field.name,
+                                    declaration.name,
+                                    hidden,
+                                    self.markedIn(info.module),
+                                    declaration.name,
+                                    hidden,
+                                },
+                            );
+                        }
+                    }
+                    resolved_slot.field_type = field_type;
+                }
+            }
+            self.variant_decls.items[index].member_defaults = member_defaults;
+        }
+        self.diagnostics.scope = source_mod.root_file;
+    }
+
+    /// One step of a containment chain: a combined-graph node, and the
+    /// field of it that holds the next node along — for a union, the
+    /// member the field belongs to travels beside it.
+    const ChainStep = struct { node: u32, member: u32, field: u32 };
 
     /// The struct is past `max_struct_values`, said in terms of what
     /// the bound actually bounds.
@@ -1335,13 +1685,15 @@ pub const Analyzer = struct {
     /// walks the loop the reader has to break.
     ///
     /// The chain is the shortest walk from a layout back to itself,
-    /// breadth-first over struct fields and confined to layouts that
-    /// are on a cycle.  The caret goes on the field that opens it,
-    /// never the `struct` keyword, because the field is the line that
-    /// gets edited — and `T?` is the edit, because a value that may be
-    /// absent is where the recursion stops (docs/LANGUAGE.md).
+    /// breadth-first over the combined graph's fields — a union's
+    /// members' payload fields beside a struct's own — and confined to
+    /// nodes that are on a cycle.  The caret goes on the field that
+    /// opens it, never the declaration keyword, because the field is
+    /// the line that gets edited — and `T?` is the edit, because a
+    /// value that may be absent is where the recursion stops
+    /// (docs/LANGUAGE.md, docs/UNION.md D12).
     fn reportStructCycles(self: *Analyzer, cyclic: []const bool) Error!void {
-        const count = self.structs.items.len;
+        const count = self.structs.items.len + self.variants.items.len;
         const unvisited = std.math.maxInt(u32);
 
         const reported = try self.temporary.alloc(bool, count);
@@ -1351,6 +1703,8 @@ pub const Analyzer = struct {
         defer self.temporary.free(came_from);
         const came_via = try self.temporary.alloc(u32, count);
         defer self.temporary.free(came_via);
+        const came_member = try self.temporary.alloc(u32, count);
+        defer self.temporary.free(came_member);
 
         var queue: std.ArrayList(u32) = .empty;
         defer queue.deinit(self.temporary);
@@ -1370,40 +1724,49 @@ pub const Analyzer = struct {
             came_from[start] = start; // visited; never re-entered
             queue.clearRetainingCapacity();
             try queue.append(self.temporary, start);
-            var closing_layout: u32 = unvisited;
-            var closing_field: u32 = unvisited;
+            var closing: ?ChainStep = null;
             var head: usize = 0;
             search: while (head < queue.items.len) : (head += 1) {
-                const layout = queue.items[head];
-                for (self.structs.items[layout].fields, 0..) |field, field_index| {
-                    if (field.field_type != .strukt) continue;
-                    const held = field.field_type.strukt;
+                const node = queue.items[head];
+                var cursor: GraphStep = .{ .node = node };
+                while (self.containedNodeAt(&cursor)) |held| {
+                    // The cursor has already moved past the field it
+                    // just answered from, so the edge is one back.
+                    const edge: ChainStep = .{
+                        .node = node,
+                        .member = cursor.member,
+                        .field = cursor.field - 1,
+                    };
                     if (held == start) {
-                        closing_layout = layout;
-                        closing_field = @intCast(field_index);
+                        closing = edge;
                         break :search;
                     }
                     if (!cyclic[held] or came_from[held] != unvisited) continue;
-                    came_from[held] = layout;
-                    came_via[held] = @intCast(field_index);
+                    came_from[held] = node;
+                    came_member[held] = edge.member;
+                    came_via[held] = edge.field;
                     try queue.append(self.temporary, held);
                 }
             }
             // `start` is marked cyclic, so an edge back to it exists.
-            if (closing_layout == unvisited) continue;
+            const closed = closing orelse continue;
 
             // Walk the parent links back to `start`, then turn the
             // chain around so it reads the way the source does.
             chain.clearRetainingCapacity();
-            try chain.append(self.temporary, .{ .layout = closing_layout, .field = closing_field });
-            var cursor = closing_layout;
+            try chain.append(self.temporary, closed);
+            var cursor = closed.node;
             while (cursor != start) {
                 const parent = came_from[cursor];
-                try chain.append(self.temporary, .{ .layout = parent, .field = came_via[cursor] });
+                try chain.append(self.temporary, .{
+                    .node = parent,
+                    .member = came_member[cursor],
+                    .field = came_via[cursor],
+                });
                 cursor = parent;
             }
             std.mem.reverse(ChainStep, chain.items);
-            for (chain.items) |step| reported[step.layout] = true;
+            for (chain.items) |step| reported[step.node] = true;
 
             written.clearRetainingCapacity();
             for (chain.items, 0..) |step, position| {
@@ -1411,31 +1774,94 @@ pub const Analyzer = struct {
                     try written.appendSlice(self.temporary, ", ");
                     if (position + 1 == chain.items.len) try written.appendSlice(self.temporary, "and ");
                 }
-                const layout = self.structs.items[step.layout];
-                const field = layout.fields[step.field];
-                try written.print(self.temporary, "{s}.{s} is {s}", .{
-                    layout.name,
-                    field.name,
+                const field = self.chainField(step);
+                try written.print(self.temporary, "{s} is {s}", .{
+                    try self.chainPlace(step),
                     try self.typeName(field.field_type),
                 });
             }
 
             const opening = chain.items[0];
-            const opening_field = self.structs.items[opening.layout].fields[opening.field];
-            const info = self.struct_decls.items[opening.layout];
-            self.diagnostics.scope = self.modules[info.module].file;
+            const opening_field = self.chainField(opening);
+            self.diagnostics.scope = self.modules[self.nodeModule(opening.node)].file;
             try self.fail(
-                "luce.sema.struct",
-                self.fieldSpan(opening.layout, opening_field.name),
-                "struct {s} contains itself: {s}; a struct is a value, so write {s}: {s}? to let the chain end at absence",
+                if (start < self.structs.items.len) "luce.sema.struct" else "luce.sema.union",
+                self.chainSpan(opening),
+                "{s} {s} contains itself: {s}; a {s} is a value, so write {s}: {s}? to let the chain end at absence",
                 .{
-                    self.structs.items[start].name,
+                    self.nodeKind(start),
+                    self.nodeName(start),
                     written.items,
+                    self.nodeKind(start),
                     opening_field.name,
                     try self.typeName(opening_field.field_type),
                 },
             );
         }
+    }
+
+    /// The declaring module of one combined-graph node.
+    fn nodeModule(self: *const Analyzer, node: u32) usize {
+        if (node < self.structs.items.len) return self.struct_decls.items[node].module;
+        return self.variant_decls.items[node - self.structs.items.len].module;
+    }
+
+    /// The declaration keyword of one combined-graph node, for a
+    /// sentence: `struct` or `union`, as the reader wrote it.
+    fn nodeKind(self: *const Analyzer, node: u32) []const u8 {
+        return if (node < self.structs.items.len) "struct" else "union";
+    }
+
+    fn nodeName(self: *const Analyzer, node: u32) []const u8 {
+        if (node < self.structs.items.len) return self.structs.items[node].name;
+        return self.variants.items[node - self.structs.items.len].name;
+    }
+
+    /// The field one chain step names — a struct's own, or a union
+    /// member's payload field.
+    fn chainField(self: *const Analyzer, step: ChainStep) types.StructField {
+        if (step.node < self.structs.items.len) {
+            return self.structs.items[step.node].fields[step.field];
+        }
+        const declared = self.variants.items[step.node - self.structs.items.len];
+        return declared.members[step.member].fields[step.field];
+    }
+
+    /// One chain step as a reader would spell it: `Node.next` for a
+    /// struct field, `Json.array.items` for a union member's.
+    fn chainPlace(self: *Analyzer, step: ChainStep) Error![]const u8 {
+        if (step.node < self.structs.items.len) {
+            const layout = self.structs.items[step.node];
+            return std.fmt.allocPrint(self.arena, "{s}.{s}", .{
+                layout.name,
+                layout.fields[step.field].name,
+            });
+        }
+        const declared = self.variants.items[step.node - self.structs.items.len];
+        const member = declared.members[step.member];
+        return std.fmt.allocPrint(self.arena, "{s}.{s}.{s}", .{
+            declared.name,
+            member.name,
+            member.fields[step.field].name,
+        });
+    }
+
+    /// Where a chain step's field is written in its own source.
+    fn chainSpan(self: *const Analyzer, step: ChainStep) Span {
+        const field = self.chainField(step);
+        if (step.node < self.structs.items.len) {
+            return self.fieldSpan(step.node, field.name);
+        }
+        const info = self.variant_decls.items[step.node - self.structs.items.len];
+        const member = self.variants.items[step.node - self.structs.items.len].members[step.member];
+        for (info.declaration.members) |written| {
+            if (!std.mem.eql(u8, written.name, member.name)) continue;
+            for (written.fields) |declared| {
+                if (std.mem.eql(u8, declared.name, field.name)) return declared.span;
+            }
+            return written.span;
+        }
+        return info.declaration.span;
     }
 
     /// Where a layout's field is written in its own source.  Layout
@@ -1450,9 +1876,12 @@ pub const Analyzer = struct {
         return declaration.span;
     }
 
-    /// One pass over the struct containment graph: mark every layout
-    /// that lies on a cycle, and fill in the shape of every layout
-    /// that does not.
+    /// One pass over the containment graph — structs and unions in one
+    /// node space, structs first — marking every layout on a cycle and
+    /// filling in the shape of every one that is not (docs/UNION.md
+    /// D12: only one member is ever live, but every member is an edge,
+    /// so a member that contains the union makes it infinite whichever
+    /// member it is).
     ///
     /// This is Tarjan's strongly connected components, written with an
     /// explicit stack.  Both jobs were recursive one-question-at-a-time
@@ -1465,8 +1894,10 @@ pub const Analyzer = struct {
     /// is a cycle; everything else closes after the layouts it
     /// contains, which is exactly when its shape can be summed.
     fn settleStructGraph(self: *Analyzer, cyclic: []bool) Error!void {
-        const count = self.structs.items.len;
-        try self.struct_shapes.appendNTimes(self.temporary, .{ .values = 1 }, count);
+        const struct_count = self.structs.items.len;
+        const count = struct_count + self.variants.items.len;
+        try self.struct_shapes.appendNTimes(self.temporary, .{ .values = 1 }, struct_count);
+        try self.variant_shapes.appendNTimes(self.temporary, .{ .values = 1 }, self.variants.items.len);
         if (count == 0) return;
 
         const unvisited = std.math.maxInt(u32);
@@ -1482,8 +1913,7 @@ pub const Analyzer = struct {
         // Tarjan's component stack, and the explicit depth-first one.
         var pending: std.ArrayList(u32) = .empty;
         defer pending.deinit(self.temporary);
-        const Step = struct { layout: u32, field: u32 };
-        var path: std.ArrayList(Step) = .empty;
+        var path: std.ArrayList(GraphStep) = .empty;
         defer path.deinit(self.temporary);
 
         var next_order: u32 = 0;
@@ -1494,51 +1924,51 @@ pub const Analyzer = struct {
             next_order += 1;
             open[root] = true;
             try pending.append(self.temporary, @intCast(root));
-            try path.append(self.temporary, .{ .layout = @intCast(root), .field = 0 });
+            try path.append(self.temporary, .{ .node = @intCast(root) });
 
             while (path.items.len != 0) {
                 // `step` points into `path`, which the descent below
                 // may grow: everything read through it is read before
                 // that append, and nothing is read after.
                 const step = &path.items[path.items.len - 1];
-                const layout = step.layout;
-                const fields = self.structs.items[layout].fields;
-                if (step.field < fields.len) {
-                    const field_type = fields[step.field].field_type;
-                    step.field += 1;
-                    if (field_type != .strukt) continue;
-                    const held = field_type.strukt;
-                    if (held == layout) cyclic[layout] = true;
+                const node = step.node;
+                if (self.containedNodeAt(step)) |held| {
+                    if (held == node) cyclic[node] = true;
                     if (order[held] == unvisited) {
                         order[held] = next_order;
                         lowest[held] = next_order;
                         next_order += 1;
                         open[held] = true;
                         try pending.append(self.temporary, held);
-                        try path.append(self.temporary, .{ .layout = held, .field = 0 });
+                        try path.append(self.temporary, .{ .node = held });
                     } else if (open[held]) {
-                        lowest[layout] = @min(lowest[layout], order[held]);
+                        lowest[node] = @min(lowest[node], order[held]);
                     }
                     continue;
                 }
 
-                // Every field visited: this layout closes.  Its
-                // struct fields are either closed (their shapes are
-                // final) or still open, which means a cycle the
-                // component check below is about to catch.
-                self.struct_shapes.items[layout] = self.sumShape(layout);
+                // Every field visited: this node closes.  The layouts
+                // it holds are either closed (their shapes are final)
+                // or still open, which means a cycle the component
+                // check below is about to catch.
+                if (node < struct_count) {
+                    self.struct_shapes.items[node] = self.sumShape(node);
+                } else {
+                    self.variant_shapes.items[node - struct_count] =
+                        self.sumVariantShape(@intCast(node - struct_count));
+                }
                 _ = path.pop();
                 if (path.items.len != 0) {
-                    const parent = path.items[path.items.len - 1].layout;
-                    lowest[parent] = @min(lowest[parent], lowest[layout]);
+                    const parent = path.items[path.items.len - 1].node;
+                    lowest[parent] = @min(lowest[parent], lowest[node]);
                 }
-                if (lowest[layout] != order[layout]) continue;
+                if (lowest[node] != order[node]) continue;
 
                 // The root of a component: everything pushed at or
                 // after it is a member.  More than one member means
                 // they hold each other, so none has a finite value.
                 var first = pending.items.len;
-                while (pending.items[first - 1] != layout) first -= 1;
+                while (pending.items[first - 1] != node) first -= 1;
                 first -= 1;
                 const members = pending.items[first..];
                 for (members) |member| open[member] = false;
@@ -1549,8 +1979,56 @@ pub const Analyzer = struct {
             }
         }
         for (cyclic, 0..) |on_cycle, index| {
-            if (on_cycle) self.struct_shapes.items[index] = .{ .values = 1 };
+            if (!on_cycle) continue;
+            if (index < struct_count) {
+                self.struct_shapes.items[index] = .{ .values = 1 };
+            } else {
+                self.variant_shapes.items[index - struct_count] = .{ .values = 1 };
+            }
         }
+    }
+
+    /// One node of the combined containment graph with the cursor of
+    /// the depth-first walk over its fields: structs advance `field`
+    /// alone, unions advance `member` and `field` together, so a
+    /// resumed scan never re-reads a field it already passed.
+    const GraphStep = struct { node: u32, member: u32 = 0, field: u32 = 0 };
+
+    /// The next combined-graph node one of the step's fields names,
+    /// advancing the cursor past it, or null once the fields run out.
+    fn containedNodeAt(self: *const Analyzer, step: *GraphStep) ?u32 {
+        if (step.node < self.structs.items.len) {
+            const fields = self.structs.items[step.node].fields;
+            while (step.field < fields.len) {
+                const held = fields[step.field].field_type;
+                step.field += 1;
+                if (self.graphNode(held)) |node| return node;
+            }
+            return null;
+        }
+        const members = self.variants.items[step.node - self.structs.items.len].members;
+        while (step.member < members.len) {
+            const fields = members[step.member].fields;
+            while (step.field < fields.len) {
+                const held = fields[step.field].field_type;
+                step.field += 1;
+                if (self.graphNode(held)) |node| return node;
+            }
+            step.member += 1;
+            step.field = 0;
+        }
+        return null;
+    }
+
+    /// The combined-graph node a field type expands into, or null for
+    /// a type that stops the walk — a container is a handle, an
+    /// optional stops at absence, and both are the prescribed fixes.
+    fn graphNode(self: *const Analyzer, of: Type) ?u32 {
+        return switch (of) {
+            .strukt => |index| index,
+            .variant => |index| @intCast(self.structs.items.len + index),
+            else => null,
+        };
     }
 
     /// Sum one layout's shape from its fields' — valid only once every
@@ -1563,6 +2041,26 @@ pub const Analyzer = struct {
             shape.values +|= self.valueCount(field.field_type);
         }
         shape.values = @min(shape.values, helpers.max_struct_values + 1);
+        return shape;
+    }
+
+    /// Sum one union's shape from its members' (docs/UNION.md D9,
+    /// D12): `carries` is the OR over every member's fields — the
+    /// predicate is type-level, and the compiler does not know which
+    /// member a value holds — and the expansion is 1 for the tag plus
+    /// the *largest* member's, because only one member is ever live.
+    fn sumVariantShape(self: *const Analyzer, index: u32) StructShape {
+        var shape: StructShape = .{ .values = 0 };
+        var widest: u32 = 0;
+        for (self.variants.items[index].members) |member| {
+            var member_values: u32 = 0;
+            for (member.fields) |field| {
+                if (self.carriesObjects(field.field_type)) shape.carries = true;
+                member_values +|= self.valueCount(field.field_type);
+            }
+            widest = @max(widest, member_values);
+        }
+        shape.values = @min(1 +| widest, helpers.max_struct_values + 1);
         return shape;
     }
 
@@ -1651,6 +2149,29 @@ pub const Analyzer = struct {
                         module_index,
                         false,
                         if (owner) |index| .{ .enumeration = self.enumType(index).enumeration } else null,
+                    );
+                }
+            }
+            // And a union's, under the same rules (docs/UNION.md D17
+            // and its SELF amendment): plain member functions are
+            // methods with implied self, `static func` declares a
+            // namespace function, and receiver writing is inferred.
+            for (module.tree.unions) |*declaration| {
+                const owner = self.variant_names.get(
+                    try self.qualify(module.prefix, declaration.name),
+                );
+                for (declaration.functions) |*function| {
+                    const member = try std.fmt.allocPrint(self.arena, "{s}.{s}", .{
+                        declaration.name,
+                        function.name,
+                    });
+                    const qualified = try self.qualify(module.prefix, member);
+                    try self.collectFunction(
+                        function,
+                        qualified,
+                        module_index,
+                        false,
+                        if (owner) |index| .{ .variant = index } else null,
                     );
                 }
             }
@@ -1937,6 +2458,7 @@ pub const Analyzer = struct {
             (enclosing == null or switch (enclosing.?) {
                 .strukt => |index| self.struct_decls.items[index].declaration.visibility != .private,
                 .enumeration => |reference| self.enum_decls.items[reference.index].declaration.visibility != .private,
+                .variant => |index| self.variant_decls.items[index].declaration.visibility != .private,
             });
         var parameter_types: std.ArrayList(Type) = .empty;
         defer parameter_types.deinit(self.arena);
@@ -2400,6 +2922,133 @@ pub const Analyzer = struct {
         return fitted;
     }
 
+    /// Fold every union payload field default, eagerly (docs/UNION.md
+    /// D4, docs/ARGS.md D2): a default is evaluated at the
+    /// declaration, so a bad one is a compile error whether or not
+    /// anything ever constructs the member.
+    fn settleVariantDefaults(self: *Analyzer) Error!void {
+        for (0..self.variant_decls.items.len) |index| {
+            const member_count = self.variant_decls.items[index].member_defaults.len;
+            for (0..member_count) |member_index| {
+                const field_count = self.variant_decls.items[index].member_defaults[member_index].len;
+                for (0..field_count) |field_index| {
+                    _ = try self.variantFieldDefault(@intCast(index), member_index, field_index);
+                }
+            }
+        }
+    }
+
+    /// Whether one collected member field declared a default at all —
+    /// asked separately from `variantFieldDefault`, whose null also
+    /// means "it failed, and the failure is already reported".
+    pub fn variantFieldHasDefault(
+        self: *const Analyzer,
+        variant_index: u32,
+        member_index: usize,
+        field_index: usize,
+    ) bool {
+        if (variant_index >= self.variant_decls.items.len) return false;
+        const info = self.variant_decls.items[variant_index];
+        if (member_index >= info.member_defaults.len) return false;
+        if (field_index >= info.member_defaults[member_index].len) return false;
+        return info.member_defaults[member_index][field_index].expression != null;
+    }
+
+    /// The folded default of one union payload field (docs/UNION.md
+    /// D4), or null when there is none or it failed (already
+    /// reported).  Lazy and cycle-checked like a struct field's,
+    /// because a default may construct a struct and lean on *its*
+    /// defaults in turn.
+    pub fn variantFieldDefault(
+        self: *Analyzer,
+        variant_index: u32,
+        member_index: usize,
+        field_index: usize,
+    ) Error!?TypedConstant {
+        if (!self.variantFieldHasDefault(variant_index, member_index, field_index)) return null;
+        const slot = &self.variant_decls.items[variant_index].member_defaults[member_index][field_index];
+        const written = slot.expression orelse return null;
+        const declared = self.variants.items[variant_index];
+        const member = declared.members[member_index];
+        const field = member.fields[field_index];
+        switch (slot.state) {
+            .ready => return .{ .value = slot.value, .value_type = slot.value_type },
+            .failed => return null,
+            .evaluating => {
+                try self.fail("luce.sema.const", written.span(), "the default of {s}.{s}.{s} depends on itself", .{
+                    declared.name,
+                    member.name,
+                    field.name,
+                });
+                slot.state = .failed;
+                return null;
+            },
+            .pending => {},
+        }
+        slot.state = .evaluating;
+        const info = self.variant_decls.items[variant_index];
+        const previous_scope = self.diagnostics.scope;
+        self.diagnostics.scope = self.modules[info.module].file;
+        defer self.diagnostics.scope = previous_scope;
+        const folded = try self.foldVariantFieldDefault(info.module, declared, member, field, written);
+        const settled = &self.variant_decls.items[variant_index].member_defaults[member_index][field_index];
+        const result = folded orelse {
+            settled.state = .failed;
+            return null;
+        };
+        settled.value = result.value;
+        settled.value_type = result.value_type;
+        settled.state = .ready;
+        return result;
+    }
+
+    /// The checking half of `variantFieldDefault`: ownership, depth,
+    /// the fold at the field's type, and the landing check — S24's
+    /// struct-field rule verbatim, because a payload field is a place
+    /// that stores (docs/UNION.md).  Null after reporting.
+    fn foldVariantFieldDefault(
+        self: *Analyzer,
+        module: usize,
+        declared: types.VariantType,
+        member: types.VariantMember,
+        field: types.StructField,
+        written: *const ast.Expression,
+    ) Error!?TypedConstant {
+        if (self.carriesObjects(field.field_type)) {
+            try self.fail(
+                "luce.sema.own",
+                written.span(),
+                "{s}.{s}.{s} keeps its object, so its default cannot be a shared object [OWNERSHIP.md S21, S24, S46]",
+                .{ declared.name, member.name, field.name },
+            );
+            return null;
+        }
+        if (helpers.deeperThan(written, helpers.max_expression_depth)) {
+            try self.fail(
+                "luce.sema.nesting",
+                written.span(),
+                "expression nested too deeply (limit {d})",
+                .{helpers.max_expression_depth},
+            );
+            return null;
+        }
+        const previous_subject = self.fold_subject;
+        self.fold_subject = "a default";
+        defer self.fold_subject = previous_subject;
+        const folded = (try constants.fold(self, module, written, field.field_type)) orelse return null;
+        const fitted = constants.fit(folded, field.field_type) orelse {
+            try self.fail("luce.sema.type", written.span(), "{s}.{s}.{s} is {s} and its default is {s}", .{
+                declared.name,
+                member.name,
+                field.name,
+                try self.typeName(field.field_type),
+                try self.typeName(folded.value_type),
+            });
+            return null;
+        };
+        return fitted;
+    }
+
     /// The first of the declaration's parameter names `expression`
     /// reads — `self` included — or null when it reads none.  A pure
     /// syntactic walk: whether the name means anything else is the
@@ -2669,6 +3318,7 @@ pub const Analyzer = struct {
             self.structs.items,
             self.heap_types.items,
             self.enums.items,
+            self.variants.items,
             self.signatures.items,
             of,
         );
@@ -2687,6 +3337,10 @@ pub const Analyzer = struct {
         }
         if (self.enum_names.get(qualified)) |index| {
             const info = self.enum_decls.items[index];
+            return try self.declaredAt(self.modules[info.module].file, info.declaration.name_span);
+        }
+        if (self.variant_names.get(qualified)) |index| {
+            const info = self.variant_decls.items[index];
             return try self.declaredAt(self.modules[info.module].file, info.declaration.name_span);
         }
         if (self.constant_names.get(qualified)) |index| {
@@ -2731,6 +3385,7 @@ pub const Analyzer = struct {
                 .pool = self.pool,
                 .structs = self.structs.items,
                 .enums = self.enums.items,
+                .variants = self.variants.items,
                 .name = info.name,
                 .parameter_count = @intCast(info.parameter_types.len),
                 .return_type = info.return_type,

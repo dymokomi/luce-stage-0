@@ -373,6 +373,9 @@ pub const Machine = struct {
     /// initialized local and element (see zeroValue for why sharing
     /// is safe).  Allocated lazily, sized by program.structs.
     struct_zeros: []?RuntimeValue = &.{},
+    /// The same, one per union (docs/UNION.md D13).  Allocated
+    /// lazily, sized by program.variants.
+    variant_zeros: []?RuntimeValue = &.{},
     /// The declaration being materialized before a function may run.
     /// It is a frame-shaped value because a failed worker must carry
     /// the same located prelude through the ordinary unwind channel as
@@ -960,6 +963,32 @@ pub const Machine = struct {
                             registers[set.value],
                         ) catch |mistake| return self.caught(mistake);
                     },
+                    // A union value is a struct value whose slot 0 is
+                    // the member index (docs/UNION.md D8): the same
+                    // runtime path builds it, and the run is padded to
+                    // the union's one static length with `none` slots
+                    // that own nothing (`types.VariantType.runLength`).
+                    .variant_make => |make| {
+                        const declared = self.program.variants[make.variant];
+                        const span = declared.runLength();
+                        self.field_scratch.clearRetainingCapacity();
+                        try self.field_scratch.ensureTotalCapacity(self.arena, span);
+                        self.field_scratch.appendAssumeCapacity(.ofLong(make.member));
+                        for (make.fields) |field_register| {
+                            self.field_scratch.appendAssumeCapacity(registers[field_register]);
+                        }
+                        while (self.field_scratch.items.len < span) {
+                            self.field_scratch.appendAssumeCapacity(.none);
+                        }
+                        registers[item] = self.runtime.makeStruct(self.field_scratch.items) catch |mistake|
+                            return self.caught(mistake);
+                    },
+                    .variant_tag => |tag| {
+                        registers[item] = registers[tag.target].asStruct()[0];
+                    },
+                    .variant_field => |get| {
+                        registers[item] = registers[get.target].asStruct()[1 + get.field];
+                    },
                     .heap_new => |new| {
                         registers[item] = self.allocateObject(new, registers) catch |mistake|
                             return self.caught(mistake);
@@ -1257,6 +1286,32 @@ pub const Machine = struct {
                 }
                 const zero: RuntimeValue = .ofStruct(fields);
                 self.struct_zeros[layout_index] = zero;
+                break :blk zero;
+            },
+            // A union's zero is its first declared member with every
+            // payload field at its own zero (docs/UNION.md D13): the
+            // run is the member index in slot 0, then that member's
+            // field zeros (D8), padded to the union's one static run
+            // length with `none` slots that own nothing.  One shared
+            // template per union, cached for the same reason a struct
+            // layout's is, and shareable for the same reason: runs are
+            // never mutated in place.
+            .variant => |index| blk: {
+                if (self.variant_zeros.len == 0) {
+                    self.variant_zeros = try self.arena.alloc(?RuntimeValue, self.program.variants.len);
+                    @memset(self.variant_zeros, null);
+                }
+                if (self.variant_zeros[index]) |zero| break :blk zero;
+                const declared = self.program.variants[index];
+                const member = declared.members[0];
+                const slots = try self.arena.alloc(RuntimeValue, declared.runLength());
+                slots[0] = .ofLong(0);
+                for (member.fields, slots[1..][0..member.fields.len]) |field, *slot| {
+                    slot.* = try self.zeroValue(field.field_type);
+                }
+                @memset(slots[1 + member.fields.len ..], .none);
+                const zero: RuntimeValue = .ofStruct(slots);
+                self.variant_zeros[index] = zero;
                 break :blk zero;
             },
         };
@@ -1900,7 +1955,10 @@ pub const Machine = struct {
 fn emptyValue(of: types.Type) RuntimeValue {
     return switch (of) {
         .string => .ofString(""),
-        .strukt => .{ .tag = .strukt },
+        // A union value's run empties exactly as a struct's does
+        // (docs/UNION.md D8): the same tag and no run, which a
+        // release walks past.
+        .strukt, .variant => .{ .tag = .strukt },
         .optional => .none,
         else => .none,
     };

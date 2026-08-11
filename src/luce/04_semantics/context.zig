@@ -79,7 +79,7 @@ pub fn rangeMessage(landed: Type) []const u8 {
         .half => half_range_message,
         .float => float_range_message,
         .double => double_range_message,
-        .none, .boolean, .string, .strukt, .heap, .enumeration, .function, .optional => long_range_message,
+        .none, .boolean, .string, .strukt, .heap, .enumeration, .variant, .function, .optional => long_range_message,
     };
 }
 
@@ -100,9 +100,9 @@ pub fn literalLandingType(expected: Type) ?Type {
             .double => .double,
             // A number never lands on an enum: `Method` is a set of
             // names and `Method(8)` is the only way in (D4, R2).
-            .boolean, .string, .strukt, .heap, .enumeration => null,
+            .boolean, .string, .strukt, .heap, .enumeration, .variant => null,
         },
-        .none, .boolean, .string, .strukt, .heap, .enumeration, .function => null,
+        .none, .boolean, .string, .strukt, .heap, .enumeration, .variant, .function => null,
     };
 }
 
@@ -278,11 +278,13 @@ pub const Analyzed = mir.build.Lowered;
 pub const Enclosing = union(enum) {
     strukt: u32,
     enumeration: Type.EnumRef,
+    variant: u32,
 
     pub fn asType(self: Enclosing) Type {
         return switch (self) {
             .strukt => |index| .{ .strukt = index },
             .enumeration => |reference| .{ .enumeration = reference },
+            .variant => |index| .{ .variant = index },
         };
     }
 };
@@ -371,6 +373,19 @@ pub const EnumDeclInfo = struct {
     /// member of an enum still pending is refused rather than read at
     /// whatever its slot happens to hold.
     settled: bool = false,
+};
+
+/// A collected union declaration with its module (docs/UNION.md).  The
+/// members themselves live in the program's `types.VariantType` beside
+/// it, the way a struct's fields live in its layout.
+pub const VariantDeclInfo = struct {
+    declaration: *const ast.UnionDecl,
+    module: usize,
+    /// One slice per collected member, parallel to the member's fields:
+    /// the written default expressions (docs/UNION.md D4), folded
+    /// lazily through `Analyzer.variantFieldDefault` exactly as a
+    /// struct field's are.
+    member_defaults: [][]FieldDefault = &.{},
 };
 
 /// A collected struct declaration with its module, for cycle spans

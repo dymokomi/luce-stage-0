@@ -115,6 +115,12 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
         // will give back (docs/STRINGS.md).
         .struct_make, .struct_set => .impure,
 
+        // A union value is a struct value whose field 0 is the tag
+        // (docs/UNION.md D8): making one allocates a run, and reading
+        // the tag or a payload slot reads a value nothing can change.
+        .variant_make => .impure,
+        .variant_tag, .variant_field => .pure,
+
         .intrinsic => |call| intrinsicEffect(
             call.kind,
             if (call.arguments.len == 0) null else function.result_types[call.arguments[0]],
@@ -344,6 +350,11 @@ pub fn viewStable(instruction: Instruction) bool {
         .struct_get,
         .struct_make,
         .struct_set,
+        // Value storage only: a union value is a field run, not the
+        // object table (docs/UNION.md D8).
+        .variant_make,
+        .variant_tag,
+        .variant_field,
         .binary,
         .unary,
         .convert,
@@ -524,6 +535,11 @@ pub fn ownershipTransparent(function: *const Function, instruction: Instruction)
         .struct_get,
         .struct_make,
         .struct_set,
+        // A union value's run holds no owner field: the trio copies
+        // and reads values, exactly as the struct trio does.
+        .variant_make,
+        .variant_tag,
+        .variant_field,
         .binary,
         .unary,
         .convert,

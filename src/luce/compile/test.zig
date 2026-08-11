@@ -1804,6 +1804,359 @@ test "luce.sema.duplicate: an import cannot take a struct's name" {
     try testing.expect(reported);
 }
 
+// ---------------------------------------------------------------------------
+// Tagged unions: the front half (docs/UNION.md)
+// ---------------------------------------------------------------------------
+
+test "a union compiles through construction, dispatch, bindings, and string(u)" {
+    var program = try expectCompiles(
+        \\union Shape:
+        \\    empty
+        \\    circle(radius: double)
+        \\    rect(width: double, height: double = 1.0)
+        \\
+        \\    func corners() -> long:
+        \\        match self:
+        \\            empty:
+        \\                return 0
+        \\            circle:
+        \\                return 0
+        \\            rect:
+        \\                return 4
+        \\
+        \\    static func unit() -> Shape:
+        \\        return Shape.circle(radius = 1.0)
+        \\
+        \\func main():
+        \\    var s = Shape.rect(width = 2.0)
+        \\    s = Shape.empty
+        \\    let u = Shape.unit()
+        \\    var total = u.corners()
+        \\    match u:
+        \\        empty:
+        \\            total = 0
+        \\        circle(radius):
+        \\            total = total + long(radius)
+        \\        rect(width, height):
+        \\            total = total + long(width + height)
+        \\    let name = string(u)
+        \\    var late: Shape
+        \\    assert(len(name) >= 0 and total >= 0)
+        \\
+    );
+    defer program.deinit();
+
+    // The variants table travels on the program, and the three
+    // instructions were emitted: construction, the tag dispatch, and a
+    // payload read in an arm (docs/UNION.md "Where it lands").
+    try testing.expectEqual(@as(usize, 1), program.variants.len);
+    try testing.expectEqualStrings("Shape", program.variants[0].name);
+    try testing.expectEqual(@as(usize, 3), program.variants[0].members.len);
+    try testing.expectEqualStrings("radius", program.variants[0].members[1].fields[0].name);
+    var made: usize = 0;
+    var tagged: usize = 0;
+    var read: usize = 0;
+    for (program.functions) |function| {
+        for (function.instructions) |instruction| switch (instruction) {
+            .variant_make => made += 1,
+            .variant_tag => tagged += 1,
+            .variant_field => read += 1,
+            else => {},
+        };
+    }
+    try testing.expect(made != 0);
+    try testing.expect(tagged != 0);
+    try testing.expect(read != 0);
+
+    // The printer names what it prints.
+    const dump = try mir.print(testing.allocator, &program);
+    defer testing.allocator.free(dump);
+    try testing.expect(std.mem.indexOf(u8, dump, "union Shape:") != null);
+    try testing.expect(std.mem.indexOf(u8, dump, "circle(radius: double)") != null);
+    try testing.expect(std.mem.indexOf(u8, dump, "variant_make Shape.circle") != null);
+    try testing.expect(std.mem.indexOf(u8, dump, "variant_field") != null);
+}
+
+test "a union's refusals land where UNION.md puts them" {
+    // D2: a union of bare members is an enum.
+    try expectRejected(
+        \\union Flag:
+        \\    yes
+        \\    no
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.union");
+    // D3: a member is not a type.
+    try expectRejected(
+        \\union Shape:
+        \\    circle(radius: double)
+        \\
+        \\func main():
+        \\    let c: Shape.circle = Shape.circle(radius = 1.0)
+        \\
+    , "luce.sema.union");
+    // D12: a member that unconditionally contains the union makes the
+    // type infinite, whichever member it is.
+    try expectRejected(
+        \\union Chain:
+        \\    nil
+        \\    cons(head: long, tail: Chain)
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.union");
+    // D15: a union may not be a map key.
+    try expectRejected(
+        \\union Shape:
+        \\    empty
+        \\    circle(radius: double)
+        \\
+        \\func main():
+        \\    var m = new map(Shape, long)
+        \\
+    , "luce.sema.type");
+    // D16: `==` on unions is refused naming match.
+    try expectRejected(
+        \\union Shape:
+        \\    empty
+        \\    circle(radius: double)
+        \\
+        \\func main():
+        \\    let a = Shape.empty
+        \\    let b = Shape.empty
+        \\    assert(a == b)
+        \\
+    , "luce.sema.union");
+    // D1/D4: the union's own name is not a way in.
+    try expectRejected(
+        \\union Shape:
+        \\    empty
+        \\    circle(radius: double)
+        \\
+        \\func main():
+        \\    let s = Shape(1)
+        \\
+    , "luce.sema.union");
+    // D4: a payload-carrying member is not a bare value...
+    try expectRejected(
+        \\union Shape:
+        \\    empty
+        \\    circle(radius: double)
+        \\
+        \\func main():
+        \\    let s = Shape.circle
+        \\
+    , "luce.sema.construct");
+    // ...and a bare member takes no parentheses.
+    try expectRejected(
+        \\union Shape:
+        \\    empty
+        \\    circle(radius: double)
+        \\
+        \\func main():
+        \\    let s = Shape.empty()
+        \\
+    , "luce.sema.construct");
+    // A construction misses fields by name, like a struct's.
+    try expectRejected(
+        \\union Shape:
+        \\    empty
+        \\    rect(width: double, height: double)
+        \\
+        \\func main():
+        \\    let s = Shape.rect(width = 1.0)
+        \\
+    , "luce.sema.construct");
+}
+
+test "a union match keeps ENUMS R1 whole and extends it with bindings" {
+    // D5: a partial field list is refused naming the missing fields.
+    try expectRejected(
+        \\union Shape:
+        \\    empty
+        \\    rect(width: double, height: double)
+        \\
+        \\func main():
+        \\    let s = Shape.empty
+        \\    match s:
+        \\        empty:
+        \\            return
+        \\        rect(width):
+        \\            return
+        \\
+    , "luce.sema.match");
+    // R1: without an else, every member appears.
+    try expectRejected(
+        \\union Shape:
+        \\    empty
+        \\    circle(radius: double)
+        \\
+        \\func main():
+        \\    let s = Shape.empty
+        \\    match s:
+        \\        empty:
+        \\            return
+        \\
+    , "luce.sema.match");
+    // A name no member spells is a diagnostic about the union.
+    try expectRejected(
+        \\union Shape:
+        \\    empty
+        \\    circle(radius: double)
+        \\
+        \\func main():
+        \\    let s = Shape.empty
+        \\    match s:
+        \\        empty:
+        \\            return
+        \\        sphere:
+        \\            return
+        \\
+    , "luce.sema.match");
+    // A binding must name a field of the arm's member.
+    try expectRejected(
+        \\union Shape:
+        \\    empty
+        \\    circle(radius: double)
+        \\
+        \\func main():
+        \\    let s = Shape.empty
+        \\    match s:
+        \\        empty:
+        \\            return
+        \\        circle(diameter):
+        \\            return
+        \\
+    , "luce.sema.match");
+    // An enum's arms bind nothing (D5 extends match; enums keep R3).
+    try expectRejected(
+        \\enum Method:
+        \\    stored
+        \\    deflated
+        \\
+        \\func main():
+        \\    let m = Method.stored
+        \\    match m:
+        \\        stored(value):
+        \\            return
+        \\        deflated:
+        \\            return
+        \\
+    , "luce.sema.match");
+    // D11: an arm binding obeys no-shadowing, with the ordinary
+    // duplicate-name diagnostic.
+    try expectRejected(
+        \\union Shape:
+        \\    empty
+        \\    circle(radius: double)
+        \\
+        \\func main():
+        \\    let radius = 1.0
+        \\    let s = Shape.empty
+        \\    match s:
+        \\        empty:
+        \\            return
+        \\        circle(radius):
+        \\            return
+        \\
+    , "luce.sema.duplicate");
+}
+
+test "a union takes the ownership rules a carrying struct takes" {
+    // S27: keeping a union value needs a verb, whichever member it
+    // holds — the predicate is type-level (docs/UNION.md D9).
+    try expectRejected(
+        \\union Json:
+        \\    null
+        \\    number(value: double)
+        \\    array(items: list(Json))
+        \\
+        \\func main():
+        \\    var values = new list(Json)
+        \\    var j = Json.number(value = 3.0)
+        \\    values.append(j)
+        \\    free(values)
+        \\
+    , "luce.sema.own");
+    // S24: a payload field is a place that stores.
+    try expectRejected(
+        \\union Json:
+        \\    null
+        \\    array(items: list(Json))
+        \\
+        \\func main():
+        \\    var kids = new list(Json)
+        \\    let a = Json.array(items = kids)
+        \\
+    , "luce.sema.own");
+    // D9 gives a union the verbs a carrying struct takes and no
+    // others: `free` releases a direct container or resource handle
+    // (S6), so a union value is refused exactly as a struct value is
+    // — the list it carries is released when the union goes out of
+    // scope, never by name.
+    try expectRejected(
+        \\union Json:
+        \\    null
+        \\    array(items: list(long))
+        \\
+        \\func main():
+        \\    var doc = Json.array(items = [1, 2])
+        \\    free(doc)
+        \\
+    , "luce.sema.type");
+    // D10: an arm's payload binding is an alias, and S23 names the
+    // owner to give instead.
+    try expectRejected(
+        \\union Json:
+        \\    null
+        \\    array(items: list(Json))
+        \\
+        \\func main():
+        \\    let doc = Json.array(items = new list(Json))
+        \\    match doc:
+        \\        null:
+        \\            return
+        \\        array(items):
+        \\            let taken = give items
+        \\
+    , "luce.sema.own");
+    // And the whole legal story compiles: construction with give,
+    // borrowing reads in an arm, and a copy where one is kept.
+    var program = try expectCompiles(
+        \\union Json:
+        \\    null
+        \\    number(value: double)
+        \\    text(value: string)
+        \\    array(items: list(Json))
+        \\
+        \\func main():
+        \\    var elements = new list(Json)
+        \\    var j = Json.number(value = 3.0)
+        \\    elements.append(give j)
+        \\    let doc = Json.array(items = give elements)
+        \\    var count: long = 0
+        \\    match doc:
+        \\        null:
+        \\            count = 0
+        \\        number(value):
+        \\            count = long(value)
+        \\        text(value):
+        \\            count = len(value)
+        \\        array(items):
+        \\            count = len(items)
+        \\    let second = copy doc
+        \\    var maybe: Json? = none
+        \\    if count == 0:
+        \\        maybe = Json.null
+        \\    assert(count == 0 or maybe == none)
+        \\
+    );
+    program.deinit();
+}
+
 test "imports are explicit, checked, and reported per file" {
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{ geo_module, util_module } };

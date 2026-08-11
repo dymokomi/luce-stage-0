@@ -404,7 +404,7 @@ test "the visibility refusals land where the memo puts them" {
     );
     // A marker fronting something unmarkable names what it expected.
     try expectDiagnostics("private import math\n\nfunc main():\n    return\n", &.{
-        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "expected func, const, struct, or enum" },
+        .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "expected func, const, struct, enum, or union" },
     });
 }
 
@@ -2334,6 +2334,227 @@ test "a member takes a value, not a type" {
         .line = 2,
         .column = 11,
         .contains = "an enum member takes a value, not a type",
+    }});
+}
+
+test "a union declares members, field lists, and the functions a struct declares" {
+    var parsed = try expectClean(
+        \\union Shape:
+        \\    empty
+        \\    circle(radius: double)
+        \\    rect(width: double, height: double = 1.0)
+        \\
+        \\    func wide() -> bool:
+        \\        return true
+        \\
+        \\    static func unit() -> Shape:
+        \\        return Shape.circle(radius = 1.0)
+        \\
+        \\func main():
+        \\    return
+        \\
+    );
+    defer parsed.deinit();
+
+    try testing.expectEqual(@as(usize, 1), parsed.program.unions.len);
+    const declared = parsed.program.unions[0];
+    try testing.expectEqualStrings("Shape", declared.name);
+    try testing.expectEqual(@as(usize, 3), declared.members.len);
+    try testing.expectEqualStrings("empty", declared.members[0].name);
+    try testing.expectEqual(@as(usize, 0), declared.members[0].fields.len);
+    try testing.expectEqualStrings("circle", declared.members[1].name);
+    try testing.expectEqual(@as(usize, 1), declared.members[1].fields.len);
+    try testing.expectEqualStrings("radius", declared.members[1].fields[0].name);
+    try testing.expectEqualStrings("double", declared.members[1].fields[0].type_name.name);
+    try testing.expect(declared.members[1].fields[0].default == null);
+    try testing.expectEqual(@as(usize, 2), declared.members[2].fields.len);
+    try testing.expect(declared.members[2].fields[1].default != null);
+    try testing.expectEqual(@as(usize, 2), declared.functions.len);
+    try testing.expectEqualStrings("wide", declared.functions[0].name);
+    try testing.expect(!declared.functions[0].is_static);
+    try testing.expect(declared.functions[1].is_static);
+}
+
+test "a union takes a visibility marker, and its members do not" {
+    var parsed = try expectClean(
+        \\private union Shape:
+        \\    circle(radius: double)
+        \\
+        \\func main():
+        \\    return
+        \\
+    );
+    defer parsed.deinit();
+    try testing.expectEqual(ast.Visibility.private, parsed.program.unions[0].visibility);
+
+    // A member is what the type *is*, and a match arm cannot name one
+    // the file it stands in cannot see.
+    try expectDiagnostics(
+        \\union Shape:
+        \\    private circle(radius: double)
+        \\
+        \\func main():
+        \\    return
+        \\
+    , &.{.{
+        .code = "luce.parse.expected",
+        .line = 2,
+        .column = 5,
+        .contains = "a union member is part of the type and is always visible",
+    }});
+    try expectDiagnostics(
+        \\union Shape:
+        \\    private:
+        \\        circle(radius: double)
+        \\
+        \\func main():
+        \\    return
+        \\
+    , &.{.{
+        .code = "luce.parse.expected",
+        .line = 2,
+        .column = 5,
+        .contains = "a union's members are the type and are always visible",
+    }});
+}
+
+test "a union member's payload fields are named, always" {
+    // `circle(double)` is a tuple with a name in front of it
+    // (docs/UNION.md D1, docs/RETURNS.md).
+    try expectDiagnostics(
+        \\union Shape:
+        \\    circle(double)
+        \\
+        \\func main():
+        \\    return
+        \\
+    , &.{.{
+        .code = "luce.parse.expected",
+        .line = 2,
+        .column = 12,
+        .contains = "a payload field is named, always: write circle(name: double)",
+    }});
+    // The struct field's colon, in the one body that parenthesizes.
+    try expectDiagnostics(
+        \\union Shape:
+        \\    circle: double
+        \\
+        \\func main():
+        \\    return
+        \\
+    , &.{.{
+        .code = "luce.parse.expected",
+        .line = 2,
+        .column = 11,
+        .contains = "a union member's payload is parenthesized",
+    }});
+    // The enum habit: a member is not a number (D1).
+    try expectDiagnostics(
+        \\union Shape:
+        \\    circle = 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , &.{.{
+        .code = "luce.parse.expected",
+        .line = 2,
+        .column = 12,
+        .contains = "a union member holds no number",
+    }});
+    // Parentheses mean a payload (D4), so empty ones mean nothing.
+    try expectDiagnostics(
+        \\union Shape:
+        \\    circle()
+        \\
+        \\func main():
+        \\    return
+        \\
+    , &.{.{
+        .code = "luce.parse.expected",
+        .line = 2,
+        .column = 11,
+        .contains = "parentheses mean a payload",
+    }});
+    // Zig's tag reuse is not taken in this run (docs/UNION.md R2).
+    try expectDiagnostics(
+        \\union Shape(Kind):
+        \\    circle(radius: double)
+        \\
+        \\func main():
+        \\    return
+        \\
+    , &.{.{
+        .code = "luce.parse.expected",
+        .line = 1,
+        .column = 12,
+        .contains = "a union names no discriminant",
+    }});
+}
+
+test "a match arm binds payload fields by name alone" {
+    var parsed = try expectClean(
+        \\union Shape:
+        \\    empty
+        \\    rect(width: double, height: double)
+        \\
+        \\func main():
+        \\    let s = Shape.empty
+        \\    match s:
+        \\        empty:
+        \\            print("e")
+        \\        rect(width, height):
+        \\            print(string(width + height))
+        \\
+    );
+    defer parsed.deinit();
+    const body = parsed.program.functions[0].body;
+    const matched = body.statements[body.statements.len - 1].match;
+    try testing.expectEqual(@as(usize, 2), matched.arms.len);
+    try testing.expectEqual(@as(usize, 0), matched.arms[0].bindings.len);
+    try testing.expectEqual(@as(usize, 2), matched.arms[1].bindings.len);
+    try testing.expectEqualStrings("width", matched.arms[1].bindings[0].text);
+    try testing.expectEqualStrings("height", matched.arms[1].bindings[1].text);
+
+    // An arm's parentheses bind at least one field, or are not written.
+    try expectDiagnostics(
+        \\func main():
+        \\    match s:
+        \\        circle():
+        \\            return
+        \\
+    , &.{.{
+        .code = "luce.parse.expected",
+        .line = 3,
+        .column = 15,
+        .contains = "parentheses bind payload fields",
+    }});
+    // The declaration's field list where the binding list belongs.
+    try expectDiagnostics(
+        \\func main():
+        \\    match s:
+        \\        circle(radius: double):
+        \\            return
+        \\
+    , &.{.{
+        .code = "luce.parse.expected",
+        .line = 3,
+        .column = 22,
+        .contains = "an arm binds fields by name alone: write circle(radius)",
+    }});
+}
+
+test "union declares at file scope" {
+    try expectDiagnostics(
+        \\func main():
+        \\    union Shape:
+        \\        circle(radius: double)
+        \\
+    , &.{.{
+        .code = "luce.parse.expected",
+        .line = 2,
+        .column = 5,
+        .contains = "'union' declarations belong at file scope",
     }});
 }
 

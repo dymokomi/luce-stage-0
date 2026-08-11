@@ -34,6 +34,10 @@ pub fn boxTag(of: Type) ?value.Tag {
         .double => .double,
         .string => .string,
         .strukt => .strukt,
+        // A union value is a struct value whose field 0 is the tag
+        // (docs/UNION.md D8): to the runtime it is a field run, so it
+        // boxes as one and the runtime never learns unions exist.
+        .variant => .strukt,
         .heap => .object,
         // An enum boxes as the integer it is (docs/ENUMS.md D10): the
         // runtime is handed a value and never a program's type table,
@@ -818,6 +822,19 @@ pub const Instruction = union(enum) {
     struct_make: struct { layout: u32, fields: []Register },
     struct_get: struct { target: Register, layout: u32, field: u32 },
     struct_set: struct { target: Register, layout: u32, field: u32, value: Register },
+    /// Build one union value: the member index in slot 0, then the
+    /// member's payload fields in declaration order (docs/UNION.md D8).
+    /// The struct path with one more register in front — built whole,
+    /// never assigned into.
+    variant_make: struct { variant: u32, member: u32, fields: []Register },
+    /// The member index a union value holds — slot 0 of its run, as a
+    /// `long`.  What `match` dispatches on (docs/UNION.md D5).
+    variant_tag: struct { target: Register },
+    /// One payload field of a union value: slot `1 + field` of its run.
+    /// Emitted only inside an arm that proved the member, so a
+    /// wrong-arm read is unrepresentable rather than checked
+    /// (docs/UNION.md D7).
+    variant_field: struct { target: Register, variant: u32, member: u32, field: u32 },
     call: Call,
     /// A direct call whose implied receiver is a mutable local in the
     /// caller. `receiver` is logical parameter zero; `arguments` are
@@ -979,6 +996,11 @@ pub const Program = struct {
     /// an enum-typed slot, `luce ir`, a diagnostic — and never on the
     /// execution path, where an enum is the integer it is stored as.
     enums: []types.EnumType = &.{},
+    /// One row per declared union: its name and its members with their
+    /// payload fields (docs/UNION.md D18).  What the three `variant_*`
+    /// instructions index, exactly as `structs` is what the `struct_*`
+    /// three index — never one through the other's table.
+    variants: []types.VariantType = &.{},
     /// One row per distinct function type the program writes
     /// (docs/FUNCTIONS.md S2): what a call through it takes, with the
     /// verb each object parameter receives by, and what it answers.

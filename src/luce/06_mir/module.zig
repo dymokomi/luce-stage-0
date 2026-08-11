@@ -98,7 +98,16 @@ pub const magic = "LUCE";
 ///
 /// 36 — `term_event_data` joins the intrinsic set behind `term.io`'s
 /// mouse and resize accessors.
-pub const format_version: u32 = 37;
+///
+/// 38 — tagged unions arrive (docs/UNION.md).  A table of them joins
+/// the program between the enums and the signatures, `types.Type`
+/// grows a `variant` tag — placed beside `enumeration`, the other
+/// types that index a table, so `function` and `optional` renumber —
+/// and three instructions join `Instruction` beside the struct trio
+/// they mirror, so every tag after `struct_set` renumbers.  Safe for
+/// the reason 22's note gives and no other: the version moved with
+/// them.
+pub const format_version: u32 = 38;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -155,6 +164,20 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
         }
     }
 
+    try writer.int(u32, @intCast(program.variants.len));
+    for (program.variants) |declared| {
+        try writer.blob(declared.name);
+        try writer.int(u32, @intCast(declared.members.len));
+        for (declared.members) |member| {
+            try writer.blob(member.name);
+            try writer.int(u32, @intCast(member.fields.len));
+            for (member.fields) |field| {
+                try writer.blob(field.name);
+                try writer.valueType(field.field_type);
+            }
+        }
+    }
+
     try writer.int(u32, @intCast(program.signatures.len));
     for (program.signatures) |signature| {
         try writer.int(u32, @intCast(signature.parameters.len));
@@ -195,6 +218,7 @@ const Writer = struct {
         try self.int(u8, @intFromEnum(std.meta.activeTag(of)));
         if (of == .strukt) try self.int(u32, of.strukt);
         if (of == .heap) try self.int(u32, of.heap);
+        if (of == .variant) try self.int(u32, of.variant);
         if (of == .function) try self.int(u32, of.function);
         // The width travels with the index, as it does in memory: the
         // decoder rebuilds the whole reference without reaching into
@@ -344,6 +368,18 @@ const Writer = struct {
                 try self.int(u32, set.field);
                 try self.int(u32, set.value);
             },
+            .variant_make => |make| {
+                try self.int(u32, make.variant);
+                try self.int(u32, make.member);
+                try self.registers(make.fields);
+            },
+            .variant_tag => |tag| try self.int(u32, tag.target),
+            .variant_field => |get| {
+                try self.int(u32, get.target);
+                try self.int(u32, get.variant);
+                try self.int(u32, get.member);
+                try self.int(u32, get.field);
+            },
             .call, .spawn => |call| {
                 try self.int(u32, call.function);
                 try self.registers(call.arguments);
@@ -452,6 +488,26 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
     }
     program.enums = enums;
 
+    const variant_count = try reader.count();
+    const variants = try arena.alloc(types.VariantType, variant_count);
+    for (variants) |*declared| {
+        declared.name = try arena.dupe(u8, try reader.blob());
+        const member_count = try reader.count();
+        const members = try arena.alloc(types.VariantMember, member_count);
+        for (members) |*member| {
+            member.name = try arena.dupe(u8, try reader.blob());
+            const field_count = try reader.count();
+            const fields = try arena.alloc(types.StructField, field_count);
+            for (fields) |*field| {
+                field.name = try arena.dupe(u8, try reader.blob());
+                field.field_type = try reader.valueType();
+            }
+            member.fields = fields;
+        }
+        declared.members = members;
+    }
+    program.variants = variants;
+
     const signature_count = try reader.count();
     const signatures = try arena.alloc(types.Signature, signature_count);
     for (signatures) |*signature| {
@@ -545,6 +601,7 @@ const Reader = struct {
             .string => .string,
             .strukt => .{ .strukt = try self.int(u32) },
             .heap => .{ .heap = try self.int(u32) },
+            .variant => .{ .variant = try self.int(u32) },
             .function => .{ .function = try self.int(u32) },
             .enumeration => .{ .enumeration = .{
                 .index = try self.int(u32),
@@ -724,6 +781,20 @@ const Reader = struct {
                 .layout = try self.int(u32),
                 .field = try self.int(u32),
                 .value = try self.int(u32),
+            } },
+            .variant_make => .{ .variant_make = .{
+                .variant = try self.int(u32),
+                .member = try self.int(u32),
+                .fields = try self.registers(arena),
+            } },
+            .variant_tag => .{ .variant_tag = .{
+                .target = try self.int(u32),
+            } },
+            .variant_field => .{ .variant_field = .{
+                .target = try self.int(u32),
+                .variant = try self.int(u32),
+                .member = try self.int(u32),
+                .field = try self.int(u32),
             } },
             .call => .{ .call = .{
                 .function = try self.int(u32),
@@ -1562,6 +1633,8 @@ test "decode allocates in proportion to its input" {
         @sizeOf(mir.Block),
         @sizeOf(types.StructLayout),
         @sizeOf(types.StructField),
+        @sizeOf(types.VariantType),
+        @sizeOf(types.VariantMember),
         @sizeOf(types.HeapType),
         @sizeOf(types.Type),
         @sizeOf(mir.ContainerConstant),
@@ -1634,8 +1707,11 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // unchanged (the hash below did not move), which is exactly the
     // shape-changed case the paragraph above warns the hash cannot
     // catch.
-    try testing.expectEqual(@as(u32, 37), format_version);
-    try testing.expectEqual(@as(u64, 11437522259294766851), hasher.final());
+    // 37 -> 38: tagged unions (docs/UNION.md) — `types.Type` grows the
+    // `variant` tag and `Instruction` grows the `variant_*` trio, both
+    // in the middle of their unions, so the wire renumbers.
+    try testing.expectEqual(@as(u32, 38), format_version);
+    try testing.expectEqual(@as(u64, 11170085788899588128), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {
@@ -1684,6 +1760,73 @@ test "an enum round-trips with its members, and a foreign width is rejected" {
     try testing.expectEqual(@intFromEnum(types.Type.EnumRef.Backing.byte), widened[table_at]);
     widened[table_at] = @intFromEnum(types.Type.EnumRef.Backing.long);
     try testing.expectError(error.InvalidModule, decode(testing.allocator, widened));
+}
+
+test "a union round-trips with its members and payload fields" {
+    var program = try compileScript(
+        \\union Shape:
+        \\    empty
+        \\    circle(radius: double)
+        \\    rect(width: double, height: double)
+        \\
+        \\func main():
+        \\    var s = Shape.circle(radius = 2.0)
+        \\    s = Shape.empty
+        \\    var total: double = 0.0
+        \\    match s:
+        \\        empty:
+        \\            total = 0.0
+        \\        circle(radius):
+        \\            total = radius
+        \\        rect(width, height):
+        \\            total = width * height
+        \\    assert(total == 0.0)
+        \\    assert(string(s) == "empty")
+        \\
+    );
+    defer program.deinit();
+
+    const encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+    var loaded = try decode(testing.allocator, encoded);
+    defer loaded.deinit();
+
+    const original_dump = try mir.print(testing.allocator, &program);
+    defer testing.allocator.free(original_dump);
+    const loaded_dump = try mir.print(testing.allocator, &loaded);
+    defer testing.allocator.free(loaded_dump);
+    try testing.expectEqualStrings(original_dump, loaded_dump);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "union Shape:") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "rect(width: double, height: double)") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "variant_make Shape.circle") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "variant_tag") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "variant_field") != null);
+
+    const again = try encode(testing.allocator, &loaded);
+    defer testing.allocator.free(again);
+    try testing.expectEqualSlices(u8, encoded, again);
+
+    // A member index past the table is a damaged module, refused the
+    // way an enum register holding no member is.
+    var damaged = false;
+    for (loaded.functions) |function| {
+        for (function.instructions) |instruction| {
+            if (instruction != .variant_make) continue;
+            if (instruction.variant_make.member != 1) continue;
+            damaged = true;
+        }
+    }
+    try testing.expect(damaged);
+    var forged = program;
+    for (forged.functions) |*function| {
+        for (function.instructions) |*instruction| {
+            if (instruction.* != .variant_make) continue;
+            instruction.variant_make.member = 9;
+        }
+    }
+    const bad = try encode(testing.allocator, &forged);
+    defer testing.allocator.free(bad);
+    try testing.expectError(error.InvalidModule, decode(testing.allocator, bad));
 }
 
 test "an enum register holding no member is refused" {

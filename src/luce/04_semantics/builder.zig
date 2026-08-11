@@ -885,12 +885,14 @@ pub const FunctionBuilder = struct {
             const declaration = switch (owner) {
                 .strukt => |index| self.analyzer.struct_decls.items[index].declaration.visibility,
                 .enumeration => |reference| self.analyzer.enum_decls.items[reference.index].declaration.visibility,
+                .variant => |index| self.analyzer.variant_decls.items[index].declaration.visibility,
             };
             if (declaration == .private) {
                 try self.fail("luce.sema.private", span, "{s} is private to {s}", .{
                     switch (owner) {
                         .strukt => |index| self.analyzer.struct_decls.items[index].declaration.name,
                         .enumeration => |reference| self.analyzer.enum_decls.items[reference.index].declaration.name,
+                        .variant => |index| self.analyzer.variant_decls.items[index].declaration.name,
                     },
                     self.analyzer.moduleName(info.module),
                 });
@@ -1487,6 +1489,9 @@ pub const FunctionBuilder = struct {
             .binary => true,
             // Both build a whole new struct value that owns its run.
             .struct_make, .struct_set => true,
+            // A union value is built whole and owns its run exactly as
+            // a struct value does (docs/UNION.md D8).
+            .variant_make => true,
             // A function's result is the caller's (S16), and `ret`
             // hands out a copy rather than a view of the callee's
             // frame — whichever way the callee was named
@@ -1626,6 +1631,9 @@ pub const FunctionBuilder = struct {
         return switch (self.code.instructions.items[register]) {
             .local_get => true,
             .struct_get => true,
+            // A payload read is a view into the scrutinee's run
+            // (docs/UNION.md D10), exactly as a field read is.
+            .variant_field => true,
             .intrinsic => |call| switch (call.kind) {
                 .index_get, .map_get, .key_at, .value_at => true,
                 else => false,
@@ -1723,14 +1731,17 @@ pub const FunctionBuilder = struct {
             if (at > 1) written.append(self.temporary(), '.') catch return false;
         }
         const spelled = written.items;
-        const index = found: {
-            if (parts.len == 2) {
-                const local = self.analyzer.qualify(self.prefix, spelled) catch return false;
-                break :found self.analyzer.enum_names.get(local) orelse return false;
-            }
-            break :found self.analyzer.enum_names.get(spelled) orelse return false;
-        };
-        return self.analyzer.enums.items[index].findMember(parts[0]) != null;
+        const head = if (parts.len == 2)
+            self.analyzer.qualify(self.prefix, spelled) catch return false
+        else
+            spelled;
+        if (self.analyzer.enum_names.get(head)) |index| {
+            return self.analyzer.enums.items[index].findMember(parts[0]) != null;
+        }
+        if (self.analyzer.variant_names.get(head)) |index| {
+            return self.analyzer.variants.items[index].findMember(parts[0]) != null;
+        }
+        return false;
     }
 
     /// Whether a written name is an enum's, in this module or an
@@ -1786,8 +1797,42 @@ pub const FunctionBuilder = struct {
                 if (self.structMethodYieldsObject(method.name)) break :blk true;
                 break :blk self.routedMethodYieldsObject(method.name);
             },
+            // `Json.null` — a bare union member is a construction, and
+            // a construction is fresh (docs/UNION.md D4).
+            .field => |field| blk: {
+                const chain = helpers.dottedChain(field.target) orelse break :blk false;
+                if (self.findLocal(chain.head()) != null) break :blk false;
+                var parts_buffer: [8][]const u8 = undefined;
+                if (chain.count + 1 > parts_buffer.len) break :blk false;
+                parts_buffer[0] = field.name;
+                for (chain.parts[0..chain.count], 1..) |part, at| parts_buffer[at] = part;
+                break :blk self.namesVariantParts(parts_buffer[0 .. chain.count + 1]);
+            },
             else => false,
         };
+    }
+
+    /// Whether a dotted chain, written inner-to-outer, spells a
+    /// **union** member: `Json.null`, `zip.Shape.circle`.  The last
+    /// part is the member and everything in front of it names the
+    /// union — `namesMember`'s shape, narrowed to one table, for the
+    /// caller that has to know which kind it found.
+    fn namesVariantParts(self: *FunctionBuilder, parts: []const []const u8) bool {
+        var written: std.ArrayList(u8) = .empty;
+        defer written.deinit(self.temporary());
+        var at = parts.len;
+        while (at > 1) {
+            at -= 1;
+            written.appendSlice(self.temporary(), parts[at]) catch return false;
+            if (at > 1) written.append(self.temporary(), '.') catch return false;
+        }
+        const spelled = written.items;
+        const head = if (parts.len == 2)
+            self.analyzer.qualify(self.prefix, spelled) catch return false
+        else
+            spelled;
+        const index = self.analyzer.variant_names.get(head) orelse return false;
+        return self.analyzer.variants.items[index].findMember(parts[0]) != null;
     }
 
     /// True when `name` is a standard-library function that method
@@ -1841,6 +1886,7 @@ pub const FunctionBuilder = struct {
         if (self.capturesName(head)) return false;
         const head_qualified = try self.analyzer.qualify(self.prefix, head);
         if (self.analyzer.struct_names.contains(head_qualified)) return true;
+        if (self.analyzer.variant_names.contains(head_qualified)) return true;
         return self.analyzer.importsModule(self.module, head);
     }
 
@@ -3118,11 +3164,14 @@ pub const FunctionBuilder = struct {
     fn lowerMatch(self: *FunctionBuilder, matched: ast.Match) Error!void {
         const temps_floor = self.temps.items.len;
         const scrutinee = (try self.lowerExpression(matched.scrutinee, false)) orelse return;
+        if (scrutinee.value_type == .variant) {
+            return self.lowerVariantMatch(matched, scrutinee, temps_floor);
+        }
         if (scrutinee.value_type != .enumeration) {
             try self.fail(
                 "luce.sema.match",
                 matched.scrutinee.span(),
-                "match dispatches over an enum, and {s} is not one; chain if and elif for a value whose cases have no names{s}",
+                "match dispatches over an enum or a union, and {s} is neither; chain if and elif for a value whose cases have no names{s}",
                 .{
                     try self.analyzer.typeName(scrutinee.value_type),
                     try self.absenceAdvice(scrutinee.value_type, matched.scrutinee),
@@ -3149,6 +3198,18 @@ pub const FunctionBuilder = struct {
                 usable = false;
                 continue;
             };
+            // A payload binding list belongs to a union's arms
+            // (docs/UNION.md D5); an enum's members carry nothing.
+            if (arm.bindings.len != 0) {
+                try self.fail(
+                    "luce.sema.match",
+                    arm.span,
+                    "{s} is an enum, and its members carry nothing to bind: write '{s}:'",
+                    .{ declared.name, arm.name },
+                );
+                usable = false;
+                continue;
+            }
             if (covered[member]) {
                 try self.fail(
                     "luce.sema.match",
@@ -3257,6 +3318,309 @@ pub const FunctionBuilder = struct {
         if (has_continuing_root) self.rootRestore(joined_roots) else self.rootRestore(root_entry);
     }
 
+    /// `match j:` over a union — ENUMS R1 extended, not forked
+    /// (docs/UNION.md D5): the same exhaustiveness, `else` and
+    /// duplicate-arm rules, dispatch on `variant_tag` instead of the
+    /// value, and an arm may bind its member's payload fields, each by
+    /// the field's own name, all of them or none.
+    fn lowerVariantMatch(
+        self: *FunctionBuilder,
+        matched: ast.Match,
+        scrutinee: Typed,
+        temps_floor: usize,
+    ) Error!void {
+        const variant_index = scrutinee.value_type.variant;
+        const declared = self.analyzer.variants.items[variant_index];
+
+        // Which member each arm names, and which members were named:
+        // both are needed before anything is lowered, because whether
+        // the *last* arm is a comparison or the fallthrough depends on
+        // the whole set.
+        const chosen = try self.temporary().alloc(u32, matched.arms.len);
+        defer self.temporary().free(chosen);
+        const covered = try self.temporary().alloc(bool, declared.members.len);
+        defer self.temporary().free(covered);
+        @memset(covered, false);
+        var usable = true;
+        for (matched.arms, chosen) |arm, *slot| {
+            const member_index = declared.findMember(arm.name) orelse {
+                try self.failUnknownVariantMember(declared, arm.name, arm.name_span);
+                usable = false;
+                continue;
+            };
+            if (!try self.checkArmBindings(declared, member_index, arm)) {
+                usable = false;
+                continue;
+            }
+            if (covered[member_index]) {
+                try self.fail(
+                    "luce.sema.match",
+                    arm.name_span,
+                    "{s} already has an arm in this match",
+                    .{arm.name},
+                );
+                usable = false;
+                continue;
+            }
+            covered[member_index] = true;
+            slot.* = member_index;
+        }
+        if (!usable) return;
+
+        var missing: usize = 0;
+        for (covered) |named| {
+            if (!named) missing += 1;
+        }
+        if (matched.else_span) |span| {
+            if (missing == 0) {
+                try self.fail(
+                    "luce.sema.match",
+                    span,
+                    "every member of {s} already has an arm, so this else can never run; drop it",
+                    .{declared.name},
+                );
+                return;
+            }
+        } else if (missing != 0) {
+            try self.failMissingVariantArms(declared, covered, missing, matched.span);
+            return;
+        }
+
+        // The scrutinee is read once and carried in a slot: a register
+        // never crosses a block, and every arm's test is a block.
+        const held = try self.code.spill(scrutinee.register, scrutinee.value_type);
+        try self.flushTemps(temps_floor);
+
+        // What an arm's payload aliases, for S23's sentence: the
+        // scrutinee where it is a bare name, nothing otherwise.
+        const owner_name: ?[]const u8 = switch (matched.scrutinee.*) {
+            .name => |name| name.text,
+            else => null,
+        };
+
+        // Facts an arm proves are the arm's own, and one that assigns
+        // over a narrowed name unproves it for everybody after.
+        const entry = try self.narrowSave();
+        defer self.temporary().free(entry);
+        const root_entry = try self.rootSave();
+        defer self.temporary().free(root_entry);
+        const joined_roots = try self.temporary().dupe(RootFact, root_entry);
+        defer self.temporary().free(joined_roots);
+        var has_continuing_root = false;
+
+        // With no else and every member named, the last arm needs no
+        // test: it is where a value that matched nothing above must be.
+        const fallthrough = matched.else_block == null;
+        const tested = if (fallthrough) matched.arms.len - 1 else matched.arms.len;
+
+        var frames: std.ArrayList(mir.build.Lowering.Conditional) = .empty;
+        defer frames.deinit(self.temporary());
+        for (matched.arms[0..tested], chosen[0..tested]) |arm, member_index| {
+            const tag = try self.code.emit(
+                .{ .variant_tag = .{ .target = try self.code.load(held) } },
+                .long,
+            );
+            const number = try self.code.emit(.{ .const_long = @intCast(member_index) }, .long);
+            const same = try self.code.emit(.{ .binary = .{
+                .op = .equal,
+                .operand_type = .long,
+                .left = tag,
+                .right = number,
+            } }, .boolean);
+            const arms = try self.code.openIf(same, true);
+            try self.narrowRestore(entry);
+            self.rootRestore(root_entry);
+            try self.lowerVariantArm(variant_index, member_index, arm, held, owner_name);
+            if (!helpers.alwaysExits(arm.body)) {
+                if (has_continuing_root) self.rootJoinInto(joined_roots) else self.rootCaptureInto(joined_roots);
+                has_continuing_root = true;
+            }
+            try self.code.elseArm(arms);
+            try frames.append(self.temporary(), arms);
+        }
+        try self.narrowRestore(entry);
+        self.rootRestore(root_entry);
+        if (matched.else_block) |otherwise| {
+            try self.lowerBlock(otherwise);
+            if (!helpers.alwaysExits(otherwise)) {
+                if (has_continuing_root) self.rootJoinInto(joined_roots) else self.rootCaptureInto(joined_roots);
+                has_continuing_root = true;
+            }
+        } else {
+            const last = matched.arms[matched.arms.len - 1];
+            try self.lowerVariantArm(variant_index, chosen[matched.arms.len - 1], last, held, owner_name);
+            if (!helpers.alwaysExits(last.body)) {
+                if (has_continuing_root) self.rootJoinInto(joined_roots) else self.rootCaptureInto(joined_roots);
+                has_continuing_root = true;
+            }
+        }
+        while (frames.pop()) |arms| try self.code.closeIf(arms);
+
+        try self.narrowRestore(entry);
+        for (matched.arms) |arm| self.widenAssignedIn(arm.body);
+        if (matched.else_block) |otherwise| self.widenAssignedIn(otherwise);
+        if (has_continuing_root) self.rootRestore(joined_roots) else self.rootRestore(root_entry);
+    }
+
+    /// One arm's binding list against its member's field list
+    /// (docs/UNION.md D5): every listed name a field, none twice, and
+    /// all of them or none — a partial list is refused naming the
+    /// missing fields the way struct construction already does.
+    /// False after reporting.
+    fn checkArmBindings(
+        self: *FunctionBuilder,
+        declared: types.VariantType,
+        member_index: u32,
+        arm: ast.MatchArm,
+    ) Error!bool {
+        if (arm.bindings.len == 0) return true;
+        const member = declared.members[member_index];
+        if (member.fields.len == 0) {
+            try self.fail(
+                "luce.sema.match",
+                arm.span,
+                "{s}.{s} carries no payload: write '{s}:'",
+                .{ declared.name, member.name, arm.name },
+            );
+            return false;
+        }
+        const bound = try self.temporary().alloc(bool, member.fields.len);
+        defer self.temporary().free(bound);
+        @memset(bound, false);
+        for (arm.bindings) |binding| {
+            const field_index = member.findField(binding.text) orelse {
+                var suggestion = helpers.Suggestion.init(binding.text);
+                for (member.fields) |field| suggestion.offer(field.name);
+                if (suggestion.best()) |closest| {
+                    try self.fail("luce.sema.match", binding.span, "{s} is not a field of {s}.{s}; did you mean {s}?", .{
+                        binding.text,
+                        declared.name,
+                        member.name,
+                        closest,
+                    });
+                    return false;
+                }
+                try self.fail("luce.sema.match", binding.span, "{s} is not a field of {s}.{s}", .{
+                    binding.text,
+                    declared.name,
+                    member.name,
+                });
+                return false;
+            };
+            if (bound[field_index]) {
+                try self.fail("luce.sema.match", binding.span, "field {s} bound twice", .{binding.text});
+                return false;
+            }
+            bound[field_index] = true;
+        }
+        for (bound) |given| {
+            if (given) continue;
+            var left_out: std.ArrayList(u8) = .empty;
+            defer left_out.deinit(self.temporary());
+            try context.writeMissingFields(
+                &left_out,
+                self.temporary(),
+                .{ .name = member.name, .fields = member.fields },
+                bound,
+            );
+            try self.fail(
+                "luce.sema.match",
+                arm.span,
+                "this arm of {s}.{s} is missing {s}; an arm binds every field, or write '{s}:' to bind none",
+                .{ declared.name, member.name, left_out.items, arm.name },
+            );
+            return false;
+        }
+        return true;
+    }
+
+    /// One arm's body, with its payload bindings in a scope of their
+    /// own — like `catch NAME:`'s (docs/UNION.md D11).  Each binding
+    /// is an alias of what the scrutinee owns (D10): reading through
+    /// it is free, keeping it needs `copy`, and a value payload is an
+    /// ordinary copy taken by the store.
+    fn lowerVariantArm(
+        self: *FunctionBuilder,
+        variant_index: u32,
+        member_index: u32,
+        arm: ast.MatchArm,
+        held: LocalId,
+        owner_name: ?[]const u8,
+    ) Error!void {
+        if (arm.bindings.len == 0) {
+            try self.lowerBlock(arm.body);
+            return;
+        }
+        const member = self.analyzer.variants.items[variant_index].members[member_index];
+        try self.pushScope();
+        for (member.fields, 0..) |field, field_index| {
+            // The binding's own span, for "already declared" messages
+            // pointing at the name the reader wrote.
+            const declared_at = for (arm.bindings) |binding| {
+                if (std.mem.eql(u8, binding.text, field.name)) break binding.span;
+            } else arm.name_span;
+            const value: Typed = .{
+                .register = try self.code.emit(.{ .variant_field = .{
+                    .target = try self.code.load(held),
+                    .variant = variant_index,
+                    .member = member_index,
+                    .field = @intCast(field_index),
+                } }, field.field_type),
+                .value_type = field.field_type,
+            };
+            const local = (try self.declareLocal(
+                field.name,
+                field.field_type,
+                false,
+                .alias,
+                declared_at,
+            )) orelse continue;
+            try self.storeOwned(local, value);
+            if (owner_name != null) {
+                if (self.findLocal(field.name)) |bound| bound.info.owner_name = owner_name;
+            }
+        }
+        try self.lowerBlock(arm.body);
+        try self.emitScopeEnd();
+        self.popScope();
+    }
+
+    /// The members a union match with no `else` left out, named — all
+    /// of them, in declaration order (`failMissingArms`' sentence, one
+    /// table over).
+    fn failMissingVariantArms(
+        self: *FunctionBuilder,
+        declared: types.VariantType,
+        covered: []const bool,
+        missing: usize,
+        span: Span,
+    ) Error!void {
+        var written: std.ArrayList(u8) = .empty;
+        defer written.deinit(self.temporary());
+        var written_so_far: usize = 0;
+        for (covered, 0..) |named, index| {
+            if (named) continue;
+            if (written_so_far != 0) {
+                if (missing > 2) try written.appendSlice(self.temporary(), ",");
+                try written.appendSlice(self.temporary(), " ");
+                if (written_so_far + 1 == missing) try written.appendSlice(self.temporary(), "and ");
+            }
+            try written.appendSlice(self.temporary(), declared.members[index].name);
+            written_so_far += 1;
+        }
+        try self.fail(
+            "luce.sema.match",
+            span,
+            "this match has no arm for {s} {s} of {s}; write {s}, or an else for everything the arms above do not name",
+            .{
+                if (missing == 1) "member" else "members",
+                written.items,
+                declared.name,
+                if (missing == 1) "one" else "them",
+            },
+        );
+    }
+
     /// A match arm, or a `Method.x`, naming something the enum has not.
     fn failUnknownMember(
         self: *FunctionBuilder,
@@ -3266,15 +3630,40 @@ pub const FunctionBuilder = struct {
     ) Error!void {
         var suggestion = helpers.Suggestion.init(written);
         for (declared.members) |member| suggestion.offer(member.name);
-        if (suggestion.best()) |closest| {
+        try self.failNoSuchMember(declared.name, suggestion.best(), written, span);
+    }
+
+    /// The union twin: a match arm, or a `Shape.x`, naming something
+    /// the union has not.
+    fn failUnknownVariantMember(
+        self: *FunctionBuilder,
+        declared: types.VariantType,
+        written: []const u8,
+        span: Span,
+    ) Error!void {
+        var suggestion = helpers.Suggestion.init(written);
+        for (declared.members) |member| suggestion.offer(member.name);
+        try self.failNoSuchMember(declared.name, suggestion.best(), written, span);
+    }
+
+    /// The one sentence both kinds say about a name their members do
+    /// not spell.
+    fn failNoSuchMember(
+        self: *FunctionBuilder,
+        declared_name: []const u8,
+        closest: ?[]const u8,
+        written: []const u8,
+        span: Span,
+    ) Error!void {
+        if (closest) |offered| {
             try self.fail("luce.sema.match", span, "{s} is not a member of {s}; did you mean {s}?", .{
                 written,
-                declared.name,
-                closest,
+                declared_name,
+                offered,
             });
             return;
         }
-        try self.fail("luce.sema.match", span, "{s} is not a member of {s}", .{ written, declared.name });
+        try self.fail("luce.sema.match", span, "{s} is not a member of {s}", .{ written, declared_name });
     }
 
     /// The members a match with no `else` left out, named — all of
@@ -6956,6 +7345,83 @@ pub const FunctionBuilder = struct {
         value: Typed,
     };
 
+    /// `Json.null` — a bare union member, which is a construction with
+    /// nothing to fill in (docs/UNION.md D4).  Null when the dotted
+    /// head names no union; a member that carries a payload is refused
+    /// here naming the fields it wants, because a bare spelling of one
+    /// is a construction missing everything.
+    ///
+    /// The lookup is `enumMemberAccess`'s, one table over.
+    fn variantMemberAccess(self: *FunctionBuilder, field: ast.FieldAccess) Error!MemberAccess {
+        const chain = helpers.dottedChain(field.target) orelse return .not_a_member;
+        if (self.findLocal(chain.head()) != null) return .not_a_member;
+
+        var written: std.ArrayList(u8) = .empty;
+        defer written.deinit(self.temporary());
+        var at = chain.count;
+        while (at > 0) {
+            at -= 1;
+            if (written.items.len != 0) try written.append(self.temporary(), '.');
+            try written.appendSlice(self.temporary(), chain.parts[at]);
+        }
+        const spelled = written.items;
+
+        // A bare name is this module's; a dotted one is an import's,
+        // and only an imported module may be the head.
+        const index = found: {
+            if (chain.count == 1) {
+                const local = try self.analyzer.qualify(self.prefix, spelled);
+                break :found self.analyzer.variant_names.get(local) orelse return .not_a_member;
+            }
+            if (!self.analyzer.importsModule(self.module, chain.head())) return .not_a_member;
+            break :found self.analyzer.variant_names.get(spelled) orelse return .not_a_member;
+        };
+        const info = self.analyzer.variant_decls.items[index];
+        if (info.declaration.visibility == .private and info.module != self.module) {
+            try self.fail("luce.sema.private", field.span, "{s} is private to {s}", .{
+                info.declaration.name,
+                self.analyzer.moduleName(info.module),
+            });
+            return .reported;
+        }
+        const declared = self.analyzer.variants.items[index];
+        const member_index = declared.findMember(field.name) orelse {
+            // `Shape.area` written without its parentheses is a
+            // function of the union, and it is not a value either
+            // (docs/METHODS.md); the shared sentence says so.
+            const qualified = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ declared.name, field.name });
+            const spelling = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ spelled, field.name });
+            if (try self.failNotAValue(spelling, qualified, field.span)) return .reported;
+            try self.failUnknownVariantMember(declared, field.name, field.span);
+            return .reported;
+        };
+        const member = declared.members[member_index];
+        if (member.fields.len != 0) {
+            var wanted: std.ArrayList(u8) = .empty;
+            defer wanted.deinit(self.temporary());
+            for (member.fields, 0..) |payload, position| {
+                if (position != 0) try wanted.appendSlice(self.temporary(), ", ");
+                try wanted.print(self.temporary(), "{s} = ...", .{payload.name});
+            }
+            try self.fail(
+                "luce.sema.construct",
+                field.span,
+                "{s}.{s} carries a payload: write {s}.{s}({s})",
+                .{ declared.name, member.name, spelled, member.name, wanted.items },
+            );
+            return .reported;
+        }
+        const of: Type = .{ .variant = index };
+        return .{ .value = .{
+            .register = try self.code.emit(.{ .variant_make = .{
+                .variant = index,
+                .member = member_index,
+                .fields = &.{},
+            } }, of),
+            .value_type = of,
+        } };
+    }
+
     fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Typed {
         // A dotted chain whose head is a bare declaration name is a
         // namespace, exactly as it is in front of a call
@@ -6970,6 +7436,15 @@ pub const FunctionBuilder = struct {
         // one dotted form whose head names a *type* and whose answer is
         // a value; everything below reads a field of one.
         switch (try self.enumMemberAccess(field)) {
+            .not_a_member => {},
+            .reported => return null,
+            .value => |member| return member,
+        }
+        // `Json.null`, `zip.Shape.circle` — a union member, which is a
+        // construction of the member with nothing to fill in
+        // (docs/UNION.md D4).  Asked beside the enum form, because it
+        // is the same dotted shape one table over.
+        switch (try self.variantMemberAccess(field)) {
             .not_a_member => {},
             .reported => return null,
             .value => |member| return member,
@@ -7331,6 +7806,18 @@ pub const FunctionBuilder = struct {
         }
         if (operand_type == .none) {
             try self.fail("luce.sema.type", binary.span, "value has no type", .{});
+            return null;
+        }
+        // Two unions are compared by matching, and by nothing else in
+        // this run (docs/UNION.md D16): `match` is the only door, so
+        // `==` is refused by the sentence that names it.
+        if (operand_type == .variant) {
+            try self.fail(
+                "luce.sema.union",
+                binary.span,
+                "two {s} values are not compared with {s}; match on each and compare what the arms carry [UNION.md D16]",
+                .{ try self.analyzer.typeName(operand_type), context.operatorText(binary.op) },
+            );
             return null;
         }
         return .{
@@ -7913,6 +8400,11 @@ pub const FunctionBuilder = struct {
         if (self.analyzer.enum_names.get(resolved)) |enum_index| {
             return self.lowerEnumOfNumber(call.callee, call.arguments, call.span, enum_index);
         }
+        // A union has no `Shape(n)` and no bare construction: a member
+        // is the only way in (docs/UNION.md D1, D4).
+        if (self.analyzer.variant_names.get(resolved)) |variant_index| {
+            return self.failVariantAsCallee(call.callee, variant_index, call.span);
+        }
         const function_index = self.analyzer.function_names.get(resolved) orelse {
             try self.failUnknownFunction(call.callee, call.span);
             return null;
@@ -8392,6 +8884,22 @@ pub const FunctionBuilder = struct {
                 if (self.analyzer.enum_names.get(resolved)) |enum_index| {
                     return self.lowerEnumOfNumber(method.name, method.arguments, method.span, enum_index);
                 }
+                if (self.analyzer.variant_names.get(resolved)) |variant_index| {
+                    return self.failVariantAsCallee(method.name, variant_index, method.span);
+                }
+                // `Shape.circle(radius = 2.0)` — a union member, which
+                // is the one construction a union has (docs/UNION.md
+                // D4).  Asked before the function table because the
+                // two cannot collide: a member and a function sharing
+                // a name is refused where the union is declared.
+                if (self.variantMemberOfQualified(resolved)) |found| {
+                    return self.lowerVariantConstruct(
+                        method.arguments,
+                        method.span,
+                        found.variant,
+                        found.member,
+                    );
+                }
                 const function_index = self.analyzer.function_names.get(resolved).?;
                 return self.lowerUserCall(
                     function_index,
@@ -8453,12 +8961,15 @@ pub const FunctionBuilder = struct {
         if (chain.count >= 2 and self.namesMember(parts[0..chain.count])) return .value;
         const head_qualified = try self.analyzer.qualify(self.prefix, head);
         if (self.analyzer.struct_names.contains(head_qualified) or
-            self.analyzer.enum_names.contains(head_qualified))
+            self.analyzer.enum_names.contains(head_qualified) or
+            self.analyzer.variant_names.contains(head_qualified))
         {
             const local = try self.analyzer.qualify(self.prefix, joined);
             if (self.analyzer.struct_names.contains(local) or
                 self.analyzer.enum_names.contains(local) or
-                self.analyzer.function_names.contains(local))
+                self.analyzer.variant_names.contains(local) or
+                self.analyzer.function_names.contains(local) or
+                self.variantMemberOfQualified(local) != null)
             {
                 return .{ .resolved = try self.arena().dupe(u8, local) };
             }
@@ -8468,7 +8979,9 @@ pub const FunctionBuilder = struct {
         if (self.analyzer.importsModule(self.module, head)) {
             if (self.analyzer.struct_names.contains(joined) or
                 self.analyzer.enum_names.contains(joined) or
-                self.analyzer.function_names.contains(joined))
+                self.analyzer.variant_names.contains(joined) or
+                self.analyzer.function_names.contains(joined) or
+                self.variantMemberOfQualified(joined) != null)
             {
                 return .{ .resolved = try self.arena().dupe(u8, joined) };
             }
@@ -8736,6 +9249,7 @@ pub const FunctionBuilder = struct {
         return switch (of) {
             .strukt => |index| self.analyzer.structs.items[index].name,
             .enumeration => |reference| self.analyzer.enums.items[reference.index].name,
+            .variant => |index| self.analyzer.variants.items[index].name,
             else => null,
         };
     }
@@ -9963,6 +10477,204 @@ pub const FunctionBuilder = struct {
         };
     }
 
+    /// The union member a fully-qualified name spells — `Shape.circle`
+    /// with the module prefix already on it — or null when the name's
+    /// head is no union or its tail no member.
+    fn variantMemberOfQualified(
+        self: *const FunctionBuilder,
+        qualified: []const u8,
+    ) ?struct { variant: u32, member: u32 } {
+        const dot = std.mem.lastIndexOfScalar(u8, qualified, '.') orelse return null;
+        const variant_index = self.analyzer.variant_names.get(qualified[0..dot]) orelse return null;
+        const member = self.analyzer.variants.items[variant_index].findMember(qualified[dot + 1 ..]) orelse
+            return null;
+        return .{ .variant = variant_index, .member = member };
+    }
+
+    /// A union's own name written where a call belongs: there is no
+    /// `Shape(n)` and no bare construction — a member is the only way
+    /// in (docs/UNION.md D1, D4).
+    fn failVariantAsCallee(
+        self: *FunctionBuilder,
+        written_name: []const u8,
+        variant_index: u32,
+        span: Span,
+    ) Error!?Typed {
+        const declared = self.analyzer.variants.items[variant_index];
+        try self.fail(
+            "luce.sema.union",
+            span,
+            "{s} is a union, and a member is the only way in: write {s}.{s}, or another of its members",
+            .{ written_name, written_name, declared.members[0].name },
+        );
+        return null;
+    }
+
+    /// `Shape.circle(radius = 2.0)` — construction of one union
+    /// member, which is `docs/ARGS.md` D8's named-only struct
+    /// construction with a namespace in front of it (docs/UNION.md
+    /// D4): named fields, defaults allowed, S24's verb rule at every
+    /// object field, and `variant_make` at the end.
+    fn lowerVariantConstruct(
+        self: *FunctionBuilder,
+        call_arguments: []const ast.Argument,
+        span: Span,
+        variant_index: u32,
+        member_index: u32,
+    ) Error!?Typed {
+        const declared = self.analyzer.variants.items[variant_index];
+        const member = declared.members[member_index];
+        const decl_info = self.analyzer.variant_decls.items[variant_index];
+        if (decl_info.declaration.visibility == .private and decl_info.module != self.module) {
+            try self.fail("luce.sema.private", span, "{s} is private to {s}", .{
+                decl_info.declaration.name,
+                self.analyzer.moduleName(decl_info.module),
+            });
+            return null;
+        }
+        // Parentheses mean a payload (D4): a bare member is written
+        // bare, and empty parentheses would be a payload of nothing.
+        if (member.fields.len == 0) {
+            try self.fail(
+                "luce.sema.construct",
+                span,
+                "{s}.{s} carries no payload, so it takes no parentheses: write {s}.{s}",
+                .{ declared.name, member.name, decl_info.declaration.name, member.name },
+            );
+            return null;
+        }
+        const registers = try self.arena().alloc(Register, member.fields.len);
+        var seen = try self.temporary().alloc(bool, member.fields.len);
+        defer self.temporary().free(seen);
+        @memset(seen, false);
+
+        // Which field each argument fills is settled before any of
+        // them is lowered: it is what says what type the argument
+        // lands in, and a bare `none` has no type until something says.
+        const expressions = try self.arena().alloc(*ast.Expression, call_arguments.len);
+        const fields = try self.arena().alloc(u32, call_arguments.len);
+        const expected_types = try self.arena().alloc(Type, call_arguments.len);
+        for (call_arguments, expressions, fields, expected_types) |argument, *slot, *field, *wanted| {
+            const name = argument.name orelse {
+                try self.fail(
+                    "luce.sema.construct",
+                    argument.span,
+                    "{s}.{s} is built with named fields: {s}.{s}(field = ...)",
+                    .{ declared.name, member.name, decl_info.declaration.name, member.name },
+                );
+                return null;
+            };
+            const field_index = member.findField(name) orelse {
+                var suggestion = helpers.Suggestion.init(name);
+                for (member.fields) |payload| suggestion.offer(payload.name);
+                if (suggestion.best()) |closest| {
+                    try self.fail("luce.sema.construct", argument.span, "{s}.{s} has no field {s}; did you mean {s}?", .{
+                        declared.name,
+                        member.name,
+                        name,
+                        closest,
+                    });
+                    return null;
+                }
+                try self.fail("luce.sema.construct", argument.span, "{s}.{s} has no field {s}", .{
+                    declared.name,
+                    member.name,
+                    name,
+                });
+                return null;
+            };
+            if (seen[field_index]) {
+                try self.fail("luce.sema.construct", argument.span, context.duplicate_field_message, .{name});
+                return null;
+            }
+            seen[field_index] = true;
+            slot.* = argument.value;
+            field.* = field_index;
+            wanted.* = member.fields[field_index].field_type;
+        }
+        const values = (try self.lowerOperandsInto(expressions, .{ .places = expected_types })) orelse return null;
+        for (call_arguments, values, fields, expected_types) |argument, value, field_index, expected| {
+            const name = argument.name.?;
+            const fitted = (try self.fit(value, expected)) orelse {
+                try self.fail("luce.sema.type", argument.span, "{s}.{s}.{s} is {s}, got {s}{s}", .{
+                    declared.name,
+                    member.name,
+                    name,
+                    try self.analyzer.typeName(expected),
+                    try self.analyzer.typeName(value.value_type),
+                    try self.mismatchAdvice(expected, value.value_type, argument.value),
+                });
+                return null;
+            };
+            // Object fields follow the verb rule at construction
+            // (S24): the binding that receives the union owns them.
+            // `none` owns nothing, so it is always a legal filling.
+            if (self.analyzer.carriesObjects(expected) and
+                argument.value.* != .none_literal and
+                try self.refuseConstantEscape(value.root, argument.span, "a union payload field")) return null;
+            if (self.analyzer.carriesObjects(expected) and
+                argument.value.* != .none_literal and
+                !(try self.yieldsOwnership(argument.value)))
+            {
+                try self.failNeedsOwnership(
+                    argument.span,
+                    try std.fmt.allocPrint(self.arena(), "{s}.{s}.{s} keeps its owned value", .{
+                        declared.name,
+                        member.name,
+                        name,
+                    }),
+                    argument.value,
+                    expected,
+                    "S21, S24",
+                );
+                return null;
+            }
+            // A union owns its run and every value in it, so
+            // construction is a store like any other (docs/STRINGS.md).
+            registers[field_index] = try self.ownedForStore(fitted);
+        }
+        // A field nobody wrote takes its default (docs/UNION.md D4):
+        // the constant register the written value would have produced.
+        for (seen, 0..) |given, field_index| {
+            if (given) continue;
+            if (!self.analyzer.variantFieldHasDefault(variant_index, member_index, field_index)) continue;
+            const filled = (try self.analyzer.variantFieldDefault(variant_index, member_index, field_index)) orelse
+                return null;
+            const made = try self.emitConstantValue(filled.value, filled.value_type);
+            registers[field_index] = try self.ownedForStore(.{
+                .register = made,
+                .value_type = filled.value_type,
+            });
+            seen[field_index] = true;
+        }
+        for (seen) |given| {
+            if (given) continue;
+            var missing: std.ArrayList(u8) = .empty;
+            defer missing.deinit(self.temporary());
+            try context.writeMissingFields(
+                &missing,
+                self.temporary(),
+                .{ .name = member.name, .fields = member.fields },
+                seen,
+            );
+            const spelled = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ declared.name, member.name });
+            try self.fail("luce.sema.construct", span, context.missing_field_message, .{
+                spelled,
+                missing.items,
+            });
+            return null;
+        }
+        const result_type: Type = .{ .variant = variant_index };
+        return .{
+            .register = try self.code.emit(.{ .variant_make = .{
+                .variant = variant_index,
+                .member = member_index,
+                .fields = registers,
+            } }, result_type),
+            .value_type = result_type,
+        };
+    }
+
     /// `int(x)`, `long(x)`, `float(x)`, `double(x)`, `string(x)` — the
     /// conversion constructors, each named for the type it produces
     /// (docs/TYPES.md §3).  They are matched by name here, before
@@ -10103,6 +10815,14 @@ pub const FunctionBuilder = struct {
             if (produces == .string) return self.lowerEnumName(value);
             return self.lowerEnumToNumber(call, value, produces);
         }
+        // `string(u)` is the member's **name**, by the enum mechanism
+        // unchanged (docs/UNION.md D16) — and the payload is never
+        // formatted: that is a formatting protocol, which is a
+        // different feature, refused here by being absent.
+        if (value.value_type == .variant) {
+            if (produces == .string) return self.lowerVariantName(value);
+            return self.failConvert(call, value);
+        }
         // `string(f)` is the function's **name** (docs/FUNCTIONS.md
         // D3) — the enum arm above, one type later, and the same act:
         // a value that is a number underneath answers with the word it
@@ -10241,6 +10961,54 @@ pub const FunctionBuilder = struct {
                 .op = .equal,
                 .operand_type = value.value_type,
                 .left = try self.code.load(held),
+                .right = number,
+            } }, .boolean);
+            const arms = try self.code.openIf(same, true);
+            try self.code.store(result, try self.code.emit(
+                .{ .const_string = try self.analyzer.pool.intern(member.name) },
+                .string,
+            ));
+            try self.code.elseArm(arms);
+            try frames.append(self.temporary(), arms);
+        }
+        while (frames.pop()) |arms| try self.code.closeIf(arms);
+        return .{ .register = try self.code.load(result), .value_type = .string };
+    }
+
+    /// `string(u)` — the member's name (docs/UNION.md D16), by
+    /// `lowerEnumName`'s mechanism unchanged: a compare-and-branch
+    /// tree over the tag answering an interned constant, nothing new
+    /// in `libluce_rt`.  The tag is the member *index* (D8), so the
+    /// tree compares indices where the enum tree compares values.
+    fn lowerVariantName(self: *FunctionBuilder, value: Typed) Error!?Typed {
+        const declared = self.analyzer.variants.items[value.value_type.variant];
+        const result = try self.code.spill(
+            try self.code.emit(
+                .{ .const_string = try self.analyzer.pool.intern(declared.members[0].name) },
+                .string,
+            ),
+            .string,
+        );
+        if (declared.members.len == 1) {
+            return .{ .register = try self.code.load(result), .value_type = .string };
+        }
+        const held = try self.code.spill(value.register, value.value_type);
+
+        var frames: std.ArrayList(mir.build.Lowering.Conditional) = .empty;
+        defer frames.deinit(self.temporary());
+        // The first member is what the slot already holds, so the tree
+        // tests the others — the same "every value holds a member's
+        // tag" promise `match` leans on, spent to save a comparison.
+        for (declared.members[1..], 1..) |member, index| {
+            const tag = try self.code.emit(
+                .{ .variant_tag = .{ .target = try self.code.load(held) } },
+                .long,
+            );
+            const number = try self.code.emit(.{ .const_long = @intCast(index) }, .long);
+            const same = try self.code.emit(.{ .binary = .{
+                .op = .equal,
+                .operand_type = .long,
+                .left = tag,
                 .right = number,
             } }, .boolean);
             const arms = try self.code.openIf(same, true);

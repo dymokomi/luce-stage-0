@@ -33,9 +33,14 @@ pub const Kind = enum {
     /// (docs/ENUMS.md D1).  A declaration keyword beside `struct`,
     /// because an enum declares a type the same way one does.
     keyword_enum,
-    /// `match expr:` — dispatch over an enum, one arm per member
-    /// (docs/ENUMS.md R1).  The restricted statement union will extend
-    /// with payload bindings rather than a second keyword.
+    /// `union Name:` — one of a closed set of members, each optionally
+    /// carrying a named field list (docs/UNION.md D1).  A declaration
+    /// keyword beside `struct` and `enum`, because a union declares a
+    /// type the same way both do.
+    keyword_union,
+    /// `match expr:` — dispatch over an enum or a union, one arm per
+    /// member (docs/ENUMS.md R1, docs/UNION.md D5).  Union arms carry
+    /// payload bindings rather than a second keyword.
     keyword_match,
     /// File-scope compile-time values and frozen containers.  `let`
     /// and `var` are function-scope bindings; the three declaration
@@ -177,6 +182,7 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "static", .kind = .keyword_static },
     .{ .word = "struct", .kind = .keyword_struct },
     .{ .word = "enum", .kind = .keyword_enum },
+    .{ .word = "union", .kind = .keyword_union },
     .{ .word = "match", .kind = .keyword_match },
     .{ .word = "const", .kind = .keyword_const },
     .{ .word = "let", .kind = .keyword_let },

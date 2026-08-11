@@ -54,6 +54,9 @@ pub fn mapOperands(
             set.target = map[set.target];
             set.value = map[set.value];
         },
+        .variant_make => |*make| make.fields = try mapSlice(arena, make.fields, map),
+        .variant_tag => |*tag| tag.target = map[tag.target],
+        .variant_field => |*get| get.target = map[get.target],
         .call, .spawn => |*call| call.arguments = try mapSlice(arena, call.arguments, map),
         .call_inout => |*call| call.arguments = try mapSlice(arena, call.arguments, map),
         .call_indirect => |*call| {
@@ -110,6 +113,11 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
             used[set.target] = true;
             used[set.value] = true;
         },
+        .variant_make => |make| for (make.fields) |field| {
+            used[field] = true;
+        },
+        .variant_tag => |tag| used[tag.target] = true,
+        .variant_field => |get| used[get.target] = true,
         .call_indirect => |call| {
             used[call.callee] = true;
             for (call.arguments) |argument| used[argument] = true;
