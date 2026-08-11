@@ -94,17 +94,21 @@
 //!    On the far side a checked expression is an HIR node, and the
 //!    questions are asked of the node.
 //!
-//! 2. **Three of those questions are answered by reading emitted code
-//!    back off the tape.**  `producesFreshStorage` and
-//!    `borrowsStoredValue` switch on `code.instructions.items[register]`,
-//!    and `sourceOf` follows a `carried` link to find the instruction
-//!    that really made the value.  All three are asking what *kind of
-//!    expression* produced it, through the instruction as a proxy —
-//!    `producesFreshStorage`'s own comment says so.  On HIR they are
-//!    properties of the node kind.  **This is the one part of the move
-//!    that is an improvement rather than a relocation**, and it is
-//!    self-contained enough to do first, on its own, with the MIR
-//!    unchanged.
+//! 2. **Three of those questions were answered by reading emitted code
+//!    back off the tape — done, and the first piece of the seam to
+//!    land.**  `producesFreshStorage` and `borrowsStoredValue` used to
+//!    switch on `code.instructions.items[register]`, with `sourceOf`
+//!    following a `carried` link to the instruction that really made
+//!    the value; all three were asking what *kind of expression*
+//!    produced it, through the instruction as a proxy.  That property
+//!    now travels forward as `Typed.provenance`, stamped where each
+//!    value is produced, and only `constantLong`'s integer proof still
+//!    reads the tape (through `carriedOrigin`, the hop's surviving
+//!    name).  A Debug-only oracle, `debugProvenanceOnTape`, re-derives
+//!    the old answer at every consumer until the seam lands, and goes
+//!    with it.  It was the one part of the move that was an
+//!    improvement rather than a relocation, and it landed first, on
+//!    its own, with the MIR byte-identical.
 //!
 //! 3. **A park can be retracted after it is emitted.**  `takeStorage`
 //!    is move-instead-of-copy (docs/STRINGS.md): it reaches back into a

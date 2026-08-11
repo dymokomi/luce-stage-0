@@ -25,6 +25,9 @@
 //! what each becomes on the far side.
 
 const std = @import("std");
+/// Whether the migration oracle below runs (`debugProvenanceOnTape`):
+/// Debug builds check every stamped provenance against the tape.
+const debug_checks = @import("builtin").mode == .Debug;
 const source_mod = @import("../01_source.zig");
 const ast = @import("../03_parse.zig").ast;
 const types = @import("../support/types.zig");
@@ -96,6 +99,24 @@ const Typed = struct {
     /// producers are fresh/mutable; names and borrowed reads override
     /// the default where the distinction matters (CONSTANTS R-C/R-D).
     root: RootState = .mutable,
+    /// What kind of expression produced this value, as far as storage
+    /// is concerned — the property the ownership questions below ask.
+    /// Decided where the value is produced, never read back off the
+    /// tape (05_hir.zig, coupling #2).
+    provenance: Provenance = .plain,
+};
+
+/// Where a value's storage stands the moment it is produced.
+const Provenance = enum {
+    /// Storage this statement allocated and nobody owns yet: a string
+    /// `+`, a built struct or union value, a call's result, an
+    /// allocating intrinsic, a taken copy (`own_storage`).
+    fresh,
+    /// A view of storage something else holds: a local reload, a field
+    /// or payload read, an element or map lookup.
+    view,
+    /// Everything else — constants, scalars, borrowless products.
+    plain,
 };
 
 /// Whether a call answering a return shape is being received by a
@@ -1486,13 +1507,51 @@ pub const FunctionBuilder = struct {
     // takes a copy — except the one case where it provably need not,
     // a value this statement made and nothing has claimed yet.
 
-    /// True when `register` holds storage this statement just
-    /// allocated and nobody owns yet.  Asked of the *instruction*
-    /// rather than of the expression that produced it: the set of
-    /// producers is closed and small, and reading it off the tape
-    /// cannot drift from what was actually emitted.
-    fn producesFreshStorage(self: *const FunctionBuilder, register: Register) bool {
-        return switch (self.code.instructions.items[self.sourceOf(register)]) {
+    /// The register that actually produced a carried value.  A
+    /// fallible call's result crosses its own branch through a hidden
+    /// slot, so the register a `try` hands back is a `local_get` of a
+    /// value the *call* made — and a proof about the value has to look
+    /// through the slot to the call.  One hop is all there ever is:
+    /// the slot is written once, right where the call stands.  It
+    /// exists for `constantLong`'s proof (and for the Debug oracle
+    /// below, which leaves with it); every *storage* question now
+    /// travels on `Typed.provenance` instead.
+    fn carriedOrigin(self: *const FunctionBuilder, register: Register) Register {
+        for (self.carried.items) |link| {
+            if (link.register == register) return link.origin;
+        }
+        return register;
+    }
+
+    /// The integer constant behind `register`, when the tape proves
+    /// one.  Bounds land on `long`, so an integer expression may have
+    /// one folded `convert` between its `const_long` producer and the
+    /// register the slice receives.  Looking through exactly that
+    /// conversion keeps this a proof about emitted MIR rather than a
+    /// second source-expression folder.
+    fn constantLong(self: *const FunctionBuilder, register: Register) ?i64 {
+        const instruction = self.code.instructions.items[self.carriedOrigin(register)];
+        return switch (instruction) {
+            .const_long => |value| value,
+            .convert => |operand| switch (self.code.instructions.items[self.carriedOrigin(operand)]) {
+                .const_long => |value| value,
+                else => null,
+            },
+            else => null,
+        };
+    }
+
+    /// **Migration scaffolding, Debug only** (05_hir.zig, coupling #2;
+    /// the seam landing deletes it).  The two retired tape predicates —
+    /// `producesFreshStorage`'s switch behind the carried hop, then
+    /// `borrowsStoredValue`'s — reproduced as one oracle, so every
+    /// `provenance` a producing arm stamped can be checked against
+    /// what the tape would have said, exactly where the old questions
+    /// were asked.  Fresh is tried first: a carried reload is both a
+    /// `local_get` and, through the hop, the call that made the value,
+    /// and the storage questions always wanted the call.
+    fn debugProvenanceOnTape(self: *const FunctionBuilder, register: Register) Provenance {
+        const fresh = switch (self.code.instructions.items[self.carriedOrigin(register)]) {
             // string `+`; every other binary answers a scalar.
             .binary => true,
             // Both build a whole new struct value that owns its run.
@@ -1508,36 +1567,40 @@ pub const FunctionBuilder = struct {
             .intrinsic => |call| call.kind.makesFreshStorage(),
             else => false,
         };
-    }
-
-    /// The register that actually produced this value.  A fallible
-    /// call's result crosses its own branch through a hidden slot, so
-    /// the register a `try` hands back is a `local_get` of a value the
-    /// *call* made — and "did this statement allocate it" has to be
-    /// asked of the call.  One hop is all there ever is: the slot is
-    /// written once, right where the call stands.
-    fn sourceOf(self: *const FunctionBuilder, register: Register) Register {
-        for (self.carried.items) |link| {
-            if (link.register == register) return link.origin;
-        }
-        return register;
-    }
-
-    /// The integer constant behind `register`, when the tape proves
-    /// one.  Bounds land on `long`, so an integer expression may have
-    /// one folded `convert` between its `const_long` producer and the
-    /// register the slice receives.  Looking through exactly that
-    /// conversion keeps this a proof about emitted MIR rather than a
-    /// second source-expression folder.
-    fn constantLong(self: *const FunctionBuilder, register: Register) ?i64 {
-        const instruction = self.code.instructions.items[self.sourceOf(register)];
-        return switch (instruction) {
-            .const_long => |value| value,
-            .convert => |operand| switch (self.code.instructions.items[self.sourceOf(operand)]) {
-                .const_long => |value| value,
-                else => null,
+        if (fresh) return .fresh;
+        const view = switch (self.code.instructions.items[register]) {
+            .local_get => true,
+            .struct_get => true,
+            // A payload read is a view into the scrutinee's run
+            // (docs/UNION.md D10), exactly as a field read is.
+            .variant_field => true,
+            .intrinsic => |call| switch (call.kind) {
+                .index_get, .map_get, .key_at, .value_at => true,
+                else => false,
             },
-            else => null,
+            else => false,
+        };
+        return if (view) .view else .plain;
+    }
+
+    /// The provenance an intrinsic's result carries: the allocators
+    /// answer fresh storage, the readers answer a view, and the rest
+    /// answer no storage question at all.
+    fn intrinsicProvenance(kind: mir.Intrinsic) Provenance {
+        if (kind.makesFreshStorage()) return .fresh;
+        return switch (kind) {
+            .index_get, .map_get, .key_at, .value_at => .view,
+            else => .plain,
+        };
+    }
+
+    /// The provenance of a type's zero (`Lowering.zeroOf`): a struct or
+    /// union zero is a built value that owns its run; every other zero
+    /// is a constant or an absence that owns nothing.
+    fn zeroProvenance(of: Type) Provenance {
+        return switch (of) {
+            .strukt, .variant => .fresh,
+            else => .plain,
         };
     }
 
@@ -1569,10 +1632,10 @@ pub const FunctionBuilder = struct {
     /// *objects* keeps its slot, because that ownership is settled at
     /// run time by `object_bind` and the release still has to load the
     /// slot to ask.
-    fn takeStorage(self: *FunctionBuilder, register: Register) bool {
-        if (!self.producesFreshStorage(register)) return false;
+    fn takeStorage(self: *FunctionBuilder, value: Typed) bool {
+        if (value.provenance != .fresh) return false;
         for (self.temps.items) |*temp| {
-            if (temp.register != register) continue;
+            if (temp.register != value.register) continue;
             if (temp.taken) return false;
             if (!temp.storage) continue;
             if (!temp.disownable or temp.objects) return false;
@@ -1598,7 +1661,12 @@ pub const FunctionBuilder = struct {
     /// (docs/STRINGS.md).
     fn ownedForStore(self: *FunctionBuilder, value: Typed) Error!Register {
         if (!self.analyzer.ownsStorage(value.value_type)) return value.register;
-        if (self.takeStorage(value.register)) return value.register;
+        if (debug_checks) {
+            // Migration scaffolding (05_hir.zig, coupling #2): the
+            // stamped provenance must say what the tape would have.
+            std.debug.assert(value.provenance == self.debugProvenanceOnTape(value.register));
+        }
+        if (self.takeStorage(value)) return value.register;
         return self.code.ownStorage(value.register);
     }
 
@@ -1624,38 +1692,17 @@ pub const FunctionBuilder = struct {
         try self.code.store(local, register);
     }
 
-    /// True when `register` holds a view of storage something else is
-    /// holding, rather than storage of its own.  Field and element
-    /// reads have always needed the hazard rule below.  An owning
-    /// local does too now that a later writing method can replace that
-    /// very local in place in the same operand run — `f(s,
-    /// s.change())` must preserve the first argument's old storage.
-    /// Every local reload is conservative here, including the hidden
-    /// borrowing slot an optional fallback crosses: its bytes may
-    /// still be a view of a field the later writer replaces.  The
-    /// caller has already restricted this question to storage-owning
-    /// result types, so scalar spills cost nothing.
-    fn borrowsStoredValue(self: *const FunctionBuilder, register: Register) bool {
-        return switch (self.code.instructions.items[register]) {
-            .local_get => true,
-            .struct_get => true,
-            // A payload read is a view into the scrutinee's run
-            // (docs/UNION.md D10), exactly as a field read is.
-            .variant_field => true,
-            .intrinsic => |call| switch (call.kind) {
-                .index_get, .map_get, .key_at, .value_at => true,
-                else => false,
-            },
-            else => false,
-        };
-    }
-
     /// Park a freshly allocated string or struct value that was not
     /// produced through `lowerExpression` — a compound assignment's
     /// concatenation, say — so the statement's end reclaims it.
     fn parkFreshStorage(self: *FunctionBuilder, value: Typed) Error!void {
         if (!self.analyzer.ownsStorage(value.value_type)) return;
-        if (!self.producesFreshStorage(value.register)) return;
+        if (debug_checks) {
+            // Migration scaffolding (05_hir.zig, coupling #2): the
+            // stamped provenance must say what the tape would have.
+            std.debug.assert(value.provenance == self.debugProvenanceOnTape(value.register));
+        }
+        if (value.provenance != .fresh) return;
         if (self.parkedForStorage(value.register)) return;
         try self.registerTemp(value, false, true);
     }
@@ -2567,7 +2614,11 @@ pub const FunctionBuilder = struct {
                 return null;
             }
             return .{
-                .value = .{ .register = try self.code.zeroOf(expected), .value_type = expected },
+                .value = .{
+                    .register = try self.code.zeroOf(expected),
+                    .value_type = expected,
+                    .provenance = zeroProvenance(expected),
+                },
                 .present = false,
             };
         }
@@ -3015,9 +3066,12 @@ pub const FunctionBuilder = struct {
             // copying the borrow before the mutation can happen.
             if (mutating[index] and
                 self.analyzer.ownsStorage(value.value_type) and
-                self.borrowsStoredValue(value.register))
+                value.provenance == .view)
             {
                 values[index].register = try self.code.ownStorage(value.register);
+                // The copy is storage this statement allocated and
+                // nobody owns yet, whatever the borrow it closed was.
+                values[index].provenance = .fresh;
                 try self.parkFreshStorage(values[index]);
             }
             spills[index] = null;
@@ -3028,6 +3082,11 @@ pub const FunctionBuilder = struct {
         for (spills, 0..) |spill, index| {
             if (spill) |local| {
                 values[index].register = try self.code.load(local);
+                // The reload is a view of the spill slot's storage: a
+                // fresh operand spilled across a split loses its
+                // freshness, exactly as the tape predicates read it,
+                // so the store that receives it copies.
+                values[index].provenance = .view;
             }
         }
         return values;
@@ -3575,6 +3634,9 @@ pub const FunctionBuilder = struct {
                     .field = @intCast(field_index),
                 } }, field.field_type),
                 .value_type = field.field_type,
+                // A payload read is a view into the scrutinee's run
+                // (docs/UNION.md D10), so the store below copies it.
+                .provenance = .view,
             };
             const local = (try self.declareLocal(
                 field.name,
@@ -3872,7 +3934,9 @@ pub const FunctionBuilder = struct {
                 if (carried) .owned else .alias,
                 name.span,
             )) orelse continue;
-            const stored: Typed = .{ .register = held, .value_type = field.field_type };
+            // A field read is a view into the shape's run, so the
+            // store copies it out (docs/STRINGS.md).
+            const stored: Typed = .{ .register = held, .value_type = field.field_type, .provenance = .view };
             try self.storeOwned(local, stored);
             if (carried) try self.code.bind(local, held);
         }
@@ -3984,7 +4048,12 @@ pub const FunctionBuilder = struct {
                 .layout = received.value.value_type.strukt,
                 .field = @intCast(position),
             } }, field.field_type);
-            const fitted = (try self.fit(.{ .register = held, .value_type = field.field_type }, target.value_type)) orelse {
+            const fitted = (try self.fit(
+                // A field read is a view into the shape's run, so the
+                // replacement store below copies it out.
+                .{ .register = held, .value_type = field.field_type, .provenance = .view },
+                target.value_type,
+            )) orelse {
                 try self.fail(
                     "luce.sema.type",
                     target.name.span,
@@ -4086,7 +4155,11 @@ pub const FunctionBuilder = struct {
         // scope owns whatever a later assignment fills in (S36, S40).
         const local = (try self.declareLocal(name, declared, true, .owned, name_span)) orelse
             return self.forgetName(name);
-        try self.storeOwned(local, .{ .register = zero, .value_type = declared });
+        try self.storeOwned(local, .{
+            .register = zero,
+            .value_type = declared,
+            .provenance = zeroProvenance(declared),
+        });
     }
 
     // Assignment, and the three shapes of place it can name -------------------
@@ -4297,18 +4370,15 @@ pub const FunctionBuilder = struct {
             });
             return;
         }
-        var new_value = placed.register;
+        var stored = placed;
         if (assign.compound) |op| {
-            new_value = (try self.compoundCombine(op, current, current_type, placed, assign.span)) orelse return;
+            stored = (try self.compoundCombine(op, current, current_type, placed, assign.span)) orelse return;
         }
 
         // The leaf is a store into whatever the chain descended to, so
         // it takes or copies its storage here; every step above it
         // moves the value the step below just built (docs/STRINGS.md).
-        try self.code.rebuild(root_local, accessors, try self.ownedForStore(.{
-            .register = new_value,
-            .value_type = current_type,
-        }));
+        try self.code.rebuild(root_local, accessors, try self.ownedForStore(stored));
     }
 
     /// The read at the head of a compound store into `object[...]`,
@@ -4365,7 +4435,7 @@ pub const FunctionBuilder = struct {
     /// arithmetic, plus string concat for `+=`.  A storage-width place
     /// combines at its arithmetic type and narrows back with the range
     /// check, so the answer is always at `place_type`.  Returns the
-    /// register holding the combined value, or null after reporting.
+    /// combined value, or null after reporting.
     fn compoundCombine(
         self: *FunctionBuilder,
         op: ast.BinaryOp,
@@ -4373,7 +4443,7 @@ pub const FunctionBuilder = struct {
         place_type: Type,
         value: Typed,
         span: Span,
-    ) Error!?Register {
+    ) Error!?Typed {
         if (!value.value_type.eql(place_type)) {
             try self.fail("luce.sema.type", span, "compound assignment needs matching types: place is {s}, value is {s}", .{
                 try self.analyzer.typeName(place_type),
@@ -4467,16 +4537,22 @@ pub const FunctionBuilder = struct {
             .left = left.register,
             .right = right.register,
         } }, at);
-        const answer = if (at.eql(place_type))
-            combined
-        else
-            try self.code.emit(.{ .convert = combined }, place_type);
+        const answer: Typed = .{
+            .register = if (at.eql(place_type))
+                combined
+            else
+                try self.code.emit(.{ .convert = combined }, place_type),
+            .value_type = place_type,
+            // The concatenation allocated fresh storage; every numeric
+            // combine answers a scalar.
+            .provenance = if (string_concat) .fresh else .plain,
+        };
         // `s += t` concatenates into fresh storage that no expression
         // parked, so a place that keeps a copy would leave the join
         // behind (docs/STRINGS.md).  Parking it makes the statement's
         // end reclaim it either way.
         if (string_concat) {
-            try self.parkFreshStorage(.{ .register = answer, .value_type = place_type });
+            try self.parkFreshStorage(answer);
         }
         return answer;
     }
@@ -4599,7 +4675,7 @@ pub const FunctionBuilder = struct {
         if (local_type == .optional and assign.compound == null) {
             if (fitted.present) try self.narrow(local) else self.widen(local);
         }
-        var store = value.register;
+        var stored = value;
         if (assign.compound) |op| {
             var current = try self.code.load(local);
             if (narrowed_place) {
@@ -4611,15 +4687,15 @@ pub const FunctionBuilder = struct {
                 );
             }
             const combined = (try self.compoundCombine(op, current, combine_type, value, assign.span)) orelse return;
-            store = ((try self.fit(.{ .register = combined, .value_type = combine_type }, local_type)) orelse
-                return).register;
+            stored = (try self.fit(combined, local_type)) orelse return;
         }
+        var store = stored.register;
         // The copy comes first, because the value being stored may be
         // a view of the storage the release is about to give back:
         // `s = s[1:]` is legal (docs/STRINGS.md).
         const owns_storage = self.code.localOwnsStorage(local);
         if (owns_storage) {
-            store = try self.ownedForStore(.{ .register = store, .value_type = local_type });
+            store = try self.ownedForStore(stored);
         }
         // Reassigning an owning var frees the old object immediately
         // (S5); the very first assignment finds only the null object.
@@ -4715,7 +4791,7 @@ pub const FunctionBuilder = struct {
             }
         }
         const current = try self.code.load(local);
-        var store = value.register;
+        var stored = value;
         if (assign.compound) |op| {
             // Read the field once, combine, store back (fields that
             // carry objects can't be compound-assigned — value-only).
@@ -4724,7 +4800,7 @@ pub const FunctionBuilder = struct {
                 .layout = layout_index,
                 .field = field_index,
             } }, expected);
-            store = (try self.compoundCombine(op, old_value, expected, value, assign.span)) orelse return;
+            stored = (try self.compoundCombine(op, old_value, expected, value, assign.span)) orelse return;
         }
         if (info.carries) {
             self.forgetAliasesOwnedBy(target.base);
@@ -4749,7 +4825,7 @@ pub const FunctionBuilder = struct {
             .target = current,
             .layout = layout_index,
             .field = field_index,
-            .value = try self.ownedForStore(.{ .register = store, .value_type = expected }),
+            .value = try self.ownedForStore(stored),
         } }, local_type);
         // `struct_set` built a whole new value that owns everything in
         // it, copying out of the old one; the old run and its value
@@ -4758,7 +4834,7 @@ pub const FunctionBuilder = struct {
         try self.code.release(local, false, self.code.localOwnsStorage(local));
         try self.code.store(local, updated);
         if (field_carries) {
-            try self.code.bind(local, store);
+            try self.code.bind(local, stored.register);
         }
         info.revision +%= 1;
     }
@@ -4811,23 +4887,20 @@ pub const FunctionBuilder = struct {
         if (assign.compound == null and
             self.analyzer.carriesObjects(element_type) and
             try self.refuseVisibleOwnershipCycle(target.base, assign.value)) return;
-        var store = value.register;
+        var stored = value.*;
         if (assign.compound) |op| {
             // Read the element once (the base and indices were lowered
             // once, above), combine, and store back.
             const subscripts = try self.arena().alloc(Register, indices.len);
             for (indices, subscripts) |index_value, *slot| slot.* = index_value.register;
             const current = try self.compoundPlaceRead(object, subscripts, element_type);
-            store = (try self.compoundCombine(op, current, element_type, value.*, assign.span)) orelse return;
+            stored = (try self.compoundCombine(op, current, element_type, value.*, assign.span)) orelse return;
         }
         const arguments = try self.arena().alloc(Register, values.len);
         for (values, arguments) |lowered, *slot| slot.* = lowered.register;
         // The element is a store; the key beside it is not — a map
         // looks a key up before it keeps one (docs/STRINGS.md).
-        arguments[arguments.len - 1] = try self.ownedForStore(.{
-            .register = store,
-            .value_type = element_type,
-        });
+        arguments[arguments.len - 1] = try self.ownedForStore(stored);
         _ = try self.code.emit(.{ .intrinsic = .{ .kind = .index_set, .arguments = arguments } }, .none);
     }
 
@@ -5056,15 +5129,14 @@ pub const FunctionBuilder = struct {
     fn bindLoopName(
         self: *FunctionBuilder,
         local: LocalId,
-        value: Register,
-        value_type: Type,
+        value: Typed,
     ) Error!void {
         if (!self.code.localOwnsStorage(local)) {
-            try self.code.store(local, value);
+            try self.code.store(local, value.register);
             return;
         }
         try self.code.release(local, false, true);
-        try self.storeOwned(local, .{ .register = value, .value_type = value_type });
+        try self.storeOwned(local, value);
     }
 
     /// for x in xs: — the element (or map key) binds immutably each
@@ -5173,11 +5245,21 @@ pub const FunctionBuilder = struct {
         // before storing this one; the slot starts empty, so the first
         // release frees nothing.
         const first_value = try self.code.iterationValue(shape, first_kind, first_type);
-        try self.bindLoopName(name_local, first_value, first_type);
+        try self.bindLoopName(name_local, .{
+            .register = first_value,
+            .value_type = first_type,
+            // A getter answers a view of the element; the raw index is
+            // a number of the loop's own.
+            .provenance = if (first_kind != null) .view else .plain,
+        });
         // Bind the payload as a second name when present.
         if (value_local) |local| {
             const payload = try self.code.iterationValue(shape, payload_kind, payload_type);
-            try self.bindLoopName(local, payload, payload_type);
+            try self.bindLoopName(local, .{
+                .register = payload,
+                .value_type = payload_type,
+                .provenance = .view,
+            });
         }
         try self.loops.append(self.temporary(), .{
             .continue_block = shape.step,
@@ -5944,8 +6026,14 @@ pub const FunctionBuilder = struct {
         // hands over an object while borrowing the struct run it sits
         // in, and a string slice borrows without yielding anything
         // (docs/STRINGS.md).
+        if (debug_checks and self.analyzer.ownsStorage(value.value_type)) {
+            // Migration scaffolding (05_hir.zig, coupling #2): the
+            // stamped provenance must say what the tape would have,
+            // for every storage-owning value this walk produces.
+            std.debug.assert(value.provenance == self.debugProvenanceOnTape(value.register));
+        }
         const storage = self.analyzer.ownsStorage(value.value_type) and
-            self.producesFreshStorage(value.register) and
+            value.provenance == .fresh and
             !self.parkedAlready(value.register);
         if (objects or storage) try self.registerTemp(value, objects, storage);
         return value;
@@ -6060,7 +6148,15 @@ pub const FunctionBuilder = struct {
                         .root = found.info.root,
                     };
                 }
-                return .{ .register = loaded, .value_type = local_type, .root = found.info.root };
+                // A name reads as a view of what its slot holds; the
+                // narrowed unwrap above answers neither fresh nor view,
+                // exactly as the tape predicates read it.
+                return .{
+                    .register = loaded,
+                    .value_type = local_type,
+                    .root = found.info.root,
+                    .provenance = .view,
+                };
             },
             // `none` has no type of its own; every place that can
             // accept it supplies one through `lowerTyped`, so reaching
@@ -6315,7 +6411,16 @@ pub const FunctionBuilder = struct {
                 .disownable = false,
             });
         }
-        return .{ .register = reload, .value_type = result_type };
+        // The reload carries the *call's* provenance across the
+        // branch: the storage is the call's fresh answer, and the slot
+        // only ferries it (the temporary above is non-disownable, so
+        // `takeStorage` still answers no and every store still
+        // copies).
+        return .{
+            .register = reload,
+            .value_type = result_type,
+            .provenance = if (storage) .fresh else .plain,
+        };
     }
 
     /// Lower the one call a `try` or `catch` is written in front of,
@@ -6468,7 +6573,9 @@ pub const FunctionBuilder = struct {
         try self.code.jump(merge);
 
         self.code.switchTo(merge);
-        return .{ .register = try self.code.load(result), .value_type = value.value_type };
+        // The answer is a reload of the hidden slot — a view of what
+        // the slot holds, exactly as the tape predicates read it.
+        return .{ .register = try self.code.load(result), .value_type = value.value_type, .provenance = .view };
     }
 
     /// `CALL catch:` and an indented handler — the statement form, for
@@ -6767,17 +6874,19 @@ pub const FunctionBuilder = struct {
     fn emitConstant(self: *FunctionBuilder, index: u32) Error!?Typed {
         const info = self.analyzer.constant_infos.items[index];
         if (info.state != .ready) return null; // already diagnosed
+        const made = try self.emitConstantValue(info.value, info.value_type);
         return .{
-            .register = try self.emitConstantValue(info.value, info.value_type),
+            .register = made.register,
             .value_type = info.value_type,
             .root = if (info.value == .container)
                 .{ .constant = .{ .row = info.value.container, .name = info.declaration.name } }
             else
                 .mutable,
+            .provenance = made.provenance,
         };
     }
 
-    fn emitConstantValue(self: *FunctionBuilder, value: ConstantValue, value_type: Type) Error!Register {
+    fn emitConstantValue(self: *FunctionBuilder, value: ConstantValue, value_type: Type) Error!Typed {
         // A present folded payload carries no separate union tag in
         // `ConstantValue`; its optional landing type is the decision.
         // Build the payload at T, then wrap it exactly as ordinary
@@ -6785,47 +6894,76 @@ pub const FunctionBuilder = struct {
         // handled below.
         if (value_type == .optional and value != .absent) {
             const arguments = try self.arena().alloc(Register, 1);
-            arguments[0] = try self.emitConstantValue(value, value_type.optional.asType());
-            return self.code.emit(
-                .{ .intrinsic = .{ .kind = .optional_wrap, .arguments = arguments } },
-                value_type,
-            );
+            arguments[0] = (try self.emitConstantValue(value, value_type.optional.asType())).register;
+            return .{
+                .register = try self.code.emit(
+                    .{ .intrinsic = .{ .kind = .optional_wrap, .arguments = arguments } },
+                    value_type,
+                ),
+                .value_type = value_type,
+            };
         }
         return switch (value) {
             // The width is the constant's own, not the widest of its
             // family: a folded constant carries its value at the
             // family's widest member and its `value_type` says where
             // that value landed (docs/TYPES.md §1).
-            .long => |folded| try self.code.emit(.{ .const_long = folded }, value_type),
-            .double => |folded| try self.code.emit(.{ .const_double = folded }, value_type),
-            .boolean => |folded| try self.code.emit(.{ .const_boolean = folded }, .boolean),
+            .long => |folded| .{
+                .register = try self.code.emit(.{ .const_long = folded }, value_type),
+                .value_type = value_type,
+            },
+            .double => |folded| .{
+                .register = try self.code.emit(.{ .const_double = folded }, value_type),
+                .value_type = value_type,
+            },
+            .boolean => |folded| .{
+                .register = try self.code.emit(.{ .const_boolean = folded }, .boolean),
+                .value_type = value_type,
+            },
             .string => |folded| blk: {
                 const constant = try self.analyzer.pool.intern(folded);
-                break :blk try self.code.emit(
-                    .{ .const_string = constant },
-                    .string,
-                );
+                // A pooled string is a view of the program's constant
+                // bytes as far as storage goes — but the tape reads a
+                // `const_string` as neither fresh nor borrowed, so a
+                // store copies it on the ordinary not-fresh path.
+                break :blk .{
+                    .register = try self.code.emit(
+                        .{ .const_string = constant },
+                        .string,
+                    ),
+                    .value_type = .string,
+                };
             },
             .strukt => |folded| blk: {
                 const layout = self.analyzer.structs.items[folded.layout];
                 const fields = try self.arena().alloc(Register, folded.fields.len);
                 for (folded.fields, layout.fields, fields) |field, field_layout, *slot| {
                     const made = try self.emitConstantValue(field, field_layout.field_type);
-                    slot.* = try self.ownedForStore(.{
-                        .register = made,
-                        .value_type = field_layout.field_type,
-                    });
+                    slot.* = try self.ownedForStore(made);
                 }
-                break :blk try self.code.emit(
-                    .{ .struct_make = .{ .layout = folded.layout, .fields = fields } },
-                    value_type,
-                );
+                // A struct default materializes as a built value that
+                // owns its run, exactly as a written construction does.
+                break :blk .{
+                    .register = try self.code.emit(
+                        .{ .struct_make = .{ .layout = folded.layout, .fields = fields } },
+                        value_type,
+                    ),
+                    .value_type = value_type,
+                    .provenance = .fresh,
+                };
             },
-            .container => |row| try self.code.emit(.{ .const_container = row }, value_type),
+            .container => |row| .{
+                .register = try self.code.emit(.{ .const_container = row }, value_type),
+                .value_type = value_type,
+            },
             // The typed absence a `T?` place gives a bare `none`: the
             // constant's type is the whole of its value (docs/ARGS.md
             // D9), and it inlines as the same zero `lowerTyped` emits.
-            .absent => try self.code.zeroOf(value_type),
+            .absent => .{
+                .register = try self.code.zeroOf(value_type),
+                .value_type = value_type,
+                .provenance = zeroProvenance(value_type),
+            },
         };
     }
 
@@ -6916,6 +7054,8 @@ pub const FunctionBuilder = struct {
                 value.value_type,
             ),
             .value_type = value.value_type,
+            // The duplicate is storage nobody owns yet.
+            .provenance = .fresh,
         };
     }
 
@@ -7207,6 +7347,8 @@ pub const FunctionBuilder = struct {
                 element_type,
             ),
             .value_type = element_type,
+            // An element read is a view of the container's storage.
+            .provenance = .view,
         };
     }
 
@@ -7420,14 +7562,19 @@ pub const FunctionBuilder = struct {
             return .reported;
         }
         const of: Type = .{ .variant = index };
-        return .{ .value = .{
-            .register = try self.code.emit(.{ .variant_make = .{
-                .variant = index,
-                .member = member_index,
-                .fields = &.{},
-            } }, of),
-            .value_type = of,
-        } };
+        return .{
+            .value = .{
+                .register = try self.code.emit(.{ .variant_make = .{
+                    .variant = index,
+                    .member = member_index,
+                    .fields = &.{},
+                } }, of),
+                .value_type = of,
+                // A union value is built whole and owns its run
+                // (docs/UNION.md D8).
+                .provenance = .fresh,
+            },
+        };
     }
 
     fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Typed {
@@ -7521,6 +7668,8 @@ pub const FunctionBuilder = struct {
                 .field = field_index,
             } }, field_type),
             .value_type = field_type,
+            // A field read is a view into the struct's run.
+            .provenance = .view,
         };
     }
 
@@ -7770,6 +7919,9 @@ pub const FunctionBuilder = struct {
                     .right = right.register,
                 } }, operand_type),
                 .value_type = operand_type,
+                // A concatenation allocates fresh bytes; every numeric
+                // result is a scalar the question never reaches.
+                .provenance = if (string_concat) .fresh else .plain,
             };
         }
 
@@ -8030,6 +8182,9 @@ pub const FunctionBuilder = struct {
             .register = try self.code.closeShortCircuit(either),
             .value_type = payload,
             .root = root,
+            // The answer is a reload of the hidden slot both arms
+            // stored into — a view of what the slot holds.
+            .provenance = .view,
         };
     }
 
@@ -8545,6 +8700,9 @@ pub const FunctionBuilder = struct {
                 .arguments = registers,
             } }, signature.result),
             .value_type = signature.result,
+            // A function's result is the caller's (S16): fresh storage
+            // whichever way the callee was named (docs/FUNCTIONS.md D2).
+            .provenance = .fresh,
         };
     }
 
@@ -8824,10 +8982,7 @@ pub const FunctionBuilder = struct {
         for (info.parameter_defaults, seen, 0..) |maybe_default, given, slot| {
             if (given) continue;
             const filled = maybe_default.?;
-            const made: Typed = .{
-                .register = try self.emitConstantValue(filled.value, filled.value_type),
-                .value_type = filled.value_type,
-            };
+            const made = try self.emitConstantValue(filled.value, filled.value_type);
             try self.parkFreshStorage(made);
             registers[slot] = made.register;
         }
@@ -8869,7 +9024,8 @@ pub const FunctionBuilder = struct {
             info.return_type,
         );
         if (info.fallible) return try self.openFallible(call, info.return_type);
-        return .{ .register = call, .value_type = info.return_type };
+        // A function's result is the caller's (S16): fresh storage.
+        return .{ .register = call, .value_type = info.return_type, .provenance = .fresh };
     }
 
     /// target.name(args): a namespaced call when the target chain is
@@ -9202,7 +9358,11 @@ pub const FunctionBuilder = struct {
             }
             return try self.openFallible(emitted, found.result);
         }
-        return .{ .register = emitted, .value_type = found.result };
+        return .{
+            .register = emitted,
+            .value_type = found.result,
+            .provenance = intrinsicProvenance(found.kind),
+        };
     }
 
     fn methodWritesReceiver(kind: mir.Intrinsic) bool {
@@ -9404,6 +9564,8 @@ pub const FunctionBuilder = struct {
                 const kept: Typed = .{
                     .register = try self.code.ownStorage(fitted.register),
                     .value_type = want,
+                    // The taken copy is storage nobody owns yet.
+                    .provenance = .fresh,
                 };
                 try self.parkFreshStorage(kept);
                 explicit[slot - 1] = kept.register;
@@ -9416,10 +9578,7 @@ pub const FunctionBuilder = struct {
         for (info.parameter_defaults, seen, 0..) |maybe_default, given, slot| {
             if (given) continue;
             const filled = maybe_default.?;
-            const made: Typed = .{
-                .register = try self.emitConstantValue(filled.value, filled.value_type),
-                .value_type = filled.value_type,
-            };
+            const made = try self.emitConstantValue(filled.value, filled.value_type);
             try self.parkFreshStorage(made);
             if (slot != 0) explicit[slot - 1] = made.register;
         }
@@ -9474,7 +9633,8 @@ pub const FunctionBuilder = struct {
         const answered: Typed = if (info.fallible)
             try self.openFallible(call, info.return_type)
         else
-            .{ .register = call, .value_type = info.return_type };
+            // A function's result is the caller's (S16): fresh storage.
+            .{ .register = call, .value_type = info.return_type, .provenance = .fresh };
         return answered;
     }
 
@@ -10053,10 +10213,7 @@ pub const FunctionBuilder = struct {
         // defaulted `start` (docs/ARGS.md D2, D3).
         for (info.parameter_defaults[values.len..], values.len..) |maybe_default, slot| {
             const filled = maybe_default.?;
-            const made: Typed = .{
-                .register = try self.emitConstantValue(filled.value, filled.value_type),
-                .value_type = filled.value_type,
-            };
+            const made = try self.emitConstantValue(filled.value, filled.value_type);
             try self.parkFreshStorage(made);
             registers[slot] = made.register;
         }
@@ -10069,7 +10226,8 @@ pub const FunctionBuilder = struct {
             info.return_type,
         );
         if (info.fallible) return try self.openFallible(call, info.return_type);
-        return .{ .register = call, .value_type = info.return_type };
+        // A function's result is the caller's (S16): fresh storage.
+        return .{ .register = call, .value_type = info.return_type, .provenance = .fresh };
     }
 
     /// `descriptor` is the receiver's *shape*, which is everything the
@@ -10439,10 +10597,7 @@ pub const FunctionBuilder = struct {
             if (!self.analyzer.fieldHasDefault(layout_index, field_index)) continue;
             const filled = (try self.analyzer.fieldDefault(layout_index, field_index)) orelse return null;
             const made = try self.emitConstantValue(filled.value, filled.value_type);
-            registers[field_index] = try self.ownedForStore(.{
-                .register = made,
-                .value_type = filled.value_type,
-            });
+            registers[field_index] = try self.ownedForStore(made);
             seen[field_index] = true;
         }
         // A still-missing field has no default.  Missing and *private*
@@ -10483,6 +10638,8 @@ pub const FunctionBuilder = struct {
         return .{
             .register = try self.code.emit(.{ .struct_make = .{ .layout = layout_index, .fields = registers } }, result_type),
             .value_type = result_type,
+            // A built struct value owns its run (docs/STRINGS.md).
+            .provenance = .fresh,
         };
     }
 
@@ -10650,10 +10807,7 @@ pub const FunctionBuilder = struct {
             const filled = (try self.analyzer.variantFieldDefault(variant_index, member_index, field_index)) orelse
                 return null;
             const made = try self.emitConstantValue(filled.value, filled.value_type);
-            registers[field_index] = try self.ownedForStore(.{
-                .register = made,
-                .value_type = filled.value_type,
-            });
+            registers[field_index] = try self.ownedForStore(made);
             seen[field_index] = true;
         }
         for (seen) |given| {
@@ -10681,6 +10835,9 @@ pub const FunctionBuilder = struct {
                 .fields = registers,
             } }, result_type),
             .value_type = result_type,
+            // A union value is built whole and owns its run
+            // (docs/UNION.md D8).
+            .provenance = .fresh,
         };
     }
 
@@ -10785,7 +10942,7 @@ pub const FunctionBuilder = struct {
             try frames.append(self.temporary(), arms);
         }
         while (frames.pop()) |arms| try self.code.closeIf(arms);
-        return .{ .register = try self.code.load(result), .value_type = answer };
+        return .{ .register = try self.code.load(result), .value_type = answer, .provenance = .view };
     }
 
     fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Typed {
@@ -10874,7 +11031,7 @@ pub const FunctionBuilder = struct {
             );
             // Fresh bytes nothing parked: the statement's end reclaims
             // them unless a place adopts them (docs/STRINGS.md).
-            const answer: Typed = .{ .register = made, .value_type = .string };
+            const answer: Typed = .{ .register = made, .value_type = .string, .provenance = .fresh };
             try self.parkFreshStorage(answer);
             return answer;
         }
@@ -10955,7 +11112,7 @@ pub const FunctionBuilder = struct {
             .string,
         );
         if (declared.members.len == 1) {
-            return .{ .register = try self.code.load(result), .value_type = .string };
+            return .{ .register = try self.code.load(result), .value_type = .string, .provenance = .view };
         }
         const held = try self.code.spill(value.register, value.value_type);
 
@@ -10981,7 +11138,7 @@ pub const FunctionBuilder = struct {
             try frames.append(self.temporary(), arms);
         }
         while (frames.pop()) |arms| try self.code.closeIf(arms);
-        return .{ .register = try self.code.load(result), .value_type = .string };
+        return .{ .register = try self.code.load(result), .value_type = .string, .provenance = .view };
     }
 
     /// `string(u)` — the member's name (docs/UNION.md D16), by
@@ -10999,7 +11156,7 @@ pub const FunctionBuilder = struct {
             .string,
         );
         if (declared.members.len == 1) {
-            return .{ .register = try self.code.load(result), .value_type = .string };
+            return .{ .register = try self.code.load(result), .value_type = .string, .provenance = .view };
         }
         const held = try self.code.spill(value.register, value.value_type);
 
@@ -11029,7 +11186,7 @@ pub const FunctionBuilder = struct {
             try frames.append(self.temporary(), arms);
         }
         while (frames.pop()) |arms| try self.code.closeIf(arms);
-        return .{ .register = try self.code.load(result), .value_type = .string };
+        return .{ .register = try self.code.load(result), .value_type = .string, .provenance = .view };
     }
 
     /// One sentence for all three constructors, naming what each takes.
@@ -11164,10 +11321,7 @@ pub const FunctionBuilder = struct {
         for (matched.parameters, seen, 0..) |parameter, given, slot| {
             if (given) continue;
             const filled = parameter.default.?;
-            arguments[slot] = .{
-                .register = try self.emitConstantValue(filled.value, filled.value_type),
-                .value_type = filled.value_type,
-            };
+            arguments[slot] = try self.emitConstantValue(filled.value, filled.value_type);
         }
 
         // Argument and result typing per builtin.
@@ -11638,7 +11792,11 @@ pub const FunctionBuilder = struct {
             }
             return .{ .value = try self.openFallible(emitted, result) };
         }
-        return .{ .value = .{ .register = emitted, .value_type = result } };
+        return .{ .value = .{
+            .register = emitted,
+            .value_type = result,
+            .provenance = intrinsicProvenance(matched.kind),
+        } };
     }
 
     fn failIntrinsic(self: *FunctionBuilder, call: ast.Call, message: []const u8) Error!IntrinsicResult {
