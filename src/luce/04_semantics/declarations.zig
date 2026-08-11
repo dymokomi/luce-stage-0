@@ -3,7 +3,10 @@
 //! Declaration collection first: struct layouts and their shapes, enum
 //! tables, function signatures, file-scope constants, the selected
 //! entry.  Then `builder.zig` walks every function body, checking it
-//! and recording what it decides on stage 6's tape.  The type checker
+//! and recording what it decides as a typed tree (05_hir.zig) — and
+//! once the whole program has checked clean, `hir.lower` lowers each
+//! recorded body onto stage 6's tape, driven from here because only
+//! the analyzer holds the settled tables it reads.  The type checker
 //! knows Luce types and nothing else; nothing about any backend
 //! appears here.
 //!
@@ -39,17 +42,10 @@ const ast = @import("../03_parse.zig").ast;
 const types = @import("../support/types.zig");
 const mir = @import("../06_mir.zig");
 
-// The check/lower seam's far side (05_hir.zig): the recorded tree's
-// replay, held against the fused walk's emissions by the dual gate
-// below while the seam lands.
+// The check/lower seam's far side (05_hir.zig): the walk below checks
+// and records the typed tree, and `hir.lower` is the one emission —
+// it lowers each recorded body onto stage 6's tape.
 const hir = @import("../05_hir.zig");
-
-/// **Migration scaffolding** (05_hir.zig; the flip retires it): Debug
-/// builds replay every gap-free recorded body through `hir.lower` into
-/// a second tape and hold the two byte-identical, so the corpus gates
-/// prove the replay over the whole suite before the fused emissions
-/// leave.
-const dual_seam_check = @import("builtin").mode == .Debug;
 const diagnostics_mod = @import("../support/diagnostics.zig");
 
 const Allocator = std.mem.Allocator;
@@ -261,18 +257,26 @@ pub const Analyzer = struct {
         try self.synthesizeShapes();
         if (self.diagnostics.hasErrors()) return null;
 
-        var lowered: std.ArrayList(mir.build.Lowering) = .empty;
-        defer lowered.deinit(self.arena);
+        // The check/lower seam (05_hir.zig): every body is checked and
+        // recorded first, and only a program with no diagnostics is
+        // lowered — so `hir.lower` never sees a gapped tree.
+        //
         // **By index, because the list grows while it is walked.**  A
         // lambda becomes a top-level function the moment its landing
-        // site is checked (docs/FUNCTIONS.md D2), so lowering function
-        // K can append function K+n — and that one is lowered in its
+        // site is checked (docs/FUNCTIONS.md D2), so checking function
+        // K can append function K+n — and that one is checked in its
         // turn, by this loop, with no second pass and no fix-up.
+        var bodies: std.ArrayList(?hir.nodes.Body) = .empty;
+        defer bodies.deinit(self.temporary);
         var at: usize = 0;
         while (at < self.functions.items.len) : (at += 1) {
-            try lowered.append(self.arena, try self.lowerFunction(self.functions.items[at]));
+            try bodies.append(self.temporary, try self.checkFunction(self.functions.items[at]));
         }
         if (self.diagnostics.hasErrors()) return null;
+
+        var lowered: std.ArrayList(mir.build.Lowering) = .empty;
+        defer lowered.deinit(self.arena);
+        try self.lowerFunctions(bodies.items, &lowered);
 
         const entry_index = self.function_names.get("main") orelse return null;
 
@@ -3435,34 +3439,27 @@ pub const Analyzer = struct {
 
     // Function bodies ------------------------------------------------------
 
-    fn lowerFunction(self: *Analyzer, info: FunctionDeclInfo) Error!mir.build.Lowering {
+    /// Check one function body: the walk resolves, types, diagnoses,
+    /// and records the typed tree (05_hir.zig).  Nothing is emitted —
+    /// `hir.lower` consumes the answer once the whole program checked
+    /// clean.  Null when the walk could not assemble a body, which
+    /// only a diagnosed program produces.
+    fn checkFunction(self: *Analyzer, info: FunctionDeclInfo) Error!?hir.nodes.Body {
         self.diagnostics.scope = self.modules[info.module].file;
         defer self.diagnostics.scope = source_mod.root_file;
-        const diagnostics_before = self.diagnostics.count();
         var builder: builder_mod.FunctionBuilder = .{
             .analyzer = self,
             .module = info.module,
             .prefix = self.modules[info.module].prefix,
+            .name = info.name,
             .results = info.results,
+            .return_type = info.return_type,
+            .fallible = info.fallible,
             .static_member = info.enclosing != null and info.receiver == .not,
             .enclosing_locals = info.enclosing_locals,
-            .code = .{
-                .arena = self.arena,
-                .pool = self.pool,
-                .structs = self.structs.items,
-                .enums = self.enums.items,
-                .variants = self.variants.items,
-                .name = info.name,
-                .parameter_count = @intCast(info.parameter_types.len),
-                .return_type = info.return_type,
-                .fallible = info.fallible,
-                .file = self.modules[info.module].file,
-                .origin = @intCast(info.declaration.span.start),
-            },
         };
         defer builder.deinitScratch();
 
-        try builder.code.openBlock();
         try builder.pushScope();
 
         const hidden: usize = if (info.receiver == .not) 0 else 1;
@@ -3497,21 +3494,12 @@ pub const Analyzer = struct {
                 parameter.name_span,
             )) orelse continue;
             builder.setRoot(local, if (owns) .mutable else .unknown);
-            // An owning parameter is an owned binding like any other
-            // (S15): take the object over from the caller on entry.
-            if (owns) {
-                const value = try builder.code.load(local);
-                try builder.code.bind(local, value);
-            }
         }
 
         try builder.lowerBlock(info.declaration.body);
-        // The typed tree's `Body` (05_hir.zig): assembled here so the
-        // recording is proven live over the whole suite; the flip's
-        // lower pass is its consumer.  Behavior-neutral — nothing is
-        // emitted or checked by it.
+        // The typed tree's `Body` (05_hir.zig): the walk's whole
+        // answer, and the one thing `hir.lower` consumes.
         try builder.finishBody();
-        try builder.emitScopeEnd();
         builder.popScope();
 
         // A typed function must return on every path.  The span is the
@@ -3527,72 +3515,20 @@ pub const Analyzer = struct {
                 .{ info.declaration.name, try self.writtenResults(&info) },
             );
         }
-        // The dual-emission gate (05_hir.zig): a gap-free tree from a
-        // clean walk replays through `hir.lower` into a second tape,
-        // and the two must agree byte for byte.
-        if (dual_seam_check and self.diagnostics.count() == diagnostics_before) {
-            if (builder.recorded_body) |*body| {
-                if (body.gaps == 0) try self.checkDualSeam(&builder, info, body);
-            }
-        }
-        // Everything from here — sealing the open blocks, freezing the
-        // block lists, turning the recorded source offsets into lines
-        // and columns, naming the file — is stage 6's, and runs when
-        // `mir.build` closes the tape.
-        return builder.code;
+        return builder.recorded_body;
     }
 
-    /// **Migration scaffolding, Debug only** (05_hir.zig; the flip
-    /// retires it): replay the recorded body into a second tape —
-    /// prologue here, body through `hir.lower`, outer scope end here,
-    /// mirroring `lowerFunction`'s own order — and hold the two tapes
-    /// identical.  A mismatch is a replay arm mis-deriving a checklist
-    /// item, and the panic names the function and the first divergence.
-    fn checkDualSeam(
+    /// Lower every checked body onto its own tape, in function order.
+    /// Runs only after the whole program checked clean, so every body
+    /// is present and gap-free — `hir.lower` asserts the latter.
+    fn lowerFunctions(
         self: *Analyzer,
-        builder: *builder_mod.FunctionBuilder,
-        info: FunctionDeclInfo,
-        body: *const hir.nodes.Body,
+        bodies: []const ?hir.nodes.Body,
+        lowered: *std.ArrayList(mir.build.Lowering),
     ) Error!void {
-        var second: mir.build.Lowering = .{
-            .arena = self.arena,
-            .pool = self.pool,
-            .structs = self.structs.items,
-            .enums = self.enums.items,
-            .variants = self.variants.items,
-            .name = info.name,
-            .parameter_count = @intCast(info.parameter_types.len),
-            .return_type = info.return_type,
-            .fallible = info.fallible,
-            .file = self.modules[info.module].file,
-            .origin = @intCast(info.declaration.span.start),
-        };
-
-        // The prologue, exactly as `lowerFunction` emits it.
-        try second.openBlock();
-        const hidden: usize = if (info.receiver == .not) 0 else 1;
-        if (info.receiver != .not) {
-            if (info.receiver == .writes) {
-                _ = try second.addInoutLocal(
-                    "self",
-                    info.parameter_types[0],
-                    self.ownsStorage(info.parameter_types[0]),
-                );
-            } else {
-                _ = try second.addLocal("self", info.parameter_types[0], false);
-            }
-        }
-        for (info.declaration.parameters, 0..) |parameter, written_index| {
-            const index = written_index + hidden;
-            if (index >= info.parameter_types.len) break;
-            const local = try second.addLocal(parameter.name, info.parameter_types[index], false);
-            if (info.parameter_modes[index] == .give or info.is_entry) {
-                const value = try second.load(local);
-                try second.bind(local, value);
-            }
-        }
-
-        // The replay's view of the settled tables.
+        // Lower's view of the settled tables, derived once: which
+        // struct and union layouts transitively carry objects, and
+        // every folded constant's typed value.
         const struct_carries = try self.temporary.alloc(bool, self.struct_shapes.items.len);
         defer self.temporary.free(struct_carries);
         for (self.struct_shapes.items, struct_carries) |shape, *slot| slot.* = shape.carries;
@@ -3605,179 +3541,39 @@ pub const Analyzer = struct {
             slot.* = .{ .value = constant.value, .value_type = constant.value_type };
         }
 
-        try hir.lower.lowerFunction(.{
-            .temporary = self.temporary,
-            .heap_types = self.heap_types.items,
-            .signatures = self.signatures.items,
-            .functions = self.functions.items,
-            .struct_carries = struct_carries,
-            .variant_carries = variant_carries,
-            .constants = folded,
-            .function = info,
-        }, body, &second);
-
-        // The outer scope's end: the owning parameters go back, in
-        // reverse declaration order.
-        var back = info.parameter_types.len;
-        while (back > hidden) {
-            back -= 1;
-            const owns = info.parameter_modes[back] == .give or info.is_entry;
-            if (!owns or !self.carriesObjects(info.parameter_types[back])) continue;
-            try second.release(@intCast(back), true, false);
+        for (self.functions.items, bodies) |info, recorded| {
+            // A clean check records every body whole; an absent one
+            // could only mean the walk was diagnosed, and the caller
+            // gates on that before coming here.
+            const body = &(recorded orelse unreachable);
+            var code: mir.build.Lowering = .{
+                .arena = self.arena,
+                .pool = self.pool,
+                .structs = self.structs.items,
+                .enums = self.enums.items,
+                .variants = self.variants.items,
+                .name = info.name,
+                .parameter_count = @intCast(info.parameter_types.len),
+                .return_type = info.return_type,
+                .fallible = info.fallible,
+                .file = self.modules[info.module].file,
+                .origin = @intCast(info.declaration.span.start),
+            };
+            try hir.lower.lowerFunction(.{
+                .temporary = self.temporary,
+                .heap_types = self.heap_types.items,
+                .signatures = self.signatures.items,
+                .functions = self.functions.items,
+                .struct_carries = struct_carries,
+                .variant_carries = variant_carries,
+                .constants = folded,
+                .function = info,
+            }, body, &code);
+            // Everything from here — sealing the open blocks, freezing
+            // the block lists, turning the recorded source offsets into
+            // lines and columns, naming the file — is stage 6's, and
+            // runs when `mir.build` closes the tape.
+            try lowered.append(self.arena, code);
         }
-
-        compareLowerings(info.name, &builder.code, &second);
     }
 };
-
-// ---------------------------------------------------------------------------
-// The dual-emission comparison (migration scaffolding; the flip
-// retires it with the gate above)
-// ---------------------------------------------------------------------------
-
-/// Hold two open tapes byte-identical: locals, instructions, result
-/// types, origins, block structure.  Panics naming the function and
-/// the first divergence — in tests this is the loud failure that names
-/// the replay arm to fix.
-fn compareLowerings(name: []const u8, primary: *const mir.build.Lowering, replayed: *const mir.build.Lowering) void {
-    if (primary.locals.items.len != replayed.locals.items.len) {
-        std.debug.panic("dual seam: {s}: locals {d} vs {d}", .{
-            name,
-            primary.locals.items.len,
-            replayed.locals.items.len,
-        });
-    }
-    for (primary.locals.items, replayed.locals.items, 0..) |first, dual, index| {
-        const same = std.mem.eql(u8, first.name, dual.name) and
-            first.local_type.eql(dual.local_type) and
-            first.owns_storage == dual.owns_storage and
-            first.inout == dual.inout;
-        if (!same) std.debug.panic(
-            "dual seam: {s}: local {d} differs: primary {s} {any} owns={} inout={} vs replay {s} {any} owns={} inout={}",
-            .{
-                name,               index,
-                first.name,         first.local_type,
-                first.owns_storage, first.inout,
-                dual.name,          dual.local_type,
-                dual.owns_storage,  dual.inout,
-            },
-        );
-    }
-    const count = @min(primary.instructions.items.len, replayed.instructions.items.len);
-    for (primary.instructions.items[0..count], replayed.instructions.items[0..count], 0..) |first, dual, index| {
-        if (!instructionEqual(first, dual)) {
-            dumpDivergence(name, primary, replayed, index);
-            std.debug.panic("dual seam: {s}: instruction {d}: {s} vs {s}", .{
-                name,
-                index,
-                @tagName(first),
-                @tagName(dual),
-            });
-        }
-        if (!primary.result_types.items[index].eql(replayed.result_types.items[index])) {
-            std.debug.panic("dual seam: {s}: instruction {d}: result type differs", .{ name, index });
-        }
-        if (primary.origin_offsets.items[index] != replayed.origin_offsets.items[index]) {
-            std.debug.panic("dual seam: {s}: instruction {d}: origin differs", .{ name, index });
-        }
-    }
-    if (primary.instructions.items.len != replayed.instructions.items.len) {
-        std.debug.panic("dual seam: {s}: instruction count {d} vs {d} (first {d} agree)", .{
-            name,
-            primary.instructions.items.len,
-            replayed.instructions.items.len,
-            count,
-        });
-    }
-    if (primary.blocks.items.len != replayed.blocks.items.len) {
-        std.debug.panic("dual seam: {s}: blocks {d} vs {d}", .{
-            name,
-            primary.blocks.items.len,
-            replayed.blocks.items.len,
-        });
-    }
-    for (primary.blocks.items, replayed.blocks.items, 0..) |*first, *dual, index| {
-        const same = first.terminated == dual.terminated and
-            std.mem.eql(mir.Register, first.items.items, dual.items.items);
-        if (!same) std.debug.panic("dual seam: {s}: block {d} differs", .{ name, index });
-    }
-}
-
-/// A window of both tapes around the first divergence, for the panic
-/// that follows — enough to name the replay arm that mis-derived.
-fn dumpDivergence(
-    name: []const u8,
-    primary: *const mir.build.Lowering,
-    replayed: *const mir.build.Lowering,
-    at: usize,
-) void {
-    const from = if (at > 8) at - 8 else 0;
-    std.debug.print("\ndual seam divergence in {s} at instruction {d}\n", .{ name, at });
-    const until = @min(at + 4, @min(primary.instructions.items.len, replayed.instructions.items.len));
-    for (from..until) |index| {
-        std.debug.print("  {d:>4}: primary {any}\n        replay  {any}\n", .{
-            index,
-            primary.instructions.items[index],
-            replayed.instructions.items[index],
-        });
-    }
-}
-
-fn instructionEqual(first: mir.Instruction, dual: mir.Instruction) bool {
-    if (std.meta.activeTag(first) != std.meta.activeTag(dual)) return false;
-    return switch (first) {
-        .const_boolean => |value| value == dual.const_boolean,
-        .const_long => |value| value == dual.const_long,
-        .const_double => |value| @as(u64, @bitCast(value)) == @as(u64, @bitCast(dual.const_double)),
-        .const_string => |value| value == dual.const_string,
-        .const_container => |value| value == dual.const_container,
-        .const_function => |value| value == dual.const_function,
-        .local_get => |value| value == dual.local_get,
-        .local_set => |value| value.local == dual.local_set.local and value.value == dual.local_set.value,
-        .binary => |value| value.op == dual.binary.op and
-            value.operand_type.eql(dual.binary.operand_type) and
-            value.left == dual.binary.left and value.right == dual.binary.right,
-        .unary => |value| value.op == dual.unary.op and value.operand == dual.unary.operand,
-        .convert => |value| value == dual.convert,
-        .struct_make => |value| value.layout == dual.struct_make.layout and
-            std.mem.eql(mir.Register, value.fields, dual.struct_make.fields),
-        .struct_get => |value| value.target == dual.struct_get.target and
-            value.layout == dual.struct_get.layout and value.field == dual.struct_get.field,
-        .struct_set => |value| value.target == dual.struct_set.target and
-            value.layout == dual.struct_set.layout and value.field == dual.struct_set.field and
-            value.value == dual.struct_set.value,
-        .variant_make => |value| value.variant == dual.variant_make.variant and
-            value.member == dual.variant_make.member and
-            std.mem.eql(mir.Register, value.fields, dual.variant_make.fields),
-        .variant_tag => |value| value.target == dual.variant_tag.target,
-        .variant_field => |value| value.target == dual.variant_field.target and
-            value.variant == dual.variant_field.variant and
-            value.member == dual.variant_field.member and value.field == dual.variant_field.field,
-        .call => |value| value.function == dual.call.function and
-            std.mem.eql(mir.Register, value.arguments, dual.call.arguments),
-        .call_inout => |value| value.function == dual.call_inout.function and
-            value.receiver == dual.call_inout.receiver and
-            std.mem.eql(mir.Register, value.arguments, dual.call_inout.arguments),
-        .spawn => |value| value.function == dual.spawn.function and
-            std.mem.eql(mir.Register, value.arguments, dual.spawn.arguments),
-        .call_indirect => |value| value.callee == dual.call_indirect.callee and
-            value.signature == dual.call_indirect.signature and
-            std.mem.eql(mir.Register, value.arguments, dual.call_indirect.arguments),
-        .intrinsic => |value| value.kind == dual.intrinsic.kind and
-            std.mem.eql(mir.Register, value.arguments, dual.intrinsic.arguments),
-        .heap_new => |value| value.heap == dual.heap_new.heap and
-            std.mem.eql(mir.Register, value.dims, dual.heap_new.dims),
-        .object_bind => |value| value.local == dual.object_bind.local and
-            value.value == dual.object_bind.value,
-        .object_unbind => |value| value.local == dual.object_unbind.local and
-            value.value == dual.object_unbind.value,
-        .jump => |value| value == dual.jump,
-        .branch => |value| value.condition == dual.branch.condition and
-            value.then_block == dual.branch.then_block and
-            value.else_block == dual.branch.else_block,
-        .ret => |value| (value == null and dual.ret == null) or
-            (value != null and dual.ret != null and value.? == dual.ret.?),
-        .trap => |value| value == dual.trap,
-        .unwind => true,
-    };
-}

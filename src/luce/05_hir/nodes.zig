@@ -6,16 +6,12 @@
 //! dissolves; this file is the vocabulary and holds no behavior at all
 //! beyond the accessors and the one computed property (`provenance`).
 //!
-//! **How it lands.**  The single-atom seam was measured impossible, so
-//! the tree arrives family by family: `04_semantics/builder.zig` keeps
-//! emitting exactly what it emits today and *additionally* records each
-//! converted expression's node on the `Typed` it answers, which makes
-//! every landing byte-identical on the MIR by construction.  The final
-//! flip — a separate `lower` pass consuming this tree — happens only
-//! when the whole tree is recorded and no `Typed.node` is ever null.
-//! Until then a node's children may be missing where they would come
-//! from an unconverted family, and the recording arm leaves the whole
-//! node null rather than record a broken tree.
+//! **How it is made.**  `04_semantics/builder.zig`'s checked walk
+//! records each expression's node on the `Typed` it answers and each
+//! statement into its block frame, emitting nothing; `05_hir/lower.zig`
+//! consumes the finished `Body` and is the one emission.  A body whose
+//! check was diagnosed may be recorded with gaps — the driver stops at
+//! diagnostics, so lower never sees one.
 //!
 //! ## The one rule this tree must not break
 //!
@@ -158,10 +154,10 @@ pub const Body = struct {
     /// because the body has no `Block` wrapper of its own.
     releases: []const Release = &.{},
     locals: []const LocalDecl,
-    /// **Migration only**: statements the walk could not record —
-    /// whole or nested — because a child's family answers no node yet.
-    /// The final flip is gated on zero everywhere; the flip deletes
-    /// the field.
+    /// Statements the walk could not record — possible only on a
+    /// diagnosed compile, whose bodies never reach `lower` (the
+    /// driver stops at diagnostics, and `lowerFunction` asserts the
+    /// zero).
     gaps: u32 = 0,
 };
 
@@ -1067,15 +1063,10 @@ pub const Statement = union(enum) {
 // Provenance — the computed node-kind property
 // ---------------------------------------------------------------------------
 
-/// Where a node's value stands as far as storage goes — the property
-/// `builder.zig` stamps by hand today (`Typed.provenance`), answered
-/// here from the node kind alone.  The migration's Debug oracles assert
-/// the two agree arm by arm as each family converts; when the seam
-/// lands, this function is the only spelling left.
-///
-/// Kinds whose family has not converted yet carry the answer the
-/// current stamps and tape predicates give; each family's landing
-/// reconciles its rows before recording them.
+/// Where a node's value stands as far as storage goes — the one
+/// spelling of the property, answered from the node kind alone; the
+/// checker and lower both read it, and the checker overrides it only
+/// for the two recorded batch rewrites (its `Typed.rewritten`).
 pub fn provenance(expression: *const Expression) Provenance {
     return switch (expression.*) {
         // Constants own nothing and view nothing.

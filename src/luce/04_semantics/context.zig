@@ -25,7 +25,6 @@ const mir = @import("../06_mir.zig");
 
 const Type = types.Type;
 const Span = source_mod.Span;
-const BlockId = mir.BlockId;
 const LocalId = mir.LocalId;
 
 /// The stage's error set.  Checking never fails on a bad program — that
@@ -575,10 +574,9 @@ pub const FoundLocal = struct {
 /// to unwind on the way.  The two depths are `FunctionBuilder`'s
 /// `scopes` and `temps` lengths as the loop body began.
 pub const LoopFrame = struct {
-    continue_block: BlockId,
-    exit_block: BlockId,
     /// Scope depth when the loop body began: break and continue
-    /// release every scope at or above it.
+    /// release every scope at or above it — the unwind the recorded
+    /// statements carry (nodes.Statement.Break).
     scope_depth: usize,
     /// Temporary depth when the loop body began.
     temps_depth: usize,

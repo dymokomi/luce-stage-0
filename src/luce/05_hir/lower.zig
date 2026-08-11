@@ -1,12 +1,13 @@
-//! The lower half of the check/lower seam: replay a recorded `Body`
+//! The lower half of the check/lower seam: lower a recorded `Body`
 //! into stage 6's tape.
 //!
 //! Consumes: `nodes.Body`, the typed tree stage 4's checked walk
 //! records, plus the settled declaration tables (`Deps`).
-//! Produces: instructions on a `mir.build.Lowering` — byte-identical
-//! to what the fused walk emits, which the dual-emission gate in
-//! `04_semantics/declarations.zig` proves function by function until
-//! the flip retires the fused emissions.
+//! Produces: instructions on a `mir.build.Lowering` — **the one
+//! emission there is**.  The dual-emission gate that held this pass
+//! byte-identical to the fused walk's emissions retired with those
+//! emissions; the corpus dumps it validated against remain the
+//! regression net.
 //!
 //! **This pass is mechanical and diagnostic-free.**  Its error set is
 //! `error{OutOfMemory}` and nothing else, by design: every decision —
@@ -70,13 +71,17 @@ pub const Deps = struct {
     function: context.FunctionDeclInfo,
 };
 
-/// Replay `body` into `code`.  The caller has already replayed the
-/// prologue — the entry block, the receiver and parameter rows, and
-/// the owning parameters' entry binds — exactly as
-/// `declarations.lowerFunction` emits them; this pass replays the body
-/// block and stops before the outer scope's own releases, which the
-/// caller emits from the same declaration facts.
+/// Lower `body` into `code` — the function whole: the entry block,
+/// the receiver and parameter rows and the owning parameters' entry
+/// binds (all derived from the declaration facts in `deps.function`),
+/// the body's statements, and the outer scope's parameter releases on
+/// the way out.  The caller hands over a configured, empty `Lowering`
+/// and gets back the one tape there is.
 pub fn lowerFunction(deps: Deps, body: *const nodes.Body, code: *mir.build.Lowering) Error!void {
+    // A gapped body is the record of a failed check, and the driver
+    // refuses to continue past diagnostics — so this pass never sees
+    // one, and a gap here is a driver bug rather than a case.
+    std.debug.assert(body.gaps == 0);
     var replay: Replay = .{ .deps = deps, .body = body, .code = code };
     defer replay.deinitScratch();
     try replay.replayBody();
@@ -173,6 +178,34 @@ const Replay = struct {
                 .borrow_param;
         }
 
+        // The prologue: the entry block, then the receiver and
+        // parameter rows in declaration order — held in lockstep with
+        // the recorded table, whose leading rows they are — with an
+        // owning parameter taking its object over from the caller on
+        // entry (OWNERSHIP.md S15, S44).
+        try self.code.openBlock();
+        if (info.receiver != .not) {
+            const receiver_type = info.parameter_types[0];
+            const id = if (info.receiver == .writes)
+                try self.code.addInoutLocal("self", receiver_type, self.ownsStorage(receiver_type))
+            else
+                try self.code.addLocal("self", receiver_type, false);
+            self.assertRecordedRow(id, "self", receiver_type);
+        }
+        for (info.declaration.parameters, 0..) |parameter, written_index| {
+            const index = written_index + hidden;
+            if (index >= info.parameter_types.len) break;
+            const parameter_type = info.parameter_types[index];
+            const id = try self.code.addLocal(parameter.name, parameter_type, false);
+            self.assertRecordedRow(id, parameter.name, parameter_type);
+            // An owning parameter is an owned binding like any other
+            // (S15): take the object over from the caller on entry.
+            if (info.parameter_modes[index] == .give or info.is_entry) {
+                const value = try self.code.load(id);
+                try self.code.bind(id, value);
+            }
+        }
+
         // Scope zero is the parameter scope: give parameters own their
         // objects (never their storage — a parameter borrows its
         // caller's bytes), in declaration order.
@@ -188,6 +221,22 @@ const Replay = struct {
         }
 
         try self.replayBlockParts(self.body.statements, self.body.releases);
+
+        // The outer scope's end: the owning parameters go back, in
+        // reverse declaration order — scope zero's own list, emitted
+        // the way every scope's is.
+        try self.emitScopeEnd();
+    }
+
+    /// The prologue's half of coupling #5's lockstep: a receiver or
+    /// parameter row this pass makes must be the recorded table's row
+    /// at the same index, or the tree and the tape have already
+    /// diverged on slot numbering.
+    fn assertRecordedRow(self: *const Replay, id: LocalId, name: []const u8, local_type: Type) void {
+        std.debug.assert(id < self.body.locals.len);
+        const row = self.body.locals[id];
+        std.debug.assert(row.name != null and std.mem.eql(u8, row.name.?, name));
+        std.debug.assert(row.local_type.eql(local_type));
     }
 
     // -- tables and predicates ---------------------------------------------
@@ -410,9 +459,8 @@ const Replay = struct {
 
     // -- expressions --------------------------------------------------------
 
-    /// Replay one expression node and everything under it, in the
-    /// order the fused walk emits: the node's own instructions, then
-    /// its recorded park.  `suppress_park` is the batch walk's hook —
+    /// Replay one expression node and everything under it: the node's
+    /// own instructions, then its recorded park.  `suppress_park` is the batch walk's hook —
     /// a borrow-copied operand's park belongs after the copy.
     fn replayValue(self: *Replay, node: nodes.NodeRef) Error!Register {
         return self.replayValueInner(node, false);
@@ -542,15 +590,15 @@ const Replay = struct {
         wrappers: []const nodes.NodeRef,
         spill: ?LocalId = null,
         /// The value's storage provenance as the batch leaves it —
-        /// the stamp the fused walk carries on its `Typed`: the core's
-        /// node-kind answer, made fresh by a borrow copy, made a view
-        /// by a spill reload, made plain by a widening or wrap.
+        /// the checker's own answer, re-derived: the core's node-kind
+        /// answer, made fresh by a borrow copy, made a view by a
+        /// spill reload, made plain by a widening or wrap.
         provenance: nodes.Provenance = .plain,
     };
 
     /// Peel the top `convert`/`wrap_optional` chain off a recorded
-    /// operand: the fused walk emits those *after* the batch (`fit`,
-    /// `widensInto`), so the replay does too.  Answers the wrapper
+    /// operand: a batch applies those *after* its cores (`fit`,
+    /// `widensInto`), so the emission does too.  Answers the wrapper
     /// chain innermost-first.
     fn peel(self: *Replay, node: nodes.NodeRef) Error!BatchEntry {
         var wrappers: std.ArrayList(nodes.NodeRef) = .empty;
@@ -676,8 +724,7 @@ const Replay = struct {
     }
 
     /// Replay a batch's defaulted entries — each is a materialized
-    /// constant, replayed whole at the point the fused walk fills the
-    /// slot.  `peel_converts` reproduces the free-builtin shape, whose
+    /// constant, emitted whole at the point the call fills the slot.  `peel_converts` reproduces the free-builtin shape, whose
     /// post-batch widenings ride the default's node.
     fn replayDefaultEntry(
         self: *Replay,

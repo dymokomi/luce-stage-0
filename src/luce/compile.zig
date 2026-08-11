@@ -9,16 +9,18 @@
 //!   01_source/     load        bytes            -> source text
 //!   02_lex/        lex         source text      -> tokens
 //!   03_parse/      parse       tokens           -> AST
-//!   04_semantics/  resolve, type-check, validate
-//!                              AST              -> validated program
-//!   05_hir/        (nothing yet — a named seam, see its header)
-//!   06_mir/        build       validated        -> verified MIR
+//!   04_semantics/  resolve, type-check, record
+//!                              AST              -> typed tree
+//!   05_hir/        lower       typed tree       -> recorded emissions
+//!   06_mir/        build       recorded         -> verified MIR
 //!   07_optimize/   optimize    MIR              -> smaller MIR
 //!   08_llvm/       lower       MIR              -> LLVM IR -> object
 //!
-//! One honest irregularity, visible in the walk below: **05_hir does
-//! nothing**, so there is no call for it at all.  docs/PIPELINE.md is
-//! the status table.
+//! One irregularity, argued in `04_semantics/declarations.zig`: stages
+//! 4 and 5 share a driver — `semantics.analyze` checks and records
+//! every body, then hands each recorded tree to `hir.lower`, because
+//! only the analyzer holds the settled declaration tables lower reads.
+//! docs/PIPELINE.md is the status table.
 //!
 //! Stage 8 is not on this path: `compileProject` stops at verified,
 //! optimized MIR, which is the front end's whole product and what
@@ -110,17 +112,15 @@ pub fn compileProject(
     };
     defer gpa.free(modules);
 
-    // Stage 4 — resolve names, check types, validate.  What comes back
-    // is a validated program plus, per function, the operations its
-    // walk decided on: a value, with nothing pointing back into the
-    // checker.
+    // Stages 4 and 5 — resolve names, check types, record the typed
+    // tree (04), then lower every recorded body onto stage 6's tape
+    // (05, `hir.lower`).  One call, because lower reads the settled
+    // declaration tables only the analyzer holds; what comes back is
+    // a value, with nothing pointing back into the checker.
     const analyzed = (try semantics.analyze(arena, gpa, modules, options, &diagnostics)) orelse {
         program.deinit();
         return .{ .failure = diagnostics };
     };
-
-    // Stage 5 — HIR.  Nothing happens here: 05_hir.zig is an empty
-    // seam, named so the absence is visible rather than invisible.
 
     // Stage 6 — MIR.  Close every function stage 4 recorded: seal the
     // open blocks, freeze the block lists, turn each instruction's
