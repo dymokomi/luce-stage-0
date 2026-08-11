@@ -35,6 +35,11 @@ const conversionNamed = types.conversionNamed;
 const mir = @import("../06_mir.zig");
 const helpers = @import("helpers.zig");
 
+// The typed tree the check/lower seam hands over (05_hir.zig).  This
+// walk *records* it beside the emission, one expression family at a
+// time, while the tape below keeps every landing byte-identical.
+const nodes = @import("../05_hir.zig").nodes;
+
 // What running a subtree could disturb, asked before it is lowered
 // (`effects.zig`).
 const effects = @import("effects.zig");
@@ -104,20 +109,20 @@ const Typed = struct {
     /// Decided where the value is produced, never read back off the
     /// tape (05_hir.zig, coupling #2).
     provenance: Provenance = .plain,
+    /// The typed tree's node for this expression (05_hir.zig),
+    /// recorded by the producing arm beside what it emits.  Null while
+    /// the value's family has not converted yet — expected
+    /// mid-campaign, and the final flip to a separate lower pass is
+    /// gated on no null ever appearing here.
+    node: ?nodes.NodeRef = null,
 };
 
-/// Where a value's storage stands the moment it is produced.
-const Provenance = enum {
-    /// Storage this statement allocated and nobody owns yet: a string
-    /// `+`, a built struct or union value, a call's result, an
-    /// allocating intrinsic, a taken copy (`own_storage`).
-    fresh,
-    /// A view of storage something else holds: a local reload, a field
-    /// or payload read, an element or map lookup.
-    view,
-    /// Everything else — constants, scalars, borrowless products.
-    plain,
-};
+/// Where a value's storage stands the moment it is produced.  The
+/// vocabulary is the typed tree's (`nodes.Provenance`), spelled once:
+/// what this walk stamps by hand is exactly what `nodes.provenance`
+/// answers from the node kind, and the Debug oracle below holds the
+/// two to it until the seam lands and only the computed one remains.
+const Provenance = nodes.Provenance;
 
 /// Whether a call answering a return shape is being received by a
 /// destructuring statement, refused in an ordinary value position, or
@@ -1604,6 +1609,69 @@ pub const FunctionBuilder = struct {
         };
     }
 
+    // The typed tree, recorded while the tape still runs ---------------------
+    //
+    // Each converted expression family constructs its node here and
+    // attaches it to the Typed it answers, changing nothing about what
+    // is emitted (05_hir.zig).  Converted so far: literals and reads.
+
+    /// Record one node of the typed tree.  Nodes live in the compile
+    /// arena beside the tape they mirror — `self.code` records through
+    /// the same arena — so tree and tape share a lifetime until the
+    /// final flip, which decides both placements together.
+    fn recordNode(self: *FunctionBuilder, expression: nodes.Expression) Error!nodes.NodeRef {
+        const made = try self.arena().create(nodes.Expression);
+        made.* = expression;
+        return made;
+    }
+
+    /// **Migration scaffolding, Debug only** (the seam's landing
+    /// pattern; the final flip deletes it).  Wherever a recorded node
+    /// duplicates a fact the tape carries, assert the two agree: the
+    /// node kind against the emitted instruction, the recorded types
+    /// against the emitted result types, and the node-kind provenance
+    /// (`nodes.provenance`) against the stamp the arm made.  Called
+    /// where the converted families answer their values, before any
+    /// consumer can respill or copy the register out from under the
+    /// comparison.  Each family's landing adds its arms.
+    fn debugNodeOnTape(self: *const FunctionBuilder, value: Typed) void {
+        if (!debug_checks) return;
+        const node = value.node orelse return;
+        std.debug.assert(nodes.provenance(node) == value.provenance);
+        std.debug.assert(node.result().eql(value.value_type));
+        const instruction = self.code.instructions.items[value.register];
+        switch (node.*) {
+            .const_long => |literal| std.debug.assert(instruction.const_long == literal.value),
+            .const_double => |literal| std.debug.assert(instruction.const_double == literal.value),
+            .const_boolean => |literal| std.debug.assert(instruction.const_boolean == literal.value),
+            .const_string => |literal| std.debug.assert(instruction.const_string == literal.constant),
+            .local_get => |read| std.debug.assert(instruction.local_get == read.local),
+            .narrowed_get => |read| {
+                std.debug.assert(instruction.intrinsic.kind == .optional_unwrap);
+                std.debug.assert(self.code.result_types.items[value.register].eql(read.payload));
+            },
+            .field_get => |read| {
+                std.debug.assert(instruction.struct_get.layout == read.layout);
+                std.debug.assert(instruction.struct_get.field == read.field);
+            },
+            .variant_payload => |read| {
+                std.debug.assert(instruction.variant_field.variant == read.variant);
+                std.debug.assert(instruction.variant_field.member == read.member);
+                std.debug.assert(instruction.variant_field.field == read.field);
+            },
+            .index_get => |read| {
+                std.debug.assert(instruction.intrinsic.kind == .index_get);
+                std.debug.assert(instruction.intrinsic.arguments.len == read.indices.len + 1);
+            },
+            // A folded constant materializes in whatever shape its
+            // value takes; the type and provenance checks above are
+            // the whole of what the node duplicates.  `absent` inlines
+            // a typed zero the same way.
+            .absent, .constant_ref => {},
+            else => {},
+        }
+    }
+
     /// Is this register's storage parked in a statement temporary?
     fn parkedForStorage(self: *const FunctionBuilder, register: Register) bool {
         for (self.temps.items) |temp| {
@@ -2613,14 +2681,19 @@ pub const FunctionBuilder = struct {
                 });
                 return null;
             }
-            return .{
-                .value = .{
-                    .register = try self.code.zeroOf(expected),
-                    .value_type = expected,
-                    .provenance = zeroProvenance(expected),
-                },
-                .present = false,
+            const absent: Typed = .{
+                .register = try self.code.zeroOf(expected),
+                .value_type = expected,
+                .provenance = zeroProvenance(expected),
+                .node = try self.recordNode(.{ .absent = .{
+                    .result = expected,
+                    .span = expression.span(),
+                } }),
             };
+            // This value answers a place directly rather than passing
+            // through `lowerExpression`, so the node oracle runs here.
+            self.debugNodeOnTape(absent);
+            return .{ .value = absent, .present = false };
         }
         self.wantPlace(expected);
         const value = (try self.lowerExpression(expression, false)) orelse return null;
@@ -3626,6 +3699,13 @@ pub const FunctionBuilder = struct {
             const declared_at = for (arm.bindings) |binding| {
                 if (std.mem.eql(u8, binding.text, field.name)) break binding.span;
             } else arm.name_span;
+            // The scrutinee read is a local reload of the held slot,
+            // and its node says so; the payload read hangs off it.
+            const scrutinee = try self.recordNode(.{ .local_get = .{
+                .local = held,
+                .result = self.code.localType(held),
+                .span = declared_at,
+            } });
             const value: Typed = .{
                 .register = try self.code.emit(.{ .variant_field = .{
                     .target = try self.code.load(held),
@@ -3637,7 +3717,19 @@ pub const FunctionBuilder = struct {
                 // A payload read is a view into the scrutinee's run
                 // (docs/UNION.md D10), so the store below copies it.
                 .provenance = .view,
+                .node = try self.recordNode(.{ .variant_payload = .{
+                    .target = scrutinee,
+                    .variant = variant_index,
+                    .member = member_index,
+                    .field = @intCast(field_index),
+                    .result = field.field_type,
+                    .span = declared_at,
+                } }),
             };
+            // This value binds its arm name directly rather than
+            // passing through `lowerExpression`, so the node oracle
+            // runs here.
+            self.debugNodeOnTape(value);
             const local = (try self.declareLocal(
                 field.name,
                 field.field_type,
@@ -6013,6 +6105,10 @@ pub const FunctionBuilder = struct {
         defer self.depth -= 1;
 
         const value = (try self.lowerExpressionInner(expression, as_statement)) orelse return null;
+        // Migration scaffolding (05_hir.zig): every recorded node is
+        // checked against the tape here, before any consumer can
+        // respill or copy the register out from under the comparison.
+        self.debugNodeOnTape(value);
         if (value.value_type == .none) return value;
         // Every ownership-yielding object is parked as a statement
         // temporary (S3).  Whatever adopts it — a binding, a
@@ -6063,13 +6159,21 @@ pub const FunctionBuilder = struct {
                 try self.fail("luce.sema.literal", span, "{s}", .{context.rangeMessage(lands)});
                 return null;
             };
-            return .{ .register = try self.code.emit(.{ .const_double = parsed }, lands), .value_type = lands };
+            return .{
+                .register = try self.code.emit(.{ .const_double = parsed }, lands),
+                .value_type = lands,
+                .node = try self.recordNode(.{ .const_double = .{ .value = parsed, .result = lands, .span = span } }),
+            };
         }
         const parsed = helpers.parseIntLiteral(literal.text, negated, lands) orelse {
             try self.fail("luce.sema.literal", span, "{s}", .{context.rangeMessage(lands)});
             return null;
         };
-        return .{ .register = try self.code.emit(.{ .const_long = parsed }, lands), .value_type = lands };
+        return .{
+            .register = try self.code.emit(.{ .const_long = parsed }, lands),
+            .value_type = lands,
+            .node = try self.recordNode(.{ .const_long = .{ .value = parsed, .result = lands, .span = span } }),
+        };
     }
 
     fn lowerExpressionInner(self: *FunctionBuilder, expression: *ast.Expression, as_statement: bool) Error!?Typed {
@@ -6100,16 +6204,25 @@ pub const FunctionBuilder = struct {
                     try self.fail("luce.sema.literal", literal.span, "{s}", .{context.rangeMessage(lands)});
                     return null;
                 };
-                return .{ .register = try self.code.emit(.{ .const_double = parsed }, lands), .value_type = lands };
+                return .{
+                    .register = try self.code.emit(.{ .const_double = parsed }, lands),
+                    .value_type = lands,
+                    .node = try self.recordNode(.{ .const_double = .{ .value = parsed, .result = lands, .span = literal.span } }),
+                };
             },
             .bool_literal => |literal| {
-                return .{ .register = try self.code.emit(.{ .const_boolean = literal.value }, .boolean), .value_type = .boolean };
+                return .{
+                    .register = try self.code.emit(.{ .const_boolean = literal.value }, .boolean),
+                    .value_type = .boolean,
+                    .node = try self.recordNode(.{ .const_boolean = .{ .value = literal.value, .result = .boolean, .span = literal.span } }),
+                };
             },
             .string_literal => |literal| {
                 const constant = try self.analyzer.pool.intern(literal.decoded);
                 return .{
                     .register = try self.code.emit(.{ .const_string = constant }, .string),
                     .value_type = .string,
+                    .node = try self.recordNode(.{ .const_string = .{ .constant = constant, .result = .string, .span = literal.span } }),
                 };
             },
             .name => |name| {
@@ -6117,7 +6230,7 @@ pub const FunctionBuilder = struct {
                     // Not a local: perhaps a file-scope constant.
                     const qualified = try self.analyzer.qualify(self.prefix, name.text);
                     if (self.analyzer.constant_names.get(qualified)) |constant| {
-                        return self.emitConstant(constant);
+                        return self.emitConstant(constant, name.span);
                     }
                     // Or a function, where a function is what the place
                     // wants (docs/FUNCTIONS.md S1).  A local wins, and
@@ -6146,6 +6259,12 @@ pub const FunctionBuilder = struct {
                         ),
                         .value_type = payload,
                         .root = found.info.root,
+                        .node = try self.recordNode(.{ .narrowed_get = .{
+                            .local = local,
+                            .payload = payload,
+                            .result = payload,
+                            .span = name.span,
+                        } }),
                     };
                 }
                 // A name reads as a view of what its slot holds; the
@@ -6156,6 +6275,11 @@ pub const FunctionBuilder = struct {
                     .value_type = local_type,
                     .root = found.info.root,
                     .provenance = .view,
+                    .node = try self.recordNode(.{ .local_get = .{
+                        .local = local,
+                        .result = local_type,
+                        .span = name.span,
+                    } }),
                 };
             },
             // `none` has no type of its own; every place that can
@@ -6870,8 +6994,9 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    /// Inline a folded file-scope constant at this use site.
-    fn emitConstant(self: *FunctionBuilder, index: u32) Error!?Typed {
+    /// Inline a folded file-scope constant at this use site; `span` is
+    /// the use site's, which is what the recorded node points at.
+    fn emitConstant(self: *FunctionBuilder, index: u32, span: Span) Error!?Typed {
         const info = self.analyzer.constant_infos.items[index];
         if (info.state != .ready) return null; // already diagnosed
         const made = try self.emitConstantValue(info.value, info.value_type);
@@ -6883,6 +7008,11 @@ pub const FunctionBuilder = struct {
             else
                 .mutable,
             .provenance = made.provenance,
+            .node = try self.recordNode(.{ .constant_ref = .{
+                .constant = index,
+                .result = info.value_type,
+                .span = span,
+            } }),
         };
     }
 
@@ -7341,6 +7471,23 @@ pub const FunctionBuilder = struct {
         const element_type = (try self.checkIndex(values[0], values[1..], index.span)) orelse return null;
         const arguments = try self.arena().alloc(Register, values.len);
         for (values, arguments) |value, *slot| slot.* = value.register;
+        // The node needs the target's and every subscript's, which
+        // exist only once their families have converted — until then
+        // this read stays unrecorded rather than recorded broken
+        // (05_hir.zig).
+        const node: ?nodes.NodeRef = node: {
+            const target = values[0].node orelse break :node null;
+            const subscripts = try self.arena().alloc(nodes.NodeRef, values.len - 1);
+            for (values[1..], subscripts) |value, *slot| {
+                slot.* = value.node orelse break :node null;
+            }
+            break :node try self.recordNode(.{ .index_get = .{
+                .target = target,
+                .indices = subscripts,
+                .result = element_type,
+                .span = index.span,
+            } });
+        };
         return .{
             .register = try self.code.emit(
                 .{ .intrinsic = .{ .kind = .index_get, .arguments = arguments } },
@@ -7349,6 +7496,7 @@ pub const FunctionBuilder = struct {
             .value_type = element_type,
             // An element read is a view of the container's storage.
             .provenance = .view,
+            .node = node,
         };
     }
 
@@ -7618,7 +7766,7 @@ pub const FunctionBuilder = struct {
                         });
                         return null;
                     }
-                    return self.emitConstant(constant);
+                    return self.emitConstant(constant, field.span);
                 }
                 try self.failNamespaceMember(base, field.name, joined, field.span);
                 return null;
@@ -7661,6 +7809,19 @@ pub const FunctionBuilder = struct {
         };
         if (!try self.fieldReachable(layout_index, field_index, field.span)) return null;
         const field_type = layout.fields[field_index].field_type;
+        // The node needs the target's, which exists only once the
+        // target's own family has converted — until then this read
+        // stays unrecorded rather than recorded broken (05_hir.zig).
+        const node: ?nodes.NodeRef = if (target.node) |target_node|
+            try self.recordNode(.{ .field_get = .{
+                .target = target_node,
+                .layout = layout_index,
+                .field = field_index,
+                .result = field_type,
+                .span = field.span,
+            } })
+        else
+            null;
         return .{
             .register = try self.code.emit(.{ .struct_get = .{
                 .target = target.register,
@@ -7670,6 +7831,7 @@ pub const FunctionBuilder = struct {
             .value_type = field_type,
             // A field read is a view into the struct's run.
             .provenance = .view,
+            .node = node,
         };
     }
 
