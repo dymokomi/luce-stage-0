@@ -55,7 +55,7 @@ host that cannot start that shell reports `io_failed`.
 Terminal programs use `os.term` for the screen and its event stream. Programs
 that only need a terminal can instead `import std.term` and use `term`:
 
-```luce
+```text
 import std.os
 
 let rows = os.term.rows()

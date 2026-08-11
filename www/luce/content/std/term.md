@@ -4,7 +4,7 @@ The short terminal module. It exposes the same hosted terminal facade as
 `std.os` without requiring a program to reach through the system-facts
 namespace.
 
-```luce
+```text
 import std.term
 
 term.clear()

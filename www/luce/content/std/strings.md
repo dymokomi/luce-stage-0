@@ -146,7 +146,7 @@ func main():
 ```output
 100000000000000000000
 loom: trap: format_float needs decimals >= 0 [explicit_trap]
-    at strings.format_float (std/strings.luc:188:9)
+    at strings.format_float (std/strings.luc:212:9)
     at main (main.luc:5:5)
 ```
 
@@ -230,26 +230,26 @@ That is why searching is a language primitive at all: not because it
 is hard, but because it is the seam where a vectorized implementation
 enters.
 
-`fold_case` and `is_space_byte` are the module's only two internals,
-and they are marked [`private`](/tour/visibility/): reaching either
-one — as `strings.fold_case(...)` or through the method spelling
+`fold_case` is the module's one internal, and it is marked
+[`private`](/tour/visibility/): reaching it — as
+`strings.fold_case(...)` or through the method spelling
 `s.fold_case(...)`, which routes to the same declaration — is
-`luce.sema.private`. They used to be reachable, which made an internal
+`luce.sema.private`. It used to be reachable, which made an internal
 helper look like a blessed string method; the marker is what closed
-that door, and the roster above is the module's whole surface.
+that door, and the roster above is the module's whole surface. (The
+old space helper graduated: it is the public `is_space` in the ASCII
+class table above.)
 
-## The one sentinel
+## The sentinel that was
 
-`find` answers `-1` for "not found". `long?` exists now, so the
-sentinel is a wart with nothing holding it up — and `find` overloads
-it: a `start` below zero or past the end of the string answers `-1`
-too, which is an *argument* error and not the same fact as "absent".
-It used to be worse: `find` and `find_from` were two declarations
-that disagreed about whether that case was reachable at all, until
-the `start` default merged them (docs/ARGS.md).
+`find` used to answer `-1` for "not found", and overloaded it for a
+`start` outside the string. It answers `long?` now: absence for a
+match that never comes and for a `start` where no match could begin,
+with `find(s, x) else -1` as the one-keystroke spelling for anyone
+who wants the number back. Nothing compares against a magic value by
+accident anymore, and the [status page](/status/) no longer keeps
+this on a list.
 
-`find` also disagrees with `count` about the empty needle: `find`
-treats it as a match at `start`, while `count` counts it zero times.
-Both answers are defensible and they are not the same answer.
-
-The [status page](/status/) keeps this on the list.
+One asymmetry remains, on purpose: `find` treats an empty needle as
+a match at `start`, while `count` counts it zero times. Both answers
+are defensible and they are not the same answer.

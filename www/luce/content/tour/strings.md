@@ -171,7 +171,7 @@ func main():
     print(f"[{trimmed}]")
     print(f"upper: {trimmed.upper()}")
     print(f"contains 'quick': {trimmed.contains("quick")}")
-    print(f"find 'brown': {trimmed.find("brown")}")
+    print(f"find 'brown': {trimmed.find("brown") else -1}")
     print(f"replace: {trimmed.replace("quick", "slow")}")
 
     let words = trimmed.split(" ")
