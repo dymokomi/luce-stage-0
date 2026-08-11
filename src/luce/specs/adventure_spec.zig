@@ -327,8 +327,10 @@ const Loaded = struct {
         context: *anyopaque,
         arena: std.mem.Allocator,
         name: []const u8,
+        from_root: []const u8,
     ) error{OutOfMemory}!luce.source.Found {
         _ = context;
+        _ = from_root; // One rootless table; the token distinguishes nothing here.
         for (modules) |file| {
             if (std.mem.eql(u8, file.name, name)) {
                 return .{ .text = .{ .bytes = try arena.dupe(u8, file.source) } };

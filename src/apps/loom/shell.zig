@@ -195,6 +195,10 @@ pub const Shell = struct {
             "editor",
             embedded_editor,
             loader.loader(),
+            // No discovery for an in-memory program: `loom edit`
+            // inside somebody's project must not resolve the editor's
+            // own imports against that project (docs/PACKAGES.md D1).
+            "",
             arguments,
         );
     }

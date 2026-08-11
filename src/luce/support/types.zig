@@ -19,6 +19,12 @@ pub const CompileOptions = struct {
     /// what a runtime trap location reports.  "" falls back to
     /// "main.luc".  Imported modules always report "PREFIX.luc".
     source_name: []const u8 = "",
+    /// Opaque host root token for the root module (docs/PACKAGES.md
+    /// D7): whatever the host's loader answers as `Found.Text.root`
+    /// for files of the same project, so the module registry's
+    /// (root, name) keys agree end to end.  The compiler never
+    /// interprets it.  "" is the rootless program.
+    source_root: []const u8 = "",
     /// Stage 7, the whole of it (`07_optimize`): on for every artifact;
     /// `luce ir --full` clears it to show the raw lowering, unreached
     /// functions and all.  The name is older than the stage — it was

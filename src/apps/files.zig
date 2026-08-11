@@ -1,8 +1,10 @@
 //! File access shared by the luce and loom executables: whole-file
-//! reads and writes, reading a source file, and the import loader that
-//! resolves `import name` as NAME.luc beside the root source file.
-//! One copy, so the two programs can never drift on how imports
-//! resolve or on what counts as an unreadable file.
+//! reads and writes, reading a source file, the import loader that
+//! resolves `import name` as NAME.luc beside the root source file,
+//! and project discovery — the walk that finds the `luce.yaml`
+//! governing a root source file (docs/PACKAGES.md D1).  One copy, so
+//! the two programs can never drift on how imports resolve or on what
+//! counts as an unreadable file.
 //!
 //! Only the sibling namespace reaches here: `import std.NAME` is
 //! answered by the compiler's own table and is never asked of a host,
@@ -33,6 +35,7 @@
 
 const std = @import("std");
 const luce = @import("luce");
+const manifest = @import("manifest.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -149,6 +152,114 @@ fn failure(mistake: anyerror) luce.source.Found {
 }
 
 // ---------------------------------------------------------------------------
+// The project root
+// ---------------------------------------------------------------------------
+
+/// What governs a compile: the project whose `luce.yaml` was found by
+/// walking up from the root source file's directory, or nothing
+/// (docs/PACKAGES.md D1).
+pub const Project = union(enum) {
+    /// No luce.yaml between the root file's directory and the
+    /// filesystem root.  The current behaviour, and nothing changes:
+    /// a single directory of .luc files stays exactly as cheap as it
+    /// is today.
+    rootless,
+    /// The directory that holds luce.yaml — the opaque root token the
+    /// compile is given as `CompileOptions.source_root`.  Allocated
+    /// from the arena `discoverProject` was handed.
+    root: []const u8,
+    /// A luce.yaml was found and could not be a manifest.  Refused,
+    /// never skipped: skipping would silently change which root
+    /// governs, and a broken manifest is a fact about the project, not
+    /// about this one compile.  The message names the file and, when
+    /// there is one, the line; allocated from the arena.
+    refused: []const u8,
+};
+
+/// Find the project governing `root_path` — the root source file as
+/// the user typed it.
+///
+/// The walk is *lexical*: the path as typed, never a realpath, so a
+/// symlinked directory resolves against the tree the author addressed
+/// rather than the tree the link points into.  A relative path is
+/// anchored under the current directory by spelling — a join, not a
+/// resolution — and the walk continues to the filesystem root, the
+/// way go.mod is found.  Pathless roots get no discovery: standard
+/// input compiles rootless wherever it is piped from.
+pub fn discoverProject(arena: Allocator, io: std.Io, root_path: []const u8) error{OutOfMemory}!Project {
+    if (std.mem.eql(u8, root_path, standard_input)) return .rootless;
+    const directory = std.fs.path.dirname(root_path) orelse "";
+
+    const start = if (std.fs.path.isAbsolute(directory))
+        directory
+    else anchored: {
+        const here = std.process.currentPathAlloc(io, arena) catch |mistake| switch (mistake) {
+            error.OutOfMemory => return error.OutOfMemory,
+            // A process whose working directory has no name cannot
+            // anchor a relative walk; it compiles rootless rather
+            // than guessing.
+            else => return .rootless,
+        };
+        if (directory.len == 0) break :anchored @as([]const u8, here);
+        break :anchored try std.fs.path.join(arena, &.{ here, directory });
+    };
+
+    var current: []const u8 = start;
+    while (true) {
+        const candidate = try std.fs.path.join(arena, &.{ current, manifest.file_name });
+        found: {
+            const info = std.Io.Dir.cwd().statFile(io, candidate, .{}) catch
+                // Not there, or an ancestor that cannot be asked —
+                // neither is a manifest, and refusing on an
+                // unreadable ancestor would fail every build below
+                // it.  The walk continues.
+                break :found;
+            if (info.kind != .file) {
+                return .{ .refused = try std.fmt.allocPrint(
+                    arena,
+                    "{s} is not a project manifest: {s}",
+                    .{ candidate, describe(info.kind) },
+                ) };
+            }
+            return readManifest(arena, io, current, candidate);
+        }
+        current = std.fs.path.dirname(current) orelse return .rootless;
+    }
+}
+
+/// Read and validate a manifest the walk found.  In this step a valid
+/// manifest only establishes the root; the want list starts resolving
+/// when the store does.
+fn readManifest(arena: Allocator, io: std.Io, directory: []const u8, path: []const u8) error{OutOfMemory}!Project {
+    const text = readWhole(arena, io, path) catch |mistake| switch (mistake) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return .{ .refused = try std.fmt.allocPrint(
+            arena,
+            "{s} cannot be read: {s}",
+            .{ path, @errorName(mistake) },
+        ) },
+    };
+    switch (try manifest.parse(arena, text)) {
+        // The token is duped so it never borrows the caller's path.
+        .manifest => return .{ .root = try arena.dupe(u8, directory) },
+        .refused => |refusal| {
+            if (refusal.line == 0) {
+                return .{ .refused = try std.fmt.allocPrint(
+                    arena,
+                    "{s}: {s}",
+                    .{ path, refusal.reason },
+                ) };
+            }
+            return .{ .refused = try std.fmt.allocPrint(
+                arena,
+                "{s}:{d}: {s}",
+                .{ path, refusal.line, refusal.reason },
+            ) };
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Imports
 // ---------------------------------------------------------------------------
 
@@ -199,7 +310,7 @@ pub const FileLoader = struct {
     io: std.Io,
     directory: []const u8,
 
-    fn load(context: *anyopaque, arena: Allocator, name: []const u8) error{OutOfMemory}!luce.source.Found {
+    fn load(context: *anyopaque, arena: Allocator, name: []const u8, from_root: []const u8) error{OutOfMemory}!luce.source.Found {
         const self: *FileLoader = @ptrCast(@alignCast(context));
         const wanted = try std.fmt.allocPrint(arena, "{s}.luc", .{name});
         const path = if (self.directory.len == 0)
@@ -236,7 +347,15 @@ pub const FileLoader = struct {
             return failure(mistake);
         };
         defer file.close(self.io);
-        return readWholeFile(arena, self.io, file, path, @intCast(info.size));
+        var found = try readWholeFile(arena, self.io, file, path, @intCast(info.size));
+        // Every module this loader can answer resolves beside the
+        // root, inside the importing file's own project, so the root
+        // token it belongs to is the token the compiler handed in —
+        // recorded per file and handed back on that file's imports.
+        // The tiers that could answer with another root's file are
+        // the store and the shelf, and they are not built yet.
+        if (found == .text) found.text.root = from_root;
+        return found;
     }
 
     pub fn loader(self: *FileLoader) luce.compile.Loader {
@@ -260,14 +379,20 @@ pub const MemoryLoader = struct {
         context: *anyopaque,
         arena: Allocator,
         name: []const u8,
+        from_root: []const u8,
     ) error{OutOfMemory}!luce.source.Found {
         const self: *MemoryLoader = @ptrCast(@alignCast(context));
         for (self.files) |file| {
             if (!std.mem.eql(u8, file.name, name)) continue;
-            return .{ .text = .{
-                .bytes = try arena.dupe(u8, file.source),
-                .path = try std.fmt.allocPrint(arena, "{s}.luc", .{name}),
-            } };
+            return .{
+                .text = .{
+                    .bytes = try arena.dupe(u8, file.source),
+                    .path = try std.fmt.allocPrint(arena, "{s}.luc", .{name}),
+                    // No discovery ever ran for these files, so the only
+                    // token in play is the one the compile was given.
+                    .root = from_root,
+                },
+            };
         }
         return .missing;
     }
@@ -365,7 +490,7 @@ test "the import loader resolves NAME.luc beside the root and returns missing ot
     defer arena.deinit();
     const resolver = loader.loader();
 
-    const found = try resolver.load(resolver.context, arena.allocator(), "geo");
+    const found = try resolver.load(resolver.context, arena.allocator(), "geo", "");
     try testing.expect(found == .text);
     try testing.expect(std.mem.indexOf(u8, found.text.bytes, "return 4") != null);
     // The host says where it really opened the file, so a diagnostic
@@ -374,7 +499,7 @@ test "the import loader resolves NAME.luc beside the root and returns missing ot
 
     // An unknown module is missing (the caller reports the failed
     // import), not an error and not an empty module.
-    const absent = try resolver.load(resolver.context, arena.allocator(), "nope");
+    const absent = try resolver.load(resolver.context, arena.allocator(), "nope", "");
     try testing.expect(absent == .missing);
 }
 
@@ -399,7 +524,7 @@ test "an import matches the directory entry exactly, whatever the filesystem thi
     defer arena.deinit();
     const resolver = loader.loader();
 
-    const found = try resolver.load(resolver.context, arena.allocator(), "geo");
+    const found = try resolver.load(resolver.context, arena.allocator(), "geo", "");
     try testing.expect(found == .unreadable);
     // Naming the real spelling is the whole point: "cannot load module
     // geo" would send the author looking for a file that is right
@@ -413,7 +538,7 @@ test "an import matches the directory entry exactly, whatever the filesystem thi
     const exact_path = try std.fmt.allocPrint(testing.allocator, "{s}/util.luc", .{directory});
     defer testing.allocator.free(exact_path);
     try writeWhole(io, exact_path, "func twice(v: long) -> long:\n    return v * 2\n");
-    const exact = try resolver.load(resolver.context, arena.allocator(), "util");
+    const exact = try resolver.load(resolver.context, arena.allocator(), "util", "");
     try testing.expect(exact == .text);
     try testing.expect(std.mem.indexOf(u8, exact.text.bytes, "v * 2") != null);
 }
@@ -435,7 +560,7 @@ test "an import must be a regular file, not a device or a fifo" {
     defer arena.deinit();
     const resolver = loader.loader();
 
-    const found = try resolver.load(resolver.context, arena.allocator(), "geo");
+    const found = try resolver.load(resolver.context, arena.allocator(), "geo", "");
     try testing.expect(found == .unreadable);
     // Naming the kind, not just refusing: /dev/null is a device.
     try testing.expectEqualStrings("it is a device", found.unreadable);
@@ -476,7 +601,147 @@ test "a directory where a module should be is unreadable, not missing" {
     defer arena.deinit();
     const resolver = loader.loader();
 
-    const found = try resolver.load(resolver.context, arena.allocator(), "geo");
+    const found = try resolver.load(resolver.context, arena.allocator(), "geo", "");
     try testing.expect(found == .unreadable);
     try testing.expectEqualStrings("it is a directory", found.unreadable);
+}
+
+test "the loader answers modules under the root token it was handed" {
+    // The token travels: the compiler hands the importing file's root
+    // in, and every module this loader resolves belongs to that same
+    // project, so the answer carries it back out (docs/PACKAGES.md D7).
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const directory = try tmpPrefix(&tmp.sub_path);
+    defer testing.allocator.free(directory);
+    const geo_path = try std.fmt.allocPrint(testing.allocator, "{s}/geo.luc", .{directory});
+    defer testing.allocator.free(geo_path);
+    try writeWhole(io, geo_path, "func area() -> long:\n    return 4\n");
+
+    var loader: FileLoader = .{ .io = io, .directory = directory };
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const resolver = loader.loader();
+
+    const found = try resolver.load(resolver.context, arena.allocator(), "geo", "/somewhere/project");
+    try testing.expect(found == .text);
+    try testing.expectEqualStrings("/somewhere/project", found.text.root);
+}
+
+test "discovery walks up from the root file's directory and the nearest manifest wins" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const directory = try tmpPrefix(&tmp.sub_path);
+    defer testing.allocator.free(directory);
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    try tmp.dir.createDir(io, "a", .default_dir);
+    try tmp.dir.createDir(io, "a/b", .default_dir);
+    const outer = try std.fmt.allocPrint(testing.allocator, "{s}/luce.yaml", .{directory});
+    defer testing.allocator.free(outer);
+    try writeWhole(io, outer, "name: outer\nversion: 0.1.0\n");
+    const inner = try std.fmt.allocPrint(testing.allocator, "{s}/a/luce.yaml", .{directory});
+    defer testing.allocator.free(inner);
+    try writeWhole(io, inner, "name: inner\nversion: 0.1.0\n");
+
+    // Two directories below the inner manifest: the nearest governs,
+    // and the outer one is shadowed rather than merged.
+    const deep = try std.fmt.allocPrint(testing.allocator, "{s}/a/b/main.luc", .{directory});
+    defer testing.allocator.free(deep);
+    const nearest = try discoverProject(arena.allocator(), io, deep);
+    try testing.expect(nearest == .root);
+    try testing.expect(std.mem.endsWith(u8, nearest.root, "/a"));
+
+    // Beside the outer manifest, that one governs.
+    const shallow = try std.fmt.allocPrint(testing.allocator, "{s}/main.luc", .{directory});
+    defer testing.allocator.free(shallow);
+    const outer_found = try discoverProject(arena.allocator(), io, shallow);
+    try testing.expect(outer_found == .root);
+    try testing.expect(std.mem.endsWith(u8, outer_found.root, &tmp.sub_path));
+}
+
+test "a broken manifest is refused with its file and line, never skipped" {
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const directory = try tmpPrefix(&tmp.sub_path);
+    defer testing.allocator.free(directory);
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    const path = try std.fmt.allocPrint(testing.allocator, "{s}/luce.yaml", .{directory});
+    defer testing.allocator.free(path);
+    try writeWhole(io, path, "name: atlas\nversion: [0.1.0]\n");
+
+    const wanted = try std.fmt.allocPrint(testing.allocator, "{s}/main.luc", .{directory});
+    defer testing.allocator.free(wanted);
+    const found = try discoverProject(arena.allocator(), io, wanted);
+    try testing.expect(found == .refused);
+    // The message names the manifest, the line, and the rule by name.
+    try testing.expect(std.mem.indexOf(u8, found.refused, "luce.yaml:2") != null);
+    try testing.expect(std.mem.indexOf(u8, found.refused, "flow style") != null);
+}
+
+test "discovery is lexical: a symlinked directory resolves against the tree that addressed it" {
+    // The author typed a path through `aside/link`; the manifest that
+    // governs is the one above that spelling.  A realpath walk would
+    // leave for the link's target and find the outer manifest instead.
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const directory = try tmpPrefix(&tmp.sub_path);
+    defer testing.allocator.free(directory);
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    try tmp.dir.createDir(io, "aside", .default_dir);
+    try tmp.dir.createDir(io, "real", .default_dir);
+    const outer = try std.fmt.allocPrint(testing.allocator, "{s}/luce.yaml", .{directory});
+    defer testing.allocator.free(outer);
+    try writeWhole(io, outer, "name: outer\nversion: 0.1.0\n");
+    const aside = try std.fmt.allocPrint(testing.allocator, "{s}/aside/luce.yaml", .{directory});
+    defer testing.allocator.free(aside);
+    try writeWhole(io, aside, "name: aside\nversion: 0.1.0\n");
+    tmp.dir.symLink(io, "../real", "aside/link", .{ .is_directory = true }) catch return error.SkipZigTest;
+
+    const through = try std.fmt.allocPrint(testing.allocator, "{s}/aside/link/main.luc", .{directory});
+    defer testing.allocator.free(through);
+    const found = try discoverProject(arena.allocator(), io, through);
+    try testing.expect(found == .root);
+    try testing.expect(std.mem.endsWith(u8, found.root, "/aside"));
+}
+
+test "standard input gets no discovery" {
+    // `loom edit` inside somebody's project must not resolve against
+    // that project, and neither may a program piped from anywhere: a
+    // pathless root has no directory to walk from, so none is invented.
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    try testing.expect((try discoverProject(arena.allocator(), testing.io, standard_input)) == .rootless);
+}
+
+test "no manifest anywhere above answers rootless" {
+    // Hermetic against the machine: an empty subtree adds nothing to
+    // the walk, so it answers exactly what walking from above it
+    // answers — in this repository, rootless.
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const directory = try tmpPrefix(&tmp.sub_path);
+    defer testing.allocator.free(directory);
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    try tmp.dir.createDir(io, "a", .default_dir);
+    const deep_path = try std.fmt.allocPrint(testing.allocator, "{s}/a/main.luc", .{directory});
+    defer testing.allocator.free(deep_path);
+    const deep = try discoverProject(arena.allocator(), io, deep_path);
+    const above = try discoverProject(arena.allocator(), io, ".zig-cache/tmp/main.luc");
+
+    try testing.expectEqual(std.meta.activeTag(above), std.meta.activeTag(deep));
+    if (deep == .root) try testing.expectEqualStrings(above.root, deep.root);
 }

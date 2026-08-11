@@ -104,7 +104,9 @@ const Files = struct {
         context: *anyopaque,
         arena: Allocator,
         name: []const u8,
+        from_root: []const u8,
     ) error{OutOfMemory}!luce.source.Found {
+        _ = from_root; // One rootless table; the token distinguishes nothing here.
         const self: *Files = @ptrCast(@alignCast(context));
         for (self.all) |file| {
             if (std.mem.eql(u8, file.name, name)) {

@@ -386,8 +386,28 @@ fn compilePathPruned(
             try err.print("luce: cannot read {s}: {s}\n", .{ path, why });
             return null;
         },
+        // The root is one path the user typed; no host answers it in
+        // two places.  The arm exists because the seam carries it.
+        .ambiguous => {
+            try err.print("luce: cannot read {s}: it answered in more than one place\n", .{path});
+            return null;
+        },
     };
     defer gpa.free(source);
+
+    // The luce.yaml governing the program, when one does: today it
+    // only establishes the root token the module registry keys by,
+    // and a broken manifest is refused here, early, by name.
+    var discovery = std.heap.ArenaAllocator.init(gpa);
+    defer discovery.deinit();
+    const source_root: []const u8 = switch (try files.discoverProject(discovery.allocator(), io, path)) {
+        .rootless => "",
+        .root => |token| token,
+        .refused => |why| {
+            try err.print("luce: {s}\n", .{why});
+            return null;
+        },
+    };
 
     // The path as the user wrote it, not its basename: `luce check
     // sub/bad.luc` that answers `bad.luc:1:1` is a location nothing
@@ -396,6 +416,7 @@ fn compilePathPruned(
     var result = try luce.compile.compileProject(gpa, source, loader.loader(), .{
         .allow_host = true,
         .source_name = files.displayName(path),
+        .source_root = source_root,
         .prune = prune,
     });
     switch (result) {

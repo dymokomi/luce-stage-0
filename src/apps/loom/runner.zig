@@ -187,16 +187,40 @@ pub fn runScript(
             try err.print("loom: cannot read {s}: {s}\n", .{ path, why });
             return 1;
         },
+        // The root is one path the user typed; no host answers it in
+        // two places.  The arm exists because the seam carries it.
+        .ambiguous => {
+            try err.print("loom: cannot read {s}: it answered in more than one place\n", .{path});
+            return 1;
+        },
     };
     defer gpa.free(source);
+
+    // The luce.yaml governing the program, when one does: today it
+    // only establishes the root token the module registry keys by,
+    // and a broken manifest is refused here, early, by name.
+    var discovery = std.heap.ArenaAllocator.init(gpa);
+    defer discovery.deinit();
+    const source_root: []const u8 = switch (try files.discoverProject(discovery.allocator(), io, path)) {
+        .rootless => "",
+        .root => |token| token,
+        .refused => |why| {
+            try err.print("loom: {s}\n", .{why});
+            return 1;
+        },
+    };
+
     var loader: files.FileLoader = .{ .io = io, .directory = std.fs.path.dirname(path) orelse "" };
-    return runSource(gpa, io, out, err, policy, path, source, loader.loader(), arguments);
+    return runSource(gpa, io, out, err, policy, path, source, loader.loader(), source_root, arguments);
 }
 
 /// Compile source bytes (already in memory) and run them.  `name` is
 /// the path they came from when there is one — it names diagnostics
 /// and decides where a native artifact is kept.  The embedded editor
 /// passes a bare name, which has no directory and so caches by hash.
+/// `source_root` is the project root token discovery answered for the
+/// path — the same token the loader will stamp on every module it
+/// answers — and "" for rootless and in-memory programs.
 pub fn runSource(
     gpa: Allocator,
     io: std.Io,
@@ -206,12 +230,14 @@ pub fn runSource(
     name: []const u8,
     source: []const u8,
     loader: ?luce.compile.Loader,
+    source_root: []const u8,
     arguments: []const []const u8,
 ) !u8 {
     var options = compile_options;
     // The path as given, not its basename: a diagnostic or a trap that
     // says `bad.luc:3:1` names a file the reader still has to find.
     options.source_name = files.displayName(name);
+    options.source_root = source_root;
     var result = try luce.compile.compileProject(gpa, source, loader, options);
     switch (result) {
         .success => {},

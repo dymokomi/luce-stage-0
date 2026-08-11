@@ -1039,7 +1039,8 @@ const TestLoader = struct {
     /// permission: the host's other answer.
     locked: []const []const u8 = &.{},
 
-    fn load(context: *anyopaque, arena: std.mem.Allocator, name: []const u8) error{OutOfMemory}!luce_source.Found {
+    fn load(context: *anyopaque, arena: std.mem.Allocator, name: []const u8, from_root: []const u8) error{OutOfMemory}!luce_source.Found {
+        _ = from_root; // One rootless table; the token distinguishes nothing here.
         const self: *TestLoader = @ptrCast(@alignCast(context));
         for (self.locked) |locked| {
             if (std.mem.eql(u8, locked, name)) return .{ .unreadable = "permission denied" };

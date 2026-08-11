@@ -38,6 +38,13 @@ pub const Kind = enum { root, standard, imported };
 
 pub const File = struct {
     kind: Kind,
+    /// The opaque root token the host chose for this file — which
+    /// project root it belongs to (docs/PACKAGES.md D7).  The compiler
+    /// never learns what a root *is*: the token keys the registry
+    /// together with `name`, and resolution hands it back to the
+    /// host's loader on every load this file causes.  "" is the
+    /// rootless program, and today's only value.
+    root: []u8,
     /// The name it is imported by; "" for the root.
     name: []u8,
     /// How a diagnostic names it: the root's display name as the host
@@ -64,6 +71,7 @@ pub const Sources = struct {
 
     pub fn deinit(self: *Sources) void {
         for (self.list.items) |file| {
+            self.allocator.free(file.root);
             self.allocator.free(file.name);
             self.allocator.free(file.path);
             self.allocator.free(file.text);
@@ -75,17 +83,20 @@ pub const Sources = struct {
 
     /// Register a prepared source text and answer its id.  The
     /// registry takes ownership of `text` (allocated by the same
-    /// allocator) and copies `name` and `path`.  Ownership transfers
-    /// even when this fails: a caller that hands text over never has
-    /// to free it, so there is one rule rather than two.
+    /// allocator) and copies `root`, `name` and `path`.  Ownership
+    /// transfers even when this fails: a caller that hands text over
+    /// never has to free it, so there is one rule rather than two.
     pub fn add(
         self: *Sources,
         kind: Kind,
+        root: []const u8,
         name: []const u8,
         path: []const u8,
         text: []u8,
     ) Error!FileId {
         errdefer self.allocator.free(text);
+        const owned_root = try self.allocator.dupe(u8, root);
+        errdefer self.allocator.free(owned_root);
         const owned_name = try self.allocator.dupe(u8, name);
         errdefer self.allocator.free(owned_name);
         const owned_path = try self.allocator.dupe(u8, path);
@@ -94,6 +105,7 @@ pub const Sources = struct {
         errdefer self.allocator.free(line_starts);
         try self.list.append(self.allocator, .{
             .kind = kind,
+            .root = owned_root,
             .name = owned_name,
             .path = owned_path,
             .text = text,
@@ -116,13 +128,25 @@ pub const Sources = struct {
         return &self.list.items[file];
     }
 
-    /// The id of the module imported as `name`, or null.  Linear over
-    /// a list that a project keeps to a few dozen entries.
-    pub fn find(self: *const Sources, name: []const u8) ?FileId {
+    /// The id of the module imported as `name` within `root`, or
+    /// null.  The pair is the key (docs/PACKAGES.md D7): one name may
+    /// bind different modules under different roots, so dedup, cycle
+    /// termination and collision all ask with the importing file's
+    /// root.  Linear over a list that a project keeps to a few dozen
+    /// entries.
+    pub fn find(self: *const Sources, root: []const u8, name: []const u8) ?FileId {
         for (self.list.items, 0..) |file, index| {
-            if (std.mem.eql(u8, file.name, name)) return @intCast(index);
+            if (std.mem.eql(u8, file.root, root) and
+                std.mem.eql(u8, file.name, name)) return @intCast(index);
         }
         return null;
+    }
+
+    /// The opaque root token this file was registered under; "" when
+    /// unknown, which is also the rootless program's token.
+    pub fn rootOf(self: *const Sources, file: FileId) []const u8 {
+        const found = self.at(file) orelse return "";
+        return found.root;
     }
 
     /// How a diagnostic should name this file; "" when unknown.
@@ -196,7 +220,7 @@ fn addText(sources: *Sources, kind: Kind, name: []const u8, path: []const u8, te
     // add() takes ownership even on failure, so there is nothing to
     // clean up here.
     const owned = try testing.allocator.dupe(u8, text);
-    return sources.add(kind, name, path, owned);
+    return sources.add(kind, "", name, path, owned);
 }
 
 test "the registry owns what it holds and hands back identity" {
@@ -211,11 +235,33 @@ test "the registry owns what it holds and hands back identity" {
     try testing.expectEqual(@as(usize, 2), sources.count());
     try testing.expectEqualStrings("editor.luc", sources.pathOf(root));
     try testing.expectEqualStrings("geo.luc", sources.pathOf(geo));
-    try testing.expectEqual(geo, sources.find("geo").?);
-    try testing.expectEqual(root, sources.find("").?);
-    try testing.expectEqual(@as(?FileId, null), sources.find("nope"));
+    try testing.expectEqual(geo, sources.find("", "geo").?);
+    try testing.expectEqual(root, sources.find("", "").?);
+    try testing.expectEqual(@as(?FileId, null), sources.find("", "nope"));
     try testing.expect(sources.at(2) == null);
     try testing.expectEqualStrings("", sources.pathOf(7));
+}
+
+test "one name under two roots is two modules, found by the pair" {
+    // The pair key is what keeps two roots' same-named modules apart
+    // (docs/PACKAGES.md D7): `util` in the project and `util` inside a
+    // package must never answer for each other.
+    var sources = Sources.init(testing.allocator);
+    defer sources.deinit();
+
+    const project_text = try testing.allocator.dupe(u8, "func here() -> long:\n    return 1\n");
+    const ours = try sources.add(.imported, "", "util", "util.luc", project_text);
+    const package_text = try testing.allocator.dupe(u8, "func there() -> long:\n    return 2\n");
+    const theirs = try sources.add(.imported, "pkg", "util", "pkg/util.luc", package_text);
+
+    try testing.expect(ours != theirs);
+    try testing.expectEqual(ours, sources.find("", "util").?);
+    try testing.expectEqual(theirs, sources.find("pkg", "util").?);
+    try testing.expectEqual(@as(?FileId, null), sources.find("elsewhere", "util"));
+    try testing.expectEqualStrings("", sources.rootOf(ours));
+    try testing.expectEqualStrings("pkg", sources.rootOf(theirs));
+    // An unknown file's root is the rootless token, like its path.
+    try testing.expectEqualStrings("", sources.rootOf(9999));
 }
 
 test "place resolves an offset against the file it belongs to" {

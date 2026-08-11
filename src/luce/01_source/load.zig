@@ -83,6 +83,15 @@ pub const Found = union(enum) {
     /// Nothing frees it: hand over a static string, or memory from the
     /// allocator the loader was given.
     unreadable: []const u8,
+    /// The name answered in more than one place — a project file and a
+    /// declared package, two shelves — and there is no precedence to
+    /// pick one, because precedence is silent shadowing with a table
+    /// (docs/PACKAGES.md D3).  Carries every answering path, verbatim,
+    /// so the refusal names them all.  Nothing frees the paths: static
+    /// strings, or memory from the allocator the loader was given.
+    /// No host answers this today; the seam carries it so resolution
+    /// tiers can arrive without the signature moving again.
+    ambiguous: []const []const u8,
 
     /// A module's source, with the origin only the host knows.
     ///
@@ -102,6 +111,14 @@ pub const Found = union(enum) {
         /// buffer, a test table — and the registry falls back to
         /// NAME.luc.  Copied, like the bytes.
         path: []const u8 = "",
+        /// The opaque root token the host chose for this module —
+        /// which project root the file belongs to (docs/PACKAGES.md
+        /// D7).  The compiler never learns what a root *is*: stage 1
+        /// records the token per file, keys the registry by
+        /// (root, name), and hands the importing file's token back to
+        /// the loader on every load that file causes.  "" is the
+        /// rootless program.  Copied, like the bytes.
+        root: []const u8 = "",
     };
 };
 
@@ -120,12 +137,21 @@ pub const Origin = enum {
 /// never opens a file itself: a host fills this in (`src/apps/
 /// files.zig` resolves NAME.luc beside the root; a test hands over a
 /// table) and everything else about loading is decided above.
+///
+/// `from_root` is the opaque root token of the file the import was
+/// written in — recorded from `Found.Text.root` when that file was
+/// loaded (the root's own token arrives as
+/// `CompileOptions.source_root`).  The host chose it and the host
+/// interprets it; the compiler only carries it, which is how a
+/// package's internal imports will one day resolve inside the package
+/// without the compiler learning what a package is.
 pub const Loader = struct {
     context: *anyopaque,
     load: *const fn (
         context: *anyopaque,
         arena: Allocator,
         name: []const u8,
+        from_root: []const u8,
     ) error{OutOfMemory}!Found,
 };
 
@@ -191,11 +217,14 @@ fn standardSource(name: []const u8) ?[]const u8 {
 /// Register the root source and answer its id (always `root_file`).
 ///
 /// `path` is how diagnostics and trap traces name it ("editor.luc");
-/// `bytes` belong to the caller and are copied.  Reports and answers
-/// null when the bytes cannot be Luce source.
+/// `root` is the opaque host root token the root module belongs to
+/// (`CompileOptions.source_root`, "" for a rootless program); `bytes`
+/// belong to the caller and are copied.  Reports and answers null when
+/// the bytes cannot be Luce source.
 pub fn openRoot(
     diagnostics: *Diagnostics,
     path: []const u8,
+    root: []const u8,
     bytes: []const u8,
 ) Error!?FileId {
     // The root is what everything else hangs off, so it is loaded
@@ -204,7 +233,7 @@ pub fn openRoot(
     const display = if (path.len != 0) path else "main.luc";
     const prepared = try encoding.prepare(diagnostics.sources.allocator, bytes);
     switch (prepared) {
-        .text => |text| return try diagnostics.sources.add(.root, "", display, text),
+        .text => |text| return try diagnostics.sources.add(.root, root, "", display, text),
         .problem => |problem| {
             // Nothing is registered, so there is no file to point at
             // and the message has to name it itself.
@@ -220,9 +249,11 @@ pub fn openRoot(
 /// takes at the call site: `import std.math` and `import math` both
 /// arrive here as "math", told apart by `origin`.
 ///
-/// Answers the id of an already-loaded module when the name is one —
-/// which is what makes an import cycle terminate rather than recurse.
-/// Reports and answers null when the module cannot be loaded.
+/// Answers the id of an already-loaded module when the pair
+/// (importing file's root, name) is one — which is what makes an
+/// import cycle terminate rather than recurse, and what keeps two
+/// roots' same-named modules from answering for each other.  Reports
+/// and answers null when the module cannot be loaded.
 pub fn openImport(
     diagnostics: *Diagnostics,
     loader: ?Loader,
@@ -238,7 +269,13 @@ pub fn openImport(
     const path = try std.fmt.allocPrint(diagnostics.allocator, "{s}.luc", .{name});
     defer diagnostics.allocator.free(path);
 
-    if (diagnostics.sources.find(name)) |already| {
+    // The import binds `name` in the importing file's namespace, and a
+    // namespace is a root: every registry question below asks with the
+    // pair, so collision is per-importing-namespace and never reaches
+    // across roots.
+    const from_root = diagnostics.sources.rootOf(from);
+
+    if (diagnostics.sources.find(from_root, name)) |already| {
         const loaded = diagnostics.sources.at(already).?;
         const wanted: sources_mod.Kind = switch (origin) {
             .standard => .standard,
@@ -277,7 +314,10 @@ pub fn openImport(
             .{ standard_namespace, path },
         );
         defer diagnostics.allocator.free(inside);
-        return try open(diagnostics, .standard, name, inside, embedded, span);
+        // The library is embedded, so no host chose a token for it; it
+        // registers under the importing file's root, because that is
+        // the namespace the binding `math` lives in.
+        return try open(diagnostics, .standard, from_root, name, inside, embedded, span);
     }
 
     // `std` is the namespace, so it is not a module and std.luc is a
@@ -300,7 +340,7 @@ pub fn openImport(
     var scratch = std.heap.ArenaAllocator.init(diagnostics.allocator);
     defer scratch.deinit();
     const found: Found = if (loader) |through|
-        try through.load(through.context, scratch.allocator(), name)
+        try through.load(through.context, scratch.allocator(), name, from_root)
     else
         .missing;
 
@@ -323,7 +363,7 @@ pub fn openImport(
                 );
                 return null;
             }
-            return try open(diagnostics, .imported, name, opened, source.bytes, span);
+            return try open(diagnostics, .imported, source.root, name, opened, source.bytes, span);
         },
         .missing => {
             try diagnostics.add(
@@ -343,6 +383,21 @@ pub fn openImport(
             );
             return null;
         },
+        .ambiguous => |places| {
+            // Every answering path, verbatim: there is no precedence
+            // to pick one, and a refusal that names only the winner
+            // would send the author hunting for the others
+            // (docs/PACKAGES.md D3).
+            const named = try std.mem.join(diagnostics.allocator, ", ", places);
+            defer diagnostics.allocator.free(named);
+            try diagnostics.add(
+                "luce.import.ambiguous",
+                span,
+                "module {s} answers in more than one place: {s}; exactly one may answer",
+                .{ name, named },
+            );
+            return null;
+        },
     }
 }
 
@@ -352,6 +407,7 @@ pub fn openImport(
 fn open(
     diagnostics: *Diagnostics,
     kind: sources_mod.Kind,
+    root: []const u8,
     name: []const u8,
     path: []const u8,
     bytes: []const u8,
@@ -359,7 +415,7 @@ fn open(
 ) Error!?FileId {
     const prepared = try encoding.prepare(diagnostics.sources.allocator, bytes);
     switch (prepared) {
-        .text => |text| return try diagnostics.sources.add(kind, name, path, text),
+        .text => |text| return try diagnostics.sources.add(kind, root, name, path, text),
         .problem => |problem| {
             try report(diagnostics, span, path, bytes, problem);
             return null;
@@ -438,19 +494,37 @@ const TableLoader = struct {
         text: []const u8,
         /// What the host would call the file; "" leaves the fallback.
         path: []const u8 = "",
-    },
+        /// The root token the host chose for the answered module.
+        root: []const u8 = "",
+        /// Answer only when the import came from this root; null
+        /// answers whatever root asked.
+        from: ?[]const u8 = null,
+    } = &.{},
     /// Names that exist but refuse to be read.
     locked: []const []const u8 = &.{},
+    /// Names that answer in more than one place, with the places.
+    contested: []const struct {
+        name: []const u8,
+        places: []const []const u8,
+    } = &.{},
 
-    fn load(context: *anyopaque, arena: Allocator, name: []const u8) error{OutOfMemory}!Found {
+    fn load(context: *anyopaque, arena: Allocator, name: []const u8, from_root: []const u8) error{OutOfMemory}!Found {
         const self: *TableLoader = @ptrCast(@alignCast(context));
         for (self.locked) |locked| {
             if (std.mem.eql(u8, locked, name)) return .{ .unreadable = "permission denied" };
         }
+        for (self.contested) |contest| {
+            if (std.mem.eql(u8, contest.name, name)) return .{ .ambiguous = contest.places };
+        }
         for (self.entries) |entry| {
-            if (std.mem.eql(u8, entry.name, name)) return .{ .text = .{
+            if (!std.mem.eql(u8, entry.name, name)) continue;
+            if (entry.from) |only| {
+                if (!std.mem.eql(u8, only, from_root)) continue;
+            }
+            return .{ .text = .{
                 .bytes = try arena.dupe(u8, entry.text),
                 .path = entry.path,
+                .root = entry.root,
             } };
         }
         return .missing;
@@ -466,7 +540,7 @@ const nowhere: Span = .{ .start = 0, .end = 0 };
 test "the root registers as file zero under the name it was given" {
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
-    const root = (try openRoot(&diagnostics, "editor.luc", "func main():\r\n    return\r\n")).?;
+    const root = (try openRoot(&diagnostics, "editor.luc", "", "func main():\r\n    return\r\n")).?;
     try testing.expectEqual(sources_mod.root_file, root);
     try testing.expectEqualStrings("editor.luc", diagnostics.sources.pathOf(root));
     // Loading normalizes: the registry holds LF text, and every span
@@ -478,14 +552,14 @@ test "the root registers as file zero under the name it was given" {
 test "a nameless root still has a path to print" {
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
-    const root = (try openRoot(&diagnostics, "", "func main():\n    return\n")).?;
+    const root = (try openRoot(&diagnostics, "", "", "func main():\n    return\n")).?;
     try testing.expectEqualStrings("main.luc", diagnostics.sources.pathOf(root));
 }
 
 test "a root that is not text is refused with its own diagnostic" {
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
-    try testing.expect((try openRoot(&diagnostics, "photo.luc", "\xFF\xD8\xFF\xE0")) == null);
+    try testing.expect((try openRoot(&diagnostics, "photo.luc", "", "\xFF\xD8\xFF\xE0")) == null);
     try testing.expectEqual(@as(usize, 1), diagnostics.count());
     try testing.expectEqualStrings("luce.source.utf8", diagnostics.at(0).?.code);
     // The message names the file, because no file was registered.
@@ -527,7 +601,7 @@ test "a bad byte is reported at a line and a column, not a raw offset" {
     for (cases) |case| {
         var diagnostics = Diagnostics.init(testing.allocator);
         defer diagnostics.deinit();
-        try testing.expect((try openRoot(&diagnostics, "bad.luc", case.bytes)) == null);
+        try testing.expect((try openRoot(&diagnostics, "bad.luc", "", case.bytes)) == null);
         try testing.expectEqualStrings(case.code, diagnostics.at(0).?.code);
         try testing.expect(std.mem.startsWith(u8, diagnostics.at(0).?.message, case.wanted));
     }
@@ -547,7 +621,7 @@ test "luce.source.too_large: a file past the ceiling is refused before it is rea
 
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
-    try testing.expect((try openRoot(&diagnostics, "huge.luc", oversized)) == null);
+    try testing.expect((try openRoot(&diagnostics, "huge.luc", "", oversized)) == null);
     try testing.expectEqual(@as(usize, 1), diagnostics.count());
     try testing.expectEqualStrings("luce.source.too_large", diagnostics.at(0).?.code);
     try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "huge.luc") != null);
@@ -558,7 +632,7 @@ test "luce.source.too_large: a file past the ceiling is refused before it is rea
     // One byte under, and it is ordinary text.
     var accepted = Diagnostics.init(testing.allocator);
     defer accepted.deinit();
-    try testing.expect((try openRoot(&accepted, "big.luc", oversized[0..encoding.max_bytes])) != null);
+    try testing.expect((try openRoot(&accepted, "big.luc", "", oversized[0..encoding.max_bytes])) != null);
     try testing.expectEqual(@as(usize, 0), accepted.count());
 }
 
@@ -568,7 +642,7 @@ test "a byte-order mark counts toward the offsets a message reports" {
     // column is off by three on every Windows-edited file.
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
-    try testing.expect((try openRoot(&diagnostics, "bad.luc", "\xEF\xBB\xBFa\x00")) == null);
+    try testing.expect((try openRoot(&diagnostics, "bad.luc", "", "\xEF\xBB\xBFa\x00")) == null);
     try testing.expect(std.mem.startsWith(u8, diagnostics.at(0).?.message, "bad.luc:1:5:"));
 }
 
@@ -579,7 +653,7 @@ test "the two namespaces are disjoint: std.math is embedded, math is the file" {
     } };
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
-    _ = (try openRoot(&diagnostics, "main.luc", "import std.math\n")).?;
+    _ = (try openRoot(&diagnostics, "main.luc", "", "import std.math\n")).?;
 
     const math = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", .standard, nowhere)).?;
     try testing.expectEqual(sources_mod.Kind.standard, diagnostics.sources.at(math).?.kind);
@@ -608,7 +682,7 @@ test "a sibling module is reached by its own name, whatever the library is calle
     } };
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
-    _ = (try openRoot(&diagnostics, "main.luc", "import math\n")).?;
+    _ = (try openRoot(&diagnostics, "main.luc", "", "import math\n")).?;
 
     const math = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", .sibling, nowhere)).?;
     try testing.expectEqual(sources_mod.Kind.imported, diagnostics.sources.at(math).?.kind);
@@ -627,7 +701,7 @@ test "one name cannot mean two modules" {
         } };
         var diagnostics = Diagnostics.init(testing.allocator);
         defer diagnostics.deinit();
-        _ = (try openRoot(&diagnostics, "main.luc", "import std.math\nimport math\n")).?;
+        _ = (try openRoot(&diagnostics, "main.luc", "", "import std.math\nimport math\n")).?;
 
         try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", order[0], nowhere)) != null);
         try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", order[1], nowhere)) == null);
@@ -638,10 +712,90 @@ test "one name cannot mean two modules" {
     }
 }
 
+test "the registry keys modules by (root, name): one name, two roots, two modules" {
+    // The pair key is what will keep a package's private `util` from
+    // answering the project's `import util` (docs/PACKAGES.md D7).
+    // The host answers `geo` with a root token of its own; an import
+    // written *in* geo then resolves under that token, so the two
+    // `helper` modules load separately and neither dedups to the other.
+    var table: TableLoader = .{ .entries = &.{
+        .{ .name = "geo", .text = "import helper\n", .root = "pkg" },
+        .{ .name = "helper", .text = "func ours() -> long:\n    return 1\n", .from = "" },
+        .{ .name = "helper", .text = "func theirs() -> long:\n    return 2\n", .root = "pkg", .from = "pkg" },
+    } };
+    var diagnostics = Diagnostics.init(testing.allocator);
+    defer diagnostics.deinit();
+    _ = (try openRoot(&diagnostics, "main.luc", "", "import geo\nimport helper\n")).?;
+
+    const geo = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo", .sibling, nowhere)).?;
+    try testing.expectEqualStrings("pkg", diagnostics.sources.rootOf(geo));
+
+    const ours = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "helper", .sibling, nowhere)).?;
+    const theirs = (try openImport(&diagnostics, table.loader(), geo, "helper", .sibling, nowhere)).?;
+    try testing.expect(ours != theirs);
+    try testing.expect(std.mem.indexOf(u8, diagnostics.sources.textOf(ours), "func ours") != null);
+    try testing.expect(std.mem.indexOf(u8, diagnostics.sources.textOf(theirs), "func theirs") != null);
+
+    // Asking again answers the module already loaded *for that root* —
+    // dedup and cycle termination moved to the pair with everything
+    // else.
+    try testing.expectEqual(ours, (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "helper", .sibling, nowhere)).?);
+    try testing.expectEqual(theirs, (try openImport(&diagnostics, table.loader(), geo, "helper", .sibling, nowhere)).?);
+    try testing.expectEqual(@as(usize, 4), diagnostics.sources.count());
+    try testing.expectEqual(@as(usize, 0), diagnostics.count());
+}
+
+test "collision is per importing namespace, not program-global" {
+    // Under one root, `import std.math` and `import math` still fight
+    // over the binding `math` — but a file in *another* root importing
+    // a sibling `math` is claiming a different namespace's binding,
+    // and is no collision at all.
+    var table: TableLoader = .{ .entries = &.{
+        .{ .name = "geo", .text = "import math\n", .root = "pkg" },
+        .{ .name = "math", .text = "func local() -> long:\n    return 7\n", .path = "pkg/math.luc", .root = "pkg", .from = "pkg" },
+        .{ .name = "math", .text = "func local() -> long:\n    return 8\n", .from = "" },
+    } };
+    var diagnostics = Diagnostics.init(testing.allocator);
+    defer diagnostics.deinit();
+    _ = (try openRoot(&diagnostics, "main.luc", "", "import std.math\nimport geo\nimport math\n")).?;
+
+    _ = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", .standard, nowhere)).?;
+    const geo = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo", .sibling, nowhere)).?;
+
+    // geo's own `import math` binds math in geo's namespace: fine.
+    try testing.expect((try openImport(&diagnostics, table.loader(), geo, "math", .sibling, nowhere)) != null);
+    try testing.expectEqual(@as(usize, 0), diagnostics.count());
+
+    // The root's `import math` claims a binding std.math holds: refused.
+    try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "math", .sibling, nowhere)) == null);
+    try testing.expectEqualStrings("luce.import.collision", diagnostics.at(0).?.code);
+    try testing.expectEqual(@as(usize, 1), diagnostics.count());
+}
+
+test "luce.import.ambiguous: a name that answers twice is refused with every path named" {
+    // Nothing fires this today — resolution has one place to look —
+    // but the seam carries the refusal so D3's probe-everything rule
+    // arrives as a stable code, not free text through `.unreadable`.
+    var table: TableLoader = .{ .contested = &.{
+        .{ .name = "geo", .places = &.{ "geo.luc", ".luce/packages/geo-1.2.0/geo.luc" } },
+    } };
+    var diagnostics = Diagnostics.init(testing.allocator);
+    defer diagnostics.deinit();
+    _ = (try openRoot(&diagnostics, "main.luc", "", "import geo\n")).?;
+
+    try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo", .sibling, nowhere)) == null);
+    try testing.expectEqualStrings("luce.import.ambiguous", diagnostics.at(0).?.code);
+    try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "geo.luc") != null);
+    try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, ".luce/packages/geo-1.2.0/geo.luc") != null);
+    // Refused means refused: nothing was registered under the name.
+    try testing.expectEqual(@as(usize, 1), diagnostics.sources.count());
+    try testing.expectEqual(@as(usize, 1), diagnostics.count());
+}
+
 test "the std namespace holds exactly the library, and nothing else" {
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
-    _ = (try openRoot(&diagnostics, "main.luc", "import std.nope\n")).?;
+    _ = (try openRoot(&diagnostics, "main.luc", "", "import std.nope\n")).?;
 
     // A module the library does not have: say what it does have.
     try testing.expect((try openImport(&diagnostics, null, sources_mod.root_file, "nope", .standard, nowhere)) == null);
@@ -665,7 +819,7 @@ test "an imported module is named by the path the host really opened" {
     } };
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
-    _ = (try openRoot(&diagnostics, "src/main.luc", "import geo\n")).?;
+    _ = (try openRoot(&diagnostics, "src/main.luc", "", "import geo\n")).?;
 
     const geo = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo", .sibling, nowhere)).?;
     try testing.expectEqualStrings("lib/geo.luc", diagnostics.sources.pathOf(geo));
@@ -681,7 +835,7 @@ test "missing and unreadable modules are different diagnostics" {
     };
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
-    _ = (try openRoot(&diagnostics, "main.luc", "import ghost\n")).?;
+    _ = (try openRoot(&diagnostics, "main.luc", "", "import ghost\n")).?;
 
     try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "ghost", .sibling, nowhere)) == null);
     try testing.expectEqualStrings("luce.import.missing", diagnostics.at(0).?.code);
@@ -701,7 +855,7 @@ test "an imported module that is not text is refused where it was imported" {
     } };
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
-    _ = (try openRoot(&diagnostics, "main.luc", "import broken\n")).?;
+    _ = (try openRoot(&diagnostics, "main.luc", "", "import broken\n")).?;
 
     const at: Span = .{ .start = 7, .end = 13 };
     try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "broken", .sibling, at)) == null);
@@ -720,7 +874,7 @@ test "an import that resolves back to the importing file is a self-import" {
     } };
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
-    _ = (try openRoot(&diagnostics, "sub/main.luc", "import main\n")).?;
+    _ = (try openRoot(&diagnostics, "sub/main.luc", "", "import main\n")).?;
 
     try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "main", .sibling, nowhere)) == null);
     try testing.expectEqualStrings("luce.import.self", diagnostics.at(0).?.code);
@@ -762,7 +916,7 @@ fn loadAnything(_: void, smith: *testing.Smith) anyerror!void {
     var diagnostics = Diagnostics.init(testing.allocator);
     defer diagnostics.deinit();
 
-    const root = try openRoot(&diagnostics, "main.luc", root_bytes);
+    const root = try openRoot(&diagnostics, "main.luc", "", root_bytes);
     if (root == null) {
         // Refused: something was said, and nothing was kept.
         try testing.expect(diagnostics.count() != 0);

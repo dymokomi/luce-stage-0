@@ -71,7 +71,7 @@ pub fn loadAll(
     var modules: std.ArrayList(ModuleTree) = .empty;
     errdefer modules.deinit(gpa);
 
-    const root = (try source_mod.openRoot(diagnostics, options.source_name, source)) orelse {
+    const root = (try source_mod.openRoot(diagnostics, options.source_name, options.source_root, source)) orelse {
         modules.deinit(gpa);
         return null;
     };

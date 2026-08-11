@@ -297,6 +297,41 @@ The review's second blocker, adopted as the implementation contract:
 - **Version ranges and a solver** — after a registry with metadata
   exists, if the exact-version corpus demands them.
 
+## The first packages, and the yaml split (owner's calls, 2026-08-10)
+
+- **The toolchain parses `luce.yaml` itself, in Zig, by necessity**:
+  the manifest configures import resolution, so it is read before any
+  Luce code could run — a `std.yaml` written in Luce cannot sit under
+  the compiler that compiles it.  `std.yaml` still lands in std (the
+  ecosystem's own format deserves first-party support), scheduled
+  beside the registry server, its first real customer; it may speak
+  more than the subset, but on the subset the two parsers are held
+  together by a **shared fixture corpus** — one directory of valid
+  and refused manifests that the toolchain's Zig tests and
+  `std_spec`'s Luce tests both consume, so divergence fails the suite
+  rather than surfacing as an install reading a manifest differently
+  than a program does.
+- **The first packages, in order**: the `geo` fixture (this memo's
+  worked example, vendored into the machinery specs); **`cli`**
+  (argument parsing over `main(args)` — pure, several files, real
+  consumers in the examples, and the first `tests/` tree `luce test`
+  meets inside a package); **`termui`** as the flagship — the
+  retained terminal UI that was deliberately discarded from std
+  returns as a package, designed in its own memo (Elm-shaped app
+  loop owned by the app, widget event unions instead of generic
+  messages, a pure cell buffer diffed in Luce with the host keeping
+  every escape byte) — followed by **the editor migrating onto it**,
+  which makes `loom edit`'s editor the first dependency-carrying
+  program.  `semver` joins as the registry server's first dependency
+  (the first real transitive chain), and `datetime` follows the
+  wall-clock host slot.
+- **The embedded editor must keep working pathlessly**: once the
+  editor imports `termui`, loom embeds the dependency's sources
+  beside the editor's own, and the `MemoryLoader` serves them as a
+  static package set — the proof that a vendored store can ride
+  inside a binary.  This is a named requirement on step 3's
+  resolution work, not an afterthought.
+
 ## Implementation order (each step lands green on its own)
 
 1. `luce.yaml` discovery + parse; the D7 seam changes land **first and
@@ -305,6 +340,13 @@ The review's second blocker, adopted as the implementation contract:
    programs (the whole existing suite is that proof) plus new
    `files.zig` tests for discovery edges (symlinked root, stdin, no
    project file).
+   *As built (2026-08-10): stdin gets no discovery at all.  D1's
+   cwd-walk clause for `luce build -` contradicted its own "a pathless
+   root gets no discovery" sentence, and the stricter reading won — a
+   piped program compiles rootless wherever it is piped from.  The
+   manifest parser is `src/apps/manifest.zig`, discovery is
+   `files.discoverProject`, and a found manifest establishes only the
+   root token in this step; resolution is unchanged until steps 2–3.*
 2. Subfolder imports + `import ... as` (D2) inside the project tree,
    with the collision/ambiguity diagnostics and site/docs pages.
 3. The store, `LUCE_LIB`, `.path` and `.hash` (D3/D4): hand-vendored
