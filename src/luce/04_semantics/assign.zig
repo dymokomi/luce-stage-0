@@ -196,7 +196,6 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
                 for (lowered, 0..) |value_operand, at_subscript| {
                     subscript_nodes[at_subscript] = .{
                         .node = value_operand.node,
-                        .spilled = run.spilled[next_operand - lowered.len + at_subscript],
                         .copied = run.copied[next_operand - lowered.len + at_subscript],
                     };
                 }
@@ -246,7 +245,6 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
         break :kind storedKindOf(self, current_type, combined);
     } else ledger.ownedForStoreKind(self, placed);
     const place: nodes.Place = .{ .chain = .{ .root = root_local, .steps = recorded_steps } };
-    const value_spilled = run.spilled[run.spilled.len - 1];
     const value_copied = run.copied[run.copied.len - 1];
     if (assign.compound) |op| {
         try recorder.recordStatement(self, .{ .compound_assign = .{
@@ -255,7 +253,6 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
             .value = placed.node,
             .store = store_kind,
             .span = assign.span,
-            .value_spilled = value_spilled,
             .value_copied = value_copied,
         } });
     } else {
@@ -264,7 +261,6 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
             .value = placed.node,
             .store = store_kind,
             .span = assign.span,
-            .value_spilled = value_spilled,
             .value_copied = value_copied,
         } });
     }
@@ -733,18 +729,16 @@ fn lowerAssignIndex(self: *FunctionBuilder, target: ast.IndexTarget, assign: ast
     // the right side as written, with the compound form keeping
     // its operator.
     const subscript_nodes = try self.arena().alloc(nodes.Operand, indices.len);
-    for (indices, run.spilled[1 .. 1 + indices.len], run.copied[1 .. 1 + indices.len], subscript_nodes) |index_value, was_spilled, was_copied, *slot| {
+    for (indices, run.copied[1 .. 1 + indices.len], subscript_nodes) |index_value, was_copied, *slot| {
         slot.* = .{
             .node = index_value.node,
-            .spilled = was_spilled,
             .copied = was_copied,
         };
     }
     const place: nodes.Place = .{ .index = .{
-        .base = .{ .node = object.node, .spilled = run.spilled[0], .copied = run.copied[0] },
+        .base = .{ .node = object.node, .copied = run.copied[0] },
         .indices = subscript_nodes,
     } };
-    const value_spilled = run.spilled[run.spilled.len - 1];
     const value_copied = run.copied[run.copied.len - 1];
     if (assign.compound) |op| {
         try recorder.recordStatement(self, .{ .compound_assign = .{
@@ -753,7 +747,6 @@ fn lowerAssignIndex(self: *FunctionBuilder, target: ast.IndexTarget, assign: ast
             .value = value.node,
             .store = store_kind,
             .span = assign.span,
-            .value_spilled = value_spilled,
             .value_copied = value_copied,
         } });
     } else {
@@ -762,7 +755,6 @@ fn lowerAssignIndex(self: *FunctionBuilder, target: ast.IndexTarget, assign: ast
             .value = value.node,
             .store = store_kind,
             .span = assign.span,
-            .value_spilled = value_spilled,
             .value_copied = value_copied,
         } });
     }

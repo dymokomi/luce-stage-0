@@ -13,11 +13,19 @@
 //!
 //! **This pass is mechanical and diagnostic-free.**  Its error set is
 //! `error{OutOfMemory}` and nothing else, by design: every decision —
-//! resolution, types, ownership verbs, store kinds, spill and
-//! borrow-copy rewrites, park claims — was made during checking and
-//! recorded on the tree.  An arm that wants to fail here has found a
-//! tree that under-records, and the fix is the *recording*
-//! (`builder.zig`), never a widened error set.
+//! resolution, types, ownership verbs, store kinds, borrow-copy
+//! rewrites, park claims — was made during checking and recorded on
+//! the tree.  An arm that wants to fail here has found a tree that
+//! under-records, and the fix is the *recording* (`builder.zig`),
+//! never a widened error set.
+//!
+//! One decision is this pass's own, and only one: **where a value has
+//! to cross a basic-block split** (05_hir.zig, coupling #4).  It is a
+//! question about blocks, which only the half that makes them can
+//! answer, so the spill, its slot and its reload are decided, made and
+//! emitted here — `markSpills` off `nodes.splitsBlocks`, the slot
+//! after the recorded table, and `assertSplitCarried` holding the
+//! decision against the block the emission actually left.
 //!
 //! What is re-derived rather than recorded — the whole list, so a
 //! reader can tell a deliberate derivation from a tree that
@@ -115,6 +123,10 @@ const Replay = struct {
     /// Per recorded local: its ownership class, filled as declares
     /// replay (prologue rows from the declaration).
     classes: []Class = &.{},
+    /// The next row of the recorded table this walk expects to reach —
+    /// coupling #5's lockstep, kept as a cursor now that the rows
+    /// themselves are laid down up front (`makeLocalTable`).
+    next_slot: LocalId = 0,
     /// What the innermost fallible call left for its `try`/`catch` —
     /// the walker's one-hop `opened` hand-over, replayed.
     opened: ?Opened = null,
@@ -181,26 +193,23 @@ const Replay = struct {
                 .borrow_param;
         }
 
-        // The prologue: the entry block, then the receiver and
-        // parameter rows in declaration order — held in lockstep with
-        // the recorded table, whose leading rows they are — with an
-        // owning parameter taking its object over from the caller on
-        // entry (OWNERSHIP.md S15, S44).
+        // The prologue: the tree's whole local table, then the entry
+        // block, then the receiver and parameter rows in declaration
+        // order — the table's leading rows, taken in lockstep — with
+        // an owning parameter taking its object over from the caller
+        // on entry (OWNERSHIP.md S15, S44).
+        try self.makeLocalTable();
         try self.code.openBlock();
         if (info.receiver != .not) {
             const receiver_type = info.parameter_types[0];
-            const id = if (info.receiver == .writes)
-                try self.code.addInoutLocal("self", receiver_type, self.ownsStorage(receiver_type))
-            else
-                try self.code.addLocal("self", receiver_type, false);
-            self.assertRecordedRow(id, "self", receiver_type);
+            _ = self.takeSlot("self", receiver_type, info.receiver == .writes and
+                self.ownsStorage(receiver_type));
         }
         for (info.declaration.parameters, 0..) |parameter, written_index| {
             const index = written_index + hidden;
             if (index >= info.parameter_types.len) break;
             const parameter_type = info.parameter_types[index];
-            const id = try self.code.addLocal(parameter.name, parameter_type, false);
-            self.assertRecordedRow(id, parameter.name, parameter_type);
+            const id = self.takeSlot(parameter.name, parameter_type, false);
             // An owning parameter is an owned binding like any other
             // (S15): take the object over from the caller on entry.
             if (info.parameter_modes[index] == .give or info.is_entry) {
@@ -229,17 +238,11 @@ const Replay = struct {
         // reverse declaration order — scope zero's own list, emitted
         // the way every scope's is.
         try self.emitScopeEnd();
-    }
 
-    /// The prologue's half of coupling #5's lockstep: a receiver or
-    /// parameter row this pass makes must be the recorded table's row
-    /// at the same index, or the tree and the tape have already
-    /// diverged on slot numbering.
-    fn assertRecordedRow(self: *const Replay, id: LocalId, name: []const u8, local_type: Type) void {
-        std.debug.assert(id < self.body.locals.len);
-        const row = self.body.locals[id];
-        std.debug.assert(row.name != null and std.mem.eql(u8, row.name.?, name));
-        std.debug.assert(row.local_type.eql(local_type));
+        // The lockstep's closing half: every row the tree recorded was
+        // reached, in order, and what stands past them are this pass's
+        // spill slots and nothing else.
+        std.debug.assert(self.next_slot == self.body.locals.len);
     }
 
     // -- tables and predicates ---------------------------------------------
@@ -277,15 +280,40 @@ const Replay = struct {
 
     // -- locals: the lockstep -----------------------------------------------
 
-    /// Make the next local row, asserting it against the recorded
-    /// table (05_hir.zig, coupling #5).  `owns` is the at-creation
-    /// claim; a park later retracted settles through `disownStorage`,
-    /// exactly as the fused walk's did.
-    fn makeLocal(self: *Replay, name: ?[]const u8, local_type: Type, owns: bool) Error!LocalId {
-        const id: LocalId = if (name) |written|
-            try self.code.addLocal(written, local_type, owns)
-        else
-            try self.code.hiddenLocal(local_type, owns);
+    /// Lay the tree's local table down on the tape, row for row,
+    /// before the body's first instruction (05_hir.zig, coupling #5).
+    ///
+    /// The tree's numbering *is* the tape's, and every recorded slot
+    /// is one the checked walk decided; making them all here — rather
+    /// than one at a time as the decisions are replayed — leaves the
+    /// ids identical to the recorded ones and leaves this pass free to
+    /// make the one kind of slot the tree does not carry: the spill,
+    /// which is lower's own decision (coupling #4) and lands after the
+    /// recorded rows.
+    ///
+    /// The storage claim is *not* entered here: it is the declaration
+    /// point's own answer, and the emission reads it between that
+    /// point and any retraction (`disownStorage`), so `takeSlot`
+    /// enters it where the declaration replays.
+    fn makeLocalTable(self: *Replay) Error!void {
+        for (self.body.locals, 0..) |row, index| {
+            const id = if (index == 0 and self.deps.function.receiver == .writes)
+                try self.code.addInoutLocal(row.name.?, row.local_type, false)
+            else if (row.name) |written|
+                try self.code.addLocal(written, row.local_type, false)
+            else
+                try self.code.hiddenLocal(row.local_type, false);
+            std.debug.assert(id == index);
+        }
+    }
+
+    /// Take the next recorded row, holding this walk to the table's
+    /// order (coupling #5's lockstep) and entering the at-creation
+    /// storage claim its declaration makes.  A park later retracted
+    /// settles through `disownStorage`, exactly as the fused walk's
+    /// did.
+    fn takeSlot(self: *Replay, name: ?[]const u8, local_type: Type, owns: bool) LocalId {
+        const id = self.next_slot;
         std.debug.assert(id < self.body.locals.len);
         const row = self.body.locals[id];
         std.debug.assert(row.local_type.eql(local_type));
@@ -294,17 +322,28 @@ const Replay = struct {
         } else {
             std.debug.assert(row.name == null);
         }
+        self.next_slot += 1;
+        self.code.claimStorage(id, owns);
         return id;
     }
 
-    /// Make a *named* row whose storage class the recording settled —
+    /// Take a *named* row whose storage class the recording settled —
     /// the loop-name and declaration rows, whose `owns_storage` embeds
     /// check-side analysis (nodes.LocalDecl).
-    fn makeRecordedLocal(self: *Replay, expected: LocalId) Error!LocalId {
+    fn takeRecordedSlot(self: *Replay, expected: LocalId) LocalId {
         const row = self.body.locals[expected];
-        const id = try self.makeLocal(row.name, row.local_type, row.owns_storage);
+        const id = self.takeSlot(row.name, row.local_type, row.owns_storage);
         std.debug.assert(id == expected);
         return id;
+    }
+
+    /// Make a spill slot: a row of **this pass's own**, after the
+    /// recorded table, holding one operand's value across a block
+    /// split (coupling #4).  It is hidden, it never owns storage — the
+    /// reload is a view of what the slot holds — and it dies with the
+    /// statement that made it.
+    fn makeSpillSlot(self: *Replay, value_type: Type) Error!LocalId {
+        return self.code.hiddenLocal(value_type, false);
     }
 
     // -- scopes, temps, releases -------------------------------------------
@@ -365,7 +404,7 @@ const Replay = struct {
     /// bind exactly when the park claims objects; enter it in the
     /// ledger with its at-park claims.
     fn emitPark(self: *Replay, parked: nodes.Park, register: Register, value_type: Type) Error!void {
-        const local = try self.makeLocal(null, value_type, parked.storage);
+        const local = self.takeSlot(null, value_type, parked.storage);
         std.debug.assert(local == parked.local);
         try self.code.store(local, register);
         if (parked.objects) try self.code.bind(local, register);
@@ -381,7 +420,7 @@ const Replay = struct {
     /// and the writing-receiver keep-copy — re-derived here: always
     /// storage-only, always fresh.
     fn parkDerivedStorage(self: *Replay, register: Register, value_type: Type) Error!void {
-        const local = try self.makeLocal(null, value_type, true);
+        const local = self.takeSlot(null, value_type, true);
         try self.code.store(local, register);
         try self.temps.append(self.scratch(), .{
             .local = local,
@@ -568,6 +607,12 @@ const Replay = struct {
         register: Register = 0,
         core: nodes.NodeRef,
         wrappers: []const nodes.NodeRef,
+        /// Whether something lowered after this operand opens a block,
+        /// so its value cannot stay in a register — decided by
+        /// `markSpills` before the run is replayed (coupling #4).
+        needs_spill: bool = false,
+        /// The slot it was carried across the split in, once it has
+        /// been made.
         spill: ?LocalId = null,
         /// The value's storage provenance as the batch leaves it —
         /// the checker's own answer, re-derived: the core's node-kind
@@ -605,13 +650,12 @@ const Replay = struct {
         };
     }
 
-    /// Replay one batch operand's core with its two recorded rewrites:
-    /// the defensive borrow copy (and the park that rides it), then
-    /// the spill store.
+    /// Replay one batch operand's core with its two rewrites: the
+    /// defensive borrow copy the tree records (and the park that rides
+    /// it), then the spill store this pass decided.
     fn replayBatchOperand(
         self: *Replay,
         entry: *BatchEntry,
-        spilled: bool,
         copied: bool,
     ) Error!void {
         if (copied) {
@@ -629,10 +673,63 @@ const Replay = struct {
         } else {
             entry.register = try self.replayValue(entry.core);
         }
-        if (spilled and entry.core.result() != .none) {
-            const slot = try self.makeLocal(null, entry.core.result(), false);
+        if (entry.needs_spill and entry.core.result() != .none) {
+            const slot = try self.makeSpillSlot(entry.core.result());
             try self.code.store(slot, entry.register);
             entry.spill = slot;
+        }
+    }
+
+    /// The declaration tables `nodes.splitsBlocks` reads — the member
+    /// counts that tell a one-constant text conversion from a
+    /// compare-and-branch chain.
+    fn declarations(self: *const Replay) nodes.Declarations {
+        return .{ .enums = self.code.enums, .variants = self.code.variants };
+    }
+
+    /// Decide the run's spills before a line of it is emitted: an
+    /// operand's value cannot stay in a register past an operand that
+    /// opens a block, so it crosses the split in a slot instead.
+    ///
+    /// The question is a *suffix* one — "does anything after me
+    /// split" — so the walk runs backwards, and it is asked of the
+    /// recorded nodes, where `nodes.splitsBlocks` answers it exactly
+    /// (05_hir.zig, coupling #4).  The checker asks the same function
+    /// about the same nodes to settle the reload's provenance, so the
+    /// two halves decide one thing between them and nothing is
+    /// recorded.
+    ///
+    /// `trailing` is what a batch lowers *after* its written operands
+    /// — the defaulted suffix — and it is asserted rather than
+    /// scanned: a default is a materialized constant and opens no
+    /// block, and one that did would put the two halves' answers out
+    /// of step, which is a worse failure than the verifier's.
+    fn markSpills(
+        self: *const Replay,
+        entries: []BatchEntry,
+        trailing: []const nodes.NodeRef,
+    ) void {
+        const declared = self.declarations();
+        for (trailing) |node| std.debug.assert(!nodes.splitsBlocks(node, declared));
+        var later = false;
+        var at = entries.len;
+        while (at > 0) {
+            at -= 1;
+            entries[at].needs_spill = later;
+            if (nodes.splitsBlocks(entries[at].core, declared)) later = true;
+        }
+    }
+
+    /// Coupling #4's exactness, held where it costs least: if lowering
+    /// an operand did leave the block it started in, every value the
+    /// run produced before it is already in a slot.  A node kind whose
+    /// lowering opens a block without saying so in `nodes.splitsBlocks`
+    /// trips here, on the first program that reaches it, instead of
+    /// reaching the MIR verifier as a register crossing a block.
+    fn assertSplitCarried(self: *const Replay, earlier: []const BatchEntry, before: BlockId) void {
+        if (self.code.current == before) return;
+        for (earlier) |entry| {
+            std.debug.assert(entry.spill != null or entry.core.result() == .none);
         }
     }
 
@@ -685,7 +782,12 @@ const Replay = struct {
         const entries = try self.scratch().alloc(BatchEntry, batch.operands.len);
         for (batch.operands[0..written], 0..) |operand, index| {
             entries[index] = try self.peel(operand);
-            try self.replayBatchOperand(&entries[index], batch.spill[index], batch.borrow_copy[index]);
+        }
+        self.markSpills(entries[0..written], batch.operands[written..]);
+        for (entries[0..written], 0..) |*entry, index| {
+            const opened_in = self.code.current;
+            try self.replayBatchOperand(entry, batch.borrow_copy[index]);
+            self.assertSplitCarried(entries[0..index], opened_in);
         }
         try self.reloadSpills(entries[0..written]);
         return entries;
@@ -695,9 +797,12 @@ const Replay = struct {
     /// with rewrites, reloads — wrappers stay the caller's.
     fn replayOperandRun(self: *Replay, operands: []const nodes.Operand) Error![]BatchEntry {
         const entries = try self.scratch().alloc(BatchEntry, operands.len);
-        for (operands, entries) |operand, *entry| {
-            entry.* = try self.peel(operand.node);
-            try self.replayBatchOperand(entry, operand.spilled, operand.copied);
+        for (operands, entries) |operand, *entry| entry.* = try self.peel(operand.node);
+        self.markSpills(entries, &.{});
+        for (operands, entries, 0..) |operand, *entry, index| {
+            const opened_in = self.code.current;
+            try self.replayBatchOperand(entry, operand.copied);
+            self.assertSplitCarried(entries[0..index], opened_in);
         }
         try self.reloadSpills(entries);
         return entries;
@@ -752,12 +857,20 @@ const Replay = struct {
     ) Error![2]BatchEntry {
         var entries: [2]BatchEntry = .{ try self.peel(left), try self.peel(right) };
         if (sides.right_first) {
-            std.debug.assert(!sides.left_spilled and !sides.left_copied);
-            try self.replayBatchOperand(&entries[1], false, false);
-            try self.replayBatchOperand(&entries[0], false, false);
+            // The typed side runs first and the other side is an
+            // untyped literal or a bare function name — a constant,
+            // which opens no block, so neither side is ever carried
+            // (nodes.Expression.Sides).
+            std.debug.assert(!sides.left_copied);
+            std.debug.assert(!nodes.splitsBlocks(entries[0].core, self.declarations()));
+            try self.replayBatchOperand(&entries[1], false);
+            try self.replayBatchOperand(&entries[0], false);
         } else {
-            try self.replayBatchOperand(&entries[0], sides.left_spilled, sides.left_copied);
-            try self.replayBatchOperand(&entries[1], false, false);
+            self.markSpills(entries[0..], &.{});
+            try self.replayBatchOperand(&entries[0], sides.left_copied);
+            const opened_in = self.code.current;
+            try self.replayBatchOperand(&entries[1], false);
+            self.assertSplitCarried(entries[0..1], opened_in);
             try self.reloadSpills(entries[0..]);
         }
         // The pair's widenings run in *phases* — the unification, then
@@ -883,9 +996,10 @@ const Replay = struct {
 
     fn replayShortCircuit(self: *Replay, circuit: nodes.Expression.ShortCircuit) Error!Register {
         const left = try self.replayValue(circuit.left);
-        // `openShortCircuit`, with the merge slot's row made through
-        // the lockstep.
-        const result = try self.makeLocal(null, .boolean, false);
+        // The answer lives in a slot because the two sides are
+        // written in different blocks and a register never crosses
+        // one; the row comes through the lockstep.
+        const result = self.takeSlot(null, .boolean, false);
         try self.code.store(result, left);
         const right_block = try self.code.reserveBlock();
         const merge = try self.code.reserveBlock();
@@ -928,17 +1042,17 @@ const Replay = struct {
         return self.code.closeShortCircuit(either);
     }
 
-    /// `openCoalesce` with the merge slot's row entered in the
-    /// lockstep table.
+    /// A short circuit's shape with the result typed by the fallback
+    /// rather than bool: park the present value, then run the fallback
+    /// only where `absent` says there was none.  The merge slot's row
+    /// comes through the lockstep table.
     fn openMergeSlot(
         self: *Replay,
         result_type: Type,
         absent: Register,
         present: Register,
     ) Error!mir.build.Lowering.ShortCircuit {
-        // Mirrors `Lowering.openCoalesce`, with the hidden slot made
-        // through the lockstep.
-        const result = try self.makeLocal(null, result_type, false);
+        const result = self.takeSlot(null, result_type, false);
         try self.code.store(result, present);
         const fallback_block = try self.code.reserveBlock();
         const merge = try self.code.reserveBlock();
@@ -1133,11 +1247,11 @@ const Replay = struct {
                 .{ .const_string = try self.code.pool.intern(declared.members[0].name) },
                 .string,
             );
-            const result = try self.makeLocal(null, .string, false);
+            const result = self.takeSlot(null, .string, false);
             try self.code.store(result, first);
             if (declared.members.len == 1) return self.code.load(result);
             const enum_type = coreTypeOf(called.operands.operands[0]);
-            const held = try self.makeLocal(null, enum_type, false);
+            const held = self.takeSlot(null, enum_type, false);
             try self.code.store(held, operand);
             var frames: std.ArrayList(mir.build.Lowering.Conditional) = .empty;
             defer frames.deinit(self.scratch());
@@ -1164,13 +1278,13 @@ const Replay = struct {
         const operand = try self.replayValue(called.operands.operands[0]);
         const answer = called.result;
         const of = answer.held().?;
-        const held = try self.makeLocal(null, .long, false);
+        const held = self.takeSlot(null, .long, false);
         try self.code.store(held, operand);
         const absent = try self.code.emit(
             .{ .intrinsic = .{ .kind = .none_value, .arguments = &.{} } },
             answer,
         );
-        const result = try self.makeLocal(null, answer, false);
+        const result = self.takeSlot(null, answer, false);
         try self.code.store(result, absent);
         var frames: std.ArrayList(mir.build.Lowering.Conditional) = .empty;
         defer frames.deinit(self.scratch());
@@ -1204,11 +1318,11 @@ const Replay = struct {
             .{ .const_string = try self.code.pool.intern(declared.members[0].name) },
             .string,
         );
-        const result = try self.makeLocal(null, .string, false);
+        const result = self.takeSlot(null, .string, false);
         try self.code.store(result, first);
         if (declared.members.len == 1) return self.code.load(result);
         const value_type = coreTypeOf(called.operands.operands[0]);
-        const held = try self.makeLocal(null, value_type, false);
+        const held = self.takeSlot(null, value_type, false);
         try self.code.store(held, operand);
         var frames: std.ArrayList(mir.build.Lowering.Conditional) = .empty;
         defer frames.deinit(self.scratch());
@@ -1251,7 +1365,7 @@ const Replay = struct {
         const storage = self.ownsStorage(called.result);
         var carried: ?LocalId = null;
         if (called.result != .none) {
-            const slot = try self.makeLocal(null, called.result, storage);
+            const slot = self.takeSlot(null, called.result, storage);
             try self.code.store(slot, call);
             carried = slot;
         }
@@ -1314,7 +1428,7 @@ const Replay = struct {
             return value;
         }
 
-        const result = try self.makeLocal(null, caught.result, false);
+        const result = self.takeSlot(null, caught.result, false);
         const merge = try self.code.reserveBlock();
         try self.code.store(result, value);
         try self.code.jump(merge);
@@ -1706,7 +1820,7 @@ const Replay = struct {
         const row = self.body.locals[declared.local];
         if (declared.value) |value| {
             const register = try self.replayValue(value);
-            const local = try self.makeRecordedLocal(declared.local);
+            const local = self.takeRecordedSlot(declared.local);
             const owns = self.carriesObjects(row.local_type) and
                 (value.* == .absent or valueParkObjects(value));
             self.classes[local] = if (owns) .owned else .alias;
@@ -1718,7 +1832,7 @@ const Replay = struct {
         // The zero fill of a late declaration, re-derived from the
         // slot's type (S40); the binding always owns.
         const zero = try self.code.zeroOf(row.local_type);
-        const local = try self.makeRecordedLocal(declared.local);
+        const local = self.takeRecordedSlot(declared.local);
         self.classes[local] = .owned;
         try self.storeOwned(local, zero, row.local_type, nodes.zeroOf(row.local_type), declared.store);
         try self.noteOwned(local, self.carriesObjects(row.local_type));
@@ -1763,7 +1877,7 @@ const Replay = struct {
                 .layout = shape_type.strukt,
                 .field = @intCast(position),
             } }, field.field_type);
-            const local = try self.makeRecordedLocal(expected);
+            const local = self.takeRecordedSlot(expected);
             const carried = self.carriesObjects(field.field_type);
             self.classes[local] = if (carried) .owned else .alias;
             try self.storeOwned(local, held, field.field_type, .view, recorded);
@@ -1836,7 +1950,6 @@ const Replay = struct {
                 assign.value,
                 assign.store,
                 null,
-                assign.value_spilled,
                 assign.value_copied,
             ),
             .chain => |chain| try self.replayAssignChain(
@@ -1844,7 +1957,6 @@ const Replay = struct {
                 assign.value,
                 assign.store,
                 null,
-                assign.value_spilled,
                 assign.value_copied,
             ),
         }
@@ -1859,7 +1971,6 @@ const Replay = struct {
                 assign.value,
                 assign.store,
                 assign.op,
-                assign.value_spilled,
                 assign.value_copied,
             ),
             .chain => |chain| try self.replayAssignChain(
@@ -1867,7 +1978,6 @@ const Replay = struct {
                 assign.value,
                 assign.store,
                 assign.op,
-                assign.value_spilled,
                 assign.value_copied,
             ),
         }
@@ -2012,7 +2122,6 @@ const Replay = struct {
         value: nodes.NodeRef,
         recorded: nodes.StoreKind,
         compound: ?nodes.BinaryOp,
-        value_spilled: bool,
         value_copied: bool,
     ) Error!void {
         // One batch: the base, the subscripts, the value.
@@ -2020,7 +2129,7 @@ const Replay = struct {
         defer self.scratch().free(run);
         run[0] = place.base;
         @memcpy(run[1 .. 1 + place.indices.len], place.indices);
-        run[run.len - 1] = .{ .node = value, .spilled = value_spilled, .copied = value_copied };
+        run[run.len - 1] = .{ .node = value, .copied = value_copied };
         const entries = try self.replayOperandRun(run);
         defer self.scratch().free(entries);
         // Subscript widenings, then the value's own (`checkIndex`,
@@ -2071,7 +2180,6 @@ const Replay = struct {
         value: nodes.NodeRef,
         recorded: nodes.StoreKind,
         compound: ?nodes.BinaryOp,
-        value_spilled: bool,
         value_copied: bool,
     ) Error!void {
         // One batch: every index step's subscripts, then the value.
@@ -2089,7 +2197,7 @@ const Replay = struct {
                 fill += 1;
             }
         }
-        run[run.len - 1] = .{ .node = value, .spilled = value_spilled, .copied = value_copied };
+        run[run.len - 1] = .{ .node = value, .copied = value_copied };
         const entries = try self.replayOperandRun(run);
         defer self.scratch().free(entries);
 
@@ -2190,17 +2298,24 @@ const Replay = struct {
     fn replayForRange(self: *Replay, loop: nodes.Statement.ForRange) Error!void {
         const floor = self.temps.items.len;
         var entries: [2]BatchEntry = .{ try self.peel(loop.start), try self.peel(loop.stop) };
-        try self.replayBatchOperand(&entries[0], loop.start_spilled, false);
-        try self.replayBatchOperand(&entries[1], false, false);
+        // The bounds are one two-operand run: the first crosses a
+        // split in the second (bounds are `long`s, so the borrow copy
+        // never applies).
+        self.markSpills(entries[0..], &.{});
+        try self.replayBatchOperand(&entries[0], false);
+        const opened_in = self.code.current;
+        try self.replayBatchOperand(&entries[1], false);
+        self.assertSplitCarried(entries[0..1], opened_in);
         try self.reloadSpills(entries[0..]);
         try self.applyWrappers(&entries[0]);
         try self.applyWrappers(&entries[1]);
         try self.flushTemps(floor);
 
         try self.pushScope();
-        const counter = try self.makeRecordedLocal(loop.counter);
-        // `openCountedLoop`'s hidden limit slot, through the lockstep.
-        const limit = try self.makeLocal(null, .long, false);
+        const counter = self.takeRecordedSlot(loop.counter);
+        // The hidden limit slot — the bound is evaluated once —
+        // through the lockstep.
+        const limit = self.takeSlot(null, .long, false);
         try self.code.store(counter, entries[0].register);
         try self.code.store(limit, entries[1].register);
         const header = try self.code.reserveBlock();
@@ -2253,14 +2368,16 @@ const Replay = struct {
         const first_kind: ?mir.Intrinsic = if (two_names or map_like) position_kind else payload_kind;
 
         try self.pushScope();
-        var shape = try self.code.openIteration(sequence_type);
-        // The two hidden slots, held to the lockstep.
-        std.debug.assert(self.body.locals[shape.object].name == null);
-        std.debug.assert(self.body.locals[shape.position].name == null);
-        const first = try self.makeRecordedLocal(loop.first);
+        // The iteration's two hidden slots — the collection and the
+        // position within it — taken through the lockstep.
+        var shape: mir.build.Lowering.Iteration = .{
+            .object = self.takeSlot(null, sequence_type, false),
+            .position = self.takeSlot(null, .long, false),
+        };
+        const first = self.takeRecordedSlot(loop.first);
         try self.noteOwned(first, false);
         const second: ?LocalId = if (loop.second) |expected| owned: {
-            const local = try self.makeRecordedLocal(expected);
+            const local = self.takeRecordedSlot(expected);
             try self.noteOwned(local, false);
             break :owned local;
         } else null;
@@ -2375,11 +2492,13 @@ const Replay = struct {
         // stores, the shape, the export, the unwinding.
         const entries = try self.scratch().alloc(BatchEntry, returned.values.len);
         defer self.scratch().free(entries);
-        for (returned.values, 0..) |value, index| {
-            entries[index] = try self.peel(value);
-            const spilled = if (index < returned.spilled.len) returned.spilled[index] else false;
+        for (returned.values, 0..) |value, index| entries[index] = try self.peel(value);
+        self.markSpills(entries, &.{});
+        for (entries, 0..) |*entry, index| {
             const copied = if (index < returned.copied.len) returned.copied[index] else false;
-            try self.replayBatchOperand(&entries[index], spilled, copied);
+            const opened_in = self.code.current;
+            try self.replayBatchOperand(entry, copied);
+            self.assertSplitCarried(entries[0..index], opened_in);
         }
         try self.reloadSpills(entries);
         for (entries) |*entry| try self.applyWrappers(entry);
@@ -2417,7 +2536,7 @@ const Replay = struct {
         if (guarded.error_local) |expected| {
             try self.pushScope();
             const words = try self.code.errorMessage();
-            const local = try self.makeRecordedLocal(expected);
+            const local = self.takeRecordedSlot(expected);
             self.classes[local] = .alias;
             try self.storeOwned(local, words, .string, .plain, null);
             try self.noteOwned(local, false);
@@ -2444,7 +2563,7 @@ const Replay = struct {
         const floor = self.temps.items.len;
         const scrutinee = try self.replayValue(matched.scrutinee);
         const scrutinee_type = matched.scrutinee.result();
-        const held = try self.makeLocal(null, scrutinee_type, false);
+        const held = self.takeSlot(null, scrutinee_type, false);
         std.debug.assert(held == matched.held);
         try self.code.store(held, scrutinee);
         try self.flushTemps(floor);
@@ -2500,7 +2619,7 @@ const Replay = struct {
         try self.pushScope();
         for (arm.bindings) |binding| {
             const register = try self.replayValue(binding.payload);
-            const local = try self.makeRecordedLocal(binding.local);
+            const local = self.takeRecordedSlot(binding.local);
             self.classes[local] = .alias;
             try self.storeOwned(local, register, binding.payload.result(), .view, null);
             try self.noteOwned(local, false);

@@ -157,15 +157,6 @@ const Opened = struct {
 /// (docs/STRINGS.md).
 pub const StorageClass = enum { owns, borrows };
 
-/// How deep `splitsBlocks` will look before answering yes on
-/// principle.  It runs on whole operand subtrees *before* they are
-/// lowered, so the depth bound `lowerExpression` keeps cannot
-/// protect it — it needs its own, and it has the luxury of a safe
-/// wrong answer: "this may split" only ever costs a spill.  The
-/// margin over the lowering bound keeps an accepted program from
-/// ever paying for it.
-pub const split_search_depth: u32 = helpers.max_expression_depth + 8;
-
 /// A value that reached its place, and whether it got there by the
 /// `T <: T?` widening — which is how an assignment knows the slot
 /// definitely holds something now.
@@ -174,9 +165,10 @@ const Fitted = struct { value: Typed, present: bool };
 /// Lower a left-to-right operand sequence whose values must all
 /// be usable together afterwards.  Registers are block-local in
 /// the emission, so every operand followed by a block-splitting
-/// one is carried across the split in a hidden local — the slot is
-/// allocated here and the reload is lower's, driven by the
-/// recorded spill flags.  The returned values live in the arena.
+/// one is carried across the split in a hidden local — the slot,
+/// the store and the reload are all lower's, and what the check
+/// keeps of it is the reload's *provenance*.  The returned values
+/// live in the arena.
 /// Operand counts this stage's scratch fits without allocating.
 /// Every binary operator has two, an index has at most five, and a
 /// call of more than this is rare — but `lowerOperands` runs for
@@ -230,16 +222,16 @@ pub const StagedOperandOwner = struct {
 };
 
 /// One lowered operand batch: the values in written order, and the
-/// batch's two per-operand rewrites — which operands were reloaded
-/// from a spill slot across a block split, and which took the
-/// defensive borrow copy in front of a later container-mutating
-/// operand.  The flags are what the call nodes record
-/// (nodes.OperandBatch); the values' nodes stay the written
-/// expressions, pre-rewrite, per that batch's convention.
-/// Arena-owned, because the recorded batch outlives the statement.
+/// batch's per-operand rewrite — which operands took the defensive
+/// borrow copy in front of a later container-mutating operand.  The
+/// flags are what the call nodes record (nodes.OperandBatch); the
+/// values' nodes stay the written expressions, pre-rewrite, per that
+/// batch's convention.  A spill across a block split is *not* here:
+/// it is `nodes.splitsBlocks`' answer about those same nodes, which
+/// lower asks itself (05_hir.zig, coupling #4).  Arena-owned, because
+/// the recorded batch outlives the statement.
 pub const OperandRun = struct {
     values: []Typed,
-    spilled: []bool,
     copied: []bool,
 };
 
@@ -388,6 +380,16 @@ pub const FunctionBuilder = struct {
 
     pub fn temporary(self: *FunctionBuilder) Allocator {
         return self.analyzer.temporary;
+    }
+
+    /// The declaration tables `nodes.splitsBlocks` reads — the member
+    /// counts that tell a one-constant text conversion from a
+    /// compare-and-branch chain.  The same tables lower hands it.
+    pub fn declarations(self: *const FunctionBuilder) nodes.Declarations {
+        return .{
+            .enums = self.analyzer.enums.items,
+            .variants = self.analyzer.variants.items,
+        };
     }
 
     pub fn deinitScratch(self: *FunctionBuilder) void {
@@ -674,69 +676,7 @@ pub const FunctionBuilder = struct {
         return local;
     }
 
-    // Block splits ---------------------------------------------------------
-    //
-    // Whether lowering a subtree can end in a basic block other than
-    // the one it started in — asked of a whole operand run before any
-    // of it is lowered, because a register does not cross a split and
-    // the value it holds has to be carried in a slot instead.  A safe
-    // wrong answer is "yes", which costs one spill.
-
-    /// True when lowering this expression may end in a different basic
-    /// block than it started: short-circuit `and`/`or` anywhere inside
-    /// it branches and merges.
-    fn splitsBlocks(self: *const FunctionBuilder, expression: *const ast.Expression, budget: u32) bool {
-        if (budget == 0) return true;
-        const left = budget - 1;
-        return switch (expression.*) {
-            .binary => |binary| binary.op == .logic_and or binary.op == .logic_or or
-                binary.op == .coalesce or binary.op == .catch_error or
-                self.splitsBlocks(binary.left, left) or self.splitsBlocks(binary.right, left),
-            .unary => |unary| self.splitsBlocks(unary.operand, left),
-            .field => |field| self.splitsBlocks(field.target, left),
-            .call => |call| self.callSplits(call.callee) or self.anySplits(call.arguments, left),
-            .new_object => |new| for (new.dims) |dimension| {
-                if (self.splitsBlocks(dimension, left)) break true;
-            } else false,
-            .list_literal => |literal| for (literal.elements) |element| {
-                if (self.splitsBlocks(element, left)) break true;
-            } else false,
-            .map_literal => |literal| for (literal.entries) |entry| {
-                if (self.splitsBlocks(entry.key, left) or self.splitsBlocks(entry.value, left)) break true;
-            } else false,
-            .index => |index| self.splitsBlocks(index.target, left) or for (index.indices) |item| {
-                if (self.splitsBlocks(item, left)) break true;
-            } else false,
-            .slice_range => |slice| self.splitsBlocks(slice.target, left) or
-                (slice.start != null and self.splitsBlocks(slice.start.?, left)) or
-                (slice.end != null and self.splitsBlocks(slice.end.?, left)),
-            .method => |method| self.callSplits(method.name) or
-                self.splitsBlocks(method.target, left) or
-                self.anySplits(method.arguments, left),
-            .give => |give| self.splitsBlocks(give.operand, left),
-            .copy => |copied| self.splitsBlocks(copied.operand, left),
-            // A fallible call branches on its outcome, always.
-            .try_call => true,
-            // A spawn is one runtime call and no branch, but what it
-            // is *given* may split; ask the arguments.
-            .spawn => |worker| self.splitsBlocks(worker.call, left),
-            else => false,
-        };
-    }
-
-    /// Whether a call written with this name may end in a different
-    /// block than it started.
-    ///
-    /// The two enum forms do: `string(m)` picks a member's name and
-    /// `Method(n)` picks a member, and both are the compare-and-branch
-    /// tree `match` is (docs/ENUMS.md D5, R2).  It is asked by **name**,
-    /// because this walk runs before any operand has a type — so
-    /// `string(count)` answers yes as well, and pays the one spill a
-    /// safe wrong answer costs here.
-    fn callSplits(self: *const FunctionBuilder, callee: []const u8) bool {
-        if (conversionNamed(callee)) |produces| return produces == .string;
-        return self.namesEnum(callee);
-    }
+    // Namespaced members ---------------------------------------------------
 
     /// Whether a dotted chain, written inner-to-outer as
     /// `helpers.dottedChain` collects it, spells an enum member:
@@ -761,28 +701,6 @@ pub const FunctionBuilder = struct {
         }
         if (self.analyzer.variant_names.get(head)) |index| {
             return self.analyzer.variants.items[index].findMember(parts[0]) != null;
-        }
-        return false;
-    }
-
-    /// Whether a written name is an enum's, in this module or an
-    /// imported one.  Matched on the last segment, which is what a
-    /// method-form call hands over (`zip.Method(8)` arrives here as
-    /// `Method`), and over-matching only costs a spill.
-    fn namesEnum(self: *const FunctionBuilder, written: []const u8) bool {
-        var names = self.analyzer.enum_names.keyIterator();
-        while (names.next()) |key| {
-            const declared = key.*;
-            if (std.mem.eql(u8, declared, written)) return true;
-            const dot = std.mem.lastIndexOfScalar(u8, declared, '.') orelse continue;
-            if (std.mem.eql(u8, declared[dot + 1 ..], written)) return true;
-        }
-        return false;
-    }
-
-    fn anySplits(self: *const FunctionBuilder, arguments: []const ast.Argument, budget: u32) bool {
-        for (arguments) |argument| {
-            if (self.splitsBlocks(argument.value, budget)) return true;
         }
         return false;
     }
@@ -1389,33 +1307,11 @@ pub const FunctionBuilder = struct {
             std.debug.assert(owners.len == operands.len);
             @memset(owners, null);
         }
-        var spill_storage: [inline_operands]?LocalId = undefined;
-        var split_storage: [inline_operands]bool = undefined;
         const wide = operands.len > inline_operands;
 
         const values = try self.arena().alloc(Typed, operands.len);
-        const spilled = try self.arena().alloc(bool, operands.len);
-        @memset(spilled, false);
         const copied = try self.arena().alloc(bool, operands.len);
         @memset(copied, false);
-        const spills = if (wide)
-            try self.temporary().alloc(?LocalId, operands.len)
-        else
-            spill_storage[0..operands.len];
-        defer if (wide) self.temporary().free(spills);
-
-        const later_splits = if (wide)
-            try self.temporary().alloc(bool, operands.len)
-        else
-            split_storage[0..operands.len];
-        defer if (wide) self.temporary().free(later_splits);
-        var any_split = false;
-        var backwards = operands.len;
-        while (backwards > 0) {
-            backwards -= 1;
-            later_splits[backwards] = any_split;
-            if (self.splitsBlocks(operands[backwards], split_search_depth)) any_split = true;
-        }
 
         // Which operands still have something that could mutate a
         // container running after them — the residual hazard below.
@@ -1426,7 +1322,7 @@ pub const FunctionBuilder = struct {
             later_mutates[0..operands.len];
         defer if (wide) self.temporary().free(mutating);
         var any_mutation = false;
-        backwards = operands.len;
+        var backwards = operands.len;
         while (backwards > 0) {
             backwards -= 1;
             mutating[backwards] = any_mutation;
@@ -1493,22 +1389,25 @@ pub const FunctionBuilder = struct {
                 copied[index] = true;
                 try ledger.parkFreshStorage(self, values[index], expression.span());
             }
-            spills[index] = null;
-            if (later_splits[index] and values[index].value_type != .none) {
-                // The spill slot's row, in the order lower makes it.
-                spills[index] = try recorder.recordLocal(self, null, values[index].value_type, false, expression.span());
-            }
         }
-        for (spills, 0..) |spill, index| {
-            if (spill != null) {
-                // The reload is a view of the spill slot's storage: a
-                // fresh operand spilled across a split loses its
-                // freshness, so the store that receives it copies.
-                values[index].rewritten = .view;
-                spilled[index] = true;
+        // An operand a later one branches past does not survive in a
+        // register (05_hir.zig, coupling #4): lower carries it across
+        // the split in a slot, and the reload is a *view* of that
+        // slot's storage, so a fresh operand loses its freshness and
+        // the store that receives it copies.  The question is asked of
+        // the recorded nodes, where it has an exact answer, and lower
+        // asks the same one of the same nodes — the decision is not
+        // recorded because it is derivable.
+        var any_split = false;
+        backwards = operands.len;
+        while (backwards > 0) {
+            backwards -= 1;
+            if (any_split and values[backwards].value_type != .none) {
+                values[backwards].rewritten = .view;
             }
+            if (nodes.splitsBlocks(values[backwards].node, self.declarations())) any_split = true;
         }
-        return .{ .values = values, .spilled = spilled, .copied = copied };
+        return .{ .values = values, .copied = copied };
     }
 
     // Expressions: the dispatch --------------------------------------------

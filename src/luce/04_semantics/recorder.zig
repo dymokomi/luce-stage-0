@@ -86,13 +86,14 @@ pub fn constantLong(self: *const FunctionBuilder, node: nodes.NodeRef) ?i64 {
 // defaults included.
 //
 // And three construction decisions.  **Operand runs carry their
-// rewrite flags everywhere a batch is lowered**: the spill across
-// a block split and the defensive borrow copy happen at a
-// literal's elements and a slice's bounds exactly as before a
-// call's arguments — one walk lowers every batch — so the
-// construction nodes record the same per-operand flags a call's
-// batch does (`nodes.Operand`), and a run without them could not
-// be replayed byte for byte.  **The `T <: T?` widening is a node
+// rewrite flag everywhere a batch is lowered**: the defensive
+// borrow copy happens at a literal's elements and a slice's
+// bounds exactly as before a call's arguments — one walk lowers
+// every batch — so the construction nodes record the same
+// per-operand flag a call's batch does (`nodes.Operand`).  The
+// spill across a block split is *not* recorded anywhere: it is
+// `nodes.splitsBlocks`' exact answer about the recorded operands
+// themselves, and lower asks it (05_hir.zig, coupling #4).  **The `T <: T?` widening is a node
 // of its own** (`wrap_optional`), recorded at `fit`, the one place
 // promotion is spelled — the wrap emits a real instruction whose
 // value has a storage answer of its own, so passing the operand's
@@ -135,11 +136,10 @@ pub fn recordNode(self: *FunctionBuilder, expression: nodes.Expression) Error!no
 /// One operand of a call node while its arm assembles the batch:
 /// the operand's node — the written expression, or a default's
 /// materialized constant — the declaration slot it fills, and the
-/// batch's two per-operand decisions (nodes.OperandBatch).
+/// batch's per-operand decision (nodes.OperandBatch).
 pub const RecordedOperand = struct {
     node: nodes.NodeRef,
     slot: u32,
-    spilled: bool = false,
     copied: bool = false,
 };
 
@@ -155,19 +155,16 @@ pub fn recordOperandBatch(
 ) Error!nodes.OperandBatch {
     const operands = try self.arena().alloc(nodes.NodeRef, entries.len);
     const slots = try self.arena().alloc(u32, entries.len);
-    const spill = try self.arena().alloc(bool, entries.len);
     const borrow_copy = try self.arena().alloc(bool, entries.len);
-    for (entries, operands, slots, spill, borrow_copy) |entry, *operand, *slot, *spilled, *copied| {
+    for (entries, operands, slots, borrow_copy) |entry, *operand, *slot, *copied| {
         operand.* = entry.node;
         slot.* = entry.slot;
-        spilled.* = entry.spilled;
         copied.* = entry.copied;
     }
     return .{
         .written = @intCast(written),
         .operands = operands,
         .slots = slots,
-        .spill = spill,
         .borrow_copy = borrow_copy,
     };
 }
@@ -196,17 +193,16 @@ pub fn recordCallNode(
 
 /// The recorded form of one non-permuting operand run — a
 /// literal's elements, an array's dimensions, a slice's parts —
-/// with the batch flags beside each operand's pre-rewrite node
+/// with the batch flag beside each operand's pre-rewrite node
 /// (nodes.Operand).
 pub fn recordOperandRun(
     self: *FunctionBuilder,
     values: []const Typed,
-    spilled: []const bool,
     copied: []const bool,
 ) Error![]nodes.Operand {
     const run = try self.arena().alloc(nodes.Operand, values.len);
-    for (values, spilled, copied, run) |value, was_spilled, was_copied, *slot| {
-        slot.* = .{ .node = value.node, .spilled = was_spilled, .copied = was_copied };
+    for (values, copied, run) |value, was_copied, *slot| {
+        slot.* = .{ .node = value.node, .copied = was_copied };
     }
     return run;
 }

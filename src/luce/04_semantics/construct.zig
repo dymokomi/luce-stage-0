@@ -123,7 +123,6 @@ pub fn lowerConstruct(
         entries[index] = .{
             .node = fitted.node,
             .slot = field_index,
-            .spilled = run.spilled[index],
             .copied = run.copied[index],
         };
         // Object fields follow the verb rule at construction
@@ -348,7 +347,6 @@ pub fn lowerVariantConstruct(
         entries[index] = .{
             .node = fitted.node,
             .slot = field_index,
-            .spilled = run.spilled[index],
             .copied = run.copied[index],
         };
         // Object fields follow the verb rule at construction
@@ -1356,7 +1354,6 @@ pub fn lowerIntrinsic(
         entries[index] = .{
             .node = arguments[slot].node,
             .slot = slot,
-            .spilled = run.spilled[index],
             .copied = run.copied[index],
         };
     }

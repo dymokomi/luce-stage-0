@@ -4,7 +4,8 @@
 //! typed the way stage 4 decides it and structured the way the reader
 //! wrote it.  `05_hir.zig`'s header lists the six couplings this tree
 //! dissolves; this file is the vocabulary and holds no behavior at all
-//! beyond the accessors and the one computed property (`provenance`).
+//! beyond the accessors and the two computed properties (`provenance`,
+//! `splitsBlocks`).
 //!
 //! **How it is made.**  `04_semantics/builder.zig`'s checked walk
 //! records each expression's node on the `Typed` it answers and each
@@ -373,10 +374,9 @@ pub const Expression = union(enum) {
     };
 
     pub const IndexGet = struct {
-        /// The container, with its batch rewrite flags: the read is one
+        /// The container, with its batch rewrite flag: the read is one
         /// operand run (`Operand`'s convention), so the target and every
-        /// subscript carry the spill and borrow-copy facts a replay
-        /// needs.
+        /// subscript carry the borrow-copy fact a replay needs.
         target: Operand,
         /// One per written subscript, in evaluation order.
         indices: []const Operand,
@@ -420,9 +420,8 @@ pub const Expression = union(enum) {
         span: Span,
         park: ?Park = null,
         /// The operand pair's evaluation and rewrite facts (`Sides`):
-        /// recorded because neither the typed-side-first evaluation
-        /// order nor the conservative spill guess is derivable from the
-        /// resolved tree (05_hir.zig, coupling #4).
+        /// recorded because the typed-side-first evaluation order is
+        /// not derivable from the resolved tree.
         sides: Sides = .{},
     };
 
@@ -431,12 +430,12 @@ pub const Expression = union(enum) {
     /// typed-side-first evaluation order the untyped-literal rule takes
     /// (docs/TYPES.md D3: the typed side is lowered first so the
     /// literal can land on it, and that reorders the emission);
-    /// `left_spilled`/`left_copied` are the batch rewrites the paired
-    /// walk performs on the left operand (the right operand is last in
-    /// its batch and never takes either).
+    /// `left_copied` is the batch rewrite the paired walk performs on
+    /// the left operand (the right operand is last in its batch and
+    /// never takes it).  The left operand's spill is not recorded: it
+    /// is `splitsBlocks(right)`, which lower asks for itself.
     pub const Sides = struct {
         right_first: bool = false,
-        left_spilled: bool = false,
         left_copied: bool = false,
     };
 
@@ -726,9 +725,11 @@ pub const ResolvedCallee = union(enum) {
 /// named-argument call shape (docs/ARGS.md D8).
 ///
 /// **The operand nodes are the written expressions, pre-rewrite.**  A
-/// spill reload or a defensive borrow copy replaces the operand's
-/// *register*, never its node, so the flags below beside the pre-copy
-/// nodes are the full story lower replays.  A defaulted entry's node
+/// defensive borrow copy replaces the operand's *register*, never its
+/// node, so the flags below beside the pre-copy nodes are the full
+/// story lower replays — the spill across a block split is not among
+/// them, because it is `splitsBlocks`' exact answer about these very
+/// nodes and lower asks it itself (coupling #4).  A defaulted entry's node
 /// is the constant the declaration supplies, spanned at the call site
 /// that omitted it.  The keep-copy a *writing receiver* forces on its
 /// storage-owning arguments is deliberately not a flag here: it is a
@@ -747,31 +748,23 @@ pub const OperandBatch = struct {
     /// the method form — so lower evaluates in this order and still
     /// lands every value on its parameter.
     slots: []const u32,
-    /// Which operands were spilled across a block split before the
-    /// call — coupling #4's conservative guess, recorded so lower
-    /// reproduces the tape byte for byte until the guess is deleted
-    /// (measured, in its own landing).
-    spill: []const bool,
     /// Which operands took the defensive copy because they view
     /// storage a later writing operand in the same batch may replace
     /// (`f(s, s.change())` — docs/STRINGS.md).
     borrow_copy: []const bool,
 };
 
-/// One lowered operand with `OperandBatch`'s two per-operand rewrite
-/// facts, spelled per operand instead of as parallel arrays — for the
+/// One lowered operand with `OperandBatch`'s per-operand rewrite
+/// fact, spelled per operand instead of as a parallel array — for the
 /// families whose operands land where they stand and permute nothing:
 /// a literal's elements, a map entry's halves, an array's dimensions,
-/// a slice's parts.  The spills and copies happen at these sites
-/// exactly as they do before a call — the emission runs every batch
-/// through the same walk — so the runs carry the same flags, under the
-/// same pre-rewrite convention: a spill reload or a defensive borrow
-/// copy replaces the operand's *register*, never its node.
+/// a slice's parts.  The copies happen at these sites exactly as they
+/// do before a call — the emission runs every batch through the same
+/// walk — so the runs carry the same flag, under the same pre-rewrite
+/// convention: a defensive borrow copy replaces the operand's
+/// *register*, never its node.
 pub const Operand = struct {
     node: NodeRef,
-    /// Spilled across a block split before use (coupling #4's
-    /// conservative guess, recorded until the guess is deleted).
-    spilled: bool = false,
     /// Took the defensive borrow copy in front of a later
     /// container-mutating operand in the same run (docs/STRINGS.md).
     copied: bool = false,
@@ -804,10 +797,10 @@ pub const Place = union(enum) {
     chain: Chain,
 
     pub const Field = struct { base: LocalId, layout: u32, field: u32 };
-    /// The base and subscripts carry their batch rewrite flags
+    /// The base and subscripts carry their batch rewrite flag
     /// (`Operand`): the indexed store lowers one operand run — base,
-    /// subscripts, value — and a replay needs the spill and borrow-copy
-    /// facts for every position (the value's ride on the statement).
+    /// subscripts, value — and a replay needs the borrow-copy fact for
+    /// every position (the value's ride on the statement).
     pub const Index = struct { base: Operand, indices: []const Operand };
     pub const Chain = struct { root: LocalId, steps: []const Step };
     pub const Step = union(enum) {
@@ -896,11 +889,10 @@ pub const Statement = union(enum) {
         /// check, emitted once by lower (05_hir.zig, coupling #3).
         store: StoreKind,
         span: Span,
-        /// The value's own batch rewrites, where the place's shape puts
-        /// it in an operand run (an indexed or chained store): a spill
-        /// or borrow copy of the stored value is an emission the place
-        /// nodes cannot carry.
-        value_spilled: bool = false,
+        /// The value's own batch rewrite, where the place's shape puts
+        /// it in an operand run (an indexed or chained store): a borrow
+        /// copy of the stored value is an emission the place nodes
+        /// cannot carry.
         value_copied: bool = false,
     };
 
@@ -911,8 +903,7 @@ pub const Statement = union(enum) {
         /// `Assign.store`, for the combined value's write-back.
         store: StoreKind,
         span: Span,
-        /// `Assign`'s value rewrites, for the same runs.
-        value_spilled: bool = false,
+        /// `Assign`'s value rewrite, for the same runs.
         value_copied: bool = false,
     };
 
@@ -940,10 +931,6 @@ pub const Statement = union(enum) {
         stop: NodeRef,
         body: Block,
         span: Span,
-        /// The bounds are one two-operand batch, so the first may be
-        /// spilled across a split in the second (`Sides`' left half;
-        /// bounds are `long`s, so the borrow copy never applies).
-        start_spilled: bool = false,
     };
 
     pub const ForIn = struct {
@@ -986,10 +973,9 @@ pub const Statement = union(enum) {
         /// (`ownedForStore`, coupling #3).
         stores: []const StoreKind,
         span: Span,
-        /// A shaped return's values are one operand batch; these are
-        /// the batch's per-value rewrites, parallel to `values` (empty
-        /// for the single-value form, which lowers no batch).
-        spilled: []const bool = &.{},
+        /// A shaped return's values are one operand batch; this is the
+        /// batch's per-value rewrite, parallel to `values` (empty for
+        /// the single-value form, which lowers no batch).
         copied: []const bool = &.{},
     };
 
@@ -1145,6 +1131,128 @@ pub fn ofIntrinsic(kind: mir.Intrinsic) Provenance {
 }
 
 // ---------------------------------------------------------------------------
+// Block splits — the computed control-flow property
+// ---------------------------------------------------------------------------
+
+/// What `splitsBlocks` has to read to answer exactly: a member chain
+/// over a **single**-member enum or union is one constant and no
+/// branch at all (`05_hir/lower.zig`'s `replayEnumText`), so how many
+/// members the declaration has is part of the answer.
+pub const Declarations = struct {
+    enums: []const types.EnumType = &.{},
+    variants: []const types.VariantType = &.{},
+};
+
+/// Does lowering this node end in a different basic block than it
+/// started in?
+///
+/// A MIR register never crosses a block boundary (`06_mir/build.zig`),
+/// so a value produced before a subtree that branches has to cross the
+/// split in a slot instead — the spill.  This is that question,
+/// answered **exactly**, off the resolved tree: every arm below is a
+/// node kind `05_hir/lower.zig` either does or does not open a block
+/// for, and both halves of the seam read this one answer (05_hir.zig,
+/// coupling #4 — it replaces the AST-shaped guess the checker used to
+/// make before anything had a type).
+///
+/// The switch is exhaustive on purpose: a node kind added later has to
+/// say here what its lowering does.  One that opens a block without
+/// saying so is caught where it costs least — `lower.zig`'s batch
+/// walk observes the block its emission actually left and asserts the
+/// decision made here against it.
+pub fn splitsBlocks(expression: *const Expression, declared: Declarations) bool {
+    return switch (expression.*) {
+        // Values, reads and materializations: straight-line, all.
+        .const_long,
+        .const_boolean,
+        .const_double,
+        .const_string,
+        .absent,
+        .local_get,
+        .narrowed_get,
+        .constant_ref,
+        .container_ref,
+        .function_value,
+        .lambda_ref,
+        => false,
+        .field_get => |read| splitsBlocks(read.target, declared),
+        .variant_payload => |read| splitsBlocks(read.target, declared),
+        .index_get => |read| splitsBlocks(read.target.node, declared) or
+            splitsRun(read.indices, declared),
+        // The slot only ferries the call's answer; the branch that
+        // made the slot necessary is the call's own.
+        .carried_get => |carried| splitsBlocks(carried.origin, declared),
+        .binary => |operation| splitsBlocks(operation.left, declared) or
+            splitsBlocks(operation.right, declared),
+        .compare => |comparison| splitsBlocks(comparison.left, declared) or
+            splitsBlocks(comparison.right, declared),
+        .convert => |conversion| splitsBlocks(conversion.operand, declared),
+        .wrap_optional => |wrapped| splitsBlocks(wrapped.operand, declared),
+        .unary => |operation| splitsBlocks(operation.operand, declared),
+        // The right side runs conditionally, and the answer is the
+        // reload of a merge slot: two branches and a new block, always.
+        .short_circuit, .coalesce => true,
+        .call => |called| splitsCall(called, declared),
+        // A fallible call's branch is the whole point of both.
+        .try_call, .catch_expr => true,
+        .struct_make => |built| splitsBatch(built.operands, declared),
+        .variant_make => |built| splitsBatch(built.operands, declared),
+        .list_literal => |literal| splitsRun(literal.elements, declared),
+        .map_literal => |literal| for (literal.entries) |entry| {
+            if (splitsBlocks(entry.key.node, declared) or
+                splitsBlocks(entry.value.node, declared)) break true;
+        } else false,
+        .slice => |sliced| splitsBlocks(sliced.target.node, declared) or
+            (sliced.start != null and splitsBlocks(sliced.start.?.node, declared)) or
+            (sliced.stop != null and splitsBlocks(sliced.stop.?.node, declared)),
+        .new_object => |made| splitsRun(made.operands, declared),
+        .give => |given| splitsBlocks(given.operand, declared),
+        .copy => |copied| splitsBlocks(copied.operand, declared),
+        // A spawn emits one instruction and no branch; what it is
+        // *given* is lowered here, so ask the arguments — and only
+        // them, because the call itself runs on the worker's runtime
+        // and its own fallibility never reaches this frame.
+        .spawn => |worker| splitsBatch(worker.call.call.operands, declared),
+    };
+}
+
+/// Whether lowering a call opens a block: its operands, the member
+/// chain the two enum and union text forms expand to, and the branch
+/// a fallible answer is tested on.
+fn splitsCall(called: Expression.Call, declared: Declarations) bool {
+    if (splitsBatch(called.operands, declared)) return true;
+    if (called.fallible) return true;
+    return switch (called.callee) {
+        // `string(m)` over a one-member enum is that member's name and
+        // nothing else; every other chain compares and branches
+        // (docs/ENUMS.md D5, R2).
+        .enum_name => |index| called.result != .string or
+            declared.enums[index].members.len > 1,
+        .variant_name => |index| declared.variants[index].members.len > 1,
+        .function, .indirect, .intrinsic, .conversion => false,
+    };
+}
+
+/// Whether any operand of a batch splits.  Defaulted entries are
+/// materialized constants and never do, but they are asked anyway:
+/// they are lowered after the written operands, so a split in one
+/// would strand exactly the same registers.
+pub fn splitsBatch(batch: OperandBatch, declared: Declarations) bool {
+    for (batch.operands) |operand| {
+        if (splitsBlocks(operand, declared)) return true;
+    }
+    return false;
+}
+
+/// Whether any operand of a non-permuting run splits.
+fn splitsRun(operands: []const Operand, declared: Declarations) bool {
+    for (operands) |operand| {
+        if (splitsBlocks(operand.node, declared)) return true;
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -1167,7 +1275,7 @@ test "nodes build, and the accessors answer every payload" {
     const sum = try arena.create(Expression);
     sum.* = .{ .binary = .{ .op = .add, .left = left, .right = right, .result = .long, .span = test_span } };
     const indices = try arena.alloc(Operand, 1);
-    indices[0] = .{ .node = sum, .spilled = true };
+    indices[0] = .{ .node = sum };
     const element = try arena.create(Expression);
     element.* = .{ .index_get = .{
         .target = .{ .node = target },
@@ -1346,7 +1454,7 @@ test "provenance mirrors the storage categories the walk stamps" {
     // value alike; an intrinsic answers what its table row says; the
     // member chains answer a reload; the carried reload and `try`
     // follow the call.
-    const batch: OperandBatch = .{ .operands = &.{}, .slots = &.{}, .spill = &.{}, .borrow_copy = &.{} };
+    const batch: OperandBatch = .{ .operands = &.{}, .slots = &.{}, .borrow_copy = &.{} };
     const called = try node(arena, .{ .call = .{ .callee = .{ .function = 0 }, .operands = batch, .fallible = true, .result = .string, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(called));
     const through = try node(arena, .{ .call = .{ .callee = .{ .indirect = .{ .local = 1, .signature = 0 } }, .operands = batch, .fallible = false, .result = .string, .span = test_span } });
@@ -1379,7 +1487,6 @@ test "provenance mirrors the storage categories the walk stamps" {
     const one_field: OperandBatch = .{
         .operands = fields,
         .slots = field_slots,
-        .spill = no_rewrites,
         .borrow_copy = no_rewrites,
     };
     const built = try node(arena, .{ .struct_make = .{ .layout = 0, .operands = one_field, .result = .{ .strukt = 0 }, .span = test_span } });
@@ -1387,11 +1494,10 @@ test "provenance mirrors the storage categories the walk stamps" {
     const member = try node(arena, .{ .variant_make = .{ .variant = 0, .member = 0, .operands = batch, .result = .{ .variant = 0 }, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(member));
     const elements = try arena.alloc(Operand, 1);
-    elements[0] = .{ .node = text, .spilled = true };
+    elements[0] = .{ .node = text, .copied = true };
     const listed = try node(arena, .{ .list_literal = .{ .elements = elements, .result = .{ .heap = 0 }, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(listed));
-    try testing.expect(listed.list_literal.elements[0].spilled);
-    try testing.expect(!listed.list_literal.elements[0].copied);
+    try testing.expect(listed.list_literal.elements[0].copied);
     const fresh_object = try node(arena, .{ .new_object = .{ .heap_type = 0, .operands = &.{}, .result = .{ .heap = 0 }, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(fresh_object));
     const sliced = try node(arena, .{ .slice = .{ .target = .{ .node = name }, .start = null, .stop = null, .result = .string, .span = test_span } });
@@ -1414,4 +1520,81 @@ test "provenance mirrors the storage categories the walk stamps" {
     try testing.expectEqual(Provenance.plain, provenance(wrapped));
     const rooted = try node(arena, .{ .container_ref = .{ .row = 4, .result = .{ .heap = 0 }, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(rooted));
+}
+
+test "splitsBlocks names exactly the lowerings that open a block" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const node = struct {
+        fn make(allocator: std.mem.Allocator, expression: Expression) !NodeRef {
+            const made = try allocator.create(Expression);
+            made.* = expression;
+            return made;
+        }
+    }.make;
+
+    // Two enums, one of each shape: a member chain over a single
+    // member is one constant, so only the two-member one branches.
+    var one_member = [_]types.EnumMember{.{ .name = "only", .value = 0 }};
+    var two_members = [_]types.EnumMember{
+        .{ .name = "stored", .value = 0 },
+        .{ .name = "deflated", .value = 1 },
+    };
+    const enums = [_]types.EnumType{
+        .{ .name = "Single", .backing = .int, .members = &one_member },
+        .{ .name = "Method", .backing = .int, .members = &two_members },
+    };
+    const declared: Declarations = .{ .enums = &enums };
+
+    const name = try node(arena, .{ .local_get = .{ .local = 0, .result = .long, .span = test_span } });
+    const literal = try node(arena, .{ .const_long = .{ .value = 1, .result = .long, .span = test_span } });
+    try testing.expect(!splitsBlocks(name, declared));
+    try testing.expect(!splitsBlocks(literal, declared));
+
+    // Straight-line operators stay straight-line, and ask their
+    // operands.
+    const sum = try node(arena, .{ .binary = .{ .op = .add, .left = name, .right = literal, .result = .long, .span = test_span } });
+    try testing.expect(!splitsBlocks(sum, declared));
+
+    // `and`/`or` and the optional fallback are control flow.
+    const flag = try node(arena, .{ .const_boolean = .{ .value = true, .result = .boolean, .span = test_span } });
+    const circuit = try node(arena, .{ .short_circuit = .{ .op = .logic_and, .left = flag, .right = flag, .result = .boolean, .span = test_span } });
+    try testing.expect(splitsBlocks(circuit, declared));
+    const fallback = try node(arena, .{ .coalesce = .{ .value = name, .fallback = .{ .value = literal }, .result = .long, .span = test_span } });
+    try testing.expect(splitsBlocks(fallback, declared));
+
+    // A split anywhere inside an operand run reaches the run.
+    const outer = try node(arena, .{ .binary = .{ .op = .add, .left = sum, .right = fallback, .result = .long, .span = test_span } });
+    try testing.expect(splitsBlocks(outer, declared));
+
+    // A call: its operands, its fallibility, and the member chains.
+    const operands = try arena.alloc(NodeRef, 1);
+    operands[0] = name;
+    const slots = try arena.alloc(u32, 1);
+    slots[0] = 0;
+    const no_copies = try arena.alloc(bool, 1);
+    no_copies[0] = false;
+    const one_operand: OperandBatch = .{ .written = 1, .operands = operands, .slots = slots, .borrow_copy = no_copies };
+    const plain_call = try node(arena, .{ .call = .{ .callee = .{ .function = 0 }, .operands = one_operand, .fallible = false, .result = .long, .span = test_span } });
+    try testing.expect(!splitsBlocks(plain_call, declared));
+    const fallible_call = try node(arena, .{ .call = .{ .callee = .{ .function = 0 }, .operands = one_operand, .fallible = true, .result = .long, .span = test_span } });
+    try testing.expect(splitsBlocks(fallible_call, declared));
+    const single_name = try node(arena, .{ .call = .{ .callee = .{ .enum_name = 0 }, .operands = one_operand, .fallible = false, .result = .string, .span = test_span } });
+    try testing.expect(!splitsBlocks(single_name, declared));
+    const member_name = try node(arena, .{ .call = .{ .callee = .{ .enum_name = 1 }, .operands = one_operand, .fallible = false, .result = .string, .span = test_span } });
+    try testing.expect(splitsBlocks(member_name, declared));
+    // `Method(n)` compares its way in whatever the member count.
+    const from_number = try node(arena, .{ .call = .{ .callee = .{ .enum_name = 0 }, .operands = one_operand, .fallible = false, .result = .{ .optional = .{ .enumeration = .{ .index = 0, .backing = .int } } }, .span = test_span } });
+    try testing.expect(splitsBlocks(from_number, declared));
+
+    // `try` and `catch` are the fallible branch itself; a spawn is
+    // one instruction and asks only what it is given.
+    const carried = try node(arena, .{ .carried_get = .{ .slot = 1, .origin = fallible_call, .result = .long, .span = test_span } });
+    try testing.expect(splitsBlocks(carried, declared));
+    const attempted = try node(arena, .{ .try_call = .{ .call = carried, .temps_floor = 0, .result = .long, .span = test_span } });
+    try testing.expect(splitsBlocks(attempted, declared));
+    const worker = try node(arena, .{ .spawn = .{ .call = fallible_call, .result = .{ .heap = 0 }, .span = test_span } });
+    try testing.expect(!splitsBlocks(worker, declared));
 }

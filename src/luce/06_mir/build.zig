@@ -131,7 +131,7 @@ pub const OpenBlock = struct {
 /// `emit` is the only way to make one and the order of calls is the
 /// order of the program.  Registers never cross a block boundary —
 /// anything a later block needs goes through a local, which is what
-/// `spill`/`load` are for.
+/// `store`/`load` are for.
 pub const Lowering = struct {
     /// The program arena: everything here outlives the build.
     arena: Allocator,
@@ -230,6 +230,17 @@ pub const Lowering = struct {
         return self.locals.items[local].owns_storage;
     }
 
+    /// Enter a slot's claim on its storage at the point its
+    /// declaration is emitted.  The caller made the row earlier — a
+    /// replay that lays the whole local table down before the first
+    /// instruction (`05_hir/lower.zig`) — and this is where the
+    /// declaration's own answer arrives, so a reader between the two
+    /// sees a slot that owns nothing, which is what a slot with
+    /// nothing in it owns.
+    pub fn claimStorage(self: *Lowering, local: LocalId, owns_storage: bool) void {
+        self.locals.items[local].owns_storage = owns_storage;
+    }
+
     /// Retract a temporary's claim on its storage: something else took
     /// it and will give it back instead (docs/STRINGS.md).
     ///
@@ -305,40 +316,6 @@ pub const Lowering = struct {
         _ = try self.emit(.{ .local_set = .{ .local = local, .value = value } }, .none);
     }
 
-    /// Carry a value across a block boundary: park it in a hidden local
-    /// now, `load` it back where it is needed.
-    pub fn spill(self: *Lowering, value: Register, value_type: Type) Error!LocalId {
-        // A spill carries a borrow across a branch and dies with the
-        // statement that made it, so it owns nothing.
-        const local = try self.hiddenLocal(value_type, false);
-        try self.store(local, value);
-        return local;
-    }
-
-    /// The same crossing, for a value that is *this frame's own*: a
-    /// fallible call's result has to survive the branch on its outcome
-    /// (docs/FAILURE.md), and unlike a spill it arrives owning
-    /// something.
-    ///
-    /// So the slot that carries it is the slot that owns it — one
-    /// place rather than two, and the caller registers it as the
-    /// statement's temporary on the side where the call returned.
-    /// **A borrowing slot would not do**, and not only for tidiness: a
-    /// slot that owns its storage holds a whole `runtime.Value`, which
-    /// is the only shape short text survives in, and one that holds
-    /// the register shape instead would carry a pointer into whatever
-    /// scratch the call answered into (docs/STRINGS.md).
-    pub fn carry(
-        self: *Lowering,
-        value: Register,
-        value_type: Type,
-        owns_storage: bool,
-    ) Error!LocalId {
-        const local = try self.hiddenLocal(value_type, owns_storage);
-        try self.store(local, value);
-        return local;
-    }
-
     // Ownership plumbing ----------------------------------------------------
     //
     // Which binding owns which object is stage 4's to decide; saying it
@@ -399,21 +376,6 @@ pub const Lowering = struct {
             .{ .intrinsic = .{ .kind = .drop_storage, .arguments = arguments } },
             self.resultType(value),
         );
-    }
-
-    /// Park a value in a fresh hidden local that owns it: the objects
-    /// in it when `objects` is set, and its storage when `storage` is.
-    pub fn park(
-        self: *Lowering,
-        value: Register,
-        value_type: Type,
-        objects: bool,
-        storage: bool,
-    ) Error!LocalId {
-        const local = try self.hiddenLocal(value_type, storage);
-        try self.store(local, value);
-        if (objects) try self.bind(local, value);
-        return local;
     }
 
     /// The zero value of a type, as instructions: numbers zero, bool
@@ -684,46 +646,6 @@ pub const Lowering = struct {
         exit: BlockId,
     };
 
-    /// `for i in range(a, b):` — the counter is the caller's named
-    /// binding; the limit is a hidden local so the bound is evaluated
-    /// once.
-    pub fn openCountedLoop(
-        self: *Lowering,
-        index: LocalId,
-        start: Register,
-        limit_value: Register,
-    ) Error!CountedLoop {
-        const limit = try self.hiddenLocal(.long, false);
-        try self.store(index, start);
-        try self.store(limit, limit_value);
-
-        const header = try self.reserveBlock();
-        const body = try self.reserveBlock();
-        const step = try self.reserveBlock();
-        const exit = try self.reserveBlock();
-        try self.jump(header);
-
-        self.switchTo(header);
-        const counter = try self.load(index);
-        const bound = try self.load(limit);
-        const keep_going = try self.emit(.{ .binary = .{
-            .op = .less,
-            .operand_type = .long,
-            .left = counter,
-            .right = bound,
-        } }, .boolean);
-        try self.branch(keep_going, body, exit);
-        self.switchTo(body);
-        return .{
-            .index = index,
-            .limit = limit,
-            .header = header,
-            .body = body,
-            .step = step,
-            .exit = exit,
-        };
-    }
-
     pub fn closeCountedLoop(self: *Lowering, loop: CountedLoop) Error!void {
         try self.jump(loop.step);
         self.switchTo(loop.step);
@@ -755,16 +677,6 @@ pub const Lowering = struct {
         step: BlockId = 0,
         exit: BlockId = 0,
     };
-
-    /// `for x in xs:` — the two hidden locals that drive it.  Made
-    /// before the caller declares the loop's named bindings, because
-    /// that is the order the slots come out in.
-    pub fn openIteration(self: *Lowering, object_type: Type) Error!Iteration {
-        return .{
-            .object = try self.hiddenLocal(object_type, false),
-            .position = try self.hiddenLocal(.long, false),
-        };
-    }
 
     /// Take the collection, start at zero, and open the header.  The
     /// length is re-read every step, so mutating the collection during
@@ -825,47 +737,6 @@ pub const Lowering = struct {
     }
 
     pub const ShortCircuit = struct { result: LocalId, right_block: BlockId, merge: BlockId };
-
-    /// `a and b` / `a or b`.  The answer lives in a local because the
-    /// two sides are written in different blocks and a register never
-    /// crosses one.  `evaluate_right_when` is what the left side has
-    /// to be for the right side to run at all.
-    pub fn openShortCircuit(
-        self: *Lowering,
-        left: Register,
-        evaluate_right_when: bool,
-    ) Error!ShortCircuit {
-        const result = try self.hiddenLocal(.boolean, false);
-        try self.store(result, left);
-        const right_block = try self.reserveBlock();
-        const merge = try self.reserveBlock();
-        if (evaluate_right_when) {
-            try self.branch(left, right_block, merge);
-        } else {
-            try self.branch(left, merge, right_block);
-        }
-        self.switchTo(right_block);
-        return .{ .result = result, .right_block = right_block, .merge = merge };
-    }
-
-    /// `a else b` — the same shape as a short circuit, with the result
-    /// typed by the fallback rather than bool: park the present value,
-    /// then run the fallback only where `absent` says there was none.
-    /// `closeShortCircuit` ends it.
-    pub fn openCoalesce(
-        self: *Lowering,
-        absent: Register,
-        present: Register,
-        result_type: Type,
-    ) Error!ShortCircuit {
-        const result = try self.hiddenLocal(result_type, false);
-        try self.store(result, present);
-        const fallback = try self.reserveBlock();
-        const merge = try self.reserveBlock();
-        try self.branch(absent, fallback, merge);
-        self.switchTo(fallback);
-        return .{ .result = result, .right_block = fallback, .merge = merge };
-    }
 
     pub fn closeShortCircuit(self: *Lowering, either: ShortCircuit) Error!Register {
         try self.jump(either.merge);

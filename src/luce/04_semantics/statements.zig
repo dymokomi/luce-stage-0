@@ -46,7 +46,6 @@ const RootFact = flow.RootFact;
 const StagedOperandOwner = builder.StagedOperandOwner;
 const StorageClass = builder.StorageClass;
 const Typed = builder.Typed;
-const split_search_depth = builder.split_search_depth;
 
 pub fn lowerBlock(self: *FunctionBuilder, block: ast.Block) Error!void {
     try self.pushScope();
@@ -1204,7 +1203,7 @@ fn lowerConditional(self: *FunctionBuilder, conditional: ast.Conditional) Error!
     const root_entry = try flow.rootSave(self);
     defer self.temporary().free(root_entry);
 
-    try flow.applyFacts(self, conditional.condition, true, split_search_depth);
+    try flow.applyFacts(self, conditional.condition, true, flow.fact_search_depth);
     try lowerBlock(self, conditional.then_block);
     const then_recorded = self.recorded_block.?;
     const after_then = try flow.narrowSave(self);
@@ -1214,7 +1213,7 @@ fn lowerConditional(self: *FunctionBuilder, conditional: ast.Conditional) Error!
 
     try flow.narrowRestore(self, entry);
     flow.rootRestore(self, root_entry);
-    try flow.applyFacts(self, conditional.condition, false, split_search_depth);
+    try flow.applyFacts(self, conditional.condition, false, flow.fact_search_depth);
     if (conditional.else_block) |else_block| {
         try lowerBlock(self, else_block);
     }
@@ -1267,7 +1266,7 @@ fn lowerWhile(self: *FunctionBuilder, loop: ast.While) Error!void {
     // in it, not after the loop.
     ledger.flushTemps(self, temps_floor);
 
-    try flow.applyFacts(self, loop.condition, true, split_search_depth);
+    try flow.applyFacts(self, loop.condition, true, flow.fact_search_depth);
     try lowerBlock(self, loop.body);
     _ = self.loops.pop();
     // After the loop nothing the body proved still holds: it may
@@ -1323,14 +1322,13 @@ fn lowerForRange(self: *FunctionBuilder, loop: ast.ForRange) Error!void {
         .stop = end.node,
         .body = self.recorded_block.?,
         .span = loop.span,
-        .start_spilled = bounds_run.spilled[0],
     } });
 }
 
 /// for x in xs: — the element (or map key) binds immutably each
 /// iteration, and a named iterable is locked against reassignment
 /// while the loop runs.  What that costs in blocks and hidden
-/// locals is `Lowering.openIteration`'s.
+/// locals is `lower.replayForIn`'s.
 fn lowerForEach(self: *FunctionBuilder, loop: ast.ForEach) Error!void {
     try flow.prepareLoopFacts(self, loop.body);
     const entry = try flow.narrowSave(self);
@@ -1382,8 +1380,8 @@ fn lowerForEach(self: *FunctionBuilder, loop: ast.ForEach) Error!void {
     try self.pushScope();
     defer self.popScope();
     // The iteration's two hidden slots: the collection, then the
-    // position, in creation order (lower's `openIteration` makes
-    // the same rows at the same point).
+    // position, in creation order (lower's `replayForIn` takes the
+    // same rows at the same point).
     _ = try recorder.recordLocal(self, null, iterable.value_type, false, loop.span);
     _ = try recorder.recordLocal(self, null, .long, false, loop.span);
 
@@ -2073,7 +2071,6 @@ fn lowerReturnShape(self: *FunctionBuilder, returned: ast.Return) Error!void {
         .moved = try self.arena().dupe(LocalId, moved.items),
         .stores = stores,
         .span = returned.span,
-        .spilled = shaped_run.spilled,
         .copied = shaped_run.copied,
     } });
 }

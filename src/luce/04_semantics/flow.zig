@@ -30,7 +30,15 @@ const assign = @import("assign.zig");
 const builder = @import("builder.zig");
 const recorder = @import("recorder.zig");
 const naming = @import("naming.zig");
+const helpers = @import("helpers.zig");
 const FunctionBuilder = builder.FunctionBuilder;
+
+/// How deep `applyFacts` walks a condition before it stops proving
+/// anything.  It runs over a condition's whole subtree, so the depth
+/// bound the checked walk keeps cannot protect it — it needs its own,
+/// and proving nothing is always safe.  The margin over the checking
+/// bound keeps an accepted program from ever reaching it.
+pub const fact_search_depth: u32 = helpers.max_expression_depth + 8;
 
 pub fn isNarrowed(self: *const FunctionBuilder, local: LocalId) bool {
     return std.mem.indexOfScalar(LocalId, self.narrowed.items, local) != null;

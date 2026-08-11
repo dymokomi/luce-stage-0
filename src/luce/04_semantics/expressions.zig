@@ -41,7 +41,6 @@ const FunctionBuilder = builder.FunctionBuilder;
 const Landing = builder.Landing;
 const RecordedOperand = recorder.RecordedOperand;
 const Typed = builder.Typed;
-const split_search_depth = builder.split_search_depth;
 
 /// give NAME — the named object transfers to whatever receives it;
 /// the name is poisoned to the end of its scope (S10, S13, S29).
@@ -512,7 +511,7 @@ pub fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Typed {
                 return null;
             }
         }
-        recorded_dims = try recorder.recordOperandRun(self, dimensions, run.spilled, run.copied);
+        recorded_dims = try recorder.recordOperandRun(self, dimensions, run.copied);
     } else {
         object_type = (try resolve.resolveType(self.analyzer, self.module, new.type_name)) orelse return null;
         if (object_type != .heap) {
@@ -657,7 +656,7 @@ pub fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted
         // One node whichever container the literal landed as: the
         // result type carries the list-or-array decision.
         .node = try recorder.recordNode(self, .{ .list_literal = .{
-            .elements = try recorder.recordOperandRun(self, elements, run.spilled, run.copied),
+            .elements = try recorder.recordOperandRun(self, elements, run.copied),
             .result = object_type,
             .span = literal.span,
         } }),
@@ -761,12 +760,10 @@ pub fn lowerMapLiteral(self: *FunctionBuilder, literal: ast.MapLiteral, wanted_c
         entry.* = .{
             .key = .{
                 .node = lowered[index * 2].node,
-                .spilled = run.spilled[index * 2],
                 .copied = run.copied[index * 2],
             },
             .value = .{
                 .node = lowered[index * 2 + 1].node,
-                .spilled = run.spilled[index * 2 + 1],
                 .copied = run.copied[index * 2 + 1],
             },
         };
@@ -791,16 +788,15 @@ pub fn lowerIndex(self: *FunctionBuilder, index: ast.Index) Error!?Typed {
     // The whole read is one operand run, so each position carries
     // its batch rewrites (nodes.Operand).
     const subscripts = try self.arena().alloc(nodes.Operand, values.len - 1);
-    for (values[1..], run.spilled[1..], run.copied[1..], subscripts) |value, was_spilled, was_copied, *slot| {
+    for (values[1..], run.copied[1..], subscripts) |value, was_copied, *slot| {
         slot.* = .{
             .node = value.node,
-            .spilled = was_spilled,
             .copied = was_copied,
         };
     }
     return .{
         .node = try recorder.recordNode(self, .{ .index_get = .{
-            .target = .{ .node = values[0].node, .spilled = run.spilled[0], .copied = run.copied[0] },
+            .target = .{ .node = values[0].node, .copied = run.copied[0] },
             .indices = subscripts,
             .result = element_type,
             .span = index.span,
@@ -875,7 +871,6 @@ pub fn lowerSliceRange(self: *FunctionBuilder, slice: ast.SliceRange) Error!?Typ
     if (slice.start != null) {
         start_operand = .{
             .node = sequence[at].node,
-            .spilled = run.spilled[at],
             .copied = run.copied[at],
         };
         at += 1;
@@ -884,7 +879,6 @@ pub fn lowerSliceRange(self: *FunctionBuilder, slice: ast.SliceRange) Error!?Typ
     if (slice.end != null) {
         stop_operand = .{
             .node = sequence[at].node,
-            .spilled = run.spilled[at],
             .copied = run.copied[at],
         };
     }
@@ -892,7 +886,6 @@ pub fn lowerSliceRange(self: *FunctionBuilder, slice: ast.SliceRange) Error!?Typ
         .node = try recorder.recordNode(self, .{ .slice = .{
             .target = .{
                 .node = sequence[0].node,
-                .spilled = run.spilled[0],
                 .copied = run.copied[0],
             },
             .start = start_operand,
@@ -1060,7 +1053,6 @@ fn variantMemberAccess(self: *FunctionBuilder, field: ast.FieldAccess) Error!Mem
                 .operands = .{
                     .operands = &.{},
                     .slots = &.{},
-                    .spill = &.{},
                     .borrow_copy = &.{},
                 },
                 .result = of,
@@ -1263,7 +1255,6 @@ fn lowerBinaryOperands(
             null,
         )) orelse return null;
         return .{ .values = run.values, .sides = .{
-            .left_spilled = run.spilled[0],
             .left_copied = run.copied[0],
         } };
     }
@@ -1730,7 +1721,7 @@ fn lowerShortCircuit(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
     // is the shape this feature exists for.  Nothing inside an
     // expression can widen, so the facts unwind by truncation.
     const facts_floor = self.narrowed.items.len;
-    try flow.applyFacts(self, binary.left, binary.op == .logic_and, split_search_depth);
+    try flow.applyFacts(self, binary.left, binary.op == .logic_and, flow.fact_search_depth);
     defer self.narrowed.shrinkRetainingCapacity(facts_floor);
     var right_node: ?nodes.NodeRef = null;
     if (try self.lowerExpression(binary.right, false)) |right| {

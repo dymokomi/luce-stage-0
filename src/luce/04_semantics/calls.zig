@@ -503,7 +503,6 @@ fn lowerIndirectCall(
         entries[index] = .{
             .node = fitted.node,
             .slot = @intCast(index),
-            .spilled = run.spilled[index],
             .copied = run.copied[index],
         };
     }
@@ -803,7 +802,6 @@ fn lowerUserCall(
         entries[index] = .{
             .node = fitted.node,
             .slot = slot,
-            .spilled = run.spilled[index],
             .copied = run.copied[index],
         };
     }
@@ -1194,7 +1192,6 @@ fn lowerValueMethod(
         entry.* = .{
             .node = value.node,
             .slot = @intCast(index),
-            .spilled = run.spilled[index],
             .copied = run.copied[index],
         };
     }
@@ -1405,7 +1402,6 @@ fn lowerReceiverCall(
     entries[0] = .{
         .node = values[0].node,
         .slot = 0,
-        .spilled = run.spilled[0],
         .copied = run.copied[0],
     };
     for (method.arguments, slots, 0..) |argument, slot, index| {
@@ -1470,7 +1466,6 @@ fn lowerReceiverCall(
         entries[index + 1] = .{
             .node = fitted.node,
             .slot = slot,
-            .spilled = run.spilled[index + 1],
             .copied = run.copied[index + 1],
         };
     }
@@ -2112,7 +2107,6 @@ fn callUser(
         entries[index] = .{
             .node = fitted.node,
             .slot = @intCast(index),
-            .spilled = run.spilled[index],
             .copied = run.copied[index],
         };
     }

@@ -107,14 +107,27 @@
 //!    settles the checker's own ledger and the recorded rows; lower
 //!    emits the decided form once, with no surgery on emitted code.
 //!
-//! 4. **`splitsBlocks` asks a MIR question about an AST subtree.**
-//!    Still a guess, deliberately: it runs before anything has a type,
-//!    `callSplits` over-matches on purpose, and a wrong answer costs
-//!    one spill, recorded as the batch's spill flags.  Lower could
-//!    compute it exactly — it is the half that knows what a block is —
-//!    **but that changes the emitted MIR** (fewer spills), so the
-//!    guess outlived the flip on purpose and its deletion is its own
-//!    measured landing.
+//! 4. **`splitsBlocks` asked a MIR question about an AST subtree.**
+//!    It was a guess — it ran before anything had a type, `callSplits`
+//!    over-matched on purpose, and a wrong answer cost one spill,
+//!    recorded as the batch's spill flags.  It is now
+//!    `nodes.splitsBlocks`, a computed property of the *typed* tree
+//!    beside `nodes.provenance`: every arm names a node kind
+//!    `lower.zig` either does or does not open a block for, so
+//!    `string(count)` and a one-member enum's name are answered
+//!    apart from a member chain, and nothing over-matches.  Lower
+//!    decides its own spills from it and makes the slots itself
+//!    (`makeSpillSlot`, after the recorded table `makeLocalTable`
+//!    lays down); the checker asks the same function about the same
+//!    nodes for the one thing a spill is its business — the reload's
+//!    provenance — and no flag is recorded on either side.  Held
+//!    exact by observation: the batch walk compares the block its
+//!    emission actually left against the decision it made
+//!    (`assertSplitCarried`).  This was the one landing that
+//!    deliberately changed the emitted MIR, and it was measured:
+//!    **715 spills over the 253-program corpus became 63**, with
+//!    every benchmark inside noise (matmul32 -5.4% compute, arrays32
+//!    -1.7%, lists -1.5%, strings -1.0%, nothing regressed).
 //!
 //! 5. **Narrowing keys on `LocalId`.**  The tree's locals table
 //!    (`Body.locals`) is now the numbering: the walk allocates every
