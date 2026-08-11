@@ -288,12 +288,52 @@ pub const Analyzer = struct {
         return std.fmt.allocPrint(self.arena, "{s}.{s}", .{ prefix, name });
     }
 
-    /// The name a refusal calls `module` — the prefix a program
+    /// The name a refusal calls `module` — the namespace a program
     /// writes in front of the dot.  Only ever read for a declaring
     /// module in a cross-module refusal, and the root module cannot be
     /// imported, so the answer is never empty where it is used.
     pub fn moduleName(self: *const Analyzer, module: usize) []const u8 {
-        return self.modules[module].prefix;
+        return self.modules[module].binding;
+    }
+
+    /// The declared key a written cross-module reference resolves to:
+    /// the imported module's own qualification prefix, plus the member
+    /// path.  `written` is "geo.Point" or "geo.Text.width", and the
+    /// head should already be known to bind an import of `module`
+    /// (`importsModule`); anything else answers the written text
+    /// unchanged.  For a module of the program's own root the key *is*
+    /// the written text; a package module's key carries its root
+    /// (docs/PACKAGES.md D7), which is how the same written text in
+    /// two packages names two different declarations.  Arena-allocated
+    /// when it differs from `written`.
+    pub fn importedName(self: *Analyzer, module: usize, written: []const u8) Error![]const u8 {
+        const dot = std.mem.indexOfScalar(u8, written, '.') orelse return written;
+        const head = written[0..dot];
+        const prefix = self.importedPrefix(module, head) orelse return written;
+        if (std.mem.eql(u8, prefix, head)) return written;
+        return std.fmt.allocPrint(self.arena, "{s}.{s}", .{ prefix, written[dot + 1 ..] });
+    }
+
+    /// The qualification prefix of whatever `module` imports bound as
+    /// `head`, or null when nothing is.  Resolution's claims are the
+    /// memory read back here: the import's spelled name, asked in the
+    /// importing file's own namespace, names the file, and the file
+    /// names its module — which is what tells two same-named package
+    /// internals apart when two modules each bind a `util`.
+    pub fn importedPrefix(self: *const Analyzer, module: usize, head: []const u8) ?[]const u8 {
+        for (self.modules[module].tree.imports) |imported| {
+            if (!std.mem.eql(u8, imported.binding, head)) continue;
+            // The library keys by its binding wherever it is imported
+            // from, so the written head is already the prefix.
+            if (imported.origin == .standard) return head;
+            const namespace = self.diagnostics.sources.rootOf(self.modules[module].file);
+            const file = self.diagnostics.sources.claim(namespace, imported.name) orelse return head;
+            for (self.modules) |candidate| {
+                if (candidate.file == file) return candidate.prefix;
+            }
+            return head;
+        }
+        return null;
     }
 
     /// The visibility rule entire (docs/VISIBILITY.md D1): a
@@ -309,8 +349,8 @@ pub const Analyzer = struct {
     /// own surface checks still run and still land on the marker's
     /// author.
     pub fn markedIn(self: *const Analyzer, module: usize) []const u8 {
-        const prefix = self.modules[module].prefix;
-        return if (prefix.len == 0) "this file" else prefix;
+        const binding = self.modules[module].binding;
+        return if (binding.len == 0) "this file" else binding;
     }
 
     /// The name of the private declaration `of` mentions, if any —
@@ -386,7 +426,7 @@ pub const Analyzer = struct {
     /// True when `module` is the embedded `std.NAME` itself, rather
     /// than a sibling file that happens to be named NAME.
     pub fn isStandardModule(self: *const Analyzer, module: usize, name: []const u8) bool {
-        if (!std.mem.eql(u8, self.modules[module].prefix, name)) return false;
+        if (!std.mem.eql(u8, self.modules[module].binding, name)) return false;
         const source = self.diagnostics.sources.at(self.modules[module].file) orelse return false;
         return source.kind == .standard;
     }
@@ -405,7 +445,7 @@ pub const Analyzer = struct {
     /// claim it.
     pub fn importSpelling(self: *Analyzer, name: []const u8) Error![]const u8 {
         for (self.modules) |module| {
-            if (!std.mem.eql(u8, module.prefix, name)) continue;
+            if (!std.mem.eql(u8, module.binding, name)) continue;
             const spelled = self.diagnostics.sources.at(module.file).?.name;
             const is_tail = spelled.len >= name.len and tail: {
                 const at = spelled.len - name.len;
@@ -627,7 +667,8 @@ pub const Analyzer = struct {
                 try self.fail("luce.sema.import", written.span, "unknown module {s}; import {s} to use its types", .{ head, try self.importSpelling(head) });
                 return null;
             }
-            if (self.struct_names.get(written.name)) |index| {
+            const key = try self.importedName(module, written.name);
+            if (self.struct_names.get(key)) |index| {
                 // Private is not unknown (VISIBILITY.md D2): the name
                 // exists and is withheld, and the sentence says which.
                 const info = self.struct_decls.items[index];
@@ -642,7 +683,7 @@ pub const Analyzer = struct {
                 }
                 return .{ .strukt = index };
             }
-            if (self.enum_names.get(written.name)) |index| {
+            if (self.enum_names.get(key)) |index| {
                 const info = self.enum_decls.items[index];
                 if (!reachable(info.module, info.declaration.visibility, module)) {
                     try self.fail(
@@ -655,7 +696,7 @@ pub const Analyzer = struct {
                 }
                 return self.enumType(index);
             }
-            if (self.variant_names.get(written.name)) |index| {
+            if (self.variant_names.get(key)) |index| {
                 const info = self.variant_decls.items[index];
                 if (!reachable(info.module, info.declaration.visibility, module)) {
                     try self.fail(

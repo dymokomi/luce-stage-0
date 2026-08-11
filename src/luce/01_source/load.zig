@@ -93,9 +93,23 @@ pub const Found = union(enum) {
     /// (docs/PACKAGES.md D3).  Carries every answering path, verbatim,
     /// so the refusal names them all.  Nothing frees the paths: static
     /// strings, or memory from the allocator the loader was given.
-    /// No host answers this today; the seam carries it so resolution
-    /// tiers can arrive without the signature moving again.
     ambiguous: []const []const u8,
+    /// The name resolved and the host's package machinery refused what
+    /// it found: a store directory whose manifest disagrees with its
+    /// name, a hash that does not match, a diamond in the transitive
+    /// wants (docs/PACKAGES.md D4, D6).  The host names the stable
+    /// diagnostic code (`luce.import.version`, `luce.import.diamond`,
+    /// `luce.import.missing`) and writes the whole sentence, because
+    /// the host is the only side that knows the paths and the numbers;
+    /// the compiler prints both verbatim.  Nothing frees either:
+    /// static strings, or memory from the allocator the loader was
+    /// given.
+    refused: Refusal,
+
+    pub const Refusal = struct {
+        code: []const u8,
+        message: []const u8,
+    };
 
     /// A module's source, with the origin only the host knows.
     ///
@@ -293,26 +307,16 @@ pub fn openImport(
 
     // The import binds `binding` in the importing file's namespace,
     // and a namespace is a root: every registry question below asks
-    // with the pair, so collision is per-importing-namespace and
-    // never reaches across roots.
+    // with the importing file's token, so collision is
+    // per-importing-namespace and never reaches across roots.
     const from_root = diagnostics.sources.rootOf(from);
 
-    if (diagnostics.sources.find(from_root, spelled)) |already| {
-        // The module is loaded; the question left is the binding.  A
-        // second spelling cannot be recorded — the first one is the
-        // prefix every qualified name was built from — so it is
+    if (diagnostics.sources.claim(from_root, spelled)) |already| {
+        // This spelling has resolved here before; the question left is
+        // the binding.  A second one cannot be recorded — the first is
+        // the prefix every qualified name was built from — so it is
         // refused rather than half-honored.
-        const held = diagnostics.sources.bindingOf(already);
-        if (!std.mem.eql(u8, held, binding)) {
-            try diagnostics.add(
-                "luce.import.collision",
-                span,
-                "module {s} is already imported as {s}; a module has one binding " ++
-                    "for the whole program, so use {s} here too",
-                .{ spelled, held, held },
-            );
-            return null;
-        }
+        if (try boundOtherwise(diagnostics, already, spelled, binding, span)) return null;
         return already;
     }
 
@@ -327,16 +331,28 @@ pub fn openImport(
             return null;
         };
         if (try bindingHeld(diagnostics, from_root, spelled, binding, origin, span)) return null;
+        // The library is embedded and identical wherever it is imported
+        // from, so one program holds one copy of each std module — a
+        // second namespace importing it claims the copy already loaded,
+        // which is what keeps a std struct one type across a package
+        // boundary.
+        if (diagnostics.sources.findStandard(spelled)) |already| {
+            if (try boundOtherwise(diagnostics, already, spelled, binding, span)) return null;
+            try diagnostics.sources.recordClaim(from_root, spelled, already);
+            return already;
+        }
         const inside = try std.fmt.allocPrint(
             diagnostics.allocator,
             "{s}/{s}",
             .{ standard_namespace, path },
         );
         defer diagnostics.allocator.free(inside);
-        // The library is embedded, so no host chose a token for it; it
-        // registers under the importing file's root, because that is
-        // the namespace the binding `math` lives in.
-        return try open(diagnostics, .standard, from_root, spelled, binding, inside, embedded, span);
+        // No host chose a token for the library; the copy registers
+        // under the first importer's root, and the token is never read
+        // back — std imports nothing a host resolves.
+        const id = (try open(diagnostics, .standard, from_root, spelled, binding, inside, embedded, span)) orelse return null;
+        try diagnostics.sources.recordClaim(from_root, spelled, id);
+        return id;
     }
 
     // `std` is the namespace, so it is not a module and std.luc is a
@@ -384,7 +400,19 @@ pub fn openImport(
                 );
                 return null;
             }
-            return try open(diagnostics, .imported, source.root, spelled, binding, opened, source.bytes, span);
+            // Whatever the import said, the host answered with a file
+            // already loaded for this root: one file is one module,
+            // whichever spelling reached it first — `geo.shapes` from
+            // the consumer and `shapes` from inside the package are
+            // claims on one set of declarations (docs/PACKAGES.md D4).
+            if (diagnostics.sources.findByPath(source.root, opened)) |already| {
+                if (try boundOtherwise(diagnostics, already, spelled, binding, span)) return null;
+                try diagnostics.sources.recordClaim(from_root, spelled, already);
+                return already;
+            }
+            const id = (try open(diagnostics, .imported, source.root, spelled, binding, opened, source.bytes, span)) orelse return null;
+            try diagnostics.sources.recordClaim(from_root, spelled, id);
+            return id;
         },
         .missing => {
             try diagnostics.add(
@@ -419,7 +447,38 @@ pub fn openImport(
             );
             return null;
         },
+        .refused => |refusal| {
+            // The host's package machinery said no and wrote the whole
+            // sentence — it is the only side that knows the paths and
+            // the numbers — and named the stable code it belongs
+            // under.  Both travel verbatim (docs/PACKAGES.md D6).
+            try diagnostics.add(refusal.code, span, "{s}", .{refusal.message});
+            return null;
+        },
     }
+}
+
+/// True when `already` is bound under a name other than `binding` —
+/// in which case the second spelling was refused and reported.  One
+/// module holds one binding for the whole program, because the
+/// binding is the prefix its qualified declaration names carry.
+fn boundOtherwise(
+    diagnostics: *Diagnostics,
+    already: FileId,
+    spelled: []const u8,
+    binding: []const u8,
+    span: Span,
+) Error!bool {
+    const held = diagnostics.sources.bindingOf(already);
+    if (std.mem.eql(u8, held, binding)) return false;
+    try diagnostics.add(
+        "luce.import.collision",
+        span,
+        "module {s} is already imported as {s}; a module has one binding " ++
+            "for the whole program, so use {s} here too",
+        .{ spelled, held, held },
+    );
+    return true;
 }
 
 /// The relative path an import's name was probed as: dots map to
@@ -564,6 +623,13 @@ const TableLoader = struct {
         name: []const u8,
         places: []const []const u8,
     } = &.{},
+    /// Names the host's package machinery refuses, code and sentence
+    /// chosen by the host (docs/PACKAGES.md D6).
+    vetoed: []const struct {
+        name: []const u8,
+        code: []const u8,
+        message: []const u8,
+    } = &.{},
 
     fn load(context: *anyopaque, arena: Allocator, name: []const u8, from_root: []const u8) error{OutOfMemory}!Found {
         const self: *TableLoader = @ptrCast(@alignCast(context));
@@ -572,6 +638,11 @@ const TableLoader = struct {
         }
         for (self.contested) |contest| {
             if (std.mem.eql(u8, contest.name, name)) return .{ .ambiguous = contest.places };
+        }
+        for (self.vetoed) |veto| {
+            if (std.mem.eql(u8, veto.name, name)) {
+                return .{ .refused = .{ .code = veto.code, .message = veto.message } };
+            }
         }
         for (self.entries) |entry| {
             if (!std.mem.eql(u8, entry.name, name)) continue;
@@ -904,6 +975,66 @@ test "luce.import.ambiguous: a name that answers twice is refused with every pat
     // Refused means refused: nothing was registered under the name.
     try testing.expectEqual(@as(usize, 1), diagnostics.sources.count());
     try testing.expectEqual(@as(usize, 1), diagnostics.count());
+}
+
+test "a host refusal travels verbatim, under the code the host named" {
+    // The store machinery's refusals — a version disagreement, a
+    // diamond, a hash mismatch — are sentences only the host can
+    // write, and codes the taxonomy already ratified (docs/PACKAGES.md
+    // D6).  The seam carries both through untouched.
+    var table: TableLoader = .{ .vetoed = &.{.{
+        .name = "geo",
+        .code = "luce.import.version",
+        .message = "package geo 1.2.0 at .luce/packages/geo-1.2.0: its luce.yaml says geo 1.3.0; the directory and its manifest must agree",
+    }} };
+    var diagnostics = Diagnostics.init(testing.allocator);
+    defer diagnostics.deinit();
+    _ = (try openRoot(&diagnostics, "main.luc", "", "import geo\n")).?;
+
+    try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo", "geo", .sibling, nowhere)) == null);
+    try testing.expectEqualStrings("luce.import.version", diagnostics.at(0).?.code);
+    try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "geo 1.3.0") != null);
+    try testing.expectEqual(@as(usize, 1), diagnostics.sources.count());
+}
+
+test "one file reached under two spellings is one module, and the binding still holds" {
+    // `geo.shapes` from the consumer and `shapes` from inside the
+    // package are two claims on one file (docs/PACKAGES.md D4): the
+    // host answers the same (root, path) for both, the registry
+    // answers the module already loaded, and an alias that would give
+    // the one module a second binding is refused.
+    var table: TableLoader = .{ .entries = &.{
+        .{
+            .name = "geo.shapes",
+            .text = "func area() -> long:\n    return 4\n",
+            .path = ".luce/packages/geo-1.2.0/shapes.luc",
+            .root = "geo-1.2.0",
+            .from = "",
+        },
+        .{
+            .name = "shapes",
+            .text = "func area() -> long:\n    return 4\n",
+            .path = ".luce/packages/geo-1.2.0/shapes.luc",
+            .root = "geo-1.2.0",
+            .from = "geo-1.2.0",
+        },
+        .{ .name = "geo", .text = "import shapes\n", .path = ".luce/packages/geo-1.2.0/geo.luc", .root = "geo-1.2.0" },
+    } };
+    var diagnostics = Diagnostics.init(testing.allocator);
+    defer diagnostics.deinit();
+    _ = (try openRoot(&diagnostics, "main.luc", "", "import geo\nimport geo.shapes\n")).?;
+
+    const geo = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo", "geo", .sibling, nowhere)).?;
+    const outside = (try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo.shapes", "shapes", .sibling, nowhere)).?;
+    const inside = (try openImport(&diagnostics, table.loader(), geo, "shapes", "shapes", .sibling, nowhere)).?;
+    try testing.expectEqual(outside, inside);
+    try testing.expectEqual(@as(usize, 3), diagnostics.sources.count());
+    try testing.expectEqual(@as(usize, 0), diagnostics.count());
+
+    // A second spelling from a third place cannot re-bind it.
+    try testing.expect((try openImport(&diagnostics, table.loader(), sources_mod.root_file, "geo.shapes", "gs", .sibling, nowhere)) == null);
+    try testing.expectEqualStrings("luce.import.collision", diagnostics.at(0).?.code);
+    try testing.expect(std.mem.indexOf(u8, diagnostics.at(0).?.message, "already imported as shapes") != null);
 }
 
 test "the std namespace holds exactly the library, and nothing else" {

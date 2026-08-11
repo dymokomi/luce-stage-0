@@ -416,7 +416,155 @@ it the same way.  A standard module keeps its own name (`import
 std.math as m` is refused at parse time); when a sibling collides with
 one, the sibling takes the alias.
 
-The manifest's `packages:` want list is parsed and validated today,
-but **packages themselves are not built yet**: there is no store, no
-search path, and no fetching — `luce.yaml` currently governs exactly
-what this section shows, the project's own tree.
+## Packages
+
+The manifest's `packages:` section is the **want list**: each entry
+names a package and one exact version — no ranges, upgrading is
+editing the number.  A wanted package is a directory named
+`NAME-VERSION` in the project's store, `.luce/packages/`, put there by
+hand today (`cp -r` a checkout, a git submodule): vendoring is just
+the store with no tooling.  A package is a directory with a
+`luce.yaml` of its own, which must agree with the directory's name and
+version or the package is refused by name.
+
+`import geo` reads the entry module `geo.luc` at the package root;
+`import geo.shapes` reads `shapes.luc` inside it.  A package's own
+imports resolve **inside the package** — its files, then its own
+`packages:` — never in the consuming project, so a `util.luc` of the
+package and a `util.luc` of the project (or of another package) can
+never answer for each other.
+
+```luce module file=luce.yaml
+name: sample
+version: 0.1.0
+
+packages:
+  paint: 0.3.0
+```
+
+```luce module file=.luce/packages/paint-0.3.0/luce.yaml
+name: paint
+version: 0.3.0
+```
+
+```luce module file=.luce/packages/paint-0.3.0/paint.luc
+import brushes
+import util
+
+func area(r: brushes.Rect) -> long:
+    return util.scale(r.width * r.height)
+```
+
+```luce module file=.luce/packages/paint-0.3.0/brushes.luc
+struct Rect:
+    width: long
+    height: long
+```
+
+```luce module file=.luce/packages/paint-0.3.0/util.luc
+func scale(v: long) -> long:
+    return v * 10
+```
+
+```luce run
+import paint
+import paint.brushes
+
+func main():
+    let r = brushes.Rect(width = 2, height = 3)
+    print("area " + string(paint.area(r)))
+```
+
+```output
+area 60
+```
+
+Resolution probes **every** tier — the project tree, the store, and
+each directory named by the `LUCE_LIB` environment variable
+(colon-separated, same `NAME-VERSION` layout) — and exactly one may
+answer.  Two answers is `luce.import.ambiguous` with every answering
+path named: there is no precedence and no first-hit, because
+precedence is silent shadowing.  The want list gates every store and
+shelf probe, so a stray install cannot change what a program means —
+and a resolution from `LUCE_LIB`, or from a want's `path:` annotation
+(the development override: resolve this package from a directory
+instead of the store), says so on standard error, every build.  A
+want may also carry `sha256:` followed by the package directory's
+content hash, verified on every resolution when present.
+
+A package's `luce.yaml` may want packages of its own; the whole
+transitive set resolves with exact versions, and one name resolves to
+**one** version in the whole build.  Two requirers disagreeing is a
+diamond, refused with both edges named — and the remedy is in the
+consumer's hands, an `override:` section in the root `luce.yaml`,
+because the person meeting the refusal owns neither manifest:
+
+```luce module file=luce.yaml
+name: sample
+version: 0.1.0
+
+packages:
+  tint: 1.2.0
+  easel: 0.4.1
+```
+
+```luce module file=.luce/packages/tint-1.2.0/luce.yaml
+name: tint
+version: 1.2.0
+
+packages:
+  mixer: 1.1.0
+```
+
+```luce module file=.luce/packages/tint-1.2.0/tint.luc
+import mixer
+
+func area(w: long, h: long) -> long:
+    return mixer.mul(w, h)
+```
+
+```luce module file=.luce/packages/easel-0.4.1/luce.yaml
+name: easel
+version: 0.4.1
+
+packages:
+  mixer: 1.2.0
+```
+
+```luce module file=.luce/packages/easel-0.4.1/easel.luc
+func escape() -> long:
+    return 27
+```
+
+```luce module file=.luce/packages/mixer-1.1.0/luce.yaml
+name: mixer
+version: 1.1.0
+```
+
+```luce module file=.luce/packages/mixer-1.1.0/mixer.luc
+func mul(a: long, b: long) -> long:
+    return a * b
+```
+
+```luce fail
+import tint
+
+func main():
+    print(string(tint.area(2, 3)))
+```
+
+```output
+luce: compile failed
+main.luc:1:1: package mixer is wanted at 1.1.0 by tint 1.2.0 and at 1.2.0 by easel 0.4.1; name the decision in the root luce.yaml's override: section [luce.import.diamond]
+    import tint
+    ^~~~~~~~~~~
+```
+
+Writing `override:` with `mixer: 1.1.0` in the root `luce.yaml`
+resolves the diamond by stated decision — the pin applies to every
+edge, and says so on standard error when it changes one.
+
+What is deliberately not here yet: fetching.  There is no network, no
+registry, and no lockfile — exact versions plus optional hashes in
+`luce.yaml` are the lock, and the store is filled by hand until the
+publishing half exists.

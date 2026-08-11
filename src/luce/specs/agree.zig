@@ -91,8 +91,21 @@ pub fn programWith(source: []const u8, options: types.CompileOptions) !mir.Progr
 }
 
 /// One sibling file of a project, for the specs that compile several
-/// (`compile/modules.zig`).
-pub const File = struct { name: []const u8, source: []const u8 };
+/// (`compile/modules.zig`).  The two root columns exist for the
+/// package specs (docs/PACKAGES.md D4, D7): `root` is the token the
+/// answer belongs to — "" is the project — and `from` gates the row to
+/// imports written under that token, which is how a table stands in
+/// for a store without touching a disk.
+pub const File = struct {
+    name: []const u8,
+    source: []const u8,
+    /// Where a diagnostic would say the file lives; "" lets the
+    /// registry fall back to NAME.luc.  Package rows need one, because
+    /// the registry identifies a module by (root, path).
+    path: []const u8 = "",
+    root: []const u8 = "",
+    from: ?[]const u8 = null,
+};
 
 /// A loader over an in-memory set of files.  Nothing here touches the
 /// disk: what is under test is how the compiler joins several files
@@ -106,12 +119,17 @@ const Files = struct {
         name: []const u8,
         from_root: []const u8,
     ) error{OutOfMemory}!luce.source.Found {
-        _ = from_root; // One rootless table; the token distinguishes nothing here.
         const self: *Files = @ptrCast(@alignCast(context));
         for (self.all) |file| {
-            if (std.mem.eql(u8, file.name, name)) {
-                return .{ .text = .{ .bytes = try arena.dupe(u8, file.source) } };
+            if (!std.mem.eql(u8, file.name, name)) continue;
+            if (file.from) |only| {
+                if (!std.mem.eql(u8, only, from_root)) continue;
             }
+            return .{ .text = .{
+                .bytes = try arena.dupe(u8, file.source),
+                .path = file.path,
+                .root = file.root,
+            } };
         }
         return .missing;
     }

@@ -69,9 +69,24 @@ pub const File = struct {
     line_starts: []u32,
 };
 
+/// One resolution the registry remembers: within `namespace` — the
+/// opaque root token of the file the import was written in — the
+/// import spelled `name` means `file`.  A claim is not a file: one
+/// file may be claimed from several namespaces under several
+/// spellings (a package module is `geo.shapes` to its consumer and
+/// `shapes` to a sibling inside the package), and the claims are what
+/// keep those spellings answering the one module rather than loading
+/// it twice (docs/PACKAGES.md D4, D7).
+const Claim = struct {
+    namespace: []u8,
+    name: []u8,
+    file: FileId,
+};
+
 pub const Sources = struct {
     allocator: Allocator,
     list: std.ArrayList(File) = .empty,
+    claims: std.ArrayList(Claim) = .empty,
 
     pub fn init(allocator: Allocator) Sources {
         return .{ .allocator = allocator };
@@ -87,6 +102,11 @@ pub const Sources = struct {
             self.allocator.free(file.line_starts);
         }
         self.list.deinit(self.allocator);
+        for (self.claims.items) |made| {
+            self.allocator.free(made.namespace);
+            self.allocator.free(made.name);
+        }
+        self.claims.deinit(self.allocator);
         self.* = undefined;
     }
 
@@ -155,13 +175,77 @@ pub const Sources = struct {
         return null;
     }
 
-    /// The id of the module *bound* as `binding` within `root`, or
-    /// null — the question collision asks: whichever module it names,
-    /// a binding may hold only one (`luce.import.collision`).
-    pub fn findBinding(self: *const Sources, root: []const u8, binding: []const u8) ?FileId {
+    /// The id of the file the host already opened at `path` for `root`,
+    /// or null.  This is what keeps a module reached under two
+    /// spellings — `geo.shapes` from the consumer, `shapes` from inside
+    /// the package — one module: whatever the import said, the host
+    /// answered with one file, and one file is one set of declarations
+    /// (docs/PACKAGES.md D4).  Textual, like the self-import check: two
+    /// spellings of one path are the host's problem, and it is the host
+    /// that answered with these.
+    pub fn findByPath(self: *const Sources, root: []const u8, path: []const u8) ?FileId {
+        if (path.len == 0) return null;
         for (self.list.items, 0..) |file, index| {
             if (std.mem.eql(u8, file.root, root) and
-                std.mem.eql(u8, file.binding, binding)) return @intCast(index);
+                std.mem.eql(u8, file.path, path)) return @intCast(index);
+        }
+        return null;
+    }
+
+    /// The id of the standard module named `name` ("std.math"), or
+    /// null.  The library is embedded and identical wherever it is
+    /// imported from, so one program holds one copy of each std module
+    /// and every namespace that imports it claims that copy.
+    pub fn findStandard(self: *const Sources, name: []const u8) ?FileId {
+        for (self.list.items, 0..) |file, index| {
+            if (file.kind == .standard and std.mem.eql(u8, file.name, name)) return @intCast(index);
+        }
+        return null;
+    }
+
+    /// Remember that within `namespace`, the import spelled `name`
+    /// resolved to `file`.  Both strings are copied.
+    pub fn recordClaim(
+        self: *Sources,
+        namespace: []const u8,
+        name: []const u8,
+        file: FileId,
+    ) Error!void {
+        const owned_namespace = try self.allocator.dupe(u8, namespace);
+        errdefer self.allocator.free(owned_namespace);
+        const owned_name = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned_name);
+        try self.claims.append(self.allocator, .{
+            .namespace = owned_namespace,
+            .name = owned_name,
+            .file = file,
+        });
+    }
+
+    /// The file that `name`, written in `namespace`, already resolved
+    /// to — or null when this spelling has not been asked here yet.
+    /// This is resolution's memory: asking again answers the module
+    /// already loaded, which is how a cycle terminates, and stage 4
+    /// reads it back to know which module an import binding names.
+    pub fn claim(self: *const Sources, namespace: []const u8, name: []const u8) ?FileId {
+        for (self.claims.items) |made| {
+            if (std.mem.eql(u8, made.namespace, namespace) and
+                std.mem.eql(u8, made.name, name)) return made.file;
+        }
+        return null;
+    }
+
+    /// The id of the module *bound* as `binding` within `namespace`,
+    /// or null — the question collision asks: whichever module it
+    /// names, a binding may hold only one (`luce.import.collision`).
+    /// Asked of the claims, because the binding lives where the import
+    /// was written: a package's entry module belongs to the package's
+    /// root, but the `geo` its consumer writes is a claim on the
+    /// consumer's namespace.
+    pub fn findBinding(self: *const Sources, namespace: []const u8, binding: []const u8) ?FileId {
+        for (self.claims.items) |made| {
+            if (!std.mem.eql(u8, made.namespace, namespace)) continue;
+            if (std.mem.eql(u8, self.bindingOf(made.file), binding)) return made.file;
         }
         return null;
     }
@@ -304,17 +388,47 @@ test "a binding is its own key: an aliased module is found by either question" {
 
     const text = try testing.allocator.dupe(u8, "func area() -> long:\n    return 4\n");
     const shapes = try sources.add(.imported, "", "geo.shapes", "gs", "geo/shapes.luc", text);
+    try sources.recordClaim("", "geo.shapes", shapes);
 
     try testing.expectEqual(shapes, sources.find("", "geo.shapes").?);
     try testing.expectEqual(shapes, sources.findBinding("", "gs").?);
     // Neither question answers the other's key.
     try testing.expectEqual(@as(?FileId, null), sources.find("", "gs"));
     try testing.expectEqual(@as(?FileId, null), sources.findBinding("", "geo.shapes"));
-    // The binding is scoped to the root like everything else.
+    // The binding is scoped to the claiming namespace like everything
+    // else.
     try testing.expectEqual(@as(?FileId, null), sources.findBinding("pkg", "gs"));
     try testing.expectEqualStrings("gs", sources.bindingOf(shapes));
     // An unknown file's binding is the root file's, like its path.
     try testing.expectEqualStrings("", sources.bindingOf(9999));
+}
+
+test "a claim remembers a resolution; one file may be claimed from two namespaces" {
+    // A package module is `geo.shapes` to its consumer and `shapes`
+    // to a file inside the package.  Both claims answer the one file,
+    // which is what keeps its declarations one set (docs/PACKAGES.md
+    // D4); the file itself is found again by the path the host opened.
+    var sources = Sources.init(testing.allocator);
+    defer sources.deinit();
+
+    const text = try testing.allocator.dupe(u8, "func area() -> long:\n    return 4\n");
+    const shapes = try sources.add(.imported, "geo-1.2.0", "geo.shapes", "shapes", ".luce/packages/geo-1.2.0/shapes.luc", text);
+    try sources.recordClaim("", "geo.shapes", shapes);
+    try sources.recordClaim("geo-1.2.0", "shapes", shapes);
+
+    try testing.expectEqual(shapes, sources.claim("", "geo.shapes").?);
+    try testing.expectEqual(shapes, sources.claim("geo-1.2.0", "shapes").?);
+    try testing.expectEqual(@as(?FileId, null), sources.claim("", "shapes"));
+    try testing.expectEqual(@as(?FileId, null), sources.claim("geo-1.2.0", "geo.shapes"));
+
+    // The binding holds in both claiming namespaces.
+    try testing.expectEqual(shapes, sources.findBinding("", "shapes").?);
+    try testing.expectEqual(shapes, sources.findBinding("geo-1.2.0", "shapes").?);
+
+    // The path is the file's identity within its root.
+    try testing.expectEqual(shapes, sources.findByPath("geo-1.2.0", ".luce/packages/geo-1.2.0/shapes.luc").?);
+    try testing.expectEqual(@as(?FileId, null), sources.findByPath("", ".luce/packages/geo-1.2.0/shapes.luc"));
+    try testing.expectEqual(@as(?FileId, null), sources.findByPath("geo-1.2.0", ""));
 }
 
 test "place resolves an offset against the file it belongs to" {

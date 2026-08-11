@@ -116,10 +116,18 @@ pub fn discover(gpa: Allocator, io: std.Io, override_lib: ?[]const u8, override_
     var runtime: []const u8 = "";
     var start: []const u8 = "";
 
-    if (override_lib) |directory| {
-        try searched.appendSlice(gpa, directory);
-        runtime = try fileIn(gpa, io, directory, "libluce_rt.a");
-        start = try fileIn(gpa, io, directory, "libluce_start.a");
+    if (override_lib) |value| {
+        // `LUCE_LIB` is a search path now that it also names package
+        // shelves (docs/PACKAGES.md D3): colon-separated, semicolon on
+        // Windows, first directory holding each library wins.
+        var directories = std.mem.splitScalar(u8, value, std.fs.path.delimiter);
+        while (directories.next()) |directory| {
+            if (directory.len == 0) continue;
+            if (searched.items.len != 0) try searched.appendSlice(gpa, ", ");
+            try searched.appendSlice(gpa, directory);
+            if (runtime.len == 0) runtime = try fileIn(gpa, io, directory, "libluce_rt.a");
+            if (start.len == 0) start = try fileIn(gpa, io, directory, "libluce_start.a");
+        }
     } else if (std.process.executableDirPathAlloc(io, gpa)) |beside| {
         defer gpa.free(beside);
         for (library_directories) |relative| {

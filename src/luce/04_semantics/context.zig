@@ -252,7 +252,16 @@ pub fn isReserved(name: []const u8) bool {
 /// its entry in stage 1's registry — the text its spans index, the
 /// path debug info reports, and the line index origins are read from.
 pub const ModuleTree = struct {
+    /// The qualification prefix its declarations carry — what the
+    /// global name tables key by, and what a serialized function name
+    /// begins with.  For a module of the program's own root (and for
+    /// std) this is the binding; for a module of a foreign root — a
+    /// package — it is `root/binding`, so two packages' same-named
+    /// internals can never merge in a `.lcm` (docs/PACKAGES.md D7).
     prefix: []const u8,
+    /// The namespace call sites write — the import's last segment, or
+    /// the alias an `as` chose.  What refusals call the module.
+    binding: []const u8,
     tree: *const ast.Program,
     file: source_mod.FileId,
 };

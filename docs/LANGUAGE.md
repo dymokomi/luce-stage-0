@@ -1820,8 +1820,8 @@ A sibling import must name the file **exactly**, including its case,
 and the file must be an ordinary one.  A case-insensitive filesystem would
 happily open `Geo.luc` for `import geo`, so the directory entry is
 checked rather than the open: a program that builds on a Mac builds
-on the machine that ships it.  Deliberately absent: package managers,
-search paths, conditional imports, re-exports.
+on the machine that ships it.  Deliberately absent: conditional
+imports and re-exports.
 
 **Projects** (docs/PACKAGES.md D1–D2, built): a `luce.yaml` above the
 root source file marks the project root, and under one, dots map to
@@ -1836,6 +1836,25 @@ one binding per program, and a standard module keeps its own name
 (`import std.math as m` is refused).  Rootless programs keep exactly
 the sibling behaviour, single segment only, with the dotted form
 refused naming `luce.yaml` as what enables it.
+
+**Packages** (docs/PACKAGES.md D3–D4, built through the store half):
+`luce.yaml`'s `packages:` want list names each package at one exact
+version, vendored by hand as `.luce/packages/NAME-VERSION/` — a
+directory with a `luce.yaml` of its own that must agree with its name
+and version or be refused.  `import geo` reads the entry module
+`geo.luc` at the package root and `import geo.sub` reaches inside;
+a package's own imports anchor to the package — its files, then its
+own want list — never the consumer's tree, so two packages' same-named
+internals never meet (their serialized names carry the package root).
+Resolution probes the project tree, the store, and every `LUCE_LIB`
+shelf, and exactly one may answer (`luce.import.ambiguous` otherwise);
+the want list gates every store probe, a `path:` annotation replaces
+the store probe for development, `sha256:` is verified when present,
+and the transitive set resolves at exact versions with diamonds
+refused (`luce.import.diamond`) unless the root's `override:` states
+the decision.  Shelf and `path:` resolutions print one line to
+standard error, every build.  Fetching, a registry, and publishing do
+not exist yet.
 
 **The standard library lives under `std.`** — `import std.math`,
 `import std.strings`, `import std.files` reach modules embedded in the

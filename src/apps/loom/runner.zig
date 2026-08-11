@@ -84,10 +84,15 @@ pub const compile_options: luce.types.CompileOptions = .{
 /// than anything a program can change.
 pub const Policy = struct {
     /// `PATH` — where the `luce` compiler is looked for after the
-    /// directory loom's own binary sits in.  Everything else the
-    /// compiler needs (`LUCE_LIB`, `LUCE_CC`) it reads from the
-    /// environment it inherits, so loom neither parses nor forwards it.
+    /// directory loom's own binary sits in.  What the compiler's *link*
+    /// needs (`LUCE_LIB` as the runtime library's home, `LUCE_CC`) it
+    /// reads from the environment it inherits, so loom does not
+    /// forward it.
     search_path: ?[]const u8 = null,
+    /// `LUCE_LIB` — read by loom's own front end as well, because the
+    /// same directories are the package shelves the import loader
+    /// probes (docs/PACKAGES.md D3).
+    library_path: ?[]const u8 = null,
     /// Where an artifact goes when it cannot go beside its program.
     ///
     /// `TMPDIR` rather than a hard-coded `/tmp`, and the difference is
@@ -102,6 +107,7 @@ pub const Policy = struct {
     pub fn read(environment: *const std.process.Environ.Map) Policy {
         return .{
             .search_path = environment.get("PATH"),
+            .library_path = environment.get("LUCE_LIB"),
             .temporary_directory = trimSeparator(
                 environment.get("TMPDIR") orelse default_temporary_directory,
             ),
@@ -188,33 +194,49 @@ pub fn runScript(
             return 1;
         },
         // The root is one path the user typed; no host answers it in
-        // two places.  The arm exists because the seam carries it.
+        // two places and no store machinery refuses it.  The arms
+        // exist because the seam carries them.
         .ambiguous => {
             try err.print("loom: cannot read {s}: it answered in more than one place\n", .{path});
+            return 1;
+        },
+        .refused => |refusal| {
+            try err.print("loom: cannot read {s}: {s}\n", .{ path, refusal.message });
             return 1;
         },
     };
     defer gpa.free(source);
 
-    // The luce.yaml governing the program, when one does: today it
-    // only establishes the root token the module registry keys by,
-    // and a broken manifest is refused here, early, by name.
+    // The luce.yaml governing the program, when one does: the root
+    // token the module registry keys by, and the want list the store
+    // probes are gated by (docs/PACKAGES.md D1, D3).  A broken
+    // manifest is refused here, early, by name.
     var discovery = std.heap.ArenaAllocator.init(gpa);
     defer discovery.deinit();
-    const source_root: []const u8 = switch (try files.discoverProject(discovery.allocator(), io, path)) {
-        .rootless => "",
-        .root => |token| token,
+    const governed: ?files.Governed = switch (try files.discoverProject(discovery.allocator(), io, path)) {
+        .rootless => null,
+        .governed => |project| project,
         .refused => |why| {
             try err.print("loom: {s}\n", .{why});
             return 1;
         },
     };
+    const source_root: []const u8 = if (governed) |project| project.root else "";
+    const shelves: []const []const u8 = if (policy.library_path) |text|
+        try files.splitSearchPath(discovery.allocator(), text)
+    else
+        &.{};
 
     var loader: files.FileLoader = .{
         .io = io,
         .directory = std.fs.path.dirname(path) orelse "",
         .project_root = source_root,
+        .project = if (governed) |project| project.manifest else null,
+        .shelves = shelves,
+        .alerts = err,
+        .gpa = gpa,
     };
+    defer loader.deinit();
     return runSource(gpa, io, out, err, policy, path, source, loader.loader(), source_root, arguments);
 }
 

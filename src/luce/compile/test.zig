@@ -1031,7 +1031,18 @@ test "collections type-check and reject misuse at compile time" {
 // Modules
 // ---------------------------------------------------------------------------
 
-const TestModule = struct { name: []const u8, source: []const u8 };
+const TestModule = struct {
+    name: []const u8,
+    source: []const u8,
+    /// The root token the answer belongs to; "" is the project.  The
+    /// package tests use these two columns the way a store host would
+    /// (docs/PACKAGES.md D4, D7).
+    root: []const u8 = "",
+    /// Answer only when the import was written under this token; null
+    /// answers whatever asked.
+    from: ?[]const u8 = null,
+    path: []const u8 = "",
+};
 
 const TestLoader = struct {
     modules: []const TestModule,
@@ -1040,15 +1051,20 @@ const TestLoader = struct {
     locked: []const []const u8 = &.{},
 
     fn load(context: *anyopaque, arena: std.mem.Allocator, name: []const u8, from_root: []const u8) error{OutOfMemory}!luce_source.Found {
-        _ = from_root; // One rootless table; the token distinguishes nothing here.
         const self: *TestLoader = @ptrCast(@alignCast(context));
         for (self.locked) |locked| {
             if (std.mem.eql(u8, locked, name)) return .{ .unreadable = "permission denied" };
         }
         for (self.modules) |module| {
-            if (std.mem.eql(u8, module.name, name)) {
-                return .{ .text = .{ .bytes = try arena.dupe(u8, module.source) } };
+            if (!std.mem.eql(u8, module.name, name)) continue;
+            if (module.from) |only| {
+                if (!std.mem.eql(u8, only, from_root)) continue;
             }
+            return .{ .text = .{
+                .bytes = try arena.dupe(u8, module.source),
+                .path = module.path,
+                .root = module.root,
+            } };
         }
         return .missing;
     }
@@ -2901,4 +2917,131 @@ test "a compound store into a list or an array still reads through index_get" {
         at = found + 1;
     }
     try testing.expectEqual(@as(usize, 2), reads);
+}
+
+// ---------------------------------------------------------------------------
+// Packages: root isolation and root-qualified serialized names
+// ---------------------------------------------------------------------------
+
+test "two packages shipping the same file name both load, apart (docs/PACKAGES.md D4, D7)" {
+    // The isolation the (root, name) registry key and the
+    // root-qualified prefixes exist for: two packages each carry a
+    // `util.luc`, each package's `import util` answers inside its own
+    // root, and the program compiles with both — no collision, no
+    // cross-package aliasing, no duplicate declaration.
+    var packaged: TestLoader = .{ .modules = &.{
+        .{
+            .name = "alpha",
+            .root = "alpha-1.0.0",
+            .path = ".luce/packages/alpha-1.0.0/alpha.luc",
+            .source = "import util\n\nfunc scaled(v: long) -> long:\n    return util.factor() * v\n",
+        },
+        .{
+            .name = "beta",
+            .root = "beta-1.0.0",
+            .path = ".luce/packages/beta-1.0.0/beta.luc",
+            .source = "import util\n\nfunc shifted(v: long) -> long:\n    return util.factor() + v\n",
+        },
+        .{
+            .name = "util",
+            .from = "alpha-1.0.0",
+            .root = "alpha-1.0.0",
+            .path = ".luce/packages/alpha-1.0.0/util.luc",
+            .source = "func factor() -> long:\n    return 10\n",
+        },
+        .{
+            .name = "util",
+            .from = "beta-1.0.0",
+            .root = "beta-1.0.0",
+            .path = ".luce/packages/beta-1.0.0/util.luc",
+            .source = "func factor() -> long:\n    return 100\n",
+        },
+    } };
+    var result = try compile_mod.compileProject(testing.allocator,
+        \\import alpha
+        \\import beta
+        \\
+        \\func main():
+        \\    assert(alpha.scaled(2) == 20)
+        \\    assert(beta.shifted(2) == 102)
+        \\
+    , packaged.loader(), .{});
+    var program = switch (result) {
+        .success => |compiled| compiled,
+        .failure => |*diagnostics| {
+            const rendered = try diagnostics.render(testing.allocator);
+            defer testing.allocator.free(rendered);
+            std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
+            result.deinit();
+            return error.TestUnexpectedResult;
+        },
+    };
+    defer program.deinit();
+
+    // The serialized module keeps the two utils apart by name: each
+    // function carries its root, so the `.lcm` cannot merge them and a
+    // trace names the package a frame came from (D7, format 39).
+    var saw_alpha = false;
+    var saw_beta = false;
+    for (program.functions) |function| {
+        if (std.mem.eql(u8, function.name, "alpha-1.0.0/util.factor")) saw_alpha = true;
+        if (std.mem.eql(u8, function.name, "beta-1.0.0/util.factor")) saw_beta = true;
+        // No function of either package serializes under the bare
+        // name the two would merge at.
+        try testing.expect(!std.mem.eql(u8, function.name, "util.factor"));
+    }
+    try testing.expect(saw_alpha);
+    try testing.expect(saw_beta);
+
+    const encoded = try mir.module.encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+    try testing.expect(std.mem.indexOf(u8, encoded, "alpha-1.0.0/util.factor") != null);
+    try testing.expect(std.mem.indexOf(u8, encoded, "beta-1.0.0/util.factor") != null);
+}
+
+test "a package's util and the project's util never answer for each other" {
+    // The project has a util.luc of its own; the package carries one
+    // too.  Each import means its own file — the project's main sees
+    // the project's, the package sees the package's — and both compile
+    // in one program.
+    var packaged: TestLoader = .{ .modules = &.{
+        .{
+            .name = "util",
+            .from = "",
+            .source = "func factor() -> long:\n    return 2\n",
+        },
+        .{
+            .name = "geo",
+            .root = "geo-1.2.0",
+            .path = ".luce/packages/geo-1.2.0/geo.luc",
+            .source = "import util\n\nfunc measure() -> long:\n    return util.factor()\n",
+        },
+        .{
+            .name = "util",
+            .from = "geo-1.2.0",
+            .root = "geo-1.2.0",
+            .path = ".luce/packages/geo-1.2.0/util.luc",
+            .source = "func factor() -> long:\n    return 7\n",
+        },
+    } };
+    var result = try compile_mod.compileProject(testing.allocator,
+        \\import util
+        \\import geo
+        \\
+        \\func main():
+        \\    assert(util.factor() == 2)
+        \\    assert(geo.measure() == 7)
+        \\
+    , packaged.loader(), .{});
+    var program = switch (result) {
+        .success => |compiled| compiled,
+        .failure => |*diagnostics| {
+            const rendered = try diagnostics.render(testing.allocator);
+            defer testing.allocator.free(rendered);
+            std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
+            result.deinit();
+            return error.TestUnexpectedResult;
+        },
+    };
+    program.deinit();
 }

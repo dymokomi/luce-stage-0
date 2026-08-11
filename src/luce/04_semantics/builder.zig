@@ -551,7 +551,7 @@ pub const FunctionBuilder = struct {
                     field.name,
                 });
                 defer self.temporary().free(joined);
-                return self.analyzer.constant_names.get(joined);
+                return self.analyzer.constant_names.get(try self.importedName(joined));
             },
             else => return null,
         }
@@ -1326,7 +1326,7 @@ pub const FunctionBuilder = struct {
                 return try self.analyzer.qualify(self.prefix, written);
             }
             if (self.analyzer.importsModule(self.module, head)) {
-                return written;
+                return try self.importedName(written);
             }
             // A call the reader never wrote cannot be fixed where it
             // points.  `f"{x:.2f}"` lowers to `strings.format_float`,
@@ -1363,6 +1363,14 @@ pub const FunctionBuilder = struct {
             return null;
         }
         return try self.analyzer.qualify(self.prefix, written);
+    }
+
+    /// The declared key of a cross-module reference written in this
+    /// function's module (`Analyzer.importedName`): the written text
+    /// itself for a module of the program's own root, and the
+    /// root-qualified key for a package's (docs/PACKAGES.md D7).
+    fn importedName(self: *FunctionBuilder, written: []const u8) Error![]const u8 {
+        return self.analyzer.importedName(self.module, written);
     }
 
     /// Does this binding own the storage in its slot?  Every real
@@ -5443,7 +5451,7 @@ pub const FunctionBuilder = struct {
             return self.analyzer.struct_names.contains(qualified);
         }
         if (!self.analyzer.importsModule(self.module, head)) return false;
-        return self.analyzer.struct_names.contains(written.items);
+        return self.analyzer.struct_names.contains(try self.importedName(written.items));
     }
 
     /// Find a visible give retained by `expression` itself.  Only the
@@ -7306,7 +7314,7 @@ pub const FunctionBuilder = struct {
                 break :found self.analyzer.enum_names.get(local) orelse return .not_a_member;
             }
             if (!self.analyzer.importsModule(self.module, chain.head())) return .not_a_member;
-            break :found self.analyzer.enum_names.get(spelled) orelse return .not_a_member;
+            break :found self.analyzer.enum_names.get(try self.importedName(spelled)) orelse return .not_a_member;
         };
         const info = self.analyzer.enum_decls.items[index];
         if (info.declaration.visibility == .private and info.module != self.module) {
@@ -7374,7 +7382,7 @@ pub const FunctionBuilder = struct {
                 break :found self.analyzer.variant_names.get(local) orelse return .not_a_member;
             }
             if (!self.analyzer.importsModule(self.module, chain.head())) return .not_a_member;
-            break :found self.analyzer.variant_names.get(spelled) orelse return .not_a_member;
+            break :found self.analyzer.variant_names.get(try self.importedName(spelled)) orelse return .not_a_member;
         };
         const info = self.analyzer.variant_decls.items[index];
         if (info.declaration.visibility == .private and info.module != self.module) {
@@ -7454,7 +7462,7 @@ pub const FunctionBuilder = struct {
             if (self.analyzer.importsModule(self.module, base)) {
                 const joined = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ base, field.name });
                 // geo.pi — an imported module's file-scope constant.
-                if (self.analyzer.constant_names.get(joined)) |constant| {
+                if (self.analyzer.constant_names.get(try self.importedName(joined))) |constant| {
                     const info = self.analyzer.constant_infos.items[constant];
                     if (info.declaration.visibility == .private and info.module != self.module) {
                         try self.fail("luce.sema.private", field.span, "{s} is private to {s}", .{
@@ -8977,19 +8985,20 @@ pub const FunctionBuilder = struct {
             return .reported;
         }
         if (self.analyzer.importsModule(self.module, head)) {
-            if (self.analyzer.struct_names.contains(joined) or
-                self.analyzer.enum_names.contains(joined) or
-                self.analyzer.variant_names.contains(joined) or
-                self.analyzer.function_names.contains(joined) or
-                self.variantMemberOfQualified(joined) != null)
+            const key = try self.importedName(joined);
+            if (self.analyzer.struct_names.contains(key) or
+                self.analyzer.enum_names.contains(key) or
+                self.analyzer.variant_names.contains(key) or
+                self.analyzer.function_names.contains(key) or
+                self.variantMemberOfQualified(key) != null)
             {
-                return .{ .resolved = try self.arena().dupe(u8, joined) };
+                return .{ .resolved = try self.arena().dupe(u8, key) };
             }
             // geo.pi.method() — a value method on an imported constant.
             if (count >= 2) {
                 const member = try std.fmt.allocPrint(self.temporary(), "{s}.{s}", .{ head, parts[count - 2] });
                 defer self.temporary().free(member);
-                if (self.analyzer.constant_names.contains(member)) return .value;
+                if (self.analyzer.constant_names.contains(try self.importedName(member))) return .value;
             }
             try self.failUnknownFunction(joined, method.span);
             return .reported;
@@ -8997,7 +9006,7 @@ pub const FunctionBuilder = struct {
         // The head names a module elsewhere in this program: point at
         // the missing import instead of "unknown name".
         for (self.analyzer.modules) |module| {
-            if (module.prefix.len != 0 and std.mem.eql(u8, module.prefix, head)) {
+            if (module.binding.len != 0 and std.mem.eql(u8, module.binding, head)) {
                 try self.fail("luce.sema.import", method.span, "unknown namespace {s}; import {s} to use it", .{ head, try self.analyzer.importSpelling(head) });
                 return .reported;
             }

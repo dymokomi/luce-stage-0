@@ -20,6 +20,11 @@
 #
 # Absolute times move with the machine; the current snapshot lives in
 # docs/CODEGEN.md, and bench/compare.sh is the same-host A/B.
+#
+# Benchmarks import nothing outside this directory's own tree — no
+# packages, no store (docs/PACKAGES.md D5): compare.sh checks out old
+# refs whose gitignored `.luce/` is empty, and a benchmark that
+# resolved a package would break the authoritative A/B.
 
 set -e
 root="$(cd "$(dirname "$0")/.." && pwd)"

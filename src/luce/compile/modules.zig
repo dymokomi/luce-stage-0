@@ -82,7 +82,7 @@ pub fn loadAll(
         modules.deinit(gpa);
         return null;
     }
-    try modules.append(gpa, .{ .prefix = "", .tree = root_tree, .file = root });
+    try modules.append(gpa, .{ .prefix = "", .binding = "", .tree = root_tree, .file = root });
 
     // Breadth-first over the import graph.  `pending` carries the file
     // each import was written in, so a diagnostic about it points at
@@ -131,8 +131,24 @@ pub fn loadAll(
         // The namespace call sites use — resolution has already made
         // sure a re-import agrees on it, so the first spelling is the
         // only spelling.
-        const prefix = try scaffold.dupe(u8, wanted.import.binding);
-        try modules.append(gpa, .{ .prefix = prefix, .tree = tree, .file = file });
+        const binding = try scaffold.dupe(u8, wanted.import.binding);
+        // The qualification prefix its declarations will carry.  A
+        // module of the program's own root — and the standard library,
+        // which belongs to no root — keys by its binding, as it always
+        // has; a module of a *foreign* root is a package's, and its
+        // prefix carries the root token, so two packages' same-named
+        // internals can never share a qualified name or merge in a
+        // serialized module (docs/PACKAGES.md D7).  The token is the
+        // host's stable package identity ("geo-1.2.0"), never a
+        // machine path, so the serialized names it reaches stay the
+        // same on every machine.
+        const loaded = diagnostics.sources.at(file).?;
+        const home = diagnostics.sources.rootOf(root);
+        const prefix = if (loaded.kind == .standard or std.mem.eql(u8, loaded.root, home))
+            binding
+        else
+            try std.fmt.allocPrint(scaffold, "{s}/{s}", .{ loaded.root, binding });
+        try modules.append(gpa, .{ .prefix = prefix, .binding = binding, .tree = tree, .file = file });
         for (tree.imports) |onward| try pending.append(gpa, .{ .from = file, .import = onward });
     }
     if (diagnostics.hasErrors()) {

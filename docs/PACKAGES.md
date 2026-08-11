@@ -1,8 +1,10 @@
 # Packages: using and loading (design)
 
-**Status: IN PROGRESS — implementation-order steps 1–2 are built (the
+**Status: IN PROGRESS — implementation-order steps 1–3 are built (the
 manifest, discovery and the D7 seam; subfolder imports and `import ...
-as`); the stores of steps 3–5 are not.**  This memo designs the
+as`; the store, `LUCE_LIB`, `path:`, hashes, diamonds + `override:`,
+and root-qualified serialized names); step 4's `.luce/cache/` is
+not.**  This memo designs the
 consuming half of packages — how a program *finds and loads* code it
 did not write — and deliberately stops before authoring and
 publishing.  The machinery for using packages has to be solid before a
@@ -373,6 +375,44 @@ The review's second blocker, adopted as the implementation contract:
    packages resolve end to end, package-internal isolation proven by
    two packages shipping same-named files, diamond + `.override`,
    the format_version bump for root-qualified names.
+   *As built (2026-08-10), deviations and decisions D3/D4 left open:*
+   **a package's root token is `name-version`** ("geo-1.2.0") — never
+   a filesystem path — so the serialized names it qualifies, and with
+   them `artifact.sourceHash`, are identical across machines and
+   across store/shelf/`path:` locations; a package module serializes
+   as `root/binding.name` (`geo-1.2.0/util.twice`), format_version 39.
+   **One file is one module whatever spelled it**: a package module
+   reached as `geo.shapes` by the consumer and as `shapes` from inside
+   the package unifies on the (root, opened-path) pair, so its structs
+   are one type across the boundary — which extends step 2's
+   one-binding rule across namespaces (the registry remembers each
+   resolution as a *claim*, and stage 4 reads the claims back to
+   resolve reference sites against the right root); std likewise loads
+   once per program rather than once per root.  **The hash is
+   SHA-256**, as the manifest value's prefix states — D1's "the way
+   `artifact.zig` hashes" was read as *content hash, refused by name*,
+   not as its algorithm, because `sourceHash` is a 64-bit cache key
+   and `sha256:` must not lie — over every regular file in sorted
+   relative-path order, each contributing path, NUL, length, bytes.
+   **`path:` replaces only the store probe**, exactly as D3 says, so a
+   shelf and a `path:` both answering is `luce.import.ambiguous` —
+   no precedence anywhere, the override included.  **`path:` and
+   `override:` are the root manifest's alone**: a package manifest
+   carrying either is refused.  **Inside a package the no-precedence
+   rule holds too**: a package file and a package dependency both
+   answering one name is ambiguous (D4's "its files, then its own
+   dependencies" reads as the anchor's contents, not as an order).
+   **Hash mismatches and directory/manifest disagreements share
+   `luce.import.version`** — D6 defines it as store/`luce.yaml`/
+   manifest disagreement, which a wrong digest is — and the store
+   machinery's refusals travel through a new `Found.refused` channel
+   carrying the stable code and the whole sentence, since only the
+   host knows the paths and the numbers.  **The transitive set
+   resolves eagerly** at the first import that consults the want list,
+   so a diamond is refused with both edges named wherever it hides.
+   **`LUCE_LIB` became a search path** (colon-separated; semicolon on
+   Windows) serving both of its meanings: the directories holding
+   `libluce_rt.a` for the link, and the package shelves.
 4. `.luce/cache/` (D5) for project builds; loom keeps beside-source
    caching for rootless files.
 5. Specs throughout: `modules_spec.zig` grows a packages section;

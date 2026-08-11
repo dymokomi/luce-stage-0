@@ -50,8 +50,9 @@ would happily open `Geo.luc` for `import geo`, so the directory entry
 is checked rather than the open — a program that builds on a Mac
 builds on the machine that ships it.
 
-Deliberately absent: package managers, search paths, conditional
-imports, and re-exports.
+Deliberately absent: conditional imports and re-exports.  Projects,
+subfolders and vendored packages are on the [modules
+reference](/ref/modules/).
 
 ## The standard library lives under std
 

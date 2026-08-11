@@ -213,6 +213,92 @@ test "a .luc with no artifact is compiled by luce and runs, warm the next time" 
     try testing.expect(!try install.holdsAnything(luce.mir.module.extension));
 }
 
+test "a vendored package resolves end to end: luce builds the project, loom runs it" {
+    // The store, used the way a person would (docs/PACKAGES.md D3-D5):
+    // a project with a luce.yaml naming its one want, the geo package
+    // hand-vendored into `.luce/packages/`, `luce build` resolving the
+    // whole of it — entry module, submodule, and the package's private
+    // util, which anchors to the package and never to the project —
+    // and the artifact running under loom.
+    const gpa = testing.allocator;
+    var install = try installTree(gpa, true);
+    defer install.deinit(gpa);
+
+    try install.write("project/luce.yaml",
+        \\name: atlas
+        \\version: 0.1.0
+        \\
+        \\packages:
+        \\  geo: 1.2.0
+        \\
+    );
+    try install.write("project/main.luc",
+        \\import geo
+        \\import geo.shapes
+        \\
+        \\func main():
+        \\    let r = shapes.Rect(width = 2, height = 3)
+        \\    print("area " + string(geo.area(r)))
+        \\
+    );
+    try install.write("project/.luce/packages/geo-1.2.0/luce.yaml",
+        \\name: geo
+        \\version: 1.2.0
+        \\
+    );
+    try install.write("project/.luce/packages/geo-1.2.0/geo.luc",
+        \\import shapes
+        \\import util
+        \\
+        \\func area(r: shapes.Rect) -> long:
+        \\    return util.scale(r.width * r.height)
+        \\
+    );
+    try install.write("project/.luce/packages/geo-1.2.0/shapes.luc",
+        \\struct Rect:
+        \\    width: long
+        \\    height: long
+        \\
+    );
+    try install.write("project/.luce/packages/geo-1.2.0/util.luc",
+        \\func scale(v: long) -> long:
+        \\    return v * 10
+        \\
+    );
+
+    // `luce build`, exactly as a person types it.  Nothing on stderr:
+    // a store resolution is the predictable case and stays quiet —
+    // only shelves and path: overrides are loud.
+    const main_path = try install.at(gpa, "project/main.luc");
+    defer gpa.free(main_path);
+    const out_path = try install.at(gpa, "project/app.lc");
+    defer gpa.free(out_path);
+    var built = try runLuce(gpa, &install, &.{ "build", main_path, "-o", out_path });
+    defer built.deinit(gpa);
+    try testing.expectEqualStrings("", built.err);
+    try testing.expectEqual(@as(u8, 0), built.status);
+    try testing.expect(install.exists("project/app.lc"));
+
+    // The artifact runs: 2 * 3 * 10, across three package modules.
+    const artifact = try install.at(gpa, "project/app.lc");
+    defer gpa.free(artifact);
+    var ran = try runLoom(gpa, &install, &.{ "run", artifact }, null, null);
+    defer ran.deinit(gpa);
+    try testing.expectEqualStrings("", ran.err);
+    try testing.expectEqualStrings("area 60\n", ran.out);
+    try testing.expectEqual(@as(u8, 0), ran.status);
+
+    // loom's own front end walks the same store when handed the
+    // source: same program, same answer, artifact cached beside it.
+    const source = try install.at(gpa, "project/main.luc");
+    defer gpa.free(source);
+    var direct = try runLoom(gpa, &install, &.{source}, null, null);
+    defer direct.deinit(gpa);
+    try testing.expectEqualStrings("", direct.err);
+    try testing.expectEqualStrings("area 60\n", direct.out);
+    try testing.expectEqual(@as(u8, 0), direct.status);
+}
+
 test "the .lc luce writes runs on a loom with no compiler at all" {
     const gpa = testing.allocator;
     var install = try installTree(gpa, true);

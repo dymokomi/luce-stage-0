@@ -73,6 +73,13 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     const command = arguments[1];
     const path = arguments[2];
 
+    // The environment, read once: `LUCE_LIB` serves both halves of the
+    // toolchain — the directories holding `libluce_rt.a` for the link,
+    // and the package shelves the loader probes (docs/PACKAGES.md D3).
+    var environment = try init.environ.createMap(gpa);
+    defer environment.deinit();
+    const library_path = environment.get("LUCE_LIB");
+
     if (std.mem.eql(u8, command, "build")) {
         // The file comes first and the options follow it.  An option
         // written in the file's slot pushes the file into the option
@@ -123,20 +130,18 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
             return 1;
         }
 
-        var environment = try init.environ.createMap(gpa);
-        defer environment.deinit();
         return buildNative(gpa, io, err, out, .{
             .path = path,
             .output_path = output_path,
             .release = release,
             .kind = emit.kind(),
-            .library_directory = environment.get("LUCE_LIB"),
+            .library_directory = library_path,
             .driver = environment.get("LUCE_CC"),
         });
     }
     if (std.mem.eql(u8, command, "check")) {
         if (arguments.len != 3) return refuse(err, "check takes one file and no options", .{});
-        var program = (try compilePath(gpa, io, err, path)) orelse return 1;
+        var program = (try compilePath(gpa, io, err, path, library_path)) orelse return 1;
         defer program.deinit();
         try out.print("{s}: ok\n", .{files.displayName(path)});
         try out.flush();
@@ -152,7 +157,7 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
         } else if (arguments.len != 3) {
             return refuse(err, "ir takes one file and at most --full", .{});
         }
-        var program = (try compilePathPruned(gpa, io, err, path, !keep_unreachable)) orelse return 1;
+        var program = (try compilePathPruned(gpa, io, err, path, library_path, !keep_unreachable)) orelse return 1;
         defer program.deinit();
         const dump = try luce.mir.print(gpa, &program);
         defer gpa.free(dump);
@@ -273,7 +278,7 @@ fn buildNative(
         driver: ?[]const u8,
     },
 ) !u8 {
-    var program = (try compilePath(gpa, io, err, request.path)) orelse return 1;
+    var program = (try compilePath(gpa, io, err, request.path, request.library_directory)) orelse return 1;
     defer program.deinit();
 
     // The same one thing release means everywhere: the artifact
@@ -359,8 +364,9 @@ fn compilePath(
     io: std.Io,
     err: *std.Io.Writer,
     path: []const u8,
+    library_path: ?[]const u8,
 ) !?luce.mir.Program {
-    return compilePathPruned(gpa, io, err, path, true);
+    return compilePathPruned(gpa, io, err, path, library_path, true);
 }
 
 fn compilePathPruned(
@@ -368,6 +374,7 @@ fn compilePathPruned(
     io: std.Io,
     err: *std.Io.Writer,
     path: []const u8,
+    library_path: ?[]const u8,
     prune: bool,
 ) !?luce.mir.Program {
     if (std.mem.endsWith(u8, path, luce.mir.module.extension)) return decodePath(gpa, io, err, path);
@@ -387,27 +394,38 @@ fn compilePathPruned(
             return null;
         },
         // The root is one path the user typed; no host answers it in
-        // two places.  The arm exists because the seam carries it.
+        // two places and no store machinery refuses it.  The arms
+        // exist because the seam carries them.
         .ambiguous => {
             try err.print("luce: cannot read {s}: it answered in more than one place\n", .{path});
+            return null;
+        },
+        .refused => |refusal| {
+            try err.print("luce: cannot read {s}: {s}\n", .{ path, refusal.message });
             return null;
         },
     };
     defer gpa.free(source);
 
-    // The luce.yaml governing the program, when one does: today it
-    // only establishes the root token the module registry keys by,
-    // and a broken manifest is refused here, early, by name.
+    // The luce.yaml governing the program, when one does: the root
+    // token the module registry keys by, and the want list the store
+    // probes are gated by (docs/PACKAGES.md D1, D3).  A broken
+    // manifest is refused here, early, by name.
     var discovery = std.heap.ArenaAllocator.init(gpa);
     defer discovery.deinit();
-    const source_root: []const u8 = switch (try files.discoverProject(discovery.allocator(), io, path)) {
-        .rootless => "",
-        .root => |token| token,
+    const governed: ?files.Governed = switch (try files.discoverProject(discovery.allocator(), io, path)) {
+        .rootless => null,
+        .governed => |project| project,
         .refused => |why| {
             try err.print("luce: {s}\n", .{why});
             return null;
         },
     };
+    const source_root: []const u8 = if (governed) |project| project.root else "";
+    const shelves: []const []const u8 = if (library_path) |text|
+        try files.splitSearchPath(discovery.allocator(), text)
+    else
+        &.{};
 
     // The path as the user wrote it, not its basename: `luce check
     // sub/bad.luc` that answers `bad.luc:1:1` is a location nothing
@@ -416,7 +434,12 @@ fn compilePathPruned(
         .io = io,
         .directory = std.fs.path.dirname(path) orelse "",
         .project_root = source_root,
+        .project = if (governed) |project| project.manifest else null,
+        .shelves = shelves,
+        .alerts = err,
+        .gpa = gpa,
     };
+    defer loader.deinit();
     var result = try luce.compile.compileProject(gpa, source, loader.loader(), .{
         .allow_host = true,
         .source_name = files.displayName(path),

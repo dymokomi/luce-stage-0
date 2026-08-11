@@ -150,6 +150,95 @@ test "constants reach across modules through imports" {
     try agree.okProgram(&program, .{});
 }
 
+test "two packages' same-named internals stay their own (docs/PACKAGES.md D4, D7)" {
+    // The store's isolation promise, run: two packages each carry a
+    // private `util.luc`, each package's `import util` is answered
+    // inside its own root, and the two never merge, collide, or answer
+    // for each other.  The loader stands in for the store — the
+    // compiler never learns what a package is, only that the two utils
+    // arrived under two root tokens.
+    var program = try agree.project(
+        \\import alpha
+        \\import beta
+        \\
+        \\func main():
+        \\    assert(alpha.scaled(2) == 20)
+        \\    assert(beta.shifted(2) == 102)
+        \\
+    , &.{
+        .{
+            .name = "alpha",
+            .root = "alpha-1.0.0",
+            .path = ".luce/packages/alpha-1.0.0/alpha.luc",
+            .source = "import util\n\nfunc scaled(v: long) -> long:\n    return util.factor() * v\n",
+        },
+        .{
+            .name = "beta",
+            .root = "beta-1.0.0",
+            .path = ".luce/packages/beta-1.0.0/beta.luc",
+            .source = "import util\n\nfunc shifted(v: long) -> long:\n    return util.factor() + v\n",
+        },
+        .{
+            .name = "util",
+            .from = "alpha-1.0.0",
+            .root = "alpha-1.0.0",
+            .path = ".luce/packages/alpha-1.0.0/util.luc",
+            .source = "func factor() -> long:\n    return 10\n",
+        },
+        .{
+            .name = "util",
+            .from = "beta-1.0.0",
+            .root = "beta-1.0.0",
+            .path = ".luce/packages/beta-1.0.0/util.luc",
+            .source = "func factor() -> long:\n    return 100\n",
+        },
+    });
+    defer program.deinit();
+    try agree.okProgram(&program, .{});
+}
+
+test "a package module reached from outside and inside is one module: one struct, one type" {
+    // The consumer writes `import geo.shapes`; the package's own entry
+    // writes `import shapes`.  The host answers both with the same
+    // file, and one file is one module — so the `Rect` a package
+    // function returns is the very type the consumer names, not a
+    // twin that looks alike.
+    var program = try agree.project(
+        \\import geo
+        \\import geo.shapes
+        \\
+        \\func main():
+        \\    let r = geo.unit()
+        \\    assert(shapes.area(r) == 1.0)
+        \\    let mine = shapes.Rect(width = 2.0, height = 3.0)
+        \\    assert(shapes.area(mine) == 6.0)
+        \\
+    , &.{
+        .{
+            .name = "geo",
+            .root = "geo-1.2.0",
+            .path = ".luce/packages/geo-1.2.0/geo.luc",
+            .source = "import shapes\n\nfunc unit() -> shapes.Rect:\n    return shapes.Rect(width = 1.0, height = 1.0)\n",
+        },
+        .{
+            .name = "geo.shapes",
+            .from = "",
+            .root = "geo-1.2.0",
+            .path = ".luce/packages/geo-1.2.0/shapes.luc",
+            .source = "struct Rect:\n    width: double\n    height: double\n\nfunc area(r: Rect) -> double:\n    return r.width * r.height\n",
+        },
+        .{
+            .name = "shapes",
+            .from = "geo-1.2.0",
+            .root = "geo-1.2.0",
+            .path = ".luce/packages/geo-1.2.0/shapes.luc",
+            .source = "struct Rect:\n    width: double\n    height: double\n\nfunc area(r: Rect) -> double:\n    return r.width * r.height\n",
+        },
+    });
+    defer program.deinit();
+    try agree.okProgram(&program, .{});
+}
+
 test "subfolder modules run: dots map to folders, and as picks the binding" {
     // docs/PACKAGES.md D2, the half that runs: `import geo.shapes`
     // binds its last segment, `as` moves only the binding, and both

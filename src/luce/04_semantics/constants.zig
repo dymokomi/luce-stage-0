@@ -632,7 +632,7 @@ pub fn fold(
             if (field.target.* == .name) {
                 const head = field.target.name.text;
                 if (analyzer.importsModule(module, head)) {
-                    const joined = try std.fmt.allocPrint(analyzer.arena, "{s}.{s}", .{ head, field.name });
+                    const joined = try analyzer.importedName(module, try std.fmt.allocPrint(analyzer.arena, "{s}.{s}", .{ head, field.name }));
                     if (analyzer.constant_names.get(joined)) |index| {
                         // The fold happens inside the declaring
                         // module and the *value* crosses (D8); the
@@ -790,7 +790,7 @@ pub fn fold(
             if (method.target.* == .name) {
                 const head = method.target.name.text;
                 if (analyzer.importsModule(module, head)) {
-                    const joined = try std.fmt.allocPrint(analyzer.arena, "{s}.{s}", .{ head, method.name });
+                    const joined = try analyzer.importedName(module, try std.fmt.allocPrint(analyzer.arena, "{s}.{s}", .{ head, method.name }));
                     if (analyzer.struct_names.get(joined)) |layout_index| {
                         return foldConstruct(analyzer, module, method.arguments, method.span, layout_index);
                     }
@@ -851,7 +851,8 @@ fn foldEnumMember(analyzer: *Analyzer, module: usize, field: ast.FieldAccess) Er
             break :found analyzer.enum_names.get(local) orelse return null;
         }
         if (!analyzer.importsModule(module, chain.head())) return null;
-        break :found analyzer.enum_names.get(written.items) orelse return null;
+        const imported = try analyzer.importedName(module, written.items);
+        break :found analyzer.enum_names.get(imported) orelse return null;
     };
     const info = analyzer.enum_decls.items[index];
     if (info.declaration.visibility == .private and info.module != module) {

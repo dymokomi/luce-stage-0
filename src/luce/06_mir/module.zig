@@ -107,7 +107,19 @@ pub const magic = "LUCE";
 /// they mirror, so every tag after `struct_set` renumbers.  Safe for
 /// the reason 22's note gives and no other: the version moved with
 /// them.
-pub const format_version: u32 = 38;
+///
+/// 39 — declaration names are root-qualified (docs/PACKAGES.md D7).
+/// The wire *shape* did not move an inch: names were always free
+/// blobs.  What moved is what they mean — a package module's
+/// functions, structs, enums, unions and constants serialize as
+/// `root/binding.name` ("geo-1.2.0/util.twice") where they used to
+/// serialize as `binding.name` — so two packages each shipping a
+/// `util` can never merge in one module, and a trace names the
+/// package a frame came from.  A module written under 38 would decode
+/// and run, which is exactly why the version must refuse it: the
+/// same program's bytes, and therefore its `artifact.sourceHash`,
+/// changed under it.
+pub const format_version: u32 = 39;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -1710,7 +1722,12 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // 37 -> 38: tagged unions (docs/UNION.md) — `types.Type` grows the
     // `variant` tag and `Instruction` grows the `variant_*` trio, both
     // in the middle of their unions, so the wire renumbers.
-    try testing.expectEqual(@as(u32, 38), format_version);
+    // 38 -> 39: root-qualified declaration names (docs/PACKAGES.md
+    // D7) — no tag moved and the hash below did not either; what
+    // changed is the *content* of the name blobs, which is the other
+    // shape-changed case the paragraph above warns the hash cannot
+    // catch.
+    try testing.expectEqual(@as(u32, 39), format_version);
     try testing.expectEqual(@as(u64, 11170085788899588128), hasher.final());
 }
 
