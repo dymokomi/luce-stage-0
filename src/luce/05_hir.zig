@@ -12,11 +12,16 @@
 //! clean body over, because only the analyzer holds the settled
 //! declaration tables lower reads).
 //!
-//! The seam landed family by family, with the fused walk's emissions
-//! held byte-identical to this pass's replay by a Debug dual-emission
-//! gate over the whole suite and a 1637-program corpus; the flip then
-//! deleted the fused emissions, and the corpus dumps remain the
-//! regression net.
+//! The seam landed family by family, and every landing was held to
+//! byte-identical MIR: a corpus of 1637 spec programs and 253 dumped
+//! ones was recorded before the first move and checked after each,
+//! and the flip itself ran both paths on every clean compile with a
+//! Debug gate comparing the two tapes instruction for instruction.
+//! All of that was scaffolding and all of it is gone; what proves
+//! the pass now is the suite — every spec program still runs on both
+//! engines and is compared on prints, traps, traces and leaks
+//! (docs/ENGINE.md), which is what proved the emissions before the
+//! seam existed.
 //!
 //! **What an HIR is for: sugar stays a node until one pass removes it.**
 //!

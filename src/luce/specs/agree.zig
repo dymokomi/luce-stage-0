@@ -80,10 +80,7 @@ pub fn programWith(source: []const u8, options: types.CompileOptions) !mir.Progr
     var result = try compile.compile(testing.allocator, source, options);
     switch (result) {
         .success => |compiled| {
-            var checked = compiled;
-            errdefer checked.deinit();
-            try corpus(&checked, source, &.{}, options.prune);
-            return checked;
+            return compiled;
         },
         .failure => |*diagnostics| {
             const rendered = try diagnostics.render(testing.allocator);
@@ -151,10 +148,7 @@ pub fn project(root: []const u8, files: []const File) !mir.Program {
     );
     switch (result) {
         .success => |compiled| {
-            var checked = compiled;
-            errdefer checked.deinit();
-            try corpus(&checked, root, files, hosted.prune);
-            return checked;
+            return compiled;
         },
         .failure => |*diagnostics| {
             const rendered = try diagnostics.render(testing.allocator);
@@ -164,79 +158,6 @@ pub fn project(root: []const u8, files: []const File) !mir.Program {
             return error.CompileFailed;
         },
     }
-}
-
-// ---------------------------------------------------------------------------
-// Migration scaffolding: the MIR corpus (LUCE_MIR_CORPUS)
-// ---------------------------------------------------------------------------
-
-/// Migration scaffolding for the check/lower seam in `04_semantics`
-/// (05_hir.zig's header is the plan).  With `LUCE_MIR_CORPUS` set to a
-/// directory, every program a spec compiles also has its printed MIR —
-/// post-07_optimize, exactly what the specs run and the artifact is
-/// built from — recorded there under the first sixteen hex digits of
-/// its source hash (`LUCE_MIR_CORPUS_MODE=record`, the default) or
-/// compared byte for byte against the recording (`=check`, where a
-/// missing file is a new spec and is recorded, and a differing one is
-/// `error.MirDrifted` with both paths printed).  That is how a
-/// refactor that must not move the emitted MIR is proven over the
-/// whole suite at once.  Unset, the hook is one environment probe.
-/// The final split landing deletes this section.
-fn corpus(compiled: *const mir.Program, root: []const u8, files: []const File, pruned: bool) !void {
-    const directory = environVariable("LUCE_MIR_CORPUS") orelse return;
-    const gpa = testing.allocator;
-
-    var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update(root);
-    for (files) |file| hasher.update(file.source);
-    // `prune` is the one compile option that changes the MIR a
-    // successful compile answers, and the optimizer specs compile one
-    // source both ways — so the raw variant is a different program to
-    // this corpus and keys its own file.
-    if (!pruned) hasher.update("#raw");
-    var digest: [32]u8 = undefined;
-    hasher.final(&digest);
-    const hex = std.fmt.bytesToHex(digest[0..8].*, .lower);
-    var name_storage: [hex.len + 8]u8 = undefined;
-    const name = std.fmt.bufPrint(&name_storage, "{s}.mir", .{&hex}) catch unreachable;
-
-    const rendered = try mir.print(gpa, compiled);
-    defer gpa.free(rendered);
-
-    var folder = try std.Io.Dir.cwd().createDirPathOpen(io, directory, .{});
-    defer folder.close(io);
-
-    const mode = environVariable("LUCE_MIR_CORPUS_MODE") orelse "record";
-    if (std.mem.eql(u8, mode, "check")) {
-        const recorded: ?[]u8 = folder.readFileAlloc(io, name, gpa, .unlimited) catch |mistake|
-            switch (mistake) {
-                error.FileNotFound => null,
-                else => return mistake,
-            };
-        if (recorded) |expected| {
-            defer gpa.free(expected);
-            if (std.mem.eql(u8, expected, rendered)) return;
-            var drift_storage: [hex.len + 8]u8 = undefined;
-            const drifted = std.fmt.bufPrint(&drift_storage, "{s}.mir.new", .{&hex}) catch unreachable;
-            try folder.writeFile(io, .{ .sub_path = drifted, .data = rendered });
-            std.debug.print(
-                "MIR drifted: recorded {s}/{s} vs this run {s}/{s}\n",
-                .{ directory, name, directory, drifted },
-            );
-            return error.MirDrifted;
-        }
-        // Missing: a spec this corpus has not seen — record it.
-    }
-    try folder.writeFile(io, .{ .sub_path = name, .data = rendered });
-}
-
-/// One environment variable, or null when unset — and always null on
-/// Windows, where this scaffolding's convenience is not worth the
-/// second lookup path (the corpus is recorded and checked on the
-/// machine doing the seam migration).
-fn environVariable(name: []const u8) ?[]const u8 {
-    if (builtin.os.tag == .windows) return null;
-    return testing.environ.getPosix(name);
 }
 
 /// Lower `source` and hand back the textual LLVM IR; the caller owns
