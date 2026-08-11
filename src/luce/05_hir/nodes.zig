@@ -198,7 +198,10 @@ pub const Expression = union(enum) {
     /// `x else fallback` — the optional fallback; the fallback runs
     /// only when `value` is absent.
     coalesce: Coalesce,
-    /// A comparison: operands at their met type, result boolean.
+    /// A comparison: operands at their met type — or each on its own
+    /// ladder for the exact cross-ladder comparison, which compares
+    /// the numbers and not a conversion of them (docs/NUMERICS.md §5)
+    /// — result boolean.
     compare: Compare,
 
     // Calls -----------------------------------------------------------------

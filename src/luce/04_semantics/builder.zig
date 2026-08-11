@@ -1613,7 +1613,14 @@ pub const FunctionBuilder = struct {
     //
     // Each converted expression family constructs its node here and
     // attaches it to the Typed it answers, changing nothing about what
-    // is emitted (05_hir.zig).  Converted so far: literals and reads.
+    // is emitted (05_hir.zig).  Converted so far: literals and reads;
+    // the operators — binary, compare (the exact cross-ladder and
+    // absence forms included), unary, short-circuit, coalesce — and
+    // the implicit numeric widening, recorded as `convert` at
+    // `widenNumeric`, the one place widening is spelled.  The explicit
+    // conversion constructors (`lowerConvert`) are *calls* in the
+    // tree's vocabulary (`nodes.ResolvedCallee.conversion`) and record
+    // with the calls family, not here.
 
     /// Record one node of the typed tree.  Nodes live in the compile
     /// arena beside the tape they mirror — `self.code` records through
@@ -1623,6 +1630,18 @@ pub const FunctionBuilder = struct {
         const made = try self.arena().create(nodes.Expression);
         made.* = expression;
         return made;
+    }
+
+    /// **The null-propagation rule, spelled once.**  A node's children
+    /// are non-null `NodeRef`s, so an operator whose operand carries no
+    /// node — its family has not converted yet — records no node of its
+    /// own and answers null instead: the completeness gate at the final
+    /// flip counts nulls, and a partial tree that looks whole is worse
+    /// than an absent one.  Every operator arm asks this of its
+    /// operands before constructing its node.
+    fn childrenRecorded(values: []const Typed) bool {
+        for (values) |value| if (value.node == null) return false;
+        return true;
     }
 
     /// **Migration scaffolding, Debug only** (the seam's landing
@@ -1662,6 +1681,62 @@ pub const FunctionBuilder = struct {
             .index_get => |read| {
                 std.debug.assert(instruction.intrinsic.kind == .index_get);
                 std.debug.assert(instruction.intrinsic.arguments.len == read.indices.len + 1);
+            },
+            .binary => |operation| {
+                // Arithmetic and the bit set only — a comparison is
+                // `compare` — and the operands' type is the result's,
+                // which is what makes the node's `result` the emitted
+                // `operand_type` too.
+                std.debug.assert(!operation.op.isComparison());
+                std.debug.assert(instruction.binary.op == operation.op);
+                std.debug.assert(instruction.binary.operand_type.eql(operation.result));
+            },
+            .compare => |comparison| {
+                std.debug.assert(comparison.op.isComparison());
+                switch (instruction) {
+                    // A same-type comparison leaves through its own
+                    // instruction, spelling the written operator.
+                    .binary => |emitted| std.debug.assert(emitted.op == comparison.op),
+                    .intrinsic => |emitted| switch (emitted.kind) {
+                        // The exact cross-ladder comparison; spelled
+                        // forwards or mirrored is the emission's fact,
+                        // not the tree's, so the operator register is
+                        // not asserted.
+                        .compare_long_double => std.debug.assert(emitted.arguments.len == 3),
+                        // `x == none` — one side of the node is the
+                        // written absence.
+                        .is_none => std.debug.assert(comparison.op == .equal and
+                            (comparison.left.* == .absent or comparison.right.* == .absent)),
+                        else => unreachable, // no other intrinsic answers a comparison
+                    },
+                    // `x != none` answers through the complement of
+                    // `is_none`.
+                    .unary => |emitted| std.debug.assert(emitted.op == .logic_not and
+                        comparison.op == .not_equal and
+                        (comparison.left.* == .absent or comparison.right.* == .absent)),
+                    else => unreachable, // no other instruction answers a comparison
+                }
+            },
+            .convert => |conversion| {
+                // The one `convert` node today is the implicit numeric
+                // widening (`widenNumeric`); the explicit constructors
+                // record as calls, so the operand always widens into
+                // the result.
+                std.debug.assert(instruction == .convert);
+                std.debug.assert(conversion.operand.result().widensTo(conversion.result));
+                std.debug.assert(self.code.result_types.items[value.register].eql(conversion.result));
+            },
+            .unary => |operation| std.debug.assert(instruction.unary.op == operation.op),
+            // The two slot-merging operators: the value is the reload
+            // of the hidden slot both arms stored into, so what is
+            // honestly assertable here is the reload — a `local_get`
+            // whose slot's type is the node's result.  The arms'
+            // stores, the branch, and the merge live in instructions
+            // and blocks the node does not point at, and stay the
+            // emission's own until the flip makes lower spell them.
+            .short_circuit, .coalesce => {
+                std.debug.assert(instruction == .local_get);
+                std.debug.assert(self.code.localType(instruction.local_get).eql(node.result()));
             },
             // A folded constant materializes in whatever shape its
             // value takes; the type and provenance checks above are
@@ -2549,6 +2624,11 @@ pub const FunctionBuilder = struct {
             ),
             .value_type = expected,
             .root = inner.root,
+            // The `T <: T?` wrap has no node kind: the typed tree
+            // spells no optional_wrap, so this path answers no node
+            // rather than an invented one — the family that models
+            // the wrap closes it (05_hir.zig).
+            .node = null,
         };
     }
 
@@ -2567,14 +2647,33 @@ pub const FunctionBuilder = struct {
     /// than re-deciding it, so there is one statement of the lattice.
     fn widenNumeric(self: *FunctionBuilder, value: Typed, to: Type) Error!Typed {
         std.debug.assert(value.value_type.widensTo(to));
-        return .{
+        const widened: Typed = .{
             .register = try self.code.emit(
                 .{ .convert = value.register },
                 to,
             ),
             .value_type = to,
             .root = value.root,
+            // The widening is a node of its own (`convert`), so an
+            // operand tree says where every conversion stands — and
+            // recording it here covers every site that widens, because
+            // this is the one place widening is spelled.  Null when
+            // the operand's family has not converted (the rule at
+            // `childrenRecorded`).
+            .node = if (value.node) |operand|
+                try self.recordNode(.{ .convert = .{
+                    .operand = operand,
+                    .result = to,
+                    .span = operand.span(),
+                } })
+            else
+                null,
         };
+        // A widened value usually replaces its operand in place rather
+        // than answering through `lowerExpression`, so the node oracle
+        // runs here.
+        self.debugNodeOnTape(widened);
+        return widened;
     }
 
     /// Bring an already-lowered value to `want` when it gets there by
@@ -7991,7 +8090,7 @@ pub const FunctionBuilder = struct {
         if (left.value_type.isNumeric() and right.value_type.isNumeric()) {
             const crosses = left.value_type.isInteger() != right.value_type.isInteger();
             if (crosses and operation.isComparison()) {
-                return self.lowerExactCompare(operation, left, right);
+                return self.lowerExactCompare(operation, left, right, binary.span);
             }
             _ = try self.unifyNumeric(&left, &right);
         }
@@ -8084,6 +8183,16 @@ pub const FunctionBuilder = struct {
                 // A concatenation allocates fresh bytes; every numeric
                 // result is a scalar the question never reaches.
                 .provenance = if (string_concat) .fresh else .plain,
+                .node = if (childrenRecorded(&.{ left, right }))
+                    try self.recordNode(.{ .binary = .{
+                        .op = operation,
+                        .left = left.node.?,
+                        .right = right.node.?,
+                        .result = operand_type,
+                        .span = binary.span,
+                    } })
+                else
+                    null,
             };
         }
 
@@ -8150,6 +8259,16 @@ pub const FunctionBuilder = struct {
                 .right = right.register,
             } }, .boolean),
             .value_type = .boolean,
+            .node = if (childrenRecorded(&.{ left, right }))
+                try self.recordNode(.{ .compare = .{
+                    .op = operation,
+                    .left = left.node.?,
+                    .right = right.node.?,
+                    .result = .boolean,
+                    .span = binary.span,
+                } })
+            else
+                null,
         };
     }
 
@@ -8178,6 +8297,7 @@ pub const FunctionBuilder = struct {
         operation: mir.BinaryOp,
         left: Typed,
         right: Typed,
+        span: Span,
     ) Error!?Typed {
         const int_first = left.value_type.isInteger();
         var whole = if (int_first) left else right;
@@ -8191,10 +8311,11 @@ pub const FunctionBuilder = struct {
 
         if (whole.value_type == .int and fraction.value_type == .double) {
             const widened = try self.widenNumeric(whole, .double);
-            const ordered = if (int_first)
+            var ordered = if (int_first)
                 try self.emitCompare(operation, widened, fraction)
             else
                 try self.emitCompare(operation, fraction, widened);
+            ordered.node = try self.exactCompareNode(operation, int_first, widened, fraction, span);
             return ordered;
         }
 
@@ -8212,7 +8333,32 @@ pub const FunctionBuilder = struct {
                 .boolean,
             ),
             .value_type = .boolean,
+            .node = try self.exactCompareNode(operation, int_first, whole, fraction, span),
         };
+    }
+
+    /// The `compare` node for an exact cross-ladder comparison, with
+    /// the operands back in written order — the mirroring the emission
+    /// performs is the emission's fact, not the tree's.  Null when an
+    /// operand's family has not converted (`childrenRecorded`).
+    fn exactCompareNode(
+        self: *FunctionBuilder,
+        operation: mir.BinaryOp,
+        int_first: bool,
+        whole: Typed,
+        fraction: Typed,
+        span: Span,
+    ) Error!?nodes.NodeRef {
+        if (!childrenRecorded(&.{ whole, fraction })) return null;
+        const written_left = if (int_first) whole else fraction;
+        const written_right = if (int_first) fraction else whole;
+        return try self.recordNode(.{ .compare = .{
+            .op = operation,
+            .left = written_left.node.?,
+            .right = written_right.node.?,
+            .result = .boolean,
+            .span = span,
+        } });
     }
 
     /// An ordinary same-type comparison, once both sides are one type.
@@ -8264,10 +8410,31 @@ pub const FunctionBuilder = struct {
             .{ .intrinsic = .{ .kind = .is_none, .arguments = arguments } },
             .boolean,
         );
-        if (binary.op == .equal) return .{ .register = absent, .value_type = .boolean };
+        // The tree records the comparison as written: the tested side
+        // against a typed absence — `absent` at the tested `T?` is the
+        // node form of the bare `none` (05_hir.zig), and lower spells
+        // `is_none` back out of the pair.  Null when the tested side's
+        // family has not converted (`childrenRecorded`).
+        const node: ?nodes.NodeRef = if (tested.node) |tested_node| node: {
+            const none_side = if (binary.right.* == .none_literal) binary.right else binary.left;
+            const written_absent = try self.recordNode(.{ .absent = .{
+                .result = tested.value_type,
+                .span = none_side.span(),
+            } });
+            const op: nodes.BinaryOp = if (binary.op == .equal) .equal else .not_equal;
+            break :node try self.recordNode(.{ .compare = .{
+                .op = op,
+                .left = if (binary.right.* == .none_literal) tested_node else written_absent,
+                .right = if (binary.right.* == .none_literal) written_absent else tested_node,
+                .result = .boolean,
+                .span = binary.span,
+            } });
+        } else null;
+        if (binary.op == .equal) return .{ .register = absent, .value_type = .boolean, .node = node };
         return .{
             .register = try self.code.emit(.{ .unary = .{ .op = .logic_not, .operand = absent } }, .boolean),
             .value_type = .boolean,
+            .node = node,
         };
     }
 
@@ -8330,15 +8497,19 @@ pub const FunctionBuilder = struct {
         );
         const either = try self.code.openCoalesce(absent, present, payload);
         var root = left.root;
+        var fallback_node: ?nodes.NodeRef = null;
         if (isLeavingCall(binary.right)) {
             // `x else trap("…")` is the assert-unwrap, and it is
             // greppable — which is why Luce has no force-unwrap sigil
             // (docs/FAILURE.md).  The fallback leaves nothing behind
-            // because it never comes back.
+            // because it never comes back — and no fallback *value*
+            // either, so the node stays unrecorded until the calls
+            // family decides how a leaving call sits in the tree.
             _ = try self.lowerExpression(binary.right, true);
         } else if (try self.lowerTyped(binary.right, payload, binary.span, "the else fallback")) |fallback| {
             try self.code.store(either.result, fallback.value.register);
             root = joinedRoot(left.root, fallback.value.root);
+            fallback_node = fallback.value.node;
         }
         return .{
             .register = try self.code.closeShortCircuit(either),
@@ -8347,6 +8518,17 @@ pub const FunctionBuilder = struct {
             // The answer is a reload of the hidden slot both arms
             // stored into — a view of what the slot holds.
             .provenance = .view,
+            // Null when either side's family has not converted
+            // (`childrenRecorded`'s rule).
+            .node = if (left.node != null and fallback_node != null)
+                try self.recordNode(.{ .coalesce = .{
+                    .value = left.node.?,
+                    .fallback = fallback_node.?,
+                    .result = payload,
+                    .span = binary.span,
+                } })
+            else
+                null,
         };
     }
 
@@ -8376,6 +8558,7 @@ pub const FunctionBuilder = struct {
         const facts_floor = self.narrowed.items.len;
         try self.applyFacts(binary.left, binary.op == .logic_and, split_search_depth);
         defer self.narrowed.shrinkRetainingCapacity(facts_floor);
+        var right_node: ?nodes.NodeRef = null;
         if (try self.lowerExpression(binary.right, false)) |right| {
             if (right.value_type != .boolean) {
                 try self.fail("luce.sema.type", binary.right.span(), "the right operand of {s} must be bool, not {s}{s}", .{
@@ -8385,11 +8568,30 @@ pub const FunctionBuilder = struct {
                 });
             } else {
                 try self.code.store(either.result, right.register);
+                right_node = right.node;
             }
         }
         return .{
             .register = try self.code.closeShortCircuit(either),
             .value_type = .boolean,
+            // The answer is a reload of the hidden slot both arms
+            // stored into — a view of what the slot holds, exactly as
+            // `else` above; a boolean never owns storage, so nothing
+            // downstream ever asks, and the stamp exists to agree with
+            // the node property (`nodes.provenance`).
+            .provenance = .view,
+            // Null when either side's family has not converted
+            // (`childrenRecorded`'s rule).
+            .node = if (left.node != null and right_node != null)
+                try self.recordNode(.{ .short_circuit = .{
+                    .op = if (binary.op == .logic_and) .logic_and else .logic_or,
+                    .left = left.node.?,
+                    .right = right_node.?,
+                    .result = .boolean,
+                    .span = binary.span,
+                } })
+            else
+                null,
         };
     }
 
@@ -8431,6 +8633,17 @@ pub const FunctionBuilder = struct {
                 return .{
                     .register = try self.code.emit(.{ .unary = .{ .op = .negate, .operand = at.register } }, at.value_type),
                     .value_type = at.value_type,
+                    // Null when the operand's family has not converted
+                    // (`childrenRecorded`'s rule).
+                    .node = if (at.node) |operand_node|
+                        try self.recordNode(.{ .unary = .{
+                            .op = .negate,
+                            .operand = operand_node,
+                            .result = at.value_type,
+                            .span = unary.span,
+                        } })
+                    else
+                        null,
                 };
             },
             .logic_not => {
@@ -8441,6 +8654,15 @@ pub const FunctionBuilder = struct {
                 return .{
                     .register = try self.code.emit(.{ .unary = .{ .op = .logic_not, .operand = operand.register } }, .boolean),
                     .value_type = .boolean,
+                    .node = if (operand.node) |operand_node|
+                        try self.recordNode(.{ .unary = .{
+                            .op = .logic_not,
+                            .operand = operand_node,
+                            .result = .boolean,
+                            .span = unary.span,
+                        } })
+                    else
+                        null,
                 };
             },
             .bit_not => {
@@ -8457,6 +8679,15 @@ pub const FunctionBuilder = struct {
                 return .{
                     .register = try self.code.emit(.{ .unary = .{ .op = .bit_not, .operand = at.register } }, at.value_type),
                     .value_type = at.value_type,
+                    .node = if (at.node) |operand_node|
+                        try self.recordNode(.{ .unary = .{
+                            .op = .bit_not,
+                            .operand = operand_node,
+                            .result = at.value_type,
+                            .span = unary.span,
+                        } })
+                    else
+                        null,
                 };
             },
         }
