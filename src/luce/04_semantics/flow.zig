@@ -29,6 +29,7 @@ const LocalId = mir.LocalId;
 const assign = @import("assign.zig");
 const builder = @import("builder.zig");
 const recorder = @import("recorder.zig");
+const naming = @import("naming.zig");
 const FunctionBuilder = builder.FunctionBuilder;
 
 pub fn isNarrowed(self: *const FunctionBuilder, local: LocalId) bool {
@@ -219,12 +220,12 @@ fn writtenConstantIndex(self: *FunctionBuilder, expression: *const ast.Expressio
     switch (expression.*) {
         .name => |name| {
             if (self.findLocal(name.text) != null) return null;
-            const qualified = try self.analyzer.qualify(self.prefix, name.text);
+            const qualified = try naming.qualify(self.analyzer, self.prefix, name.text);
             return self.analyzer.constant_names.get(qualified);
         },
         .field => |field| {
             if (field.target.* != .name or self.findLocal(field.target.name.text) != null) return null;
-            if (!self.analyzer.importsModule(self.module, field.target.name.text)) return null;
+            if (!naming.importsModule(self.analyzer, self.module, field.target.name.text)) return null;
             const joined = try std.fmt.allocPrint(self.temporary(), "{s}.{s}", .{
                 field.target.name.text,
                 field.name,
@@ -244,7 +245,7 @@ pub fn writtenConstant(self: *FunctionBuilder, expression: *const ast.Expression
             if (info.declaration.visibility == .private and info.module != self.module) {
                 try self.fail("luce.sema.private", field.span, "{s} is private to {s}", .{
                     field.name,
-                    self.analyzer.moduleName(info.module),
+                    naming.moduleName(self.analyzer, info.module),
                 });
                 return .reported;
             }

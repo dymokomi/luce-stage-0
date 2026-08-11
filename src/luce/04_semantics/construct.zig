@@ -35,6 +35,10 @@ const flow = @import("flow.zig");
 const ledger = @import("ledger.zig");
 const recorder = @import("recorder.zig");
 const refusals = @import("refusals.zig");
+const defaults = @import("defaults.zig");
+const naming = @import("naming.zig");
+const resolve = @import("resolve.zig");
+const shapes = @import("shapes.zig");
 const FunctionBuilder = builder.FunctionBuilder;
 const RecordedOperand = recorder.RecordedOperand;
 const Typed = builder.Typed;
@@ -52,7 +56,7 @@ pub fn lowerConstruct(
     if (decl_info.declaration.visibility == .private and decl_info.module != self.module) {
         try self.fail("luce.sema.private", span, "{s} is private to {s}", .{
             decl_info.declaration.name,
-            self.analyzer.moduleName(decl_info.module),
+            naming.moduleName(self.analyzer, decl_info.module),
         });
         return null;
     }
@@ -125,10 +129,10 @@ pub fn lowerConstruct(
         // Object fields follow the verb rule at construction
         // (S24): the binding that receives the struct owns them.
         // `none` owns nothing, so it is always a legal filling.
-        if (self.analyzer.carriesObjects(expected) and
+        if (shapes.carriesObjects(self.analyzer, expected) and
             argument.value.* != .none_literal and
             try flow.refuseConstantEscape(self, value.root, argument.span, "a struct field")) return null;
-        if (self.analyzer.carriesObjects(expected) and
+        if (shapes.carriesObjects(self.analyzer, expected) and
             argument.value.* != .none_literal and
             !(try self.yieldsOwnership(argument.value)))
         {
@@ -153,8 +157,8 @@ pub fn lowerConstruct(
     var next_entry = call_arguments.len;
     for (seen, 0..) |given, field_index| {
         if (given) continue;
-        if (!self.analyzer.fieldHasDefault(layout_index, field_index)) continue;
-        const filled = (try self.analyzer.fieldDefault(layout_index, field_index)) orelse return null;
+        if (!defaults.fieldHasDefault(self.analyzer, layout_index, field_index)) continue;
+        const filled = (try defaults.fieldDefault(self.analyzer, layout_index, field_index)) orelse return null;
         const made = try expressions.emitConstantValue(self, filled.value, filled.value_type, span);
         ledger.ownedForStore(self, made);
         entries[next_entry] = .{ .node = made.node, .slot = @intCast(field_index) };
@@ -177,8 +181,8 @@ pub fn lowerConstruct(
                 .{
                     decl_info.declaration.name,
                     layout.fields[field_index].name,
-                    self.analyzer.moduleName(decl_info.module),
-                    self.analyzer.moduleName(decl_info.module),
+                    naming.moduleName(self.analyzer, decl_info.module),
+                    naming.moduleName(self.analyzer, decl_info.module),
                 },
             );
             return null;
@@ -260,7 +264,7 @@ pub fn lowerVariantConstruct(
     if (decl_info.declaration.visibility == .private and decl_info.module != self.module) {
         try self.fail("luce.sema.private", span, "{s} is private to {s}", .{
             decl_info.declaration.name,
-            self.analyzer.moduleName(decl_info.module),
+            naming.moduleName(self.analyzer, decl_info.module),
         });
         return null;
     }
@@ -350,10 +354,10 @@ pub fn lowerVariantConstruct(
         // Object fields follow the verb rule at construction
         // (S24): the binding that receives the union owns them.
         // `none` owns nothing, so it is always a legal filling.
-        if (self.analyzer.carriesObjects(expected) and
+        if (shapes.carriesObjects(self.analyzer, expected) and
             argument.value.* != .none_literal and
             try flow.refuseConstantEscape(self, value.root, argument.span, "a union payload field")) return null;
-        if (self.analyzer.carriesObjects(expected) and
+        if (shapes.carriesObjects(self.analyzer, expected) and
             argument.value.* != .none_literal and
             !(try self.yieldsOwnership(argument.value)))
         {
@@ -380,8 +384,8 @@ pub fn lowerVariantConstruct(
     var next_entry = call_arguments.len;
     for (seen, 0..) |given, field_index| {
         if (given) continue;
-        if (!self.analyzer.variantFieldHasDefault(variant_index, member_index, field_index)) continue;
-        const filled = (try self.analyzer.variantFieldDefault(variant_index, member_index, field_index)) orelse
+        if (!defaults.variantFieldHasDefault(self.analyzer, variant_index, member_index, field_index)) continue;
+        const filled = (try defaults.variantFieldDefault(self.analyzer, variant_index, member_index, field_index)) orelse
             return null;
         const made = try expressions.emitConstantValue(self, filled.value, filled.value_type, span);
         ledger.ownedForStore(self, made);
@@ -453,7 +457,7 @@ pub fn lowerEnumOfNumber(
     if (info.declaration.visibility == .private and info.module != self.module) {
         try self.fail("luce.sema.private", span, "{s} is private to {s}", .{
             info.declaration.name,
-            self.analyzer.moduleName(info.module),
+            naming.moduleName(self.analyzer, info.module),
         });
         return null;
     }
@@ -1103,7 +1107,7 @@ pub fn lowerIntrinsic(
         // The parse family's third member (docs/BYTES.md R3): the
         // bytes back as text, or absent when they are not text.
         .parse_string => {
-            const buffer = try self.analyzer.internHeapType(.{ .list = .byte });
+            const buffer = try resolve.internHeapType(self.analyzer, .{ .list = .byte });
             if (!arguments[0].value_type.eql(buffer))
                 return failIntrinsic(self, call, "parse_string takes a list(byte)");
             result = .{ .optional = .string };
@@ -1302,7 +1306,7 @@ pub fn lowerIntrinsic(
         .dir_list => {
             if (arguments[0].value_type != .string)
                 return failIntrinsic(self, call, "dir_list takes a string path");
-            result = try self.analyzer.internHeapType(.{ .list = .string });
+            result = try resolve.internHeapType(self.analyzer, .{ .list = .string });
         },
         // The byte channel's door (docs/BYTES.md R5).  The mode is
         // a number here and a named door in `std.files`, which is
@@ -1313,7 +1317,7 @@ pub fn lowerIntrinsic(
                 return failIntrinsic(self, call, "file_open takes (path string, mode long)");
             if (!try self.widensInto(&arguments[1], .long))
                 return failIntrinsic(self, call, "file_open takes (path string, mode long)");
-            result = try self.analyzer.internHeapType(.file);
+            result = try resolve.internHeapType(self.analyzer, .file);
         },
         // Reached through `f.read(buffer)` and its two siblings,
         // which `objectMethod` types against the receiver: a

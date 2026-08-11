@@ -31,6 +31,8 @@ const Type = types.Type;
 const builder = @import("builder.zig");
 const flow = @import("flow.zig");
 const recorder = @import("recorder.zig");
+const naming = @import("naming.zig");
+const shapes = @import("shapes.zig");
 const FunctionBuilder = builder.FunctionBuilder;
 const Typed = builder.Typed;
 
@@ -70,7 +72,7 @@ pub fn functionReachable(self: *FunctionBuilder, function_index: u32, span: Span
                     .enumeration => |reference| self.analyzer.enum_decls.items[reference.index].declaration.name,
                     .variant => |index| self.analyzer.variant_decls.items[index].declaration.name,
                 },
-                self.analyzer.moduleName(info.module),
+                naming.moduleName(self.analyzer, info.module),
             });
             return false;
         }
@@ -78,7 +80,7 @@ pub fn functionReachable(self: *FunctionBuilder, function_index: u32, span: Span
     if (info.declaration.visibility == .private) {
         try self.fail("luce.sema.private", span, "{s} is private to {s}", .{
             info.declaration.name,
-            self.analyzer.moduleName(info.module),
+            naming.moduleName(self.analyzer, info.module),
         });
         return false;
     }
@@ -101,7 +103,7 @@ pub fn fieldReachable(
     try self.fail("luce.sema.private", span, "{s} of {s} is private to {s}", .{
         self.analyzer.structs.items[layout_index].fields[field_index].name,
         info.declaration.name,
-        self.analyzer.moduleName(info.module),
+        naming.moduleName(self.analyzer, info.module),
     });
     return false;
 }
@@ -161,7 +163,7 @@ pub fn failUnknownName(self: *FunctionBuilder, name: []const u8, span: Span) Err
         }
         return;
     }
-    const qualified = try self.analyzer.qualify(self.prefix, name);
+    const qualified = try naming.qualify(self.analyzer, self.prefix, name);
     if (try failNotAValue(self, name, qualified, span)) return;
     var suggestion = helpers.Suggestion.init(name);
     offerLocals(self, &suggestion);
@@ -410,7 +412,7 @@ pub fn failNeedsOwnership(
     value_type: Type,
     situations: []const u8,
 ) Error!void {
-    const carries_resource = try self.analyzer.carriesResource(value_type);
+    const carries_resource = try shapes.carriesResource(self.analyzer, value_type);
     if (value_type == .optional) {
         if (carries_resource) {
             const advice = try resourceMoveAdvice(self, value);

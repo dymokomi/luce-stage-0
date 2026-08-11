@@ -28,6 +28,7 @@ const LocalId = mir.LocalId;
 
 const builder = @import("builder.zig");
 const recorder = @import("recorder.zig");
+const shapes = @import("shapes.zig");
 const FunctionBuilder = builder.FunctionBuilder;
 const Typed = builder.Typed;
 
@@ -268,7 +269,7 @@ fn takeStorage(self: *FunctionBuilder, value: Typed) bool {
 /// here, where the decision that elides it can be seen
 /// (docs/STRINGS.md).
 pub fn ownedForStoreKind(self: *FunctionBuilder, value: Typed) nodes.StoreKind {
-    if (!self.analyzer.ownsStorage(value.value_type)) return .plain;
+    if (!shapes.ownsStorage(self.analyzer, value.value_type)) return .plain;
     if (takeStorage(self, value)) {
         // Move-instead-of-copy: the place adopts storage this
         // statement made and nothing else claims (docs/STRINGS.md).
@@ -314,7 +315,7 @@ pub fn storeOwned(self: *FunctionBuilder, local: LocalId, value: Typed) void {
 /// produced through `lowerExpression` — a compound assignment's
 /// concatenation, say — so the statement's end reclaims it.
 pub fn parkFreshStorage(self: *FunctionBuilder, value: Typed, span: Span) Error!void {
-    if (!self.analyzer.ownsStorage(value.value_type)) return;
+    if (!shapes.ownsStorage(self.analyzer, value.value_type)) return;
     if (value.provenance() != .fresh) return;
     if (parkedForStorage(self, value.node)) return;
     try registerTemp(self, value, false, true, span);

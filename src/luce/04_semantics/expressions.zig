@@ -34,6 +34,9 @@ const ledger = @import("ledger.zig");
 const recorder = @import("recorder.zig");
 const refusals = @import("refusals.zig");
 const statements = @import("statements.zig");
+const naming = @import("naming.zig");
+const resolve = @import("resolve.zig");
+const shapes = @import("shapes.zig");
 const FunctionBuilder = builder.FunctionBuilder;
 const Landing = builder.Landing;
 const RecordedOperand = recorder.RecordedOperand;
@@ -79,7 +82,7 @@ pub fn lowerGive(self: *FunctionBuilder, give: ast.Give) Error!?Typed {
         return null;
     }
     if (try self.checkPoisoned(info, name, give.span)) return null;
-    const carries_resource = try self.analyzer.carriesResource(local_type);
+    const carries_resource = try shapes.carriesResource(self.analyzer, local_type);
     if (local_type == .optional and !flow.isNarrowed(self, local)) {
         if (carries_resource) {
             try self.fail(
@@ -396,7 +399,7 @@ pub fn emitConstantValue(self: *FunctionBuilder, value: ConstantValue, value_typ
 /// Resources have one owner and cannot occur anywhere in that copy.
 pub fn lowerCopy(self: *FunctionBuilder, copied: ast.Copy) Error!?Typed {
     const value = (try self.lowerExpression(copied.operand, false)) orelse return null;
-    const carries_resource = try self.analyzer.carriesResource(value.value_type);
+    const carries_resource = try shapes.carriesResource(self.analyzer, value.value_type);
     // The ordinary optional diagnostic says to test and continue,
     // but that would only reveal the next refusal here: a present
     // resource graph is still non-copyable.  Say both facts once
@@ -414,7 +417,7 @@ pub fn lowerCopy(self: *FunctionBuilder, copied: ast.Copy) Error!?Typed {
     // Copying a question makes no sense: there may be nothing to
     // duplicate.  Test it first.
     if (try refusals.refusesAbsence(self, value, "copy", copied.span, copied.operand)) return null;
-    if (!self.analyzer.carriesObjects(value.value_type)) {
+    if (!shapes.carriesObjects(self.analyzer, value.value_type)) {
         try self.fail(
             "luce.sema.own",
             copied.span,
@@ -491,14 +494,14 @@ pub fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Typed {
             try self.fail("luce.sema.new", new.span, "new array takes 1 to 4 dimension sizes: new array(long, 5, 5)", .{});
             return null;
         }
-        const element = (try self.analyzer.resolveType(self.module, new.type_name.arguments[0])) orelse return null;
+        const element = (try resolve.resolveType(self.analyzer, self.module, new.type_name.arguments[0])) orelse return null;
         // `new array(T, n)` spells its shape with expressions, so
         // it interns the heap type here rather than through the
         // written-type path — and needs the same refusal.
-        if (try self.analyzer.refuseOptionalPart(element, new.type_name.arguments[0], "array element")) {
+        if (try resolve.refuseOptionalPart(self.analyzer, element, new.type_name.arguments[0], "array element")) {
             return null;
         }
-        object_type = try self.analyzer.internHeapType(.{
+        object_type = try resolve.internHeapType(self.analyzer, .{
             .array = .{ .element = element, .rank = @intCast(new.dims.len) },
         });
         const run = (try self.lowerOperandsIntoTracking(new.dims, .nothing, null)) orelse return null;
@@ -511,7 +514,7 @@ pub fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Typed {
         }
         recorded_dims = try recorder.recordOperandRun(self, dimensions, run.spilled, run.copied);
     } else {
-        object_type = (try self.analyzer.resolveType(self.module, new.type_name)) orelse return null;
+        object_type = (try resolve.resolveType(self.analyzer, self.module, new.type_name)) orelse return null;
         if (object_type != .heap) {
             try self.fail("luce.sema.new", new.span, "new builds list, map, array, or builder", .{});
             return null;
@@ -630,9 +633,9 @@ pub fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted
         }
         // A literal is a container door like any other (S20, S21):
         // object elements must be fresh, given, or copied.
-        if (self.analyzer.carriesObjects(element.value_type) and
+        if (shapes.carriesObjects(self.analyzer, element.value_type) and
             try flow.refuseConstantEscape(self, element.root, expression.span(), "a container store")) return null;
-        if (self.analyzer.carriesObjects(element.value_type) and !(try self.yieldsOwnership(expression))) {
+        if (shapes.carriesObjects(self.analyzer, element.value_type) and !(try self.yieldsOwnership(expression))) {
             try refusals.failNeedsOwnership(
                 self,
                 expression.span(),
@@ -645,7 +648,7 @@ pub fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted
         }
     }
     const object_type = expected_container orelse
-        try self.analyzer.internHeapType(.{ .list = element_type });
+        try resolve.internHeapType(self.analyzer, .{ .list = element_type });
     // The per-element stores are lower's; their adopt-or-copy is
     // the settled park plus the node-kind provenance (coupling
     // #3), decided here by the same ledger walk.
@@ -730,7 +733,7 @@ pub fn lowerMapLiteral(self: *FunctionBuilder, literal: ast.MapLiteral, wanted_c
             });
             return null;
         }
-        if (self.analyzer.carriesObjects(value_type) and !(try self.yieldsOwnership(entry.value))) {
+        if (shapes.carriesObjects(self.analyzer, value_type) and !(try self.yieldsOwnership(entry.value))) {
             if (try flow.refuseConstantEscape(self, value.root, entry.value.span(), "a map store")) return null;
             try refusals.failNeedsOwnership(
                 self,
@@ -745,7 +748,7 @@ pub fn lowerMapLiteral(self: *FunctionBuilder, literal: ast.MapLiteral, wanted_c
     }
 
     const object_type = expected_container orelse
-        try self.analyzer.internHeapType(.{ .map = .{ .key = key_type, .value = value_type } });
+        try resolve.internHeapType(self.analyzer, .{ .map = .{ .key = key_type, .value = value_type } });
     // The per-entry stores are lower's; the value stores' decide
     // through the same ledger walk (coupling #3).
     for (literal.entries, 0..) |_, index| {
@@ -854,7 +857,7 @@ pub fn lowerSliceRange(self: *FunctionBuilder, slice: ast.SliceRange) Error!?Typ
         if (end_constant) |to| from == to else false
     else
         false;
-    if (!is_string and !empty and try self.analyzer.carriesResource(target.value_type)) {
+    if (!is_string and !empty and try shapes.carriesResource(self.analyzer, target.value_type)) {
         try self.fail(
             "luce.sema.own",
             slice.span,
@@ -927,17 +930,17 @@ fn enumMemberAccess(self: *FunctionBuilder, field: ast.FieldAccess) Error!Member
     // and only an imported module may be the head.
     const index = found: {
         if (chain.count == 1) {
-            const local = try self.analyzer.qualify(self.prefix, spelled);
+            const local = try naming.qualify(self.analyzer, self.prefix, spelled);
             break :found self.analyzer.enum_names.get(local) orelse return .not_a_member;
         }
-        if (!self.analyzer.importsModule(self.module, chain.head())) return .not_a_member;
+        if (!naming.importsModule(self.analyzer, self.module, chain.head())) return .not_a_member;
         break :found self.analyzer.enum_names.get(try self.importedName(spelled)) orelse return .not_a_member;
     };
     const info = self.analyzer.enum_decls.items[index];
     if (info.declaration.visibility == .private and info.module != self.module) {
         try self.fail("luce.sema.private", field.span, "{s} is private to {s}", .{
             info.declaration.name,
-            self.analyzer.moduleName(info.module),
+            naming.moduleName(self.analyzer, info.module),
         });
         return .reported;
     }
@@ -1005,17 +1008,17 @@ fn variantMemberAccess(self: *FunctionBuilder, field: ast.FieldAccess) Error!Mem
     // and only an imported module may be the head.
     const index = found: {
         if (chain.count == 1) {
-            const local = try self.analyzer.qualify(self.prefix, spelled);
+            const local = try naming.qualify(self.analyzer, self.prefix, spelled);
             break :found self.analyzer.variant_names.get(local) orelse return .not_a_member;
         }
-        if (!self.analyzer.importsModule(self.module, chain.head())) return .not_a_member;
+        if (!naming.importsModule(self.analyzer, self.module, chain.head())) return .not_a_member;
         break :found self.analyzer.variant_names.get(try self.importedName(spelled)) orelse return .not_a_member;
     };
     const info = self.analyzer.variant_decls.items[index];
     if (info.declaration.visibility == .private and info.module != self.module) {
         try self.fail("luce.sema.private", field.span, "{s} is private to {s}", .{
             info.declaration.name,
-            self.analyzer.moduleName(info.module),
+            naming.moduleName(self.analyzer, info.module),
         });
         return .reported;
     }
@@ -1097,7 +1100,7 @@ pub fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Typed {
     }
     if (field.target.* == .name and self.findLocal(field.target.name.text) == null) {
         const base = field.target.name.text;
-        if (self.analyzer.importsModule(self.module, base)) {
+        if (naming.importsModule(self.analyzer, self.module, base)) {
             const joined = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ base, field.name });
             // geo.pi — an imported module's file-scope constant.
             if (self.analyzer.constant_names.get(try self.importedName(joined))) |constant| {
@@ -1105,7 +1108,7 @@ pub fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Typed {
                 if (info.declaration.visibility == .private and info.module != self.module) {
                     try self.fail("luce.sema.private", field.span, "{s} is private to {s}", .{
                         field.name,
-                        self.analyzer.moduleName(info.module),
+                        naming.moduleName(self.analyzer, info.module),
                     });
                     return null;
                 }
@@ -1115,7 +1118,7 @@ pub fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Typed {
             return null;
         }
         // Words.classify — a struct of this module as a namespace.
-        const head_qualified = try self.analyzer.qualify(self.prefix, base);
+        const head_qualified = try naming.qualify(self.analyzer, self.prefix, base);
         if (self.analyzer.struct_names.contains(head_qualified)) {
             const joined = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ head_qualified, field.name });
             try refusals.failNamespaceMember(self, base, field.name, joined, field.span);
@@ -1204,7 +1207,7 @@ fn namesAFunction(self: *FunctionBuilder, expression: *const ast.Expression) boo
     switch (expression.*) {
         .name => |name| {
             if (self.findLocal(name.text) != null) return false;
-            const qualified = self.analyzer.qualify(self.prefix, name.text) catch return false;
+            const qualified = naming.qualify(self.analyzer, self.prefix, name.text) catch return false;
             return self.analyzer.function_names.contains(qualified);
         },
         .field => |field| {
@@ -1215,7 +1218,7 @@ fn namesAFunction(self: *FunctionBuilder, expression: *const ast.Expression) boo
                 chain.head(),
                 field.name,
             }) catch return false;
-            const local = self.analyzer.qualify(self.prefix, written) catch return false;
+            const local = naming.qualify(self.analyzer, self.prefix, written) catch return false;
             return self.analyzer.function_names.contains(local) or
                 self.analyzer.function_names.contains(written);
         },
@@ -1660,7 +1663,7 @@ fn lowerCoalesce(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
     // Both arms must agree on ownership: the binding that receives
     // the result either owns an object or does not, and that is
     // one static fact, not one per branch (S1, S8, S16).
-    if (self.analyzer.carriesObjects(payload) and
+    if (shapes.carriesObjects(self.analyzer, payload) and
         (try self.yieldsOwnership(binary.left)) != (try self.yieldsOwnership(binary.right)))
     {
         try self.fail(

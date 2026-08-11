@@ -13,20 +13,21 @@
 //! and typing it needs the name resolved first.  Three sibling stage
 //! folders would advertise an independence that does not exist and
 //! could not be built, so they live here together and are named
-//! internally instead.  That is why the numbering runs 03, 04, 05 with
-//! no gap: this is the intended end state, not a pending split.
+//! internally instead.  The seam this stage *does* have is a different
+//! one, and it is real: checking ends here and emission begins at
+//! stage 5 (`05_hir/`).
 //!
 //! **Where this stage stops.**  It decides *what* the program does and
-//! records each decision as it is reached, on a `mir.build.Lowering` —
-//! stage 6's tape.  It does not know how MIR is made: register
-//! numbering, block bookkeeping, the local table, the constant pool,
-//! sealing, debug origins, and the assembly of a `mir.Program` are all
-//! `06_mir/build.zig`'s.  What crosses the seam is a plain value with
-//! no path back into the checker, which is why stage 6 can close it
-//! long after this stage has finished.  Recording cannot be *deferred*
-//! — it happens in the same visit as the check that decides it,
-//! because the check is what decides it — but it is not this stage's
-//! code.
+//! records each decision as it is reached — onto `05_hir`'s typed
+//! tree, and **onto nothing else: nothing here emits an
+//! instruction**.  Stage 5 lowers that tree, and how MIR is then made
+//! — register numbering, block bookkeeping, the local table, the
+//! constant pool, sealing, debug origins, the assembly of a
+//! `mir.Program` — is `06_mir/build.zig`'s.  Recording cannot be
+//! *deferred*: it happens in the same visit as the check that decides
+//! it, because the check is what decides it.  What crosses each seam
+//! is a plain value with no path back into the checker, which is why
+//! the later stages can close long after this one has finished.
 //!
 //! Rules enforced here, per docs/LANGUAGE.md: static types with no
 //! implicit numeric conversion, immutable `let` and parameters, no
@@ -60,7 +61,26 @@
 //!                      local and loop state a body is checked against.
 //!   declarations.zig — pass one: collect struct layouts, function
 //!                      signatures, top-level constants, and the
-//!                      selected entry; then drive pass two.
+//!                      selected entry; then drive pass two.  The
+//!                      `Analyzer` and its tables live here; each
+//!                      concern that can be named on its own is a
+//!                      file beside it, holding free functions over
+//!                      `*Analyzer`:
+//!   naming.zig       — what a declaration is called, where it was
+//!                      written, and who may see it.
+//!   resolve.zig      — a written type name to a `Type`, and the
+//!                      interning behind the shapes it mints.
+//!   shapes.zig       — what a type carries, how wide it is, and the
+//!                      one graph walk that settles both.
+//!   layouts.zig      — the declared type tables: enums, unions and
+//!                      structs, names first and contents after.
+//!   signatures.zig   — the function table: every signature, the
+//!                      lambda and the specialization the compiler
+//!                      adds to it, the entry, and the layout a
+//!                      return shape rides in.
+//!   defaults.zig     — the folded defaults of a parameter, a struct
+//!                      field, and a union payload field.
+//!   receiver.zig     — whether a method writes its implicit `self`.
 //!   constants.zig    — compile-time evaluation: the one folder every
 //!                      constant, enum value and default goes through.
 //!                      It answers with a value and never emits, which
@@ -123,6 +143,13 @@ pub const task_methods = @import("04_semantics/builtins.zig").task_methods;
 test {
     _ = @import("04_semantics/context.zig");
     _ = @import("04_semantics/declarations.zig");
+    _ = @import("04_semantics/naming.zig");
+    _ = @import("04_semantics/resolve.zig");
+    _ = @import("04_semantics/shapes.zig");
+    _ = @import("04_semantics/layouts.zig");
+    _ = @import("04_semantics/signatures.zig");
+    _ = @import("04_semantics/defaults.zig");
+    _ = @import("04_semantics/receiver.zig");
     _ = @import("04_semantics/builder.zig");
     _ = @import("04_semantics/flow.zig");
     _ = @import("04_semantics/ledger.zig");

@@ -66,6 +66,10 @@ const fresh_object_methods = builtins_mod.fresh_object_methods;
 // Pass one, for the one thing this walk needs from it: the collected
 // project it runs against.
 const Analyzer = @import("declarations.zig").Analyzer;
+const naming = @import("naming.zig");
+const resolve = @import("resolve.zig");
+const shapes = @import("shapes.zig");
+const signatures = @import("signatures.zig");
 
 // The stage's shared vocabulary (`04_semantics/context.zig`).
 const context = @import("context.zig");
@@ -524,11 +528,11 @@ pub const FunctionBuilder = struct {
     ) Error!?[]const u8 {
         if (std.mem.indexOfScalar(u8, written, '.')) |dot| {
             const head = written[0..dot];
-            const local_head = try self.analyzer.qualify(self.prefix, head);
+            const local_head = try naming.qualify(self.analyzer, self.prefix, head);
             if (self.analyzer.struct_names.contains(local_head)) {
-                return try self.analyzer.qualify(self.prefix, written);
+                return try naming.qualify(self.analyzer, self.prefix, written);
             }
-            if (self.analyzer.importsModule(self.module, head)) {
+            if (naming.importsModule(self.analyzer, self.module, head)) {
                 return try self.importedName(written);
             }
             // A call the reader never wrote cannot be fixed where it
@@ -554,7 +558,7 @@ pub const FunctionBuilder = struct {
                     "luce.sema.import",
                     span,
                     "unknown namespace {s}; import {s} to use it",
-                    .{ head, try self.analyzer.importSpelling(head) },
+                    .{ head, try naming.importSpelling(self.analyzer, head) },
                 ),
                 .format_spec => try self.fail(
                     "luce.sema.import",
@@ -565,7 +569,7 @@ pub const FunctionBuilder = struct {
             }
             return null;
         }
-        return try self.analyzer.qualify(self.prefix, written);
+        return try naming.qualify(self.analyzer, self.prefix, written);
     }
 
     /// The declared key of a cross-module reference written in this
@@ -573,7 +577,7 @@ pub const FunctionBuilder = struct {
     /// itself for a module of the program's own root, and the
     /// root-qualified key for a package's (docs/PACKAGES.md D7).
     pub fn importedName(self: *FunctionBuilder, written: []const u8) Error![]const u8 {
-        return self.analyzer.importedName(self.module, written);
+        return naming.importedName(self.analyzer, self.module, written);
     }
 
     pub fn declareLocal(
@@ -603,17 +607,17 @@ pub const FunctionBuilder = struct {
         if (self.findLocal(name)) |found| {
             try self.fail("luce.sema.duplicate", span, "{s} is already declared{s}", .{
                 name,
-                try self.analyzer.declaredAt(self.analyzer.modules[self.module].file, found.info.declared_at),
+                try naming.declaredAt(self.analyzer, self.analyzer.modules[self.module].file, found.info.declared_at),
             });
             return null;
         }
-        const qualified = try self.analyzer.qualify(self.prefix, name);
-        if (try self.analyzer.firstDeclarationOf(qualified)) |where| {
+        const qualified = try naming.qualify(self.analyzer, self.prefix, name);
+        if (try naming.firstDeclarationOf(self.analyzer, qualified)) |where| {
             try self.fail("luce.sema.duplicate", span, "{s} is already a top-level declaration{s}", .{ name, where });
             return null;
         }
-        const carries = self.analyzer.carriesObjects(local_type);
-        const owns_storage = storage_class == .owns and self.analyzer.ownsStorage(local_type);
+        const carries = shapes.carriesObjects(self.analyzer, local_type);
+        const owns_storage = storage_class == .owns and shapes.ownsStorage(self.analyzer, local_type);
         const local = try recorder.recordLocal(self, name, local_type, owns_storage, span);
         const scope = &self.scopes.items[self.scopes.items.len - 1];
         try scope.names.put(self.temporary(), name, .{
@@ -651,9 +655,9 @@ pub const FunctionBuilder = struct {
             try self.fail("luce.sema.duplicate", span, "self is already declared", .{});
             return null;
         }
-        const owns_storage = writes and self.analyzer.ownsStorage(receiver_type);
+        const owns_storage = writes and shapes.ownsStorage(self.analyzer, receiver_type);
         const local = try recorder.recordLocal(self, "self", receiver_type, owns_storage, span);
-        const carries = self.analyzer.carriesObjects(receiver_type);
+        const carries = shapes.carriesObjects(self.analyzer, receiver_type);
         const scope = &self.scopes.items[self.scopes.items.len - 1];
         try scope.names.put(self.temporary(), "self", .{
             .local = local,
@@ -749,7 +753,7 @@ pub const FunctionBuilder = struct {
         }
         const spelled = written.items;
         const head = if (parts.len == 2)
-            self.analyzer.qualify(self.prefix, spelled) catch return false
+            naming.qualify(self.analyzer, self.prefix, spelled) catch return false
         else
             spelled;
         if (self.analyzer.enum_names.get(head)) |index| {
@@ -845,7 +849,7 @@ pub const FunctionBuilder = struct {
         }
         const spelled = written.items;
         const head = if (parts.len == 2)
-            self.analyzer.qualify(self.prefix, spelled) catch return false
+            naming.qualify(self.analyzer, self.prefix, spelled) catch return false
         else
             spelled;
         const index = self.analyzer.variant_names.get(head) orelse return false;
@@ -868,7 +872,7 @@ pub const FunctionBuilder = struct {
         var qualified: [64]u8 = undefined;
         const written = std.fmt.bufPrint(&qualified, "strings.{s}", .{name}) catch return false;
         const index = self.analyzer.function_names.get(written) orelse return false;
-        return self.analyzer.carriesObjects(self.analyzer.functions.items[index].return_type);
+        return shapes.carriesObjects(self.analyzer, self.analyzer.functions.items[index].return_type);
     }
 
     /// True when some struct in this program declares a **method** by
@@ -888,7 +892,7 @@ pub const FunctionBuilder = struct {
             if (candidate.receiver == .not) continue;
             const dot = std.mem.lastIndexOfScalar(u8, candidate.name, '.') orelse continue;
             if (!std.mem.eql(u8, candidate.name[dot + 1 ..], name)) continue;
-            if (self.analyzer.carriesObjects(candidate.return_type)) return true;
+            if (shapes.carriesObjects(self.analyzer, candidate.return_type)) return true;
         }
         return false;
     }
@@ -901,10 +905,10 @@ pub const FunctionBuilder = struct {
         const head = chain.head();
         if (self.findLocal(head) != null) return false;
         if (refusals.capturesName(self, head)) return false;
-        const head_qualified = try self.analyzer.qualify(self.prefix, head);
+        const head_qualified = try naming.qualify(self.analyzer, self.prefix, head);
         if (self.analyzer.struct_names.contains(head_qualified)) return true;
         if (self.analyzer.variant_names.contains(head_qualified)) return true;
-        return self.analyzer.importsModule(self.module, head);
+        return naming.importsModule(self.analyzer, self.module, head);
     }
     // Landing ---------------------------------------------------------------
     //
@@ -1230,7 +1234,7 @@ pub const FunctionBuilder = struct {
         for (info.parameter_types, info.parameter_modes, parameters) |held, mode, *parameter| {
             parameter.* = .{ .value_type = held, .gives = mode == .give };
         }
-        const shape = try self.analyzer.internSignature(.{
+        const shape = try resolve.internSignature(self.analyzer, .{
             .parameters = parameters,
             .result = if (info.results.len >= 2) .none else info.return_type,
         });
@@ -1477,7 +1481,7 @@ pub const FunctionBuilder = struct {
             // string has no handle to check, so it closes here, by
             // deciding the copy before the mutation can happen.
             if (mutating[index] and
-                self.analyzer.ownsStorage(value.value_type) and
+                shapes.ownsStorage(self.analyzer, value.value_type) and
                 value.provenance() == .view)
             {
                 // The copy is storage this statement allocated and
@@ -1538,7 +1542,7 @@ pub const FunctionBuilder = struct {
         // temporary (S3).  Whatever adopts it — a binding, a
         // container, a give parameter, a return — re-owns it at run
         // time, which turns the parked release into a no-op.
-        const objects = self.analyzer.carriesObjects(value.value_type) and
+        const objects = shapes.carriesObjects(self.analyzer, value.value_type) and
             try self.yieldsOwnership(expression) and
             !ledger.parkedAlready(self, value.node);
         // Freshly allocated storage is parked for the same reason and
@@ -1546,7 +1550,7 @@ pub const FunctionBuilder = struct {
         // hands over an object while borrowing the struct run it sits
         // in, and a string slice borrows without yielding anything
         // (docs/STRINGS.md).
-        const storage = self.analyzer.ownsStorage(value.value_type) and
+        const storage = shapes.ownsStorage(self.analyzer, value.value_type) and
             value.provenance() == .fresh and
             !ledger.parkedAlready(self, value.node);
         if (objects or storage) try ledger.registerTemp(self, value, objects, storage, expression.span());
@@ -1641,7 +1645,7 @@ pub const FunctionBuilder = struct {
             .name => |name| {
                 const found = self.findLocal(name.text) orelse {
                     // Not a local: perhaps a file-scope constant.
-                    const qualified = try self.analyzer.qualify(self.prefix, name.text);
+                    const qualified = try naming.qualify(self.analyzer, self.prefix, name.text);
                     if (self.analyzer.constant_names.get(qualified)) |constant| {
                         return expressions.emitConstant(self, constant, name.span);
                     }
@@ -1793,7 +1797,8 @@ pub const FunctionBuilder = struct {
                 if (!std.mem.eql(u8, parameter.text, held.name)) continue;
                 try self.fail("luce.sema.duplicate", parameter.span, "{s} is already declared{s}", .{
                     parameter.text,
-                    try self.analyzer.declaredAt(
+                    try naming.declaredAt(
+                        self.analyzer,
                         self.analyzer.modules[self.module].file,
                         held.declared_at,
                     ),
@@ -1846,7 +1851,8 @@ pub const FunctionBuilder = struct {
             .body = .{ .statements = body_statements, .span = written.span },
             .span = written.span,
         };
-        const named = try self.analyzer.registerLambda(
+        const named = try signatures.registerLambda(
+            self.analyzer,
             declaration,
             self.module,
             signature,
@@ -1913,8 +1919,8 @@ pub const FunctionBuilder = struct {
         origin: nodes.NodeRef,
         span: Span,
     ) Error!Typed {
-        const objects = self.analyzer.carriesObjects(result_type);
-        const storage = self.analyzer.ownsStorage(result_type);
+        const objects = shapes.carriesObjects(self.analyzer, result_type);
+        const storage = shapes.ownsStorage(self.analyzer, result_type);
 
         // A callee answering nothing has no value to carry: the
         // "value" is the call itself, and so is its node.  The floor
@@ -2093,7 +2099,7 @@ pub const FunctionBuilder = struct {
         // Both sides must agree on ownership, for the reason `else`
         // does: the binding that receives the result either owns an
         // object or does not, and that is one static fact (S1, S8).
-        if (self.analyzer.carriesObjects(value.value_type) and
+        if (shapes.carriesObjects(self.analyzer, value.value_type) and
             !(try self.yieldsOwnership(binary.right)))
         {
             try self.fail(

@@ -37,6 +37,10 @@ const flow = @import("flow.zig");
 const ledger = @import("ledger.zig");
 const recorder = @import("recorder.zig");
 const refusals = @import("refusals.zig");
+const naming = @import("naming.zig");
+const resolve = @import("resolve.zig");
+const shapes = @import("shapes.zig");
+const signatures = @import("signatures.zig");
 const FunctionBuilder = builder.FunctionBuilder;
 const RootFact = flow.RootFact;
 const StagedOperandOwner = builder.StagedOperandOwner;
@@ -782,7 +786,7 @@ fn lowerBinding(
     // plain `T`, so the binding starts out present.
     var widened = false;
     if (annotation) |written| {
-        const expected = (try self.analyzer.resolveType(self.module, written)) orelse
+        const expected = (try resolve.resolveType(self.analyzer, self.module, written)) orelse
             return refusals.forgetName(self, name);
         if (value_expression.* == .none_literal) {
             value = ((try self.lowerTyped(value_expression, expected, span, name)) orelse
@@ -827,7 +831,7 @@ fn lowerBinding(
     // reason: the binding is established here and whatever a later
     // assignment fills in belongs to its scope — `none` itself
     // owns nothing (S43).
-    const owns = self.analyzer.carriesObjects(value.value_type) and
+    const owns = shapes.carriesObjects(self.analyzer, value.value_type) and
         (value_expression.* == .none_literal or try self.yieldsOwnership(value_expression));
     const local = (try self.declareLocal(
         name,
@@ -869,7 +873,7 @@ fn lowerReceivedShape(
 ) Error!?ReceivedShape {
     self.shape_position = .receive;
     const value = (try self.lowerExpression(expression, false)) orelse return null;
-    const shape = self.analyzer.returnShapeOf(value.value_type) orelse {
+    const shape = signatures.returnShapeOf(self.analyzer, value.value_type) orelse {
         // One value, two names.  Naming the call is what makes the
         // sentence actionable, and the call is right there.
         try self.fail(
@@ -917,7 +921,7 @@ fn lowerDestructure(self: *FunctionBuilder, bind: ast.Destructure) Error!void {
     const stores = try self.arena().alloc(nodes.StoreKind, bind.names.len);
     var complete = true;
     for (bind.names, received.layout.fields, 0..) |name, field, position| {
-        const carried = self.analyzer.carriesObjects(field.field_type);
+        const carried = shapes.carriesObjects(self.analyzer, field.field_type);
         const local = (try self.declareLocal(
             name.text,
             field.field_type,
@@ -932,7 +936,7 @@ fn lowerDestructure(self: *FunctionBuilder, bind: ast.Destructure) Error!void {
         // owning slot's store copies it out (docs/STRINGS.md).
         locals[position] = local;
         stores[position] = if (recorder.localOwnsStorage(self, local) and
-            self.analyzer.ownsStorage(field.field_type)) .copy else .plain;
+            shapes.ownsStorage(self.analyzer, field.field_type)) .copy else .plain;
     }
     // The shape itself never owned the objects its fields carried —
     // each name did, from the moment it was bound — so the
@@ -976,7 +980,7 @@ fn fitsInto(actual: Type, expected: Type) bool {
 /// (S16/S45), so only an owning var can receive one.
 fn existingTarget(self: *FunctionBuilder, name: ast.Name) Error!?ExistingTarget {
     const found = self.findLocal(name.text) orelse {
-        const qualified = try self.analyzer.qualify(self.prefix, name.text);
+        const qualified = try naming.qualify(self.analyzer, self.prefix, name.text);
         if (self.analyzer.constant_names.contains(qualified)) {
             try self.fail("luce.sema.const", name.span, "{s} is a file-scope constant and cannot be assigned", .{name.text});
         } else {
@@ -1078,7 +1082,7 @@ fn lowerAssignMany(self: *FunctionBuilder, assigned: ast.AssignMany) Error!void 
         // and stores everything else plain (`ownedForStoreKind`
         // over a view or a wrapped view: never a take).
         stores[position] = if (target.owns_storage and
-            self.analyzer.ownsStorage(target.value_type)) .copy else .plain;
+            shapes.ownsStorage(self.analyzer, target.value_type)) .copy else .plain;
         prepared[position] = .{
             .target = target,
             .present = target.value_type == .optional and field.field_type != .optional,
@@ -1130,7 +1134,7 @@ fn lowerLateDeclaration(
     written: ast.TypeName,
     span: Span,
 ) Error!void {
-    const declared = (try self.analyzer.resolveType(self.module, written)) orelse
+    const declared = (try resolve.resolveType(self.analyzer, self.module, written)) orelse
         return refusals.forgetName(self, name);
     // A function value has no zero: every value of the type names a
     // function, and there is no function to name here.  So the one
@@ -1153,7 +1157,7 @@ fn lowerLateDeclaration(
     // struct or union zero is a fresh built run the slot adopts,
     // an owned-storage scalar zero copies, and everything else is
     // plain (`ownedForStoreKind` over `zeroProvenance`).
-    const store: nodes.StoreKind = if (!self.analyzer.ownsStorage(declared))
+    const store: nodes.StoreKind = if (!shapes.ownsStorage(self.analyzer, declared))
         .plain
     else switch (declared) {
         .strukt, .variant => .take,
@@ -1474,7 +1478,7 @@ fn refuseBorrowedReturn(
     resource_conflict: bool,
 ) Error!bool {
     if (info.class == .owned) return false;
-    const carries_resource = try self.analyzer.carriesResource(value_type);
+    const carries_resource = try shapes.carriesResource(self.analyzer, value_type);
     switch (info.class) {
         .owned => unreachable,
         .borrow_param => {
@@ -1674,7 +1678,7 @@ const VisibleCycleGive = struct {
 fn callConstructsStruct(self: *FunctionBuilder, call: ast.Call) Error!bool {
     if (std.mem.indexOfScalar(u8, call.callee, '.') != null) return false;
     if (self.findLocal(call.callee) != null) return false;
-    const qualified = try self.analyzer.qualify(self.prefix, call.callee);
+    const qualified = try naming.qualify(self.analyzer, self.prefix, call.callee);
     return self.analyzer.struct_names.contains(qualified);
 }
 
@@ -1695,12 +1699,12 @@ fn methodConstructsStruct(self: *FunctionBuilder, method: ast.Method) Error!bool
     }
     try written.appendSlice(self.temporary(), method.name);
 
-    const head_qualified = try self.analyzer.qualify(self.prefix, head);
+    const head_qualified = try naming.qualify(self.analyzer, self.prefix, head);
     if (self.analyzer.struct_names.contains(head_qualified)) {
-        const qualified = try self.analyzer.qualify(self.prefix, written.items);
+        const qualified = try naming.qualify(self.analyzer, self.prefix, written.items);
         return self.analyzer.struct_names.contains(qualified);
     }
-    if (!self.analyzer.importsModule(self.module, head)) return false;
+    if (!naming.importsModule(self.analyzer, self.module, head)) return false;
     return self.analyzer.struct_names.contains(try self.importedName(written.items));
 }
 
@@ -1837,11 +1841,11 @@ fn lowerReturn(self: *FunctionBuilder, returned: ast.Return) Error!void {
         // Whatever a function returns, the caller owns (S16, S17):
         // an owned name moves out, fresh values flow out, borrows
         // are compile errors.
-        if (self.analyzer.carriesObjects(value.value_type) and
+        if (shapes.carriesObjects(self.analyzer, value.value_type) and
             try flow.refuseConstantEscape(self, value.root, returned.span, "return")) return;
         var moved_storage: [1]LocalId = undefined;
         var moved: []const LocalId = &.{};
-        if (self.analyzer.carriesObjects(value.value_type)) {
+        if (shapes.carriesObjects(self.analyzer, value.value_type)) {
             switch (expression.*) {
                 .name => |name| {
                     // The name lowered to a value of an
@@ -1865,7 +1869,7 @@ fn lowerReturn(self: *FunctionBuilder, returned: ast.Return) Error!void {
                 },
                 else => {
                     if (!(try self.yieldsOwnership(expression))) {
-                        if (try self.analyzer.carriesResource(value.value_type)) {
+                        if (try shapes.carriesResource(self.analyzer, value.value_type)) {
                             try self.fail(
                                 "luce.sema.own",
                                 returned.span,
@@ -2085,7 +2089,7 @@ fn movesOut(
     moved: *std.ArrayList(LocalId),
     resource_conflict: bool,
 ) Error!?nodes.StoreKind {
-    if (!self.analyzer.carriesObjects(value.value_type)) {
+    if (!shapes.carriesObjects(self.analyzer, value.value_type)) {
         return ledger.ownedForStoreKind(self, value);
     }
     if (try flow.refuseConstantEscape(self, value.root, expression.span(), "return")) return null;
@@ -2118,7 +2122,7 @@ fn movesOut(
         },
         else => {
             if (!(try self.yieldsOwnership(expression))) {
-                if (try self.analyzer.carriesResource(value.value_type)) {
+                if (try shapes.carriesResource(self.analyzer, value.value_type)) {
                     try self.fail(
                         "luce.sema.own",
                         expression.span(),

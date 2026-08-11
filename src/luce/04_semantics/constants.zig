@@ -34,6 +34,10 @@ const operators = @import("../runtime/operators.zig");
 const runtime_value = @import("../runtime/value.zig");
 
 const Analyzer = @import("declarations.zig").Analyzer;
+const defaults = @import("defaults.zig");
+const naming = @import("naming.zig");
+const resolve = @import("resolve.zig");
+const shapes = @import("shapes.zig");
 
 const Span = source_mod.Span;
 const Type = types.Type;
@@ -62,7 +66,7 @@ pub fn foldAll(analyzer: *Analyzer) Error!void {
         if (folded) |value| {
             const info = analyzer.constant_infos.items[index];
             if (info.declaration.visibility == .private) continue;
-            if (analyzer.privateMentioned(value.value_type)) |hidden| {
+            if (naming.privateMentioned(analyzer, value.value_type)) |hidden| {
                 try analyzer.fail(
                     "luce.sema.private",
                     info.declaration.name_span,
@@ -70,7 +74,7 @@ pub fn foldAll(analyzer: *Analyzer) Error!void {
                     .{
                         info.declaration.name,
                         hidden,
-                        analyzer.markedIn(info.module),
+                        naming.markedIn(analyzer, info.module),
                         info.declaration.name,
                         hidden,
                     },
@@ -119,7 +123,7 @@ fn evaluate(analyzer: *Analyzer, index: u32) Error!?TypedConstant {
     // told the two disagree (docs/TYPES.md D3).
     var annotated: ?Type = null;
     if (declaration.annotation) |written| {
-        annotated = (try analyzer.resolveType(module, written)) orelse {
+        annotated = (try resolve.resolveType(analyzer, module, written)) orelse {
             analyzer.constant_infos.items[index].state = .failed;
             return null;
         };
@@ -366,7 +370,7 @@ fn foldSequence(
                 .{},
             );
         }
-        if (analyzer.carriesObjects(element_type)) {
+        if (shapes.carriesObjects(analyzer, element_type)) {
             return nestedContainerError(analyzer, literal.span);
         }
     }
@@ -383,7 +387,7 @@ fn foldSequence(
                 .{},
             );
         }
-        if (slot.value == .container or analyzer.carriesObjects(slot.value_type)) {
+        if (slot.value == .container or shapes.carriesObjects(analyzer, slot.value_type)) {
             return nestedContainerError(analyzer, element.span());
         }
     }
@@ -407,7 +411,7 @@ fn foldSequence(
     }
 
     const container_type = expected_container orelse
-        try analyzer.internHeapType(.{ .list = element_type });
+        try resolve.internHeapType(analyzer, .{ .list = element_type });
     const values = try analyzer.arena.alloc(mir.ConstantValue, folded.len);
     for (folded, values) |element, *encoded| {
         encoded.* = try encodeValue(analyzer, element.value);
@@ -511,7 +515,7 @@ fn foldMap(
                 .{},
             );
         }
-        if (values[index].value == .container or analyzer.carriesObjects(values[index].value_type)) {
+        if (values[index].value == .container or shapes.carriesObjects(analyzer, values[index].value_type)) {
             return nestedContainerError(analyzer, entry.value.span());
         }
     }
@@ -549,7 +553,7 @@ fn foldMap(
 
     const key_type = wanted_key.?;
     const container_type = expected_container orelse
-        try analyzer.internHeapType(.{ .map = .{ .key = key_type, .value = value_type } });
+        try resolve.internHeapType(analyzer, .{ .map = .{ .key = key_type, .value = value_type } });
     const entries = try analyzer.arena.alloc(mir.ContainerConstant.MapEntry, literal.entries.len);
     for (keys, values, entries) |key, value, *encoded| {
         encoded.* = .{
@@ -618,7 +622,7 @@ pub fn fold(
             return constantError(analyzer, literal.span, "none needs a place that says what it is absent of; annotate it: const name: T? = none", .{});
         },
         .name => |name| {
-            const qualified = try analyzer.qualify(analyzer.modules[module].prefix, name.text);
+            const qualified = try naming.qualify(analyzer, analyzer.modules[module].prefix, name.text);
             if (analyzer.constant_names.get(qualified)) |index| {
                 return evaluate(analyzer, index);
             }
@@ -631,19 +635,19 @@ pub fn fold(
             // geo.pi — an imported module's constant...
             if (field.target.* == .name) {
                 const head = field.target.name.text;
-                if (analyzer.importsModule(module, head)) {
-                    const joined = try analyzer.importedName(module, try std.fmt.allocPrint(analyzer.arena, "{s}.{s}", .{ head, field.name }));
+                if (naming.importsModule(analyzer, module, head)) {
+                    const joined = try naming.importedName(analyzer, module, try std.fmt.allocPrint(analyzer.arena, "{s}.{s}", .{ head, field.name }));
                     if (analyzer.constant_names.get(joined)) |index| {
                         // The fold happens inside the declaring
                         // module and the *value* crosses (D8); the
                         // gate is on saying the name.
                         const info = analyzer.constant_infos.items[index];
-                        if (!Analyzer.reachable(info.module, info.declaration.visibility, module)) {
+                        if (!naming.reachable(info.module, info.declaration.visibility, module)) {
                             try analyzer.fail(
                                 "luce.sema.private",
                                 field.span,
                                 "{s} is private to {s}",
-                                .{ field.name, analyzer.moduleName(info.module) },
+                                .{ field.name, naming.moduleName(analyzer, info.module) },
                             );
                             return null;
                         }
@@ -669,7 +673,7 @@ pub fn fold(
                 try analyzer.fail("luce.sema.private", field.span, "{s} of {s} is private to {s}", .{
                     field.name,
                     owner.declaration.name,
-                    analyzer.moduleName(owner.module),
+                    naming.moduleName(analyzer, owner.module),
                 });
                 return null;
             }
@@ -759,7 +763,7 @@ pub fn fold(
                 };
                 return .{ .value = .{ .long = codepoint }, .value_type = .long };
             }
-            const qualified = try analyzer.qualify(analyzer.modules[module].prefix, call.callee);
+            const qualified = try naming.qualify(analyzer, analyzer.modules[module].prefix, call.callee);
             if (analyzer.struct_names.get(qualified)) |layout_index| {
                 return foldConstruct(analyzer, module, call.arguments, call.span, layout_index);
             }
@@ -789,8 +793,8 @@ pub fn fold(
             // module.Struct(...) construction reaches imports.
             if (method.target.* == .name) {
                 const head = method.target.name.text;
-                if (analyzer.importsModule(module, head)) {
-                    const joined = try analyzer.importedName(module, try std.fmt.allocPrint(analyzer.arena, "{s}.{s}", .{ head, method.name }));
+                if (naming.importsModule(analyzer, module, head)) {
+                    const joined = try naming.importedName(analyzer, module, try std.fmt.allocPrint(analyzer.arena, "{s}.{s}", .{ head, method.name }));
                     if (analyzer.struct_names.get(joined)) |layout_index| {
                         return foldConstruct(analyzer, module, method.arguments, method.span, layout_index);
                     }
@@ -847,18 +851,18 @@ fn foldEnumMember(analyzer: *Analyzer, module: usize, field: ast.FieldAccess) Er
     }
     const index = found: {
         if (chain.count == 1) {
-            const local = try analyzer.qualify(analyzer.modules[module].prefix, written.items);
+            const local = try naming.qualify(analyzer, analyzer.modules[module].prefix, written.items);
             break :found analyzer.enum_names.get(local) orelse return null;
         }
-        if (!analyzer.importsModule(module, chain.head())) return null;
-        const imported = try analyzer.importedName(module, written.items);
+        if (!naming.importsModule(analyzer, module, chain.head())) return null;
+        const imported = try naming.importedName(analyzer, module, written.items);
         break :found analyzer.enum_names.get(imported) orelse return null;
     };
     const info = analyzer.enum_decls.items[index];
     if (info.declaration.visibility == .private and info.module != module) {
         try analyzer.fail("luce.sema.private", field.span, "{s} is private to {s}", .{
             info.declaration.name,
-            analyzer.moduleName(info.module),
+            naming.moduleName(analyzer, info.module),
         });
         return null;
     }
@@ -996,11 +1000,11 @@ fn foldConstruct(
     if (decl_info.declaration.visibility == .private and decl_info.module != module) {
         try analyzer.fail("luce.sema.private", span, "{s} is private to {s}", .{
             decl_info.declaration.name,
-            analyzer.moduleName(decl_info.module),
+            naming.moduleName(analyzer, decl_info.module),
         });
         return null;
     }
-    if (analyzer.carriesObjects(result_type)) {
+    if (shapes.carriesObjects(analyzer, result_type)) {
         return constantError(analyzer, span, "{s} carries objects; only object-free structs fold in a constant [CONSTANTS.md R-E]", .{layout.name});
     }
     if (layout.fields.len == 0) {
@@ -1024,7 +1028,7 @@ fn foldConstruct(
             try analyzer.fail("luce.sema.private", argument.span, "{s} of {s} is private to {s}", .{
                 name,
                 decl_info.declaration.name,
-                analyzer.moduleName(decl_info.module),
+                naming.moduleName(analyzer, decl_info.module),
             });
             return null;
         }
@@ -1050,8 +1054,8 @@ fn foldConstruct(
     // only the required ones can be missing.
     for (seen, 0..) |given, field_index| {
         if (given) continue;
-        if (!analyzer.fieldHasDefault(layout_index, field_index)) continue;
-        const filled = (try analyzer.fieldDefault(layout_index, field_index)) orelse return null;
+        if (!defaults.fieldHasDefault(analyzer, layout_index, field_index)) continue;
+        const filled = (try defaults.fieldDefault(analyzer, layout_index, field_index)) orelse return null;
         fields[field_index] = filled.value;
         seen[field_index] = true;
     }
@@ -1067,8 +1071,8 @@ fn foldConstruct(
                 .{
                     decl_info.declaration.name,
                     layout.fields[field_index].name,
-                    analyzer.moduleName(decl_info.module),
-                    analyzer.moduleName(decl_info.module),
+                    naming.moduleName(analyzer, decl_info.module),
+                    naming.moduleName(analyzer, decl_info.module),
                 },
             );
             return null;

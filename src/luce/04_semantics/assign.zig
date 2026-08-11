@@ -30,6 +30,8 @@ const ledger = @import("ledger.zig");
 const recorder = @import("recorder.zig");
 const refusals = @import("refusals.zig");
 const statements = @import("statements.zig");
+const naming = @import("naming.zig");
+const shapes = @import("shapes.zig");
 const FunctionBuilder = builder.FunctionBuilder;
 const Provenance = builder.Provenance;
 const Typed = builder.Typed;
@@ -115,7 +117,7 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
         },
     }
     const found = self.findLocal(root.text) orelse {
-        const qualified = try self.analyzer.qualify(self.prefix, root.text);
+        const qualified = try naming.qualify(self.analyzer, self.prefix, root.text);
         if (self.analyzer.constant_names.contains(qualified)) {
             try self.fail("luce.sema.const", chain.span, "{s} is a file-scope constant and cannot be assigned", .{root.text});
             return;
@@ -185,7 +187,7 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
                 // container of object-carrying structs can't be a
                 // nested-place step (it would free objects the
                 // rebuilt struct still shares).
-                if (self.analyzer.carriesObjects(element_type)) {
+                if (shapes.carriesObjects(self.analyzer, element_type)) {
                     try self.fail("luce.sema.own", index.span, "cannot assign through an index into object-carrying elements; rebuild the element and store it whole [OWNERSHIP.md S22]", .{});
                     return;
                 }
@@ -219,7 +221,7 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
 
     // The leaf must be a value; nesting object ownership through a
     // chain is not supported here.
-    if (self.analyzer.carriesObjects(current_type)) {
+    if (shapes.carriesObjects(self.analyzer, current_type)) {
         try self.fail("luce.sema.own", chain.span, "a nested place assigns a value; replace the whole object slot with the single-level form [OWNERSHIP.md S21, S25]", .{});
         return;
     }
@@ -300,7 +302,7 @@ const Combined = struct { provenance: Provenance, derived: ?usize = null };
 /// its derived park rather than by a node (`ownedForStoreKind`'s
 /// decision, spelled for the derived ledger).
 fn storedKindOf(self: *FunctionBuilder, value_type: Type, combined: Combined) nodes.StoreKind {
-    if (!self.analyzer.ownsStorage(value_type)) return .plain;
+    if (!shapes.ownsStorage(self.analyzer, value_type)) return .plain;
     if (combined.provenance == .fresh) {
         if (combined.derived) |index| {
             return if (ledger.takeDerivedStorage(self, index)) .take else .copy;
@@ -392,7 +394,7 @@ fn compoundCombine(
 
 fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign: ast.Assign) Error!void {
     const found = self.findLocal(base) orelse {
-        const qualified = try self.analyzer.qualify(self.prefix, base);
+        const qualified = try naming.qualify(self.analyzer, self.prefix, base);
         if (self.analyzer.constant_names.contains(qualified)) {
             try self.fail("luce.sema.const", span, "{s} is a file-scope constant and cannot be assigned", .{base});
         } else {
@@ -470,7 +472,7 @@ fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign:
             // of `tasks` is the same graph with the same problem.
             // Name that no-op/ownership conflict directly instead
             // of manufacturing a second error (S5, S8, S21).
-            if (try self.analyzer.carriesResource(value.value_type) and assign.value.* == .name) {
+            if (try shapes.carriesResource(self.analyzer, value.value_type) and assign.value.* == .name) {
                 const source_root = try statements.visibleOwnershipRoot(self, assign.value);
                 if (source_root != null and source_root.? == local) {
                     try self.fail(
@@ -559,7 +561,7 @@ fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign:
 
 fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast.Assign) Error!void {
     const found = self.findLocal(target.base) orelse {
-        const qualified = try self.analyzer.qualify(self.prefix, target.base);
+        const qualified = try naming.qualify(self.analyzer, self.prefix, target.base);
         if (self.analyzer.constant_names.contains(qualified)) {
             try self.fail("luce.sema.const", target.span, "{s} is a file-scope constant and cannot be assigned", .{target.base});
             return;
@@ -592,7 +594,7 @@ fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast
     const expected = layout.fields[field_index].field_type;
     // An object field follows the verb rule and its owner drops
     // the old value (S25); only the owning binding can restock it.
-    const field_carries = self.analyzer.carriesObjects(expected);
+    const field_carries = shapes.carriesObjects(self.analyzer, expected);
     if (field_carries) {
         if (info.class != .owned and info.class != .inout_receiver) {
             try self.fail(
@@ -697,9 +699,9 @@ fn lowerAssignIndex(self: *FunctionBuilder, target: ast.IndexTarget, assign: ast
     }
     // Containers own their object elements: storing one takes a
     // fresh value, a give, or a copy (S20, S21).
-    if (self.analyzer.carriesObjects(element_type) and
+    if (shapes.carriesObjects(self.analyzer, element_type) and
         try flow.refuseConstantEscape(self, value.root, assign.span, "a container store")) return;
-    if (self.analyzer.carriesObjects(element_type) and !(try self.yieldsOwnership(assign.value))) {
+    if (shapes.carriesObjects(self.analyzer, element_type) and !(try self.yieldsOwnership(assign.value))) {
         try refusals.failNeedsOwnership(
             self,
             assign.span,
@@ -715,7 +717,7 @@ fn lowerAssignIndex(self: *FunctionBuilder, target: ast.IndexTarget, assign: ast
     // is the first point at which destination ancestry matters
     // (S20, S33).
     if (assign.compound == null and
-        self.analyzer.carriesObjects(element_type) and
+        shapes.carriesObjects(self.analyzer, element_type) and
         try statements.refuseVisibleOwnershipCycle(self, target.base, assign.value)) return;
     // The element is a store; the key beside it is not — a map
     // looks a key up before it keeps one (docs/STRINGS.md).  The

@@ -49,6 +49,10 @@ const ledger = @import("ledger.zig");
 const recorder = @import("recorder.zig");
 const refusals = @import("refusals.zig");
 const statements = @import("statements.zig");
+const naming = @import("naming.zig");
+const resolve = @import("resolve.zig");
+const shapes = @import("shapes.zig");
+const signatures = @import("signatures.zig");
 const FunctionBuilder = builder.FunctionBuilder;
 const OperandRun = builder.OperandRun;
 const RecordedOperand = recorder.RecordedOperand;
@@ -676,7 +680,7 @@ fn lowerUserCall(
         // runtime that spawned it.  Refuse those types here rather
         // than letting `spawn` or `wait` reach the runtime's
         // defensive `not_owned` trap.
-        if (info.results.len == 1 and try self.analyzer.carriesResource(info.return_type)) {
+        if (info.results.len == 1 and try shapes.carriesResource(self.analyzer, info.return_type)) {
             try self.fail(
                 "luce.sema.own",
                 span,
@@ -688,7 +692,7 @@ fn lowerUserCall(
         // A borrow cannot cross: the callee's runtime is not this
         // one, so there is nothing here for it to borrow *from*.
         for (info.parameter_types, info.parameter_modes, info.declaration.parameters) |held, mode, parameter| {
-            if (try self.analyzer.carriesResource(held)) {
+            if (try shapes.carriesResource(self.analyzer, held)) {
                 try self.fail(
                     "luce.sema.own",
                     span,
@@ -698,7 +702,7 @@ fn lowerUserCall(
                 return null;
             }
             if (mode == .give) continue;
-            if (!self.analyzer.carriesObjects(held)) continue;
+            if (!shapes.carriesObjects(self.analyzer, held)) continue;
             try self.fail(
                 "luce.sema.own",
                 span,
@@ -828,7 +832,7 @@ fn lowerUserCall(
         return null;
     }
     if (spawning) |_| {
-        const carried = try self.analyzer.internHeapType(.{
+        const carried = try resolve.internHeapType(self.analyzer, .{
             .task = .{ .result = info.return_type, .fallible = info.fallible },
         });
         // A spawn's node wraps the resolved call, and the inner
@@ -983,12 +987,12 @@ fn methodNamespace(self: *FunctionBuilder, method: ast.Method) Error!NamespaceRe
     // one and not a namespace path (docs/ENUMS.md D3).  The same
     // shape as the imported-constant case below, one enum earlier.
     if (chain.count >= 2 and self.namesMember(parts[0..chain.count])) return .value;
-    const head_qualified = try self.analyzer.qualify(self.prefix, head);
+    const head_qualified = try naming.qualify(self.analyzer, self.prefix, head);
     if (self.analyzer.struct_names.contains(head_qualified) or
         self.analyzer.enum_names.contains(head_qualified) or
         self.analyzer.variant_names.contains(head_qualified))
     {
-        const local = try self.analyzer.qualify(self.prefix, joined);
+        const local = try naming.qualify(self.analyzer, self.prefix, joined);
         if (self.analyzer.struct_names.contains(local) or
             self.analyzer.enum_names.contains(local) or
             self.analyzer.variant_names.contains(local) or
@@ -1000,7 +1004,7 @@ fn methodNamespace(self: *FunctionBuilder, method: ast.Method) Error!NamespaceRe
         try refusals.failUnknownFunction(self, joined, method.span);
         return .reported;
     }
-    if (self.analyzer.importsModule(self.module, head)) {
+    if (naming.importsModule(self.analyzer, self.module, head)) {
         const key = try self.importedName(joined);
         if (self.analyzer.struct_names.contains(key) or
             self.analyzer.enum_names.contains(key) or
@@ -1023,7 +1027,7 @@ fn methodNamespace(self: *FunctionBuilder, method: ast.Method) Error!NamespaceRe
     // the missing import instead of "unknown name".
     for (self.analyzer.modules) |module| {
         if (module.binding.len != 0 and std.mem.eql(u8, module.binding, head)) {
-            try self.fail("luce.sema.import", method.span, "unknown namespace {s}; import {s} to use it", .{ head, try self.analyzer.importSpelling(head) });
+            try self.fail("luce.sema.import", method.span, "unknown namespace {s}; import {s} to use it", .{ head, try naming.importSpelling(self.analyzer, head) });
             return .reported;
         }
     }
@@ -1125,7 +1129,7 @@ fn lowerValueMethod(
     // fresh value, a give, or a copy (S20, S21).
     if (found.kind == .append_value or found.kind == .insert_value) {
         if (self.analyzer.heapOf(receiver.value_type)) |descriptor| {
-            if (descriptor == .list and self.analyzer.carriesObjects(descriptor.list)) {
+            if (descriptor == .list and shapes.carriesObjects(self.analyzer, descriptor.list)) {
                 const value_index: usize = if (found.kind == .append_value) 0 else 1;
                 if (try flow.refuseConstantEscape(
                     self,
@@ -1456,7 +1460,7 @@ fn lowerReceiverCall(
         // follows from the resolved callee — receiver mode and
         // parameter type — so lower re-derives it
         // (nodes.OperandBatch).
-        if (info.receiver == .writes and self.analyzer.ownsStorage(want)) {
+        if (info.receiver == .writes and shapes.ownsStorage(self.analyzer, want)) {
             // The keep-copy is storage nobody owns yet, parked as
             // a derived temporary — the second of the two parks
             // the recording never sees, re-derived by lower from
@@ -1510,7 +1514,7 @@ fn lowerReceiverCall(
     // recommend moving the unrelated replacement (S8, SELF D3-D4).
     if (info.receiver == .writes and method.target.* == .name) {
         if (self.findLocal(method.target.name.text)) |receiver| {
-            if (self.analyzer.carriesObjects(receiver_type)) {
+            if (shapes.carriesObjects(self.analyzer, receiver_type)) {
                 self.forgetAliasesOwnedBy(method.target.name.text);
             }
             receiver.info.revision +%= 1;
@@ -1544,7 +1548,7 @@ fn receiverPlace(
     switch (method.target.*) {
         .name => |name| {
             const found = self.findLocal(name.text) orelse {
-                const qualified = try self.analyzer.qualify(self.prefix, name.text);
+                const qualified = try naming.qualify(self.analyzer, self.prefix, name.text);
                 if (self.analyzer.constant_names.contains(qualified)) {
                     try self.fail(
                         "luce.sema.const",
@@ -1777,10 +1781,10 @@ pub fn methodParameters(self: *FunctionBuilder, receiver: Type, name: []const u8
             // count a write takes is a `long`.  Neither landing
             // depends on the receiver, so both are written out.
             if (std.mem.eql(u8, name, "read")) break :blk try typeList(self, &.{
-                try self.analyzer.internHeapType(.{ .array = .{ .element = .byte, .rank = 1 } }),
+                try resolve.internHeapType(self.analyzer, .{ .array = .{ .element = .byte, .rank = 1 } }),
             });
             if (std.mem.eql(u8, name, "write")) break :blk try typeList(self, &.{
-                try self.analyzer.internHeapType(.{ .array = .{ .element = .byte, .rank = 1 } }),
+                try resolve.internHeapType(self.analyzer, .{ .array = .{ .element = .byte, .rank = 1 } }),
                 .long,
             });
             if (std.mem.eql(u8, name, "flush")) break :blk &.{};
@@ -1810,7 +1814,7 @@ fn sequenceParameters(
             const parameters = try self.arena().alloc(types.Signature.Parameter, 2);
             parameters[0] = .{ .value_type = element };
             parameters[1] = .{ .value_type = element };
-            const comparator = try self.analyzer.internSignature(.{
+            const comparator = try resolve.internSignature(self.analyzer, .{
                 .parameters = parameters,
                 .result = .boolean,
             });
@@ -1892,7 +1896,7 @@ fn stringsCall(
     as_statement: bool,
 ) Error!?Typed {
     const local_module = std.mem.eql(u8, self.prefix, "strings");
-    if (!local_module and !self.analyzer.importsModule(self.module, "strings")) {
+    if (!local_module and !naming.importsModule(self.analyzer, self.module, "strings")) {
         try self.fail(
             "luce.sema.import",
             method.span,
@@ -1972,8 +1976,8 @@ fn listsCall(
     element: Type,
     as_statement: bool,
 ) Error!?Typed {
-    const local_module = self.analyzer.isStandardModule(self.module, "lists");
-    if (!local_module and !self.analyzer.importsStandardModule(self.module, "lists")) {
+    const local_module = naming.isStandardModule(self.analyzer, self.module, "lists");
+    if (!local_module and !naming.importsStandardModule(self.analyzer, self.module, "lists")) {
         try self.fail(
             "luce.sema.import",
             method.span,
@@ -2011,7 +2015,8 @@ fn listsCall(
         "lists.sort_by({s})",
         .{element_name},
     );
-    const function_index = (try self.analyzer.registerStandardSpecialization(
+    const function_index = (try signatures.registerStandardSpecialization(
+        self.analyzer,
         "lists.sort_by_template",
         specialized_name,
         &.{ receiver_type, comparator },
@@ -2167,7 +2172,7 @@ fn objectMethod(
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
                 // One value cannot own every slot (S21, S23):
                 // arrays of objects store per slot instead.
-                if (self.analyzer.carriesObjects(shape.element)) {
+                if (shapes.carriesObjects(self.analyzer, shape.element)) {
                     try self.fail(
                         "luce.sema.own",
                         method.span,
@@ -2195,7 +2200,7 @@ fn objectMethod(
             }
             if (std.mem.eql(u8, name, "keys")) {
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
-                return .{ .kind = .map_keys, .result = try self.analyzer.internHeapType(.{ .list = pair.key }) };
+                return .{ .kind = .map_keys, .result = try resolve.internHeapType(self.analyzer, .{ .list = pair.key }) };
             }
             if (std.mem.eql(u8, name, "values")) {
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
@@ -2203,7 +2208,7 @@ fn objectMethod(
                 // owns a deep copy of every map value.  A resource
                 // has one owner, so no resource-carrying value type
                 // can take that copying path (S31, S32).
-                if (try self.analyzer.carriesResource(pair.value)) {
+                if (try shapes.carriesResource(self.analyzer, pair.value)) {
                     try self.fail(
                         "luce.sema.own",
                         method.span,
@@ -2212,7 +2217,7 @@ fn objectMethod(
                     );
                     return null;
                 }
-                return .{ .kind = .map_values, .result = try self.analyzer.internHeapType(.{ .list = pair.value }) };
+                return .{ .kind = .map_values, .result = try resolve.internHeapType(self.analyzer, .{ .list = pair.value }) };
             }
             if (std.mem.eql(u8, name, "get")) {
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
