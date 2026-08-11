@@ -190,7 +190,7 @@ The corpus that argued for it, item by item:
 
 ---
 
-## Tier 2 — sum types: half shipped, half still bending other designs
+## Tier 2 — sum types: shipped, both halves
 
 **Enums are built (docs/ENUMS.md, 2026-08-06).**  `enum Method:` and
 `enum Method(byte):`, members namespaced and folding as constants,
@@ -199,9 +199,17 @@ methods and namespace functions, containers at the backing width —
 and `match`, with an arm for every member or an `else`.  `std.zip`
 converted the day it landed: a compression method and a DEFLATE block
 type, read through the enums rather than through `== 8` and an `elif`
-chain.  **Union is the drafted sum-type direction**, and it would
-extend `match` with payload arms rather than introduce a second
-statement.  It is not scheduled.
+chain.  **Unions are built too (docs/UNION.md, as built,
+2026-08-10)**: members carrying named payload fields, constructed as
+namespaced calls with named arguments, `match` extended with payload
+arms that bind each field by its own name as an alias — the only door
+to a payload, so wrong-arm access is unrepresentable — ownership with
+no new rule, the zero as the first declared member, recursion through
+owning containers with `Shape?` as the terminator that is not one,
+and a value that is a struct-shaped run `libluce_rt` walks without
+ever learning unions exist.  Sixteen two-engine specs and the refusal
+rows are the proof; `std.json` is the customer and is now writable
+against a real `union Json`.
 
 
 **Owner direction, 2026-08-04 — the endgame is set.**  After the
@@ -218,16 +226,21 @@ home for genuine raw-overlay needs.  The design memo, when its turn
 comes, designs the tagged world: payload-per-member over the enum
 machinery, checked access, exhaustive dispatch, and the question of
 whether `T?` becomes a two-member tagged union under the hood.  The
-resulting `docs/UNION.md` records eighteen drafted decisions and holds
-three questions; tagged is ratified, the complete feature is not.
+resulting `docs/UNION.md` recorded eighteen drafted decisions and held
+three questions; all eighteen shipped as written on 2026-08-10, with
+the three held questions taken as their written recommendations
+(`T?` stayed its own mechanism — D14 — and did not become a union
+under the hood).
 
 
-No tagged unions: a member carries a name and a number, never a
-value.  That is still the second-order blocker `docs/FAILURE.md`
-refused `Result<T, E>` for, which is what forced `T!` to be a function
-attribute.  Now that it is built, that answer looks better than
-"probably right": the attribute is what gave Luce Ok-wrapping for free
-and kept `types.Type` out of the feature entirely.
+Tagged unions were, until that run, the second-order blocker
+`docs/FAILURE.md` refused `Result<T, E>` for, which is what forced
+`T!` to be a function attribute.  That refusal **stands** even with
+the blocker gone: R3 promised this run nothing about error shapes,
+the attribute is what gave Luce Ok-wrapping for free and kept
+`types.Type` out of the feature entirely, and whether an error reason
+may one day be a value-only union is a question `std.json`'s callers
+get to ask, not this entry.
 
 The corpus has since been paid back, in the file that predated all of
 it.  All three of the debts this section listed are gone from
@@ -256,17 +269,18 @@ twenty-one builtins missing, two names present that are not free
 builtins), and an enum member may not be named `insert`, because the
 list-method table reserves it.
 
-**The enum half was decided on that evidence and is now evidence
-itself.**  A tagged union can subsume `T?` cleanly if that turns out
-to be the better factoring, and it inherits the machinery enums
-built: the type tag, the per-program table, the compare-and-branch
-tree, and a `match` whose arms are already the shape payload arms
-extend.
+**The enum half was decided on that evidence, and the union half was
+built on the machinery it left**: the type tag, the per-program
+table, the compare-and-branch tree, and the `match` whose bare arms
+were already the shape `circle(radius):` extends.  `T?` was *not*
+subsumed — D14 kept it its own mechanism, for the five reasons the
+research priced — and `Shape?` became writable instead, which is what
+gives a recursive union a terminator that is not a container.
 
 **Concurrency has a separate approved next run.**  Workers and owned
 `task` joins are built.  D12 reserves typed channels whose
-`send(give x)` transfers ownership between worker runtimes; it is the
-next language extension, before any unscheduled union run.  That is the
+`send(give x)` transfers ownership between worker runtimes; with the
+union run landed, it is the next language extension.  That is the
 ratified direction, not a complete channel surface: the channel type,
 buffering and back-pressure, receive result, close behavior and failure
 surface still need an owner decision.
@@ -1049,18 +1063,29 @@ Completed chronology lives in the tiers above.  The current queue is:
 3. **Cross-compilation** — `--target`, and one `libluce_rt` per target.
 4. **Share one `libluce_rt` between artifacts** instead of copying it
    into each.
-5. **Tagged unions only when scheduled.**  The direction is ratified
-   and the design is drafted with held questions; it is not the current
-   run.
+5. ~~**Tagged unions only when scheduled.**~~ — **landed 2026-08-10,
+   the day it was scheduled** (docs/UNION.md, as built): the eighteen
+   decisions as written, the three held questions as their written
+   recommendations, two recorded departures (the padded run and the
+   refused `free(u)`), `format_version` 37 → 38, and `libluce_rt`
+   untouched.  With it the ratified language roadmap is worked down:
+   **typed channels (item 1) are the next queued design run**, and
+   `std.json` — written without unions as a lazy flat document — is
+   now writable against a real `union Json` if that proves the better
+   shape.
 6. **Stage 5 (HIR)** — required by `fmt`, by an LSP, and by keeping
-   array operations whole.
+   array operations whole.  Union added the two builder couplings its
+   memo priced (`variant_make`/`variant_field` arms in the
+   tape-reading predicates), which the eventual move carries.
 
 ---
 
 **The honest summary:** the shipped core is locked and the front end is
-in genuinely good shape.  Typed channels are the approved next
-design-and-implementation run; tagged unions are drafted but
-unscheduled, and a short list of library questions remains.  The host surface is closed:
+in genuinely good shape.  The ratified language roadmap is worked down
+— tagged unions, its last run, shipped 2026-08-10 (docs/UNION.md, as
+built).  Typed channels are the approved next
+design-and-implementation run, and a short list of library questions
+remains.  The host surface is closed:
 the last two names on its gap list, `exit` and path manipulation, both
 shipped — `exit` as a gated builtin and paths as `std.paths` over
 `strings`.  Three benchmark rows remain behind their C twins for three

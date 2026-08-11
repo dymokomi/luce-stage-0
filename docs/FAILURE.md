@@ -437,7 +437,11 @@ level. Exceptions with unwinding — the `i1` flag was chosen over
 `Result<T, E>` as a user-visible type — no generics, no tagged unions;
 special-casing it the way `List(T)` is special-cased is a category
 error, because `List(T)` is a monomorphic heap object while `Result`
-needs pattern matching and `From`. Inferred error sets — Zig's cost is
+needs pattern matching and `From`.  (Tagged unions have since shipped
+— 2026-08-10 — and this refusal stands on its other legs: the union
+run promised errors nothing by design, docs/UNION.md R3, because an
+error unwinds through releases and the load-bearing objection was
+never the missing type.) Inferred error sets — Zig's cost is
 unsupported recursion, unstable type identity, and its own community
 calling them a design error in public APIs. Error payloads beyond the
 message — Zig's most-upvoted issue, deferred across eight milestones and

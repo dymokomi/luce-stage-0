@@ -14,7 +14,8 @@ no value.
 The lines between them decide everything about memory.
 
 **Values** copy on assignment and on call, and nobody frees them: the
-seven numbers, `bool`, `string`, structs carrying no object or resource,
+seven numbers, `bool`, `string`, structs and unions carrying no object
+or resource,
 enums and function values. A value never takes an ownership word.
 
 **Container objects** are referenced, created with `new` or a literal,
@@ -142,7 +143,8 @@ loom: trap: conversion out of range [conversion_range]
 
 `string(x)` prints a number with the shortest text that round-trips
 **at its own width**, so the width is visible in the answer. It also
-prints a `bool`, a string, an enum member's name, or a function value's
+prints a `bool`, a string, an enum or union member's name, or a
+function value's
 name. Container objects, resources and structs are not accepted.
 
 ```luce run
@@ -314,6 +316,61 @@ func main():
 deflated is 8, and 3 is false
 ```
 
+## union {#union}
+
+A value that is exactly one of a set of declared members, each member
+optionally carrying named payload fields; declared with
+[`union`](../statements/#union). The member is part of the value:
+there is no way to construct one without choosing a member, and no way
+to reach a payload except a [`match`](../statements/#match) arm that
+proved which member the value holds.
+
+- **Construction is a namespaced call with named arguments** —
+  `Shape.circle(radius = 2.0)` — under the same rules as struct
+  construction, defaults included. A bare member is written without
+  parentheses: `Shape.empty`. The union's own name is not a
+  constructor.
+- **Ownership is a struct's.** A union carries objects when *any*
+  member's payload field does; the predicate is type-level, so keeping
+  a value of such a union takes `give` or `copy` whichever member it
+  holds. An arm's payload binding **aliases** what the scrutinee owns.
+  `free(u)` is refused, as it is for a struct; scope end releases
+  whatever the live member owns. A union of value-only members takes
+  no verbs.
+- **The zero is the first declared member**, every payload field at
+  its own zero — what `var s: Shape` starts at and what container
+  cells hold.
+- A member may not unconditionally contain its own union — the same
+  finite-size rule structs have, refused with `?` and the containers
+  named as the fixes. `Shape?` is an ordinary optional and is the
+  recursion terminator that is not a container.
+- `string(u)` answers the member's **name**; the payload is never
+  formatted. `==` on two union values is refused, naming `match`. A
+  union may not be a map key.
+- A union takes methods and static namespace functions under the
+  [same rules](../statements/#methods) as a struct.
+
+```luce run
+union Json:
+    null
+    number(value: double)
+    array(items: list(Json))
+
+func main():
+    var xs = new list(Json)
+    xs.append(Json.number(value = 2.5))
+    let doc = Json.array(items = give xs)
+    match doc:
+        array(items):
+            print(f"an {doc} of {len(items)}")
+        else:
+            print("not an array")
+```
+
+```output
+an array of 1
+```
+
 ## list(T)
 
 A growable sequence. Created with a literal or `new list(T)`. An empty
@@ -476,6 +533,8 @@ hold it.
 - a parameter
 - a return type
 - a struct field
+- a union member's payload field — which is what lets a recursive
+  union end at absence
 
 `T?` may **not** be a container element type or a map value type, and
 there is no `T??` — one `?` is all there is.
@@ -518,7 +577,8 @@ assigned. For a container object or resource type that is the null
 handle, and using it traps `null_object`; the stable code uses the
 runtime's older broad “object” term. For an enum it is the **first declared member**:
 zero is a number no member need hold, and every value of an enum is a
-member.
+member. For a union it is likewise the first declared member, with
+every payload field at its own zero.
 
 `let` always requires an initializer: a name that can never be
 reassigned and holds nothing is a contradiction.

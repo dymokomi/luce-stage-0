@@ -26,7 +26,7 @@ receiver first, resolved by the receiver's type, not dispatched.
 | `ord(text: string) -> long` | first codepoint; traps on empty |
 | `parse_int(text: string) -> long?` | `none` when the text is not an integer |
 | `parse_float(text: string) -> double?` | `none` when the text is not a number |
-| `byte(x)`, `short(x)`, `int(x)`, `long(x)`, `half(x)`, `float(x)`, `double(x)`, `string(x)` | the conversion constructors, each named for what it produces. Float to integer rounds half away from zero and traps outside the target's range; integer to a narrower integer traps outside it; float to a narrower float rounds to nearest and reaches `inf` rather than trapping; `string(x)` accepts numbers, `bool`, strings, enums and function values, and refuses container objects, resources and structs |
+| `byte(x)`, `short(x)`, `int(x)`, `long(x)`, `half(x)`, `float(x)`, `double(x)`, `string(x)` | the conversion constructors, each named for what it produces. Float to integer rounds half away from zero and traps outside the target's range; integer to a narrower integer traps outside it; float to a narrower float rounds to nearest and reaches `inf` rather than trapping; `string(x)` accepts numbers, `bool`, strings, enums, unions (answering the member's name, never the payload) and function values, and refuses container objects, resources and structs |
 
 The four numeric builtins that answer their operand's own type land
 their arguments where the whole call lands, so `let x: double =

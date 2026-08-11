@@ -16,7 +16,8 @@ the two ladders the answer is always `double` (docs/TYPES.md §2).
 Three categories of data, with deliberate lines between them:
 
 - **Values** — `bool`, the seven numbers, `string` (immutable UTF-8),
-  user `struct`s that carry no container object or resource, `enum`s,
+  user `struct`s and `union`s that carry no container object or
+  resource, `enum`s,
   and function values.  Values copy on assignment and call;
   nobody frees a value.  The numbers are two ladders, and four of them do
   arithmetic: `int` (signed 32-bit) and `long` (signed 64-bit) trap on
@@ -103,7 +104,8 @@ it):
   be duplicated: the function must instead receive it through a `give`
   parameter and every caller must hand over ownership.
 - **Values never take verbs.**  Numbers, `bool`, `string`, enums,
-  function values and plain-value structs copy freely.  A struct that
+  function values and plain-value structs copy freely.  A struct or
+  union that
   carries a container object or resource follows the ownership rules when
   *kept*.  A resource takes `give` and `free`, but never `copy`.
 - **`free(x)` survives as deliberate early release** on a direct owned
@@ -800,10 +802,101 @@ stops compiling.  An `else` stands for the members the arms above did
 not name, and one that covers nothing is refused for the same reason
 `a else b` is when `a` is never absent.
 
-A member carries no payload: that is a tagged union.  The tagged
-direction is ratified and the full design is drafted, but it is not
-scheduled; if it ships, it extends `match` with payload arms rather
-than introducing a second statement (docs/UNION.md).
+A member carries no payload: a name with a *value* behind it is a
+union, next.
+
+## Unions, and the payloads their members carry
+
+Some values are one of a few shapes, and each shape carries its own
+facts: a JSON value is one of six things, and two of the six contain
+more JSON.  `union` declares the set, and `match` — the same statement
+enums built — extends with payload arms rather than forking
+(docs/UNION.md).
+
+```luce
+union Shape:
+    empty
+    circle(radius: double)
+    rect(width: double, height: double)
+
+func area(s: Shape) -> double:
+    match s:
+        empty:
+            return 0.0
+        circle(radius):
+            return 3.0 * radius * radius
+        rect(width, height):
+            return width * height
+
+func main():
+    print(string(area(Shape.rect(width = 3.0, height = 4.0))))
+```
+
+Members are namespaced always, like an enum's, and a payload's fields
+are **named, always** — construction is a namespaced call with named
+arguments and defaults, through the same checker struct construction
+uses, and a bare member like `Shape.empty` takes no parentheses.  At
+least one member must carry a payload: a union of bare members *is* an
+enum, and is refused by a sentence naming `enum`.
+
+**`match` is the only door.**  An arm names its member bare and, if it
+wants the payload, lists the member's fields — each binds a local in
+the arm's scope **by the field's own name**, all of them or none
+(`circle:` is legal and binds nothing; a partial list is refused
+naming the missing fields).  There is no field access on a union value
+and no tag test, so reading the wrong member's payload is
+unrepresentable rather than checked.  Exhaustiveness, `else`, and the
+duplicate-arm rules are `match`'s own, unchanged.
+
+**Ownership arrives with no new rule.**  A union carries objects if
+*any* member's field does — the predicate is type-level, so a
+`Json.number` needs `give` or `copy` to be kept even though it owns
+nothing — and the verbs mean exactly what they mean for a carrying
+struct: construction takes `give`/`copy`/fresh in payload fields, an
+arm's payload binding **aliases** what the scrutinee owns (keeping it
+needs `copy`; `give` on it is refused naming the owner), and `free(u)`
+is refused as it is for a struct — a union dies when its scope ends,
+whichever member it holds.  A union of value-only members takes no
+verbs at all.
+
+The zero of a union is its **first declared member** with every
+payload field at its own zero: that is what `var s: Shape` starts at,
+what `new array(Shape, n)` fills cells with, and what makes
+`list(Json)` constructible.  Recursion travels through owning
+containers — `array(items: list(Json))` is finite because a list is
+one handle — while a member that unconditionally contains its own
+union is refused, with `?` named as the fix;
+`Shape?` is the recursion terminator that is not a container, and it
+works everywhere `T?` works.
+
+`string(u)` answers the member's **name** — never the payload; that
+would be a formatting protocol, which this is not.  `==` on unions is
+refused by a sentence naming `match`, and a union may not be a map
+*key* (keys are `long` and `string`, as always).  A union takes the
+methods and static namespace functions a struct takes, under the same
+implied-`self` rules:
+
+```luce
+union Json:
+    null
+    number(value: double)
+    array(items: list(Json))
+
+    func weight() -> long:
+        match self:
+            null:
+                return 0
+            number:
+                return 1
+            array(items):
+                return len(items)
+
+    static func of(n: double) -> Json:
+        return Json.number(value = n)
+
+func main():
+    print(string(Json.of(2.5).weight()))
+```
 
 ## Collections
 
@@ -1782,12 +1875,10 @@ decision), `errdefer` and error return traces (docs/FAILURE.md
 refuses both, with reasons), typed error sets and error payloads
 beyond the message, garbage collection and reference counting (scope
 ownership is the model — docs/OWNERSHIP.md), operator overloading,
-**tagged unions** (the tagged direction is ratified and the design is
-drafted, but it is not scheduled; enums shipped and carry no payload —
-docs/ENUMS.md and docs/UNION.md),
 and **positional-only and keyword-only parameter
 markers** (Python's `/` and `*`, Dart's `{}` section): one kind of
 parameter, and the trailing-defaults rule is what keeps a
 must-be-named parameter from arriving by accident (docs/ARGS.md D6).
 (string interpolation shipped: see f-strings above; named and default
-arguments shipped: see "Calls" above.)
+arguments shipped: see "Calls" above; tagged unions shipped: see
+"Unions" above.)

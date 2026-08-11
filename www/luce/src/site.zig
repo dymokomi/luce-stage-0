@@ -36,7 +36,7 @@ pub const sections = [_]Section{
         .slug = "tour",
         .label = "Tour",
         .title = "A tour of Luce",
-        .blurb = "Start here. Sixteen short chapters, in order, from installing the compiler to writing a program that reads a file.",
+        .blurb = "Start here. Seventeen short chapters, in order, from installing the compiler to writing a program that reads a file.",
         .pages = &.{
             .{ .slug = "hello", .title = "Hello, Luce", .blurb = "Build the toolchain, compile a program, run it." },
             .{ .slug = "values", .title = "Values and types", .blurb = "Numbers, strings, enums and function values, plus the one-way numeric promotion rules." },
@@ -48,6 +48,7 @@ pub const sections = [_]Section{
             .{ .slug = "strings", .title = "Strings", .blurb = "Immutable UTF-8, f-strings, slicing, and where the rest of the string library lives." },
             .{ .slug = "ownership", .title = "Memory", .blurb = "Scope ownership: no collector, no reference counting, and four words to learn." },
             .{ .slug = "absence", .title = "Absence", .blurb = "T?, none, narrowing, and else — saying that a thing might not be there." },
+            .{ .slug = "unions", .title = "Unions", .blurb = "One of a few shapes, each carrying its own fields — and match, the only door to the payload." },
             .{ .slug = "failure", .title = "Failure", .blurb = "T!, try, catch and error — and the rule that decides between a trap and an error." },
             .{ .slug = "modules", .title = "Modules", .blurb = "A file is a module; the standard library lives under std." },
             .{ .slug = "visibility", .title = "Visibility", .blurb = "Public until it says private — the marker, the struct regions, and the factory pattern." },

@@ -25,15 +25,16 @@ precision, not semantic acceptance.
 
 **The runtime is not done, but the wall is down.** The two items that
 blocked real programs are both closed: a `.lc` **is** machine code,
-with six of the nine current benchmarks at C parity, whether `loom run`
+with five of the nine current benchmarks at C parity, whether `loom run`
 opens it or a shell runs an `--emit=exe` binary, and memory is genuinely
 given back for owner trees — object identity first, then string bytes
 and struct field runs. Retaining stores refuse a visible ownership cycle
 statically and trap an alias-hidden one before mutation.
 
 **What is left is a short list of library questions and tracked runtime
-hardening, the typed-channel design-and-implementation run, a drafted but
-unscheduled union design, and three measured performance gaps.**
+hardening, the typed-channel design-and-implementation run, and three
+measured performance gaps.** Tagged unions — the last run of the
+ratified language roadmap — shipped on 2026-08-10.
 
 ## What works
 
@@ -56,29 +57,33 @@ unscheduled union design, and three measured performance gaps.**
 | The bit set: `&` `\|` `^` `~` `<<` `>>` at Go's precedence, hex and binary literals, `_` digit separators | shipped |
 | Visibility: public until a declaration says `private` | shipped |
 | Enums at a chosen integer width, and `match` with every member named | shipped |
+| Unions: members carrying named payload fields, `match` arms binding each field by name | shipped |
 | LLVM backend: a `.lc` **is** machine code, `--emit=exe` standalone binaries | shipped |
 | Trap locations and call traces in debug builds | shipped |
 | Two build modes that differ only in what a trap can say | shipped |
 | map lookups O(1); sort O(n log n) and stable by guarantee | shipped |
 
-The compiler-internal serialized module is format **36**. Program-root
+The compiler-internal serialized module is format **38**. Program-root
 containers moved it to 33 by adding a pool, instruction and trap code;
 the later `ownership_cycle` trap, `shell_run` service and `term_event_data`
-intrinsic moved it again. The published host ABI is **15** because the
-last two add host slots.
+intrinsic moved it again, and unions moved it to 38 by adding the
+variant table and three instructions. The published host ABI is **15**:
+no union crosses the host boundary, so the union run did not move it.
 
 ## What is measured
 
 Against C twins at `-O3 -march=native`, on one host, on the
-floor-subtracted `compute` column: **0.78× to 1.06× on six of the nine
-benchmarks** — loops, math, arrays, both matrix multiplies and
-statistics. Three are behind, for three different reasons: **2.67× on
-strings**, which is allocation-bound rather than
-code-generation-bound; **2.60× on lists**, which is `append` and
-nothing else, a list's length living in the object's row where C's
-count lives in a register; and **8.66× on the 32-bit array
-reduction**, which is the price of checking every integer add — the
-loop cannot be reassociated, so it cannot be vectorized.
+floor-subtracted `compute` column: **0.78× to 1.09× on five of the nine
+benchmarks** — loops, math, arrays and both matrix multiplies. Four are
+behind, for four different reasons: **2.75× on strings**, which is
+allocation-bound rather than code-generation-bound; **2.53× on lists**,
+which is `append` and nothing else, a list's length living in the
+object's row where C's count lives in a register; **1.32× on
+statistics**, the recorded price of a parked extremum vectorization —
+the intrinsic that vectorized `min`/`max` reductions was retired when
+its x86-64 lowering proved untrustworthy; and **7.92× on the 32-bit
+array reduction**, which is the price of checking every integer add —
+the loop cannot be reassociated, so it cannot be vectorized.
 [The table and its caveats](/guide/performance/).
 
 Memory, on a churn loop that retains nothing: **flat**, where it used
@@ -99,8 +104,8 @@ These are decisions with reasons written down, not gaps.
 - **Tuples.** A function may answer more than one value, but the shape
   it answers them in is not a type: it cannot annotate anything, nest,
   or be written as an expression. An anonymous structural product type
-  would be the first structural type in a language with no generics
-  and no sum types, and every one of those asks whether it nests,
+  would be the first structural type in a language whose types are all
+  nominal and monomorphic, and every one of those asks whether it nests,
   whether a container holds it, and whether it compares. A pair that
   travels together is a struct.
 - **Garbage collection and reference counting**, at every layer, in
@@ -132,7 +137,7 @@ These are decisions with reasons written down, not gaps.
   environment, lifetime story or ownership rule for captured state.
   Behavior plus state remains a struct with a method.
 
-## Approved next, and drafted later
+## Approved next, and shipped on the way
 
 **Typed channels between workers are the approved next
 design-and-implementation run.** Workers and owned `task` joins shipped
@@ -143,17 +148,22 @@ receive and close behavior, or the failure surface; those belong to
 that next run, built on the existing two-runtime transfer and worker
 machinery.
 
-**Tagged unions — a member with a payload.** Enums shipped, and with
-them [`match`](/tour/enums/): a set of names at one integer width,
-dispatch that refuses to compile when a member has no arm, and
-`Method(n)` answering `Method?` for the number that arrived from a
-file. What a member still cannot carry is a *value*. The tagged
-direction is ratified and the full design is drafted with three held
-questions, but it is not scheduled. It is also the reason a
-`Result`-style error type was refused in favour of `T!` as a function
-attribute.
+**Tagged unions — a member with a payload — shipped, closing the sum
+types.** Enums came first, and with them [`match`](/tour/enums/): a
+set of names at one integer width, dispatch that refuses to compile
+when a member has no arm, and `Method(n)` answering `Method?` for the
+number that arrived from a file. [Unions](/tour/unions/) followed on
+2026-08-10: members carrying named payload fields, construction with
+named arguments, and `match` extended with arms that bind each field
+by its own name — the only door to a payload, so reading the wrong
+member's payload is unrepresentable rather than checked. Ownership
+gained no new rule, the runtime gained no new semantic, and `T?`
+deliberately stayed its own mechanism. The absence of unions was also
+the stated reason a `Result`-style error type was refused in favour of
+`T!` as a function attribute; that refusal stands on its load-bearing
+reason, and errors stay two codes and a message.
 
-The half that shipped was decided on the corpus, and the corpus has
+The enum half was decided on the corpus, and the corpus has
 spent it. `std.zip` reads a compression method and a DEFLATE block
 type through enums rather than through `== 8` and an `elif` chain
 whose last arm existed to say "unknown". And `editor.luc` — the file
@@ -285,15 +295,15 @@ than shipping a highlighter that disagrees with the compiler.
 2. The cheap library slice: character classes, `m.get(k) -> V?`, and
    decide whether a dedicated `set` earns its surface.
 3. Cross-compilation and sharing one runtime between artifacts.
-4. Tagged unions only when the drafted design is scheduled.
-5. The faithful syntax tree, which a formatter and a language server
+4. The faithful syntax tree, which a formatter and a language server
    both need.
 
 ## The honest summary
 
 The shipped core is locked and the front end is in genuinely good
-shape. Typed channels are the approved next design-and-implementation
-run; tagged unions are drafted but unscheduled, and a short list of
+shape. The ratified language roadmap is worked down — tagged unions,
+its last run, shipped. Typed channels are the approved next
+design-and-implementation run, and a short list of
 library questions remains. The channel-independent runtime prerequisites
 are closed: worker registries synchronize their own lifetime, every file
 callback is effect-serialized, a failed file-resource allocation closes

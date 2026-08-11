@@ -317,8 +317,8 @@ It is not a set of flags: `Method.stored | Method.deflated` is not a
 [integers with the bit operators](../values/), and an enum's job is
 the other one — naming a value that is exactly one of a few things.
 
-It carries no payload yet, either. A member is a name and a number,
-not a name and a value: that is a tagged union. The tagged direction is
-ratified; the full design is drafted with three held questions, but it
-is not scheduled. If it ships, it extends `match` with payload arms
-rather than introducing a second statement.
+And a member carries no payload. A member is a name and a number, not
+a name and a value — when each name needs to carry facts of its own,
+that is a [union](../unions/), and its `match` arms extend the ones
+you just learned with payload bindings rather than introducing a
+second statement.

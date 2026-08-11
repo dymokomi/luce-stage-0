@@ -47,8 +47,8 @@ that used to grow without bound now sits flat at about 1.8 MB.
 `-O3 -march=native`, the same algorithms measure 0.78× to 1.06× on six
 of the nine benchmarks — loops, math, arrays, both matrix multiplies
 and statistics. Three are not there, and each says why: string
-processing at 2.67× is allocation-bound, lists at 2.60× is `append`
-alone, and a 32-bit integer reduction at 8.66× is the price of
+processing at 2.75× is allocation-bound, lists at 2.53× is `append`
+alone, and a 32-bit integer reduction at 7.92× is the price of
 checking every add.
 [The numbers, and what they do not say](/guide/performance/).
 
@@ -64,7 +64,7 @@ between them is one sentence — *traps are bugs, errors are news*.
 
 It is a real language with a real compiler, a real runtime, a real
 terminal and a real editor written in itself — and it is early. There
-are no closures, no generics for user code, no tagged unions, no
+are no closures, no generics for user code, no
 tuples, no package manager
 and no language server. Some of those are deliberate and permanent;
 some are simply not built yet. The

@@ -3,11 +3,12 @@
 ## File structure
 
 A file holds, in any order: `import` lines, file-scope `const`
-constants, `struct` declarations, `enum` declarations, and `func`
+constants, `struct` declarations, `enum` declarations, `union`
+declarations, and `func`
 declarations. There is no top-level executable code and no top-level
 `var`.
 
-Each of the four declaration forms may carry a
+Each of the five declaration forms may carry a
 [visibility](#visibility) word. Without one it is public.
 
 ## Entry
@@ -50,7 +51,7 @@ arguments too (see [calls](../expressions/#calls)). Every path through
 a function that declares a value return type must return; the compiler
 checks it.
 
-A plain function member of a struct or enum is a [method](#methods):
+A plain function member of a struct, enum or union is a [method](#methods):
 its receiver is the implied local `self`. A member written `static
 func` is instead a namespace function and has no receiver. There are
 no variadics. Top-level and static namespace functions can be used as
@@ -119,21 +120,58 @@ is a constant integer expression, folded like every other constant.
   member**, which is what `var m: Method` starts at and what
   `new array(Method, n)` fills with.
 
+## union {#union}
+
+```
+union Name:
+    member
+    member(field: Type, field: Type = constant)
+    ...
+
+    func method(...):
+        ...
+    static func member(...):
+        ...
+```
+
+A set of members of which a value holds exactly one, each member
+optionally carrying a parenthesized list of **named** payload fields
+with optional trailing constant defaults. Members are snake_case, one
+per line; [`match`](#match) is the only way to reach a payload.
+
+- At least one member must carry a payload: a union of bare members
+  is an enum, and is refused saying so (`luce.sema.union`).
+- Payload fields are named, always; a positional payload is refused
+  where it is written.
+- A member is not a type — `let c: Shape.circle` is refused — and the
+  union's own name is not a constructor: there is no `Shape(n)`.
+- Construction is a namespaced call with named arguments,
+  `Shape.circle(radius = 2.0)`, under the struct-construction rules;
+  a bare member takes no parentheses.
+- A member may not unconditionally contain its own union; the refusal
+  names `?` — the recursion ends at absence or travels through an
+  owning container. The 4096-value size bound that structs have
+  applies here too, counting a union as `1 +` its largest member.
+- A union takes the same methods and static namespace functions a
+  `struct` takes, under the [same rules](#methods).
+- The declaration may carry a [visibility](#visibility) word; a
+  member may not — a union's members are what the type is.
+
 ## match {#match}
 
 ```
 match expression:
     member:
         ...
-    member:
+    member(field, field):
         ...
     else:
         ...
 ```
 
-Dispatch over an enum. The scrutinee must be one; every arm is a bare
-member name of that enum, and each opens a block. `else` is optional
-and comes last.
+Dispatch over an enum or a [union](#union). The scrutinee must be
+one; every arm is a bare member name of that type, and each opens a
+block. `else` is optional and comes last.
 
 - Without an `else`, **every member must have an arm**, and one that
   is missing is `luce.sema.match`, by name.
@@ -142,10 +180,22 @@ and comes last.
 - Arms are ordinary statement blocks: they declare, assign, loop,
   `break`, `continue` and `return`. A match all of whose arms return
   is a return.
+- Over a union, an arm may follow its member with a parenthesized
+  list of that member's payload fields. Each binds a local in the
+  arm's scope **by the field's own name**; an object payload binds as
+  an alias of what the scrutinee owns. The list is **all of the
+  member's fields or none** — `member:` binds nothing — and a partial
+  list is refused naming the missing fields, as is a name that is not
+  a field of the arm's member. Bindings obey the no-shadowing rule
+  (`luce.sema.duplicate`). An enum's arms bind nothing.
+- There is no other door to a union's payload: no field access on a
+  union value, no tag test, and no way to name a payload outside an
+  arm — so reading the wrong member's payload is unrepresentable.
 
 ## Methods {#methods}
 
-A plain function declared inside a `struct` or an `enum` is a
+A plain function declared inside a `struct`, an `enum` or a `union`
+is a
 **method** with an implied `self`. A namespace member says `static`.
 
 ```

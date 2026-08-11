@@ -104,7 +104,7 @@ and      break    catch    const    continue copy     elif
 else     enum     false    for      func     give     if
 import   in       let      match    new      none     not
 or       private  public   return   self     spawn    static
-struct   true     try      var      while
+struct   true     try      union    var      while
 ```
 
 `spawn` runs a call on a [worker](/tour/threads/) instead of making
@@ -121,7 +121,8 @@ keyword rather than a convention so that nothing can shadow it and no
 declaration can call something else by that name — which is what makes
 `p.length()` readable as a call on `p` and nothing else.
 
-`static` belongs immediately before `func` inside a struct or enum. It
+`static` belongs immediately before `func` inside a struct, enum or
+union. It
 marks the namespace member that has no implied `self`; a file-scope
 function is already a namespace function and does not say it.
 

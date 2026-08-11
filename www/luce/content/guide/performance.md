@@ -14,16 +14,16 @@ code-generation change moves.
 
 | benchmark | C | Luce | Luce/C | compute |
 |---|---|---|---|---|
-| loops | 82.2 ms | 87.2 ms | 1.06× | 1.06× |
-| math | 139.1 ms | 110.2 ms | 0.79× | **0.78×** |
-| strings | 21.7 ms | 52.6 ms | 2.43× | **2.67×** |
-| arrays | 44.3 ms | 47.6 ms | 1.07× | 1.06× |
-| arrays32 | 8.1 ms | 43.4 ms | 5.38× | **8.66×** |
-| matmul | 10.9 ms | 12.0 ms | 1.10× | 1.05× |
-| matmul32 | 7.0 ms | 7.8 ms | 1.12× | 1.05× |
-| stats | 32.8 ms | 35.0 ms | 1.07× | 1.05× |
-| lists | 8.7 ms | 17.5 ms | 2.03× | **2.60×** |
-| *(do-nothing floor)* | 3.5 ms | 4.2 ms | — | — |
+| loops | 80.5 ms | 84.1 ms | 1.05× | 1.04× |
+| math | 138.8 ms | 109.2 ms | 0.79× | **0.78×** |
+| strings | 19.9 ms | 50.0 ms | 2.51× | **2.75×** |
+| arrays | 43.5 ms | 46.9 ms | 1.08× | 1.07× |
+| arrays32 | 8.0 ms | 42.8 ms | 5.39× | **7.92×** |
+| matmul | 10.4 ms | 11.7 ms | 1.12× | 1.07× |
+| matmul32 | 6.7 ms | 7.7 ms | 1.15× | 1.09× |
+| stats | 32.4 ms | 42.5 ms | 1.31× | **1.32×** |
+| lists | 8.1 ms | 16.7 ms | 2.05× | **2.53×** |
+| *(do-nothing floor)* | 3.0 ms | 3.7 ms | — | — |
 
 **`compute` is the column to quote.** Where anything else in the
 repository names a benchmark ratio it names that column and says so,

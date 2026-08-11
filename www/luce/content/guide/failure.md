@@ -44,9 +44,9 @@ and could have checked: `ln` of a non-positive number, `pow` and
 
 ## Why not a `Result` type
 
-Because Luce has no tagged unions. `Result<T, E>` needs one, and
-adding tagged unions to get error handling would have been the tail
-wagging the dog.
+Because when errors were designed, Luce had no tagged unions —
+`Result<T, E>` needs one, and adding tagged unions to get error
+handling would have been the tail wagging the dog.
 
 What Luce did instead is make fallibility an **attribute of the
 function** rather than a type. `T!` is not a type: there is no `T!` to
@@ -57,9 +57,13 @@ nothing to wrap it in.
 That turned out better than "probably right". The attribute is what
 gave Luce Ok-wrapping for free — you never write the wrapper — and it
 kept the type system entirely out of the feature: not one exhaustive
-switch over the type union grew an arm. It is, however, the third
-design in the language bent around the same missing hole, and the
-[status page](/status/) says so.
+switch over the type union grew an arm. [Unions](/tour/unions/) have
+since shipped, and the answer did not move: the union run promised
+errors nothing, deliberately, because the load-bearing reason was
+never the missing type — an error unwinds through releases, so a
+reason that carried objects would have the unwind releasing what it
+carries out. Errors stay two codes and a message until real callers
+show what they need to branch on.
 
 ## try is return with one terminator changed
 

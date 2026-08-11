@@ -1,13 +1,14 @@
 # Unions — one of these, and the language always knows which
 
-> **Status (2026-08-10): drafted, not scheduled.**  The design below is
-> taken and priced, but no run is underway and none is on the board.
-> The three questions that genuinely need the owner are held in "For
-> ratification", each with a recommendation already written.
+> **Status (2026-08-10): built**, the day it was scheduled, in one
+> vertical, on both engines.  The eighteen decisions shipped as
+> written, the three held questions were taken as their written
+> recommendations, and the two places the code departed from this
+> memo are recorded in "As built" at the bottom.
 
 Run five of the ratified roadmap (`docs/MISSING.md` Tier 2), and the
-last of it: after this the owner's *"and I think we're good"* is the
-whole remaining language.  Its one deciding question was answered
+last of it: with this built the owner's *"and I think we're good"* is
+the whole remaining language.  Its one deciding question was answered
 before the memo was written — owner, 2026-08-04: *"Tagged unions
 obviously"* — so this is not a memo about whether the tag exists.  It
 is about what a member may carry, what carrying it means for memory,
@@ -21,8 +22,11 @@ this tree as it stands today rather than as it stood when the survey
 was gathered — three things landed in between and two of them move a
 recommendation.
 
-**Every fenced block here is `text`.**  None of this compiles yet, and
-`tools/doccheck.zig` would be right to refuse it as Luce.
+**Every fenced block here is `text`**, because none of it compiled
+when the memo was written.  It all compiles now; the verified samples
+live on the site and in `specs/union_spec.zig`, and these fences stay
+`text` because a design memo's examples are the design's, not the
+build's.
 
 ---
 
@@ -615,3 +619,57 @@ is not categorically forbidden on an object-carrying value; it may
 replace one bare mutable binding that owns its objects in place.  The
 union work must apply that same ownership test rather than revive the
 old `var self` restriction.
+
+---
+
+## As built (2026-08-10)
+
+Built the day it was scheduled, in one vertical, on both engines.  The
+eighteen decisions shipped as written, with the SELF amendment above
+applied in place of D17's original receiver spelling, and the three
+held questions were taken as their written recommendations: the zero
+is the first declared member with every payload field at its own zero
+(R1), there is no discriminant reuse (R2), and this run promised
+`std.json` nothing about error shapes (R3).  Two places the code
+departed from the memo, each recorded where it lives; each is here
+with the reason, and each has a spec.
+
+| | departure, and where it is argued |
+|---|---|
+| **A1** | **Runs are padded to one static length per union** — `1 + the widest member's field count`, D12's own number made the run length — where D8's letter said a run was the member index followed by the *active* member's fields, so that `Shape.empty` would have been one slot.  It could not be: generated code re-derives a value's box from its static type alone at sites where the run pointer is legitimately null — a call's result is a bare pointer, and `fillBoxShape` writes the length word once in the entry block — so the length had to be a fact about the type, exactly as a struct's is.  A member with fewer fields pads its tail with `none` slots, which own nothing, copy as themselves, and free nothing, so the ownership walks never notice.  `types.VariantType.runLength` is the number and its comment the argument; `lower.zig`'s `boxLength` and `variantZero` arms are where the compiled path reads it. |
+| **A2** | **`free(u)` is refused, as it is for a struct.**  D9 said the verbs mean what S31, S26, S6 and S27 already say about a carrying struct — and read closely, S6 as ratified never freed a struct: `free` releases a direct container or resource handle, and a struct value has never been one.  A union takes exactly a struct's verbs, so `free` on one is the same `luce.sema.type` sentence a struct value gets, and a union dies the way a struct does — when its scope ends.  That release is proven by the two-engine leak census rather than by a verb: three members of three shapes go out of scope in `specs/union_spec.zig` and the census is zero. |
+
+Two smaller calls the memo did not need to make: `variant_tag`
+answers a **`long`** — slot 0 boxes exactly as a `long` does, which
+is what the interpreter parks in the same slot and what `match`'s
+compare-and-branch tree tests — and a union declaration takes a
+visibility marker while its members, like an enum's, do not.
+
+Everything else landed as drawn.  The three instructions are
+`variant_make` / `variant_tag` / `variant_field` with the verifier
+rules of "Where it lands", and the printer prints them.
+`format_version` moved **37 → 38** — the memo's "29 → 30" was
+overtaken by the runs that landed between its writing and this one.  `libluce_rt`
+learned **nothing**: no export, no semantic, no table — the commit
+touched no `runtime/` file — and `luce_rt_struct_make` builds the run,
+`ownValue` copies it, `dropStorage` frees it, exactly as D8 priced.
+A rendered-IR test (`08_llvm/test.zig`) pins one runtime call per
+construction and none per read, which is the inline-load promise made
+executable.  `abi.version` did not move.
+
+**Sixteen two-engine spec rows** in `specs/union_spec.zig` cover the
+memo's battery — construction and dispatch for every member shape,
+defaults on payload fields, value and object payload bindings,
+`give`/`copy` on a carrying union, a caught error unwinding past two
+of them with the census at zero, a trap with union values in flight,
+the zeros of a late `var`, an `array(Shape, n)` and a `list(Json)`
+element, a recursive `Json` tree built, walked, copied and freed,
+`Shape?` narrowed and defaulted, `string(u)` for all six `Json`
+members, and A4's fallthrough — beside refusal rows in
+`03_parse/test.zig` and `compile/test.zig` for every numbered refusal:
+D1's positional payload, D2's all-bare union, D3's member-as-type,
+D4's bare payload member and parenthesized bare member, D5's partial
+field list and unknown member, D11's shadowing arm binding, D12's
+self-containing union, D15's union map key, and D16's `==`, refused by
+a sentence naming `match`.  The worked `Json` example compiles and
+runs through the real toolchain on both engines.
