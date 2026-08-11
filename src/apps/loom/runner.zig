@@ -38,13 +38,21 @@
 //!
 //! Beside the source, as `NAME.lc` — the same file `luce build
 //! NAME.luc` writes, so a build can ship one and loom simply finds it.
-//! It is keyed on **content**: the artifact carries a hash of the
-//! serialized module it was built from, and a program whose bytes
-//! changed gets a rebuild whatever the clock says about either file.
-//! When there is nowhere to write beside the program — a read-only
-//! directory, or a program with no path at all, like the embedded
-//! editor — the artifact goes to the temp directory under its hash
-//! instead, which is the same cache with a different address.
+//! Under a governing `luce.yaml` the project's own
+//! **`.luce/cache/`** takes the artifact over instead
+//! (docs/PACKAGES.md D5): the same relative spot the source holds in
+//! the project tree, mirrored under the cache directory, so a rebuilt
+//! program replaces its artifact rather than leaving one per edit and
+//! `rm -rf .luce/cache` is always safe.  Either way it is keyed on
+//! **content**: the artifact carries a hash of the serialized module
+//! it was built from — which the front end rebuilds from *all* loaded
+//! sources, package files and their root tokens included, so a changed
+//! package file or a `luce.yaml` edit that changes resolution moves
+//! the key — and a program whose bytes changed gets a rebuild whatever
+//! the clock says about any file.  When there is nowhere to write —
+//! a read-only tree, or a program with no path at all, like the
+//! embedded editor — the artifact goes to the temp directory under its
+//! hash instead, which is the same cache with a different address.
 //!
 //! A warm run invokes nothing external.  A cold one runs `luce` once,
 //! which runs the linker once.
@@ -283,13 +291,15 @@ pub fn runSource(
     // the bytes the compiler is handed when one has to be built.
     const encoded = try luce.mir.module.encode(gpa, &program);
     defer gpa.free(encoded);
-    return run(gpa, io, out, err, policy, name, encoded, arguments);
+    return run(gpa, io, out, err, policy, name, source_root, encoded, arguments);
 }
 
 /// Get this program's artifact — cached or freshly built — and run it.
 ///
 /// `encoded` is the serialized module: what the artifact is keyed on,
-/// and what the compiler is handed when one has to be built.  There is
+/// and what the compiler is handed when one has to be built.
+/// `source_root` is the discovered project root, "" for a rootless
+/// program — it decides only where the artifact is kept.  There is
 /// nothing to fall back to and nothing to choose between, so a program
 /// that cannot be compiled here is a sentence naming what was missing,
 /// which is a fact the person can act on.
@@ -300,12 +310,13 @@ pub fn run(
     err: *std.Io.Writer,
     policy: Policy,
     name: []const u8,
+    source_root: []const u8,
     encoded: []const u8,
     arguments: []const []const u8,
 ) !u8 {
     var refusal: ?[]const u8 = null;
     defer if (refusal) |why| gpa.free(why);
-    if (try artifactFor(gpa, io, policy, name, encoded, &refusal)) |opened| {
+    if (try artifactFor(gpa, io, policy, name, source_root, encoded, &refusal)) |opened| {
         var loaded = opened;
         defer loaded.close();
         return runLoaded(gpa, io, out, err, &loaded, arguments);
@@ -330,18 +341,22 @@ fn artifactFor(
     io: std.Io,
     policy: Policy,
     name: []const u8,
+    source_root: []const u8,
     encoded: []const u8,
     refusal: *?[]const u8,
 ) !?native.Loaded {
     const source_hash = artifact.sourceHash(encoded);
-    var places = try Places.of(gpa, io, policy.temporary_directory, name, source_hash);
+    var places = try Places.of(gpa, io, policy.temporary_directory, source_root, name, source_hash);
     defer places.deinit(gpa);
     if (places.paths().len == 0) {
         refusal.* = try std.fmt.allocPrint(
             gpa,
-            "there is nowhere to put the artifact: it cannot go beside the program, " ++
+            "there is nowhere to put the artifact: it cannot go {s}, " ++
                 "and {s} holds no private directory this user can make one in",
-            .{policy.temporary_directory},
+            .{
+                if (source_root.len == 0) "beside the program" else "in the project's .luce/cache",
+                policy.temporary_directory,
+            },
         );
         return null;
     }
@@ -469,11 +484,17 @@ fn compileTo(
 
 /// Where an artifact for this program may live, best first.
 ///
-/// Beside the source is the honest place: deletable with it, visible in
-/// a listing, and exactly the name `luce build` writes — so a warm
-/// artifact can be shipped rather than earned.  The temp directory is
-/// the fallback for a read-only directory or a program with no path at
-/// all, and keys on the hash because there is no name to key on.
+/// Beside the source is the honest place for a rootless program:
+/// deletable with it, visible in a listing, and exactly the name `luce
+/// build` writes — so a warm artifact can be shipped rather than
+/// earned.  Under a governing `luce.yaml` the honest place is the
+/// project's own `.luce/cache/` instead (docs/PACKAGES.md D5), the
+/// source's relative spot in the tree mirrored under it, so a project
+/// never collects artifacts among its sources, a rebuilt program
+/// replaces its artifact by name, and deleting `.luce/cache` costs one
+/// recompile and nothing else.  The temp directory is the fallback for
+/// a read-only tree or a program with no path at all, and keys on the
+/// hash because there is no name to key on.
 ///
 /// ## The spare place is a directory of this user's own
 ///
@@ -504,7 +525,12 @@ fn compileTo(
 /// and every system that has one does it; `rm -rf` on this directory
 /// is always safe and costs one recompile.
 const Places = struct {
-    beside: ?[:0]u8 = null,
+    /// The name-addressed place: `NAME.lc` beside the source for a
+    /// rootless program, or the same relative spot under the project's
+    /// `.luce/cache/` when a `luce.yaml` governs.  Null when the
+    /// program has no name to address by, or the cache directory
+    /// cannot be made.
+    named: ?[:0]u8 = null,
     /// Null when there is no private directory to be had.
     temporary: ?[:0]u8 = null,
     /// Scratch for `paths`, which answers a borrowed slice rather than
@@ -518,14 +544,18 @@ const Places = struct {
         gpa: Allocator,
         io: std.Io,
         temporary: []const u8,
+        source_root: []const u8,
         name: []const u8,
         source_hash: u64,
     ) !Places {
         var made: Places = .{};
         if (stemOf(name)) |stem| {
-            made.beside = try std.fmt.allocPrintSentinel(gpa, "{s}.lc", .{stem}, 0);
+            made.named = if (source_root.len == 0)
+                try std.fmt.allocPrintSentinel(gpa, "{s}.lc", .{stem}, 0)
+            else
+                try cachePlace(gpa, io, source_root, stem);
         }
-        errdefer if (made.beside) |path| gpa.free(path);
+        errdefer if (made.named) |path| gpa.free(path);
 
         const directory = try std.fmt.allocPrint(
             gpa,
@@ -574,14 +604,14 @@ const Places = struct {
     }
 
     fn deinit(self: *Places, gpa: Allocator) void {
-        if (self.beside) |path| gpa.free(path);
+        if (self.named) |path| gpa.free(path);
         if (self.temporary) |path| gpa.free(path);
         self.* = undefined;
     }
 
     fn paths(self: *Places) []const [:0]const u8 {
         var count: usize = 0;
-        if (self.beside) |path| {
+        if (self.named) |path| {
             self.storage[count] = path;
             count += 1;
         }
@@ -592,6 +622,62 @@ const Places = struct {
         return self.storage[0..count];
     }
 };
+
+/// The cached-artifact path for a governed program: the stem's own
+/// place in the project tree, mirrored under `<root>/.luce/cache/`
+/// (docs/PACKAGES.md D5), `.lc` appended — so one program has one
+/// artifact and a rebuild replaces it.  The directory is made on
+/// demand, `mkdir -p` fashion.  The caller owns the path; null means
+/// the cache is not to be had — the directory cannot be made, or the
+/// stem does not spell a place under the root — and the temp fallback
+/// is all there is, exactly as for an unwritable source directory.
+fn cachePlace(
+    gpa: Allocator,
+    io: std.Io,
+    root: []const u8,
+    stem: []const u8,
+) error{OutOfMemory}!?[:0]u8 {
+    // Anchor the stem the way project discovery anchored its walk
+    // (`files.discoverProject`): lexically, under the current
+    // directory, never a realpath — so the root that walk answered is
+    // a spelled prefix of the anchored stem, and the part after it is
+    // the program's place in the tree.
+    const anchored = if (std.fs.path.isAbsolute(stem))
+        try gpa.dupe(u8, stem)
+    else anchored: {
+        const here = std.process.currentPathAlloc(io, gpa) catch |mistake| switch (mistake) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return null,
+        };
+        defer gpa.free(here);
+        break :anchored try std.fs.path.join(gpa, &.{ here, stem });
+    };
+    defer gpa.free(anchored);
+
+    if (!std.mem.startsWith(u8, anchored, root)) return null;
+    var relative = anchored[root.len..];
+    if (!std.mem.endsWith(u8, root, std.fs.path.sep_str)) {
+        // The prefix must end at a path boundary: root /a/b is not an
+        // ancestor of /a/bc/x.
+        if (relative.len == 0 or relative[0] != std.fs.path.sep) return null;
+        relative = relative[1..];
+    }
+    if (relative.len == 0) return null;
+
+    const path = try std.fmt.allocPrintSentinel(
+        gpa,
+        "{s}{c}.luce{c}cache{c}{s}.lc",
+        .{ root, std.fs.path.sep, std.fs.path.sep, std.fs.path.sep, relative },
+        0,
+    );
+    // The path just built always has a parent — it contains the cache
+    // directory — and that parent is made on demand.
+    std.Io.Dir.cwd().createDirPath(io, std.fs.path.dirname(path).?) catch {
+        gpa.free(path);
+        return null;
+    };
+    return path;
+}
 
 /// `foo.luc` names an artifact `foo.lc` beside it.  Anything else — the
 /// embedded editor, a program read from a stream — has no file to sit
@@ -725,15 +811,15 @@ test "an artifact is named beside the source it came from" {
     var path_storage: [std.fs.max_path_bytes]u8 = undefined;
     const temporary = try scratchDirectory(&scratch, &path_storage);
 
-    var beside = try Places.of(gpa, testing.io, temporary, "examples/editor/editor.luc", 0x1234);
+    var beside = try Places.of(gpa, testing.io, temporary, "", "examples/editor/editor.luc", 0x1234);
     defer beside.deinit(gpa);
-    try testing.expectEqualStrings("examples/editor/editor.lc", beside.beside.?);
+    try testing.expectEqualStrings("examples/editor/editor.lc", beside.named.?);
     try testing.expectEqual(@as(usize, 2), beside.paths().len);
     try testing.expectEqualStrings("examples/editor/editor.lc", beside.paths()[0]);
 
-    var anonymous = try Places.of(gpa, testing.io, temporary, "editor", 0x1234);
+    var anonymous = try Places.of(gpa, testing.io, temporary, "", "editor", 0x1234);
     defer anonymous.deinit(gpa);
-    try testing.expect(anonymous.beside == null);
+    try testing.expect(anonymous.named == null);
     try testing.expectEqual(@as(usize, 1), anonymous.paths().len);
     const expected = try std.fmt.allocPrint(
         gpa,
@@ -761,7 +847,7 @@ test "the spare artifact directory is made private, and one that is not is not u
     const temporary = try scratchDirectory(&scratch, &path_storage);
 
     // Made on first use, and private whatever the umask says.
-    var fresh = try Places.of(gpa, io, temporary, "editor", 7);
+    var fresh = try Places.of(gpa, io, temporary, "", "editor", 7);
     defer fresh.deinit(gpa);
     try testing.expect(fresh.temporary != null);
     const found = try scratch.dir.statFile(io, Places.spare_directory, .{});
@@ -769,7 +855,7 @@ test "the spare artifact directory is made private, and one that is not is not u
     try testing.expectEqual(@as(std.posix.mode_t, 0), found.permissions.toMode() & 0o077);
 
     // Found again on the next run, without being remade.
-    var again = try Places.of(gpa, io, temporary, "editor", 7);
+    var again = try Places.of(gpa, io, temporary, "", "editor", 7);
     defer again.deinit(gpa);
     try testing.expectEqualStrings(fresh.temporary.?, again.temporary.?);
 
@@ -780,7 +866,7 @@ test "the spare artifact directory is made private, and one that is not is not u
     var open_storage: [std.fs.max_path_bytes]u8 = undefined;
     const open_root = try scratchDirectory(&open, &open_storage);
     try open.dir.createDir(io, Places.spare_directory, .fromMode(0o777));
-    var shared = try Places.of(gpa, io, open_root, "editor", 7);
+    var shared = try Places.of(gpa, io, open_root, "", "editor", 7);
     defer shared.deinit(gpa);
     try testing.expect(shared.temporary == null);
     // And with nowhere else to go, there is no place at all.
@@ -795,7 +881,84 @@ test "the spare artifact directory is made private, and one that is not is not u
     const target = try std.fs.path.join(gpa, &.{ temporary, Places.spare_directory });
     defer gpa.free(target);
     try linked.dir.symLink(io, target, Places.spare_directory, .{});
-    var redirected = try Places.of(gpa, io, linked_root, "editor", 7);
+    var redirected = try Places.of(gpa, io, linked_root, "", "editor", 7);
     defer redirected.deinit(gpa);
     try testing.expect(redirected.temporary == null);
+}
+
+test "under a project root the artifact goes to .luce/cache, mirroring the tree" {
+    // docs/PACKAGES.md D5: the cache takes over for governed programs.
+    // The source's own place in the project tree is mirrored under
+    // `.luce/cache/`, so one program has one artifact and a rebuild
+    // replaces it; nothing is written beside the source any more.
+    const gpa = testing.allocator;
+    const io = testing.io;
+    var scratch = testing.tmpDir(.{});
+    defer scratch.cleanup();
+    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
+    const root = try scratchDirectory(&scratch, &path_storage);
+
+    const name = try std.fmt.allocPrint(gpa, "{s}/src/tools/x.luc", .{root});
+    defer gpa.free(name);
+    var places = try Places.of(gpa, io, root, root, name, 0x1234);
+    defer places.deinit(gpa);
+    const expected = try std.fmt.allocPrint(gpa, "{s}/.luce/cache/src/tools/x.lc", .{root});
+    defer gpa.free(expected);
+    try testing.expectEqualStrings(expected, places.named.?);
+    try testing.expectEqualStrings(expected, places.paths()[0]);
+
+    // The cache directory was made on demand, ready to be written.
+    const made = try scratch.dir.statFile(io, ".luce/cache/src/tools", .{});
+    try testing.expectEqual(std.Io.File.Kind.directory, made.kind);
+
+    // A root that is not an ancestor of the program is refused rather
+    // than guessed at: /a/b never claims /a/bc's programs.
+    const cousin = try std.fmt.allocPrint(gpa, "{s}x/main.luc", .{root});
+    defer gpa.free(cousin);
+    var foreign = try Places.of(gpa, io, root, root, cousin, 0x1234);
+    defer foreign.deinit(gpa);
+    try testing.expect(foreign.named == null);
+}
+
+test "a relative program path anchors under the cwd before the root strips it" {
+    // `loom src/main.luc` from the project directory: discovery
+    // anchored its walk lexically under the cwd, and the cache place
+    // anchors the same way, so the two always agree on what is under
+    // the root.
+    const gpa = testing.allocator;
+    const io = testing.io;
+    var scratch = testing.tmpDir(.{});
+    defer scratch.cleanup();
+    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
+    const root = try scratchDirectory(&scratch, &path_storage);
+
+    // The name as a person in the repository would type it: relative.
+    const relative = try std.fmt.allocPrint(gpa, ".zig-cache/tmp/{s}/main.luc", .{&scratch.sub_path});
+    defer gpa.free(relative);
+    var places = try Places.of(gpa, io, root, root, relative, 0x1234);
+    defer places.deinit(gpa);
+    const expected = try std.fmt.allocPrint(gpa, "{s}/.luce/cache/main.lc", .{root});
+    defer gpa.free(expected);
+    try testing.expectEqualStrings(expected, places.named.?);
+}
+
+test "a .luce that cannot be a directory forfeits the cache place, not the run" {
+    // A file squatting where `.luce` goes: the cache cannot be made,
+    // so the program still runs — from the temp fallback — rather than
+    // failing on a directory it does not own.
+    const gpa = testing.allocator;
+    const io = testing.io;
+    var scratch = testing.tmpDir(.{});
+    defer scratch.cleanup();
+    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
+    const root = try scratchDirectory(&scratch, &path_storage);
+    try scratch.dir.writeFile(io, .{ .sub_path = ".luce", .data = "not a directory" });
+
+    const name = try std.fmt.allocPrint(gpa, "{s}/main.luc", .{root});
+    defer gpa.free(name);
+    var places = try Places.of(gpa, io, root, root, name, 0x1234);
+    defer places.deinit(gpa);
+    try testing.expect(places.named == null);
+    try testing.expectEqual(@as(usize, 1), places.paths().len);
+    try testing.expect(std.mem.indexOf(u8, places.paths()[0], Places.spare_directory) != null);
 }

@@ -49,6 +49,7 @@ ratified language roadmap — shipped on 2026-08-10.
 | File-scope `const`: folded values and flat immutable program-root containers | shipped |
 | Runtime and constant `{key: value}` map literals; empty `{}` refused | shipped |
 | Modules, and a reserved `std.` namespace | shipped |
+| Packages, the consuming half: `luce.yaml` projects, dotted imports with `as`, exact-version packages vendored into `.luce/packages/` and verified by hash — no fetch, no registry, no `luce install` yet | shipped |
 | Function values and capture-free expression lambdas | shipped |
 | Implied-self methods and `static` namespace functions | shipped |
 | Multiple returns into new or existing bindings | shipped |
@@ -63,12 +64,15 @@ ratified language roadmap — shipped on 2026-08-10.
 | Two build modes that differ only in what a trap can say | shipped |
 | map lookups O(1); sort O(n log n) and stable by guarantee | shipped |
 
-The compiler-internal serialized module is format **38**. Program-root
+The compiler-internal serialized module is format **39**. Program-root
 containers moved it to 33 by adding a pool, instruction and trap code;
 the later `ownership_cycle` trap, `shell_run` service and `term_event_data`
-intrinsic moved it again, and unions moved it to 38 by adding the
-variant table and three instructions. The published host ABI is **15**:
-no union crosses the host boundary, so the union run did not move it.
+intrinsic moved it again, unions moved it to 38 by adding the
+variant table and three instructions, and packages moved it to 39 by
+qualifying module names with their package root, so two packages'
+same-named files can never merge in a serialized module. The published
+host ABI is **15**: neither unions nor packages cross the host
+boundary, so neither run moved it.
 
 ## What is measured
 

@@ -3045,3 +3045,74 @@ test "a package's util and the project's util never answer for each other" {
     };
     program.deinit();
 }
+
+/// One consumer program over one vendored package, compiled and
+/// serialized — the bytes the artifact cache keys on.  The package's
+/// root token and its internal `util.luc` are the two knobs the cache
+/// test below turns.  The caller owns the bytes.
+fn encodePackaged(token: []const u8, util_source: []const u8) ![]u8 {
+    var packaged: TestLoader = .{ .modules = &.{
+        .{
+            .name = "geo",
+            .root = token,
+            .source = "import util\n\nfunc measure() -> long:\n    return util.factor()\n",
+        },
+        .{
+            .name = "util",
+            .from = token,
+            .root = token,
+            .source = util_source,
+        },
+    } };
+    var result = try compile_mod.compileProject(testing.allocator,
+        \\import geo
+        \\
+        \\func main():
+        \\    assert(geo.measure() == geo.measure())
+        \\
+    , packaged.loader(), .{});
+    var program = switch (result) {
+        .success => |compiled| compiled,
+        .failure => |*diagnostics| {
+            const rendered = try diagnostics.render(testing.allocator);
+            defer testing.allocator.free(rendered);
+            std.debug.print("unexpected diagnostics:\n{s}", .{rendered});
+            result.deinit();
+            return error.TestUnexpectedResult;
+        },
+    };
+    defer program.deinit();
+    return mir.module.encode(testing.allocator, &program);
+}
+
+test "the artifact cache key moves with a package file and with its resolution (docs/PACKAGES.md D5)" {
+    // `.luce/cache/` keys an artifact on a hash of the encoded module
+    // (`apps/loom/runner.zig`), and the encoded module is rebuilt from
+    // *all* loaded sources with their root tokens in the serialized
+    // names — so an edited package file moves the key, and so does a
+    // resolution change that re-roots the very same bytes.  This test
+    // is what the loom cache's invalidation story stands on.
+    const ten = "func factor() -> long:\n    return 10\n";
+    const eleven = "func factor() -> long:\n    return 11\n";
+
+    const baseline = try encodePackaged("geo-1.2.0", ten);
+    defer testing.allocator.free(baseline);
+
+    // Same sources, same resolution: the same bytes, so a warm cache
+    // stays warm.
+    const again = try encodePackaged("geo-1.2.0", ten);
+    defer testing.allocator.free(again);
+    try testing.expectEqualSlices(u8, baseline, again);
+
+    // One edited package file: a different module, a different key.
+    const edited = try encodePackaged("geo-1.2.0", eleven);
+    defer testing.allocator.free(edited);
+    try testing.expect(!std.mem.eql(u8, baseline, edited));
+
+    // The same bytes resolved as a different version: the root token
+    // travels in the serialized names, so a `luce.yaml` edit that
+    // changes resolution changes the key too.
+    const rerooted = try encodePackaged("geo-1.3.0", ten);
+    defer testing.allocator.free(rerooted);
+    try testing.expect(!std.mem.eql(u8, baseline, rerooted));
+}

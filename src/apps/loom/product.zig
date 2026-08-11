@@ -289,7 +289,9 @@ test "a vendored package resolves end to end: luce builds the project, loom runs
     try testing.expectEqual(@as(u8, 0), ran.status);
 
     // loom's own front end walks the same store when handed the
-    // source: same program, same answer, artifact cached beside it.
+    // source: same program, same answer — and the artifact lands in
+    // the project's own `.luce/cache/`, never beside the source
+    // (docs/PACKAGES.md D5).
     const source = try install.at(gpa, "project/main.luc");
     defer gpa.free(source);
     var direct = try runLoom(gpa, &install, &.{source}, null, null);
@@ -297,6 +299,49 @@ test "a vendored package resolves end to end: luce builds the project, loom runs
     try testing.expectEqualStrings("", direct.err);
     try testing.expectEqualStrings("area 60\n", direct.out);
     try testing.expectEqual(@as(u8, 0), direct.status);
+    try testing.expect(install.exists("project/.luce/cache/main.lc"));
+    try testing.expect(!install.exists("project/main.lc"));
+
+    // A second run is a cache hit, and the honest observable is that
+    // it needs no compiler at all: with `luce` taken away, a miss
+    // could only fail, so answering quietly *is* the hit.
+    try install.scratch.dir.rename("luce", install.scratch.dir, "luce.away", io);
+    var bare: std.process.Environ.Map = .init(gpa);
+    defer bare.deinit();
+    try bare.put("PATH", install.root);
+    var warm = try runLoom(gpa, &install, &.{source}, &bare, null);
+    defer warm.deinit(gpa);
+    try testing.expectEqualStrings("", warm.err);
+    try testing.expectEqualStrings("area 60\n", warm.out);
+    try testing.expectEqual(@as(u8, 0), warm.status);
+
+    // The cache key covers every loaded source, the vendored package's
+    // included: edit one file in the store and the next run rebuilds —
+    // over the same name, so the cache holds one artifact per program,
+    // however many times it changes.
+    try install.scratch.dir.rename("luce.away", install.scratch.dir, "luce", io);
+    try install.write("project/.luce/packages/geo-1.2.0/util.luc",
+        \\func scale(v: long) -> long:
+        \\    return v * 11
+        \\
+    );
+    var moved = try runLoom(gpa, &install, &.{source}, null, null);
+    defer moved.deinit(gpa);
+    try testing.expectEqualStrings("", moved.err);
+    try testing.expectEqualStrings("area 66\n", moved.out);
+    try testing.expectEqual(@as(u8, 0), moved.status);
+
+    // One artifact, and no `.lcm` hand-over left behind: the writer
+    // discipline followed the artifact into the shared directory.
+    var cache = try install.scratch.dir.openDir(io, "project/.luce/cache", .{ .iterate = true });
+    defer cache.close(io);
+    var entries = cache.iterate();
+    var held: usize = 0;
+    while (try entries.next(io)) |entry| {
+        held += 1;
+        try testing.expectEqualStrings("main.lc", entry.name);
+    }
+    try testing.expectEqual(@as(usize, 1), held);
 }
 
 test "the .lc luce writes runs on a loom with no compiler at all" {

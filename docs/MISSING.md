@@ -772,6 +772,19 @@ improvement the audit exposed:
   discovering `func test_*():` would be cheap and very Zig.  `fmt` and
   an LSP both want stage 5's faithful tree first — an argument for
   writing it.
+- **Packages: the consuming half is built; producing and fetching are
+  not.**  A program under a `luce.yaml` resolves dotted imports,
+  hand-vendored packages in `.luce/packages/`, `LUCE_LIB` shelves and
+  `path:` overrides at exact versions with content hashes, diamonds
+  refused with `override:` as the remedy, and compiles into
+  `.luce/cache/` (docs/PACKAGES.md, ratified and built).  What remains
+  is everything that *makes and moves* a package: `luce install` /
+  `luce update` / `luce init`, the registry and its static-file fetch
+  protocol, publishing manifests with mandatory hashes, signatures and
+  yanking, the package export boundary, and `std.yaml` — each a named
+  deferral in that memo, waiting on the publishing memo it says comes
+  next.  Until then a package enters a project by being copied into
+  the store, which is vendoring, and is proven end to end.
 - **Docs to correct:** `tools/vscode-luce/syntaxes/luce.tmLanguage.json`
   used to be the worst of these — hand-written, highlighting removed v1
   Fabric builtins, knowing none of `give`, `copy`, `new`, `try`,

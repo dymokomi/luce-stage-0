@@ -1,10 +1,14 @@
 # Packages: using and loading (design)
 
-**Status: IN PROGRESS — implementation-order steps 1–3 are built (the
-manifest, discovery and the D7 seam; subfolder imports and `import ...
-as`; the store, `LUCE_LIB`, `path:`, hashes, diamonds + `override:`,
-and root-qualified serialized names); step 4's `.luce/cache/` is
-not.**  This memo designs the
+**Status: BUILT — the consuming half this memo designs is complete.
+All five implementation-order steps landed (each with its as-built
+note below): the manifest, discovery and the D7 seam; subfolder
+imports and `import ... as`; the store, `LUCE_LIB`, `path:`, hashes,
+diamonds + `override:`, and root-qualified serialized names; the
+`.luce/cache/` compile cache; and the closing spec sweep.  What this
+memo deliberately stops before — authoring, publishing, fetching,
+`luce install`/`luce update`/`luce init`, the registry — remains
+unbuilt and is the next memo's, as designed.**  This memo designs the
 consuming half of packages — how a program *finds and loads* code it
 did not write — and deliberately stops before authoring and
 publishing.  The machinery for using packages has to be solid before a
@@ -415,5 +419,62 @@ The review's second blocker, adopted as the implementation contract:
    `libluce_rt.a` for the link, and the package shelves.
 4. `.luce/cache/` (D5) for project builds; loom keeps beside-source
    caching for rootless files.
+   *As built (2026-08-10): under a governing `luce.yaml`, loom keeps a
+   program's artifact at the program's own relative spot in the tree,
+   mirrored under `<root>/.luce/cache/` — `src/tools/x.luc` caches at
+   `.luce/cache/src/tools/x.lc` — so one program has one artifact, a
+   rebuild replaces it by name, and `rm -rf .luce/cache` costs one
+   recompile and nothing else; the directory is made on demand, and a
+   tree where it cannot be made falls back to the hash-named temp
+   place exactly as an unwritable source directory always has.  The
+   key is D5's, unchanged: `artifact.sourceHash` over the encoded
+   module, which carries every loaded source under its root-qualified
+   names — so an edited package file misses, and so does a `luce.yaml`
+   edit that re-roots the same bytes, both proven down to the encoded
+   bytes in `compile/test.zig`.  The `.lcm` writer discipline derives
+   its scratch names from the artifact path and so followed it into
+   the shared directory; two looms warming one cache still cannot
+   cross.  **`luce build` did not change**: `-o` and the
+   beside-the-source default are the compiler's deliverable, not
+   loom's cache — D5's "takes over the compile cache" is loom's
+   convenience only.  For the same reason loom does not read a
+   deliverable `main.lc` a build left beside a governed source: under
+   a root it reads and writes `.luce/cache/` alone, so a shipped warm
+   artifact is named with `-o` and run directly.*
 5. Specs throughout: `modules_spec.zig` grows a packages section;
    `product.zig` drives a vendored package the way a person would.
+   *As built (2026-08-10): the packages section proves on both engines
+   everything a running program can observe of D1–D7 — two packages'
+   same-named internals apart, one module reached by two spellings as
+   one type, subfolder bindings with `as`, a transitive dependency
+   chain the consumer never names, and a trap inside a package whose
+   frames both engines report identically and root-qualified — while
+   the store machinery keeps its proofs in `src/apps/files.zig` and
+   `src/apps/manifest.zig` and the refusals theirs in
+   `compile/test.zig` and `01_source/load.zig`.  `product.zig` drives
+   the vendored store the way a person would: cold through `luce
+   build` and through loom's own front end, warm with the compiler
+   renamed away — a cache hit invokes nothing external, so running
+   without a compiler is the honest observable — and invalidated by
+   editing one file in the store.  D5's benchmark consequence is
+   recorded in `bench/run.sh`'s header.*
+
+**As built, closing note (2026-08-10).**  The five steps became: a
+~400-line hand-written manifest parser and a lexical walk-to-root
+discovery (`src/apps/manifest.zig`, `files.discoverProject`); dots
+mapped to directories under one anchor with `as` as the collision
+remedy and one-binding-per-module; a store the want list gates, probed
+beside every `LUCE_LIB` shelf and `path:` override with no precedence
+anywhere, packages holding their directory names and manifests to
+agreement, SHA-256 content hashes verified when stated, diamonds
+refused with both edges named and `override:` as the consumer's
+remedy, and serialized names qualified by root token
+(`format_version` 39) so the same program hashes the same on every
+machine; a project compile cache at `<root>/.luce/cache/` addressed by
+the program's place in the tree and keyed on the hash of the encoded
+module; and the spec sweep above.  The compiler still never learns
+what a package is — every D7 obligation lives behind the `Loader`
+seam, names in, bytes out, each answer stamped with the root token it
+belongs to.  The registry, the fetch protocol and `luce
+install`/`update`/`init` are deliberately still absent; when they are
+designed, this memo's resolver is what their files must load.

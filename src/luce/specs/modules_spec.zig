@@ -11,7 +11,16 @@
 //! imported, a constant cycle — are compile-time facts and stay in
 //! `compile/test.zig` beside the driver that produces them.  What is
 //! here is the half that runs, so it runs on both engines and the two
-//! are compared (`specs/agree.zig`).
+//! are compared (`specs/agree.zig`).  The packages section
+//! (docs/PACKAGES.md) is here for the same reason: package isolation,
+//! a transitive dependency chain, aliased subfolder bindings and
+//! package-qualified trap frames are all things a *running* program
+//! observes, so each is proven on both engines; the store machinery
+//! itself — discovery, manifests, hashes, diamonds — is the host's and
+//! is proven in `src/apps/files.zig` and `src/apps/manifest.zig`.
+
+const std = @import("std");
+const testing = std.testing;
 
 const agree = @import("agree.zig");
 
@@ -237,6 +246,76 @@ test "a package module reached from outside and inside is one module: one struct
     });
     defer program.deinit();
     try agree.okProgram(&program, .{});
+}
+
+test "a transitive package chain runs: a dependency's dependency answers inside it (docs/PACKAGES.md D4)" {
+    // The store resolves the whole want set eagerly: geo wants mathx,
+    // the consumer never names mathx and never sees it — the loader
+    // gates it to imports written inside geo, the way the want list
+    // gates a real store.  The chain runs end to end on both engines,
+    // and a package constant crosses to the consumer through the same
+    // claims its functions cross by.
+    var program = try agree.project(
+        \\import geo
+        \\
+        \\func main():
+        \\    assert(geo.area(2.0, 3.0) == 60.0)
+        \\    assert(geo.label == "geo")
+        \\
+    , &.{
+        .{
+            .name = "geo",
+            .root = "geo-1.2.0",
+            .path = ".luce/packages/geo-1.2.0/geo.luc",
+            .source = "import mathx\n\nconst label = \"geo\"\n\nfunc area(w: double, h: double) -> double:\n    return mathx.scale(w * h)\n",
+        },
+        .{
+            .name = "mathx",
+            .from = "geo-1.2.0",
+            .root = "mathx-1.1.0",
+            .path = ".luce/packages/mathx-1.1.0/mathx.luc",
+            .source = "func scale(v: double) -> double:\n    return v * 10.0\n",
+        },
+    });
+    defer program.deinit();
+    try agree.okProgram(&program, .{});
+}
+
+test "a trap inside a package is one report: same frames on both engines, the package named" {
+    // The runtime half of root-qualified names (docs/PACKAGES.md D7):
+    // a fault inside a package's private module unwinds through the
+    // package, both engines report the same frames in the same order —
+    // `compareProgram` holds the traces to byte equality — and the
+    // frames say which package the fault came from, because the
+    // serialized names carry the root token.
+    var program = try agree.project(
+        \\import geo
+        \\
+        \\func main():
+        \\    let sampled = geo.sample()
+        \\    assert(sampled == 0)
+        \\
+    , &.{
+        .{
+            .name = "geo",
+            .root = "geo-1.2.0",
+            .path = ".luce/packages/geo-1.2.0/geo.luc",
+            .source = "import util\n\nfunc sample() -> long:\n    return util.pick()\n",
+        },
+        .{
+            .name = "util",
+            .from = "geo-1.2.0",
+            .root = "geo-1.2.0",
+            .path = ".luce/packages/geo-1.2.0/util.luc",
+            .source = "func pick() -> long:\n    var xs = [1, 2, 3]\n    var index = 7\n    return xs[index]\n",
+        },
+    });
+    defer program.deinit();
+    var session = try agree.compareProgram(&program, .{});
+    defer session.deinit();
+    try testing.expect(session.end == .trapped);
+    try testing.expect(session.end.trapped == .index_bounds);
+    try testing.expect(std.mem.indexOf(u8, session.trace(), "geo-1.2.0") != null);
 }
 
 test "subfolder modules run: dots map to folders, and as picks the binding" {
