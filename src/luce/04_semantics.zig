@@ -68,7 +68,26 @@
 //!                      of pass one.
 //!   builder.zig      — pass two: the checked walk of every function
 //!                      body, recording what it decides on stage 6's
-//!                      tape as it goes.
+//!                      tape as it goes.  `FunctionBuilder` and its
+//!                      spine live here; each concern that can be
+//!                      named on its own is a file beside it, holding
+//!                      free functions over `*FunctionBuilder`:
+//!   flow.zig         — narrowing and root provenance: what a branch
+//!                      saves, restores and joins.
+//!   ledger.zig       — the statement-temporary ledger: who owns a
+//!                      fresh value until something adopts it.
+//!   recorder.zig     — the typed tree's recording API, and the one
+//!                      place that writes a `nodes` node.
+//!   refusals.zig     — what the walk says when it says no: the
+//!                      unknown name and the ownership verb.
+//!   statements.zig   — the statement walk, and pass one's entry to it.
+//!   assign.zig       — assignment and the three shapes of place.
+//!   expressions.zig  — the expression forms, one at a time.
+//!   calls.zig        — which callable a call names and which slot
+//!                      each argument fills.
+//!   construct.zig    — construction, conversion, and the free
+//!                      builtins: the call-shaped forms that build a
+//!                      value rather than run a body.
 //!   builtins.zig     — what the language spells for itself: the free
 //!                      builtins, the method tables, and what each
 //!                      lowers to.  Data, read by the walk *and* by
@@ -105,6 +124,15 @@ test {
     _ = @import("04_semantics/context.zig");
     _ = @import("04_semantics/declarations.zig");
     _ = @import("04_semantics/builder.zig");
+    _ = @import("04_semantics/flow.zig");
+    _ = @import("04_semantics/ledger.zig");
+    _ = @import("04_semantics/recorder.zig");
+    _ = @import("04_semantics/refusals.zig");
+    _ = @import("04_semantics/statements.zig");
+    _ = @import("04_semantics/assign.zig");
+    _ = @import("04_semantics/expressions.zig");
+    _ = @import("04_semantics/calls.zig");
+    _ = @import("04_semantics/construct.zig");
     _ = @import("04_semantics/builtins.zig");
     _ = @import("04_semantics/constants.zig");
     _ = @import("04_semantics/effects.zig");

@@ -523,7 +523,7 @@ fn routedStandardMethods(repository: Repository, module: []const u8) !Names {
     var names: Names = .{ .gpa = repository.gpa };
     errdefer names.deinit();
 
-    const source = try repository.read("src/luce/04_semantics/builder.zig");
+    const source = try repository.read("src/luce/04_semantics/calls.zig");
     defer repository.gpa.free(source);
     const opening = try std.fmt.allocPrint(repository.gpa, "\"{s}.", .{module});
     defer repository.gpa.free(opening);
