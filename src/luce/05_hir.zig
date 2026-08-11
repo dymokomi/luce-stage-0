@@ -5,10 +5,13 @@
 //! straight on to MIR, so this stage is a pass-through in the literal
 //! sense — the driver names it and does not call it.
 //!
-//! There is no `05_hir/` directory because there is no code to put in
-//! one.  The barrel exists on its own so the stage has a place in the
-//! listing, in `luce.zig`, and in `compile.zig`, and so the gap is
-//! visible rather than inferred from a number that never appears.
+//! What the stage *holds* is `05_hir/nodes.zig`: the typed tree's node
+//! vocabulary, which stage 4's walk records beside its emission, one
+//! expression family at a time, while the tape below keeps every
+//! landing byte-identical.  The pass that consumes the tree is written
+//! only when the whole tree is recorded; until then the driver still
+//! does not call this stage, and this header remains its decision
+//! record.
 //!
 //! **What an HIR is for: sugar stays a node until one pass removes it.**
 //!
@@ -165,6 +168,13 @@
 //! the same way, and is the shape to aim at: it answers with a value
 //! and never emits, which is exactly what `lower`'s input has to be.
 //!
-//! Until that pass is written, this file stays empty and honest.
+//! Until that pass is written, this barrel re-exports the node
+//! vocabulary and nothing else.
 
-test {}
+/// The typed tree the seam hands over: node kinds, statements, the
+/// per-body local table, and the computed `provenance` property.
+pub const nodes = @import("05_hir/nodes.zig");
+
+test {
+    _ = nodes;
+}
