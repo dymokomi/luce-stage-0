@@ -965,12 +965,17 @@ fn enumMemberAccess(self: *FunctionBuilder, field: ast.FieldAccess) Error!Member
     };
 }
 
-/// What a dotted access turned out to be: not an enum member at
-/// all, one that was refused and reported, or the member's value.
+/// What a dotted access turned out to be: not a member of this kind
+/// at all, one that was refused and reported, or the member's value.
 /// The middle case is why this is not an optional — a name that was
 /// already answered must not be lowered a second time as something
 /// else, which is how one mistake became two messages.
-const MemberAccess = union(enum) {
+///
+/// Stage 4 asks a dotted name three questions in turn — is it an enum
+/// member, a union member, a method bound to its receiver — and each
+/// answers with this, so `p.at` that was refused as a bind is never
+/// re-read as the field it is not (docs/BINDING.md D4).
+pub const MemberAccess = union(enum) {
     not_a_member,
     reported,
     value: Typed,
@@ -1448,14 +1453,15 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
             );
             return null;
         }
-        // **A function value has no order** (docs/FUNCTIONS.md D3):
-        // it is a name for a function, and there is no sense in
-        // which one function is before another.
+        // **A function value has no order** (docs/FUNCTIONS.md D3) —
+        // and since D6 it has no equality either, so the sentence
+        // names the one comparison a program can make instead rather
+        // than pointing at an `==` that is also refused.
         if (operand_type == .function) {
             try self.fail(
                 "luce.sema.type",
                 binary.span,
-                "a function value is the same function or a different one; there is no order between two [FUNCTIONS.md D3]",
+                "a function value has no order, and no equality either; compare string(f) if the name is what you meant [FUNCTIONS.md D3, BINDING.md D6]",
                 .{},
             );
             return null;
@@ -1478,6 +1484,28 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
             binary.span,
             "two {s} values are not compared with {s}; match on each and compare what the arms carry [UNION.md D16]",
             .{ try self.analyzer.typeName(operand_type), context.operatorText(binary.op) },
+        );
+        return null;
+    }
+    // **A function value has no equality either** (docs/BINDING.md D6).
+    //
+    // It was a bare index once, and comparing indices was the whole
+    // answer (FUNCTIONS.md D3).  It is now the function *and* the
+    // receiver it may carry, and its type cannot say which of the two
+    // it has: one `func(long) -> long` place holds a plain function, a
+    // lambda, and a bind of any receiver.  So comparing by function
+    // alone calls two binds of one method equal whatever they carry,
+    // which is the dishonest answer D6 names, and there is no honest
+    // one to put in its place while the class is not in the type.
+    // `string(f)` is how to ask what a value names.
+    if (operand_type == .function) {
+        try self.fail(
+            "luce.sema.type",
+            binary.span,
+            "a function value is the function it names and the receiver it may carry, and its type cannot say which; " ++
+                "two values of one method with different receivers are different workers, so {s} has no honest answer — " ++
+                "compare string(f) if the name is what you meant [BINDING.md D6]",
+            .{context.operatorText(binary.op)},
         );
         return null;
     }

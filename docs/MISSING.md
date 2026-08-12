@@ -761,16 +761,26 @@ improvement the audit exposed:
   and **bound methods** (docs/BINDING.md, 2026-08-11) made the answer
   literal: `receiver.method` where a `func` type lands is a function
   value whose environment is a struct the program declared.  Nothing
-  anonymous entered the language.  What is still missing of that memo:
-  a **carrying** receiver does not bind (D4 — the class would be the
-  receiver's, but a function type cannot say which of its values
-  carries one, and `carriesObjects` asks a type); `==` on a value-state
-  bind is not yet refused and compares by function alone (D6, the same
-  missing per-value class); `func(...)?` is not yet the storable form,
-  so a function value is still not a field, an element or an optional
-  payload (D7); `func(T) -> R!` does not exist, so a fallible method
-  does not bind (D8); and union member constructors are not yet
-  function values (D11).
+  anonymous entered the language.  A **carrying** receiver now binds by
+  **borrowing** it (D4, as the owner amended it on 2026-08-11): a bound
+  value owns the two-slot run that holds it and never owns the objects
+  inside, so the owning bind — `give counter.bump` — is refused and
+  `carriesObjects(.function)` is exactly false rather than
+  conservatively so.  `==` on a function value is refused with it (D6),
+  because no type can say which of its values carries a receiver, and
+  no function value crosses a worker boundary for the same reason.
+  Union member constructors are function values (D11).  **What is still
+  missing of that memo**: `func(...)?` is not yet the storable form, so
+  a function value is still not a struct field, a container element or
+  an optional payload (D7) — and the blocker in front of it is a
+  *spelling*, since `func(long) -> string?` already parses as a
+  function answering an optional string, so the memo recommends
+  parenthesized types (`(func(long) -> string)?`) and the decision is
+  the owner's; `func(T) -> R!` does not exist, so a fallible method
+  does not bind (D8); and an **owning** bind — a callback that is the
+  sole owner of a graph — stays refused, with per-value tracking (the
+  `nodes.provenance` shape) named as its reopening path if a customer
+  ever bleeds for it.
 - **Iterators.**  What is missing is not a protocol but string
   codepoints — one loop form.
 - **Interfaces, inheritance, operator overloading, async, reflection.**

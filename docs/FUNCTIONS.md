@@ -157,6 +157,23 @@ D2's "a function value is an index" is likewise one version old: it is
 now the pair `{function, receiver}`, carried as a two-slot field run.
 `libluce_rt` still learns nothing — the run is a struct's run.
 
+**D3's equality is retired** (docs/BINDING.md D6, 2026-08-11).  "Same
+function or not" was the whole answer while a function value *was* a
+function; it is now the function and the receiver it may carry, and
+its type cannot say which — so `f == g` would call two binds of one
+method equal whatever they carry.  `==` and `!=` on a function value
+are refused with that sentence, beside the ordering refusal D3 already
+made, and `string(f)` is how a program asks what a value names.  The
+rest of D3 stands: function values copy freely and take no verbs.
+
+**D5's worker sentence is narrowed** by the same fact: a function
+value borrows the receiver it may carry, a borrow cannot cross into a
+runtime that has nothing to borrow *from*, and the type cannot say
+whether this one carries anything — so a function value is refused as
+a spawned function's parameter and as its result.  A call through a
+value still checks argument verbs exactly as a direct call does, which
+is what D5 was really about.
+
 ## SELF clarification — 2026-08-08
 
 D1 is unchanged under implied self: methods still cannot be function

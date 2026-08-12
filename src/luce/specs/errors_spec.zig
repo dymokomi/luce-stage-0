@@ -1230,7 +1230,7 @@ test "luce.sema.call: a writing method does not bind (BINDING.md D9)" {
     );
 }
 
-test "luce.sema.own: a receiver carrying objects does not bind yet (BINDING.md D4)" {
+test "luce.sema.own: a fresh carrying receiver has nothing to borrow from (BINDING.md D4)" {
     try expectSaying(
         \\struct Bag:
         \\    items: list(long)
@@ -1242,12 +1242,124 @@ test "luce.sema.own: a receiver carrying objects does not bind yet (BINDING.md D
         \\    return f(0)
         \\
         \\func main():
-        \\    let bag = Bag(items = new list(long))
-        \\    assert(apply(bag.beyond) == false)
+        \\    assert(apply(Bag(items = new list(long)).beyond) == false)
         \\
     ,
         "luce.sema.own",
-        "binding a carrying receiver is not built yet",
+        "dies at the end of this statement",
+    );
+}
+
+test "luce.sema.own: a receiver carrying a resource does not bind (BINDING.md D4)" {
+    try expectHostSaying(
+        \\struct Reader:
+        \\    handle: file
+        \\
+        \\    func ready() -> bool:
+        \\        return true
+        \\
+        \\func apply(f: func() -> bool) -> bool:
+        \\    return f()
+        \\
+        \\func main() -> !:
+        \\    var reader = Reader(handle = try file_open("notes.txt", 0))
+        \\    assert(apply(reader.ready))
+        \\
+    ,
+        "luce.sema.own",
+        "carries a file or task, and a bound value borrows its receiver",
+    );
+}
+
+test "luce.sema.own: a function value does not cross a worker boundary (BINDING.md D4)" {
+    try expectSaying(
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\func work(f: func(long) -> long, n: long) -> long:
+        \\    return f(n)
+        \\
+        \\func main():
+        \\    let job = spawn work(twice, 21)
+        \\    assert(job.wait() == 42)
+        \\
+    ,
+        "luce.sema.own",
+        "a function value borrows the receiver it may carry",
+    );
+}
+
+test "luce.sema.own: a worker cannot answer a function value (BINDING.md D4)" {
+    try expectSaying(
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\func pick() -> func(long) -> long:
+        \\    return twice
+        \\
+        \\func main():
+        \\    let job = spawn pick()
+        \\    let f = job.wait()
+        \\    assert(f(21) == 42)
+        \\
+    ,
+        "luce.sema.own",
+        "a function value borrows the receiver it may carry",
+    );
+}
+
+test "luce.sema.type: a function value has no equality (BINDING.md D6)" {
+    try expectSaying(
+        \\func up(a: long, b: long) -> bool:
+        \\    return a < b
+        \\
+        \\func main():
+        \\    let f: func(long, long) -> bool = up
+        \\    let g: func(long, long) -> bool = up
+        \\    assert(f == g)
+        \\
+    ,
+        "luce.sema.type",
+        "the function it names and the receiver it may carry",
+    );
+}
+
+test "luce.sema.type: a bound value has no equality either (BINDING.md D6)" {
+    try expectSaying(
+        \\struct Scale:
+        \\    factor: long
+        \\
+        \\    func times(n: long) -> long:
+        \\        return n * self.factor
+        \\
+        \\func main():
+        \\    let two = Scale(factor = 2)
+        \\    let three = Scale(factor = 3)
+        \\    let f: func(long) -> long = two.times
+        \\    let g: func(long) -> long = three.times
+        \\    assert(f != g)
+        \\
+    ,
+        "luce.sema.type",
+        "different workers",
+    );
+}
+
+test "luce.sema.type: a member constructor whose shape does not fit the place is refused (BINDING.md D11)" {
+    try expectSaying(
+        \\union Msg:
+        \\    quit
+        \\    query_changed(query: string)
+        \\
+        \\func apply(f: func(long) -> Msg) -> Msg:
+        \\    return f(1)
+        \\
+        \\func main():
+        \\    assert(apply(Msg.query_changed) == Msg.quit)
+        \\
+    ,
+        "luce.sema.type",
+        "and Msg.query_changed is func(string) -> Msg",
     );
 }
 
@@ -7733,7 +7845,7 @@ test "luce.sema.name: a lambda reaching an enclosing local is refused, and taugh
     , "luce.sema.name", "a lambda carries no environment");
 }
 
-test "luce.sema.type: function values have identity but no ordering" {
+test "luce.sema.type: function values have neither ordering nor equality" {
     try expectHostSaying(
         \\func before(a: long, b: long) -> bool:
         \\    return a < b
@@ -7743,7 +7855,7 @@ test "luce.sema.type: function values have identity but no ordering" {
         \\    let right: func(long, long) -> bool = before
         \\    print(string(left < right))
         \\
-    , "luce.sema.type", "there is no order between two");
+    , "luce.sema.type", "a function value has no order, and no equality either");
 }
 
 test "luce.sema.import: sort_by is routed through std lists" {

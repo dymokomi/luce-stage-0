@@ -136,9 +136,51 @@ func main():
 ```
 
 That makes a bound value an ordinary value: it copies freely, takes no
-ownership verb, releases nothing you have to think about, and crosses
-into a worker. `string(f)` answers the method's qualified name —
-`Scale.times`.
+ownership verb, and releases nothing you have to think about.
+`string(f)` answers the method's qualified name — `Scale.times`.
+
+A receiver that **carries objects** — a list, a map, an array, or a
+struct holding one — is **borrowed** instead of copied. The value holds
+its own little run, and the handles inside it name the receiver's
+graph, exactly as a struct copy does: appending to the receiver's list
+is visible through the bound value.
+
+```luce run
+struct Bag:
+    items: list(long)
+
+    func at(i: long) -> long:
+        return self.items[i]
+
+func main():
+    var bag = Bag(items = [7, 8])
+    let read: func(long) -> long = bag.at
+    print(string(read(0)))
+    bag.items.append(99)
+    print(string(read(2)))
+```
+
+```output
+7
+99
+```
+
+So a function value **never owns objects**. That is a guarantee, not an
+accident: `give bag.at` and `copy bag.at` are refused, and nothing else
+can make a bound value the sole owner of a graph. It buys the thing
+worth having — a struct that holds a handler stays a *value* struct,
+and `let b = a` still copies it — and it costs the one thing every
+alias in Luce costs: keep the receiver alive. A bound value whose
+receiver's owner is gone meets `use_after_free` at the call, on the
+line that made it.
+
+Two facts follow from the same place, because a function type cannot
+say which of its values carries a receiver. A function value has **no
+equality**: two binds of one method with different receivers are
+different workers, and comparing the names is what you meant, so
+compare `string(f)`. And a function value does **not cross a worker
+boundary**, in either direction — a borrow has nothing to borrow from
+over there.
 
 The proving customer is sorting by state the comparator carries, which
 had no honest spelling before:
@@ -169,13 +211,43 @@ func main():
 1
 ```
 
-Three methods do not bind, and each says so by name. A **writing**
-method does not — a writer needs the binding that owns its receiver, so
-call it there. A **fallible** method does not — a function type still
-carries no `!`. And a receiver that **carries objects** — a list, a map,
-an array, a resource, or a struct holding one — does not yet; bind a
-method of a value-only receiver, or pass the receiver to a top-level
-function.
+Four things do not bind, and each says so by name. A **writing** method
+does not — a writer needs the binding that owns its receiver, so call
+it there. A **fallible** method does not — a function type still
+carries no `!`. A receiver carrying a **file** or a **task** does not —
+a resource stays with the binding that owns it. And a **fresh**
+carrying receiver does not: its objects die at the end of the statement
+that made them, so there would be nothing left to borrow.
+
+A **union member constructor** is a function value in the same places.
+`Msg.query_changed` where a `func(string) -> Msg` is expected builds
+that member, with the payload fields as parameters in declaration
+order; a payload-less member such as `Msg.quit` stays a value.
+
+```luce run
+union Msg:
+    quit
+    query_changed(query: string)
+
+func describe(m: Msg) -> string:
+    match m:
+        quit:
+            return "quit"
+        query_changed(query):
+            return "query " + query
+
+func route(make: func(string) -> Msg, text: string) -> string:
+    return describe(make(text))
+
+func main():
+    print(route(Msg.query_changed, "abc"))
+    print(describe(Msg.quit))
+```
+
+```output
+query abc
+quit
+```
 
 ## Structs
 

@@ -248,7 +248,13 @@ test "a lambda nested inside a lambda's body is a function of its own" {
 // A function value is a value (D3)
 // ---------------------------------------------------------------------------
 
-test "function values compare as the same function or a different one" {
+// D3's equality is one version old, and BINDING.md D6 retired it: a
+// function value is the function it names *and* the receiver it may
+// carry, and its type cannot say which, so `==` has no honest answer.
+// The refusal lives in `errors_spec.zig`; what a program asks instead
+// is the name, which is the test below.
+
+test "the name a function value answers is what distinguishes two of them" {
     try agree.prints(
         \\func up(a: long, b: long) -> bool:
         \\    return a < b
@@ -260,11 +266,10 @@ test "function values compare as the same function or a different one" {
         \\    let f: func(long, long) -> bool = up
         \\    let g: func(long, long) -> bool = up
         \\    let h: func(long, long) -> bool = down
-        \\    print(string(f == g))
-        \\    print(string(f == h))
-        \\    print(string(f != h))
+        \\    print(string(string(f) == string(g)))
+        \\    print(string(string(f) == string(h)))
         \\
-    , "true\nfalse\ntrue\n");
+    , "true\nfalse\n");
 }
 
 test "string of a function value is the function's name" {
@@ -292,9 +297,8 @@ test "string gives sibling lambdas distinct compiler function names" {
         \\    let twice: func(long) -> long = (n) -> n * 2
         \\    let thrice: func(long) -> long = (n) -> n * 3
         \\    print(string(string(twice) != string(thrice)))
-        \\    print(string(twice != thrice))
         \\
-    , "true\ntrue\n");
+    , "true\n");
 }
 
 test "a function value copies freely, into a local, a parameter and back out" {
@@ -313,7 +317,7 @@ test "a function value copies freely, into a local, a parameter and back out" {
         \\    let a = chosen()
         \\    let b = through(a)
         \\    print(string(b(4)))
-        \\    print(string(a == b))
+        \\    print(string(string(a) == string(b)))
         \\
     , "8\ntrue\n");
 }
@@ -512,7 +516,15 @@ test "a function value chosen by a branch dispatches to whichever was chosen" {
     , "true\nfalse\n");
 }
 
-test "a give-taking function value crosses into a worker and calls there" {
+// A function value does not cross a worker boundary (docs/BINDING.md
+// D4, as amended): it borrows the receiver it may carry, a borrow
+// cannot cross, and a function type cannot say whether this one
+// carries anything.  Both refusals are proved in `errors_spec.zig`.
+// What survives here is the fact those two tests were really about —
+// a `give`-taking function called through a value moves its argument
+// exactly as a direct call does (D5).
+
+test "a give-taking function value moves its argument when called through the value" {
     try agree.prints(
         \\func consume(values: give list(long)) -> long:
         \\    var total: long = 0
@@ -525,24 +537,7 @@ test "a give-taking function value crosses into a worker and calls there" {
         \\
         \\func main():
         \\    var values: list(long) = [1, 2, 3, 4]
-        \\    let work = spawn run(consume, give values)
-        \\    print(string(work.wait()))
+        \\    print(string(run(consume, give values)))
         \\
     , "10\n");
-}
-
-test "a worker can return a function value and the joiner can call it" {
-    try agree.prints(
-        \\func twice(n: long) -> long:
-        \\    return n * 2
-        \\
-        \\func choose() -> func(long) -> long:
-        \\    return twice
-        \\
-        \\func main():
-        \\    let work = spawn choose()
-        \\    let chosen = work.wait()
-        \\    print(string(chosen(21)))
-        \\
-    , "42\n");
 }

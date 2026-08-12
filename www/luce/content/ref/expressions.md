@@ -94,9 +94,12 @@ trap.
 ## Comparison
 
 `== != < <= > >=` order numbers and `string`. `==` and `!=` also
-apply to `bool`, enums and function values. Functions and enums have
-no ordering. Object equality compares identity. Unions have no `==`
-at all: `match` on each value and compare what the arms carry.
+apply to `bool` and enums. Enums have no ordering. Object equality
+compares identity. Unions have no `==` at all: `match` on each value
+and compare what the arms carry. Function values have neither `==` nor
+an order: a function value is the function it names *and* the receiver
+it may carry, its type cannot say which, and comparing the names is
+what a program usually meant — compare `string(f)`.
 
 ## Logic
 

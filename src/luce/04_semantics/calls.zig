@@ -688,9 +688,35 @@ fn lowerUserCall(
             );
             return null;
         }
+        // A function value borrows its receiver and never owns it
+        // (docs/BINDING.md D4), and a borrow is exactly what cannot
+        // cross — the sentence below about `give` says so for every
+        // other carrying type.  The difference is that a function type
+        // cannot say whether the value in front of it carries a
+        // receiver at all, so the boundary cannot ask; it refuses the
+        // type instead, which is the same conservatism the resource
+        // checks either side of this one apply.
+        if (info.results.len == 1 and info.return_type == .function) {
+            try self.fail(
+                "luce.sema.own",
+                span,
+                "{s} answers {s}, and a function value borrows the receiver it may carry; a borrow cannot cross back through wait, and a function type cannot say whether this one carries anything [THREADS.md D4, BINDING.md D4]",
+                .{ name, try self.analyzer.typeName(info.return_type) },
+            );
+            return null;
+        }
         // A borrow cannot cross: the callee's runtime is not this
         // one, so there is nothing here for it to borrow *from*.
         for (info.parameter_types, info.parameter_modes, info.declaration.parameters) |held, mode, parameter| {
+            if (held == .function) {
+                try self.fail(
+                    "luce.sema.own",
+                    span,
+                    "parameter {s} of {s} is {s}, and a function value borrows the receiver it may carry; a borrow cannot cross a worker boundary, and a function type cannot say whether this one carries anything — name the function the worker should call instead [THREADS.md D2, BINDING.md D4]",
+                    .{ parameter.name, name, try self.analyzer.typeName(held) },
+                );
+                return null;
+            }
             if (try shapes.carriesResource(self.analyzer, held)) {
                 try self.fail(
                     "luce.sema.own",

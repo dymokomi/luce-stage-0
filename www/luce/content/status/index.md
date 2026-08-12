@@ -139,10 +139,15 @@ These are decisions with reasons written down, not gaps.
   but user-written monomorphised generic functions would still add a
   new surface and a specialization model. `std.lists.sort_by` uses one
   compiler-owned closed specialization instead.
-- **Closures.** Capture-free lambdas and function values shipped, and
-  `std.lists.sort_by` closed the comparator wound without an
-  environment, lifetime story or ownership rule for captured state.
-  Behavior plus state remains a struct with a method.
+- **Closures.** Capture-free lambdas, function values and **bound
+  methods** shipped, and `std.lists.sort_by` closed the comparator
+  wound without an anonymous environment: a bound value's environment
+  is a struct the program declared. It owns the run that holds it and
+  never owns objects — a value-only receiver is copied in, a carrying
+  one is borrowed — so no lifetime story or new ownership rule was
+  needed. Behavior plus state remains a struct with a method. Still
+  missing: a function value is not yet a struct field or a container
+  element, which wants `func(...)?` as the storable form.
 
 ## Approved next, and shipped on the way
 

@@ -577,16 +577,55 @@ func main():
     print(string(apply(doubling.times, 21)))
 ```
 
-The receiver is **copied into the value** at the bind, so the value
-carries its own state and writing the original afterwards does not
-reach it.  `string(f)` answers the method's qualified name.
+A **value-only** receiver is copied into the value at the bind, so the
+value carries its own state and writing the original afterwards does
+not reach it.  A receiver that **carries objects** — a list, a map, an
+array, or a struct holding one — is **borrowed**: the value holds its
+own two-slot run, and the handles inside it alias the receiver's graph
+exactly as a struct copy does.  So appending to the receiver's list is
+visible through the bound value, and a bound value whose receiver's
+owner is gone meets `use_after_free` at the call, like every other
+alias.
 
-Three things do not bind in this run and each says so by name: a
-**writing** method (its store-back discipline is its own design), a
-**fallible** method (a function type still carries no `!`), and a
-receiver that **carries objects** — a list, a map, an array, a resource,
-or a struct holding one.  Bind a method of a value-only receiver, or
-pass the receiver to a top-level function.
+A function value therefore **never owns objects**, and that is a
+guarantee rather than an accident: `give doubling.times` and
+`copy doubling.times` are refused, so no bound value can be the sole
+owner of a graph.  Two more refusals keep it true — a receiver
+carrying a `file` or `task` does not bind, and neither does a **fresh**
+one, whose objects die at the end of the statement that made them.
+Two consequences follow from the same fact, since a function type
+cannot say which of its values carries a receiver: a function value
+has **no equality** (`string(f)` is how a program asks what it names),
+and a function value does **not cross a worker boundary**, in either
+direction.
+
+Two things also do not bind, each saying so by name: a **writing**
+method (its store-back discipline is its own design) and a **fallible**
+method (a function type still carries no `!`).
+
+A **union member constructor** is a function value in the same places:
+`Msg.query_changed` where a `func(string) -> Msg` is expected builds
+that member, with the payload fields as parameters in declaration
+order.  A payload-less member such as `Msg.quit` stays a value.
+
+```luce
+union Msg:
+    quit
+    query_changed(query: string)
+
+func describe(m: Msg) -> string:
+    match m:
+        quit:
+            return "quit"
+        query_changed(query):
+            return "query " + query
+
+func route(make: func(string) -> Msg, text: string) -> string:
+    return describe(make(text))
+
+func main():
+    print(route(Msg.query_changed, "abc"))
+```
 
 A lambda is a parenthesized list of bare parameter names, `->`, and
 one expression:

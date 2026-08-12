@@ -19,18 +19,25 @@
 //!     is a plain value from then on, it copies freely, it takes no
 //!     verbs, and the receiver it carries is its own — writing the
 //!     original afterwards does not reach it.
-//!   * **D5** — a value-state bound value crosses a worker boundary,
-//!     because its class is its receiver-state's class and that class
-//!     is "value".
+//!   * **D4, as amended** — a carrying receiver is *borrowed*: the
+//!     value holds its own run and the handles inside it alias the
+//!     receiver's graph (S26), the census is zero when both die, and an
+//!     alias that outlives its owner meets `use_after_free` at the call
+//!     (S9).  A function value never owns objects, which is why it
+//!     needs no verb anywhere.
 //!   * **D6** — `string(f)` answers the method's qualified name.
+//!   * **D11** — a union member constructor is a function value, with
+//!     the payload fields as parameters; a payload-less member stays a
+//!     value.
 //!   * **D11's neighbour** — the receiver may be an enum as readily as
 //!     a struct, because a method is a method wherever it was declared
 //!     (docs/ENUMS.md D7).
 //!
-//! The refusals — a writing method bound, a carrying receiver bound, a
-//! shape that does not fit — live in `errors_spec.zig` with every other
-//! diagnostic, because a program that does not compile has no engine to
-//! disagree about.
+//! The refusals — a writing method bound, a resource or fresh receiver
+//! bound, `==` on a function value, a function value at a worker
+//! boundary, a shape that does not fit — live in `errors_spec.zig` with
+//! every other diagnostic, because a program that does not compile has
+//! no engine to disagree about.
 
 const std = @import("std");
 const agree = @import("agree.zig");
@@ -286,27 +293,159 @@ test "string of a bound value is the method's qualified name" {
 }
 
 // ---------------------------------------------------------------------------
-// The boundary a value-state bind crosses (D5)
+// A carrying receiver is borrowed (D4, as amended)
 // ---------------------------------------------------------------------------
 
-test "a value-state bound value crosses into a worker and is called there" {
+test "a bind of a carrying receiver aliases the receiver's graph" {
     try agree.prints(
-        \\struct Scale:
-        \\    factor: long
+        \\struct Bag:
+        \\    items: list(long)
         \\
-        \\    func times(n: long) -> long:
-        \\        return n * self.factor
-        \\
-        \\func work(f: func(long) -> long, n: long) -> long:
-        \\    return f(n)
+        \\    func at(i: long) -> long:
+        \\        return self.items[i]
         \\
         \\func main():
-        \\    let doubling = Scale(factor = 3)
-        \\    let f: func(long) -> long = doubling.times
-        \\    let task = spawn work(f, 14)
-        \\    print(string(task.wait()))
+        \\    var bag = Bag(items = [7, 8])
+        \\    let read: func(long) -> long = bag.at
+        \\    print(string(read(0)))
+        \\    bag.items.append(99)
+        \\    print(string(read(2)))
         \\
-    , "42\n");
+    , "7\n99\n");
+}
+
+test "a carrying receiver takes no verb at the bind, and the census is zero" {
+    try agree.prints(
+        \\struct Bag:
+        \\    label: string
+        \\    items: list(long)
+        \\
+        \\    func total() -> long:
+        \\        var sum: long = 0
+        \\        for item in self.items:
+        \\            sum = sum + item
+        \\        return sum
+        \\
+        \\func main():
+        \\    var bag = Bag(label = "counts", items = [1, 2, 3])
+        \\    let sum: func() -> long = bag.total
+        \\    print(bag.label)
+        \\    print(string(sum()))
+        \\
+    , "counts\n6\n");
+}
+
+test "a bind of a borrowed parameter is answered out of the function that made it" {
+    try agree.prints(
+        \\struct Bag:
+        \\    items: list(long)
+        \\
+        \\    func at(i: long) -> long:
+        \\        return self.items[i]
+        \\
+        \\func reader(bag: Bag) -> func(long) -> long:
+        \\    return bag.at
+        \\
+        \\func main():
+        \\    var bag = Bag(items = [7, 8])
+        \\    let read = reader(bag)
+        \\    print(string(read(0)))
+        \\    print(string(read(1)))
+        \\
+    , "7\n8\n");
+}
+
+test "a bound value whose receiver's owner is gone traps at the call" {
+    try agree.trap(
+        \\struct Bag:
+        \\    items: list(long)
+        \\
+        \\    func at(i: long) -> long:
+        \\        return self.items[i]
+        \\
+        \\func make() -> func(long) -> long:
+        \\    var bag = Bag(items = [1, 2])
+        \\    return bag.at
+        \\
+        \\func main():
+        \\    let read = make()
+        \\    print(string(read(0)))
+        \\
+    , .use_after_free);
+}
+
+// ---------------------------------------------------------------------------
+// Union member constructors are function values (D11)
+// ---------------------------------------------------------------------------
+
+test "a union member constructor lands where a function type is expected" {
+    try agree.prints(
+        \\union Msg:
+        \\    quit
+        \\    query_changed(query: string)
+        \\    resized(width: long, height: long)
+        \\
+        \\func describe(m: Msg) -> string:
+        \\    match m:
+        \\        quit:
+        \\            return "quit"
+        \\        query_changed(query):
+        \\            return "query " + query
+        \\        resized(width, height):
+        \\            return "resized " + string(width) + "x" + string(height)
+        \\
+        \\func route(make: func(string) -> Msg, text: string) -> string:
+        \\    return describe(make(text))
+        \\
+        \\func main():
+        \\    print(route(Msg.query_changed, "abc"))
+        \\    let make: func(long, long) -> Msg = Msg.resized
+        \\    print(describe(make(3, 4)))
+        \\
+    , "query abc\nresized 3x4\n");
+}
+
+test "a payload-less member stays a value, not a function" {
+    try agree.prints(
+        \\union Msg:
+        \\    quit
+        \\    query_changed(query: string)
+        \\
+        \\func describe(m: Msg) -> string:
+        \\    match m:
+        \\        quit:
+        \\            return "quit"
+        \\        query_changed(query):
+        \\            return query
+        \\
+        \\func main():
+        \\    let bare = Msg.quit
+        \\    print(describe(bare))
+        \\
+    , "quit\n");
+}
+
+test "a carrying payload takes give through the constructor value, as its construction does" {
+    try agree.prints(
+        \\union Item:
+        \\    empty
+        \\    numbers(values: list(long))
+        \\
+        \\func count(m: Item) -> long:
+        \\    match m:
+        \\        empty:
+        \\            return 0
+        \\        numbers(values):
+        \\            return len(values)
+        \\
+        \\func build(make: func(give list(long)) -> Item) -> long:
+        \\    var xs: list(long) = [1, 2, 3]
+        \\    return count(make(give xs))
+        \\
+        \\func main():
+        \\    print(string(build(Item.numbers)))
+        \\
+    , "3\n");
 }
 
 // ---------------------------------------------------------------------------

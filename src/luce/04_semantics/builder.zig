@@ -92,6 +92,7 @@ const LocalId = mir.LocalId;
 // per concern, listed in the header above.  Two of them own a type
 // this walker holds — the ledger's slot and the recorder's frame.
 const calls = @import("calls.zig");
+const construct = @import("construct.zig");
 const expressions = @import("expressions.zig");
 const flow = @import("flow.zig");
 const ledger = @import("ledger.zig");
@@ -1117,6 +1118,128 @@ pub const FunctionBuilder = struct {
         };
     }
 
+    /// **`Msg.query_changed` where a function type lands** — a union
+    /// member constructor as a function value (docs/BINDING.md D11).
+    ///
+    /// The member's payload fields are the parameters, in declaration
+    /// order, and the union is the result: `query_changed(query:
+    /// string)` is a `func(string) -> Msg`.  A field that carries
+    /// objects takes `give`, because that is the verb its construction
+    /// takes (S24) and calling through a value checks argument verbs
+    /// exactly as a direct call does (FUNCTIONS D5).
+    ///
+    /// **A payload-less member stays a value, not a function**, so it
+    /// is answered here as the value it is and the landing place says
+    /// what it wanted — one decision, said once.
+    ///
+    /// Nothing downstream learns a constructor exists: the analyzer
+    /// synthesizes the top-level function `Msg.query_changed` whose
+    /// body is the construction the reader would have written, and
+    /// emits the `const_function` a named function emits.  That is the
+    /// lambda's own route (FUNCTIONS D2), one node kind over.
+    fn memberConstructor(
+        self: *FunctionBuilder,
+        field: ast.FieldAccess,
+        written: []const u8,
+        signature: u32,
+    ) Error!expressions.MemberAccess {
+        const qualified = try naming.qualify(self.analyzer, self.prefix, written);
+        const found = construct.variantMemberOfQualified(self, qualified) orelse
+            return .not_a_member;
+        const declared = self.analyzer.variants.items[found.variant];
+        const member = declared.members[found.member];
+        if (member.fields.len == 0) {
+            const value = (try expressions.lowerField(self, field)) orelse return .reported;
+            return .{ .value = value };
+        }
+
+        // The constructor's own shape, and the comparison the place
+        // deserves before a function is synthesized for it.
+        const result: Type = .{ .variant = found.variant };
+        const parameters = try self.arena().alloc(types.Signature.Parameter, member.fields.len);
+        for (member.fields, parameters) |payload, *parameter| {
+            parameter.* = .{
+                .value_type = payload.field_type,
+                .gives = shapes.carriesObjects(self.analyzer, payload.field_type),
+            };
+        }
+        const made: types.Signature = .{ .parameters = parameters, .result = result };
+        const wants = self.analyzer.signatures.items[signature];
+        if (!made.eql(wants)) {
+            const spelled = try resolve.internSignature(self.analyzer, made);
+            try self.fail("luce.sema.type", field.span, "this place is {s}, and {s} is {s}", .{
+                try self.analyzer.typeName(.{ .function = signature }),
+                written,
+                try self.analyzer.typeName(spelled),
+            });
+            return .reported;
+        }
+
+        // The synthesized declaration: `func Msg.query_changed(query:
+        // string) -> Msg: return Msg.query_changed(query = query)`.
+        // The body reuses the written head, so an imported union
+        // resolves from the reference site's own module exactly as it
+        // did where the reader wrote it, and the arguments are named
+        // because a member construction takes nothing else (UNION D4).
+        const declaration = try self.arena().create(ast.FuncDecl);
+        const written_parameters = try self.arena().alloc(ast.Parameter, member.fields.len);
+        const arguments = try self.arena().alloc(ast.Argument, member.fields.len);
+        for (member.fields, parameters, written_parameters, arguments) |payload, parameter, *slot, *argument| {
+            slot.* = .{
+                .name = payload.name,
+                .name_span = field.span,
+                .mode = if (parameter.gives) .give else .borrow,
+                .type_name = .{ .name = "func", .span = field.span },
+                .span = field.span,
+            };
+            const read = try self.arena().create(ast.Expression);
+            read.* = .{ .name = .{ .text = payload.name, .span = field.span } };
+            const passed = if (parameter.gives) given: {
+                const moved = try self.arena().create(ast.Expression);
+                moved.* = .{ .give = .{ .operand = read, .span = field.span } };
+                break :given moved;
+            } else read;
+            argument.* = .{ .name = payload.name, .value = passed, .span = field.span };
+        }
+        const construction = try self.arena().create(ast.Expression);
+        construction.* = .{ .method = .{
+            .target = field.target,
+            .name = field.name,
+            .arguments = arguments,
+            .span = field.span,
+        } };
+        const values = try self.arena().alloc(*ast.Expression, 1);
+        values[0] = construction;
+        const body = try self.arena().alloc(ast.Statement, 1);
+        body[0] = .{ .return_statement = .{ .values = values, .span = field.span } };
+        const returns = try self.arena().alloc(ast.TypeName, 1);
+        returns[0] = .{ .name = "func", .span = field.span };
+        declaration.* = .{
+            .name = written,
+            .name_span = field.span,
+            .parameters = written_parameters,
+            .returns = returns,
+            .body = .{ .statements = body, .span = field.span },
+            .span = field.span,
+        };
+        const index = try signatures.registerLambda(
+            self.analyzer,
+            declaration,
+            self.module,
+            made,
+            &.{},
+        );
+        const value: Type = .{ .function = signature };
+        return .{ .value = .{
+            .node = try recorder.recordNode(self, .{ .function_value = .{
+                .function = index,
+                .result = value,
+                .span = field.span,
+            } }),
+            .value_type = value,
+        } };
+    }
+
     /// **`receiver.method` where a function type lands** — a bound
     /// method: a function value whose environment is the receiver
     /// (docs/BINDING.md D1, D2).
@@ -1127,14 +1250,21 @@ pub const FunctionBuilder = struct {
     /// signature with the receiver's parameter dropped, and the
     /// receiver travels inside the value.
     ///
-    /// Answers null when the receiver's type has no method of this
-    /// name, so `p.x` still reads as the field it is.  Every refusal a
-    /// bind has of its own is spoken here.
-    fn boundMethod(self: *FunctionBuilder, field: ast.FieldAccess, signature: u32) Error!?Typed {
-        const receiver = (try self.lowerExpression(field.target, false)) orelse return null;
+    /// Answers `.not_a_member` when the receiver's type has no method
+    /// of this name, so `p.x` still reads as the field it is, and
+    /// `.reported` once a diagnostic has been spoken — a bind that was
+    /// refused must not be re-read as a field, which is how one mistake
+    /// became two messages.  Every refusal a bind has of its own is
+    /// spoken here.
+    fn boundMethod(
+        self: *FunctionBuilder,
+        field: ast.FieldAccess,
+        signature: u32,
+    ) Error!expressions.MemberAccess {
+        const receiver = (try self.lowerExpression(field.target, false)) orelse return .reported;
         const index = (try calls.structMethod(self, receiver.value_type, field.name)) orelse
-            return null;
-        if (!try refusals.functionReachable(self, index, field.span)) return null;
+            return .not_a_member;
+        if (!try refusals.functionReachable(self, index, field.span)) return .reported;
         const info = self.analyzer.functions.items[index];
         const declared = calls.declaredName(self, receiver.value_type).?;
 
@@ -1150,7 +1280,7 @@ pub const FunctionBuilder = struct {
                     "bind a reading method, or call this one on the binding that owns it [BINDING.md D9]",
                 .{ declared, field.name },
             );
-            return null;
+            return .reported;
         }
         // A fallible method's `!` is an obligation its call sites
         // carry, and a function type still has nowhere to write one
@@ -1163,25 +1293,61 @@ pub const FunctionBuilder = struct {
                     "a fallible method is not a value yet [BINDING.md D8]",
                 .{ declared, field.name },
             );
-            return null;
+            return .reported;
         }
-        // **A receiver that carries objects does not bind in this run**
-        // (docs/BINDING.md D4, not built).  The verbs would be S21's
-        // and the class the receiver's, but a function *type* cannot
-        // say which of its values carries one — so the ceremony a
-        // carrying value owes cannot be demanded at the places that ask
-        // a type rather than a value.  Refused by name rather than
-        // bound without it.
+        // **A carrying receiver is borrowed, and the two refusals that
+        // keep that true** (docs/BINDING.md D4, as amended).
+        //
+        // The invariant the whole feature rests on: *a function value
+        // borrows its receiver's objects and never owns them.*  That is
+        // what makes `carriesObjects(.function)` false at the thirty-odd
+        // sites that ask a type rather than a value — a function value
+        // takes no verb, releases no object, and is storable without
+        // ceremony (D7).  A bind that could make a function value the
+        // *sole* owner of a graph would break it, and the two spellings
+        // that could are refused here rather than checked for later.
         if (shapes.carriesObjects(self.analyzer, receiver.value_type)) {
-            try self.fail(
-                "luce.sema.own",
-                field.span,
-                "{s} carries objects, and binding a carrying receiver is not built yet; " ++
-                    "bind a method of a value-only receiver, or pass the receiver to a " ++
-                    "top-level function [BINDING.md D4]",
-                .{try self.analyzer.typeName(receiver.value_type)},
-            );
-            return null;
+            // A resource cannot be borrowed by a value that outlives
+            // the borrow's own scope and cannot be duplicated when the
+            // value crosses into a worker's runtime, so the alias story
+            // S8 tells about a list has no counterpart for a `file` or
+            // a `task`.  Asked of the receiver's type, where the answer
+            // is exact.
+            if (try shapes.carriesResource(self.analyzer, receiver.value_type)) {
+                try self.fail(
+                    "luce.sema.own",
+                    field.span,
+                    "{s} carries a file or task, and a bound value borrows its receiver and never owns it; " ++
+                        "a resource stays with the binding that owns it, so keep that binding and call " ++
+                        "{s}.{s} on it directly, or bind a method of a value-only receiver " ++
+                        "[BINDING.md D4, OWNERSHIP.md S31]",
+                    .{ try self.analyzer.typeName(receiver.value_type), declared, field.name },
+                );
+                return .reported;
+            }
+            // A fresh carrying receiver has no owner to outlive the
+            // value: its objects are this statement's temporary and die
+            // at the semicolon (S3), so every call through the value
+            // would trap `use_after_free`.  Refused where it is written
+            // rather than met at the first call.
+            if (nodes.provenance(receiver.node) == .fresh) {
+                try self.fail(
+                    "luce.sema.own",
+                    field.span,
+                    "this {s} is made here and dies at the end of this statement, and a bound value borrows " ++
+                        "its receiver and never owns it; bind {s} on a name that outlives the value, bind a " ++
+                        "method of a value-only receiver, or keep the {s} and call {s}.{s} on it directly " ++
+                        "[BINDING.md D4, OWNERSHIP.md S3]",
+                    .{
+                        try self.analyzer.typeName(receiver.value_type),
+                        field.name,
+                        try self.analyzer.typeName(receiver.value_type),
+                        declared,
+                        field.name,
+                    },
+                );
+                return .reported;
+            }
         }
         const wants = self.analyzer.signatures.items[signature];
         if (!self.matchesSignature(info, wants, 1)) {
@@ -1191,10 +1357,10 @@ pub const FunctionBuilder = struct {
                 field.name,
                 try self.boundSignature(info),
             });
-            return null;
+            return .reported;
         }
         const value: Type = .{ .function = signature };
-        return .{
+        return .{ .value = .{
             .node = try recorder.recordNode(self, .{ .bound_method = .{
                 .function = index,
                 .receiver = receiver.node,
@@ -1202,7 +1368,7 @@ pub const FunctionBuilder = struct {
                 .span = field.span,
             } }),
             .value_type = value,
-        };
+        } };
     }
 
     /// The function type a bind of this method would wear: the
@@ -1734,20 +1900,36 @@ pub const FunctionBuilder = struct {
                                 chain.head(),
                                 field.name,
                             });
+                            // `Msg.query_changed` — a union member
+                            // constructor is a function value too
+                            // (docs/BINDING.md D11), asked before the
+                            // function table because the two cannot
+                            // collide: a member and a function sharing
+                            // a name is refused where the union is
+                            // declared.
+                            switch (try self.memberConstructor(field, written, signature)) {
+                                .not_a_member => {},
+                                .reported => return null,
+                                .value => |made| return made,
+                            }
                             return self.functionValue(written, field.span, signature);
                         }
                     }
                     // `receiver.method` — the method travels with the
                     // value it was written on (docs/BINDING.md D1).
                     //
-                    // A null answer means the receiver's type has no
+                    // `.not_a_member` means the receiver's type has no
                     // method of this name, and the field path below
                     // says what it always said about `p.x`.  It lowers
                     // the receiver a second time to do so, which costs
                     // nothing that matters: no field is a function
                     // value, so every route through here ends in a
                     // diagnostic and the tape is never replayed.
-                    if (try self.boundMethod(field, signature)) |bound| return bound;
+                    switch (try self.boundMethod(field, signature)) {
+                        .not_a_member => {},
+                        .reported => return null,
+                        .value => |bound| return bound,
+                    }
                 }
                 return expressions.lowerField(self, field);
             },

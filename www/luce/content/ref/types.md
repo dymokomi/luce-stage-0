@@ -175,6 +175,15 @@ func(string)
 func(give list(long)) -> long
 ```
 
+A function type is worn by four things: a named top-level or `static`
+function, a lambda, a **bound method** (`receiver.method`, whose
+environment is that receiver), and a **union member constructor**
+(`Msg.query_changed`). One place holds any of them and no reader can
+tell which — which is also why a function value has no equality, and
+why one never crosses a worker boundary. A function value owns the run
+that holds it and never owns objects: a value-only receiver is copied
+in, a carrying one is borrowed, and `give receiver.method` is refused.
+
 The result is omitted when the function returns nothing. `give`
 remains because ownership is part of calling the value. Fallibility
 does not: a fallible function cannot be used as a value because a

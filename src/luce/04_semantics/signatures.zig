@@ -306,16 +306,23 @@ fn collectFunction(
     });
 }
 
-/// Register the top-level function a lambda becomes
-/// (docs/FUNCTIONS.md D2), and answer its index.
+/// Register a top-level function stage 4 synthesized, and answer its
+/// index — a lambda (docs/FUNCTIONS.md D2), or a union member
+/// constructor landing where a function type is wanted
+/// (docs/BINDING.md D11).
 ///
 /// Not `collectFunction`: there is no written signature to resolve
-/// — the landing site's is the signature — no name to check for
-/// collisions, because the name is unforgeable, and no visibility to
-/// read, because nothing can name this function but the value that
-/// was just made of it.  What it shares with a declared function is
-/// everything after that: it is lowered by the same loop, checked by
-/// the same walk, and called through the same instruction.
+/// — the caller hands over the settled one — no name to check for
+/// collisions, because nothing in the program's own namespace can
+/// spell it, and no visibility to read, because nothing can name this
+/// function but the value that was just made of it.  What it shares
+/// with a declared function is everything after that: it is lowered by
+/// the same loop, checked by the same walk, and called through the
+/// same instruction.
+///
+/// **One registration per reference site**, for both callers: two
+/// mentions of one lambda or one constructor are two functions with
+/// one name, which is what `string(f)` answers and all it promises.
 pub fn registerLambda(
     self: *Analyzer,
     declaration: *const ast.FuncDecl,
