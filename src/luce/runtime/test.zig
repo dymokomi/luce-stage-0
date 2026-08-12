@@ -87,6 +87,22 @@ fn copyWithAllocator(allocator: std.mem.Allocator, source: *Runtime, held: Value
     try testing.expectEqual(@as(u32, 0), target.live);
 }
 
+/// Copy one function run through a failing object allocator.  The receiver
+/// is deliberately a carrying struct with outside text: a function value
+/// owns its run, but only borrows the receiver's object graph.  A failed
+/// copy must therefore return the new run and any nested value storage
+/// without touching the source graph.
+fn copyFunctionWithAllocator(allocator: std.mem.Allocator, held: Value) !void {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var target: Runtime = .init(.{ .arena = arena.allocator(), .objects = allocator });
+    defer {
+        target.deinit();
+        arena.deinit();
+    }
+    const duplicate = target.ownValue(held) catch |mistake| return mistake;
+    target.dropStorage(duplicate);
+}
+
 const CopyShape = enum { list, map, array, strukt };
 
 fn nestedList(runtime: *Runtime) !Value {
@@ -582,6 +598,27 @@ test "a container owns what it adopts and frees it with itself (S20, S22)" {
     try testing.expectEqual(@as(u32, 0), runtime.live);
 }
 
+test "scope release uses a worklist for a deep object graph" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const root = try runtime.newList(Value.none);
+    var current = root;
+    // This is deliberately deeper than a typical native stack can safely
+    // recurse through.  The language's object graph is user data, so its
+    // depth must not be bounded by the host call stack.
+    for (0..40_000) |_| {
+        const child = try runtime.newList(Value.none);
+        try containers.append(runtime, current, child);
+        current = child;
+    }
+
+    runtime.freeValue(root);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
 test "every adopting door refuses a direct ownership cycle without changing its target" {
     var bench: Bench = undefined;
     bench.setup();
@@ -889,6 +926,27 @@ test "copy duplicates what an object owns, recursively (S31)" {
     _ = try runtime.resolve(inner);
 }
 
+test "deep copy uses a worklist for a deep object graph" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const root = try runtime.newList(Value.none);
+    var current = root;
+    for (0..40_000) |_| {
+        const child = try runtime.newList(Value.none);
+        try containers.append(runtime, current, child);
+        current = child;
+    }
+
+    const duplicate = try runtime.deepCopy(root);
+    try testing.expectEqual(@as(u32, 80_002), runtime.live);
+    runtime.freeValue(duplicate);
+    runtime.freeValue(root);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
 test "deep copies and derived lists name the exact parent they build" {
     var bench: Bench = undefined;
     bench.setup();
@@ -989,6 +1047,25 @@ test "failed nested list, map, array, and struct copies leave no target" {
             .{ &bench.runtime, source },
         );
     }
+}
+
+test "failed function-value copies return every nested storage allocation" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+
+    const label = try bench.runtime.ownValue(Value.ofString(
+        "a receiver string that must be duplicated with the function run",
+    ));
+    const receiver = try bench.runtime.makeStruct(&.{label});
+    const function = try bench.runtime.makeFunction(&.{ Value.ofLong(7), receiver });
+    defer bench.runtime.dropStorage(function);
+
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        copyFunctionWithAllocator,
+        .{function},
+    );
 }
 
 test "failed list slices and map value lists roll copied rows back" {

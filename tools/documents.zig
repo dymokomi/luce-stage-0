@@ -29,6 +29,7 @@ pub const living = [_][]const u8{
     "docs/PIPELINE.md",
     "docs/CODING_GUIDE.md",
     "docs/SOFTWARE_DESIGN.md",
+    "docs/LANGUAGE_AUDIT.md",
     "docs/README.md",
     "README.md",
     "CLAUDE.md",

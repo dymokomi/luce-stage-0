@@ -402,17 +402,18 @@ fn settle(reference: *Reference, capture: *Capture, status: abi.Status) !End {
         // Same frames, same lines, same "... N more" — a trap is not
         // reported identically until its trace is.
         try testing.expectEqualStrings(reference.trap_trace.items, capture.trapTrace());
+        try testing.expectEqual(@as(i64, reference.leaked.?), capture.leaked.?);
         return .{ .trapped = code };
     }
     if (reference.error_code) |code| {
         // An error is news, so what has to match is the news: the
-        // code, the words, and the one place it was raised
-        // (docs/FAILURE.md).  Not the census — a run that ended
-        // errored publishes nothing, on either engine.
+        // code, the words, the one place it was raised, and what the
+        // unwind left alive (docs/FAILURE.md).
         try testing.expectEqual(abi.Status.errored, status);
         try testing.expectEqual(code, capture.error_code.?);
         try testing.expectEqualStrings(reference.error_message, capture.errorMessage());
         try testing.expectEqualStrings(reference.error_origin.items, capture.errorOrigin());
+        try testing.expectEqual(@as(i64, reference.leaked.?), capture.leaked.?);
         return .{ .errored = code };
     }
     if (reference.exit_status) |chosen| {
@@ -449,6 +450,10 @@ fn sameWorld(reference: *const World, capture: *const World) !void {
     try testing.expectEqual(reference.lines_read, capture.lines_read);
     try testing.expectEqual(reference.clock, capture.clock);
     try testing.expectEqual(reference.epoch, capture.epoch);
+    try testing.expectEqual(reference.open_handle, capture.open_handle);
+    try testing.expectEqual(reference.next_handle, capture.next_handle);
+    try testing.expectEqual(reference.handle_position, capture.handle_position);
+    try testing.expectEqual(reference.handle_writes, capture.handle_writes);
     // The directories each arm made, in the order it made them: a
     // `dir_create` that made a parent on one engine and not on the
     // other is exactly the disagreement this comparison is for.
@@ -623,6 +628,21 @@ pub fn prints(source: []const u8, expected: []const u8) !void {
 pub fn printsGiven(source: []const u8, provided: Provided, expected: []const u8) !void {
     var session = try compare(source, provided);
     defer session.deinit();
+    switch (session.end) {
+        .finished => {},
+        .trapped => |code| {
+            std.debug.print("expected a finished run, got trap {s}\n", .{@tagName(code)});
+            return error.TestUnexpectedResult;
+        },
+        .errored => |code| {
+            std.debug.print("expected a finished run, got error {s}\n", .{@tagName(code)});
+            return error.TestUnexpectedResult;
+        },
+        .exited => |status| {
+            std.debug.print("expected a finished run, got exit({d})\n", .{status});
+            return error.TestUnexpectedResult;
+        },
+    }
     try testing.expectEqualStrings(expected, session.printed());
 }
 

@@ -74,10 +74,9 @@ same-named files can never merge in a serialized module, and
 `dir_create` and `epoch_ms` moved it to 40, bound methods to 41, and
 the filesystem surface to 42 by retiring `file_exists` and adding
 `path_kind`.
-The published
-host ABI is **17**: neither unions nor packages cross the host
-boundary, so neither run moved it, while the new services are
-host services and moved it once each.
+The published host ABI is **18**: version 18 made the finished census
+cover every non-exhaustion ending; neither unions nor packages cross the
+host boundary, so neither moved it.
 
 ## What is measured
 

@@ -286,7 +286,7 @@ test "the guard finds a stale name in every scope it scans" {
     // The count of trees and the count of sightings are stated here,
     // so removing a scope fails before anything is walked.
     try testing.expectEqual(@as(usize, 5), trees.len);
-    try testing.expectEqual(@as(usize, 13), living.len);
+    try testing.expectEqual(@as(usize, 14), living.len);
     // One `Int` in each of the three `.luc` fixtures; `list(Int)` in
     // the page's luce fence is a sighting for each name; one `Float`
     // in the spec's program; and `List(String)` in a living

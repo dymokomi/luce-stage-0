@@ -371,9 +371,63 @@ fn leavesByCall(expression: *const ast.Expression) bool {
         std.mem.eql(u8, callee, "exit");
 }
 
+/// A `while true` without a break for this loop cannot fall through.
+/// Breaks in nested loops belong to those loops, so the walk descends
+/// through conditionals, matches and handlers but stops at every other
+/// loop boundary.
+fn loopHasBreak(block: ast.Block) bool {
+    for (block.statements) |statement| {
+        switch (statement) {
+            .break_statement => return true,
+            .conditional => |conditional| {
+                if (loopHasBreak(conditional.then_block)) return true;
+                if (conditional.else_block) |else_block| {
+                    if (loopHasBreak(else_block)) return true;
+                }
+            },
+            .match => |matched| {
+                for (matched.arms) |arm| if (loopHasBreak(arm.body)) return true;
+                if (matched.else_block) |else_block| {
+                    if (loopHasBreak(else_block)) return true;
+                }
+            },
+            .guarded => |guarded| {
+                if (statementHasBreak(guarded.attempt.*)) return true;
+                if (loopHasBreak(guarded.handler)) return true;
+            },
+            // A break below another loop belongs to that loop.
+            .while_loop, .for_range, .for_each => {},
+            else => {},
+        }
+    }
+    return false;
+}
+
+fn statementHasBreak(statement: ast.Statement) bool {
+    return switch (statement) {
+        .break_statement => true,
+        .conditional => |conditional| loopHasBreak(conditional.then_block) or
+            (if (conditional.else_block) |else_block| loopHasBreak(else_block) else false),
+        .match => |matched| blk: {
+            for (matched.arms) |arm| if (loopHasBreak(arm.body)) break :blk true;
+            break :blk if (matched.else_block) |else_block| loopHasBreak(else_block) else false;
+        },
+        .guarded => |guarded| statementHasBreak(guarded.attempt.*) or loopHasBreak(guarded.handler),
+        .while_loop, .for_range, .for_each => false,
+        else => false,
+    };
+}
+
+fn neverFallsThrough(loop: ast.While) bool {
+    return loop.condition.* == .bool_literal and
+        loop.condition.bool_literal.value and
+        !loopHasBreak(loop.body);
+}
+
 /// Conservative all-paths-return: a block returns when some statement
 /// certainly returns; an if returns only when both arms do.  Loops
-/// never guarantee a return.
+/// guarantee a return only when their condition is literally `true` and
+/// no break can target that loop.
 pub fn returnsOnAllPaths(block: ast.Block) bool {
     for (block.statements) |statement| {
         switch (statement) {
@@ -386,6 +440,7 @@ pub fn returnsOnAllPaths(block: ast.Block) bool {
                 }
             },
             .match => |matched| if (everyArm(matched, returnsOnAllPaths)) return true,
+            .while_loop => |loop| if (neverFallsThrough(loop)) return true,
             else => {},
         }
     }
@@ -398,7 +453,8 @@ pub fn returnsOnAllPaths(block: ast.Block) bool {
 /// guard narrow the rest of the enclosing block — after
 /// `if x == none: return`, the code below runs only where `x` is
 /// there.  A wrong "no" costs a diagnostic the reader can work around;
-/// a wrong "yes" would be unsound, so loops never count.
+/// a wrong "yes" would be unsound, so only a literal infinite loop with
+/// no break counts.
 pub fn alwaysExits(block: ast.Block) bool {
     for (block.statements) |statement| {
         switch (statement) {
@@ -411,6 +467,7 @@ pub fn alwaysExits(block: ast.Block) bool {
                 }
             },
             .match => |matched| if (everyArm(matched, alwaysExits)) return true,
+            .while_loop => |loop| if (neverFallsThrough(loop)) return true,
             else => {},
         }
     }
@@ -441,6 +498,7 @@ pub fn exitingStatement(statement: ast.Statement) ?[]const u8 {
             break :blk "if";
         },
         .match => |matched| if (everyArm(matched, alwaysExits)) "match" else null,
+        .while_loop => |loop| if (neverFallsThrough(loop)) "while" else null,
         else => null,
     };
 }
@@ -546,7 +604,7 @@ test "a block leaves only when every path does" {
     } }};
     try testing.expect(alwaysExits(.{ .statements = &both, .span = marker }));
 
-    // One arm is not both, and a loop guarantees nothing.
+    // One arm is not both, and a finite loop may not execute at all.
     var only_then = [_]ast.Statement{.{ .conditional = .{
         .condition = &condition,
         .then_block = .{ .statements = &then_arm, .span = marker },
@@ -554,13 +612,34 @@ test "a block leaves only when every path does" {
         .span = marker,
     } }};
     try testing.expect(!alwaysExits(.{ .statements = &only_then, .span = marker }));
+    var finite_condition: ast.Expression = .{ .bool_literal = .{ .value = false, .span = marker } };
     var body = [_]ast.Statement{returned};
     var loop = [_]ast.Statement{.{ .while_loop = .{
-        .condition = &condition,
+        .condition = &finite_condition,
         .body = .{ .statements = &body, .span = marker },
         .span = marker,
     } }};
     try testing.expect(!alwaysExits(.{ .statements = &loop, .span = marker }));
+
+    // A literal infinite loop with no break cannot reach the block's
+    // end, so it is a valid last statement of a value-returning
+    // function.  A break restores the ordinary conservative answer.
+    var forever_body = [_]ast.Statement{continued};
+    var forever = [_]ast.Statement{.{ .while_loop = .{
+        .condition = &condition,
+        .body = .{ .statements = &forever_body, .span = marker },
+        .span = marker,
+    } }};
+    try testing.expect(returnsOnAllPaths(.{ .statements = &forever, .span = marker }));
+    try testing.expect(alwaysExits(.{ .statements = &forever, .span = marker }));
+
+    var break_body = [_]ast.Statement{broke};
+    var break_loop = [_]ast.Statement{.{ .while_loop = .{
+        .condition = &condition,
+        .body = .{ .statements = &break_body, .span = marker },
+        .span = marker,
+    } }};
+    try testing.expect(!returnsOnAllPaths(.{ .statements = &break_loop, .span = marker }));
 }
 
 test "a suggestion keeps the closest name, and stays quiet when nothing is close" {

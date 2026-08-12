@@ -1166,7 +1166,8 @@ s.find(sub, i)       # the same find: start defaults to 0
 s.contains(sub)      # bool
 s.starts_with(p)     # bool
 s.ends_with(p)       # bool
-s.count(sub)         # non-overlapping occurrences
+s.count(sub)         # non-overlapping occurrences; empty sub counts
+                     # len(s) + 1 byte boundaries
 s.trim()             # ASCII whitespace off both ends
 s.lower()            # ASCII case fold down; multibyte passes whole
 s.upper()            # ASCII case fold up
@@ -1553,9 +1554,11 @@ every pair of operands that does not trap:
 
 A positive divisor therefore never yields a negative answer, which is
 what makes `x % 256` a byte wrap for every `x` and `(row - 1) % height`
-a torus.  `//` and `%` by zero trap; on Floats they are IEEE and do
+a torus.  `//` and `%` by zero trap; on floating-point values they are IEEE and do
 not, and double `%` floors with the integer one so promotion crosses
-the line without a seam in it.
+the line without a seam in it.  Because floating-point values use binary64 and the
+floor-mod result is rounded, a boundary case can equal the divisor
+(`-1e-100 % 1.0 == 1.0`); do not assume strict `< divisor` for floats.
 
 There is no `//` comment: a comment runs from `#` to the end of the
 line, and a line beginning `//` is answered by name

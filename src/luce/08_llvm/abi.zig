@@ -214,7 +214,13 @@ const trace = @import("../runtime/trace.zig");
 /// append-only and nothing reorders — but no artifact built at this
 /// version indexes it, and the hosts in this tree leave it null,
 /// exactly as the whole-file text slots were left at version 12.
-pub const version: u32 = 17;
+///
+/// 18 — `finished` keeps its shape and position, but its census now
+/// covers every run that opened a runtime: normal return, `exit`, a
+/// trap, and an uncaught error.  Only exhaustion has no runtime to
+/// count.  Hosts that use the number to diagnose a run must rebuild
+/// with this meaning rather than treating a missing callback as zero.
+pub const version: u32 = 18;
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the
@@ -353,10 +359,11 @@ pub const CallDepthFn = *const fn (context: ?*anyopaque) callconv(.c) i64;
 /// traps at the same call on both engines.
 pub const default_call_depth: i64 = 256;
 
-/// The run ended without trapping, leaving `leaked` objects alive.
-/// Memory is explicit in Luce, so what a program did not free is part
-/// of what it did, and a host that wants to say so reads it here.
-/// Optional: a null slot simply means nobody is counting.
+/// The run ended after opening a runtime, leaving `leaked` objects
+/// alive.  Memory is explicit in Luce, so what a program did not free
+/// is part of what it did, including a trap or uncaught error.  An
+/// exhausted run has no census and does not call this slot.  Optional:
+/// a null slot simply means nobody is counting.
 pub const FinishedFn = *const fn (
     context: ?*anyopaque,
     leaked: i64,
@@ -799,8 +806,9 @@ pub const Host = extern struct {
     print: ?PrintFn = null,
     /// Required.
     trap: TrapFn,
-    /// Optional — the leak census, reported once at the end of a run
-    /// that did not trap.
+    /// Optional — the leak census, reported once at the end of every
+    /// run that opened a runtime, including a trap or uncaught error.
+    /// Exhaustion has no census and does not call this slot.
     finished: ?FinishedFn = null,
     file_read: ?FileReadFn = null,
     file_write: ?FileWriteFn = null,

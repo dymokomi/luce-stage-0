@@ -1034,3 +1034,42 @@ predicates — of which seven were the same bug and nine were already
 correct.  `format_version` did not move: the verifier only got
 stricter, and every module it newly rejects is one that could not have
 been lowered or could not have run correctly anyway.
+
+---
+
+## 2026-08-12 — release, copy, and harness paths made total
+
+The live inventory found that the runtime's object release, deep copy, and
+cross-runtime move still depended on native recursion. `runtime/heap.zig`
+now drains an explicit worklist for release and copy. Copy publishes shells
+before queuing children so the walk has stable destinations, then rolls back
+the root, free-row chain, and grown object-table allocation if a later child
+is stale, a resource, or an allocation fails. A 40,000-node release and a
+40,000-edge deep-copy test keep those guarantees independent of native stack
+depth; list slices and map values use the same copy door.
+
+The executable specification had three false gaps: trap/error census values
+were not reported or compared, `prints` accepted matching output after a
+non-success ending, and file world comparison omitted handle position and
+open-handle state. The callback contract is now ABI version 18, and `agree`
+compares those facts on every applicable ending. The host and compiled-run
+documentation were updated with the new contract.
+
+The same pass recognized literal infinite loops without breaks as
+non-falling-through, made empty-needle counting explicit (`len(s) + 1` byte
+boundaries), disclosed floating floor-mod rounding, and added a cross-feature
+spec covering a union payload, a bound method, and an optional callback.
+
+## 2026-08-12 — first test-led union and function-value hardening slice
+
+The next pass kept the current borrowing model and attacked its composition
+boundary. Differential specs now copy and dispatch optional function values
+inside unions, copy union-held bound methods through a container, observe a
+receiver mutation through both copies, and unwind through a trapped callback
+while a union still owns a payload list.  Runtime coverage adds allocator
+failure checks for a function run with a carrying receiver and outside text.
+
+The module seam now also has a hostile-MIR fixture: a bound function with an
+out-of-range receiver register and one with a receiver of the wrong type are
+both rejected by verification before execution.  The full repository suite
+passes with 2,018 tests.

@@ -276,6 +276,58 @@ test "S34: a trap mid-run aborts cleanly with union values in flight" {
     , .index_bounds);
 }
 
+test "a union copies a function-valued field and dispatches both choices" {
+    try agree.prints(
+        \\union Job:
+        \\    empty
+        \\    action(run: (func(long) -> long)?, label: string)
+        \\
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\func same(n: long) -> long:
+        \\    return n
+        \\
+        \\func apply(job: Job, n: long) -> long:
+        \\    match job:
+        \\        empty:
+        \\            return -1
+        \\        action(run, label):
+        \\            let chosen = run else same
+        \\            return chosen(n + len(label))
+        \\
+        \\func main():
+        \\    var jobs = new list(Job)
+        \\    jobs.append(Job.action(run = twice, label = "!"))
+        \\    jobs.append(Job.action(run = none, label = "?"))
+        \\    let copied = copy jobs
+        \\    print(string(apply(copied[0], 20)))
+        \\    print(string(apply(copied[1], 20)))
+        \\    print(string(apply(jobs[0], 20)))
+        \\
+    , "42\n21\n42\n");
+}
+
+test "a trapped callback releases a union payload and its function run" {
+    try agree.trap(
+        \\union Job:
+        \\    run(action: (func(long) -> long)?, values: list(long))
+        \\
+        \\func read(index: long) -> long:
+        \\    var values: list(long) = [3, 4]
+        \\    return values[index]
+        \\
+        \\func main():
+        \\    var payload: list(long) = [3, 4]
+        \\    let job = Job.run(action = read, values = give payload)
+        \\    match job:
+        \\        run(action, values):
+        \\            if action != none:
+        \\                print(string(action(9)))
+        \\
+    , .index_bounds);
+}
+
 // ---------------------------------------------------------------------------
 // The zero: first declared member, every payload field at its own zero
 // ---------------------------------------------------------------------------

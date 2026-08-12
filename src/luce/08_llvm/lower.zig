@@ -2472,8 +2472,9 @@ const Module = struct {
         wip.cursor = .{ .block = ending };
         const outcome = try wip.load(.normal, .i32, outcome_slot, word, "outcome.word");
         // Three answers, and each one is somebody's to hear: a trap
-        // with its trace, an error with its raise site, a finished run
-        // with its leak census (docs/FAILURE.md).
+        // with its trace, an error with its raise site, and the census
+        // for every run that got far enough to open a runtime
+        // (docs/FAILURE.md).
         const trapped = try wip.icmp(
             .eq,
             outcome,
@@ -2496,29 +2497,23 @@ const Module = struct {
             &.{ started, outcome },
             "status",
         );
-        // The census is published for a run that finished and for one
-        // that exited: memory is explicit, so what an `exit(status)`
-        // left standing is part of what the program did.  A trapped,
-        // errored, or exhausted run publishes nothing, as before.
-        const status_ok = try wip.icmp(
+        // Publish the census for every run that opened a runtime.  A
+        // trap and an uncaught error are still observable program
+        // outcomes, so the objects their unwind left alive must be
+        // compared just like a normal return.  Only an exhausted run
+        // has no reliable runtime to count.
+        const exhausted = try wip.icmp(
             .eq,
             status,
-            try self.builder.intValue(.i32, @intFromEnum(abi.Status.ok)),
-            "status.ok",
+            try self.builder.intValue(.i32, @intFromEnum(abi.Status.exhausted)),
+            "status.exhausted",
         );
-        const status_exited = try wip.icmp(
-            .eq,
-            status,
-            try self.builder.intValue(.i32, @intFromEnum(abi.Status.exited)),
-            "status.exited",
-        );
-        const censusable = try wip.bin(.@"or", status_ok, status_exited, "censusable");
         try self.reportLeaks(
             &wip,
             host,
             context,
             started,
-            try wip.bin(.xor, censusable, try self.builder.intValue(.i1, 1), "no.census"),
+            exhausted,
         );
         _ = try self.callService(&wip, .luce_rt_close, .void, &.{started}, "");
         _ = try wip.ret(status);
@@ -2564,9 +2559,9 @@ const Module = struct {
     }
 
     /// Hand the host the trap, once, now that the program has stopped
-    /// and its trace is complete.  A run that ended any other way
-    /// reports nothing, which `luce_rt_report` decides for itself — the
-    /// branch here only spares a finished run the call.
+    /// and its trace is complete.  A run that ended any other way has no
+    /// trap report to publish, which `luce_rt_report` decides for itself —
+    /// this branch only spares a finished run the call.
     fn reportTrap(
         self: *Module,
         wip: *Builder.WipFunction,
@@ -2616,15 +2611,15 @@ const Module = struct {
     }
 
     /// Tell the host what the run did not free, when it has somewhere
-    /// to put it and the run finished.  A run that trapped or errored
-    /// publishes nothing, so it reports nothing.
+    /// to put it and the runtime opened successfully.  Exhaustion has
+    /// no reliable runtime to count, so that path is skipped.
     fn reportLeaks(
         self: *Module,
         wip: *Builder.WipFunction,
         host: Builder.Value,
         context: Builder.Value,
         started: Builder.Value,
-        trapped: Builder.Value,
+        skip_census: Builder.Value,
     ) Error!void {
         const service_fn = try self.loadHostSlot(wip, host, .finished, "finished.fn");
         const missing = try wip.icmp(
@@ -2633,7 +2628,7 @@ const Module = struct {
             try self.builder.nullValue(.ptr),
             "finished.missing",
         );
-        const skip = try wip.bin(.@"or", missing, trapped, "no.census");
+        const skip = try wip.bin(.@"or", missing, skip_census, "no.census");
         // Two edges reach `quiet`: the branch that skips the census,
         // and the fall-through from the block that took it.
         const quiet = try wip.block(2, "no.census");

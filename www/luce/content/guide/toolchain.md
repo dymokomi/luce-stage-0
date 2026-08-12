@@ -38,7 +38,7 @@ the function it names beside the receiver it carries, which widens
 `file_exists` and adds `path_kind` after `dir_create`, so the tags
 between them and the end renumber. The earlier
 `call_inout` edge used by writing
-methods first moved it to 32. The published host ABI is **17**: version
+methods first moved it to 32. The published host ABI is **18**: version
 14 appended the `shell_run` host slot, version 15 appends terminal
 event data, version 16 appends `dir_create` and `epoch_ms` — a
 directory made with its parents, and the wall clock `clock_ms`
@@ -49,7 +49,7 @@ crosses the host boundary.
 
 Current release label: `0.18` (`luce --version`, `loom --version`). The
 release label is intentionally separate from `format_version = 42` and
-`abi.version = 17`: the latter two describe artifact compatibility, while
+`abi.version = 18`: the latter two describe artifact compatibility, while
 the former names the user-facing toolchain release.
 
 `FILE` may also be `-`, to read the program from standard input.

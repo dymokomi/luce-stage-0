@@ -305,7 +305,7 @@ test "strings: find (with its start default), contains, starts_with, ends_with, 
         \\    assert(not strings.ends_with(s, "worlds"))
         \\    assert(strings.count("aaaa", "aa") == 2)
         \\    assert(strings.count("a.b.c", ".") == 2)
-        \\    assert(strings.count("abc", "") == 0)
+        \\    assert(strings.count("abc", "") == 4)
         \\
     );
 }

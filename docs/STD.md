@@ -174,7 +174,8 @@ strings.is_upper(b)  strings.is_lower(b)  strings.is_space(b)
                                  # byte_at answers; bytes above 127
                                  # are in none of them
 strings.starts_with(s, prefix)   strings.ends_with(s, suffix)
-strings.count(s, needle)         # non-overlapping occurrences
+strings.count(s, needle)         # non-overlapping occurrences; empty
+                                 # needle counts len(s) + 1 boundaries
 strings.trim(s)                  # ASCII whitespace off both ends
 strings.lower(s)  strings.upper(s)   # ASCII folding; multibyte
                                      # characters pass through whole

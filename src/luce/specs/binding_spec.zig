@@ -641,6 +641,61 @@ test "a stored bind whose receiver's owner is gone traps at the call, not before
     , .use_after_free);
 }
 
+test "a copied union preserves a bound receiver's borrowed graph" {
+    try agree.prints(
+        \\struct Bag:
+        \\    items: list(long)
+        \\
+        \\    func at(i: long) -> long:
+        \\        return self.items[i]
+        \\
+        \\union Reader:
+        \\    held(action: (func(long) -> long)?)
+        \\
+        \\func main():
+        \\    var bag = Bag(items = [7, 8])
+        \\    var readers = new list(Reader)
+        \\    readers.append(Reader.held(action = bag.at))
+        \\    let copied = copy readers
+        \\    bag.items.append(99)
+        \\    match readers[0]:
+        \\        held(action):
+        \\            if action != none:
+        \\                print(string(action(2)))
+        \\    match copied[0]:
+        \\        held(action):
+        \\            if action != none:
+        \\                print(string(action(2)))
+        \\
+    , "99\n99\n");
+}
+
+test "a bound receiver borrowed through a union traps only when called" {
+    try agree.trap(
+        \\struct Bag:
+        \\    items: list(long)
+        \\
+        \\    func at(i: long) -> long:
+        \\        return self.items[i]
+        \\
+        \\union Reader:
+        \\    held(action: (func(long) -> long)?)
+        \\
+        \\func collect(into: list(Reader)):
+        \\    var bag = Bag(items = [1, 2])
+        \\    into.append(Reader.held(action = bag.at))
+        \\
+        \\func main():
+        \\    var readers = new list(Reader)
+        \\    collect(readers)
+        \\    match readers[0]:
+        \\        held(action):
+        \\            if action != none:
+        \\                print(string(action(0)))
+        \\
+    , .use_after_free);
+}
+
 test "a stored function value is released with what holds it" {
     // The value owns its run and nothing else, so a list of them is a
     // list of runs: the census is zero when the list dies, and the
@@ -829,6 +884,50 @@ test "a nested place takes a union constructor, a match arm, a guarded call and 
         \\        print(caught(2))
         \\
     , "query hello\nplain 1\ntrue\nplain 2\n");
+}
+
+test "a union payload composes with a bound method and a stored callback" {
+    // This is the deliberately cross-feature case: the union owns a
+    // list of value structs, a match arm reads one of those structs,
+    // its method becomes a borrowed function value, and the enclosing
+    // value carries a second optional function value.  No layer gets
+    // to treat one of those shapes as a special case.
+    try agree.prints(
+        \\struct Item:
+        \\    prefix: string
+        \\    scale: long
+        \\    func render(value: long) -> string:
+        \\        return self.prefix + string(value * self.scale)
+        \\
+        \\union Work:
+        \\    empty
+        \\    batch(items: list(Item))
+        \\
+        \\struct Plan:
+        \\    work: Work
+        \\    finish: (func(long) -> string)? = none
+        \\
+        \\func suffix(value: long) -> string:
+        \\    return "!" + string(value)
+        \\
+        \\func evaluate(plan: Plan) -> string:
+        \\    let finish = plan.finish
+        \\    match plan.work:
+        \\        empty:
+        \\            return "empty"
+        \\        batch(items):
+        \\            let render: func(long) -> string = items[0].render
+        \\            if finish != none:
+        \\                return render(4) + finish(5)
+        \\            return render(4)
+        \\
+        \\func main():
+        \\    var items = new list(Item)
+        \\    items.append(Item(prefix = "item", scale = 2))
+        \\    let plan = Plan(work = Work.batch(items = give items), finish = suffix)
+        \\    print(evaluate(plan))
+        \\
+    , "item8!5\n");
 }
 
 test "a nested place under try lands what the call answers" {

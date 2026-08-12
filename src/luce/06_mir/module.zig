@@ -1368,6 +1368,69 @@ test "decoded function types and conversions are verified before execution" {
     entry.result_types[storing.?] = original_result;
 }
 
+test "a decoded bound function value rejects a forged receiver" {
+    var program = try compileScript(
+        \\struct Scale:
+        \\    factor: long
+        \\
+        \\    func times(n: long) -> long:
+        \\        return n * self.factor
+        \\
+        \\func main():
+        \\    let scale = Scale(factor = 2)
+        \\    let f: func(long) -> long = scale.times
+        \\    let n: long = 3
+        \\    print(string(f(n)))
+        \\
+    );
+    defer program.deinit();
+
+    const Site = struct { function: usize, instruction: usize };
+    var site: ?Site = null;
+    var scalar: ?mir.Register = null;
+    for (program.functions, 0..) |*function, function_index| {
+        for (function.instructions, 0..) |instruction, register| {
+            switch (instruction) {
+                .const_function => |named| if (named.receiver != null) {
+                    site = .{ .function = function_index, .instruction = register };
+                    for (function.result_types, 0..) |result, candidate| {
+                        if (result.eql(.long)) scalar = @intCast(candidate);
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+    try testing.expect(site != null);
+    try testing.expect(scalar != null);
+
+    const found = site.?;
+    const function = &program.functions[found.function];
+    const original = function.instructions[found.instruction].const_function.receiver;
+
+    // A receiver register that is outside the function is a malformed
+    // operand, not a reason for either decoder or verifier to index past
+    // the register table.
+    function.instructions[found.instruction].const_function.receiver = @intCast(function.instructions.len + 1);
+    {
+        const encoded = try encode(testing.allocator, &program);
+        defer testing.allocator.free(encoded);
+        try testing.expectError(error.InvalidModule, decode(testing.allocator, encoded));
+    }
+
+    // A register of the wrong value type is just as invalid even though
+    // it is in bounds.  The verifier must tie the receiver to parameter
+    // zero of the method it names.
+    function.instructions[found.instruction].const_function.receiver = scalar.?;
+    {
+        const encoded = try encode(testing.allocator, &program);
+        defer testing.allocator.free(encoded);
+        try testing.expectError(error.InvalidModule, decode(testing.allocator, encoded));
+    }
+
+    function.instructions[found.instruction].const_function.receiver = original;
+}
+
 test "an optional type round-trips with its payload, and T?? is rejected" {
     var program = try compileScript(
         \\struct Slot:

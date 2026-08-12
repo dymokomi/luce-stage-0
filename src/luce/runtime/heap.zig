@@ -65,6 +65,18 @@ pub const Raised = struct {
 
 pub const MapEntry = struct { key: Value, value: Value };
 
+/// One pending value in the deep-copy walk.  The destination points
+/// into a stable value run: a caller's result slot, a copied struct,
+/// or a fully-sized list/array/map buffer.  The parent is the copied
+/// container that will own an object found at that slot; it is absent
+/// for a standalone struct, whose objects remain loose until its caller
+/// adopts the completed value.
+const CopyTask = struct {
+    source: Value,
+    destination: *Value,
+    parent: ?Handle = null,
+};
+
 /// Where a run's memory comes from.  Luce has two kinds of data with
 /// two different lifetimes, so it takes two allocators, and mixing them
 /// up is what made freed objects unreclaimable for as long as there was
@@ -1980,17 +1992,16 @@ pub const Runtime = struct {
         }
     }
 
-    /// Free one object and everything it owns, recursively (S20), give
-    /// its storage back, and offer its row to the next `new`.
+    /// Free one object and everything it owns (S20), give its storage
+    /// back, and offer its row to the next `new`.
     ///
-    /// The order is deliberate all the way through.  The generation
-    /// moves first, so the object is dead before its own elements are
-    /// walked and an element naming it stops the walk instead of
-    /// recursing forever.  The elements are walked next, while they
-    /// are still there, and only then can the buffer holding them go.
-    /// The row joins the free list last, once nothing about it is
-    /// still being read.  Nothing here allocates, so the pointer into
-    /// the table stays good across all of it.
+    /// The release walk is iterative.  A row's `next_free` field is
+    /// temporarily the link in a private worklist while that row is
+    /// being destroyed; the row joins the allocator's free list only
+    /// after its children and storage are gone.  This keeps release
+    /// independent of the native call stack and, because it allocates
+    /// nothing, makes the final cleanup path total even under memory
+    /// pressure.
     pub fn freeObject(self: *Runtime, handle: Handle) void {
         const object = self.liveObject(handle) orelse return;
         // The program root is sticky: releases reached through an
@@ -2004,37 +2015,90 @@ pub const Runtime = struct {
     /// program root.  Ordinary releases enter through `freeObject`;
     /// only failed materialization uses this on `.program` rows.
     fn destroyObject(self: *Runtime, handle: Handle) void {
+        var pending = value.null_index;
+        self.scheduleDestroy(handle, &pending, true);
+        self.releaseScheduled(&pending);
+    }
+
+    /// Mark one live row dead and put it on a release worklist.
+    /// `allow_program` is used only by constant-materialization abort,
+    /// where the root itself must be destroyed; children still obey the
+    /// ordinary program-root boundary.
+    fn scheduleDestroy(
+        self: *Runtime,
+        handle: Handle,
+        pending: *u32,
+        allow_program: bool,
+    ) void {
         const object = self.liveObject(handle) orelse return;
+        if (!allow_program and object.owner.kind == .program) return;
+
+        // Mark the row dead before examining its children.  Besides
+        // making a damaged cycle harmless, this prevents two aliases
+        // in one container from putting the same row on the worklist.
         const was_program = object.owner.kind == .program;
         object.generation += 1;
         self.live -= 1;
         if (was_program) self.program_root_count -= 1;
-        switch (object.data) {
-            // Only a `Value` element can hold an object; a `f64`, an
-            // `i64` or a byte cell owns nothing and has nothing to walk.
-            .list, .array => if (object.elements.kind == .value) {
-                for (object.elements.cells(Value)) |item| self.freeValue(item);
-            },
-            .map => |map| for (map.entries.items) |entry| {
-                // A map owns its keys' storage as well as its values';
-                // keys are long or String, so there is never an object
-                // in one.
-                self.dropStorage(entry.key);
-                self.freeValue(entry.value);
-            },
-            .builder => {},
-            // The scope's end is the close (docs/BYTES.md R5).
-            .file => |open| self.closeFile(open.handle),
-            // And for a worker the scope's end is the join
-            // (docs/THREADS.md D5).
-            .task => |held| if (held) |worker| workers.release(self, worker),
+        object.next_free = pending.*;
+        pending.* = handle.index;
+    }
+
+    /// Add every object named by a value to the release worklist.  A
+    /// function value deliberately stops at its field run: its object
+    /// handles borrow the receiver's graph (docs/BINDING.md D4).
+    fn scheduleValue(self: *Runtime, held: Value, pending: *u32) void {
+        switch (held.view()) {
+            .object => |handle| self.scheduleDestroy(handle, pending, false),
+            .strukt => |fields| for (fields) |field| self.scheduleValue(field, pending),
+            .function => {},
+            else => {},
         }
-        object.release(self.objects);
-        // A row that has run out of generations is retired rather than
-        // handed out again: see `retired`.
-        if (object.generation != retired) {
-            object.next_free = self.free_row;
-            self.free_row = handle.index;
+    }
+
+    /// Drain a release worklist.  Rows are already marked dead when they
+    /// enter it, so child handles cannot be reused until their own row
+    /// has been fully released.
+    fn releaseScheduled(self: *Runtime, pending: *u32) void {
+        while (pending.* != value.null_index) {
+            const index = pending.*;
+            const object = &self.table.items[index];
+            pending.* = object.next_free;
+            object.next_free = value.null_index;
+
+            switch (object.data) {
+                // Only a `Value` element can hold an object; a `f64`,
+                // an `i64` or a byte cell owns nothing and has nothing
+                // to walk.
+                .list, .array => if (object.elements.kind == .value) {
+                    for (object.elements.cells(Value)) |item| {
+                        self.scheduleValue(item, pending);
+                        self.dropStorage(item);
+                    }
+                },
+                .map => |map| for (map.entries.items) |entry| {
+                    // A map owns its keys' storage as well as its
+                    // values'; keys are long or String, so there is
+                    // never an object in one.
+                    self.dropStorage(entry.key);
+                    self.scheduleValue(entry.value, pending);
+                    self.dropStorage(entry.value);
+                },
+                .builder => {},
+                // The scope's end is the close (docs/BYTES.md R5).
+                .file => |open| self.closeFile(open.handle),
+                // And for a worker the scope's end is the join
+                // (docs/THREADS.md D5).
+                .task => |held| if (held) |worker| workers.release(self, worker),
+            }
+
+            object.release(self.objects);
+            // A row that has run out of generations is retired rather
+            // than handed out again: see `retired`.
+            if (object.generation != retired) {
+                object.next_free = self.free_row;
+                self.free_row = index;
+            }
         }
     }
 
@@ -2050,12 +2114,9 @@ pub const Runtime = struct {
     /// The object half of `freeValue`, on its own: everything a struct
     /// value's fields name, without touching the run they sit in.
     pub fn freeObjectsIn(self: *Runtime, held: Value) void {
-        switch (held.view()) {
-            .object => |handle| self.freeObject(handle),
-            .strukt => |fields| for (fields) |field| self.freeObjectsIn(field),
-            .function => {}, // a borrowed run: see `bind` (docs/BINDING.md D4)
-            else => {},
-        }
+        var pending = value.null_index;
+        self.scheduleValue(held, &pending);
+        self.releaseScheduled(&pending);
     }
 
     /// give/free verification (S23): never an object a container
@@ -2137,97 +2198,146 @@ pub const Runtime = struct {
     /// difference; writing the walk twice would have been two places
     /// for one semantic.
     pub fn copyFrom(self: *Runtime, source: *Runtime, held: Value) Error!Value {
-        switch (held.view()) {
+        const initial_table_len = self.table.items.len;
+        const initial_table_capacity = self.table.capacity;
+        var tasks: std.ArrayList(CopyTask) = .empty;
+        defer tasks.deinit(self.objects);
+
+        var result = Value.none;
+        errdefer {
+            // Every shell is installed in a destination before its
+            // children are queued, so the root reaches partial copies
+            // even when the next task allocation fails.
+            self.freeObjectsIn(result);
+            self.dropStorage(result);
+            self.rollbackCopyTable(initial_table_len, initial_table_capacity);
+        }
+
+        try tasks.append(self.objects, .{
+            .source = held,
+            .destination = &result,
+        });
+        while (tasks.items.len != 0) {
+            const task = tasks.pop().?;
+            try self.copyTask(source, task, &tasks);
+        }
+        return result;
+    }
+
+    /// Restore the table allocation that preceded a failed copy.  The
+    /// iterative walk publishes shells before it discovers a later bad
+    /// child, so a failure may have used free rows and appended new rows.
+    /// Releasing the root returns the rows to the free list; this second
+    /// half removes the newly appended rows from that list and gives any
+    /// grown table buffer back.  A failed copy is therefore transactional
+    /// to its destination, including allocator-visible table storage.
+    fn rollbackCopyTable(
+        self: *Runtime,
+        initial_len: usize,
+        initial_capacity: usize,
+    ) void {
+        var kept_head = value.null_index;
+        var kept_tail = value.null_index;
+        var row = self.free_row;
+        while (row != value.null_index) {
+            const next = self.table.items[row].next_free;
+            if (@as(usize, row) < initial_len) {
+                if (kept_tail == value.null_index) {
+                    kept_head = row;
+                } else {
+                    self.table.items[kept_tail].next_free = row;
+                }
+                kept_tail = row;
+            }
+            row = next;
+        }
+        if (kept_tail != value.null_index) {
+            self.table.items[kept_tail].next_free = value.null_index;
+        }
+        self.free_row = kept_head;
+
+        // `shrinkAndFree` uses its argument as both the new length and
+        // capacity.  Temporarily exposing the old spare capacity as
+        // length lets it restore that exact capacity without a second
+        // allocation when the original table had room beyond its rows.
+        if (self.table.capacity > initial_capacity) {
+            if (self.table.items.len < initial_capacity) {
+                self.table.items.len = initial_capacity;
+            }
+            self.table.shrinkAndFree(self.objects, initial_capacity);
+        }
+        self.table.items.len = initial_len;
+    }
+
+    /// Process one copy task.  Container shells are installed before
+    /// their children are queued; that ordering gives rollback one
+    /// stable root and keeps every destination pointer valid.
+    fn copyTask(
+        self: *Runtime,
+        source: *Runtime,
+        task: CopyTask,
+        tasks: *std.ArrayList(CopyTask),
+    ) Error!void {
+        switch (task.source.view()) {
             .object => |handle| {
-                if (handle.index == value.null_index) return held;
-                if (source.liveObject(handle) == null) return self.fail(.use_after_free);
-                const index = handle.index;
-                // Each arm copies the source object's contents out
-                // before recursing: the walk allocates objects, which
-                // moves the table, and the source's own buffers do not
-                // move with it.
-                var storage: Object = switch (source.table.items[index].data) {
+                if (handle.index == value.null_index) {
+                    task.destination.* = task.source;
+                    return;
+                }
+                const source_object = source.liveObject(handle) orelse
+                    return self.fail(.use_after_free);
+                var storage: Object = switch (source_object.data) {
                     .list => blk: {
-                        const run = source.table.items[index].elements;
-                        var copied: Object.Elements = .{ .kind = run.kind };
-                        errdefer self.discardCopiedElements(&copied);
-                        try copied.ensureCapacity(self.objects, run.count);
-                        // Packed cells own nothing, so the whole run
-                        // copies as bytes; only a `Value` element needs
-                        // a walk of its own.
-                        if (run.kind != .value) {
-                            // A List retains spare capacity after a
-                            // remove or clear.  The copy sizes itself
-                            // from the live count, so only those cells
-                            // fit and only those cells are values.
-                            const used = run.count * run.kind.width();
-                            @memcpy(copied.bytes[0..used], run.bytes[0..used]);
-                            copied.count = run.count;
+                        const run = source_object.elements;
+                        var elements: Object.Elements = .{ .kind = run.kind };
+                        try elements.ensureCapacity(self.objects, run.count);
+                        if (run.kind == .value) {
+                            elements.count = run.count;
+                            if (run.count != 0) @memset(elements.cells(Value), Value.none);
                         } else {
-                            // `run` is a copy of the row's descriptor, so
-                            // the buffer it names stays put while the
-                            // walk allocates and moves either table.
-                            for (run.cells(Value)) |item| {
-                                const duplicate = try self.copyFrom(source, item);
-                                copied.count += 1;
-                                copied.put(copied.count - 1, duplicate);
-                            }
+                            const used = run.count * run.kind.width();
+                            if (used != 0) @memcpy(elements.bytes[0..used], run.bytes[0..used]);
+                            elements.count = run.count;
                         }
-                        break :blk .{ .data = .list, .elements = copied };
-                    },
-                    .map => |map| blk: {
-                        var copied: Map = .empty;
-                        errdefer {
-                            for (copied.entries.items) |entry| {
-                                self.dropStorage(entry.key);
-                                self.freeValue(entry.value);
-                            }
-                            copied.deinit(self.objects);
-                        }
-                        for (map.entries.items) |entry| {
-                            // The key's bytes are the source map's, so
-                            // the copy takes its own: a `map(string, T)`
-                            // whose keys are longer than a value holds
-                            // would otherwise be two maps over one run
-                            // of bytes, and two frees of it.
-                            const key = try self.ownValue(entry.key);
-                            errdefer self.dropStorage(key);
-                            const copied_value = try self.copyFrom(source, entry.value);
-                            errdefer self.freeValue(copied_value);
-                            try copied.insert(self.objects, .{
-                                .key = key,
-                                .value = copied_value,
-                            });
-                        }
-                        break :blk .{ .data = .{ .map = copied } };
+                        break :blk .{ .data = .list, .elements = elements };
                     },
                     .array => blk: {
-                        const run = source.table.items[index].elements;
-                        const dims = try self.objects.dupe(i64, source.table.items[index].dims);
+                        const run = source_object.elements;
+                        const dims = try self.objects.dupe(i64, source_object.dims);
                         errdefer self.objects.free(dims);
-                        const elements = try self.objects.alignedAlloc(
+                        const bytes = try self.objects.alignedAlloc(
                             u8,
                             .of(Value),
                             run.bytes.len,
                         );
-                        var copied: Object.Elements = .{
+                        var elements: Object.Elements = .{
                             .kind = run.kind,
-                            .bytes = elements,
+                            .bytes = bytes,
+                            .count = run.count,
                         };
-                        errdefer self.discardCopiedElements(&copied);
-                        // Cells that own nothing copy as bytes; only a
-                        // `Value` element needs a walk of its own.
+                        errdefer self.discardCopiedElements(&elements);
                         if (run.kind == .value) {
-                            for (run.cells(Value)) |item| {
-                                const duplicate = try self.copyFrom(source, item);
-                                copied.count += 1;
-                                copied.put(copied.count - 1, duplicate);
-                            }
-                        } else {
-                            @memcpy(elements, run.bytes);
-                            copied.count = run.count;
+                            if (run.count != 0) @memset(elements.cells(Value), Value.none);
+                        } else if (run.bytes.len != 0) {
+                            @memcpy(elements.bytes, run.bytes);
                         }
-                        break :blk .{ .data = .array, .dims = dims, .elements = copied };
+                        break :blk .{ .data = .array, .dims = dims, .elements = elements };
+                    },
+                    .map => |map| blk: {
+                        var copied: Map = .empty;
+                        errdefer {
+                            for (copied.entries.items) |entry| self.dropStorage(entry.key);
+                            copied.deinit(self.objects);
+                        }
+                        // Insert empty values first.  Once the shell is
+                        // attached, no more entries are added, so the
+                        // value pointers stay stable while tasks fill them.
+                        for (map.entries.items) |entry| {
+                            const key = try self.ownValue(entry.key);
+                            errdefer self.dropStorage(key);
+                            try copied.insert(self.objects, .{ .key = key, .value = Value.none });
+                        }
+                        break :blk .{ .data = .{ .map = copied } };
                     },
                     .builder => |builder| blk: {
                         var copied: std.ArrayList(u8) = .empty;
@@ -2235,45 +2345,79 @@ pub const Runtime = struct {
                         try copied.appendSlice(self.objects, builder.items);
                         break :blk .{ .data = .{ .builder = copied } };
                     },
-                    // A second Luce handle on one open file would be
-                    // two owners of one resource, which is the thing
-                    // scope ownership exists to make impossible.  Stage
-                    // 4 refuses `copy f` by name; this is the wall
-                    // behind it, for IR that arrived some other way.
-                    .file => return self.fail(.not_owned),
-                    // A task is one worker's, and a second handle on it
-                    // would be two joiners of one thread.  Stage 4
-                    // refuses `copy t` by name; this is the wall behind
-                    // it (docs/THREADS.md D3).
-                    .task => return self.fail(.not_owned),
+                    // A second handle on a file or task would create a
+                    // second owner of a resource; the analyzer refuses
+                    // both and this is the runtime backstop.
+                    .file, .task => return self.fail(.not_owned),
                 };
-                errdefer self.discardCopiedObject(&storage);
-                return self.attach(storage);
+
+                const duplicate = self.attach(storage) catch |mistake| {
+                    self.discardCopiedObject(&storage);
+                    return mistake;
+                };
+                task.destination.* = duplicate;
+                if (task.parent) |parent| self.adoptInto(parent, duplicate);
+
+                const destination = &self.table.items[duplicate.asObject().index];
+                // `attach` may move `source.table` when both runtimes are
+                // the same.  Re-resolve the source row before reading the
+                // children; the descriptor pointer captured above is no
+                // longer guaranteed to point into the table.
+                const source_after = source.liveObject(handle) orelse unreachable;
+                switch (source_after.data) {
+                    .list, .array => if (source_after.elements.kind == .value) {
+                        const cells = destination.elements.cells(Value);
+                        for (source_after.elements.cells(Value), 0..) |item, at| {
+                            try tasks.append(self.objects, .{
+                                .source = item,
+                                .destination = &cells[at],
+                                .parent = duplicate.asObject(),
+                            });
+                        }
+                    },
+                    .map => |map| {
+                        const copied_map = &destination.data.map;
+                        for (map.entries.items, 0..) |entry, at| {
+                            try tasks.append(self.objects, .{
+                                .source = entry.value,
+                                .destination = &copied_map.entries.items[at].value,
+                                .parent = duplicate.asObject(),
+                            });
+                        }
+                    },
+                    .builder, .file, .task => {},
+                }
             },
             .strukt => |fields| {
-                if (fields.len == 0) return held;
+                if (fields.len == 0) {
+                    task.destination.* = task.source;
+                    return;
+                }
                 const copied = try self.objects.alloc(Value, fields.len);
-                var filled: usize = 0;
-                errdefer {
-                    for (copied[0..filled]) |field| self.freeValue(field);
-                    self.objects.free(copied);
+                @memset(copied, Value.none);
+                const duplicate = Value.ofStruct(copied);
+                task.destination.* = duplicate;
+                if (task.parent) |parent| self.adoptInto(parent, duplicate);
+                for (fields, copied) |field, *destination| {
+                    try tasks.append(self.objects, .{
+                        .source = field,
+                        .destination = destination,
+                        .parent = task.parent,
+                    });
                 }
-                for (fields, copied) |field, *slot| {
-                    slot.* = try self.copyFrom(source, field);
-                    filled += 1;
-                }
-                return Value.ofStruct(copied);
             },
-            // **A function value copies as its run and nothing more.**
-            // A deep copy of a struct holding one duplicates the two
-            // slots and keeps the receiver's graph aliased, because the
-            // value borrows that graph and a copy of a borrow is a
-            // borrow (docs/BINDING.md D4).  `ownValue` is exactly that.
-            .function => return self.ownValue(held),
-            // A String is a value, and the copy owns its own bytes:
-            // `copy xs` of a `List(String)` used to hand back a second
-            // container sharing the first's (docs/STRINGS.md).
-            else => return self.ownValue(held),
+            // A function value copies its run and nothing more.  The
+            // run borrows any receiver object graph (BINDING.md D4).
+            .function => {
+                const duplicate = try self.ownValue(task.source);
+                task.destination.* = duplicate;
+                if (task.parent) |parent| self.adoptInto(parent, duplicate);
+            },
+            else => {
+                const duplicate = try self.ownValue(task.source);
+                task.destination.* = duplicate;
+                if (task.parent) |parent| self.adoptInto(parent, duplicate);
+            },
         }
     }
 };

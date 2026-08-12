@@ -487,7 +487,8 @@ to **14**; `term_event_data` moved the format to **36** and the ABI to
 **15**; the `dir_create` and `epoch_ms` services moved the format
 to **40** and the ABI to **16**; and the appended `path_kind` service,
 which retires `file_exists` beside it, moved the format to **42** and
-the ABI to **17**, which is where the ABI still is.
+the ABI to **17**; version 18 then made the finished census cover
+normal completion, exit, traps, and uncaught errors as well as success.
 
 Every generated entry path calls one private `luce.constants`
 materializer before user code.  It constructs rows through the same
@@ -557,8 +558,9 @@ program-root constants then moved it to 33, and the appended
 the appended `term_event_data` service moved the format to **36** and
 the ABI to **15**; the appended `dir_create` and `epoch_ms` services
 moved the format to **40** and the ABI to **16**; and the appended
-`path_kind` service moved the format to **42** and the ABI to **17**,
-which is the current ABI.
+`path_kind` service moved the format to **42** and the ABI to **17**;
+version **18** then made the finished census cover every
+non-exhaustion ending.
 
 ## Call depth, and the trace a trap carries
 
@@ -1055,7 +1057,7 @@ fits; generated code only ever *writes* the other form, and reads both
 ## The published host ABI
 
 `src/luce/08_llvm/abi.zig` is the contract and the only authority on
-it; `abi.version` is the number a loader checks, currently **17**.  A compiled artifact
+it; `abi.version` is the number a loader checks, currently **18**.  A compiled artifact
 exports one symbol:
 
 ```c

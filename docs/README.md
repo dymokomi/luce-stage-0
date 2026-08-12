@@ -47,6 +47,7 @@ human-reviewed.  These files are the reasoning behind it.
 | [STD.md](STD.md) | The standard library, module by module, and what it takes to add one. |
 | [CODING_GUIDE.md](CODING_GUIDE.md) | How Zig is written here. Authoritative and intentionally opinionated. |
 | [SOFTWARE_DESIGN.md](SOFTWARE_DESIGN.md) | How to decide what a module is, what it hides, and what it is called — deep modules, information hiding, and the red flags that say an abstraction is not paying for itself. The guide above wins on anything it covers. |
+| [LANGUAGE_AUDIT.md](LANGUAGE_AUDIT.md) | The living feature-by-feature review matrix: pipeline seam, positive and adversarial behavior, composition probes, and the test anchor to extend. |
 | [MISSING.md](MISSING.md) | The honest gap list, re-derived against the tree rather than carried forward. The closest thing to a work queue. |
 
 Where a gap **closes**, its entry leaves MISSING.md for

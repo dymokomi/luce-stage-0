@@ -28,7 +28,7 @@ is the [character vocabulary](#characters) — `characters`, `width`,
 | `strings.contains(s, needle) -> bool` | |
 | `strings.starts_with(s, prefix) -> bool` | |
 | `strings.ends_with(s, suffix) -> bool` | |
-| `strings.count(s, needle) -> long` | non-overlapping occurrences |
+| `strings.count(s, needle) -> long` | non-overlapping occurrences; an empty needle counts every `len(s) + 1` byte boundary |
 | `strings.is_digit(b) -> bool` | the ASCII classes, on the byte `byte_at` answers |
 | `strings.is_alpha(b)`, `is_alnum(b)`, `is_upper(b)`, `is_lower(b)`, `is_space(b)` | bytes above 127 are in none of them |
 
@@ -309,6 +309,6 @@ who wants the number back. Nothing compares against a magic value by
 accident anymore, and the [status page](/status/) no longer keeps
 this on a list.
 
-One asymmetry remains, on purpose: `find` treats an empty needle as
-a match at `start`, while `count` counts it zero times. Both answers
-are defensible and they are not the same answer.
+The empty-needle rule is explicit: `find` matches at the requested
+`start`, while `count` counts every byte boundary, `len(s) + 1` in all.
+They answer different questions without disagreeing about the boundaries.

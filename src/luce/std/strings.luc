@@ -63,10 +63,11 @@ func ends_with(s: string, suffix: string) -> bool:
         return false
     return s[len(s) - len(suffix):] == suffix
 
-# How many non-overlapping occurrences; an empty needle counts zero.
+# How many non-overlapping occurrences; an empty needle matches every
+# byte boundary, including the two ends of an empty string.
 func count(s: string, needle: string) -> long:
     if len(needle) == 0:
-        return 0
+        return len(s) + 1
     var found = 0
     # The loops below carry the position as a plain long, unwrapping
     # each answer at the call: -1 is spelled once, at the `else`, and

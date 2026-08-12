@@ -969,7 +969,9 @@ pub const Capture = struct {
     /// host has nowhere to allocate, and the text is what is compared.
     trace_storage: [8192]u8 = undefined,
     trace_length: usize = 0,
-    /// Objects the run did not free, or null when it never finished.
+    /// Objects the run did not free, or null when it exhausted before a
+    /// runtime existed.  The callback now publishes the census for
+    /// every other ending, including a trap or uncaught error.
     leaked: ?i64 = null,
     /// The status `exit(status)` carried, or null when the program
     /// never exited.
@@ -1679,6 +1681,7 @@ pub const Reference = struct {
             },
             .trap => |raised| {
                 self.trap_code = raised.code;
+                self.leaked = raised.leaked_objects;
                 // The arena goes at the end of this function, so keep
                 // the words rather than a borrow of them.
                 self.trap_message = try self.gpa.dupe(u8, raised.message);
@@ -1701,6 +1704,7 @@ pub const Reference = struct {
             },
             .errored => |raised| {
                 self.error_code = raised.code;
+                self.leaked = raised.leaked_objects;
                 self.error_message = try self.gpa.dupe(u8, raised.message);
                 var encoded: [512]u8 = undefined;
                 try self.error_origin.appendSlice(self.gpa, traceLine(

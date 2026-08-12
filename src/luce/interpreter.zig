@@ -67,6 +67,10 @@ pub const Trap = struct {
     /// Deep recursion is capped; `dropped` counts what the cap cut.
     trace: []const TraceFrame = &.{},
     dropped: u32 = 0,
+    /// Heap objects still alive when the trap stopped the run.  A trap
+    /// unwinds without scope releases, so the census is part of the
+    /// observable result just as it is for a normal return.
+    leaked_objects: u32 = 0,
 };
 
 /// An uncaught error: the program said `-> !` and nothing caught what
@@ -82,6 +86,8 @@ pub const Raised = struct {
     /// stripped (--release) module reports line 0 and still names the
     /// function, exactly as a trap's frames do.
     origin: TraceFrame,
+    /// Heap objects still alive when the uncaught error stopped the run.
+    leaked_objects: u32 = 0,
 };
 
 pub const Success = struct {

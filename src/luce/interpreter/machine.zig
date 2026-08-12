@@ -97,6 +97,7 @@ pub fn run(
                     .line = raised.origin.line,
                     .column = raised.origin.column,
                 },
+                .leaked_objects = @intCast(machine.runtime.leaked()),
             } };
         },
         .trap => |trap| {
@@ -114,6 +115,7 @@ pub fn run(
             // (docs/STRINGS.md).  Reported after the traceback: a
             // trap's words may be a string the program built.
             machine.releaseFrameStorage();
+            reported.leaked_objects = @intCast(machine.runtime.leaked());
             return .{ .trap = reported };
         },
         // The unwind skipped releases the way a trap's does, so the
