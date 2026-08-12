@@ -1093,7 +1093,7 @@ pub const FunctionBuilder = struct {
             return null;
         }
         const wants = self.analyzer.signatures.items[signature];
-        if (!self.matchesSignature(info, wants)) {
+        if (!self.matchesSignature(info, wants, 0)) {
             try self.fail(
                 "luce.sema.type",
                 span,
@@ -1117,6 +1117,113 @@ pub const FunctionBuilder = struct {
         };
     }
 
+    /// **`receiver.method` where a function type lands** — a bound
+    /// method: a function value whose environment is the receiver
+    /// (docs/BINDING.md D1, D2).
+    ///
+    /// There is no marker.  What makes this a bind is the place it
+    /// lands in, exactly as a bare function name becomes a value by
+    /// landing (FUNCTIONS.md D2); the value's type is the method's
+    /// signature with the receiver's parameter dropped, and the
+    /// receiver travels inside the value.
+    ///
+    /// Answers null when the receiver's type has no method of this
+    /// name, so `p.x` still reads as the field it is.  Every refusal a
+    /// bind has of its own is spoken here.
+    fn boundMethod(self: *FunctionBuilder, field: ast.FieldAccess, signature: u32) Error!?Typed {
+        const receiver = (try self.lowerExpression(field.target, false)) orelse return null;
+        const index = (try calls.structMethod(self, receiver.value_type, field.name)) orelse
+            return null;
+        if (!try refusals.functionReachable(self, index, field.span)) return null;
+        const info = self.analyzer.functions.items[index];
+        const declared = calls.declaredName(self, receiver.value_type).?;
+
+        // **A writing method does not bind in this run**
+        // (docs/BINDING.md D9).  A writer needs one bare owning `var`
+        // receiver aliased in place (SELF.md D3); a bound writer is an
+        // inout closure whose store-back discipline is its own design.
+        if (info.receiver == .writes) {
+            try self.fail(
+                "luce.sema.call",
+                field.span,
+                "{s}.{s} writes its receiver, and a writing method is not a function value; " ++
+                    "bind a reading method, or call this one on the binding that owns it [BINDING.md D9]",
+                .{ declared, field.name },
+            );
+            return null;
+        }
+        // A fallible method's `!` is an obligation its call sites
+        // carry, and a function type still has nowhere to write one
+        // (docs/BINDING.md D8, not built).
+        if (info.fallible) {
+            try self.fail(
+                "luce.sema.fallible",
+                field.span,
+                "{s}.{s} can fail, and a function type carries no '!'; " ++
+                    "a fallible method is not a value yet [BINDING.md D8]",
+                .{ declared, field.name },
+            );
+            return null;
+        }
+        // **A receiver that carries objects does not bind in this run**
+        // (docs/BINDING.md D4, not built).  The verbs would be S21's
+        // and the class the receiver's, but a function *type* cannot
+        // say which of its values carries one — so the ceremony a
+        // carrying value owes cannot be demanded at the places that ask
+        // a type rather than a value.  Refused by name rather than
+        // bound without it.
+        if (shapes.carriesObjects(self.analyzer, receiver.value_type)) {
+            try self.fail(
+                "luce.sema.own",
+                field.span,
+                "{s} carries objects, and binding a carrying receiver is not built yet; " ++
+                    "bind a method of a value-only receiver, or pass the receiver to a " ++
+                    "top-level function [BINDING.md D4]",
+                .{try self.analyzer.typeName(receiver.value_type)},
+            );
+            return null;
+        }
+        const wants = self.analyzer.signatures.items[signature];
+        if (!self.matchesSignature(info, wants, 1)) {
+            try self.fail("luce.sema.type", field.span, "this place is {s}, and {s}.{s} bound is {s}", .{
+                try self.analyzer.typeName(.{ .function = signature }),
+                declared,
+                field.name,
+                try self.boundSignature(info),
+            });
+            return null;
+        }
+        const value: Type = .{ .function = signature };
+        return .{
+            .node = try recorder.recordNode(self, .{ .bound_method = .{
+                .function = index,
+                .receiver = receiver.node,
+                .result = value,
+                .span = field.span,
+            } }),
+            .value_type = value,
+        };
+    }
+
+    /// The function type a bind of this method would wear: the
+    /// declaration's shape with the receiver's parameter dropped, which
+    /// is what a reader has to compare the place against.
+    fn boundSignature(self: *FunctionBuilder, info: context.FunctionDeclInfo) Error![]const u8 {
+        if (info.results.len >= 2) {
+            return std.fmt.allocPrint(self.arena(), "a method answering {d} values", .{info.results.len});
+        }
+        const written = info.parameter_types[1..];
+        const parameters = try self.arena().alloc(types.Signature.Parameter, written.len);
+        for (written, info.parameter_modes[1..], parameters) |held, mode, *parameter| {
+            parameter.* = .{ .value_type = held, .gives = mode == .give };
+        }
+        const shape = try resolve.internSignature(self.analyzer, .{
+            .parameters = parameters,
+            .result = info.return_type,
+        });
+        return self.analyzer.typeName(shape);
+    }
+
     /// Whether a declared function really has the shape a function type
     /// demands: the same parameter types in the same order, the same
     /// verb on each, and the same answer.
@@ -1130,12 +1237,20 @@ pub const FunctionBuilder = struct {
         self: *FunctionBuilder,
         info: context.FunctionDeclInfo,
         wants: types.Signature,
+        /// The first collected parameter the written type covers: zero
+        /// for a plain function value, one for a bind — whose receiver
+        /// the value carries instead of taking (docs/BINDING.md D1).
+        first: usize,
     ) bool {
         _ = self;
         if (info.results.len >= 2) return false;
-        if (info.parameter_types.len != wants.parameters.len) return false;
+        if (info.parameter_types.len != wants.parameters.len + first) return false;
         if (!info.return_type.eql(wants.result)) return false;
-        for (info.parameter_types, info.parameter_modes, wants.parameters) |held, mode, parameter| {
+        for (
+            info.parameter_types[first..],
+            info.parameter_modes[first..],
+            wants.parameters,
+        ) |held, mode, parameter| {
             if ((mode == .give) != parameter.gives) return false;
             if (!held.eql(parameter.value_type)) return false;
         }
@@ -1622,6 +1737,17 @@ pub const FunctionBuilder = struct {
                             return self.functionValue(written, field.span, signature);
                         }
                     }
+                    // `receiver.method` — the method travels with the
+                    // value it was written on (docs/BINDING.md D1).
+                    //
+                    // A null answer means the receiver's type has no
+                    // method of this name, and the field path below
+                    // says what it always said about `p.x`.  It lowers
+                    // the receiver a second time to do so, which costs
+                    // nothing that matters: no field is a function
+                    // value, so every route through here ends in a
+                    // diagnostic and the tape is never replayed.
+                    if (try self.boundMethod(field, signature)) |bound| return bound;
                 }
                 return expressions.lowerField(self, field);
             },

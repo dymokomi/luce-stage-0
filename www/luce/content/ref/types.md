@@ -188,12 +188,15 @@ not constant expressions, and `var f: func(long)` without an
 initializer is refused because there is no zero function.
 
 A top-level or static namespace function becomes a value where a function
-type is expected. The expected signature supplies the landing shape,
-so an unannotated `let f = named_function` is refused. Function values
-copy freely, compare with `==` and `!=`, have no ordering, and
-`string(f)` gives the declared or compiler-generated function name.
+type is expected, and so does a **reading method bound to its
+receiver** — `doubling.times`, whose type is the method's with the
+receiver's parameter dropped. The expected signature supplies the
+landing shape, so an unannotated `let f = named_function` is refused.
+Function values copy freely, compare with `==` and `!=`, have no
+ordering, and `string(f)` gives the declared or compiler-generated
+function name — for a bound value, the method's qualified name.
 See [calls and lambdas](../expressions/#function-values-and-lambdas)
-for the expression forms and the capture rule.
+for the expression forms, the bind and the capture rule.
 
 ## struct
 

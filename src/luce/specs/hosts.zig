@@ -93,6 +93,26 @@ pub const World = struct {
     /// real one.  Two engines cannot agree on a wall clock, and what
     /// is under test is the marshalling, not the calendar.
     clock: i64 = 1_000,
+    /// The wall clock, on the same terms and for the same reason: a
+    /// plausible number of milliseconds since the Unix epoch, ticking
+    /// a fixed step per reading so two engines reading it twice each
+    /// still agree.  A spec proves that the reading crosses both host
+    /// tables intact and never goes backwards; what the real calendar
+    /// says is `apps/host.zig`'s business, and its own test's.
+    epoch: i64 = 1_755_000_000_000,
+    /// A world with no calendar: `epoch_ms` answers "cannot tell",
+    /// which the program meets as `host_unavailable` — the refusal a
+    /// null slot gives, arriving through a slot that is there.  The
+    /// same distinction `unmeasurable` draws for the machine facts.
+    timeless: bool = false,
+    /// The directories this world has been made to hold, one full path
+    /// per row.  A flat set rather than a tree: what a spec has to see
+    /// is *which* directories a call left behind, and since
+    /// `dir_create` makes the parents too, the set is the whole
+    /// answer.
+    made: [max_made_directories][64]u8 = undefined,
+    made_lengths: [max_made_directories]usize = @splat(0),
+    made_count: usize = 0,
     /// The machine this world claims to be, for the same reason the
     /// clock is not a real one: two engines cannot agree on what the
     /// real machine had free between the two runs, and what is under
@@ -139,6 +159,13 @@ pub const World = struct {
     const rows: i64 = 24;
     const cols: i64 = 80;
     const clock_step: i64 = 17;
+    /// The wall clock moves less per reading than the monotonic one,
+    /// so a spec printing both cannot confuse which it is looking at.
+    const epoch_step: i64 = 3;
+    /// How many directories one world may hold.  A `Capture` is fixed
+    /// buffers throughout (see the header), and a spec that wants a
+    /// deeper tree than this is a spec about the file system.
+    const max_made_directories = 16;
 
     const default_arguments = [_][]const u8{ "alpha", "beta" };
     const default_lines = [_][]const u8{ "first line", "second line" };
@@ -189,6 +216,73 @@ pub const World = struct {
     fn tick(self: *World) i64 {
         defer self.clock += clock_step;
         return self.clock;
+    }
+
+    /// What time this world says it is, or null for a world with no
+    /// calendar at all.
+    fn epochTick(self: *World) ?i64 {
+        if (self.timeless) return null;
+        defer self.epoch += epoch_step;
+        return self.epoch;
+    }
+
+    // -- directories ---------------------------------------------------
+
+    /// Make a directory and every directory leading to it, answering
+    /// whether there is one there now (`abi.DirCreateFn`).
+    ///
+    /// The two rules the service publishes are kept here rather than
+    /// asserted about: the parents are recorded alongside the leaf,
+    /// and a directory already in the set is a plain `true`.  A world
+    /// that refuses writes refuses this too, and the one *file* it
+    /// holds standing in the way is a refusal of its own — the caller
+    /// asked for a directory and there is not one.
+    fn createDirectory(self: *World, path: []const u8) bool {
+        const wanted = trimmedPath(path);
+        if (wanted.len == 0) return false;
+        if (self.refuse_writes) return false;
+        var at: usize = 0;
+        while (at < wanted.len) {
+            const stop = std.mem.indexOfScalarPos(u8, wanted, at, '/') orelse wanted.len;
+            const prefix = wanted[0..stop];
+            if (self.exists(prefix)) return false;
+            if (!self.hasDirectory(prefix)) {
+                if (self.made_count == max_made_directories) return false;
+                if (prefix.len > self.made[0].len) return false;
+                @memcpy(self.made[self.made_count][0..prefix.len], prefix);
+                self.made_lengths[self.made_count] = prefix.len;
+                self.made_count += 1;
+            }
+            at = stop + 1;
+        }
+        return true;
+    }
+
+    /// Whether this world holds a directory of that name.
+    fn hasDirectory(self: *const World, path: []const u8) bool {
+        const wanted = trimmedPath(path);
+        for (0..self.made_count) |row| {
+            if (std.mem.eql(u8, self.made[row][0..self.made_lengths[row]], wanted)) return true;
+        }
+        return false;
+    }
+
+    /// How many directories this world holds.
+    pub fn directoryCount(self: *const World) usize {
+        return self.made_count;
+    }
+
+    /// One directory's name, borrowed from this world.
+    pub fn directoryAt(self: *const World, row: usize) []const u8 {
+        return self.made[row][0..self.made_lengths[row]];
+    }
+
+    /// A path without its trailing separator, so "papers/" and
+    /// "papers" name the one directory they do on a real file system.
+    fn trimmedPath(path: []const u8) []const u8 {
+        var end = path.len;
+        while (end != 0 and path[end - 1] == '/') end -= 1;
+        return path[0..end];
     }
 
     /// The machine's three facts, or null for a world that cannot
@@ -878,9 +972,11 @@ pub const Capture = struct {
             .file_delete = if (provided.files) fileDelete else null,
             .file_rename = if (provided.files) fileRename else null,
             .dir_list = if (provided.files) dirList else null,
+            .dir_create = if (provided.files) dirCreate else null,
             .read_line = if (provided.input) readLine else null,
             .print_error = if (provided.diagnostics) printError else null,
             .clock_ms = if (provided.clock) clockMilliseconds else null,
+            .epoch_ms = if (provided.clock) epochMilliseconds else null,
             .sleep_ms = if (provided.clock) sleepMilliseconds else null,
             .exited = if (provided.exit) exited else null,
             .env = if (provided.environment) environmentValue else null,
@@ -1137,6 +1233,15 @@ pub const Capture = struct {
         return if (moved) .yes else .no;
     }
 
+    fn dirCreate(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+    ) callconv(.c) abi.Answer {
+        const made = of(context).world.createDirectory(path[0..@intCast(path_length)]);
+        return if (made) .yes else .no;
+    }
+
     fn dirList(
         context: ?*anyopaque,
         path: [*]const u8,
@@ -1173,6 +1278,10 @@ pub const Capture = struct {
 
     fn clockMilliseconds(context: ?*anyopaque) callconv(.c) i64 {
         return of(context).world.tick();
+    }
+
+    fn epochMilliseconds(context: ?*anyopaque, answer: *i64) callconv(.c) abi.Answer {
+        return told(of(context).world.epochTick(), answer);
     }
 
     fn totalMemory(context: ?*anyopaque, answer: *i64) callconv(.c) abi.Answer {
@@ -1296,9 +1405,11 @@ pub const Reference = struct {
             .file_delete = if (self.provided.files) deleteFile else null,
             .file_rename = if (self.provided.files) renameFile else null,
             .dir_list = if (self.provided.files) listDirectory else null,
+            .dir_create = if (self.provided.files) makeDirectory else null,
             .read_line = if (self.provided.input) readLine else null,
             .print_error = if (self.provided.diagnostics) printError else null,
             .clock_ms = if (self.provided.clock) clockMilliseconds else null,
+            .epoch_ms = if (self.provided.clock) epochMilliseconds else null,
             .sleep_ms = if (self.provided.clock) sleepMilliseconds else null,
             .env = if (self.provided.environment) environmentValue else null,
             .exited = if (self.provided.exit) exitedHook else null,
@@ -1344,6 +1455,10 @@ pub const Reference = struct {
         return of(context).world.rename(from, to);
     }
 
+    fn makeDirectory(context: *anyopaque, path: []const u8) bool {
+        return of(context).world.createDirectory(path);
+    }
+
     fn listDirectory(
         context: *anyopaque,
         arena: Allocator,
@@ -1370,6 +1485,10 @@ pub const Reference = struct {
 
     fn clockMilliseconds(context: *anyopaque) i64 {
         return of(context).world.tick();
+    }
+
+    fn epochMilliseconds(context: *anyopaque) ?i64 {
+        return of(context).world.epochTick();
     }
 
     fn sleepMilliseconds(context: *anyopaque, milliseconds: i64) void {

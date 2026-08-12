@@ -25,6 +25,7 @@ error, because file access genuinely does not exist there.
 | `files.delete(path) -> !` | deleting a path that is not there is `io_failed`, not a quiet success |
 | `files.rename(from, to) -> !` | moves a file, **replacing** an existing target |
 | `files.list(path) -> list(string)!` | the names in a directory, **sorted**; plain names, not paths |
+| `files.make_directory(path) -> !` | makes a directory **and every directory leading to it**; a directory already there is success |
 
 And the binary half, which is the same file seen as bytes:
 
@@ -57,6 +58,15 @@ the file system felt like, which differs between two machines holding
 the same files — and a program that prints a listing should print the
 same listing. The names are plain names: join them to the directory
 yourself.
+
+**`make_directory` means "there is a directory here when I return."**
+It makes the parents, so a nested layout is one call and not a
+splitting loop in every program; and a directory that was already
+there is success, so an install path never writes
+`if not files.exists(p)` in front of it — which would be exactly the
+check-then-act race `exists` is not allowed to be. A *file* holding
+the name is `io_failed`: you asked for a directory and there is not
+one.
 
 ```luce run
 import std.files

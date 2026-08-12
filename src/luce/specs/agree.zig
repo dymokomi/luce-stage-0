@@ -327,6 +327,17 @@ pub const Session = struct {
         return self.reference.error_origin.items;
     }
 
+    /// The directories the world holds now, in the order they were
+    /// made — parents before the leaves that needed them, because
+    /// `dir_create` makes them that way.  Both engines left this
+    /// behind; `settle` compared it.
+    pub fn directories(self: *const Session, into: [][]const u8) [][]const u8 {
+        const world = &self.reference.world;
+        const held = @min(into.len, world.directoryCount());
+        for (0..held) |row| into[row] = world.directoryAt(row);
+        return into[0..held];
+    }
+
     /// The one file the world holds now, or null when it holds none.
     /// Both engines left it this way — `settle` compared them.
     pub fn file(self: *const Session) ?struct { name: []const u8, content: []const u8 } {
@@ -437,6 +448,14 @@ fn sameWorld(reference: *const World, capture: *const World) !void {
     try testing.expectEqual(reference.keys_read, capture.keys_read);
     try testing.expectEqual(reference.lines_read, capture.lines_read);
     try testing.expectEqual(reference.clock, capture.clock);
+    try testing.expectEqual(reference.epoch, capture.epoch);
+    // The directories each arm made, in the order it made them: a
+    // `dir_create` that made a parent on one engine and not on the
+    // other is exactly the disagreement this comparison is for.
+    try testing.expectEqual(reference.directoryCount(), capture.directoryCount());
+    for (0..reference.directoryCount()) |row| {
+        try testing.expectEqualStrings(reference.directoryAt(row), capture.directoryAt(row));
+    }
 }
 
 // ---------------------------------------------------------------------------

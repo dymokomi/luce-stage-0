@@ -276,7 +276,8 @@ private const type_words = {
 
 private const builtin_words = {
     "abs": true, "assert": true, "ceil": true, "chr": true,
-    "clamp": true, "clock_ms": true, "dir_list": true, "env": true,
+    "clamp": true, "clock_ms": true, "dir_create": true, "dir_list": true,
+    "epoch_ms": true, "env": true,
     "error": true, "exit": true, "file_append": true, "file_delete": true,
     "file_exists": true, "file_open": true, "file_read": true,
     "file_rename": true, "file_write": true, "floor": true, "free": true,

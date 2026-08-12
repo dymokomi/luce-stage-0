@@ -408,24 +408,46 @@ linkage, no stability promise) and bought the whole error channel.
 
 ### Function values and indirect calls
 
-A function value is an `i32` index into `Program.functions`, not an
-address carried through the language.  `const_function` materialises
-that index.  `call_indirect` uses the interned signature attached to
-the value, performs the same call-depth check as a direct call, loads
-one pointer from the module's `luce.function_table`, and calls it with
-the same `%host`, `%rt`, `%depth`, value arguments and optional `%out`.
-The returned outcome takes the same unwind edge.  A fallible function
-cannot become a value, so the indirect shape has no error edge to lose.
+A function value is a **two-slot `runtime.Value` run** (docs/BINDING.md
+D12): slot 0 holds the `i32` index into `Program.functions`, slot 1 the
+receiver the value carries or `none`.  No address is carried through
+the language.  `const_function` builds that run with
+`luce_rt_struct_make`, the same call a struct literal makes, so the
+runtime learned a shape and not a semantic — it copies, releases and
+walks the run with the code it already had for struct field runs.  The
+run is built the same way whether a receiver is there or not, which is
+what lets a `func(...)` place hold a plain function, a lambda and a
+bind without any reader distinguishing them.
 
-The table is one pointer per Luce function in program order.  It is a
-private constant and is emitted only if a function value is made, so a
-program of direct calls carries no function-pointer machinery.  A
-second lazy table holds the corresponding names for `string(f)`; a
-named function gives its qualified name and a lambda gives the distinct
-compiler name synthesized from its source place.  The interpreter uses
-the same indices against its `mir.Function` table, which is why the
-differential specs exercise one representation rather than two
-unrelated dispatch rules.
+`call_indirect` reads slot 0, checks the run is really there and the
+index is really a function, performs the same call-depth check as a
+direct call, loads one pointer from the module's `luce.function_table`,
+and calls it with the same `%host`, `%rt`, `%depth`, **a pointer to
+slot 1**, the value arguments and the optional `%out`.  The returned
+outcome takes the same unwind edge.  A fallible function cannot become
+a value, so the indirect shape has no error edge to lose.
+
+**The table holds adapters, not functions.**  A call site cannot know
+whether the value in its hand carries a receiver — the type does not say
+— and a C signature is chosen at compile time, so every entry has the
+same shape with the receiver slot in it: `luce.bound.N` unboxes that
+slot into the callee's parameter zero when the value is a bind and
+ignores it when it is not.  One row per Luce function in program order,
+null for every function no value ever names (unreachable, because the
+adapters were collected from the same `const_function` instructions an
+index can only have come from).  It is a private constant emitted only
+if a function value is made, so a program of direct calls carries no
+function-pointer machinery.  The cost is one extra call frame per call
+*through a value*; the alternative was two calling conventions at a site
+that cannot tell them apart.  A second lazy table holds the
+corresponding names for `string(f)`; a named function gives its
+qualified name, a bind gives the method's qualified name, and a lambda
+gives the distinct compiler name synthesized from its source place.
+The interpreter needs no adapters — it has the program in front of it
+and prepends the receiver to the argument run — and uses the same
+indices against its `mir.Function` table, which is why the differential
+specs exercise one representation rather than two unrelated dispatch
+rules.
 
 The MIR verifier has two iterative containment checks: one for direct
 struct layout cycles, and one combined graph for anonymous heap-type
@@ -461,8 +483,9 @@ serialized module to **format 33**; none is a host service, so
 `abi.version` remains **13** at that point in the format history. The
 later appended `ownership_cycle` trap moves the module format to **34**;
 the subsequent `shell_run` host service moved it to **35** and the ABI
-to **14**; `term_event_data` moves the current format to **36** and the
-ABI to **15**.
+to **14**; `term_event_data` moved the format to **36** and the ABI to
+**15**; and the `dir_create` and `epoch_ms` services moved the format
+to **40** and the ABI to **16**, which is where the ABI still is.
 
 Every generated entry path calls one private `luce.constants`
 materializer before user code.  It constructs rows through the same
@@ -529,8 +552,10 @@ the local flag first moved the serialized module to format 32;
 program-root constants then moved it to 33, and the appended
 `ownership_cycle` trap moved the module format to **34**. The current
 `shell_run` service moved the format to **35** and the host ABI to **14**;
-the appended `term_event_data` service makes the current format **36**
-and ABI **15**.
+the appended `term_event_data` service moved the format to **36** and
+the ABI to **15**; the appended `dir_create` and `epoch_ms` services
+moved the format to **40** and the ABI to **16**, which is the current
+ABI.
 
 ## Call depth, and the trace a trap carries
 
@@ -1179,7 +1204,25 @@ may leave them untouched, and the payload of a key that never came is
 surface needed by Luce's worker values. **14** appended `shell_run`: one
 host-shell command returns captured standard output and standard error,
 with the exit status included in the transcript. A non-zero command exit
-is data; only failure to start the shell is an I/O error.
+is data; only failure to start the shell is an I/O error.  **15**
+appended `term_event_data`, the number-only query for the mouse
+coordinates, button, modifiers and wheel value of the event `key_read`
+just answered.
+
+**16** appended two unrelated services in one bump, because a version
+is a rebuild of every artifact there is and paying that twice in a week
+buys nothing.  `dir_create` makes a directory **and every directory
+leading to it**, and answers `yes` for one that was already there —
+both halves of "there is a directory at this path when I return",
+which is what keeps a caller out of the check-then-create race
+`file_exists` is documented never to be a guard against.  `epoch_ms`
+answers milliseconds since the Unix epoch, which `clock_ms` cannot: that
+clock is monotonic with an unspecified origin, so only its differences
+mean anything.  It takes the machine facts' shape — an out-parameter
+and an `Answer` — rather than `clock_ms`'s bare `i64`, because a host
+with no calendar has to be able to say so instead of inventing a date,
+and the program then traps `host_unavailable` exactly as it would
+against a null slot.
 
 Two shapes the version-8 slots settled, both of which stayed inside
 the conventions already there rather than inventing new ones:

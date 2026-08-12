@@ -259,7 +259,7 @@ const Replay = struct {
 
     fn ownsStorage(self: *const Replay, of: Type) bool {
         return switch (of) {
-            .string, .strukt, .variant => true,
+            .string, .strukt, .variant, .function => true,
             .optional => |payload| self.ownsStorage(payload.asType()),
             else => false,
         };
@@ -592,8 +592,30 @@ const Replay = struct {
                 );
             },
             .spawn => |worker| try self.replaySpawn(worker),
-            .function_value => |named| try self.code.emit(.{ .const_function = named.function }, named.result),
-            .lambda_ref => |made| try self.code.emit(.{ .const_function = made.function }, made.result),
+            .function_value => |named| try self.code.emit(
+                .{ .const_function = .{ .function = named.function } },
+                named.result,
+            ),
+            .lambda_ref => |made| try self.code.emit(
+                .{ .const_function = .{ .function = made.function } },
+                made.result,
+            ),
+            .bound_method => |bound| bind: {
+                const receiver = try self.replayValue(bound.receiver);
+                // **The receiver becomes the value's own here** (D3):
+                // the same store a struct field takes, so fresh storage
+                // moves in and a borrowed read is duplicated.  What the
+                // run holds is then released with the run.
+                const held = try self.ownedForStore(
+                    receiver,
+                    bound.receiver.result(),
+                    nodes.provenance(bound.receiver),
+                );
+                break :bind try self.code.emit(.{ .const_function = .{
+                    .function = bound.function,
+                    .receiver = held.register,
+                } }, bound.result);
+            },
         };
     }
 

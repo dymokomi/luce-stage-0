@@ -159,7 +159,10 @@ pub fn ownsStorage(self: *const Analyzer, of: Type) bool {
         // run to give back.  A union value is a run whose slot 0
         // is the tag, and owns it exactly the same way
         // (docs/UNION.md D8, D9).
-        .string, .strukt, .variant => true,
+        // A function value owns the two-slot run that holds the
+        // function it names and the receiver it carries, the same way
+        // and for the same reason (docs/BINDING.md D12).
+        .string, .strukt, .variant, .function => true,
         .optional => |payload| ownsStorage(self, payload.asType()),
         else => false,
     };

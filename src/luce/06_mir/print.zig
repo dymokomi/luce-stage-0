@@ -184,7 +184,15 @@ fn printInstruction(
         .const_double => |value| try appendPrint(text, allocator, "const {d}", .{value}),
         .const_string => |constant| try appendPrint(text, allocator, "const data#{d}", .{constant}),
         .const_container => |constant| try appendPrint(text, allocator, "const_container container#{d}", .{constant}),
-        .const_function => |named| try appendPrint(text, allocator, "const_function {s}", .{program.functions[named].name}),
+        .const_function => |named| if (named.receiver) |receiver|
+            try appendPrint(text, allocator, "const_function {s} bound r{d}", .{
+                program.functions[named.function].name,
+                receiver,
+            })
+        else
+            try appendPrint(text, allocator, "const_function {s}", .{
+                program.functions[named.function].name,
+            }),
         .local_get => |local| try appendPrint(text, allocator, "local_get %{d}", .{local}),
         .local_set => |set| try appendPrint(text, allocator, "local_set %{d}, r{d}", .{ set.local, set.value }),
         .binary => |binary| {

@@ -78,7 +78,7 @@ pub const builtins = [_][]const u8{
     "term_rows",       "term_cols",           "term_clear",   "term_move",   "term_style",
     "term_write",      "term_flush",          "key_read",     "key_text",    "exit",
     "os_total_memory", "os_available_memory", "os_cpu_count", "shell_run",   "file_open",
-    "term_event_data", "parse_string",
+    "term_event_data", "parse_string",        "dir_create",   "epoch_ms",
 };
 
 /// Names that mean something only behind a receiver: `xs.append(v)`,

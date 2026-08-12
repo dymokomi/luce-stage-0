@@ -229,6 +229,143 @@ test "the clock, the wait and the environment reach the host" {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Making a directory
+// ---------------------------------------------------------------------------
+//
+// Two rules the service publishes and these specs hold it to: it makes
+// the parents, and a directory already there is success.  Both are one
+// decision — the call means "there is a directory at this path when I
+// return" — and both are what keeps a caller out of a check-then-create
+// race.
+
+test "dir_create makes the directory, and the parents leading to it" {
+    var session = try agree.compare(
+        \\func main() -> !:
+        \\    try dir_create("store/packages/geo-1.2.0")
+        \\    print("made")
+        \\
+    , .{});
+    defer session.deinit();
+
+    var rows: [8][]const u8 = undefined;
+    const made = session.directories(&rows);
+    try testing.expectEqual(@as(usize, 3), made.len);
+    // Parents first, because that is the order they had to be made in.
+    try testing.expectEqualStrings("store", made[0]);
+    try testing.expectEqualStrings("store/packages", made[1]);
+    try testing.expectEqualStrings("store/packages/geo-1.2.0", made[2]);
+    try testing.expectEqualStrings("made\n", session.printed());
+}
+
+test "a directory already there is success, not an error" {
+    // The install path's whole shape: make it, make it again, and get
+    // on with the work.  If the second call raised, every caller would
+    // write an existence check in front of it, and that check is a
+    // race (docs/FAILURE.md).
+    var session = try agree.compare(
+        \\func main() -> !:
+        \\    try dir_create("papers")
+        \\    try dir_create("papers")
+        \\    dir_create("papers") catch:
+        \\        print("refused")
+        \\    print("still one")
+        \\
+    , .{});
+    defer session.deinit();
+
+    var rows: [8][]const u8 = undefined;
+    const made = session.directories(&rows);
+    try testing.expectEqual(@as(usize, 1), made.len);
+    try testing.expectEqualStrings("papers", made[0]);
+    try testing.expectEqualStrings("still one\n", session.printed());
+}
+
+test "a file in the way is an error the caller can catch" {
+    // The one refusal idempotence must not swallow: something is
+    // there, and it is not a directory.  News rather than a trap, like
+    // everything else the world decides.
+    var session = try agree.compare(
+        \\func main() -> !:
+        \\    try dir_create("notes.txt")
+        \\
+    , .{ .world = .withFile("notes.txt", "body") });
+    defer session.deinit();
+
+    try testing.expectEqual(mir.ErrorCode.io_failed, session.end.errored);
+    try testing.expectEqualStrings("cannot make directory notes.txt", session.message());
+}
+
+test "a world that refuses writes makes no directory at all" {
+    var session = try agree.compare(
+        \\func main():
+        \\    dir_create("a/b/c") catch:
+        \\        print("refused")
+        \\
+    , .{ .world = .{ .refuse_writes = true } });
+    defer session.deinit();
+
+    var rows: [8][]const u8 = undefined;
+    try testing.expectEqual(@as(usize, 0), session.directories(&rows).len);
+    try testing.expectEqualStrings("refused\n", session.printed());
+}
+
+// ---------------------------------------------------------------------------
+// The wall clock
+// ---------------------------------------------------------------------------
+
+test "epoch_ms answers what time it is, and never goes backwards" {
+    // What a spec can prove about a calendar is the shape of the
+    // answer and not the date: a plausible number of milliseconds
+    // since 1970 — long past the epoch, not yet the far future — and
+    // two readings in order.  What the *real* calendar says is
+    // `apps/host.zig`'s business, and its own test's.
+    try agree.prints(
+        \\func main():
+        \\    let first = epoch_ms()
+        \\    let second = epoch_ms()
+        \\    assert(first > 1000000000000)
+        \\    assert(first < 100000000000000)
+        \\    assert(second >= first)
+        \\    print("epoch ok")
+        \\
+    , "epoch ok\n");
+}
+
+test "the two clocks are two questions" {
+    // `clock_ms` measures a span and `epoch_ms` names a moment, which
+    // is why they are two builtins and not one: this world's monotonic
+    // clock starts at a thousand and its calendar in 2025, and a
+    // program reading both gets both.
+    try agree.prints(
+        \\func main():
+        \\    print(string(clock_ms()))
+        \\    print(string(epoch_ms()))
+        \\    print(string(clock_ms()))
+        \\    print(string(epoch_ms()))
+        \\
+    ,
+        \\1000
+        \\1755000000000
+        \\1017
+        \\1755000000003
+        \\
+    );
+}
+
+test "a host with no calendar refuses rather than inventing a date" {
+    // The other road to the same trap: the slot is *there* and the
+    // host says it cannot tell.  A number would be a lie the program
+    // could not see through (`apps/machine.zig`'s rule).
+    var provided: agree.Provided = .{};
+    provided.world.timeless = true;
+    try agree.trapGiven(
+        \\func main():
+        \\    print(string(epoch_ms()))
+        \\
+    , provided, .host_unavailable);
+}
+
 test "every host service fails closed when the host withholds it" {
     const cases = [_][]const u8{
         \\func main():
@@ -266,6 +403,14 @@ test "every host service fails closed when the host withholds it" {
         \\func main() -> !:
         \\    let names = try dir_list(".")
         \\    free(names)
+        \\
+        ,
+        \\func main() -> !:
+        \\    try dir_create("x")
+        \\
+        ,
+        \\func main():
+        \\    print(string(epoch_ms()))
         \\
         ,
         \\func main():

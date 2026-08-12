@@ -26,13 +26,12 @@
 # it belongs to, halfway through — and the entries already written stay
 # where they are, exactly as `unzip` leaves them.
 #
-# **One thing zipper cannot do, and says so rather than half-doing.**
-# There is no directory-creating builtin (docs/MISSING.md, tier 5), so
-# an entry inside a directory can be extracted only where that
-# directory already exists.  zipper checks before it writes anything
-# and names the directory that is missing; it never writes half an
-# archive and never invents a flattened name for a file whose place in
-# the tree it could not make.
+# **Directories an archive names, zipper makes.**  `files.make_directory`
+# makes the parents too and treats one already there as success, so
+# extracting `papers/note.txt` into an empty directory works the way
+# `unzip` does — no flattened names, and no asking the person to go and
+# make the tree by hand first.  The names are still checked whole before
+# anything is written, so a hostile archive leaves the disk untouched.
 
 import std.zip
 import std.files
@@ -104,36 +103,36 @@ func method_of(entry: zip.Entry) -> string:
 
 # Extract every entry into `into`, which must already be there.
 #
-# Two passes on purpose: nothing is written until every name in the
-# archive has passed the gate and every directory it needs has been
-# found.  A hostile archive is refused whole, and a merely awkward one
-# — an entry under a directory that does not exist — leaves the disk
-# exactly as it found it instead of half an extraction.
+# Two passes on purpose, and the first one still writes nothing: every
+# name in the archive goes through the gate before the first byte lands,
+# so a hostile archive is refused whole and leaves the disk exactly as
+# it found it.  The second pass makes each entry's directory as it
+# reaches it — `make_directory` makes the parents and does not mind one
+# that is already there, so this is a call and not a bookkeeping
+# problem.
 func unzip_archive(path: string, into: string) -> !:
     let archive = try zip.read(path)
     let entries = try zip.entries(archive)
     if not files.exists(into):
         error("zipper: " + into + " is not there to extract into")
 
+    var names: list(string) = []
     for entry in entries:
         let name = try safe_name(entry.name())
+        names.append(name)
+
+    var written: long = 0
+    for index, entry in entries:
+        let name = names[index]
         let target = paths.join(into, name)
         if strings.ends_with(name, "/"):
             # A name ending in "/" is a directory and has no contents
-            # (APPNOTE 4.4.17.1).  zipper cannot make one.
-            if not files.exists(target):
-                error("zipper: " + name + " is a directory, and zipper cannot make one — make " + target + " and run again")
+            # (APPNOTE 4.4.17.1) — so making it is the whole of
+            # extracting it.
+            try files.make_directory(target)
         else:
-            let holder = paths.dir(target)
-            if not files.exists(holder):
-                error("zipper: " + holder + " is not there, and zipper cannot make a directory — make it and run again")
-
-    var written: long = 0
-    for entry in entries:
-        let name = entry.name()
-        if not strings.ends_with(name, "/"):
+            try files.make_directory(paths.dir(target))
             let data = try zip.extract(archive, entry)
-            let target = paths.join(into, name)
             try files.write_bytes(target, data)
             print("  " + strings.pad_left(string(len(data)), 10) + "  " + target)
             written += 1

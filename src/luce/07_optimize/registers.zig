@@ -35,12 +35,16 @@ pub fn mapOperands(
         .const_double,
         .const_string,
         .const_container,
-        .const_function,
         .local_get,
         .jump,
         .trap,
         .unwind,
         => {},
+        // A bound function value names a register: the receiver it
+        // carries (docs/BINDING.md D12).
+        .const_function => |*named| {
+            if (named.receiver) |receiver| named.receiver = map[receiver];
+        },
         .local_set => |*set| set.value = map[set.value],
         .binary => |*binary| {
             binary.left = map[binary.left];
@@ -92,12 +96,14 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
         .const_double,
         .const_string,
         .const_container,
-        .const_function,
         .local_get,
         .jump,
         .trap,
         .unwind,
         => {},
+        .const_function => |named| {
+            if (named.receiver) |receiver| used[receiver] = true;
+        },
         .local_set => |set| used[set.value] = true,
         .binary => |binary| {
             used[binary.left] = true;

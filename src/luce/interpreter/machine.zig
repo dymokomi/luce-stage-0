@@ -912,14 +912,46 @@ pub const Machine = struct {
                     .const_container => |constant| {
                         registers[item] = self.runtime.constant(constant);
                     },
-                    // A function value is the index of the function it
-                    // names, and an `int` underneath (docs/FUNCTIONS.md
-                    // D2) — the same value the compiled path holds, so
-                    // the two engines compare and print alike.
-                    .const_function => |named| registers[item] = .ofInt(@intCast(named)),
+                    // A function value is a two-slot run: the function
+                    // it names, then the receiver it carries or `none`
+                    // (docs/BINDING.md D12).  A struct value, built the
+                    // way struct values are built, so the compiled path
+                    // holds the same bytes and the two engines compare
+                    // and print alike.
+                    .const_function => |named| {
+                        self.field_scratch.clearRetainingCapacity();
+                        try self.field_scratch.ensureTotalCapacity(
+                            self.arena,
+                            mir.function_run_length,
+                        );
+                        self.field_scratch.appendAssumeCapacity(.ofInt(@intCast(named.function)));
+                        self.field_scratch.appendAssumeCapacity(
+                            if (named.receiver) |receiver| registers[receiver] else .none,
+                        );
+                        registers[item] = self.runtime.makeStruct(self.field_scratch.items) catch |mistake|
+                            return self.caught(mistake);
+                    },
                     .local_get => |local| registers[item] = self.localSlot(frame, local).*,
                     .local_set => |set| self.localSlot(frame, set.local).* = registers[set.value],
                     .binary => |operation| {
+                        // A function value compares by the function it
+                        // names, and by nothing else (FUNCTIONS.md D3).
+                        // It is answered here rather than in
+                        // `libluce_rt` for the reason the whole seam
+                        // exists: a run of two values is all the
+                        // runtime sees, and which run is a function
+                        // value is a fact about the program's types.
+                        if (operation.operand_type == .function) {
+                            const left = self.boundValue(registers[operation.left]) orelse
+                                return self.trap(.null_object);
+                            const right = self.boundValue(registers[operation.right]) orelse
+                                return self.trap(.null_object);
+                            const same = left.named == right.named;
+                            registers[item] = .ofBoolean(
+                                if (operation.op == .equal) same else !same,
+                            );
+                            continue;
+                        }
                         registers[item] = operators.binary(
                             &self.runtime,
                             operation.op,
@@ -1035,21 +1067,29 @@ pub const Machine = struct {
                     // instruction, and everything after that is the
                     // call above, unchanged (docs/FUNCTIONS.md D2).
                     .call_indirect => |called| {
-                        self.argument_scratch.clearRetainingCapacity();
-                        try self.argument_scratch.ensureTotalCapacity(self.arena, called.arguments.len);
-                        for (called.arguments) |argument| {
-                            self.argument_scratch.appendAssumeCapacity(registers[argument]);
-                        }
                         // The value names a function or it names
                         // nothing, and nothing is what an unwritten slot
                         // holds; the compiled path makes the same
                         // refusal at the same call.
-                        const named = registers[called.callee].asInt();
-                        if (named < 0 or named >= self.program.functions.len) {
+                        const bound = self.boundValue(registers[called.callee]) orelse
                             return self.trap(.null_object);
+                        self.argument_scratch.clearRetainingCapacity();
+                        try self.argument_scratch.ensureTotalCapacity(
+                            self.arena,
+                            called.arguments.len + 1,
+                        );
+                        // **The receiver is argument zero**, exactly
+                        // where the callee's own parameter zero is, so a
+                        // bound call is the direct call it always was
+                        // with one more value in front (BINDING.md D12).
+                        if (bound.receiver) |receiver| {
+                            self.argument_scratch.appendAssumeCapacity(receiver);
+                        }
+                        for (called.arguments) |argument| {
+                            self.argument_scratch.appendAssumeCapacity(registers[argument]);
                         }
                         if (try self.pushFrame(
-                            @intCast(named),
+                            bound.named,
                             self.argument_scratch.items,
                             item,
                             null,
@@ -1225,6 +1265,30 @@ pub const Machine = struct {
         };
     }
 
+    /// What a function value holds: the function it names, and the
+    /// receiver it carries or nothing (docs/BINDING.md D12).
+    const Bound = struct { named: u32, receiver: ?RuntimeValue };
+
+    /// Read one, or null when the value names no function at all —
+    /// which is what an unwritten function-typed slot holds, and what a
+    /// hand-made module could put anywhere.
+    ///
+    /// Every reader of a function value goes through here, so the
+    /// refusal is written once and says the same thing the compiled
+    /// path's `namedFunction` says at the same place.
+    fn boundValue(self: *Machine, held: RuntimeValue) ?Bound {
+        if (held.tag != .strukt or held.bits == 0) return null;
+        const slots = held.asStruct();
+        if (slots.len != mir.function_run_length) return null;
+        const named = slots[mir.function_run_named].asInt();
+        if (named < 0 or named >= self.program.functions.len) return null;
+        const receiver = slots[mir.function_run_receiver];
+        return .{
+            .named = @intCast(named),
+            .receiver = if (receiver.tag == .none) null else receiver,
+        };
+    }
+
     /// The zero value a fresh local or array element carries, per type.
     pub fn zeroValue(self: *Machine, written: types.Type) error{OutOfMemory}!RuntimeValue {
         // An enum-typed slot starts at the enum's **first declared
@@ -1259,10 +1323,10 @@ pub const Machine = struct {
             // The slot fill of a function-typed local, which nothing a
             // program can write ever reads: stage 4 refuses the one
             // declaration that would ask for a function value's zero,
-            // and a `call_indirect` through this index refuses at the
-            // call, exactly as the compiled path does
-            // (docs/FUNCTIONS.md, As built).
-            .function => .ofInt(-1),
+            // and every reader of one refuses the run that is nowhere,
+            // exactly as the compiled path does (docs/FUNCTIONS.md, As
+            // built; docs/BINDING.md D12).
+            .function => .{ .tag = .strukt },
             .strukt => |layout_index| blk: {
                 // One shared zero template per layout, built on first
                 // use.  Sharing the fields slice across every
@@ -1585,11 +1649,9 @@ pub const Machine = struct {
             // the name lives as long as the program does, which is what
             // the compiled path's constant table is too.
             .function_name => {
-                const named = registers[arguments[0]].asInt();
-                if (named < 0 or named >= self.program.functions.len) {
+                const bound = self.boundValue(registers[arguments[0]]) orelse
                     return self.runtime.fail(.null_object);
-                }
-                return .ofString(self.program.functions[@intCast(named)].name);
+                return .ofString(self.program.functions[bound.named].name);
             },
             .parse_int => return text.parseInt(&self.runtime, registers[arguments[0]]),
             .parse_float => return text.parseFloat(&self.runtime, registers[arguments[0]]),
@@ -1702,6 +1764,16 @@ pub const Machine = struct {
                 }
                 return .none;
             },
+            .dir_create => {
+                const host = try self.service();
+                const callback = host.dir_create orelse
+                    return self.runtime.fail(.host_unavailable);
+                const path = registers[arguments[0]].asString();
+                if (!callback(host.context, path)) {
+                    self.runtime.raiseIo(.make, path, self.placeOf(site));
+                }
+                return .none;
+            },
             .dir_list => {
                 const host = try self.service();
                 const callback = host.dir_list orelse
@@ -1738,6 +1810,15 @@ pub const Machine = struct {
                 const host = try self.service();
                 const callback = host.clock_ms orelse return self.runtime.fail(.host_unavailable);
                 return .ofLong(callback(host.context));
+            },
+            // A host that cannot tell the time refuses the call, the
+            // same way one that cannot measure its machine does —
+            // `machineFact` is that refusal, and the wall clock takes
+            // it rather than a number nobody could stand behind.
+            .epoch_ms => {
+                const host = try self.service();
+                const callback = host.epoch_ms orelse return self.runtime.fail(.host_unavailable);
+                return self.machineFact(callback(host.context));
             },
             .os_total_memory => {
                 const host = try self.service();

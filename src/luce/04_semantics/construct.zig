@@ -1261,7 +1261,11 @@ pub fn lowerIntrinsic(
                 return failIntrinsic(self, call, "print_error takes a string");
             result = .none;
         },
-        .clock_ms => {
+        // Two clocks, and the name is what tells them apart: `clock_ms`
+        // is monotonic and only its differences mean anything, while
+        // `epoch_ms` counts from a fixed origin and its reading is the
+        // answer (docs/LANGUAGE.md).
+        .clock_ms, .epoch_ms => {
             result = .long;
         },
         // Bytes, bytes and a count.  `long` and not `int` for the
@@ -1294,6 +1298,15 @@ pub fn lowerIntrinsic(
         .file_delete => {
             if (arguments[0].value_type != .string)
                 return failIntrinsic(self, call, "file_delete takes a string path");
+            result = .none;
+        },
+        // Making a directory answers nothing for the reason a write
+        // does: the world decided, so what it said travels in the
+        // error channel and every call site says which of `try` and
+        // `catch` it means (docs/FAILURE.md).
+        .dir_create => {
+            if (arguments[0].value_type != .string)
+                return failIntrinsic(self, call, "dir_create takes a string path");
             result = .none;
         },
         .file_rename => {

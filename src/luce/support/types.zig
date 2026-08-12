@@ -83,12 +83,21 @@ pub const Type = union(enum) {
     /// way heap shapes are, so two identically written function types
     /// share one index and equality is an index comparison.
     ///
-    /// **Underneath it is a number.**  A function value is the index of
-    /// the function it names in the program's function table — which is
-    /// why `storage()` answers `.int` for one and why nothing in
-    /// `libluce_rt` learns a thing (docs/FUNCTIONS.md D2): to a machine
-    /// it is an `int`, and only the type table knows which signature the
-    /// int is allowed to be called at.
+    /// **Underneath it is a pair**: the index of the function it names
+    /// in the program's function table, and the receiver it travels
+    /// with — empty for a plain function value and a lambda, a whole
+    /// value for a bound method (docs/BINDING.md D12).  Both engines
+    /// carry the pair as a two-slot field run, which is why `boxTag`
+    /// answers `.strukt` for one and why `libluce_rt` still learns
+    /// nothing: to the runtime it is a run of two values, and only the
+    /// type table knows which signature the pair may be called at.
+    ///
+    /// **The receiver's type is not in this type**, on purpose: one
+    /// `func(Point, Point) -> bool` place accepts a plain function, a
+    /// lambda, and a bind of any receiver whose method has that shape.
+    /// What a value carries is therefore a property of the value, not
+    /// of its type, and the run is self-describing so no reader needs
+    /// the type to walk one.
     function: u32,
     /// `T?` — a `T` that may be absent (docs/FAILURE.md).  `?` means
     /// nullable and only nullable; it never carries a reason.
@@ -225,10 +234,6 @@ pub const Type = union(enum) {
     pub fn storage(self: Type) Type {
         return switch (self) {
             .enumeration => |reference| reference.backing.asType(),
-            // A function value is the index of the function it names
-            // (docs/FUNCTIONS.md D2).  One sentence here is what keeps
-            // every engine-side switch from growing an arm for it.
-            .function => .int,
             // **A variant answers with itself, never as a `.strukt`
             // with a different index** (docs/UNION.md D8): a variant
             // index names a row of `Program.variants` and a struct

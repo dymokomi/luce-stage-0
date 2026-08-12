@@ -141,6 +141,11 @@ pub const FileAct = enum(i32) {
     flush,
     /// A host shell could not be started for `std.os.shell.run`.
     run,
+    /// A directory `dir_create` was asked for is not there and could
+    /// not be made — the permission was refused, or something that is
+    /// not a directory holds the name.  Appended, so nothing
+    /// renumbers.
+    make,
 
     /// A static string, with its trailing space; the caller owns
     /// nothing.
@@ -155,6 +160,7 @@ pub const FileAct = enum(i32) {
             .open => "cannot open ",
             .flush => "cannot flush ",
             .run => "cannot run ",
+            .make => "cannot make directory ",
         };
     }
 };

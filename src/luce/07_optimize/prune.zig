@@ -87,7 +87,7 @@ fn functionSlot(instruction: *Instruction) ?*u32 {
         // `call_indirect` naming no function at all — so without this
         // arm a comparator passed to `sort_by` would be pruned out from
         // under the value that names it (docs/FUNCTIONS.md D2).
-        .const_function => |*named| named,
+        .const_function => |*named| &named.function,
         // Everything else: `call_indirect` carries its callee in a
         // register, and the rest is data, storage or control flow.
         .const_boolean,

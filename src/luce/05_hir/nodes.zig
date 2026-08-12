@@ -298,6 +298,9 @@ pub const Expression = union(enum) {
     /// A lambda, after the analyzer synthesized its declaration — a
     /// function value that remembers it was written in place.
     lambda_ref: LambdaRef,
+    /// `receiver.method` where a function type lands — a function
+    /// value whose environment is the receiver (docs/BINDING.md D1).
+    bound_method: BoundMethod,
 
     // Payloads --------------------------------------------------------------
 
@@ -654,6 +657,21 @@ pub const Expression = union(enum) {
     pub const LambdaRef = struct {
         /// The synthesized declaration's function table index.
         function: u32,
+        result: Type,
+        span: Span,
+        park: ?Park = null,
+    };
+
+    pub const BoundMethod = struct {
+        /// The method's function table index.  **Its parameter zero is
+        /// the receiver**, which the value carries rather than takes,
+        /// so the type this expression wears is one parameter shorter
+        /// than the declaration (docs/BINDING.md D1).
+        function: u32,
+        /// The receiver, copied into the value at the bind (D3).  What
+        /// the value holds is its own from here on, which is why a
+        /// bound value releases like the struct value it contains.
+        receiver: NodeRef,
         result: Type,
         span: Span,
         park: ?Park = null,
@@ -1102,8 +1120,10 @@ pub fn provenance(expression: *const Expression) Provenance {
         .copy => .fresh,
         // A task is a resource, not storage.
         .spawn => .plain,
-        // A function value is a number (docs/FUNCTIONS.md D2).
-        .function_value, .lambda_ref => .plain,
+        // Built whole, exactly as a struct value is: a function value
+        // owns the two-slot run holding the function it names and the
+        // receiver it carries (docs/BINDING.md D12).
+        .function_value, .lambda_ref, .bound_method => .fresh,
     };
 }
 
@@ -1213,6 +1233,7 @@ pub fn splitsBlocks(expression: *const Expression, declared: Declarations) bool 
         // them, because the call itself runs on the worker's runtime
         // and its own fallibility never reaches this frame.
         .spawn => |worker| splitsBatch(worker.call.call.operands, declared),
+        .bound_method => |bound| splitsBlocks(bound.receiver, declared),
     };
 }
 
@@ -1508,10 +1529,19 @@ test "provenance mirrors the storage categories the walk stamps" {
     try testing.expectEqual(Provenance.fresh, provenance(copied));
     const worker = try node(arena, .{ .spawn = .{ .call = called, .result = .{ .heap = 1 }, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(worker));
+    // A function value is built whole and owns the run holding the
+    // function it names and the receiver it carries, bound or not.
     const named = try node(arena, .{ .function_value = .{ .function = 2, .result = .{ .function = 0 }, .span = test_span } });
-    try testing.expectEqual(Provenance.plain, provenance(named));
+    try testing.expectEqual(Provenance.fresh, provenance(named));
     const synthesized = try node(arena, .{ .lambda_ref = .{ .function = 3, .result = .{ .function = 0 }, .span = test_span } });
-    try testing.expectEqual(Provenance.plain, provenance(synthesized));
+    try testing.expectEqual(Provenance.fresh, provenance(synthesized));
+    const bound = try node(arena, .{ .bound_method = .{
+        .function = 4,
+        .receiver = name,
+        .result = .{ .function = 0 },
+        .span = test_span,
+    } });
+    try testing.expectEqual(Provenance.fresh, provenance(bound));
 
     // The two folded/widened materializations that ride construction:
     // a wrapped optional is a new plain value whatever its payload

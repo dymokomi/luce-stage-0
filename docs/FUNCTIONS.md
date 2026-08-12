@@ -140,6 +140,23 @@ at the ratified minimum: `std.lists` provides stable O(n log n)
 `xs.sort_by(before)` for every list element type, routed through method
 syntax after `import std.lists`; `keep` and `find_by` remain deferred.
 
+## BINDING amendment — 2026-08-11
+
+**D1's second sentence is retired.**  Methods *are* function values
+now, bound to the receiver they were written on: `receiver.method`
+where a `func(T, ...) -> R` lands is a value whose environment is that
+receiver, with the receiver's parameter dropped from the written type.
+The capture line D1 drew is unmoved — the environment is a struct the
+program declared, with a name, a layout and an ownership class — and
+what changed is that Luce now spells the struct-with-a-method answer as
+a value rather than only recommending it.  docs/BINDING.md is the
+design and its *As built* section is what shipped; the lambda's refusal
+of capture (S3, D10 there) stands permanently.
+
+D2's "a function value is an index" is likewise one version old: it is
+now the pair `{function, receiver}`, carried as a two-slot field run.
+`libluce_rt` still learns nothing — the run is a struct's run.
+
 ## SELF clarification — 2026-08-08
 
 D1 is unchanged under implied self: methods still cannot be function

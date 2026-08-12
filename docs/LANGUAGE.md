@@ -553,9 +553,40 @@ A named top-level or `static` namespace function is a value where a function
 type is expected: `ascending`, `Scale.twice`, `math.round`.  The place
 supplies the signature, just as a numeric place supplies a literal's
 width.  With no such place, `let f = ascending` is refused and the
-diagnostic asks for an annotation.  A method reference is also refused:
-`p.length` would carry `p`, and carrying an environment is capture.
-Write a lambda that receives the value again, `(p) -> p.length()`.
+diagnostic asks for an annotation.
+
+**A reading method bound to a receiver is a value in the same places**
+(docs/BINDING.md): `doubling.times` where a `func(long) -> long` is
+expected is a function value whose environment is `doubling`, with the
+receiver's parameter dropped from the written type.  There is no
+marker; the landing place is what makes it a bind, exactly as it is for
+a bare function name.
+
+```luce
+struct Scale:
+    factor: long
+
+    func times(n: long) -> long:
+        return n * self.factor
+
+func apply(f: func(long) -> long, value: long) -> long:
+    return f(value)
+
+func main():
+    let doubling = Scale(factor = 2)
+    print(string(apply(doubling.times, 21)))
+```
+
+The receiver is **copied into the value** at the bind, so the value
+carries its own state and writing the original afterwards does not
+reach it.  `string(f)` answers the method's qualified name.
+
+Three things do not bind in this run and each says so by name: a
+**writing** method (its store-back discipline is its own design), a
+**fallible** method (a function type still carries no `!`), and a
+receiver that **carries objects** — a list, a map, an array, a resource,
+or a struct holding one.  Bind a method of a value-only receiver, or
+pass the receiver to a top-level function.
 
 A lambda is a parenthesized list of bare parameter names, `->`, and
 one expression:
@@ -577,7 +608,8 @@ parameters, visible functions and file-scope constants.  It may not
 name a local from the surrounding function, including a surrounding
 function-valued local in call position: **a lambda carries no
 environment**.  State that travels with behavior is a struct with a
-method.
+method — and that struct's reading methods bind, which is how the
+sentence became something a program can write.
 
 A call through a function value is positional.  Its type carries no
 parameter names or defaults, so `f(value = 1)` is refused even when the
@@ -593,7 +625,8 @@ nested function type.
 
 The proving standard-library customer is stable comparator sorting:
 after `import std.lists`, `xs.sort_by(before)` takes
-`func(T, T) -> bool` for a `list(T)`.  It is ordinary std Luce routed
+`func(T, T) -> bool` for a `list(T)` — a named function, a lambda, or a
+comparator bound to the state it sorts by.  It is ordinary std Luce routed
 through method syntax, not a new runtime builtin.
 
 ## Calls: names at the site, defaults at the declaration
@@ -703,11 +736,12 @@ dynamic dispatch or reference type.  `Point.length(p)` is refused:
 methods are called through their receiver, while `Point.origin()` is
 the namespace call its `static` declaration promises.
 
-That distinction reaches function values and workers too.  A method
-reference such as `p.length` or `Point.length` would carry a receiver,
-so it is not a value and cannot be spawned.  `Point.origin`, like any
-top-level or other static function, is a value where
-`func() -> Point` is expected and may be a worker target.
+That distinction reaches function values and workers too.  `p.length`
+is a value — a **bound** one, carrying `p` (docs/BINDING.md) — while
+`Point.length` is not: a method is reached through a receiver, and the
+type is not one.  A method cannot be spawned in either spelling.
+`Point.origin`, like any top-level or other static function, is a value
+where `func() -> Point` is expected and may be a worker target.
 
 **Whether a method writes `self` is inferred, not declared.**  A
 store to `self` or one of its value fields makes it a writer, as does
@@ -1176,6 +1210,7 @@ env(name)                    # string?  — none when unset
 shell_run(command)           # string! — host shell transcript and exit status
 
 clock_ms()                   # long, monotonic, unspecified origin
+epoch_ms()                   # long, milliseconds since the Unix epoch
 sleep_ms(milliseconds)       # waits at least that long
 
 file_read(path)              # string!
@@ -1185,6 +1220,7 @@ file_delete(path)            # !
 file_rename(from, to)        # !
 file_exists(path)            # bool — a question, never a guard
 dir_list(path)               # list(string)! — plain names, unsorted
+dir_create(path)             # ! — the parents too; already there is ok
 file_open(path, mode)         # file! — 0 read, 1 write, 2 append
 
 term_rows()   term_cols()   term_clear()   term_move(row, col)
@@ -1199,6 +1235,27 @@ os_total_memory()            # long — bytes the machine has
 os_available_memory()        # long — bytes it could still hand out
 os_cpu_count()               # long — logical processors
 ```
+
+**Two clocks, told apart by their names.**  `clock_ms` counts from an
+origin nobody specifies, so only differences mean anything and it is
+what a span is measured with; `epoch_ms` counts from
+1970-01-01T00:00:00Z, so its reading *is* the answer and it is what a
+timestamp is made of.  An operator can set the wall clock backwards, so
+a duration measured with `epoch_ms` can come out negative — which is why
+the two are two builtins and not one.  Turning `epoch_ms` into a date is
+a library nobody has written; this is the number that library will be
+built on.  A host with no calendar refuses `epoch_ms` with
+`host_unavailable` rather than inventing a number, which is why it takes
+the machine facts' fallible shape and not `clock_ms`'s bare one.
+
+**`dir_create` means "there is a directory at this path when I
+return."**  That one sentence decides its two rules together: it makes
+every directory leading to the one asked for, and a directory already
+there is success rather than a failure.  The alternative puts the same
+splitting loop in every program and a `file_exists` in front of every
+call — and that check is a race, which is exactly what `file_exists` is
+documented never to be a guard for.  A *file* holding the name is still
+`io_failed`: the caller asked for a directory and there is not one.
 
 `file_open` is the primitive under `std.files.open`, `create`, and
 `append_to`; ordinary code uses those named doors rather than the mode

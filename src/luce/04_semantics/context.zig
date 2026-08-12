@@ -232,7 +232,8 @@ pub const reserved_names = [_][]const u8{
     "file_append", "file_delete",  "file_rename",     "dir_list",            "term_rows",
     "term_cols",   "term_clear",   "term_move",       "term_style",          "term_write",
     "term_flush",  "exit",         "os_total_memory", "os_available_memory", "os_cpu_count",
-    "file_open",   "parse_string", "shell_run",       "term_event_data",
+    "file_open",   "parse_string", "shell_run",       "term_event_data",     "dir_create",
+    "epoch_ms",
 };
 
 pub fn isReserved(name: []const u8) bool {

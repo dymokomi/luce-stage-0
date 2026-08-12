@@ -315,8 +315,19 @@ pub const Value = extern struct {
     /// It lives as long as the run does: until `luce_rt_close`, or
     /// until the storage is dropped.  Empty for a struct with no
     /// fields.
+    /// The field run this value holds, or the empty run when it holds
+    /// none.
+    ///
+    /// **A value with no run reads as the empty run**, whichever of the
+    /// two words says so.  `length` is zero for a struct with no fields;
+    /// `bits` is zero for a slot that was never written, whose length
+    /// may still be the one its *type* fixes — a function value's run is
+    /// always two slots long, so its unwritten form is a null address
+    /// with a length of two (docs/BINDING.md D12).  `dropStorage` has
+    /// always read both words this way; reading them here is what makes
+    /// every other walk agree with it.
     pub fn asStruct(self: Value) []Value {
-        if (self.length == 0) return &.{};
+        if (self.length == 0 or self.bits == 0) return &.{};
         const fields: [*]Value = @ptrFromInt(@as(usize, @intCast(self.bits)));
         return fields[0..@intCast(self.length)];
     }

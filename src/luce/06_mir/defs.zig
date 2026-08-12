@@ -43,13 +43,28 @@ pub fn boxTag(of: Type) ?value.Tag {
         // runtime is handed a value and never a program's type table,
         // and what it has to know about one is its width.
         .enumeration => |reference| boxTag(reference.backing.asType()),
-        // A function value boxes as the `int` it is
-        // (docs/FUNCTIONS.md D2) — the same sentence the enum arm above
-        // says, one type later.
-        .function => .int,
+        // A function value is a two-slot field run — the function it
+        // names and the receiver it carries — so it boxes as the struct
+        // it is (docs/BINDING.md D12).  The runtime is handed a run and
+        // never a program's type table, which is the whole reason a
+        // receiver of any shape can travel in one.
+        .function => .strukt,
         .optional => null,
     };
 }
+/// A function value's field run: how long it is, and which slot holds
+/// what (docs/BINDING.md D12).
+///
+/// Here beside `boxTag` and for its reason — **both engines build one
+/// and both engines read one**, and a disagreement about which slot is
+/// which would not show up as a shape error anywhere, only as a program
+/// calling the wrong thing.  The run is the same two slots whether the
+/// value carries a receiver or not, so nothing downstream branches on
+/// boundness to find its way around one.
+pub const function_run_length: usize = 2;
+pub const function_run_named: usize = 0;
+pub const function_run_receiver: usize = 1;
+
 pub const BlockId = u32;
 pub const LocalId = u32;
 
@@ -203,6 +218,29 @@ pub const Intrinsic = enum {
     /// `host_unavailable` like every other withheld service.
     clock_ms,
     sleep_ms,
+    /// `epoch_ms()` — milliseconds since the Unix epoch, which is a
+    /// different question from `clock_ms`'s and deliberately next to
+    /// it.
+    ///
+    /// **Named for what it counts from, not for what it measures.**
+    /// `clock_ms` is monotonic with an unspecified origin, so only
+    /// differences mean anything; this one has a fixed origin and its
+    /// *reading* is the answer.  A name like `time_ms` or `now_ms`
+    /// would leave the pair distinguished only by which of the two a
+    /// reader happened to learn first, and mistaking them is the
+    /// classic bug in both directions — timing a span with a clock an
+    /// operator can set backwards, or stamping a record with a number
+    /// that means nothing off this machine.  `epoch_ms` cannot be
+    /// read as elapsed time by anybody.
+    ///
+    /// A host that cannot tell the time refuses with
+    /// `host_unavailable` rather than inventing a number, which is why
+    /// its slot answers through the `Answer` convention the way the
+    /// machine facts do and not as a bare number the way `clock_ms`
+    /// does.  A calendar is still a library nobody has written
+    /// (docs/MISSING.md): this answers the one number a calendar would
+    /// be built on.
+    epoch_ms,
     /// One environment variable, or absent when it is unset.  Absence
     /// again, for the same reason `read_line`'s is: "not set" is the
     /// same fact every time and carries no news.
@@ -214,6 +252,26 @@ pub const Intrinsic = enum {
     file_delete,
     file_rename,
     dir_list,
+    /// `dir_create(path)` — make a directory, and everything that
+    /// leads to it.
+    ///
+    /// **It makes the parents** (`mkdir -p`), and **a directory that
+    /// is already there is success.**  Both are one decision: the call
+    /// says "there is a directory at this path when I am done", which
+    /// is what every caller of it actually wants — a package store
+    /// laying out `.luce/packages/NAME-VERSION/`, an extractor writing
+    /// under a `papers/` nobody made yet.  The alternative — one
+    /// component per call, an existing directory refused — puts the
+    /// same loop in every program and a `file_exists` in front of
+    /// every call, and that guard is a race, which is the same reason
+    /// `file_exists` is not a guard for `file_read` (docs/FAILURE.md).
+    /// A file standing in the way is still a failure: the caller asked
+    /// for a directory and there is not one.
+    ///
+    /// Fallible on the same grounds as the four file services above:
+    /// the world decides, and no non-racy check stands in for the
+    /// result.
+    dir_create,
     /// The byte channel: a file reached through an open handle
     /// (docs/BYTES.md R4, R5).  `file_open` answers a `file` the
     /// caller's scope owns and whose end closes it — there is no
@@ -329,6 +387,8 @@ pub const Intrinsic = enum {
             .file_delete,
             .file_rename,
             .dir_list,
+            .dir_create,
+            .epoch_ms,
             .term_rows,
             .term_cols,
             .term_clear,
@@ -441,6 +501,10 @@ pub const Intrinsic = enum {
             .file_delete,
             .file_rename,
             .dir_list,
+            // Making a directory is the same kind of ask: the world
+            // may refuse it, and a check in front of the call is a
+            // race rather than a guard.
+            .dir_create,
             // The byte channel, on the same grounds.
             .file_open,
             .handle_read,
@@ -524,6 +588,7 @@ pub const Intrinsic = enum {
             .read_line,
             .print_error,
             .clock_ms,
+            .epoch_ms,
             .sleep_ms,
             .env_get,
             .exit_program,
@@ -631,6 +696,7 @@ pub const Intrinsic = enum {
             .file_delete,
             .file_rename,
             .dir_list,
+            .dir_create,
             .term_rows,
             .term_cols,
             .term_clear,
@@ -642,6 +708,7 @@ pub const Intrinsic = enum {
             .key_text,
             .print_error,
             .clock_ms,
+            .epoch_ms,
             .sleep_ms,
             .exit_program,
             .os_total_memory,
@@ -733,6 +800,7 @@ pub const Intrinsic = enum {
             .file_delete,
             .file_rename,
             .dir_list,
+            .dir_create,
             .term_rows,
             .term_cols,
             .term_clear,
@@ -745,6 +813,7 @@ pub const Intrinsic = enum {
             .read_line,
             .print_error,
             .clock_ms,
+            .epoch_ms,
             .sleep_ms,
             .env_get,
             .exit_program,
@@ -795,15 +864,17 @@ pub const Instruction = union(enum) {
     /// contents each runtime materializes before it executes a
     /// function.  The register's heap type must be the row's `heap`.
     const_container: u32,
-    /// A **function value**: the index of the function it names
-    /// (docs/FUNCTIONS.md D2).  The register's own type is the
-    /// signature it is allowed to be called at — the index alone says
-    /// which function, and the type says what shape it wears.
+    /// A **function value**: the function it names, and the receiver it
+    /// carries (docs/FUNCTIONS.md D2, docs/BINDING.md D12).  The
+    /// register's own type is the signature it is allowed to be called
+    /// at — the pair says which function and with what environment, and
+    /// the type says what shape the call wears.
     ///
-    /// A constant beside the others because that is what it is: a
-    /// lambda has already become a top-level function by the time this
-    /// is emitted, so there is nothing left here but a name.
-    const_function: u32,
+    /// It kept its `const_` name after gaining a receiver because the
+    /// unbound form is still what it always was and is still the common
+    /// one; what changed is that the environment may be non-empty, not
+    /// what the instruction means.
+    const_function: BoundFunction,
     local_get: LocalId,
     local_set: struct { local: LocalId, value: Register },
     binary: Binary,
@@ -879,6 +950,15 @@ pub const Instruction = union(enum) {
 
     pub const Binary = struct { op: BinaryOp, operand_type: Type, left: Register, right: Register };
     pub const Unary = struct { op: UnaryOp, operand: Register };
+    /// A function value as both engines build it: which function, and
+    /// the register holding the receiver it travels with, or null when
+    /// it travels with none (docs/BINDING.md D12).
+    ///
+    /// **Null is not a special case downstream.**  Both engines build
+    /// the same two-slot run either way — the function index, then the
+    /// receiver or `none` — so a bound value and a plain one are one
+    /// shape at a call, and only this field says which was written.
+    pub const BoundFunction = struct { function: u32, receiver: ?Register = null };
     pub const Call = struct { function: u32, arguments: []Register };
     pub const InoutCall = struct { function: u32, receiver: LocalId, arguments: []Register };
     pub const IndirectCall = struct { callee: Register, signature: u32, arguments: []Register };

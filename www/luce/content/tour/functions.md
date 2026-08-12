@@ -68,16 +68,114 @@ compiler asks for an annotation.
 
 A lambda carries no environment. It may use its parameters, functions
 and file-scope constants, but not a local from the function around it;
-behavior plus state is a struct with a method. A method reference is
-refused for the same reason — it would carry its receiver — while a
-static namespace function such as `Scale.twice` is an ordinary function
-value.
+behavior plus state is a struct with a method.
 
 Calls through values are positional because a function type has no
 parameter names or defaults. Function values copy freely, compare with
 `==` and `!=`, have no ordering, and `string(f)` gives the function's
 name. There are first-class functions and capture-free lambdas, but no
 closures.
+
+## A method travels with its struct
+
+"Behavior plus state is a struct with a method" is not advice — it is
+something you can write down. A **reading method written where a
+function type is expected** becomes a function value whose environment
+is the receiver:
+
+```luce run
+struct Scale:
+    factor: long
+
+    func times(n: long) -> long:
+        return n * self.factor
+
+func apply(f: func(long) -> long, value: long) -> long:
+    return f(value)
+
+func main():
+    let doubling = Scale(factor = 2)
+    let tripling = Scale(factor = 3)
+    print(string(apply(doubling.times, 21)))
+    print(string(apply(tripling.times, 21)))
+```
+
+```output
+42
+63
+```
+
+There is no marker. `doubling.times` is the ordinary member spelling,
+and what makes it a value rather than a call is the place it lands in —
+exactly as a bare `ascending` becomes a value by landing. The written
+type drops the receiver's parameter: `Scale.times` takes one `long` at
+the call site, so the value is a `func(long) -> long`.
+
+The receiver is **copied into the value**. What the value carries is
+its own from then on, so writing the original afterwards does not reach
+it:
+
+```luce run
+struct Scale:
+    factor: long
+
+    func times(n: long) -> long:
+        return n * self.factor
+
+func main():
+    var scale = Scale(factor = 2)
+    let doubling: func(long) -> long = scale.times
+    scale.factor = 100
+    print(string(doubling(3)))
+    print(string(scale.times(3)))
+```
+
+```output
+6
+300
+```
+
+That makes a bound value an ordinary value: it copies freely, takes no
+ownership verb, releases nothing you have to think about, and crosses
+into a worker. `string(f)` answers the method's qualified name —
+`Scale.times`.
+
+The proving customer is sorting by state the comparator carries, which
+had no honest spelling before:
+
+```luce run
+import std.lists
+
+struct Nearest:
+    origin: long
+
+    func before(a: long, b: long) -> bool:
+        return abs(a - self.origin) < abs(b - self.origin)
+
+func main():
+    let near = Nearest(origin = 10)
+    var xs = new list(long)
+    xs.append(1)
+    xs.append(14)
+    xs.append(9)
+    xs.sort_by(near.before)
+    for x in xs:
+        print(string(x))
+```
+
+```output
+9
+14
+1
+```
+
+Three methods do not bind, and each says so by name. A **writing**
+method does not — a writer needs the binding that owns its receiver, so
+call it there. A **fallible** method does not — a function type still
+carries no `!`. And a receiver that **carries objects** — a list, a map,
+an array, a resource, or a struct holding one — does not yet; bind a
+method of a value-only receiver, or pass the receiver to a top-level
+function.
 
 ## Structs
 

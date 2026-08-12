@@ -303,10 +303,10 @@ test "an entry that names its way out of the directory is refused, and nothing i
 }
 
 // ---------------------------------------------------------------------------
-// The directory zipper cannot make
+// The directories an archive names
 // ---------------------------------------------------------------------------
 
-test "an entry under a directory that is not there is named, not half-extracted" {
+test "an entry under a directory that is not there brings the directory with it" {
     const gpa = testing.allocator;
     var yard = try Yard.open(gpa);
     defer yard.deinit(gpa);
@@ -320,25 +320,22 @@ test "an entry under a directory that is not there is named, not half-extracted"
     var built = try yard.expectRuns(gpa, &.{ "zip", "nested.zip", "papers/note.txt", "loose.txt" });
     defer built.deinit(gpa);
 
-    // There is no directory-creating builtin (docs/MISSING.md), so the
-    // one thing zipper must not do is guess: not flatten the name, not
-    // write half the archive, not fail at the file system's message.
+    // This was the ceiling docs/MISSING.md named: with no
+    // directory-making builtin, zipper could only refuse an archive
+    // whose tree was not already on disk.  `dir_create` closed it, so
+    // an empty directory is somewhere a whole archive can land.
     try yard.tree.makeDirectory("empty");
-    var refused = try yard.run(gpa, &.{ "unzip", "nested.zip", "empty" });
-    defer refused.deinit(gpa);
-    try testing.expectEqual(exit_errored, refused.status);
-    try testing.expect(refused.saysErr("empty/papers is not there"));
-    try testing.expect(refused.saysErr("cannot make a directory"));
-    try testing.expectEqualStrings("", refused.out);
-    try testing.expect(!yard.tree.exists("empty/note.txt"));
-    try testing.expect(!yard.tree.exists("empty/loose.txt"));
-
-    // Given the directory, it extracts the whole thing.
-    try yard.tree.makeDirectory("empty/papers");
     var done = try yard.expectRuns(gpa, &.{ "unzip", "nested.zip", "empty" });
     defer done.deinit(gpa);
     try yard.expectFile(gpa, "empty/papers/note.txt", "kept\n");
     try yard.expectFile(gpa, "empty/loose.txt", "beside\n");
+
+    // And again into the same place: `make_directory` treats a
+    // directory already there as success, so re-extracting is an
+    // ordinary overwrite rather than a failure.
+    var again = try yard.expectRuns(gpa, &.{ "unzip", "nested.zip", "empty" });
+    defer again.deinit(gpa);
+    try yard.expectFile(gpa, "empty/papers/note.txt", "kept\n");
 }
 
 // ---------------------------------------------------------------------------

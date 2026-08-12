@@ -238,6 +238,8 @@ files.rename(from, to)           # !; replaces `to` if it exists, so
                                  # without ever leaving half of one
 files.list(path)                 # list(string)!, sorted; plain names,
                                  # not paths, and no "." or ".."
+files.make_directory(path)       # !; the parents too, and a directory
+                                 # already there is success
 ```
 
 `append_text` is spelled that way because `append` is a **reserved
@@ -248,6 +250,13 @@ it is recorded as one in `docs/MISSING.md`.
 `list` sorts because the host's order is whatever the file system felt
 like, and two machines holding the same files answer differently.  A
 program that prints a listing should print the same listing.
+
+`make_directory` means "there is a directory at this path when I
+return", which decides its two rules together: it makes the parents,
+and a directory that was already there is success.  Anything else puts
+a splitting loop in every caller and a `files.exists` in front of every
+call — and that check is the race `exists` is documented never to be.
+A *file* holding the name is still `io_failed`.
 
 The four new ones are `!` for the reason `read` and `write` are: the
 world decides, and no non-racy check stands in for the result.

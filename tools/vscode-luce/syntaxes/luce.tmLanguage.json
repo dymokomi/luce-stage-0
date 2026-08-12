@@ -55,7 +55,7 @@
         },
         {
           "name": "support.function.builtin.host.luce",
-          "match": "\\b(?:print|file_read|file_write|file_exists|term_rows|term_cols|term_clear|term_move|term_style|term_write|term_flush|key_read|key_text|read_line|print_error|clock_ms|sleep_ms|env|file_append|file_delete|file_rename|dir_list|file_open|exit|os_total_memory|os_available_memory|os_cpu_count|shell_run|term_event_data)\\b"
+          "match": "\\b(?:print|file_read|file_write|file_exists|term_rows|term_cols|term_clear|term_move|term_style|term_write|term_flush|key_read|key_text|read_line|print_error|clock_ms|epoch_ms|sleep_ms|env|file_append|file_delete|file_rename|dir_list|dir_create|file_open|exit|os_total_memory|os_available_memory|os_cpu_count|shell_run|term_event_data)\\b"
         }
       ]
     },

@@ -119,7 +119,26 @@ pub const magic = "LUCE";
 /// and run, which is exactly why the version must refuse it: the
 /// same program's bytes, and therefore its `artifact.sourceHash`,
 /// changed under it.
-pub const format_version: u32 = 39;
+///
+/// 40 — `dir_create` and `epoch_ms` join the intrinsic set: a
+/// directory made with its parents, and the wall clock `clock_ms`
+/// deliberately is not.  Both land *inside* the host group beside the
+/// services they belong with — `dir_create` after `dir_list`,
+/// `epoch_ms` after `sleep_ms` — rather than on the end, so every tag
+/// after them renumbers.  That is safe here for exactly one reason and
+/// it is this line: the version moved with them, so a module written
+/// under 39 is refused by name instead of decoded against the wrong
+/// tags.
+///
+/// 41 — bound methods arrive (docs/BINDING.md).  A function value grows
+/// from a bare index to `{function, receiver}`: `const_function` writes
+/// an extra optional register, so its payload is wider than any 40
+/// decoder expects, and a function value's runtime shape moves from an
+/// `int` to a two-slot field run.  Nothing was appended and nothing
+/// renumbered — one instruction's payload changed — which is exactly
+/// the kind of change a stale decoder would read straight past, so the
+/// version is what refuses it.
+pub const format_version: u32 = 41;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -348,7 +367,11 @@ const Writer = struct {
             .const_double => |value| try self.int(u64, @bitCast(value)),
             .const_string => |constant| try self.int(u32, constant),
             .const_container => |constant| try self.int(u32, constant),
-            .const_function => |named| try self.int(u32, named),
+            .const_function => |named| {
+                try self.int(u32, named.function);
+                try self.int(u8, @intFromBool(named.receiver != null));
+                if (named.receiver) |receiver| try self.int(u32, receiver);
+            },
             .local_get => |local| try self.int(u32, local),
             .local_set => |set| {
                 try self.int(u32, set.local);
@@ -762,7 +785,14 @@ const Reader = struct {
             .const_double => .{ .const_double = @bitCast(try self.int(u64)) },
             .const_string => .{ .const_string = try self.int(u32) },
             .const_container => .{ .const_container = try self.int(u32) },
-            .const_function => .{ .const_function = try self.int(u32) },
+            .const_function => blk: {
+                const named = try self.int(u32);
+                const bound = (try self.int(u8)) != 0;
+                break :blk .{ .const_function = .{
+                    .function = named,
+                    .receiver = if (bound) try self.int(u32) else null,
+                } };
+            },
             .local_get => .{ .local_get = try self.int(u32) },
             .local_set => .{ .local_set = .{
                 .local = try self.int(u32),
@@ -1298,13 +1328,17 @@ test "decoded function types and conversions are verified before execution" {
     }
     program.signatures = original_signatures;
 
-    // `Type.storage()` exposes a function index as an integer to the
-    // engines.  It does not make function-to-int a language conversion.
+    // A function value is a run with a function index in it, and no
+    // engine ever hands that index to a program: converting one to an
+    // `int` is not a language conversion and must not decode as one.
     var function_value: ?mir.Register = null;
     var storing: ?mir.Register = null;
     for (entry.instructions, 0..) |instruction, register| switch (instruction) {
         .const_function => function_value = @intCast(register),
-        .local_set => |set| if (function_value != null and set.value == function_value.?) {
+        // The store of a function value, whichever register carries it
+        // by then: the value owns a run, so an ownership instruction
+        // may stand between the constant and the slot it lands in.
+        .local_set => |set| if (entry.result_types[set.value] == .function) {
             storing = @intCast(register);
         },
         else => {},
@@ -1727,8 +1761,17 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // changed is the *content* of the name blobs, which is the other
     // shape-changed case the paragraph above warns the hash cannot
     // catch.
-    try testing.expectEqual(@as(u32, 39), format_version);
-    try testing.expectEqual(@as(u64, 11170085788899588128), hasher.final());
+    // 39 -> 40: `dir_create` and `epoch_ms` join `mir.Intrinsic`, in
+    // the middle of the host group rather than at its end, so the hash
+    // moves with the two new names *and* every tag after them
+    // renumbers.
+    // 40 -> 41: bound methods (docs/BINDING.md) — `const_function`
+    // grows a receiver register beside the function it names, so its
+    // payload widened while every tag stayed put.  The hash below did
+    // not move, which is the shape-changed case the paragraph above
+    // warns it cannot catch.
+    try testing.expectEqual(@as(u32, 41), format_version);
+    try testing.expectEqual(@as(u64, 1920569578452782657), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

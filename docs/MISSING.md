@@ -460,9 +460,20 @@ it still hits.
      never a host gap — joining and splitting a path is pure text, so
      it is a std module over `strings` — and it waited to be designed
      against a program that needed it rather than guessed at.
-   - **A wall clock and a calendar.**  `clock_ms` is monotonic and
-     says only that differences mean something.  Dates are a library,
-     not a builtin, and the library does not exist.
+   - ~~**A wall clock**~~ — **shipped as `epoch_ms`** (ABI 16),
+     milliseconds since the Unix epoch.  It is a second builtin rather
+     than a mode of `clock_ms` because the two answer different
+     questions and confusing them is the classic bug in both
+     directions: a span measured with a clock an operator can set back
+     comes out negative, and a record stamped with a monotonic reading
+     means nothing off the machine that made it.  The name says what
+     it counts from, so neither can be read as the other.  It takes
+     the machine facts' fallible slot shape — a host with no calendar
+     answers "cannot tell" and the program traps `host_unavailable`
+     — rather than inventing a date.  **The calendar is still not
+     here**: turning milliseconds into a date is a library, not a
+     builtin, and the library does not exist.  This is the number it
+     will be built on.
    - **Setting an environment variable, and reading the whole
      environment.**  Process-global mutation with no reader in the
      corpus.
@@ -745,11 +756,21 @@ improvement the audit exposed:
   does not make user code monomorphic at more than one type.  The closed
   specialization used by `std.lists.sort_by` is compiler-owned std
   machinery, not a surface generic system.
-- **Closures — absent.**  Function values and one-expression lambdas
-  shipped on the near side of the capture line.  Comparator sorting no
-  longer bleeds: `std.lists.sort_by` takes either a named function or a
-  capture-free lambda.  Behavior plus state remains a struct with a
-  method, explicit and owned.
+- **Closures — absent, and answered.**  Function values and
+  one-expression lambdas shipped on the near side of the capture line,
+  and **bound methods** (docs/BINDING.md, 2026-08-11) made the answer
+  literal: `receiver.method` where a `func` type lands is a function
+  value whose environment is a struct the program declared.  Nothing
+  anonymous entered the language.  What is still missing of that memo:
+  a **carrying** receiver does not bind (D4 — the class would be the
+  receiver's, but a function type cannot say which of its values
+  carries one, and `carriesObjects` asks a type); `==` on a value-state
+  bind is not yet refused and compares by function alone (D6, the same
+  missing per-value class); `func(...)?` is not yet the storable form,
+  so a function value is still not a field, an element or an optional
+  payload (D7); `func(T) -> R!` does not exist, so a fallible method
+  does not bind (D8); and union member constructors are not yet
+  function values (D11).
 - **Iterators.**  What is missing is not a protocol but string
   codepoints — one loop form.
 - **Interfaces, inheritance, operator overloading, async, reflection.**
@@ -1044,19 +1065,27 @@ that were one movement:
   total and `strings.from_bytes` answers `string?`.
 
 What is left of the item is smaller and named in `docs/BYTES.md`: no
-seek on a handle, no file metadata, and no directory creation.
+seek on a handle, and no file metadata.
 
-**The directory is the one that bites, and there is now a program that
-proves it.**  `examples/zipper/zipper.luc` extracts a ZIP archive, and an
-archive names its entries with directories in them; with no way to make
-one, zipper can extract an entry under `papers/` only where `papers/`
-already exists, and the honest thing it can do is check every name
-before it writes anything and say which directory is missing.  It does.
-That is a real ceiling on a real program rather than a gap in a list:
-the next `LuceHost` slot this tree wants is a directory-making one
-beside `dir_list`, with `files.make_directory` over it, and the shape
-is already settled by the five handle slots (`docs/BYTES.md` B7) — one
-optional service, fail-closed, answering `yes`/`no`.
+~~**The directory is the one that bites**~~ — **closed** (ABI 16).
+`dir_create(path)` is the slot this entry asked for, beside `dir_list`
+and with `files.make_directory` over it: one optional service,
+fail-closed, answering `yes`/`no`.  Two decisions came with it, and
+they are one decision said twice — the call means *there is a directory
+at this path when I return*.  It makes **every directory leading to
+the one asked for**, because both of its callers want a nested layout
+(a package store writing `.luce/packages/NAME-VERSION/`, an extractor
+writing under a directory the archive named) and the alternative puts
+the same splitting loop in every program; and a directory that was
+**already there is success**, because the alternative makes every
+install path write `if not files.exists(p)` in front of the call, which
+is exactly the check-then-act race `file_exists` is documented never to
+be a guard against.  A *file* holding the name is still `io_failed`.
+`examples/zipper/zipper.luc` was the program that proved the ceiling
+and is the program that shows it gone: the pre-pass that named a
+missing directory and refused the archive is now a `make_directory`
+call, so an archive with `papers/note.txt` in it extracts into an empty
+directory the way `unzip` does.
 
 ## Tier 6 — the OS beyond the language
 

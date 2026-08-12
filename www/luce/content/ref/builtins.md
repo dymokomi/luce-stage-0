@@ -113,13 +113,28 @@ the call and a failed launch is an `io_failed` error.
 | Signature | Notes |
 |---|---|
 | `clock_ms() -> long` | a **monotonic** reading in milliseconds; only differences mean anything, and it is not a wall clock or a calendar |
+| `epoch_ms() -> long` | milliseconds since the Unix epoch — **what time it is**, which the monotonic clock cannot say |
 | `sleep_ms(milliseconds: long)` | waits at least that long; presents the pending frame first, as `key_read` does |
 
-Neither can fail, and that is deliberate for `sleep_ms`: a duration
-that has **already elapsed** — zero, or the negative left by
+**Two clocks, and the names say which is which.** `clock_ms` counts
+from an origin nobody specifies, so subtracting two readings is the
+only thing it is for; `epoch_ms` counts from 1970-01-01T00:00:00Z, so
+its *reading* is the answer and it is what a timestamp is made of. Use
+`clock_ms` to measure how long something took — an operator can set the
+wall clock backwards, and a span measured with `epoch_ms` would go
+negative — and `epoch_ms` to say when something happened.
+
+`epoch_ms` is not a calendar: turning it into a date is a library
+nobody has written yet, and this is the number that library will be
+built on.
+
+Neither clock can fail, but a host that has no calendar at all refuses
+`epoch_ms` with `host_unavailable` rather than inventing a number — the
+same refusal the machine facts give, and for the same reason. That a
+duration has **already elapsed** — zero, or the negative left by
 `deadline - clock_ms()` when a frame overran — is not a bug and not a
-failure. There is no time left to wait, so it returns at once. An
-animation loop can subtract without guarding.
+failure for `sleep_ms`. There is no time left to wait, so it returns at
+once. An animation loop can subtract without guarding.
 
 ### The exit
 
@@ -143,6 +158,25 @@ func main():
 
 ```output
 an overrun frame waits 0 ms
+```
+
+A moment, and a span, told apart by which clock answers them:
+
+```luce run
+func main():
+    # `epoch_ms` names a moment: this is the number a timestamp is
+    # made of, and it means the same thing on every machine.
+    let stamped = epoch_ms()
+    print("after 2020: " + string(stamped > 1577836800000))
+    # `clock_ms` measures a span, and only differences mean anything.
+    let started = clock_ms()
+    sleep_ms(0)
+    print("elapsed is never negative: " + string(clock_ms() >= started))
+```
+
+```output
+after 2020: true
+elapsed is never negative: true
 ```
 
 ### The machine
@@ -171,6 +205,7 @@ never made to invent a number for a machine it could not measure.
 | `file_rename(from: string, to: string) -> !` | moves a file, **replacing** an existing target — which is what makes write-then-rename the way to replace a file without ever leaving half of one on disk |
 | `file_exists(path: string) -> bool` | a question about the past, not a guard |
 | `dir_list(path: string) -> list(string)!` | the names in a directory — plain names, not paths, without `.` and `..`, in whatever order the file system gave them. A fresh list the caller owns |
+| `dir_create(path: string) -> !` | makes a directory **and every directory leading to it**. A directory already there is success; a *file* holding the name is `io_failed` |
 | `file_open(path: string, mode: long) -> file!` | a handle your scope owns. `mode` is 0 read, 1 write, 2 append — and you write [`files.open`](/std/files/), [`files.create`](/std/files/) or [`files.append_to`](/std/files/) rather than a number |
 
 Every one that changes a file is fallible, because the world decides
@@ -178,10 +213,37 @@ whether it lands. `file_exists` is the exception and answers a plain
 `bool` — but it is a question about the past, never a guard for the
 call after it.
 
+**`dir_create` means "there is a directory here when I return."** It
+makes the parents, so laying out `store/packages/geo-1.2.0` is one
+call rather than a splitting loop in every program; and a directory
+that was already there is success, so an install path never has to
+write `if not files.exists(p)` in front of it — which would be exactly
+the check-then-act race `file_exists` is not allowed to be. Write it as
+[`files.make_directory`](/std/files/).
+
 `file_read` and `file_write` are **defined over the handle**: each is
 an open, a loop of reads or writes, a close, and — for the reading
 direction — the runtime's own UTF-8 check. They are conveniences with a
 ceiling, not a second channel.
+
+```luce run
+import std.files
+
+func main() -> !:
+    # One call for the whole path: `store` and `store/packages` are
+    # made on the way.
+    try files.make_directory("store/packages/geo-1.2.0")
+    # And saying it again is success, not an error.
+    try files.make_directory("store/packages")
+    try files.write("store/packages/geo-1.2.0/luce.json", "{}\n")
+    let names = try files.list("store/packages")
+    for name in names:
+        print(name)
+```
+
+```output
+geo-1.2.0
+```
 
 ### Bytes
 

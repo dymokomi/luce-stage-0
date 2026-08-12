@@ -348,8 +348,21 @@ const Module = struct {
     /// this is the switch that turns the first back into a call.
     worker_entry: ?Builder.Function.Index = null,
 
+    /// One entry per program function: the adapter a value of it is
+    /// called through, or `null` for a function no value ever names.
+    ///
+    /// **The table a function value dispatches through is a table of
+    /// adapters, not of functions**, because a call site cannot know
+    /// whether the value it holds carries a receiver: one
+    /// `func(Point, Point) -> bool` place accepts a plain function, a
+    /// lambda and a bind, and a C signature is chosen at compile time
+    /// (docs/BINDING.md D12).  So every entry takes a receiver, and the
+    /// adapter for a plain function ignores it.
+    entries: []?Builder.Function.Index = &.{},
+
     fn deinit(self: *Module) void {
         self.gpa.free(self.spawned);
+        self.gpa.free(self.entries);
         self.gpa.free(self.functions);
         self.gpa.free(self.struct_zeros);
         self.gpa.free(self.variant_zeros);
@@ -422,8 +435,12 @@ const Module = struct {
             // A union value is a struct value whose field 0 is the tag
             // (docs/UNION.md D8): a pointer to its run of `Value`s.
             .variant => .ptr,
+            // A function value is the two-slot run `boxTag` calls a
+            // struct: the function it names, then the receiver it
+            // carries (docs/BINDING.md D12).  A pointer to that run,
+            // for the same reason a struct is one.
+            .function => .ptr,
             .enumeration => unreachable, // answered by storage() above
-            .function => unreachable, // answered by storage() above
         };
     }
 
@@ -479,14 +496,16 @@ const Module = struct {
                 &.{ .ptr, .ptr, .i64, .ptr, .i64 },
                 .normal,
             ),
-            .file_delete => builder.fnType(.i32, &.{ .ptr, .ptr, .i64 }, .normal),
+            .file_delete, .dir_create => builder.fnType(.i32, &.{ .ptr, .ptr, .i64 }, .normal),
             .dir_list => builder.fnType(.i32, &.{ .ptr, .ptr, .i64, .ptr, .ptr }, .normal),
             .exited => builder.fnType(.void, &.{ .ptr, .i64 }, .normal),
-            // One shape for all three machine facts: nothing to ask
-            // with, a number in an out-parameter, an answer.
+            // One shape for all three machine facts and for the wall
+            // clock: nothing to ask with, a number in an
+            // out-parameter, an answer that may be "cannot tell".
             .os_total_memory,
             .os_available_memory,
             .os_cpu_count,
+            .epoch_ms,
             => builder.fnType(.i32, &.{ .ptr, .ptr }, .normal),
             // The handle channel (docs/BYTES.md).  Named and typed
             // here like `trap` is, and called from here for the same
@@ -575,11 +594,11 @@ const Module = struct {
             .string,
             .strukt,
             .variant,
+            .function,
             .heap,
             .optional,
             => Builder.Alignment.fromByteUnits(8),
             .enumeration => unreachable, // answered by storage() above
-            .function => unreachable, // answered by storage() above
         };
     }
 
@@ -948,7 +967,10 @@ const Module = struct {
                 .i64,
             ) },
             .enumeration => unreachable, // answered by storage() above
-            .function => unreachable, // answered by storage() above
+            // A struct field is never a function value in this run:
+            // the storable form is `func(...)?` and that type does not
+            // exist yet (docs/FUNCTIONS.md S2, docs/BINDING.md D7).
+            .function => unreachable, // not a field type
         };
         const length: u64 = switch (of) {
             .strukt => |nested| self.program.structs[nested].fields.len,
@@ -1149,6 +1171,8 @@ const Module = struct {
 
         self.spawned = try self.collectSpawned();
         if (self.spawned.len != 0) try self.lowerWorkerEntry();
+
+        try self.lowerValueEntries();
 
         for (self.program.functions, 0..) |*function, index| {
             try self.lowerFunction(function, @intCast(index));
@@ -1524,6 +1548,116 @@ const Module = struct {
         return found.toOwnedSlice(self.gpa);
     }
 
+    /// One adapter per function some `const_function` makes a value of.
+    ///
+    /// A program that makes no function value emits none of this, the
+    /// way a program that never spawns emits no worker entry.
+    fn lowerValueEntries(self: *Module) Error!void {
+        self.entries = try self.gpa.alloc(?Builder.Function.Index, self.program.functions.len);
+        @memset(self.entries, null);
+        var any = false;
+        for (self.program.functions) |function| {
+            for (function.instructions) |instruction| {
+                const named = switch (instruction) {
+                    .const_function => |value| value,
+                    else => continue,
+                };
+                if (self.entries[named.function] != null) continue;
+                self.entries[named.function] = try self.lowerValueEntry(named);
+                any = true;
+            }
+        }
+        if (!any) {
+            self.gpa.free(self.entries);
+            self.entries = &.{};
+        }
+    }
+
+    /// `i32 @luce.bound.N(ptr host, ptr rt, i64 depth, ptr receiver,
+    /// <written parameters>, ptr result)` — the shape every function
+    /// value is called through.
+    ///
+    /// For a plain function the receiver slot is one unused argument.
+    /// For a bind it is the value's own environment, boxed, and this is
+    /// where it becomes the callee's parameter zero — the one place in
+    /// the backend that knows what a receiver's type is, which is why
+    /// the call site does not have to (docs/BINDING.md D12).
+    fn lowerValueEntry(
+        self: *Module,
+        named: mir.Instruction.BoundFunction,
+    ) Error!Builder.Function.Index {
+        const function = &self.program.functions[named.function];
+        const bound: u32 = if (named.receiver == null) 0 else 1;
+
+        var parameters: std.ArrayList(Builder.Type) = .empty;
+        defer parameters.deinit(self.gpa);
+        try parameters.appendSlice(self.gpa, &.{ .ptr, .ptr, .i64, .ptr });
+        for (function.locals[bound..function.parameter_count]) |parameter| {
+            try parameters.append(self.gpa, try self.valueType(parameter.local_type));
+        }
+        if (function.return_type != .none) try parameters.append(self.gpa, .ptr);
+        const signature_type = try self.builder.fnType(.i32, parameters.items, .normal);
+
+        const declared = try self.builder.addFunction(
+            signature_type,
+            try self.builder.strtabStringFmt("luce.bound.{d}", .{named.function}),
+            .default,
+        );
+        declared.setLinkage(.internal, self.builder);
+
+        var wip: Builder.WipFunction = try .init(self.builder, .{
+            .function = declared,
+            .strip = true,
+        });
+        defer wip.deinit();
+        const entry = try wip.block(0, "entry");
+        wip.cursor = .{ .block = entry };
+
+        var arm: Body = .{
+            .module = self,
+            .wip = &wip,
+            .function = function,
+            .index = named.function,
+            .host = wip.arg(0),
+            .runtime = wip.arg(1),
+            .depth = wip.arg(2),
+            .entry_block = entry,
+        };
+        defer arm.deinit();
+
+        var passed: std.ArrayList(Builder.Value) = .empty;
+        defer passed.deinit(self.gpa);
+        try passed.appendSlice(self.gpa, &.{ wip.arg(0), wip.arg(1), wip.arg(2) });
+        if (bound == 1) {
+            try passed.append(self.gpa, try arm.unboxed(
+                function.locals[0].local_type,
+                wip.arg(3),
+                "bound.self",
+            ));
+        }
+        // The written parameters stand after the receiver slot, whether
+        // this adapter uses that slot or not.
+        for (bound..function.parameter_count) |at| {
+            try passed.append(self.gpa, wip.arg(@intCast(4 + at - bound)));
+        }
+        if (function.return_type != .none) {
+            try passed.append(self.gpa, wip.arg(@intCast(4 + function.parameter_count - bound)));
+        }
+
+        const target = self.functions[named.function];
+        _ = try wip.ret(try wip.call(
+            .normal,
+            Builder.CallConv.default,
+            .none,
+            target.typeOf(self.builder),
+            target.toValue(self.builder),
+            passed.items,
+            "bound.outcome",
+        ));
+        try wip.finish();
+        return declared;
+    }
+
     /// `i32 @luce.worker(ptr host, ptr rt, i64 which, ptr args, i64
     /// count, ptr out, i64 depth)` — the one door a worker's thread
     /// enters this module through (docs/THREADS.md).
@@ -1816,6 +1950,9 @@ const Module = struct {
         try parameters.append(self.gpa, .ptr);
         try parameters.append(self.gpa, .ptr);
         try parameters.append(self.gpa, .i64);
+        // The receiver slot, present whether the value carries one or
+        // not: `Module.entries` says why (docs/BINDING.md D12).
+        try parameters.append(self.gpa, .ptr);
         for (written.parameters) |parameter| {
             try parameters.append(self.gpa, try self.valueType(parameter.value_type));
         }
@@ -1827,9 +1964,15 @@ const Module = struct {
     }
 
     /// The program's function table: one pointer per Luce function, in
-    /// program order, so a function value — which is an index — becomes
-    /// something callable with one `getelementptr` and one load
-    /// (docs/FUNCTIONS.md D2).
+    /// program order, so a function value — whose first slot is an
+    /// index — becomes something callable with one `getelementptr` and
+    /// one load (docs/FUNCTIONS.md D2).
+    ///
+    /// **What it holds is adapters** (`Module.entries`), so a row is
+    /// null for every function no value ever names.  A null row is
+    /// unreachable rather than checked: the collection that built the
+    /// adapters walked the same `const_function` instructions the index
+    /// can only have come from.
     ///
     /// Built once and only where something asks: a program that never
     /// makes a function value emits none of it, exactly as a program
@@ -1838,8 +1981,11 @@ const Module = struct {
         if (self.function_table) |built| return built;
         var entries: std.ArrayList(Builder.Constant) = .empty;
         defer entries.deinit(self.gpa);
-        for (self.functions) |declared| {
-            try entries.append(self.gpa, declared.toConst(self.builder));
+        for (self.entries) |entry| {
+            try entries.append(self.gpa, if (entry) |declared|
+                declared.toConst(self.builder)
+            else
+                try self.builder.nullConst(.ptr));
         }
         const table_type = try self.builder.arrayType(entries.items.len, .ptr);
         const variable = try self.builder.addVariable(
@@ -1989,7 +2135,8 @@ const Module = struct {
             .boolean, .byte => 1,
             .short, .half => 2,
             .int, .float => 4,
-            .long, .double, .strukt, .variant, .heap => 8,
+            // A function value travels as the pointer to its run.
+            .long, .double, .strukt, .variant, .function, .heap => 8,
             // `{ ptr, i64 }` — how a String travels.
             .string => 16,
             // `{T, i1}`: the payload, then one byte for the bit,
@@ -2011,7 +2158,6 @@ const Module = struct {
             // Never reached: a function returning nothing has no slot.
             .none => 0,
             .enumeration => unreachable, // answered by storage() above
-            .function => unreachable, // answered by storage() above
         };
     }
 
@@ -2961,11 +3107,11 @@ const Body = struct {
             // would ask a program for one (docs/FUNCTIONS.md, As
             // built).  What is left is the frame slot a function-typed
             // local lives in before its first store, which nothing a
-            // program can write ever reads.  It is filled with an index
-            // no function has, and `emitIndirectCall` range-checks
-            // before it dispatches, so a hand-made module that reads it
+            // program can write ever reads.  It is filled with the run
+            // that is nowhere, and every reader of a function value
+            // checks for it first, so a hand-made module that reads it
             // anyway traps rather than jumping somewhere.
-            .function => try self.module.builder.intValue(.i32, -1),
+            .function => try self.module.builder.nullValue(.ptr),
             // The zero of a `T?` is absence: the payload's own zero,
             // beside a bit saying it is not there.  Giving the unused
             // half a defined value rather than `poison` is what makes
@@ -3176,7 +3322,7 @@ const Body = struct {
                 .i64,
                 "box.bits",
             ),
-            .strukt, .variant => try self.wip.cast(.ptrtoint, held, .i64, "box.bits"),
+            .strukt, .variant, .function => try self.wip.cast(.ptrtoint, held, .i64, "box.bits"),
             .string => try self.wip.cast(
                 .ptrtoint,
                 try self.wip.extractValue(held, &.{0}, "box.text"),
@@ -3185,7 +3331,6 @@ const Body = struct {
             ),
             .optional => self.fail("the bits of a T? read from its type"),
             .enumeration => unreachable, // answered by storage() above
-            .function => unreachable, // answered by storage() above
         };
     }
 
@@ -3221,10 +3366,13 @@ const Body = struct {
                 .i64,
                 self.module.program.variants[index].runLength(),
             ),
+            // Every function value spans the same two slots, bound or
+            // not (docs/BINDING.md D12), which is what lets its box be
+            // re-derived from the static type as a struct's is.
+            .function => try builder.intValue(.i64, mir.function_run_length),
             .string => try self.wip.extractValue(held, &.{1}, "box.length"),
             .optional => self.fail("the length of a T? read from its type"),
             .enumeration => unreachable, // answered by storage() above
-            .function => unreachable, // answered by storage() above
         };
     }
 
@@ -3378,10 +3526,9 @@ const Body = struct {
             .string => try self.unboxedText(slot, bits, name),
             // The field count is a compile-time fact, so only the
             // address of the run travels back.
-            .strukt, .variant => try self.wip.cast(.inttoptr, bits, .ptr, name),
+            .strukt, .variant, .function => try self.wip.cast(.inttoptr, bits, .ptr, name),
             .none, .optional => unreachable, // answered above
             .enumeration => unreachable, // answered by storage() above
-            .function => unreachable, // answered by storage() above
         };
     }
 
@@ -3655,9 +3802,8 @@ const Body = struct {
         // (docs/ENUMS.md D9).
         return switch (written.storage()) {
             .boolean, .byte, .short, .int, .long, .half, .float, .double => true,
-            .none, .string, .strukt, .variant, .heap, .optional => false,
+            .none, .string, .strukt, .variant, .function, .heap, .optional => false,
             .enumeration => unreachable, // answered by storage() above
-            .function => unreachable, // answered by storage() above
         };
     }
 
@@ -3907,7 +4053,7 @@ const Body = struct {
             // type keeps the 24-byte slot.
             .none, .string, .strukt, .variant, .heap, .optional => self.module.value_type,
             .enumeration => unreachable, // answered by storage() above
-            .function => unreachable, // answered by storage() above
+            .function => unreachable, // not an element type
         };
     }
 
@@ -3926,7 +4072,7 @@ const Body = struct {
             .optional,
             => Builder.Alignment.fromByteUnits(8),
             .enumeration => unreachable, // answered by storage() above
-            .function => unreachable, // answered by storage() above
+            .function => unreachable, // not an element type
         };
     }
 
@@ -3949,7 +4095,7 @@ const Body = struct {
             // asserted against it by `runtime/test.zig`.
             .none, .string, .strukt, .variant, .heap, .optional => @sizeOf(runtime.Value),
             .enumeration => unreachable, // answered by storage() above
-            .function => unreachable, // answered by storage() above
+            .function => unreachable, // not an element type
         };
     }
 
@@ -4257,7 +4403,7 @@ const Body = struct {
                 "element",
             ),
             .enumeration => unreachable, // answered by storage() above
-            .function => unreachable, // answered by storage() above
+            .function => unreachable, // not an element type
         };
     }
 
@@ -4288,7 +4434,7 @@ const Body = struct {
                 held,
             ),
             .enumeration => unreachable, // answered by storage() above
-            .function => unreachable, // answered by storage() above
+            .function => unreachable, // not an element type
         }
     }
 
@@ -5197,17 +5343,7 @@ const Body = struct {
                 );
                 self.produced[register].box = out;
             },
-            // A function value is the index of the function it names,
-            // held as the `i32` a `.function` register is
-            // (docs/FUNCTIONS.md D2).  Nothing is emitted for the
-            // function itself: the table below is what turns the index
-            // back into something callable, and it is emitted once.
-            .const_function => |named| {
-                self.produced[register].value = try self.module.builder.intValue(
-                    .i32,
-                    named,
-                );
-            },
+            .const_function => |named| try self.emitConstFunction(register, named),
             .call_indirect => |called| try self.emitIndirectCall(register, called),
             .local_get => |local| {
                 const held = self.function.locals[local];
@@ -5995,10 +6131,12 @@ const Body = struct {
         // because that switch's narrow arms are about *numbers*, where
         // promotion has already run and a storage width is a lowering
         // bug; here a `byte` backing is the ordinary case.
-        // A function value compares as the `int` it is: same function
-        // or not, and no ordering (docs/FUNCTIONS.md D3).  The enum arm
-        // below, one type earlier, and for the same reason it stands
-        // outside the numeric switch.
+        // A function value compares by the function it names: same
+        // function or not, and no ordering (docs/FUNCTIONS.md D3).  The
+        // enum arm below, one type earlier, and for the same reason it
+        // stands outside the numeric switch — but one indirection
+        // further in, because a function value is a run and the name is
+        // its first slot (docs/BINDING.md D12).
         if (operation.operand_type == .function or operation.operand_type == .enumeration) {
             const same: Builder.IntegerCondition = switch (operation.op) {
                 .equal => .eq,
@@ -6021,6 +6159,14 @@ const Body = struct {
                 .modulo,
                 => return self.fail("arithmetic on the comparison path"),
             };
+            if (operation.operand_type == .function) {
+                return self.wip.icmp(
+                    same,
+                    try self.namedFunction(left, "left.named"),
+                    try self.namedFunction(right, "right.named"),
+                    "compare",
+                );
+            }
             return self.wip.icmp(same, left, right, "compare");
         }
 
@@ -6285,6 +6431,87 @@ const Body = struct {
     /// arguments, the same depth check, the same out-parameter, the
     /// same unwind edge.  A fallible function is never a value, so
     /// there is no error edge here to get wrong.
+    /// A function value: the two-slot run holding the function it names
+    /// and the receiver it carries, built exactly the way a struct
+    /// value is (docs/BINDING.md D12).
+    ///
+    /// `libluce_rt` is handed a run and told how long it is, which is
+    /// all it was ever told about a struct — so a receiver of any shape
+    /// travels without the runtime learning that function values exist.
+    fn emitConstFunction(
+        self: *Body,
+        register: mir.Register,
+        named: mir.Instruction.BoundFunction,
+    ) Error!void {
+        const run = try self.scratchRun(
+            self.module.value_type,
+            mir.function_run_length,
+            value_alignment,
+            "bound",
+        );
+        try self.boxAt(
+            run,
+            mir.function_run_named,
+            .int,
+            try self.module.builder.intValue(.i32, named.function),
+        );
+        if (named.receiver) |receiver| {
+            try self.storedAt(run, mir.function_run_receiver, receiver);
+        } else {
+            try self.noneAt(run, mir.function_run_receiver);
+        }
+        try self.callAnswering(register, .luce_rt_struct_make, &.{
+            self.runtime,
+            run,
+            try self.module.builder.intValue(.i64, mir.function_run_length),
+        });
+    }
+
+    /// The function a value names, read out of its run.
+    ///
+    /// **The run that is nowhere is refused here**, once, for every
+    /// reader: a function-typed slot that was never written holds no
+    /// run, and reading one is the same mistake as using a freed
+    /// object.  Whoever asks gets an index that really is in the
+    /// program's table or a trap, and never a jump into nothing.
+    fn namedFunction(self: *Body, value: Builder.Value, name: []const u8) Error!Builder.Value {
+        try self.check(
+            try self.wip.icmp(
+                .eq,
+                try self.wip.cast(.ptrtoint, value, .i64, "run.word"),
+                try self.module.builder.intValue(.i64, 0),
+                "no.run",
+            ),
+            .null_object,
+        );
+        const slot = try self.wip.gep(
+            .inbounds,
+            self.module.value_type,
+            value,
+            &.{try self.module.builder.intValue(.i64, mir.function_run_named)},
+            "named.slot",
+        );
+        const named = try self.wip.cast(
+            .trunc,
+            try self.loadBoxField(slot, box_bits, "named.bits"),
+            .i32,
+            name,
+        );
+        try self.check(
+            try self.wip.icmp(
+                .uge,
+                named,
+                try self.module.builder.intValue(
+                    .i32,
+                    @as(i64, @intCast(self.module.program.functions.len)),
+                ),
+                "no.such.function",
+            ),
+            .null_object,
+        );
+        return named;
+    }
+
     fn emitIndirectCall(
         self: *Body,
         register: mir.Register,
@@ -6306,26 +6533,15 @@ const Body = struct {
         );
 
         // The value names a function or it names nothing, and nothing
-        // is what an unwritten slot holds.  One unsigned compare, and
-        // the same refusal the interpreter makes at the same call.
-        try self.check(
-            try self.wip.icmp(
-                .uge,
-                self.produced[called.callee].value,
-                try self.module.builder.intValue(
-                    .i32,
-                    @as(i64, @intCast(self.module.program.functions.len)),
-                ),
-                "no.such.function",
-            ),
-            .null_object,
-        );
+        // is what an unwritten slot holds — the same refusal the
+        // interpreter makes at the same call.
+        const named = try self.namedFunction(self.produced[called.callee].value, "callee");
         const table = try self.module.functionTable();
         const slot = try self.wip.gep(
             .inbounds,
             .ptr,
             table.toValue(self.module.builder),
-            &.{try self.wip.cast(.zext, self.produced[called.callee].value, .i64, "callee.at")},
+            &.{try self.wip.cast(.zext, named, .i64, "callee.at")},
             "callee.slot",
         );
         const target = try self.wip.load(
@@ -6341,6 +6557,16 @@ const Body = struct {
         try arguments.append(gpa, self.host);
         try arguments.append(gpa, self.runtime);
         try arguments.append(gpa, callee_depth);
+        // The receiver slot of the value's own run — the environment
+        // the adapter unboxes, or the `none` a plain value carries
+        // there and its adapter never reads.
+        try arguments.append(gpa, try self.wip.gep(
+            .inbounds,
+            self.module.value_type,
+            self.produced[called.callee].value,
+            &.{try self.module.builder.intValue(.i64, mir.function_run_receiver)},
+            "receiver.slot",
+        ));
         for (called.arguments) |argument| {
             try arguments.append(gpa, self.produced[argument].value);
         }
@@ -6961,29 +7187,13 @@ const Body = struct {
             // one load; the bytes are the module's own constants and
             // nobody frees them (docs/FUNCTIONS.md D3).
             .function_name => {
-                // As at an indirect call, the sentinel in an unwritten
-                // function slot names no table row.  Check before the
-                // inbounds GEP so damaged-but-verified MIR traps instead
-                // of making LLVM assume an out-of-bounds access cannot
-                // happen.
-                try self.check(
-                    try self.wip.icmp(
-                        .uge,
-                        self.produced[of[0]].value,
-                        try self.module.builder.intValue(
-                            .i32,
-                            @as(i64, @intCast(self.module.program.functions.len)),
-                        ),
-                        "no.such.function",
-                    ),
-                    .null_object,
-                );
+                const named = try self.namedFunction(self.produced[of[0]].value, "named");
                 const names = try self.module.functionNames();
                 const slot = try self.wip.gep(
                     .inbounds,
                     self.module.string_type,
                     names.toValue(self.module.builder),
-                    &.{try self.wip.cast(.zext, self.produced[of[0]].value, .i64, "name.at")},
+                    &.{try self.wip.cast(.zext, named, .i64, "name.at")},
                     "name.slot",
                 );
                 self.produced[register].value = try self.wip.load(
@@ -7056,6 +7266,21 @@ const Body = struct {
                 self.produced[register].outcome = try self.raiseIo(.rename, answer, from, from_length);
             },
             .dir_list => try self.emitDirList(register, of[0]),
+            // Making a directory is the same shape deleting one is: a
+            // path in, an outcome back.  The parents and the
+            // already-there case are the *host's* rule (`abi.zig`'s
+            // `DirCreateFn`), not something generated code arranges —
+            // a loop here would be a second implementation of the
+            // service, and the two engines would each have one.
+            .dir_create => {
+                const path, const path_length = try self.textParts(of[0], "path");
+                const answer = try self.callHost(
+                    .dir_create,
+                    &.{ path, path_length },
+                    "made",
+                );
+                self.produced[register].outcome = try self.raiseIo(.make, answer, path, path_length);
+            },
 
             // -- the byte channel (docs/BYTES.md) ---------------------
             //
@@ -7167,6 +7392,13 @@ const Body = struct {
             },
             .clock_ms => {
                 self.produced[register].value = try self.callHostNumber(.clock_ms, "clock");
+            },
+            // The wall clock takes the machine facts' shape and not
+            // the monotonic clock's: a host with no calendar answers
+            // `no` and the program traps `host_unavailable`, rather
+            // than a number being invented for it (`abi.EpochFn`).
+            .epoch_ms => {
+                self.produced[register].value = try self.callHostFact(.epoch_ms, "epoch");
             },
             .os_total_memory => {
                 self.produced[register].value = try self.callHostFact(.os_total_memory, "total");

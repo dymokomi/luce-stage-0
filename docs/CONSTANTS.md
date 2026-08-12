@@ -587,9 +587,9 @@ earlier examples or mechanisms disagree with it.
   materialize the surviving rows before user code.  Allocation failure
   cleans partial rows and names the declaration in debug mode.  The
   serialized module was `format_version = 33`; the published host table
-  did not change at that point; the current `abi.version` is 15 after
-  the later `shell_run` and `term_event_data` host services, and the
-  current module format is 36.
+  did not change at that point; the current `abi.version` is 16 after
+  the later `shell_run`, `term_event_data`, `dir_create` and `epoch_ms`
+  host services, and the current module format is 41.
 - **Customers and proof.**  `std.zip` now holds the CRC table, four
   length/distance base and extra tables, and the code-length order as
   six file-scope constants.  The editor's keyword and builtin sets are

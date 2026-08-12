@@ -28,6 +28,7 @@ pub const living = [_][]const u8{
     "docs/MODES.md",
     "docs/PIPELINE.md",
     "docs/CODING_GUIDE.md",
+    "docs/SOFTWARE_DESIGN.md",
     "docs/README.md",
     "README.md",
     "CLAUDE.md",
@@ -62,6 +63,7 @@ pub const records = [_][]const u8{
     "docs/PACKAGES.md",
     "docs/TESTING.md",
     "docs/BINDING.md",
+    "docs/FILESYSTEM.md",
     "docs/SELF.md",
     "docs/CONSTANTS.md",
 };

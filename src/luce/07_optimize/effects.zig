@@ -70,10 +70,11 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
         // change: a local (invalidated by its own `local_set`, which
         // the caller tracks), a field of an immutable struct value.
         .const_boolean, .const_long, .const_double, .const_string, .const_container => .pure,
-        // A function value is a name for a function: the same name
-        // twice is the same value, and naming one runs nothing
-        // (docs/FUNCTIONS.md D3).
-        .const_function => .pure,
+        // A function value is a fresh two-slot run — the function it
+        // names beside the receiver it carries — so making one has the
+        // identity and the allocation `struct_make` has, and for the
+        // same reason (docs/BINDING.md D12).
+        .const_function => .impure,
         .local_get, .struct_get => .pure,
 
         .unary => |unary| switch (unary.op) {
@@ -93,7 +94,12 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
             function.result_types[at],
         )) .stable else .pure,
         .binary => |binary| if (binary.op.isComparison())
-            .pure
+            // A function value is compared by the function it names,
+            // read out of its run — and every reader of a run refuses
+            // the one that is nowhere, so this one comparison can
+            // refuse (docs/BINDING.md D12).  `function_name` is
+            // `.stable` for the same reason and no other.
+            (if (binary.operand_type == .function) .stable else .pure)
         else if (binary.operand_type.isFloating())
             // IEEE arithmetic answers everything, `/0` included, so
             // every double operator is pure — and since `/` is real
@@ -279,12 +285,14 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .read_line,
         .print_error,
         .clock_ms,
+        .epoch_ms,
         .sleep_ms,
         .env_get,
         .file_append,
         .file_delete,
         .file_rename,
         .dir_list,
+        .dir_create,
         // The byte channel: `file_open` takes a table row and every
         // other one reaches the world through a handle.
         .file_open,
@@ -485,11 +493,15 @@ pub fn viewStable(instruction: Instruction) bool {
             .read_line,
             .print_error,
             .clock_ms,
+            .epoch_ms,
             .sleep_ms,
             .env_get,
             .file_append,
             .file_delete,
             .file_rename,
+            // Making a directory takes no table row: it is a path in
+            // and an outcome back, like deleting one.
+            .dir_create,
             // Reading and writing through a handle resolves that
             // handle and the buffer, which are reads.
             .handle_read,

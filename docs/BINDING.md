@@ -1,6 +1,11 @@
 # Bound methods — the method travels with its struct
 
-> **Status (2026-08-10): ratified, not built.**  The owner ratified
+> **Status (2026-08-11): built in part — see *As built* below.**
+> D1, D2, D3, D5's value-state half, D6's naming half, D9's refusal and
+> D12 shipped; D4's carrying receiver, D6's refusal, D7, D8 and D11 did
+> not, each for a reason recorded there.
+>
+> **Ratified 2026-08-10.**  The owner ratified
 > the design in conversation on 2026-08-10, including the two defaults
 > held out for the decision: a carrying receiver **borrows** at a bare
 > bind and takes `give`/`copy` to move in, and the spelling is plain
@@ -81,3 +86,93 @@ unwrapped).
 After `luce test` (whose runner this does not touch), before `termui`
 (whose design assumes D11 and D7).  The run is union-sized; the memo
 that schedules it is PACKAGES.md's flagship plan.
+
+## As built — 2026-08-11
+
+**D12 first, and it is the whole of the change.**  A function value
+grew from a bare index to `{function, receiver}` and both engines carry
+the pair as a **two-slot field run**: slot 0 the function's index in the
+program table, slot 1 the receiver or `none`.  That shape is a struct
+value's shape, so `libluce_rt` learned exactly what D12 promised — a
+run of two values and how long it is — and not one semantic: the copy
+that `ownValue` makes, the release that `dropStorage` makes and the
+object walk that `bind` makes were already written for struct field
+runs and were already dynamic, because a `Value` describes itself.  The
+run length and the two slot numbers are stated once, in `06_mir/defs.zig`
+beside `boxTag`, for that function's own reason: both engines build one
+and both read one.
+
+The run is built the same way whether the value carries a receiver or
+not.  That costs a plain function value one allocation it did not use to
+make, and it buys the thing worth having: **no reader of a function
+value branches on boundness to find its way around one**, so a place
+that holds a `func(...)` cannot tell — and must not be able to tell —
+which of the three it holds.
+
+`const_function` therefore grew a receiver operand, stopped being pure
+(it allocates, exactly as `struct_make` does), and its result now owns
+storage.  `format_version` moved 40 → **41**.  `abi.version` did not
+move and the argument is short: nothing crosses the host boundary that
+did not before.  A receiver travels inside a Luce value, a bound call is
+a call, and the host table gained no slot.
+
+**The bind lands where FUNCTIONS D2 said it would.**  Stage 4 resolves
+`receiver.method` in the same `.field` arm that already resolved
+`Struct.helper`, one step later: when the head does not name a
+declaration, the target is lowered as a value and its type is asked for
+a method of that name.  A miss answers *not a bind* and the field path
+below says what it always said about `p.x`, which is why binding cost
+the field diagnostics nothing.  The type is the declaration's shape with
+parameter zero dropped — `matchesSignature` gained the index of the
+first parameter the written type covers, and that number is 0 for a
+plain function value and 1 for a bind.
+
+**The receiver is copied in at the bind (D3)** through the same
+`ownedForStore` a struct field's value goes through: a fresh temporary
+moves, a borrowed read is duplicated.  So writing the original receiver
+afterwards does not reach the value, which is the sentence D3 is for,
+and a receiver holding text is released once by the value that holds it.
+
+**The backend dispatches through adapters, and that is new.**  A call
+site cannot know whether the value in its hand carries a receiver — one
+`func(Point, Point) -> bool` place accepts a plain function, a lambda
+and a bind — but a C signature is chosen at compile time.  So the
+function table stopped holding functions and started holding one
+adapter per function some `const_function` names: `luce.bound.N` takes a
+receiver slot after the depth, unboxes it into the callee's parameter
+zero when the value is a bind, and ignores it when it is not.  Every
+indirect call passes the receiver slot of the run it is calling through.
+The price is one extra call frame per call *through a function value*;
+the alternative was two calling conventions at a site that cannot tell
+them apart.  The interpreter needs none of this: it has the program in
+front of it and prepends the receiver to the argument run.
+
+### What did not ship, and why
+
+- **D4's carrying receiver.**  Refused by name (`luce.sema.own`,
+  naming D4).  The blocker is not the verbs — those are S21's and were
+  ready — but that **`carriesObjects` asks a *type***, in some
+  thirty-five places, and a function type cannot say which of its
+  values carries.  `func(Point, Point) -> bool` is one type worn by a
+  plain function, a lambda, a value-state bind and an owning bind, and
+  D5's "a bound value's class is its receiver-state's class" therefore
+  makes the class a property of the *value*.  Making it one is a real
+  change to how stage 4 asks the ownership question, and it is the same
+  change D6's refusal needs (below).  Doing it badly under time
+  pressure would have put a wrong answer in the one place the language
+  cannot afford one, so it was not done at all.
+- **D6's refusal of `==` on a value-state bind.**  Equality compares
+  the function named, as it always did; two binds of one method
+  therefore compare equal whatever they carry, which is exactly the
+  dishonest answer D6 names.  The refusal is static and needs to know,
+  at the comparison, whether an operand may carry a receiver — the same
+  per-value class D4 needs.  The two reopen together.  `string(f)`
+  shipped: it answers the method's qualified name.
+- **D7's storable `func(...)?`.**  Not started.  A function value is
+  still not a struct field, a container element or an optional payload.
+- **D8's fallible function types.**  Not started; a fallible method is
+  refused at the bind (`luce.sema.fallible`) exactly as a fallible
+  function already was at a plain function value.
+- **D11's union member constructors.**  Not started.
+- **D9 shipped as a refusal**, as designed: a writing method names the
+  reader form and does not bind.

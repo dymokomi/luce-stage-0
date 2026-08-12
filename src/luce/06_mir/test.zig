@@ -679,7 +679,7 @@ test "an inout call aliases exactly local zero and cannot use another call lane"
         .parameters = try arena.dupe(types.Signature.Parameter, &.{.{ .value_type = .long }}),
         .result = .none,
     }});
-    functions[0].instructions[2] = .{ .const_function = 1 };
+    functions[0].instructions[2] = .{ .const_function = .{ .function = 1 } };
     functions[0].result_types[2] = .{ .function = 0 };
     try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
     functions[0].result_types[2] = .none;
@@ -856,7 +856,7 @@ test "recursive heap and function type tables are rejected before names render" 
 test "a function's integer storage is not a numeric conversion" {
     var program = try programOf(.{
         .instructions = &.{
-            .{ .const_function = 0 }, // r0
+            .{ .const_function = .{ .function = 0 } }, // r0
             .{ .const_long = 0 }, // r1, made a convert below
             .{ .ret = null }, // r2
         },

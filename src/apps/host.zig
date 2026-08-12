@@ -259,6 +259,8 @@ pub const Host = struct {
             .file_delete = cFileDelete,
             .file_rename = cFileRename,
             .dir_list = cDirList,
+            .dir_create = cDirCreate,
+            .epoch_ms = cEpoch,
             .exited = cExited,
             .os_total_memory = cTotalMemory,
             .os_available_memory = cAvailableMemory,
@@ -506,6 +508,21 @@ pub const Host = struct {
         return true;
     }
 
+    /// Make a directory and everything that leads to it, answering
+    /// whether there is one there now.
+    ///
+    /// `createDirPath` is `mkdir -p` and answers success for a
+    /// directory that was already there, which is exactly the pair of
+    /// rules `abi.DirCreateFn` publishes — so loom keeps them by
+    /// naming the one call that already has them rather than by
+    /// building a loop of its own.  Anything else the world says —
+    /// a permission refused, a *file* holding the name — is `false`,
+    /// which the program meets as `io_failed`.
+    fn createDirectory(self: *Host, path: []const u8) bool {
+        std.Io.Dir.cwd().createDirPath(self.io, path) catch return false;
+        return true;
+    }
+
     /// The names in a directory, without `.` and `..` — the iterator
     /// never yields them — kept in this Host in both shapes the two
     /// engines read.  Borrowed until the next listing.
@@ -607,6 +624,16 @@ pub const Host = struct {
     /// even that.
     fn clockMilliseconds(self: *Host) i64 {
         return std.Io.Timestamp.now(self.io, .awake).toMilliseconds();
+    }
+
+    /// Milliseconds since the Unix epoch.  `real` and not `awake`:
+    /// this is the one reading whose *value* is the answer, so it is
+    /// the settable system clock — the very property that disqualifies
+    /// it from `clock_ms` is what makes it a calendar.  Loom always
+    /// knows what time it is, so it never answers "cannot tell"; the
+    /// slot is shaped to allow that for hosts that do not.
+    fn epochMilliseconds(self: *Host) i64 {
+        return std.Io.Timestamp.now(self.io, .real).toMilliseconds();
     }
 
     /// Wait at least this long.  A duration that has already elapsed —
@@ -1302,6 +1329,19 @@ pub const Host = struct {
             to[0..@intCast(to_length)],
         );
         return if (moved) .yes else .no;
+    }
+
+    fn cDirCreate(
+        context: ?*anyopaque,
+        path: [*]const u8,
+        path_length: i64,
+    ) callconv(.c) abi.Answer {
+        return if (of(context).createDirectory(path[0..@intCast(path_length)])) .yes else .no;
+    }
+
+    fn cEpoch(context: ?*anyopaque, answer: *i64) callconv(.c) abi.Answer {
+        answer.* = of(context).epochMilliseconds();
+        return .yes;
     }
 
     fn cDirList(
@@ -2131,6 +2171,53 @@ test "the C table offers every service, over the same implementation" {
         &length,
     ));
 
+    // Making a directory: the parents come with it, saying it twice
+    // is success rather than an error, and a *file* holding the name
+    // is a refusal — the three rules `abi.DirCreateFn` publishes,
+    // against the real file system rather than a model of one.
+    const nested = try std.fs.path.join(
+        testing.allocator,
+        &.{ directory, "store", "packages", "geo-1.2.0" },
+    );
+    defer testing.allocator.free(nested);
+    try testing.expectEqual(abi.Answer.yes, table.dir_create.?(
+        table.context,
+        nested.ptr,
+        @intCast(nested.len),
+    ));
+    try testing.expectEqual(abi.Answer.yes, table.dir_create.?(
+        table.context,
+        nested.ptr,
+        @intCast(nested.len),
+    ));
+    // The parents really are there: a listing of the outermost one
+    // names the directory below it.
+    const store = try std.fs.path.join(testing.allocator, &.{ directory, "store" });
+    defer testing.allocator.free(store);
+    try testing.expectEqual(abi.Answer.yes, table.dir_list.?(
+        table.context,
+        store.ptr,
+        @intCast(store.len),
+        &text,
+        &length,
+    ));
+    try testing.expect(std.mem.indexOf(u8, text[0..@intCast(length)], "packages\x00") != null);
+    const occupied = try std.fs.path.join(testing.allocator, &.{ directory, "in_the_way.txt" });
+    defer testing.allocator.free(occupied);
+    try testing.expectEqual(abi.Answer.yes, table.handle_open.?(
+        table.context,
+        occupied.ptr,
+        @intCast(occupied.len),
+        @intFromEnum(luce.runtime.files.Mode.write),
+        &handle,
+    ));
+    try testing.expectEqual(abi.Answer.yes, table.handle_close.?(table.context, handle));
+    try testing.expectEqual(abi.Answer.no, table.dir_create.?(
+        table.context,
+        occupied.ptr,
+        @intCast(occupied.len),
+    ));
+
     // The clock only promises that differences mean something, so
     // that is all this checks.
     const began = table.clock_ms.?(table.context);
@@ -2151,6 +2238,18 @@ test "the C table offers every service, over the same implementation" {
         &text,
         &length,
     ));
+
+    // The wall clock, held to what can be true of any calendar rather
+    // than to today's date: a reading well past 2001 and well short of
+    // 2100, and two readings in order.  A test that asserted a date
+    // would be a test that expires.
+    var stamped: i64 = undefined;
+    var stamped_again: i64 = undefined;
+    try testing.expectEqual(abi.Answer.yes, table.epoch_ms.?(table.context, &stamped));
+    try testing.expect(stamped > 1_000_000_000_000);
+    try testing.expect(stamped < 4_102_444_800_000);
+    try testing.expectEqual(abi.Answer.yes, table.epoch_ms.?(table.context, &stamped_again));
+    try testing.expect(stamped_again >= stamped);
 
     try testing.expectEqual(@as(i64, call_depth), table.call_depth.?(table.context));
 

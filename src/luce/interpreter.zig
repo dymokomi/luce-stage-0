@@ -176,6 +176,14 @@ pub const Host = struct {
         arena: Allocator,
         path: []const u8,
     ) error{OutOfMemory}!?[]const []const u8 = null,
+    /// Make a directory and every directory leading to it, answering
+    /// whether there is one there now.  A directory already in place
+    /// is `true`, and a *file* holding the name is `false` — the
+    /// caller asked for a directory and there is not one.  The `false`
+    /// becomes the `io_failed` the program meets, exactly as the file
+    /// services above do (`abi.DirCreateFn` says the same rules on the
+    /// other table).
+    dir_create: ?*const fn (context: *anyopaque, path: []const u8) bool = null,
     /// One line of standard input, the prompt written and flushed
     /// first.  Null means end of input, which the program meets as
     /// `none` — nothing there, and no reason worth carrying.
@@ -191,6 +199,13 @@ pub const Host = struct {
     /// wait of at least that long.  Neither can fail.
     clock_ms: ?*const fn (context: *anyopaque) i64 = null,
     sleep_ms: ?*const fn (context: *anyopaque, milliseconds: i64) void = null,
+    /// Milliseconds since the Unix epoch — what time it is, which the
+    /// monotonic clock above cannot say.  Null *from* it — as distinct
+    /// from the slot itself being null — means this host has no
+    /// calendar, which the program meets as `host_unavailable`: the
+    /// same shape the machine facts take, and for the same reason
+    /// (`abi.EpochFn`).
+    epoch_ms: ?*const fn (context: *anyopaque) ?i64 = null,
     /// One environment variable, or null when it is unset.
     env: ?*const fn (
         context: *anyopaque,

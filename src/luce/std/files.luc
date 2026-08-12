@@ -72,6 +72,20 @@ func delete(path: string) -> !:
 func rename(from: string, to: string) -> !:
     try file_rename(from, to)
 
+# Make a directory, and every directory leading to it.
+#
+# It means "there is a directory at this path when I return", so a
+# directory that was already there is success and not an error.  That
+# is deliberate: the alternative makes every caller write
+# `if not files.exists(p)` in front of the call, and that check is a
+# race — the same one that is why `exists` is never a guard for the
+# read after it.
+#
+# A *file* holding the name is an error: you asked for a directory and
+# there is not one.
+func make_directory(path: string) -> !:
+    try dir_create(path)
+
 # -- the byte channel (docs/BYTES.md) ---------------------------------
 #
 # A file is bytes reached through an open handle, and text is a

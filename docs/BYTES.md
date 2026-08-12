@@ -228,11 +228,13 @@ directory, listed, extracted to files whose contents are checked byte
 for byte, zipped again from those files, and extracted a second time to
 the same bytes.  Read, write, read, every step a process.  Three things
 that run found nothing in `std.zip` and one thing in the language, and
-the one thing is an absence already written down: there is **no
+the one thing was an absence already written down: there was **no
 directory-creating builtin** (docs/MISSING.md), so an entry under a
-directory is extracted only where that directory already exists, and
-zipper says exactly that instead of flattening a name or writing half
-an archive.
+directory could be extracted only where that directory already existed,
+and zipper said exactly that instead of flattening a name or writing
+half an archive.  That absence is **closed**: `dir_create` arrived at
+`abi.version` 16 with `files.make_directory` over it, and zipper makes
+each entry's directory as it reaches it.
 
 The paragraph above still holds and is the reason the floor is where it
 is: the unconditional rows are the embedded bytes.  What was added

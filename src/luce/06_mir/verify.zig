@@ -667,18 +667,33 @@ fn isMember(program: *const Program, held: i64, of: Type) bool {
 ///
 /// A fallible function is never a value (docs/FUNCTIONS.md, As built),
 /// so one arriving here is a module stage 4 could not have written.
+/// A function value names a function and wears a signature, and the two
+/// have to agree — with the receiver, when there is one, standing where
+/// the signature does not reach.
+///
+/// **A bind drops one parameter from the written shape**
+/// (docs/BINDING.md D1): the callee's parameter zero is the receiver the
+/// value carries, and the signature covers everything after it.  Tying
+/// the receiver register's type to that parameter here is what stops a
+/// module from calling one struct's method with another's value.
 fn expectSignature(
     program: *const Program,
+    caller: *const Function,
+    defined: *const std.AutoHashMapUnmanaged(Register, void),
     signature: types.Signature,
-    named: u32,
+    named: Instruction.BoundFunction,
 ) VerifyError!void {
-    const callee = program.functions[named];
+    const callee = program.functions[named.function];
     if (callee.fallible) return error.TypeMismatch;
     if (callee.parameter_count != 0 and callee.locals[0].inout) return error.BadFunction;
-    if (signature.parameters.len != callee.parameter_count) return error.BadFunction;
     if (callee.locals.len < callee.parameter_count) return error.BadLocal;
+    const bound: u32 = if (named.receiver == null) 0 else 1;
+    if (signature.parameters.len + bound != callee.parameter_count) return error.BadFunction;
+    if (named.receiver) |register| {
+        try expectType(try operandType(caller, defined, register), callee.locals[0].local_type);
+    }
     for (signature.parameters, 0..) |parameter, index| {
-        try expectType(callee.locals[index].local_type, parameter.value_type);
+        try expectType(callee.locals[bound + index].local_type, parameter.value_type);
     }
     try expectType(callee.return_type, signature.result);
 }
@@ -727,15 +742,15 @@ fn verifyInstruction(
             if (constant >= program.container_constants.len) return error.BadConstant;
             try expectType(result, .{ .heap = program.container_constants[constant].heap });
         },
-        // A function value names a function and wears a signature, and
-        // the two have to agree: the named function's parameters and
-        // result are what the signature says, or the module could call
-        // one shape through another's spelling (docs/FUNCTIONS.md D2).
+        // Which function, which signature, and — for a bind — which
+        // receiver: `expectSignature` is where the three are tied
+        // together, or the module could call one shape through
+        // another's spelling (docs/FUNCTIONS.md D2, docs/BINDING.md D1).
         .const_function => |named| {
-            if (named >= program.functions.len) return error.BadFunction;
+            if (named.function >= program.functions.len) return error.BadFunction;
             if (result != .function) return error.TypeMismatch;
             if (result.function >= program.signatures.len) return error.BadFunction;
-            try expectSignature(program, program.signatures[result.function], named);
+            try expectSignature(program, function, defined, program.signatures[result.function], named);
         },
         .local_get => |local| {
             if (local >= function.locals.len) return error.BadLocal;
@@ -1563,7 +1578,7 @@ fn verifyIntrinsic(
             try expectType(arguments[0], .string);
             try expectType(result, .none);
         },
-        .clock_ms => {
+        .clock_ms, .epoch_ms => {
             try exactly(arguments, 0);
             try expectType(result, .long);
         },
@@ -1585,9 +1600,11 @@ fn verifyIntrinsic(
             // error channel, like every other file service.
             try expectType(result, .none);
         },
-        .file_delete => {
+        .file_delete, .dir_create => {
             try exactly(arguments, 1);
             try expectType(arguments[0], .string);
+            // Answers nothing: whether the world took it travels in
+            // the error channel, like every other file service.
             try expectType(result, .none);
         },
         .dir_list => {

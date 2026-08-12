@@ -45,8 +45,8 @@ check against.
 ## Files
 
 The host's raw file builtins are `file_read`, `file_write`,
-`file_append`, `file_delete`, `file_rename`, `file_exists` and
-`dir_list`, plus `file_open` for a scope-owned handle;
+`file_append`, `file_delete`, `file_rename`, `file_exists`,
+`dir_list` and `dir_create`, plus `file_open` for a scope-owned handle;
 [`std.files`](/std/files/) is the honest layer over them. Every
 operation whose answer the world decides is **fallible**, so you `try`
 or `catch` it.

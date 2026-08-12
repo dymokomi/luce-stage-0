@@ -202,11 +202,20 @@ receiver.method(args)       sugar; see below
 ## Function values and lambdas {#function-values-and-lambdas}
 
 A top-level or static namespace function name is a value where a
-[function type](../types/#function) is expected. A method reference is
-not: `point.length` would carry its receiver and therefore cross the
-capture line. A value is called with ordinary parentheses, and its
-arguments are checked against the signature exactly as a direct
-call's are, including any required `give`.
+[function type](../types/#function) is expected. So is
+`receiver.method` for a **reading** method: the value carries the
+receiver, and the written type drops the receiver's parameter, so a
+method taking one `long` at its call site binds as a
+`func(long) -> long`. The receiver is copied into the value at the
+bind, which is what makes a bound value an ordinary value with no
+ownership verb of its own. A value is called with ordinary
+parentheses, and its arguments are checked against the signature
+exactly as a direct call's are, including any required `give`.
+
+Three binds are refused, each by name: a **writing** method (call it on
+the binding that owns its receiver), a **fallible** method (a function
+type carries no `!`), and a receiver that **carries objects** — a
+container, a resource, or a struct holding one.
 
 A lambda is parenthesized parameter names, `->`, and one expression:
 

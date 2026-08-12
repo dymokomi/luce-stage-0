@@ -49,6 +49,9 @@ question, never a guard</td></tr>
 <tr><td><code>dir_list(path)</code></td><td><code>list(string)!</code></td><td>The
 names in a directory, unsorted, without <code>.</code> and
 <code>..</code></td></tr>
+<tr><td><code>dir_create(path)</code></td><td><code>!</code></td><td>Make a
+directory and every directory leading to it; one already there is
+success</td></tr>
 </table>
 </div>
 
@@ -178,6 +181,8 @@ keys.luc: ok
 <tr><th>Builtin</th><th>Answers</th><th>What loom does</th></tr>
 <tr><td><code>clock_ms()</code></td><td><code>long</code></td><td>A monotonic
 reading — only differences mean anything</td></tr>
+<tr><td><code>epoch_ms()</code></td><td><code>long</code></td><td>Milliseconds
+since the Unix epoch — what time it is</td></tr>
 <tr><td><code>sleep_ms(ms)</code></td><td></td><td>Wait at least that
 long</td></tr>
 <tr><td><code>env(name)</code></td><td><code>string?</code></td><td>One
@@ -197,7 +202,13 @@ that number</td></tr>
 
 <p><code>clock_ms</code> is monotonic and not a calendar: a clock an administrator
 can move backwards would break even the promise that differences mean something.
-There is no wall clock, because dates are a library that does not exist yet.
+That is why the wall clock is a second builtin rather than a mode of this one —
+<code>epoch_ms</code> counts from 1970-01-01T00:00:00Z, so its reading is the
+answer and a timestamp is made of it, while a span measured with it can come out
+negative. Turning it into a date is still a library that does not exist yet; this
+is the number that library will be built on. A host with no calendar refuses
+<code>epoch_ms</code> rather than inventing a date, exactly as a host that cannot
+measure its machine refuses the <code>os_*</code> facts.
 <code>sleep_ms</code> of a duration that has already elapsed — zero, or the
 negative one <code>deadline - clock_ms()</code> produces on a slow frame — is not
 a failure; there is no time left to wait, so the call returns. A frame-pacing

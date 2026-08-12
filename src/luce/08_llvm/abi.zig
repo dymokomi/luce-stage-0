@@ -177,7 +177,21 @@ const trace = @import("../runtime/trace.zig");
 /// the mouse coordinates, button, modifiers and wheel value belonging to
 /// the event just read, plus zero for keyboard events.  No earlier field
 /// moves, but the new intrinsic must not index an older table.
-pub const version: u32 = 15;
+///
+/// 16 — `dir_create` and `epoch_ms` are appended, in one bump for two
+/// services because a version is a rebuild of every artifact there is
+/// and paying that twice in a week buys nothing.  They are not one
+/// subject, and this file says so rather than pretending: the first
+/// makes a directory and the parents leading to it, answering `no` for
+/// a world that refused; the second says what time it is, which
+/// `clock_ms` cannot — that clock is monotonic with an unspecified
+/// origin, so only its differences mean anything.  Both are optional
+/// and fail-closed like every effect before them, and `epoch_ms`
+/// answers through the `Answer` convention rather than as a bare
+/// number for the reason the machine facts do: a host with no calendar
+/// must be able to say so instead of inventing a number.  No earlier
+/// field moves.
+pub const version: u32 = 16;
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the
@@ -577,6 +591,51 @@ pub const DirListFn = *const fn (
     names_length: *i64,
 ) callconv(.c) Answer;
 
+/// Make a directory at `path`, **and every directory leading to it**.
+/// `no` is the world saying no, which the program meets as
+/// `io_failed`.
+///
+/// Two rules a host must keep, both of them the caller's whole reason
+/// for calling:
+///
+///   * **The parents are made too** (`mkdir -p`).  The callers are a
+///     package store laying out `.luce/packages/NAME-VERSION/` and an
+///     extractor writing under a directory the archive named and
+///     nobody made; a one-component-at-a-time service puts the same
+///     splitting loop in every program.
+///   * **A directory already there is `yes`.**  The call means "there
+///     is a directory at this path when I return", and answering `no`
+///     would make every caller write an existence check in front of
+///     it — which is a race, and the same one `file_exists` in front
+///     of `file_read` is (docs/FAILURE.md).
+///
+/// A *file* holding the name is still `no`: the caller asked for a
+/// directory and there is not one.
+pub const DirCreateFn = *const fn (
+    context: ?*anyopaque,
+    path: [*]const u8,
+    path_length: i64,
+) callconv(.c) Answer;
+
+/// Milliseconds since the Unix epoch — what time it is, as distinct
+/// from `clock_ms`'s "how much time has passed".
+///
+/// `yes` fills `answer`.  `no` means **this host cannot tell**: it has
+/// no calendar, or is deliberately running the program without one,
+/// and the program then traps `host_unavailable` exactly as it would
+/// against a null slot.  That is why this is not a bare `i64` like
+/// `ClockFn`: a monotonic reading may have any origin at all and every
+/// host can produce one, while there is no honest wall-clock number
+/// for a host that does not know the date, and inventing one is a lie
+/// a program cannot see through (`apps/machine.zig`'s rule).
+///
+/// It is **not monotonic**, deliberately: an operator may set the
+/// clock, and a program timing something wants `clock_ms`.
+pub const EpochFn = *const fn (
+    context: ?*anyopaque,
+    answer: *i64,
+) callconv(.c) Answer;
+
 // ---------------------------------------------------------------------------
 // The handle channel (version 12)
 // ---------------------------------------------------------------------------
@@ -745,6 +804,13 @@ pub const Host = extern struct {
     shell_run: ?ShellRunFn = null,
     /// Version 15: numeric data for the most recent terminal input event.
     term_event_data: ?TermEventDataFn = null,
+    /// Version 16: a directory made with its parents, and the wall
+    /// clock `clock_ms` deliberately is not.  Appended together, so
+    /// every earlier field keeps its address; unrelated to each other,
+    /// which the version note above says out loud rather than
+    /// inventing a subject the two share.
+    dir_create: ?DirCreateFn = null,
+    epoch_ms: ?EpochFn = null,
 };
 
 /// The index of each `Host` field, as the generated code addresses it.
@@ -792,6 +858,8 @@ pub const Slot = enum(u32) {
     worker_join = 38,
     shell_run = 39,
     term_event_data = 40,
+    dir_create = 41,
+    epoch_ms = 42,
 
     pub const count = @typeInfo(Slot).@"enum".fields.len;
 };

@@ -57,6 +57,9 @@ pub const Function = @import("06_mir/defs.zig").Function;
 pub const Program = @import("06_mir/defs.zig").Program;
 pub const strip = @import("06_mir/defs.zig").strip;
 pub const boxTag = @import("06_mir/defs.zig").boxTag;
+pub const function_run_length = @import("06_mir/defs.zig").function_run_length;
+pub const function_run_named = @import("06_mir/defs.zig").function_run_named;
+pub const function_run_receiver = @import("06_mir/defs.zig").function_run_receiver;
 
 /// Building the MIR: the emitter stage 4 records on, and the pass that
 /// closes what it recorded into a `Program`.

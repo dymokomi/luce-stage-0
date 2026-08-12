@@ -1189,7 +1189,7 @@ test "luce.sema.method: a struct has no method by that name, and the closest one
     );
 }
 
-test "luce.sema.name: there are no bound method values" {
+test "luce.sema.name: a method reference with no landing place is not a value" {
     try expectSaying(
         \\struct Point:
         \\    x: long
@@ -1206,6 +1206,92 @@ test "luce.sema.name: there are no bound method values" {
     ,
         "luce.sema.name",
         "is a function; write",
+    );
+}
+
+test "luce.sema.call: a writing method does not bind (BINDING.md D9)" {
+    try expectSaying(
+        \\struct Counter:
+        \\    total: long
+        \\
+        \\    func bump(by: long):
+        \\        self.total = self.total + by
+        \\
+        \\func apply(f: func(long)):
+        \\    f(1)
+        \\
+        \\func main():
+        \\    var counter = Counter(total = 0)
+        \\    apply(counter.bump)
+        \\
+    ,
+        "luce.sema.call",
+        "writes its receiver, and a writing method is not a function value",
+    );
+}
+
+test "luce.sema.own: a receiver carrying objects does not bind yet (BINDING.md D4)" {
+    try expectSaying(
+        \\struct Bag:
+        \\    items: list(long)
+        \\
+        \\    func beyond(n: long) -> bool:
+        \\        return len(self.items) > n
+        \\
+        \\func apply(f: func(long) -> bool) -> bool:
+        \\    return f(0)
+        \\
+        \\func main():
+        \\    let bag = Bag(items = new list(long))
+        \\    assert(apply(bag.beyond) == false)
+        \\
+    ,
+        "luce.sema.own",
+        "binding a carrying receiver is not built yet",
+    );
+}
+
+test "luce.sema.type: a bind whose shape does not fit the place is refused" {
+    try expectSaying(
+        \\struct Scale:
+        \\    factor: long
+        \\
+        \\    func times(n: long) -> long:
+        \\        return n * self.factor
+        \\
+        \\func apply(f: func(long, long) -> long) -> long:
+        \\    return f(1, 2)
+        \\
+        \\func main():
+        \\    let doubling = Scale(factor = 2)
+        \\    assert(apply(doubling.times) == 2)
+        \\
+    ,
+        "luce.sema.type",
+        "bound is",
+    );
+}
+
+test "luce.sema.fallible: a fallible method does not bind yet (BINDING.md D8)" {
+    try expectSaying(
+        \\struct Reader:
+        \\    at: long
+        \\
+        \\    func value(n: long) -> long!:
+        \\        if n < 0:
+        \\            error("negative")
+        \\        return n + self.at
+        \\
+        \\func apply(f: func(long) -> long) -> long:
+        \\    return f(1)
+        \\
+        \\func main():
+        \\    let reader = Reader(at = 1)
+        \\    assert(apply(reader.value) == 2)
+        \\
+    ,
+        "luce.sema.fallible",
+        "a fallible method is not a value yet",
     );
 }
 

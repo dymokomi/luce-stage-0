@@ -206,10 +206,12 @@ static func name(param: Type):        # has no self
 
 `self` has the enclosing type and is available only in a method body;
 writing it as a parameter is refused. `p.length()` resolves from `p`'s
-type. There is no dispatch, no bound method value, and no
-`Point.length(p)` type-qualified form. A static member is called as
-`Point.origin()` and may be a function value or worker target; a method
-may not.
+type. There is no dispatch and no `Point.length(p)` type-qualified
+form. A static member is called as `Point.origin()` and may be a
+function value or worker target. A method may not be spawned, and it
+is a function value only as a **bound** one — `p.length` where a
+function type is expected, carrying `p`
+([expressions](../expressions/#function-values-and-lambdas)).
 
 The compiler infers whether a method writes its receiver. A store to
 `self` or a value field, or a transitive call to another writer on
