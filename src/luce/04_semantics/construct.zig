@@ -593,7 +593,7 @@ pub fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Typed {
                     try self.fail(
                         "luce.sema.convert",
                         call.span,
-                        "string() converts a number, a bool, a string, an enum, or a function value; a builder hands over its text with .build()",
+                        "string() converts a number, a bool, a string, an enum, a union member, or a function value; a builder hands over its text with .build()",
                         .{},
                     );
                     return null;
@@ -773,7 +773,7 @@ fn failConvert(self: *FunctionBuilder, call: ast.Call, value: Typed) Error!?Type
     // a message that enumerates them is a message that goes stale
     // every time the ladder grows a rung.
     const takes: []const u8 = if (conversionNamed(call.callee).? == .string)
-        "a number, a bool, a string, an enum, or a function value"
+        "a number, a bool, a string, an enum, a union member, or a function value"
     else
         "a number";
     try self.fail("luce.sema.convert", call.span, "{s}() converts {s}, not {s}{s}", .{
@@ -953,11 +953,33 @@ pub fn lowerIntrinsic(
             result = arguments[0].value_type;
         },
         .len => {
-            const measurable = arguments[0].value_type == .string or
-                arguments[0].value_type == .heap;
+            // **A `file` and a `task` are `.heap` and are not
+            // containers.**  The gate used to admit every heap type
+            // while the sentence under it listed five, and the two the
+            // sentence left out are exactly the two with no length:
+            // `len(spawn work())` type-checked, verified, and reached a
+            // runtime switch whose file/task arm is `unreachable`.  The
+            // gate now asks the descriptor, so the predicate and the
+            // sentence say the same thing.
+            const measurable = arguments[0].value_type == .string or measure: {
+                const descriptor = self.analyzer.heapOf(arguments[0].value_type) orelse break :measure false;
+                break :measure switch (descriptor) {
+                    .list, .map, .array, .builder => true,
+                    .file, .task => false,
+                };
+            };
             if (!measurable) {
                 if (arguments[0].value_type == .optional) {
                     try refusals.failAbsence(self, call.span, "len", arguments[0].value_type, call.arguments[0].value);
+                    return .failed;
+                }
+                if (arguments[0].value_type == .heap) {
+                    try self.fail(
+                        "luce.sema.type",
+                        call.span,
+                        "len takes a string, list, map, array, or builder; {s} is a resource, not a container, and has no length",
+                        .{try self.analyzer.typeName(arguments[0].value_type)},
+                    );
                     return .failed;
                 }
                 return failIntrinsic(self, call, "len takes a string, list, map, array, or builder");

@@ -1383,6 +1383,256 @@ test "luce.sema.method: searching a container of function values is equality too
     );
 }
 
+// ---------------------------------------------------------------------------
+// What a comparison reaches, not what its outermost tag says
+// ---------------------------------------------------------------------------
+//
+// Three refusals were written as `type == .function` or
+// `type == .variant` where the honest question is *what does comparing
+// this value reach* — and a struct's `==` is field-by-field `==`, so a
+// wrapper was all it took to walk past every one of them.  Each of the
+// three programs below compiled, and each panicked the runtime from
+// ordinary source: a union's payload run has a different length on each
+// arm, so `Cell == Cell` walked two slices of unequal length, and a
+// stored function value reached a comparator whose `.function` arm is
+// `unreachable` because there is no honest answer to give.  One walk
+// answers for all three now (`04_semantics/shapes.zig`'s
+// `incomparablePart`), and it stops where `==` stops.
+
+test "luce.sema.union: a struct carrying a union is not compared either (UNION.md D16)" {
+    // `==` on a union is refused because `match` is the only door into
+    // one.  A struct's `==` *is* field-by-field `==`, so comparing a
+    // struct that holds one asks exactly the refused question through a
+    // wrapper — and answered it by walking the inactive payload slot,
+    // whose shape differs per arm.  With a `Point` on one side and a
+    // `long` on the other that is two runs of different lengths: a
+    // panic in a checked build, a read off the end of a slice in an
+    // unchecked one.
+    try expectSaying(
+        \\struct Point:
+        \\    x: long
+        \\    y: long
+        \\
+        \\union Shape:
+        \\    at(p: Point)
+        \\    count(n: long)
+        \\
+        \\struct Cell:
+        \\    what: Shape
+        \\
+        \\func main():
+        \\    let a = Cell(what = Shape.at(p = Point(x = 1, y = 2)))
+        \\    let b = Cell(what = Shape.count(n = 3))
+        \\    assert(a == b)
+        \\
+    ,
+        "luce.sema.union",
+        "match is the only door into one",
+    );
+    // The same refusal one level deeper, and with both payloads the
+    // same width — so nothing about it depends on the run lengths
+    // happening to differ.  This is the shape that answered "different"
+    // rather than crashing, which is the worse of the two failures: a
+    // program that quietly compares an inactive slot.
+    try expectSaying(
+        \\union Shape:
+        \\    circle(radius: double)
+        \\    square(side: double)
+        \\
+        \\struct Box:
+        \\    s: Shape
+        \\
+        \\struct Crate:
+        \\    b: Box
+        \\
+        \\func main():
+        \\    let a = Crate(b = Box(s = Shape.circle(radius = 1.0)))
+        \\    let b = Crate(b = Box(s = Shape.square(side = 1.0)))
+        \\    assert(a != b)
+        \\
+    ,
+        "luce.sema.union",
+        "match is the only door into one",
+    );
+}
+
+test "luce.sema.type: a struct carrying a function value is not compared either (BINDING.md D6)" {
+    // D7 blesses `(func(...) -> R)?` as a struct field, and D6 refuses
+    // `==` on a function value — but the refusal asked the operand's
+    // own tag, so the field shape D7 exists to allow walked straight
+    // past it into the runtime comparator's `unreachable`.
+    try expectSaying(
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\struct Button:
+        \\    label: string
+        \\    on_click: (func(long) -> long)?
+        \\
+        \\func main():
+        \\    let a = Button(label = "ok", on_click = twice)
+        \\    let b = Button(label = "ok", on_click = twice)
+        \\    assert(a == b)
+        \\
+    ,
+        "luce.sema.type",
+        "a function value has no equality",
+    );
+    // Two levels deeper, so the walk is a walk and not one hop.
+    try expectSaying(
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\struct Button:
+        \\    on_click: (func(long) -> long)?
+        \\
+        \\struct Row:
+        \\    b: Button
+        \\
+        \\struct Panel:
+        \\    r: Row
+        \\
+        \\func main():
+        \\    let a = Panel(r = Row(b = Button(on_click = twice)))
+        \\    assert(a == a)
+        \\
+    ,
+        "luce.sema.type",
+        "a function value has no equality",
+    );
+}
+
+test "luce.sema.method: a search asks what the element reaches, not what it is" {
+    // `find` and `contains` are `==` under another spelling, so they
+    // refuse exactly what `==` refuses — which stopped being true the
+    // moment the element was a struct rather than the function value
+    // itself.  A struct in a list is one level; a struct in a list in a
+    // struct is the level that proves the walk.
+    try expectSaying(
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\struct Button:
+        \\    label: string
+        \\    on_click: (func(long) -> long)?
+        \\
+        \\func main():
+        \\    var xs = new list(Button)
+        \\    xs.append(Button(label = "ok", on_click = twice))
+        \\    assert(xs.contains(Button(label = "ok", on_click = twice)))
+        \\
+    ,
+        "luce.sema.method",
+        "a function value has no equality",
+    );
+    try expectSaying(
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\struct Button:
+        \\    on_click: (func(long) -> long)?
+        \\
+        \\struct Row:
+        \\    b: Button
+        \\
+        \\func main():
+        \\    var rows = new list(Row)
+        \\    rows.append(Row(b = Button(on_click = twice)))
+        \\    let at = rows.find(Row(b = Button(on_click = twice)))
+        \\
+    ,
+        "luce.sema.method",
+        "a function value has no equality",
+    );
+    // A union element is the other half of the same rule: `match` is
+    // the only door, so a container of unions cannot be searched — as
+    // an element, and as a field of one.
+    try expectSaying(
+        \\union Shape:
+        \\    circle(radius: double)
+        \\    square(side: double)
+        \\
+        \\func main():
+        \\    var xs = new list(Shape)
+        \\    xs.append(Shape.circle(radius = 1.0))
+        \\    assert(xs.contains(Shape.square(side = 2.0)))
+        \\
+    ,
+        "luce.sema.method",
+        "match is the only door into one",
+    );
+    try expectSaying(
+        \\union Shape:
+        \\    circle(radius: double)
+        \\    square(side: double)
+        \\
+        \\struct Box:
+        \\    s: Shape
+        \\
+        \\func main():
+        \\    var xs = new list(Box)
+        \\    xs.append(Box(s = Shape.circle(radius = 1.0)))
+        \\    assert(xs.contains(Box(s = Shape.square(side = 2.0))))
+        \\
+    ,
+        "luce.sema.method",
+        "match is the only door into one",
+    );
+}
+
+test "luce.sema.type: len measures a container, and a resource is not one" {
+    // The gate admitted every `.heap` type while the sentence under it
+    // listed five, and the two the sentence left out are exactly the
+    // two with no length.  `len(spawn work())` type-checked, passed the
+    // MIR verifier, and reached a runtime switch whose file/task arm is
+    // `unreachable` — the predicate and its own message disagreeing,
+    // which is the whole bug.
+    try expectSaying(
+        \\func work() -> long:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let t = spawn work()
+        \\    assert(len(t) == 0)
+        \\
+    ,
+        "luce.sema.type",
+        "is a resource, not a container, and has no length",
+    );
+    try expectHostSaying(
+        \\func main() -> !:
+        \\    let f = try file_open("/tmp/luce-len-of-a-file", 1)
+        \\    assert(len(f) == 0)
+        \\
+    ,
+        "luce.sema.type",
+        "is a resource, not a container, and has no length",
+    );
+}
+
+test "luce.sema.type: values() of a map of function values is refused (BINDING.md D7)" {
+    // A map value is the one slot written bare, because `get` already
+    // answers `V?` — so `map(string, func(long) -> long)` is legal
+    // while `list(func(long) -> long)` is a type no program can write.
+    // `values()` manufactured one anyway: `luce check` said ok and
+    // `luce build` aborted the compiler with no diagnostic at all,
+    // because a list cell has no shape for a bare function value.
+    try expectSaying(
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\func main():
+        \\    var m = new map(string, func(long) -> long)
+        \\    m["a"] = twice
+        \\    let vs = m.values()
+        \\    assert(len(vs) == 1)
+        \\
+    ,
+        "luce.sema.type",
+        "a bare function type is not a list element",
+    );
+}
+
 test "luce.sema.type: a member constructor whose shape does not fit the place is refused (BINDING.md D11)" {
     try expectSaying(
         \\union Msg:
@@ -2484,7 +2734,7 @@ test "luce.sema.convert: string() names its value domain and build() for a build
         \\
     ,
         "luce.sema.convert",
-        "string() converts a number, a bool, a string, an enum, or a function value; a builder hands over its text with .build()",
+        "string() converts a number, a bool, a string, an enum, a union member, or a function value; a builder hands over its text with .build()",
         4,
         16,
     );
@@ -2496,7 +2746,7 @@ test "luce.sema.convert: string() names its value domain and build() for a build
         \\
     ,
         "luce.sema.convert",
-        "string() converts a number, a bool, a string, an enum, or a function value, not list(int)",
+        "string() converts a number, a bool, a string, an enum, a union member, or a function value, not list(int)",
         3,
         16,
     );
@@ -4760,7 +5010,7 @@ test "an f-string hole is underlined, not the whole literal" {
         \\
     ,
         "luce.sema.convert",
-        "string() converts a number, a bool, a string, an enum, or a function value, not list(int)",
+        "string() converts a number, a bool, a string, an enum, a union member, or a function value, not list(int)",
         6,
         30,
     );

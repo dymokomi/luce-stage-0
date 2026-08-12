@@ -1917,14 +1917,6 @@ fn refuseNamedMethodArguments(self: *FunctionBuilder, method: ast.Method) Error!
 
 const MethodFound = struct { kind: mir.Intrinsic, result: Type };
 
-/// Whether this is a function value, or the slot a stored one lives
-/// in (`(func(...) -> R)?`, docs/BINDING.md D7).  The two are one
-/// answer wherever the question is about what a value *is* rather
-/// than about whether it is there.
-fn holdsFunction(of: Type) bool {
-    return of == .function or (of == .optional and of.optional == .function);
-}
-
 fn methodFail(self: *FunctionBuilder, method: ast.Method, comptime message: []const u8) Error!?MethodFound {
     try self.fail("luce.sema.method", method.span, message, .{});
     return null;
@@ -2602,6 +2594,28 @@ fn objectMethod(
                     );
                     return null;
                 }
+                // **`values()` manufactures a list type, and a bare
+                // function type is not a list element** (docs/BINDING.md
+                // D7).  A map value is the one slot written bare, because
+                // `get` already answers `V?` — so `map(string, func(long)
+                // -> long)` is legal and `list(func(long) -> long)` is a
+                // type no program can write.  Manufacturing one anyway
+                // produced a program `luce check` accepted and the
+                // backend could not lower: a list cell has no shape for a
+                // bare function, and `cellType` said so with an
+                // `unreachable`.  Refused where the list would be made,
+                // naming the loop that does work.
+                if (pair.value == .function) {
+                    try self.fail(
+                        "luce.sema.type",
+                        method.span,
+                        "map.values() would answer list({s}), and a bare function type is not a list element — the storable " ++
+                            "form is ({s})?, which a map value is deliberately not written as; walk m.keys() and read m.get(k) " ++
+                            "instead [BINDING.md D7]",
+                        .{ try self.analyzer.typeName(pair.value), try self.analyzer.typeName(pair.value) },
+                    );
+                    return null;
+                }
                 return .{ .kind = .map_values, .result = try resolve.internHeapType(self.analyzer, .{ .list = pair.value }) };
             }
             if (std.mem.eql(u8, name, "get")) {
@@ -2740,20 +2754,18 @@ fn sequenceMethod(
         return .{ .kind = .list_reverse, .result = .none };
     }
     if (std.mem.eql(u8, name, "find") or std.mem.eql(u8, name, "contains")) {
-        // **Both look with `==`, and a function value has none**
-        // (docs/BINDING.md D6): its type cannot say which of its
-        // values carries a receiver, so "is this one in here" has no
-        // honest answer, exactly as `f == g` has none.  Refused where
-        // the comparison is asked for rather than left to the
-        // runtime, which has no sentence to say and reaches its
-        // `unreachable` instead.
-        if (holdsFunction(element)) {
-            return methodFail(
-                self,
-                method,
-                "a function value has no equality, so a list or an array of them cannot be searched; " ++
-                    "keep what you meant to look for beside them — a name, an enum — and search that [BINDING.md D6]",
-            );
+        // **Both look with `==`, so both refuse exactly what `==`
+        // refuses** — and the question is about the whole element, not
+        // about its outermost tag.  A function value has no equality
+        // (docs/BINDING.md D6) and `match` is the only door into a
+        // union (docs/UNION.md D16); a `list(Button)` whose `Button`
+        // holds either reaches the runtime's comparator, which has no
+        // sentence to say and reaches its `unreachable` instead.  One
+        // walk answers here and at `==`, which is what keeps the two
+        // spellings of one refusal from drifting apart again.
+        if (try shapes.incomparablePart(self.analyzer, element)) |found| {
+            try refusals.failUnsearchable(self, found, element, name, method.span);
+            return null;
         }
     }
     if (std.mem.eql(u8, name, "find")) {

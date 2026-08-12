@@ -94,11 +94,16 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
             function.result_types[at],
         )) .stable else .pure,
         .binary => |binary| if (binary.op.isComparison())
-            // A function value is compared by the function it names,
-            // read out of its run — and every reader of a run refuses
-            // the one that is nowhere, so this one comparison can
-            // refuse (docs/BINDING.md D12).  `function_name` is
-            // `.stable` for the same reason and no other.
+            // **A function value has no comparison at all** — no order
+            // (FUNCTIONS.md D3) and, since BINDING.md D6, no equality
+            // either, wherever a comparison reaches one.  Stage 4
+            // refuses it and `06_mir/verify.zig` refuses the shape in a
+            // decoded module, so this arm classifies something that
+            // cannot arrive; it stays, and stays `.stable`, because
+            // reading a function out of its run is a read of a run and
+            // every reader of one refuses the run that is nowhere
+            // (D12) — which is the honest answer if it ever did.
+            // `function_name` is `.stable` for that reason and no other.
             (if (binary.operand_type == .function) .stable else .pure)
         else if (binary.operand_type.isFloating())
             // IEEE arithmetic answers everything, `/0` included, so

@@ -1479,37 +1479,21 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
         try self.fail("luce.sema.type", binary.span, "value has no type", .{});
         return null;
     }
-    // Two unions are compared by matching, and by nothing else in
-    // this run (docs/UNION.md D16): `match` is the only door, so
-    // `==` is refused by the sentence that names it.
-    if (operand_type == .variant) {
-        try self.fail(
-            "luce.sema.union",
+    // **Both refusals below are about the whole compared value, not
+    // about its outermost tag.**  A struct's `==` is field-by-field
+    // `==` (`runtime/operators.zig`), so a struct whose field is a
+    // union asks exactly the question UNION.md D16 refuses, and a
+    // struct whose field holds a function value asks exactly the one
+    // BINDING.md D6 refuses — through a wrapper the reader did not
+    // think of as a comparison. `incomparablePart` is the one walk
+    // that answers for both, and it stops where `==` stops.
+    if (try shapes.incomparablePart(self.analyzer, operand_type)) |found| {
+        try refusals.failIncomparable(
+            self,
+            found,
+            operand_type,
+            context.operatorText(binary.op),
             binary.span,
-            "two {s} values are not compared with {s}; match on each and compare what the arms carry [UNION.md D16]",
-            .{ try self.analyzer.typeName(operand_type), context.operatorText(binary.op) },
-        );
-        return null;
-    }
-    // **A function value has no equality either** (docs/BINDING.md D6).
-    //
-    // It was a bare index once, and comparing indices was the whole
-    // answer (FUNCTIONS.md D3).  It is now the function *and* the
-    // receiver it may carry, and its type cannot say which of the two
-    // it has: one `func(long) -> long` place holds a plain function, a
-    // lambda, and a bind of any receiver.  So comparing by function
-    // alone calls two binds of one method equal whatever they carry,
-    // which is the dishonest answer D6 names, and there is no honest
-    // one to put in its place while the class is not in the type.
-    // `string(f)` is how to ask what a value names.
-    if (operand_type == .function) {
-        try self.fail(
-            "luce.sema.type",
-            binary.span,
-            "a function value is the function it names and the receiver it may carry, and its type cannot say which; " ++
-                "two values of one method with different receivers are different workers, so {s} has no honest answer — " ++
-                "compare string(f) if the name is what you meant [BINDING.md D6]",
-            .{context.operatorText(binary.op)},
         );
         return null;
     }

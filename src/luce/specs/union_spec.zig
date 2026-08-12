@@ -676,3 +676,110 @@ test "S3: an enum-valued call is matched the same way, and nothing is left over"
         \\
     );
 }
+
+// ---------------------------------------------------------------------------
+// D16's refusal is transitive, and `match` is still the whole answer
+// ---------------------------------------------------------------------------
+//
+// `==` on a union is refused because `match` is the only door.  A
+// struct's `==` is field-by-field `==`, so a struct holding a union
+// asked exactly that refused question through a wrapper — and answered
+// it by comparing the *inactive* payload slot, whose shape differs per
+// arm.  Wrapping a union no longer buys a comparison it does not have
+// (the refusals are in `errors_spec.zig`); what a program writes
+// instead is here.
+
+test "D16: a struct carrying a union is compared by matching what it carries" {
+    // The program the refusal sends a reader to write.  Nothing about
+    // it is new — it is `match` on each side and `==` on what the arms
+    // carry, which is the sentence the diagnostic says out loud.
+    try agree.prints(
+        \\struct Point:
+        \\    x: long
+        \\    y: long
+        \\
+        \\union Shape:
+        \\    at(p: Point)
+        \\    count(n: long)
+        \\
+        \\struct Cell:
+        \\    what: Shape
+        \\
+        \\enum Kind:
+        \\    at
+        \\    count
+        \\
+        \\func kindOf(s: Shape) -> Kind:
+        \\    match s:
+        \\        at(p):
+        \\            return Kind.at
+        \\        count(n):
+        \\            return Kind.count
+        \\
+        \\func pointOf(s: Shape) -> Point:
+        \\    match s:
+        \\        at(p):
+        \\            return p
+        \\        count(n):
+        \\            return Point(x = 0, y = 0)
+        \\
+        \\func countOf(s: Shape) -> long:
+        \\    match s:
+        \\        at(p):
+        \\            return 0
+        \\        count(n):
+        \\            return n
+        \\
+        \\func same(left: Shape, right: Shape) -> bool:
+        \\    if kindOf(left) != kindOf(right):
+        \\        return false
+        \\    match left:
+        \\        at(p):
+        \\            let other = pointOf(right)
+        \\            return p.x == other.x and p.y == other.y
+        \\        count(n):
+        \\            return n == countOf(right)
+        \\
+        \\func main():
+        \\    let a = Cell(what = Shape.at(p = Point(x = 1, y = 2)))
+        \\    let b = Cell(what = Shape.count(n = 3))
+        \\    let c = Cell(what = Shape.at(p = Point(x = 1, y = 2)))
+        \\    print(string(same(a.what, b.what)))
+        \\    print(string(same(a.what, c.what)))
+        \\
+    , "false\ntrue\n");
+}
+
+test "D16: a container of unions is searched by what identifies the member" {
+    // `find` and `contains` are `==` under another spelling, so a list
+    // of unions cannot be searched either.  The move the diagnostic
+    // names — keep what identifies the member beside it — is an
+    // ordinary enum and an ordinary search.
+    try agree.prints(
+        \\enum Kind:
+        \\    circle
+        \\    square
+        \\
+        \\union Shape:
+        \\    circle(radius: double)
+        \\    square(side: double)
+        \\
+        \\func kindOf(s: Shape) -> Kind:
+        \\    match s:
+        \\        circle(radius):
+        \\            return Kind.circle
+        \\        square(side):
+        \\            return Kind.square
+        \\
+        \\func main():
+        \\    var shapes = new list(Shape)
+        \\    shapes.append(Shape.circle(radius = 1.0))
+        \\    shapes.append(Shape.square(side = 2.0))
+        \\    var kinds = new list(Kind)
+        \\    for s in shapes:
+        \\        kinds.append(kindOf(s))
+        \\    print(string(kinds.contains(Kind.square)))
+        \\    print(string(kinds.find(Kind.circle) else -1))
+        \\
+    , "true\n0\n");
+}

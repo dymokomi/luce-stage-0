@@ -941,3 +941,117 @@ test "the leaf of a nested place names the width its value is read at" {
         \\
     , "201\n3000000000\n3\n");
 }
+
+// ---------------------------------------------------------------------------
+// Where the comparison refusal stops (D6, D7)
+// ---------------------------------------------------------------------------
+//
+// D6's refusal is about what a comparison *reaches*, and a refusal that
+// reaches too far is as wrong as one that reaches too little.  These
+// three facts pin the frontier: `==` descends a struct's field run and
+// stops dead at an object handle, because object equality is identity
+// and never reads what is inside.  The corresponding refusals are in
+// `errors_spec.zig`.
+
+test "a struct of ordinary values still compares, field for field" {
+    try agree.prints(
+        \\struct Point:
+        \\    x: long
+        \\    y: long
+        \\
+        \\struct Line:
+        \\    a: Point
+        \\    b: Point
+        \\    label: string
+        \\
+        \\func main():
+        \\    let one = Line(a = Point(x = 1, y = 2), b = Point(x = 3, y = 4), label = "l")
+        \\    let same = Line(a = Point(x = 1, y = 2), b = Point(x = 3, y = 4), label = "l")
+        \\    let other = Line(a = Point(x = 1, y = 2), b = Point(x = 3, y = 5), label = "l")
+        \\    print(string(one == same))
+        \\    print(string(one == other))
+        \\    print(string(one != other))
+        \\
+    , "true\nfalse\ntrue\n");
+}
+
+test "a struct holding a container of function values compares by handle, and is not refused" {
+    // **The frontier, stated as a program.**  `Panel` reaches a
+    // function value through its list, and `==` never looks: a list
+    // compares as the object it is, so two panels naming one list are
+    // equal and two naming different lists are not, whatever the
+    // elements hold.  Asking `shapes.carries` here — the walk the
+    // worker boundary uses, which goes through a container because a
+    // `give` moves the whole graph — would refuse this program for a
+    // comparison it does not make.
+    try agree.prints(
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\struct Button:
+        \\    on_click: (func(long) -> long)?
+        \\
+        \\struct Panel:
+        \\    buttons: list(Button)
+        \\
+        \\func main():
+        \\    var buttons = new list(Button)
+        \\    buttons.append(Button(on_click = twice))
+        \\    let panel = Panel(buttons = give buttons)
+        \\    let alias = panel
+        \\    print(string(panel == alias))
+        \\    var others = new list(Button)
+        \\    others.append(Button(on_click = twice))
+        \\    let second = Panel(buttons = give others)
+        \\    print(string(panel == second))
+        \\
+    , "true\nfalse\n");
+}
+
+test "searching a container of values that do compare is untouched" {
+    try agree.prints(
+        \\struct Point:
+        \\    x: long
+        \\    y: long
+        \\
+        \\func main():
+        \\    var numbers = new list(long)
+        \\    numbers.append(3)
+        \\    numbers.append(7)
+        \\    print(string(numbers.find(7) else -1))
+        \\    print(string(numbers.contains(4)))
+        \\    var names = new list(string)
+        \\    names.append("a")
+        \\    print(string(names.contains("a")))
+        \\    var points = new list(Point)
+        \\    points.append(Point(x = 1, y = 2))
+        \\    print(string(points.contains(Point(x = 1, y = 2))))
+        \\    print(string(points.find(Point(x = 9, y = 9)) else -1))
+        \\
+    , "1\nfalse\ntrue\ntrue\n-1\n");
+}
+
+test "values() of an ordinary map still answers the list of them" {
+    // The contrast case for D7's refusal: only a *bare function* value
+    // type has no list to be put in, and every other map answers
+    // `values()` exactly as it always did.
+    try agree.prints(
+        \\struct Point:
+        \\    x: long
+        \\    y: long
+        \\
+        \\func main():
+        \\    var counts = new map(string, long)
+        \\    counts["a"] = 1
+        \\    counts["b"] = 2
+        \\    let numbers = counts.values()
+        \\    print(string(len(numbers)))
+        \\    var places = new map(string, Point)
+        \\    places["home"] = Point(x = 1, y = 2)
+        \\    let points = places.values()
+        \\    print(string(points[0].x))
+        \\    var handlers = new map(string, func(long) -> long)
+        \\    print(string(len(handlers.keys())))
+        \\
+    , "2\n1\n0\n");
+}

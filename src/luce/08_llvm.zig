@@ -27,6 +27,21 @@
 //! `T?`, `T!`, ownership, the math builtins, and every host service.
 //! There is no list of gaps here because there are none.
 //!
+//! **What that sentence rests on, stated once because it was once
+//! untrue.**  A handful of `unreachable`s in `lower.zig` are not "not
+//! yet" but *never* — a bare function type has no cell shape and no
+//! field zero, because the storable form is `(func(...) -> R)?`
+//! (docs/BINDING.md D7) — and a "never" is only honest while something
+//! upstream actually refuses the shape it names.  On 2026-08-12 nothing
+//! did: `m.values()` on a `map(K, func(...))` manufactured a
+//! `list(func(...))`, a type no program can write, and `luce build`
+//! aborted the compiler with no diagnostic on a program `luce check`
+//! had accepted.  Two refusals now hold the claim up — stage 4 at
+//! `values()`, and `06_mir/verify.zig` rejecting the heap descriptor
+//! outright — so those arms are unreachable rather than merely
+//! unreached.  **Any new `unreachable` here owes the same pair**: name
+//! the shape, and point at what refuses it.
+//!
 //! The `fail` messages that remain in `lower.zig` are not gaps.  They
 //! name invariants the front end already guarantees — a block without
 //! a terminator, arithmetic on a type that has none, an entry function

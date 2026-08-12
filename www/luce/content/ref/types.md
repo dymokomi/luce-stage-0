@@ -184,6 +184,13 @@ why one never crosses a worker boundary. A function value owns the run
 that holds it and never owns objects: a value-only receiver is copied
 in, a carrying one is borrowed, and `give receiver.method` is refused.
 
+That lack of equality follows the value wherever a comparison reaches
+it: a struct holding a `(func(...) -> R)?` field is not compared with
+`==` either, and `xs.find(v)` and `xs.contains(v)` over a container of
+such structs are refused for the same reason, because a search is `==`
+under another spelling. Keep what you meant to look for beside the
+values — a name, an enum — and compare that.
+
 The result is omitted when the function returns nothing. `give`
 remains because ownership is part of calling the value. Fallibility
 does not: a fallible function cannot be used as a value because a

@@ -239,7 +239,7 @@ private struct Editing:
 # twenty-one builtins the language has gained since.  Ground truth is
 # the compiler's own tables, which `tools/grammar.zig` reads for the
 # VS Code grammar:
-# `02_lex/token.zig`'s `keywords` (thirty-three words) and
+# `02_lex/token.zig`'s `keywords` (thirty-four words) and
 # `04_semantics/builtins.zig`'s `builtins` (forty-six), plus `range`,
 # which is syntax the parser recognises only inside a `for`.
 #
@@ -263,8 +263,8 @@ private const keyword_words = {
     "let": true, "match": true, "new": true, "none": true,
     "not": true, "or": true, "private": true, "public": true,
     "return": true, "self": true, "spawn": true, "static": true,
-    "struct": true, "true": true, "try": true, "var": true,
-    "while": true,
+    "struct": true, "true": true, "try": true, "union": true,
+    "var": true, "while": true,
 }
 
 # The language's lowercase builtin types are types too.  The original

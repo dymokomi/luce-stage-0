@@ -331,6 +331,14 @@ main.luc:8:12: two Shape values are not compared with ==; match on each and comp
                ^~~~~~
 ```
 
+**The refusal follows the union wherever a comparison reaches it.** A
+struct's `==` is field-by-field `==`, so a struct holding a `Shape` is
+not compared either, and neither is `xs.find(v)` or `xs.contains(v)`
+over a list or an array of them — a search is `==` under another
+spelling. Each says the same thing and offers the same two moves:
+`match` on the member and compare what the arms carry, or keep what
+identifies the member beside it — a name, an enum — and compare that.
+
 A union may not be a map *key* either — keys are `long`, `string` and
 enums, and a union has no key form: keep it in the value and key by
 what identifies it.

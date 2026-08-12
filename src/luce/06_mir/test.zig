@@ -831,7 +831,12 @@ test "recursive heap and function type tables are rejected before names render" 
     program.heap_types[0] = .{ .list = .{ .optional = .{ .heap = 0 } } };
     try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
 
-    program.heap_types = try arena.dupe(types.HeapType, &.{.{ .list = .{ .function = 0 } }});
+    // A function value reaches a list as `(func(...) -> R)?` and in no
+    // other spelling (docs/BINDING.md D7 — a bare function type is not
+    // an element type, and the table check above refuses one), so the
+    // cycle is written through the optional the language can actually
+    // produce.
+    program.heap_types = try arena.dupe(types.HeapType, &.{.{ .list = .{ .optional = .{ .function = 0 } } }});
     program.signatures = try arena.dupe(types.Signature, &.{.{
         .parameters = &.{},
         .result = .{ .heap = 0 },

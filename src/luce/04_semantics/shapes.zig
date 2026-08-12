@@ -15,10 +15,14 @@
 //! The predicates the rest of stage 4 asks are the settled tables
 //! read back — `carriesObjects` and `valueCount` are array reads, and
 //! both were exponential when they were recursive queries — beside
-//! the two that need no table at all: `ownsStorage`, which is about a
-//! run of bytes rather than an object, and `carries`, whose own
-//! iterative walk keeps a legitimately cyclic *type* graph
-//! (`struct Node: kids: list(Node)`) linear.
+//! the three that need no table at all: `ownsStorage`, which is about
+//! a run of bytes rather than an object, and the two iterative walks
+//! that keep a legitimately cyclic *type* graph
+//! (`struct Node: kids: list(Node)`) linear.  Those two are `carries`,
+//! which follows the whole graph because the worker boundary moves the
+//! whole graph, and `incomparablePart`, which stops at an object handle
+//! because `==` does.  Which frontier a question wants is the question
+//! itself, and each walk's doc comment says which and why.
 //!
 //! Free functions over `declarations.zig`'s `*Analyzer`; `pub` means
 //! visible to stage 4's own files, nothing wider.
@@ -157,6 +161,99 @@ pub fn carries(self: *const Analyzer, of: Type, sought: Carried) Error!bool {
         }
     }
     return false;
+}
+
+/// What `==` can meet on its way down a value that it has no answer
+/// for, and the part of the type that answers to it.
+pub const Incomparable = struct {
+    pub const Reason = enum {
+        /// A function value is the function it names *and* the receiver
+        /// it may carry, and its type cannot say which — so two values
+        /// of one method with different receivers would compare equal
+        /// (docs/BINDING.md D6).
+        function,
+        /// `match` is the only door into a union (docs/UNION.md D16):
+        /// an inactive payload slot holds a different shape on each
+        /// side, so a run-for-run comparison is not even well formed.
+        variant,
+    };
+
+    reason: Reason,
+    /// The part of the compared type the reason belongs to — the
+    /// operand type itself when the operand is the problem, and a
+    /// field of it otherwise, so the sentence can name both.
+    part: Type,
+};
+
+/// What comparing two values of `of` would reach that `==` has no
+/// answer for, or null when the comparison means what it says.
+///
+/// **This walk stops where `==` stops, which is why it is not
+/// `carries`.**  The worker boundary asks what a value would *carry*
+/// if its whole graph moved, so its walk goes through a container.
+/// Equality never does: `runtime/operators.zig` compares an object
+/// handle by identity and never reads what is inside it, so
+/// `struct Row: cells: list(Button)` compares two handles and is a
+/// perfectly honest `==` even though a `Button` holds a function
+/// value.  Refusing that would be a false refusal, so the frontier is
+/// the value's own run — struct fields, union runs, optional payloads
+/// — and an object handle ends it.
+///
+/// Iterative and visited-checked for the same reason `carries` is: a
+/// `struct Node: next: Node?` makes the *type* graph cyclic without
+/// making any value infinite, and the walk must stay linear.  Visited
+/// in queue order, so the part it names is the first one a reader
+/// would find reading the declaration top to bottom.
+pub fn incomparablePart(self: *const Analyzer, of: Type) Error!?Incomparable {
+    // Every scalar, every string and every object handle compares by
+    // itself, so the overwhelmingly common `==` allocates nothing.
+    switch (of) {
+        .strukt, .variant, .function, .optional => {},
+        else => return null,
+    }
+
+    const seen_structs = try self.temporary.alloc(bool, self.structs.items.len);
+    defer self.temporary.free(seen_structs);
+    @memset(seen_structs, false);
+
+    var pending: std.ArrayList(Type) = .empty;
+    defer pending.deinit(self.temporary);
+    try pending.append(self.temporary, of);
+
+    var next: usize = 0;
+    while (next < pending.items.len) : (next += 1) {
+        // Bound before the arms run: appending inside one may move the
+        // backing array, and a capture into it would then be stale.
+        const current = pending.items[next];
+        switch (current) {
+            .function => return .{ .reason = .function, .part = current },
+            .variant => return .{ .reason = .variant, .part = current },
+            .optional => |payload| try pending.append(self.temporary, payload.asType()),
+            .strukt => |layout| {
+                if (seen_structs[layout]) continue;
+                seen_structs[layout] = true;
+                for (self.structs.items[layout].fields) |field| {
+                    try pending.append(self.temporary, field.field_type);
+                }
+            },
+            // An object compares by identity, so nothing inside it is
+            // read; every other type compares as itself.
+            .heap,
+            .none,
+            .boolean,
+            .byte,
+            .short,
+            .int,
+            .long,
+            .half,
+            .float,
+            .double,
+            .string,
+            .enumeration,
+            => {},
+        }
+    }
+    return null;
 }
 
 /// True for types that carry *storage* — a string's bytes, a

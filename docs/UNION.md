@@ -125,7 +125,7 @@ recursion free and a collector mandatory (§2.1).
 | **D14** | **`T?` stays its own mechanism, and `Shape?` becomes writable.**  Five independent reasons in §Q5 and the field's own split runs on whether a language has generics; Zig has them and still chose the built-in.  The converse is the cheap half: one arm on `types.Type.Payload` beside `strukt` and `heap`, which is what gives a union a recursion terminator that is not a container.  `Shape??` stays unrepresentable, because `Payload` is a union of its own. |
 | **D15** | **Containers, fields and keys.**  `list(Json)` and `map(string, Json)` work by construction; a union element keeps the 24-byte boxed cell, exactly as a struct element does (BYTES B1's `.value` kind).  A union may **not** be a map *key* — keys are `long` and `string` and always have been, for `hashOf`'s reason, which is the same narrowing ENUMS' D9 met on
 contact.  A struct field may be a union, which ORs into the struct's `carries` flag — so **a struct with a `Json` field can never be a `var self` receiver** (`docs/METHODS.md`), which is worth knowing before `std.json` is written against it. |
-| **D16** | **`string(u)` answers the member's name**, by ENUMS A2's mechanism unchanged — a compare-and-branch over the tag answering an interned constant, nothing new in `libluce_rt`.  **The payload is never formatted**: that is a formatting protocol, it is a different feature, and it is refused here by name so nobody assumes it.  `==` on unions is refused in this run by a sentence naming `match`. |
+| **D16** | **`string(u)` answers the member's name**, by ENUMS A2's mechanism unchanged — a compare-and-branch over the tag answering an interned constant, nothing new in `libluce_rt`.  **The payload is never formatted**: that is a formatting protocol, it is a different feature, and it is refused here by name so nobody assumes it.  `==` on unions is refused in this run by a sentence naming `match` — **and the refusal is transitive**, because a struct's `==` is field-by-field `==`: see *D16's `==`, as it had to be corrected* below. |
 | **D17** | **Methods and namespace functions carry over whole** from `docs/METHODS.md`, as they did for enums (D7 there): `Json.parse(text)` is a namespace function, `j.kind()` a method, told apart by whether the first parameter is `self`.  METHODS' existing restriction does the rest — a `var self` receiver must carry no objects, so a value-only union may have one and `Json` may not.  A member name and a declaration name colliding inside one union is the duplicate-name refusal two members already get. |
 | **D18** | **Inside the compiler the word is `variant`.**  The language keyword is `union`; Zig's own `union` keyword takes the name in the one place it must not be dodged around — `types.Type`'s arm — so the arm is `.variant: u32`, the table is `Program.variants`, and the three instructions are `variant_make` / `variant_tag` / `variant_field`.  One word inside, one word outside, the `strukt` precedent, and one sentence in `types.zig` saying so.  Diagnostics say `union`, because a diagnostic speaks the language's vocabulary and not the compiler's. |
 
@@ -760,3 +760,77 @@ live:
 
 `std.json`'s own header, `docs/STD.md`'s section and
 `/std/json/` carry the rest.
+
+## D16's `==`, as it had to be corrected (2026-08-12)
+
+D16 refused `==` on a union with a sentence naming `match`, and the
+refusal asked the operand's own tag.  A struct's `==` is field-by-field
+`==` (`runtime/operators.zig`), so **a struct holding a union asked the
+refused question through a wrapper and got an answer**:
+
+```text
+struct Point:
+    x: long
+    y: long
+
+union Shape:
+    at(p: Point)
+    count(n: long)
+
+struct Cell:
+    what: Shape
+
+Cell(what = Shape.at(p = Point(x = 1, y = 2))) == Cell(what = Shape.count(n = 3))
+```
+
+A union value is a struct-shaped run whose slot 0 is the member index
+and whose payload slots hold **a different shape on each arm**.  The
+comparison above walked a `Point` run against a `long`: two runs of
+unequal length, which is a panic in a checked build and a read off the
+end of a slice in an unchecked one.  Where both arms happened to be the
+same width there was no crash and something worse — a quiet "different"
+computed partly from an *inactive* payload slot.
+
+**A struct carrying a union is not comparable either.**  That is the
+correction, and it is the only one consistent with D16 rather than a
+patch on its symptom:
+
+- A struct's `==` is *defined* as field-by-field `==`.  A field-wise
+  `==` that reaches a union is asking exactly the operation D16
+  refuses; letting a wrapper through is a hole in D16, not a feature
+  of structs.
+- Making it work is a decision D16 deliberately did not make.  "Tag
+  first, then only the live payload fields" is implementable, but it
+  answers questions this memo left open — whether an inactive payload
+  participates, what a payload field that is itself a union or a
+  function value does — and it would have to be argued for
+  `Shape == Shape` first.  Allowing the wrapped comparison while
+  refusing the direct one is the one position no reader can hold.
+- The crash had to go regardless, and refusing costs a program
+  nothing it cannot write: `match` on each side and `==` on what the
+  arms carry is the sentence the diagnostic already says out loud.
+
+The same rule reaches `xs.find(v)` and `xs.contains(v)`, which are
+`==` under another spelling: a `list(Shape)` and a `list(Box)` are both
+refused, naming the move that works — keep what identifies the member
+beside it, a name or an enum, and search that.
+
+**Where it is decided.**  One walk in `04_semantics/shapes.zig`
+(`incomparablePart`) answers for `==`, `find` and `contains`, and it
+answers for BINDING.md D6's function values in the same pass, because
+that refusal had the identical defect at the identical sites.  Its
+frontier is `==`'s own: it descends struct field runs, union runs and
+optional payloads, and it **stops at an object handle**, because object
+equality is identity and never reads the contents — so
+`struct Row: cells: list(Shape)` still compares two rows by the handles
+they hold, and refusing *that* would be a false refusal.  This is why
+the walk is not `shapes.carries`, which the worker boundary uses and
+which goes through a container on purpose.
+
+`06_mir/verify.zig` refuses an equality whose operand type reaches a
+union or a function value, so the runtime comparator's remaining
+`unreachable` is unreachable rather than merely unreached, and its
+struct arm now answers "different" for runs of unequal length instead
+of walking off the end of one.  The refusals are proved by wording in
+`specs/errors_spec.zig`; what a program writes instead is proved on
+both engines at the end of `specs/union_spec.zig`.

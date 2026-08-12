@@ -209,8 +209,24 @@ pub fn compare(op: vocabulary.BinaryOp, left: Value, right: Value) bool {
             return if (op == .equal) same else !same;
         },
         .strukt => |held| {
+            const other = right.asStruct();
+            // **Two runs of different lengths are different values**,
+            // and saying so is what keeps this loop total.  A struct's
+            // run has one length per type, so equal lengths are all a
+            // well-formed program can present — but a *union* value is
+            // a run too, and its payload slots hold a different shape
+            // on each arm, so `Cell(what = Shape.at(...))` against
+            // `Cell(what = Shape.count(3))` used to walk two runs of
+            // unequal length: a panic in a checked build and a read
+            // off the end of a slice in an unchecked one.  Comparing a
+            // union at all is refused now — in stage 4 wherever `==`
+            // reaches one (docs/UNION.md D16) and in the verifier
+            // beside it — so nothing here can arrive from source; this
+            // is what a damaged module meets instead of undefined
+            // behaviour.
+            if (held.len != other.len) return op != .equal;
             var same = true;
-            for (held, right.asStruct()) |left_field, right_field| {
+            for (held, other) |left_field, right_field| {
                 if (!compare(.equal, left_field, right_field)) same = false;
             }
             return if (op == .equal) same else !same;
@@ -226,7 +242,12 @@ pub fn compare(op: vocabulary.BinaryOp, left: Value, right: Value) bool {
         // A function value has no equality at all (docs/BINDING.md D6):
         // it is the function it names *and* the receiver it may carry,
         // and its type cannot say which, so stage 4 refuses `==` before
-        // anything reaches here.
+        // anything reaches here — wherever a comparison *reaches* one,
+        // through a struct field and through a searched element as well
+        // as at the top level, which is one walk shared by `==`, `find`
+        // and `contains`.  `06_mir/verify.zig` refuses the same shape in
+        // a decoded module, which is what makes this arm unreachable
+        // rather than merely unreached.
         .function => unreachable,
         // Handled above, before the payload dispatch.
         .none => unreachable,
@@ -247,6 +268,23 @@ test "a struct holding none compares, in either order, instead of crashing" {
     try std.testing.expect(!compare(.equal, present, absent));
     try std.testing.expect(compare(.not_equal, absent, present));
     try std.testing.expect(compare(.not_equal, present, absent));
+}
+
+test "two runs of different lengths are different, instead of walking off one" {
+    // A union value is a field run whose payload slots hold a different
+    // shape on each arm, so a struct holding one used to present two
+    // runs of unequal length here: a panic in a checked build and a
+    // read past the end of a slice in an unchecked one.  Comparing a
+    // union is refused now — in stage 4 wherever `==` reaches one, and
+    // in the MIR verifier beside it — so this is what a damaged module
+    // meets rather than undefined behaviour.
+    var short = [_]Value{Value.ofLong(1)};
+    var long = [_]Value{ Value.ofLong(1), Value.ofLong(2) };
+
+    try std.testing.expect(!compare(.equal, Value.ofStruct(&short), Value.ofStruct(&long)));
+    try std.testing.expect(!compare(.equal, Value.ofStruct(&long), Value.ofStruct(&short)));
+    try std.testing.expect(compare(.not_equal, Value.ofStruct(&short), Value.ofStruct(&long)));
+    try std.testing.expect(compare(.not_equal, Value.ofStruct(&long), Value.ofStruct(&short)));
 }
 
 /// `%` on doubles: the floor modulus, pairing with `//` exactly as the

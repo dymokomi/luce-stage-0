@@ -69,7 +69,7 @@ that non-composition is the whole gap.
 | **D3** | **A value-only receiver is copied at the bind.**  The bound value is then a plain value: copies freely, takes no verbs, crosses a worker boundary when given, releases nothing.  This is the everyday case and it carries zero ceremony. |
 | **D4** | **A carrying receiver borrows at a bare bind** — the bound value aliases the receiver's graph, reads through it freely (S8), and an alias that outlives its owner meets `use_after_free` at the call, dynamically, like every source alias.  `give counter.bump` **moves** the receiver into the value, which then owns its state, carries objects, takes `give`/`copy` at stores and is released by scope; `copy counter.bump` copies it in.  The verb table is S21/S24's, unchanged.  Ratified as presented — **and amended 2026-08-11: the owning bind is refused, the borrow is the whole of it.  See *As built, second run*.** |
 | **D5** | **Ownership arrives with no new rule** (the union precedent): a bound value's class is its receiver-state's class.  Value-state bound values are values; owning bound values are carrying values with the verbs and death point a carrying struct has; borrowing bound values are aliases.  `spawn` admits a value-state or given owning bind and refuses a borrowing one, which is the existing boundary sentence.  **Amended with D4: there is no owning bind, so no function value crosses.** |
-| **D6** | **Equality stays identity**: same function and same receiver identity (same object for owning/borrowing binds; value-state binds compare by function alone is *refused* — `==` on a value-state bound value is refused like ordering, because two copies of equal state are observably distinct workers of equal behavior and no answer is honest).  `string(f)` answers the method's qualified name.  **Amended with D4: no function value has equality, because no type can say which of them carries a receiver.** |
+| **D6** | **Equality stays identity**: same function and same receiver identity (same object for owning/borrowing binds; value-state binds compare by function alone is *refused* — `==` on a value-state bound value is refused like ordering, because two copies of equal state are observably distinct workers of equal behavior and no answer is honest).  `string(f)` answers the method's qualified name.  **Amended with D4: no function value has equality, because no type can say which of them carries a receiver** — and the refusal is *transitive*, reaching every comparison that descends into one, `==` on a struct that holds one and `find`/`contains` over a container of those included (*As built, second run*, corrected 2026-08-12). |
 | **D7** | **The storable form of every function value is `func(...)?`** — this run folds in the deferred "yet"s: function-typed struct fields, container elements and map values land as optionals, absence is the zero (S40 answered by the mechanism `T?` already is), and calling through one requires narrowing or `else`.  A bare `func` type remains legal on parameters and `let`s, where a value is always present. |
 | **D8** | **Fallibility joins the value type**: `func(T) -> R!` and `func() -> !` are distinct value types (they always were distinct function shapes), callable through a value with the same mandatory `try`/`catch` any fallible call carries. |
 | **D9** | **Writing methods do not bind in this run.**  A writer requires one bare owning `var` receiver aliased in place (SELF); a bound writer is an inout closure whose store-back discipline deserves its own design.  Refused with a sentence naming the reader form, reopens as a superset. |
@@ -317,6 +317,49 @@ container changed, because nothing else compares elements: `append`,
 `insert`, `fill`, `sort_by` and a store all *place* a value, and a
 function value places like any other (D7).
 
+**And it reaches every value the comparison *descends into*
+(2026-08-12, corrected).**  The paragraph above was written as though
+"where the comparison is written" meant "what the written operand's own
+type is", and both refusals were coded that way — `type == .function`,
+or that tag under one optional.  A struct's `==` is field-by-field
+`==`, so the D7 shape this memo exists to bless walked straight past
+both of them:
+
+```text
+struct Button:
+    label: string
+    on_click: (func(long) -> long)?
+
+Button("ok", twice) == Button("ok", twice)   # compiled; panicked
+```
+
+The comparison reached the runtime comparator's `.function` arm — the
+`unreachable` that is only honest while nothing can arrive there — from
+ordinary source that `luce check` accepted.  `xs.find(b)` and
+`xs.contains(b)` on a `list(Button)` did the same, one wrapper further
+out.
+
+**The refusal is therefore transitive, and the walk that decides it is
+shared with `==` itself** (`04_semantics/shapes.zig`'s
+`incomparablePart`, spoken by `refusals.failIncomparable` and
+`refusals.failUnsearchable`).  Two things about its frontier are
+deliberate:
+
+- It descends a struct's field run, a union's run and an optional's
+  payload — everything `runtime/operators.zig` descends.
+- It **stops at an object handle**, because `==` does: object equality
+  is identity and never reads the contents.  So
+  `struct Panel: buttons: list(Button)` still compares two panels by
+  the handles they hold, which is an honest `==` and must not be
+  refused.  This is why the walk is not `shapes.carries`, which the
+  worker boundary uses and which goes *through* a container — a `give`
+  moves the whole graph, and a comparison does not look at it.
+
+`06_mir/verify.zig` refuses the same shape in a decoded module, which
+is what makes the runtime's `.function => unreachable` unreachable
+rather than merely unreached.  The sentence a reader gets names the
+struct, the part of it that answered, and `string(f)`.
+
 ### D11, as built
 
 **A union member constructor is a function value.**
@@ -420,6 +463,20 @@ answer a `V??`, which has no representation and never will.  This is a
 refinement of D7's letter ("container elements and map values land as
 optionals") forced by a wall D7 did not see; the spirit is intact,
 because the reader still writes exactly one `?` and gets it from `get`.
+
+**`m.values()` is refused on that one map, and the rule is its own
+reason** (2026-08-12).  A bare `func` type is legal as a map value and
+illegal as a list element, so `values()` — which answers `list(V)` —
+would manufacture a type no program can write.  It did: `luce check`
+said ok and `luce build` aborted the compiler with no diagnostic at
+all, because a list cell has no shape for a function value that is
+always there (`08_llvm`'s `cellType`, `cellAlignment`, `cellWidth` and
+`loadCell`/`storeCell` all say so with an `unreachable`, and
+`06_mir/verify.zig` now refuses the descriptor, so those arms are
+unreachable rather than merely unreached).  The refusal is at
+`values()` and it names the loop that works: walk `m.keys()` and read
+`m.get(k)`.  `m.keys()` is untouched — a key is a `long`, a `string` or
+an enum, and every one of those is an element type.
 
 ### The invariant, and the hole that had to be closed to keep it
 

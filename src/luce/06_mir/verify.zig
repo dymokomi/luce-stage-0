@@ -61,7 +61,19 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
         try verifyType(program, signature.result);
     }
     for (program.heap_types) |descriptor| switch (descriptor) {
-        .list => |element| try verifyType(program, element),
+        // **A bare function type is not an element type**
+        // (docs/BINDING.md D7): the storable form is
+        // `(func(...) -> R)?`, and a cell has no shape for a function
+        // that is always there — which is what `08_llvm`'s `cellType`,
+        // `cellAlignment` and `cellWidth` say with their `unreachable`.
+        // Refusing the descriptor here is what makes those arms
+        // unreachable rather than merely unreached, so a hand-made or
+        // stale module cannot ask the backend for a cell it has no
+        // width for.
+        .list => |element| {
+            if (element == .function) return error.BadStruct;
+            try verifyType(program, element);
+        },
         // **A key is a `long`, a `string`, or an enum** (docs/ENUMS.md,
         // As built 2026-08-12).  The enum is admitted here because it
         // *is* an integer at a chosen width whose whole comparison
@@ -78,6 +90,7 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
             try verifyType(program, pair.value);
         },
         .array => |shape| {
+            if (shape.element == .function) return error.BadStruct;
             try verifyType(program, shape.element);
             if (shape.rank < 1 or shape.rank > 4) return error.BadStruct;
         },
@@ -468,7 +481,7 @@ fn verifyFunction(allocator: Allocator, program: *const Program, function: *cons
             if (instruction.isTerminator() != last) {
                 return if (last) error.UnterminatedBlock else error.MisplacedTerminator;
             }
-            try verifyInstruction(program, function, &defined, item, instruction);
+            try verifyInstruction(allocator, program, function, &defined, item, instruction);
             try defined.put(allocator, item, {});
         }
     }
@@ -722,6 +735,7 @@ fn expectType(actual: Type, expected: Type) VerifyError!void {
 // ---------------------------------------------------------------------------
 
 fn verifyInstruction(
+    allocator: Allocator,
     program: *const Program,
     function: *const Function,
     defined: *const std.AutoHashMapUnmanaged(Register, void),
@@ -792,7 +806,22 @@ fn verifyInstruction(
             if (isStorageWidth(binary.operand_type)) return error.TypeMismatch;
             if (binary.op.isComparison()) {
                 switch (binary.op) {
-                    .equal, .not_equal => {},
+                    // **Equality is not universal.**  A function value
+                    // is the function it names and the receiver it may
+                    // carry, and its type cannot say which
+                    // (docs/BINDING.md D6); `match` is the only door
+                    // into a union (docs/UNION.md D16).  Stage 4
+                    // refuses both wherever a comparison reaches one —
+                    // through a struct field as readily as at the top
+                    // level — and this is the module-format half of the
+                    // same rule, which is what makes the runtime
+                    // comparator's `.function => unreachable`
+                    // unreachable rather than merely unreached.
+                    .equal, .not_equal => if (try comparisonIsRefused(
+                        allocator,
+                        program,
+                        binary.operand_type,
+                    )) return error.TypeMismatch,
                     else => if (!binary.operand_type.isNumeric() and binary.operand_type != .string)
                         return error.TypeMismatch,
                 }
@@ -1163,8 +1192,16 @@ fn verifyIntrinsic(
         },
         .len => {
             try exactly(arguments, 1);
-            const measurable = arguments[0] == .string or arguments[0] == .heap;
-            if (!measurable) return error.BadIntrinsic;
+            // A `file` and a `task` are heap types with no length, and
+            // `containers.length` says so with an `unreachable` — so
+            // the shape is what decides here, not the tag.
+            if (arguments[0] != .string) {
+                if (arguments[0] != .heap) return error.BadIntrinsic;
+                switch (try heapShape(program, arguments[0])) {
+                    .list, .map, .array, .builder => {},
+                    .file, .task => return error.BadIntrinsic,
+                }
+            }
             try expectType(result, .long);
         },
         .string_slice => {
@@ -1692,6 +1729,57 @@ fn expectByteBuffer(program: *const Program, of: Type) VerifyError!void {
 
 fn exactly(arguments: []const Type, count: usize) VerifyError!void {
     if (arguments.len != count) return error.BadIntrinsic;
+}
+
+/// Whether comparing two values of `of` with `==` would reach
+/// something equality has no answer for: a function value
+/// (docs/BINDING.md D6) or a union (docs/UNION.md D16).
+///
+/// This is `04_semantics/shapes.zig`'s `incomparablePart` over the
+/// module's own tables — one rule, two tables, because a decoded
+/// module has no analyzer to ask.  The frontier is `==`'s: an object
+/// handle compares by identity and nothing inside it is read, so the
+/// walk descends a struct's field run, a union's members and an
+/// optional's payload and stops at a `.heap`.
+///
+/// Iterative and visited-checked, because the *type* graph may be
+/// cyclic where no value is (`struct Node: next: Node?`).  Every tag
+/// that compares as itself answers without allocating, so the ordinary
+/// numeric and string comparison pays nothing.
+fn comparisonIsRefused(allocator: Allocator, program: *const Program, of: Type) VerifyError!bool {
+    switch (of) {
+        .strukt, .variant, .function, .optional => {},
+        else => return false,
+    }
+
+    const seen = try allocator.alloc(bool, program.structs.len);
+    defer allocator.free(seen);
+    @memset(seen, false);
+
+    var pending: std.ArrayList(Type) = .empty;
+    defer pending.deinit(allocator);
+    try pending.append(allocator, of);
+
+    var next: usize = 0;
+    while (next < pending.items.len) : (next += 1) {
+        // Bound before the arms run: appending inside one may move the
+        // backing array, and a capture into it would then be stale.
+        const current = pending.items[next];
+        switch (current) {
+            .function, .variant => return true,
+            .optional => |payload| try pending.append(allocator, payload.asType()),
+            .strukt => |layout| {
+                if (layout >= program.structs.len) return error.BadStruct;
+                if (seen[layout]) continue;
+                seen[layout] = true;
+                for (program.structs[layout].fields) |field| {
+                    try pending.append(allocator, field.field_type);
+                }
+            },
+            else => {},
+        }
+    }
+    return false;
 }
 
 fn heapShape(program: *const Program, of: Type) VerifyError!types.HeapType {

@@ -904,3 +904,135 @@ pub fn refusesAbsence(
     try failAbsence(self, span, situation, value.value_type, from);
     return true;
 }
+
+// -- what `==` cannot answer, wherever it is asked -------------------
+
+/// Report an `==` or `!=` whose operands reach something equality has
+/// no answer for (`shapes.incomparablePart`).
+///
+/// **The refusal is about the whole compared value, not its outermost
+/// tag.**  A struct's `==` is field-by-field `==`, so `Cell == Cell`
+/// where `Cell` holds a union is the comparison UNION.md D16 refuses,
+/// and one whose field holds a function value is the comparison
+/// BINDING.md D6 refuses — reached through a wrapper the reader never
+/// thought of as comparing a union or a function.  Each sentence names
+/// the part that answered, so the reader who wrote `a == b` on two
+/// plain-looking structs is told which field to look at.
+pub fn failIncomparable(
+    self: *FunctionBuilder,
+    found: shapes.Incomparable,
+    compared: Type,
+    operator: []const u8,
+    span: Span,
+) Error!void {
+    const nested = !found.part.eql(compared);
+    switch (found.reason) {
+        .variant => {
+            if (!nested) {
+                try self.fail(
+                    "luce.sema.union",
+                    span,
+                    "two {s} values are not compared with {s}; match on each and compare what the arms carry [UNION.md D16]",
+                    .{ try self.analyzer.typeName(compared), operator },
+                );
+                return;
+            }
+            try self.fail(
+                "luce.sema.union",
+                span,
+                "{s} is compared field by field and it reaches {s}, which is a union; match is the only door into one, " ++
+                    "so {s} is refused here too — match on the member and compare what the arms carry [UNION.md D16]",
+                .{ try self.analyzer.typeName(compared), try self.analyzer.typeName(found.part), operator },
+            );
+        },
+        .function => {
+            if (!nested) {
+                try self.fail(
+                    "luce.sema.type",
+                    span,
+                    "a function value is the function it names and the receiver it may carry, and its type cannot say which; " ++
+                        "two values of one method with different receivers are different workers, so {s} has no honest answer — " ++
+                        "compare string(f) if the name is what you meant [BINDING.md D6]",
+                    .{operator},
+                );
+                return;
+            }
+            try self.fail(
+                "luce.sema.type",
+                span,
+                "{s} is compared field by field and it reaches {s}: a function value has no equality, because its type " ++
+                    "cannot say which receiver it carries, so {s} has no honest answer — compare string(f) of the field " ++
+                    "if the name is what you meant [BINDING.md D6]",
+                .{ try self.analyzer.typeName(compared), try self.analyzer.typeName(found.part), operator },
+            );
+        },
+    }
+}
+
+/// Report an `xs.find(v)` or `xs.contains(v)` whose elements reach
+/// something equality has no answer for.
+///
+/// Both look with `==`, so they are `failIncomparable`'s question in
+/// another spelling and they must refuse exactly what it refuses —
+/// which is what stopped being true when the test asked the element's
+/// own tag: a `list(Button)` whose `Button` holds a function value
+/// slipped through into the runtime's comparator, which has no
+/// sentence to say.  The sentence names the element, what it reaches,
+/// and the one move that works: search something that does compare.
+pub fn failUnsearchable(
+    self: *FunctionBuilder,
+    found: shapes.Incomparable,
+    element: Type,
+    method_name: []const u8,
+    span: Span,
+) Error!void {
+    // The element type and the part that answered are printed
+    // separately rather than joined, because an element that *is* the
+    // problem would otherwise be named twice in one sentence.
+    const element_name = try self.analyzer.typeName(element);
+    const part_name = try self.analyzer.typeName(found.part);
+    const nested = !found.part.eql(element);
+    switch (found.reason) {
+        .variant => {
+            if (!nested) {
+                try self.fail(
+                    "luce.sema.method",
+                    span,
+                    "{s} compares elements with ==, and {s} is a union: match is the only door into one, so a list or an " ++
+                        "array of them cannot be searched — keep what identifies the member beside it, a name or an enum, " ++
+                        "and search that [UNION.md D16]",
+                    .{ method_name, element_name },
+                );
+                return;
+            }
+            try self.fail(
+                "luce.sema.method",
+                span,
+                "{s} compares elements with ==, and {s} reaches {s}, which is a union: match is the only door into one, " ++
+                    "so a list or an array of them cannot be searched — keep what identifies the member beside it, a name " ++
+                    "or an enum, and search that [UNION.md D16]",
+                .{ method_name, element_name, part_name },
+            );
+        },
+        .function => {
+            if (!nested) {
+                try self.fail(
+                    "luce.sema.method",
+                    span,
+                    "a function value has no equality, so a list or an array of them cannot be searched; " ++
+                        "keep what you meant to look for beside them — a name, an enum — and search that [BINDING.md D6]",
+                    .{},
+                );
+                return;
+            }
+            try self.fail(
+                "luce.sema.method",
+                span,
+                "{s} compares elements with ==, and {s} reaches {s}: a function value has no equality, because a function " ++
+                    "type cannot say which receiver a value carries — keep what you meant to look for beside them, a name " ++
+                    "or an enum, and search that [BINDING.md D6]",
+                .{ method_name, element_name, part_name },
+            );
+        },
+    }
+}
