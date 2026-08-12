@@ -122,7 +122,7 @@ pub const sections = [_]Section{
             .{ .slug = "os", .title = "std.os", .blurb = "The machine's own facts: how much memory it has, how much is left, how many processors." },
             .{ .slug = "term", .title = "std.term", .blurb = "Terminal drawing and keyboard, mouse, and resize events." },
             .{ .slug = "zip", .title = "std.zip", .blurb = "ZIP archives and DEFLATE, in pure Luce: read a real archive, write one, and check it." },
-            .{ .slug = "json", .title = "std.json", .blurb = "JSON against RFC 8259, parsed lazily into a flat document: read the leaves, print it back." },
+            .{ .slug = "json", .title = "std.json", .blurb = "JSON against RFC 8259, as a union: match a value, build one, write it back." },
         },
     },
     .{

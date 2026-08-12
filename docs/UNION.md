@@ -673,3 +673,71 @@ field list and unknown member, D11's shadowing arm binding, D12's
 self-containing union, D15's union map key, and D16's `==`, refused by
 a sentence naming `match`.  The worked `Json` example compiles and
 runs through the real toolchain on both engines.
+
+## The customer, two days later (2026-08-12)
+
+**`std.json` is now written on top of this**, and the memo's `union
+Json` is the type it declares — `null / boolean(value: bool) /
+number → real(value: double) / text(value: string) /
+array(items: list(Json)) / object(fields: map(string, Json))`, with
+one member added and nothing taken away.  The evidence section's claim
+that *"a design that serves it honestly serves everything smaller"*
+survived contact: the whole rework is a `.luc` file and its specs, and
+**not one line of the compiler, the runtime or this document's
+decisions moved to accommodate it.**
+
+What held, checked rather than assumed:
+
+- **D13's zero.**  `Json.null` is first and is the zero, so
+  `list(Json)` and `map(string, Json)` are constructible and the
+  parser's `new list(Json)` needs no ceremony.  BYTES B2's constraint
+  was the decisive one exactly as argued.
+- **D12's finiteness.**  The recursion goes through the two containers
+  and nothing else; `sumShape` accepted the declaration on the first
+  try and the tree frees itself through S20.
+- **D9/D10's ownership, with no new rule.**  Construction is S24
+  (`give` once, at the outermost value — the map and the list *are*
+  the builder); an arm's payload binding aliases, so mutating a
+  parsed tree in place is `match` plus an ordinary container write and
+  no verb; keeping what a walk found needs `copy`, which is why
+  `member` and `element` answer copies and say so.  The two-engine
+  leak census over a tree built, walked, copied, mutated, given away
+  and freed is zero, which was the claim the specs existed to keep
+  honest.
+- **D7's "match is the only door"** turned out to be the *API*, not a
+  restriction on it: `std.json` needs no navigation type at all,
+  because matching an object hands the caller the `map` itself and
+  reading through it is a borrow.  The old `Document`/`Node`/`Kind`
+  triple — a flat tape of indices, written that way because a nested
+  tree of owning containers could not answer `get -> Node?` — is
+  gone whole.
+- **D16's `string(u)`** is what became of `Kind`: the member's name,
+  which is every use `kind()` had that `match` did not already serve.
+
+Two things the memo could not have priced, both recorded where they
+live:
+
+- **A member was added: `integer(value: long)` beside
+  `real(value: double)`.**  JSON has one number type and Luce has two,
+  and a language with no implicit narrowing cannot hand a `long` out
+  of a `double` without inventing or discarding information.  The
+  split makes `std.json`'s ratified "`as_long` reads the notation"
+  rule a *type-level* fact the compiler holds instead of a re-reading
+  of the token's text — and it is the split Zig's `std.json`,
+  serde_json, Jackson and System.Text.Json all make.  Nothing in this
+  memo argues against it; the memo simply drew the type from the RFC's
+  data model rather than from Luce's.
+- **A union costs frames, and a recursive one costs them per level.**
+  `match` is cheap, but the *walk* of a recursive union is a call per
+  level at both ends — the module's reader and writer, and every
+  caller that reads what they answer — against loom's 128-call policy.
+  That is what moved `std.json`'s nesting bound from 128 to 64 and
+  what merged its two container readers into one function, so a level
+  costs one frame rather than two.  It is not a defect of the design:
+  it is what a tree is, and the flat tape it replaced bought its
+  iterative walk by giving up being a value.  But it is the one number
+  a program feels, and it belongs beside D8's allocation cost as
+  something the shape charges.
+
+`std.json`'s own header, `docs/STD.md`'s section and
+`/std/json/` carry the rest.

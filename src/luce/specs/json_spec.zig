@@ -10,6 +10,12 @@
 //! reason — the choice this module made has a test that says so, and
 //! that test is the documentation of it.
 //!
+//! **And a `Json` is a union**, so the rest of this suite is the thing
+//! `docs/UNION.md` said would prove the design: a recursive owned tree
+//! built, walked, copied, mutated and freed, with the two-engine leak
+//! census as the witness that scope ownership needed no new rule for
+//! it.
+//!
 //! The fixtures at the foot are Nicolas Seriot's **JSONTestSuite**
 //! (`Parsing JSON is a Minefield`, 2016), whose `y_` cases every
 //! parser must accept, whose `n_` cases every parser must reject, and
@@ -40,7 +46,7 @@ const asks =
     \\
     \\func counted(text: string) -> long!:
     \\    let doc = try json.parse(text)
-    \\    return doc.root().count()
+    \\    return doc.count()
     \\
     \\func accepted(text: string) -> bool:
     \\    let size = counted(text) catch -1
@@ -49,15 +55,16 @@ const asks =
     \\
 ;
 
-/// Reaching a member is two steps — ask, then narrow — because `get`
-/// answers `Node?` and a method needs a `Node`.  This is the idiom a
-/// program writes, and it is a function only because a node returns
-/// from one: the flat document is what makes that legal.
+/// Reaching a member is two steps — ask, then narrow — because
+/// `member` answers `Json?` and a method needs a `Json`.  This is the
+/// idiom a program writes when it wants to *keep* what it found; a
+/// walk that only reads says `match` and reaches the map itself,
+/// which copies nothing, and there are specs below for both.
 const reads =
     \\import std.json
     \\
-    \\func child(doc: json.Document, node: json.Node, name: string) -> json.Node:
-    \\    let found = doc.get(node, name)
+    \\func child(value: json.Json, name: string) -> json.Json:
+    \\    let found = value.member(name)
     \\    if found != none:
     \\        return found
     \\    trap("this spec asked for a member that is not there: " + name)
@@ -187,59 +194,74 @@ test "json: the number grammar is the whole of section 6 and nothing more" {
     );
 }
 
-test "json: a number is read by the notation it was written in" {
+test "json: a number is read by the notation it was written in, and the notation is the member" {
     try agreeOk(
         \\import std.json
         \\
+        \\func name_of(value: json.Json) -> string:
+        \\    return string(value)
+        \\
         \\func main() -> !:
         \\    let doc = try json.parse("[42, -7, 4.2, 42.0, 4.2e1, 1e3, -0, 0]")
-        \\    let root = doc.root()
         \\
-        \\    # Written whole, so it is a whole number.
-        \\    assert(doc.at(root, 0).as_long() else -1 == 42)
-        \\    assert(doc.at(root, 1).as_long() else 0 == -7)
-        \\    assert(doc.at(root, 7).as_long() else -1 == 0)
+        \\    # Written whole, so it is a whole number — and the union
+        \\    # says so before any accessor is called.  This is the rule
+        \\    # `as_long` used to enforce by re-reading the text, now
+        \\    # held by the member the value is.
+        \\    assert(name_of(doc.element(0)) == "integer")
+        \\    assert(name_of(doc.element(2)) == "real")
+        \\    assert(doc.element(0).as_long() else -1 == 42)
+        \\    assert(doc.element(1).as_long() else 0 == -7)
+        \\    assert(doc.element(7).as_long() else -1 == 0)
         \\
         \\    # Written with a fraction or an exponent, so it is not —
         \\    # not even when the value it names is whole.  Absence says
         \\    # "that is not how this was written", where truncating
         \\    # would throw the fraction away without saying so.
-        \\    assert(doc.at(root, 2).as_long() == none)
-        \\    assert(doc.at(root, 3).as_long() == none)
-        \\    assert(doc.at(root, 4).as_long() == none)
-        \\    assert(doc.at(root, 5).as_long() == none)
+        \\    assert(doc.element(2).as_long() == none)
+        \\    assert(doc.element(3).as_long() == none)
+        \\    assert(doc.element(4).as_long() == none)
+        \\    assert(doc.element(5).as_long() == none)
         \\
-        \\    # Every one of them is a double, whole ones included.
-        \\    assert(doc.at(root, 0).as_double() else 0.0 == 42.0)
-        \\    assert(doc.at(root, 3).as_double() else 0.0 == 42.0)
-        \\    assert(doc.at(root, 4).as_double() else 0.0 == 42.0)
-        \\    assert(doc.at(root, 5).as_double() else 0.0 == 1000.0)
+        \\    # Every one of them is a double, whole ones included: a
+        \\    # long widens, which is the one conversion Luce makes on
+        \\    # its own.
+        \\    assert(doc.element(0).as_double() else 0.0 == 42.0)
+        \\    assert(doc.element(3).as_double() else 0.0 == 42.0)
+        \\    assert(doc.element(4).as_double() else 0.0 == 42.0)
+        \\    assert(doc.element(5).as_double() else 0.0 == 1000.0)
         \\
-        \\    # A negative zero survives as one: JSON writes it, so this
-        \\    # module reads it.
-        \\    assert(doc.at(root, 6).as_double() else 1.0 == 0.0)
-        \\    assert(doc.at(root, 6).raw() == "-0")
+        \\    # A negative zero written whole is the integer zero, as it
+        \\    # is for Python's json and Go's encoding/json.  Written as
+        \\    # a real it stays one, and survives the round trip.
+        \\    assert(name_of(doc.element(6)) == "integer")
+        \\    assert(doc.element(6).as_long() else -1 == 0)
+        \\    let signed = try json.parse("-0.0")
+        \\    assert(signed.write() == "-0.0")
         \\
     );
 }
 
-test "json: a number past what a machine holds parses and reads as absent" {
-    try agreeOk(
-        \\import std.json
-        \\
+test "json: a whole number past a long is a real, and a number past a double is refused" {
+    try agreeOk(asks ++
         \\func main() -> !:
         \\    # Grammatical, so the document is valid — RFC 8259 section
-        \\    # 6 sets no bound and says so.  The value is another
-        \\    # question, and absence is the honest answer to it: the
-        \\    # same one parse_int and parse_float give.
-        \\    let doc = try json.parse("[1e309, 9223372036854775808, -9223372036854775809]")
-        \\    let root = doc.root()
-        \\    assert(doc.at(root, 0).as_double() == none)
-        \\    assert(doc.at(root, 1).as_long() == none)
-        \\    assert(doc.at(root, 2).as_long() == none)
-        \\    # The text is still there, exactly as it was written, for
-        \\    # a caller who wants to do something else with it.
-        \\    assert(doc.at(root, 1).raw() == "9223372036854775808")
+        \\    # 6 sets no bound on the notation.  A whole number too
+        \\    # large for a long is a real, which is where its precision
+        \\    # honestly is: `as_long` answers absence exactly as it did
+        \\    # when the module re-read the text.
+        \\    let doc = try json.parse("[9223372036854775808, -9223372036854775809]")
+        \\    assert(string(doc.element(0)) == "real")
+        \\    assert(doc.element(0).as_long() == none)
+        \\    assert(doc.element(1).as_long() == none)
+        \\    assert(doc.element(0).as_double() != none)
+        \\
+        \\    # Past a double there is nothing left to hold it with, and
+        \\    # section 6 lets an implementation set limits on the range
+        \\    # it accepts.  Storing an infinity would be storing a value
+        \\    # this module could never write back.
+        \\    assert(not accepted("[1e999]"))
+        \\    assert(accepted("[1e308]"))
         \\
     );
 }
@@ -252,15 +274,14 @@ test "json: the eight escapes decode, and nothing else is an escape" {
     try agreeOk(asks ++
         \\func main() -> !:
         \\    let doc = try json.parse("[\"\\\"\", \"\\\\\", \"\\/\", \"\\b\", \"\\f\", \"\\n\", \"\\r\", \"\\t\"]")
-        \\    let root = doc.root()
-        \\    assert(doc.at(root, 0).as_text() else "" == "\"")
-        \\    assert(doc.at(root, 1).as_text() else "" == "\\")
-        \\    assert(doc.at(root, 2).as_text() else "" == "/")
-        \\    assert(doc.at(root, 3).as_text() else "" == chr(8))
-        \\    assert(doc.at(root, 4).as_text() else "" == chr(12))
-        \\    assert(doc.at(root, 5).as_text() else "" == "\n")
-        \\    assert(doc.at(root, 6).as_text() else "" == chr(13))
-        \\    assert(doc.at(root, 7).as_text() else "" == "\t")
+        \\    assert(doc.element(0).as_text() else "" == "\"")
+        \\    assert(doc.element(1).as_text() else "" == "\\")
+        \\    assert(doc.element(2).as_text() else "" == "/")
+        \\    assert(doc.element(3).as_text() else "" == chr(8))
+        \\    assert(doc.element(4).as_text() else "" == chr(12))
+        \\    assert(doc.element(5).as_text() else "" == "\n")
+        \\    assert(doc.element(6).as_text() else "" == chr(13))
+        \\    assert(doc.element(7).as_text() else "" == "\t")
         \\
         \\    # RFC 8259 section 7 lists those eight and \u, and the
         \\    # list is closed.
@@ -276,11 +297,10 @@ test "json: a \\u escape is four hexadecimal digits, in either case" {
     try agreeOk(asks ++
         \\func main() -> !:
         \\    let doc = try json.parse("[\"\\u0041\", \"\\u00e9\", \"\\u20AC\", \"\\u0000\"]")
-        \\    let root = doc.root()
-        \\    assert(doc.at(root, 0).as_text() else "" == "A")
-        \\    assert(doc.at(root, 1).as_text() else "" == chr(233))
-        \\    assert(doc.at(root, 2).as_text() else "" == chr(8364))
-        \\    assert(len(doc.at(root, 3).as_text() else "x") == 1)
+        \\    assert(doc.element(0).as_text() else "" == "A")
+        \\    assert(doc.element(1).as_text() else "" == chr(233))
+        \\    assert(doc.element(2).as_text() else "" == chr(8364))
+        \\    assert(len(doc.element(3).as_text() else "x") == 1)
         \\
         \\    assert(not accepted("\"\\u041\""))
         \\    assert(not accepted("\"\\u00g1\""))
@@ -297,11 +317,10 @@ test "json: a surrogate pair is one codepoint, and half of one is refused" {
         \\    # written as two escapes and read as one character —
         \\    # four bytes of UTF-8, not two characters of three.
         \\    let doc = try json.parse("[\"\\ud834\\udd1e\", \"\\uD801\\uDC37\"]")
-        \\    let root = doc.root()
-        \\    let clef = doc.at(root, 0).as_text() else ""
+        \\    let clef = doc.element(0).as_text() else ""
         \\    assert(len(clef) == 4)
         \\    assert(clef == chr(119070))
-        \\    assert((doc.at(root, 1).as_text() else "") == chr(66615))
+        \\    assert((doc.element(1).as_text() else "") == chr(66615))
         \\
         \\    # Half a pair has no UTF-8 and a Luce string is UTF-8, so
         \\    # the choice is refuse or quietly substitute, and this
@@ -328,10 +347,15 @@ test "json: a control character inside a string must be escaped" {
         \\    assert(not accepted("\"a" + chr(0) + "b\""))
         \\    assert(accepted("\"a\\nb\""))
         \\    assert(accepted("\"a\\tb\""))
+        \\    # And one after an escape, where the decoding path meets
+        \\    # it rather than the scanning one.
+        \\    assert(not accepted("\"a\\nb" + chr(10) + "c\""))
         \\
-        \\    # And a string that is never closed is not a string.
+        \\    # A string that is never closed is not a string, with and
+        \\    # without an escape in front of the end.
         \\    assert(not accepted("\"unclosed"))
         \\    assert(not accepted("\"tail\\\""))
+        \\    assert(not accepted("\"a\\nb"))
         \\
     );
 }
@@ -343,10 +367,13 @@ test "json: text outside ASCII arrives as itself" {
         \\    # the parser sees a byte of it (RFC 8259 section 8.1) —
         \\    # there is no encoding question here to get wrong.
         \\    let doc = try json.parse("{\"caf" + chr(233) + "\": \"" + chr(955) + chr(119070) + "\"}")
-        \\    let root = doc.root()
         \\    let name = "caf" + chr(233)
-        \\    assert((child(doc, root, name).as_text() else "") == chr(955) + chr(119070))
-        \\    assert(doc.keys(root)[0] == name)
+        \\    assert((child(doc, name).as_text() else "") == chr(955) + chr(119070))
+        \\    match doc:
+        \\        object(fields):
+        \\            assert(fields.keys()[0] == name)
+        \\        else:
+        \\            trap("a parsed object is an object")
         \\
     );
 }
@@ -375,12 +402,11 @@ test "json: an object is names and values, and the punctuation is not optional" 
         \\    assert(not accepted("{\"a\":1"))
         \\    assert(not accepted("{]"))
         \\
-        \\    # A member name may be empty, and it is still a name: the
-        \\    # module tells it from "this value is not a member at all".
+        \\    # A member name may be empty, and it is still a name.
         \\    let doc = try json.parse("{\"\":0}")
-        \\    assert(doc.at(doc.root(), 0).key() == "")
-        \\    assert(doc.root().key() == "")
-        \\    assert(doc.keys(doc.root())[0] == "")
+        \\    assert(doc.count() == 1)
+        \\    assert(doc.member("") != none)
+        \\    assert(doc.write() == "{\"\":0}")
         \\
     );
 }
@@ -403,33 +429,35 @@ test "json: an array is values in order, and the punctuation is not optional" {
         \\    assert(not accepted("}"))
         \\
         \\    let doc = try json.parse("[10,20,30]")
-        \\    let root = doc.root()
-        \\    assert(root.count() == 3)
-        \\    assert(doc.at(root, 0).as_long() else -1 == 10)
-        \\    assert(doc.at(root, 2).as_long() else -1 == 30)
-        \\    # An element of an array is nobody's member.
-        \\    assert(doc.at(root, 1).key() == "")
+        \\    assert(doc.count() == 3)
+        \\    assert(doc.element(0).as_long() else -1 == 10)
+        \\    assert(doc.element(2).as_long() else -1 == 30)
         \\
     );
 }
 
-test "json: a duplicate member resolves to the last, and the document keeps both" {
+test "json: a duplicate member resolves to the last, and an object is a mapping" {
     try agreeOk(reads ++
         \\func main() -> !:
         \\    # RFC 8259 section 4: names SHOULD be unique, and what
-        \\    # happens when they are not is unpredictable.  Every
-        \\    # mainstream parser keeps the last, and so does `get`.
+        \\    # happens when they are not is unpredictable.  An object
+        \\    # here is a map(string, Json), so the second "a" replaces
+        \\    # the first in the place the first claimed — which is what
+        \\    # JavaScript's JSON.parse, Python's json and Go's
+        \\    # encoding/json all do, and unlike the flat document this
+        \\    # module used to build, both are not kept: a mapping with
+        \\    # two entries under one name is not a mapping.
         \\    let doc = try json.parse("{\"a\":\"first\",\"b\":2,\"a\":\"last\"}")
-        \\    let root = doc.root()
-        \\    assert((child(doc, root, "a").as_text() else "") == "last")
-        \\
-        \\    # The document is not edited to match: it said what it
-        \\    # said, and a reader who wants to know that can find out.
-        \\    assert(root.count() == 3)
-        \\    let names = doc.keys(root)
-        \\    assert(len(names) == 3)
-        \\    assert(names[0] == "a" and names[1] == "b" and names[2] == "a")
-        \\    assert(doc.write(root) == "{\"a\":\"first\",\"b\":2,\"a\":\"last\"}")
+        \\    assert((child(doc, "a").as_text() else "") == "last")
+        \\    assert(doc.count() == 2)
+        \\    match doc:
+        \\        object(fields):
+        \\            let names = fields.keys()
+        \\            assert(len(names) == 2)
+        \\            assert(names[0] == "a" and names[1] == "b")
+        \\        else:
+        \\            trap("a parsed object is an object")
+        \\    assert(doc.write() == "{\"a\":\"last\",\"b\":2}")
         \\
     );
 }
@@ -437,17 +465,20 @@ test "json: a duplicate member resolves to the last, and the document keeps both
 test "json: a member name is compared decoded, however it was written" {
     try agreeOk(reads ++
         \\func main() -> !:
-        \\    # The same name, spelled three ways.  A lookup decodes
-        \\    # only the names that hold a backslash, which is almost
-        \\    # none of them in almost every document.
+        \\    # The same name, spelled three ways.  Escapes are spent on
+        \\    # the way in, so a lookup is a map lookup and nothing is
+        \\    # decoded twice.
         \\    let doc = try json.parse("{\"a\\nb\": 1, \"\\u0041\": 2, \"plain\": 3}")
-        \\    let root = doc.root()
-        \\    assert((child(doc, root, "a\nb").as_long() else -1) == 1)
-        \\    assert((child(doc, root, "A").as_long() else -1) == 2)
-        \\    assert(doc.get(root, "plain") != none)
-        \\    assert(doc.get(root, "a\\nb") == none)
-        \\    assert(doc.keys(root)[0] == "a\nb")
-        \\    assert(doc.at(root, 1).key() == "A")
+        \\    assert((child(doc, "a\nb").as_long() else -1) == 1)
+        \\    assert((child(doc, "A").as_long() else -1) == 2)
+        \\    assert(doc.member("plain") != none)
+        \\    assert(doc.member("a\\nb") == none)
+        \\    match doc:
+        \\        object(fields):
+        \\            assert(fields.keys()[0] == "a\nb")
+        \\            assert(fields.keys()[1] == "A")
+        \\        else:
+        \\            trap("a parsed object is an object")
         \\
     );
 }
@@ -456,7 +487,7 @@ test "json: a member name is compared decoded, however it was written" {
 // Nesting (RFC 8259 section 9)
 // ---------------------------------------------------------------------------
 
-test "json: nesting is bounded at 128, and a deeper document is refused rather than run out of stack" {
+test "json: nesting is bounded at 64, and a deeper document is refused rather than run out of stack" {
     try agreeOk(asks ++
         \\func nest(depth: long) -> string:
         \\    var out = new builder()
@@ -468,12 +499,14 @@ test "json: nesting is bounded at 128, and a deeper document is refused rather t
         \\    return out.build()
         \\
         \\func main():
-        \\    # RFC 8259 section 9 lets a parser set a limit; this one
-        \\    # is loom's own call-depth policy, so every document this
-        \\    # module accepts is one a recursive Luce function can walk.
-        \\    assert(accepted(nest(127)))
-        \\    assert(accepted(nest(128)))
-        \\    assert(not accepted(nest(129)))
+        \\    # RFC 8259 section 9 lets a parser set a limit.  This one
+        \\    # is half of loom's 128-call budget, because a tree is
+        \\    # walked by recursion at both ends: this module's reader
+        \\    # and writer take one frame a level, and so does every
+        \\    # caller that reads what they answer.
+        \\    assert(accepted(nest(63)))
+        \\    assert(accepted(nest(64)))
+        \\    assert(not accepted(nest(65)))
         \\    # The one the owner asked about: ten thousand deep is an
         \\    # error with a name, not a machine falling over.
         \\    assert(not accepted(nest(10000)))
@@ -481,55 +514,120 @@ test "json: nesting is bounded at 128, and a deeper document is refused rather t
     );
 }
 
-// ---------------------------------------------------------------------------
-// Reading what was parsed
-// ---------------------------------------------------------------------------
-
-test "json: kind is six names, and a match over them needs no else" {
-    try agreeOk(
+test "json: a document at the bound parses, walks and writes inside loom's own call budget" {
+    // loom's real policy, not the suite's roomy one: `src/apps/host.zig`
+    // lets a program nest 128 calls, and the bound is half of it so that
+    // both ends of the walk fit with room over.
+    try agree.printsGiven(
         \\import std.json
         \\
-        \\func label(kind: json.Kind) -> string:
-        \\    match kind:
-        \\        object:
-        \\            return "object"
-        \\        array:
-        \\            return "array"
-        \\        text:
-        \\            return "text"
-        \\        number:
-        \\            return "number"
-        \\        boolean:
-        \\            return "boolean"
-        \\        null:
-        \\            return "null"
+        \\func nest(depth: long) -> string:
+        \\    var out = new builder()
+        \\    for step in range(0, depth):
+        \\        out.append("[")
+        \\    out.append("1")
+        \\    for step in range(0, depth):
+        \\        out.append("]")
+        \\    return out.build()
+        \\
+        \\func deepest(value: json.Json) -> long:
+        \\    match value:
+        \\        array(items):
+        \\            var best: long = 0
+        \\            for item in items:
+        \\                let here = deepest(item)
+        \\                if here > best:
+        \\                    best = here
+        \\            return best + 1
+        \\        object(fields):
+        \\            var best: long = 0
+        \\            for name, entry in fields:
+        \\                let here = deepest(entry)
+        \\                if here > best:
+        \\                    best = here
+        \\            return best + 1
+        \\        else:
+        \\            return 0
+        \\
+        \\func under(padding: long, text: string) -> long!:
+        \\    # Fifty frames of somebody else's program before this
+        \\    # module is called at all.
+        \\    if padding > 0:
+        \\        let answer = try under(padding - 1, text)
+        \\        return answer
+        \\    let doc = try json.parse(text)
+        \\    let again = try json.parse(doc.write())
+        \\    return deepest(doc) + deepest(again)
         \\
         \\func main() -> !:
-        \\    let doc = try json.parse("[{}, [], \"s\", 1, true, null]")
-        \\    let root = doc.root()
-        \\    assert(label(root.kind()) == "array")
-        \\    assert(label(doc.at(root, 0).kind()) == "object")
-        \\    assert(label(doc.at(root, 1).kind()) == "array")
-        \\    assert(label(doc.at(root, 2).kind()) == "text")
-        \\    assert(label(doc.at(root, 3).kind()) == "number")
-        \\    assert(label(doc.at(root, 4).kind()) == "boolean")
-        \\    assert(label(doc.at(root, 5).kind()) == "null")
+        \\    print(string(try under(50, nest(64))))
+        \\
+    , .{ .call_depth = 128 },
+        \\128
         \\
     );
 }
 
-test "json: an accessor of the wrong kind answers absence, and null is not absence" {
+// ---------------------------------------------------------------------------
+// A value is a union
+// ---------------------------------------------------------------------------
+
+test "json: a match over a Json needs no else, and names all seven members" {
+    try agreeOk(
+        \\import std.json
+        \\
+        \\func label(held: json.Json) -> string:
+        \\    # No else: the day an eighth member arrives this function
+        \\    # stops compiling and names it.
+        \\    match held:
+        \\        null:
+        \\            return "null"
+        \\        boolean(value):
+        \\            return "boolean " + string(value)
+        \\        integer(value):
+        \\            return "integer " + string(value)
+        \\        real(value):
+        \\            return "real " + string(value)
+        \\        text(value):
+        \\            return "text " + value
+        \\        array(items):
+        \\            return "array of " + string(len(items))
+        \\        object(fields):
+        \\            return "object of " + string(len(fields))
+        \\
+        \\func main() -> !:
+        \\    let doc = try json.parse("[null, true, 7, 7.5, \"s\", [1], {\"a\": 1}]")
+        \\    match doc:
+        \\        array(items):
+        \\            assert(label(items[0]) == "null")
+        \\            assert(label(items[1]) == "boolean true")
+        \\            assert(label(items[2]) == "integer 7")
+        \\            assert(label(items[3]) == "real 7.5")
+        \\            assert(label(items[4]) == "text s")
+        \\            assert(label(items[5]) == "array of 1")
+        \\            assert(label(items[6]) == "object of 1")
+        \\        else:
+        \\            trap("a parsed array is an array")
+        \\
+        \\    # string(u) is the member's name, which is the nearest
+        \\    # thing this module has to the old `kind()`.
+        \\    assert(string(json.Json.null) == "null")
+        \\    assert(string(json.Json.text(value = "x")) == "text")
+        \\
+    );
+}
+
+test "json: an accessor of the wrong member answers absence, and null is not absence" {
     try agreeOk(
         \\import std.json
         \\
         \\func main() -> !:
         \\    let doc = try json.parse("[\"s\", 1, true, false, null, {}, []]")
-        \\    let root = doc.root()
-        \\    let text = doc.at(root, 0)
-        \\    let number = doc.at(root, 1)
-        \\    let yes = doc.at(root, 2)
-        \\    let no = doc.at(root, 3)
-        \\    let nothing = doc.at(root, 4)
+        \\    let text = doc.element(0)
+        \\    let number = doc.element(1)
+        \\    let yes = doc.element(2)
+        \\    let no = doc.element(3)
+        \\    let nothing = doc.element(4)
         \\
         \\    assert((text.as_text() else "") == "s")
         \\    assert(text.as_long() == none)
@@ -546,54 +644,60 @@ test "json: an accessor of the wrong kind answers absence, and null is not absen
         \\    assert(yes.as_long() == none)
         \\
         \\    # JSON's null is a value that is there.  "There is no such
-        \\    # member" is a different sentence, and `get` says that one.
+        \\    # member" is a different sentence, and `member` says that
+        \\    # one.
         \\    assert(nothing.is_null())
         \\    assert(nothing.as_bool() == none)
         \\    assert(nothing.as_text() == none)
-        \\    assert(doc.get(doc.at(root, 5), "anything") == none)
+        \\    assert(doc.element(5).member("anything") == none)
         \\
-        \\    # A container is not a leaf and has no text of its own.
-        \\    assert(doc.at(root, 5).raw() == "")
-        \\    assert(doc.at(root, 6).count() == 0)
-        \\    assert(len(doc.items(number)) == 0)
-        \\    assert(len(doc.keys(number)) == 0)
+        \\    # A leaf has no members and no elements.
+        \\    assert(doc.element(6).count() == 0)
+        \\    assert(number.count() == 0)
+        \\    assert(number.member("a") == none)
         \\
     );
 }
 
-test "json: get answers absence for a name that is not there and for a value that is not an object" {
+test "json: member answers absence for a name that is not there and for a value that is not an object" {
     try agreeOk(reads ++
         \\func main() -> !:
         \\    let doc = try json.parse("{\"here\": 1}")
-        \\    let root = doc.root()
-        \\    # `has` is a reserved name in Luce, so `get(…) != none` is
-        \\    # the membership question, and it is the same one call.
-        \\    assert(doc.get(root, "here") != none)
-        \\    assert(doc.get(root, "there") == none)
-        \\    assert(doc.get(root, "") == none)
-        \\    assert(doc.get(root, "her") == none)
-        \\    assert(doc.get(root, "heree") == none)
+        \\    # `has` is a reserved name in Luce, so `member(…) != none`
+        \\    # is the membership question, and it is the same one call.
+        \\    assert(doc.member("here") != none)
+        \\    assert(doc.member("there") == none)
+        \\    assert(doc.member("") == none)
+        \\    assert(doc.member("her") == none)
+        \\    assert(doc.member("heree") == none)
         \\    # A value that is not an object has no members, which is
         \\    # the same news to a caller looking for a field.
-        \\    assert(doc.get(child(doc, root, "here"), "here") == none)
+        \\    assert(child(doc, "here").member("here") == none)
         \\
     );
 }
 
-test "json: items and at agree, and at past the end is a bug that traps" {
+test "json: element walks arrays and objects alike, and past the end is a bug that traps" {
     try agreeOk(reads ++
         \\func main() -> !:
         \\    let doc = try json.parse("[1, [2, 3], {\"a\": 4}, 5]")
-        \\    let root = doc.root()
-        \\    let all = doc.items(root)
-        \\    assert(len(all) == 4)
-        \\    for index in range(0, 4):
-        \\        assert(doc.at(root, index).raw() == all[index].raw())
-        \\    # A node handed out of `items` navigates like any other:
-        \\    # it is a value that knows where it lives.
-        \\    assert((doc.at(all[1], 1).as_long() else -1) == 3)
-        \\    assert((child(doc, all[2], "a").as_long() else -1) == 4)
-        \\    assert((all[3].as_long() else -1) == 5)
+        \\    assert(doc.count() == 4)
+        \\    assert(doc.element(0).as_long() else -1 == 1)
+        \\    assert(doc.element(1).element(1).as_long() else -1 == 3)
+        \\    assert(child(doc.element(2), "a").as_long() else -1 == 4)
+        \\    assert(doc.element(3).as_long() else -1 == 5)
+        \\
+        \\    # An object's members are positioned too, in the order
+        \\    # they were first named.
+        \\    let record = try json.parse("{\"a\": 1, \"b\": 2}")
+        \\    assert(record.element(0).as_long() else -1 == 1)
+        \\    assert(record.element(1).as_long() else -1 == 2)
+        \\
+        \\    # And what element hands back is a copy the caller owns,
+        \\    # so it outlives the walk that found it.
+        \\    var kept: list(json.Json) = []
+        \\    kept.append(doc.element(1))
+        \\    assert(kept[0].count() == 2)
         \\
     );
 
@@ -602,36 +706,112 @@ test "json: items and at agree, and at past the end is a bug that traps" {
         \\
         \\func main() -> !:
         \\    let doc = try json.parse("[1, 2]")
-        \\    let root = doc.root()
-        \\    print(string(doc.at(root, 2).as_long() else -1))
+        \\    print(string(doc.element(2).as_long() else -1))
         \\
     , budget, .explicit_trap);
 }
 
-test "json: a node is a value that copies, and the document is the one object" {
+// ---------------------------------------------------------------------------
+// Building, and the ownership that comes with it
+// ---------------------------------------------------------------------------
+
+test "json: a value is built the way it is taken apart, and ownership is taken once" {
+    try agree.printsGiven(
+        \\import std.json
+        \\
+        \\func main():
+        \\    # docs/UNION.md's own construction paragraph, run: every
+        \\    # inner value is fresh and silent (S20), and the one verb
+        \\    # is on the last line, where a named object moves into a
+        \\    # value that outlives the name (S24).
+        \\    var fields = new map(string, json.Json)
+        \\    fields["name"] = json.Json.text(value = "luce")
+        \\    fields["version"] = json.Json.integer(value = 2)
+        \\    fields["ratio"] = json.Json.real(value = 0.5)
+        \\    fields["tags"] = json.Json.array(items = [json.Json.text(value = "lang")])
+        \\    fields["nothing"] = json.Json.null
+        \\    let doc = json.Json.object(fields = give fields)
+        \\    print(doc.write())
+        \\    print(doc.pretty(2))
+        \\
+    , budget,
+        \\{"name":"luce","version":2,"ratio":0.5,"tags":["lang"],"nothing":null}
+        \\{
+        \\  "name": "luce",
+        \\  "version": 2,
+        \\  "ratio": 0.5,
+        \\  "tags": [
+        \\    "lang"
+        \\  ],
+        \\  "nothing": null
+        \\}
+        \\
+    );
+}
+
+test "json: a parsed tree is walked, mutated through its containers, and written back" {
+    try agree.printsGiven(
+        \\import std.json
+        \\
+        \\func bump(value: json.Json):
+        \\    # An arm's payload binding aliases what the scrutinee owns
+        \\    # (UNION.md D10), so mutating the list or the map it names
+        \\    # mutates the tree — no verb, no copy, no second owner.
+        \\    match value:
+        \\        object(fields):
+        \\            if fields.has("port"):
+        \\                let held = fields["port"].as_long() else 0
+        \\                fields["port"] = json.Json.integer(value = held + 1)
+        \\            for name, entry in fields:
+        \\                bump(entry)
+        \\        array(items):
+        \\            for item in items:
+        \\                bump(item)
+        \\            items.append(json.Json.boolean(value = true))
+        \\        else:
+        \\            return
+        \\
+        \\func main() -> !:
+        \\    let doc = try json.parse("{\"servers\":[{\"port\":80},{\"port\":8080}],\"port\":1}")
+        \\    bump(doc)
+        \\    print(doc.write())
+        \\
+    , budget,
+        \\{"servers":[{"port":81},{"port":8081},true],"port":2}
+        \\
+    );
+}
+
+test "json: give, copy and the scope are the whole of a tree's memory" {
     try agreeOk(
         \\import std.json
         \\
-        \\func deepest(doc: json.Document, node: json.Node) -> json.Node:
-        \\    # The shape the flat document buys: a node returns from a
-        \\    # function, goes into a list, and costs a copy of six
-        \\    # fields to do either.  A nested tree of owning containers
-        \\    # could not answer this signature at all.
-        \\    var here = node
-        \\    while here.count() > 0:
-        \\        here = doc.at(here, 0)
-        \\    return here
+        \\func swallow(value: give json.Json) -> long:
+        \\    # The parameter takes ownership, so this scope frees the
+        \\    # whole tree when it ends.
+        \\    return value.count()
         \\
         \\func main() -> !:
-        \\    let doc = try json.parse("[[[[\"bottom\"]]]]")
-        \\    let found = deepest(doc, doc.root())
-        \\    assert((found.as_text() else "") == "bottom")
+        \\    for step in range(0, 50):
+        \\        let doc = try json.parse("{\"a\": [1, 2, {\"b\": \"c\"}], \"d\": null}")
+        \\        # A copy is a second tree with a second owner: editing
+        \\        # it leaves the first alone.
+        \\        var twin = copy doc
+        \\        match twin:
+        \\            object(fields):
+        \\                fields["a"] = json.Json.null
+        \\            else:
+        \\                trap("a parsed object is an object")
+        \\        assert(doc.member("a") != none)
+        \\        assert(twin.member("a") != none)
+        \\        assert(doc.element(0).count() == 3)
+        \\        assert(twin.element(0).count() == 0)
+        \\        assert(swallow(give twin) == 2)
         \\
-        \\    var kept: list(json.Node) = []
-        \\    for item in doc.items(doc.root()):
-        \\        kept.append(item)
-        \\    assert(len(kept) == 1)
-        \\    assert(kept[0].count() == 1)
+        \\    # A refused parse frees what it had built so far too.
+        \\    for step in range(0, 50):
+        \\        let refused = json.parse("[1, 2, [3, 4") catch json.Json.null
+        \\        assert(refused.is_null())
         \\
     );
 }
@@ -640,36 +820,38 @@ test "json: a node is a value that copies, and the document is the one object" {
 // Writing
 // ---------------------------------------------------------------------------
 
-test "json: write puts every token back and the whitespace nowhere" {
+test "json: write puts the value back and the whitespace nowhere" {
     try agreeOk(reads ++
         \\func main() -> !:
         \\    let spaced = "{\n  \"a\" : [ 1, 2 ] ,\n  \"b\" : { \"c\" : null }\n}"
         \\    let doc = try json.parse(spaced)
-        \\    let root = doc.root()
-        \\    assert(doc.write(root) == "{\"a\":[1,2],\"b\":{\"c\":null}}")
+        \\    assert(doc.write() == "{\"a\":[1,2],\"b\":{\"c\":null}}")
         \\    # A subtree writes on its own.
-        \\    assert(doc.write(child(doc, root, "b")) == "{\"c\":null}")
+        \\    assert(child(doc, "b").write() == "{\"c\":null}")
         \\    # Empty containers keep their own shape.
         \\    let empty = try json.parse("[{},[],[{}]]")
-        \\    assert(empty.write(empty.root()) == "[{},[],[{}]]")
+        \\    assert(empty.write() == "[{},[],[{}]]")
         \\
     );
 }
 
-test "json: the tokens that come back are the ones that went in" {
+test "json: write re-encodes the value, and parsing what it wrote gives the same value" {
     try agreeOk(
         \\import std.json
         \\
         \\func main() -> !:
-        \\    # Numbers keep their notation and strings keep their
-        \\    # escapes: `write` is not a re-encoding, it is the same
-        \\    # tokens with the whitespace taken out.
-        \\    # Written with no whitespace, because that is the one
-        \\    # thing `write` does not put back: everything else in this
-        \\    # line survives the round trip byte for byte.
-        \\    let source = "[1e3,42.0,-0,\"\\u0041\",\"a\\/b\",\"caf" + chr(233) + "\"]"
-        \\    let doc = try json.parse(source)
-        \\    assert(doc.write(doc.root()) == source)
+        \\    # The value is what survived the parse, so `write` is a
+        \\    # re-encoding and not an echo: an escape that had a
+        \\    # shorter spelling gets it, a solidus loses the one it did
+        \\    # not need, and a real is written with the point that
+        \\    # keeps it a real.
+        \\    let doc = try json.parse("[1e3,42.0,-0,\"\\u0041\",\"a\\/b\",\"caf" + chr(233) + "\"]")
+        \\    let once = doc.write()
+        \\    assert(once == "[1000.0,42.0,0,\"A\",\"a/b\",\"caf" + chr(233) + "\"]")
+        \\    # And that is a fixed point: what comes out reads back as
+        \\    # the same value and writes the same bytes again.
+        \\    let again = try json.parse(once)
+        \\    assert(again.write() == once)
         \\
     );
 }
@@ -679,24 +861,24 @@ test "json: parse, write, parse is a fixed point over a rich document" {
         \\func main() -> !:
         \\    let source = "{\n  \"name\": \"luce\",\n  \"version\": 2,\n  \"ratio\": -1.5e-3,\n  \"tags\": [\"lang\", \"runtime\", []],\n  \"nested\": {\"a\": {\"b\": {\"c\": [true, false, null]}}},\n  \"escaped\": \"quote \\\" slash \\\\ newline \\n clef \\ud834\\udd1e\",\n  \"empty\": {},\n  \"none\": null\n}"
         \\    let first = try json.parse(source)
-        \\    let once = first.write(first.root())
+        \\    let once = first.write()
         \\    let second = try json.parse(once)
-        \\    let twice = second.write(second.root())
+        \\    let twice = second.write()
         \\    assert(once == twice)
         \\
         \\    # And the document says the same things after the trip.
-        \\    assert(second.root().count() == 8)
-        \\    assert(child(second, second.root(), "tags").count() == 3)
-        \\    let decoded = child(second, second.root(), "escaped").as_text() else ""
+        \\    assert(second.count() == 8)
+        \\    assert(child(second, "tags").count() == 3)
+        \\    let decoded = child(second, "escaped").as_text() else ""
         \\    let clef = decoded[len(decoded) - 4:]
         \\    assert(clef == chr(119070))
         \\    assert(decoded[0:14] == "quote \" slash ")
         \\
-        \\    # Pretty is the same document with room around it, and
-        \\    # parsing it gives the same tokens back.
-        \\    let indented = second.pretty(second.root(), 2)
+        \\    # Pretty is the same value with room around it, and
+        \\    # parsing it gives the same value back.
+        \\    let indented = second.pretty(2)
         \\    let third = try json.parse(indented)
-        \\    assert(third.write(third.root()) == once)
+        \\    assert(third.write() == once)
         \\
     );
 }
@@ -707,8 +889,8 @@ test "json: pretty indents by the count it is given" {
         \\
         \\func main() -> !:
         \\    let doc = try json.parse("{\"a\":[1,{\"b\":2}],\"c\":{},\"d\":[]}")
-        \\    print(doc.pretty(doc.root(), 2))
-        \\    print(doc.pretty(doc.root(), 0))
+        \\    print(doc.pretty(2))
+        \\    print(doc.pretty(0))
         \\
     , budget,
         \\{
@@ -724,6 +906,22 @@ test "json: pretty indents by the count it is given" {
         \\{"a":[1,{"b":2}],"c":{},"d":[]}
         \\
     );
+}
+
+test "json: a real that is not a number has no JSON to be written as" {
+    // Nothing this module parses can hold an infinity — a number past
+    // a double is refused on the way in — but a program can build one
+    // out of arithmetic, and there is no text that would read back as
+    // what it was given (RFC 8259 section 6).
+    try agree.trapGiven(
+        \\import std.json
+        \\
+        \\func main():
+        \\    let huge: double = 1.0e308
+        \\    let doc = json.Json.real(value = huge * 10.0)
+        \\    print(doc.write())
+        \\
+    , budget, .explicit_trap);
 }
 
 test "json: quote escapes what must be escaped and leaves the rest alone" {
@@ -748,10 +946,12 @@ test "json: quote escapes what must be escaped and leaves the rest alone" {
         \\    # RFC 8259 section 8.1 asks for.
         \\    assert(json.quote(chr(233)) == "\"" + chr(233) + "\"")
         \\
-        \\    # And what it writes is what this module reads back.
-        \\    let quoted = json.quote("a\"b\\c" + chr(11) + "d/e" + chr(233))
-        \\    let doc = try json.parse(quoted)
-        \\    assert((doc.root().as_text() else "") == "a\"b\\c" + chr(11) + "d/e" + chr(233))
+        \\    # And what it writes is what this module reads back — and
+        \\    # what `write` puts around a string of its own.
+        \\    let awkward = "a\"b\\c" + chr(11) + "d/e" + chr(233)
+        \\    let doc = try json.parse(json.quote(awkward))
+        \\    assert((doc.as_text() else "") == awkward)
+        \\    assert(json.Json.text(value = awkward).write() == json.quote(awkward))
         \\
     );
 }
@@ -829,6 +1029,14 @@ test "json: a refusal names the problem and the byte it happened at" {
         \\import std.json
         \\
         \\func main() -> !:
+        \\    let doc = try json.parse("[1e999]")
+        \\
+    , "json: the number at byte 1 is past what a double can hold");
+
+    try agreeRaises(
+        \\import std.json
+        \\
+        \\func main() -> !:
         \\    let doc = try json.parse("[\"a\\qb\"]")
         \\
     , "json: unknown escape at byte 3");
@@ -856,6 +1064,20 @@ test "json: a refusal names the problem and the byte it happened at" {
         \\    let doc = try json.parse("[garbage]")
         \\
     , "json: a value was expected at byte 1");
+
+    try agreeRaises(
+        \\import std.json
+        \\
+        \\func main() -> !:
+        \\    var deep = new builder()
+        \\    for step in range(0, 65):
+        \\        deep.append("[")
+        \\    deep.append("1")
+        \\    for step in range(0, 65):
+        \\        deep.append("]")
+        \\    let doc = try json.parse(deep.build())
+        \\
+    , "json: values nested deeper than 64, at byte 64");
 }
 
 // ---------------------------------------------------------------------------
@@ -936,14 +1158,22 @@ test "json: the JSONTestSuite n_ cases, which every parser must refuse" {
 test "json: the JSONTestSuite i_ cases, which parsers disagree about, and what this one decided" {
     try agreeOk(asks ++
         \\func main() -> !:
-        \\    # i_number_huge_exp, i_number_too_big_pos_int: grammatical,
-        \\    # so the document parses; the value is out of range, so the
-        \\    # accessor answers absence.  Accepting and then saying "not
-        \\    # a double" keeps the two questions apart.
-        \\    assert(accepted("[1e999]"))
+        \\    # i_number_too_big_pos_int: grammatical, so it parses; too
+        \\    # large for a long, so it is a real, which is where its
+        \\    # precision honestly is.
         \\    assert(accepted("[100000000000000000000]"))
-        \\    let huge = try json.parse("[1e999]")
-        \\    assert(huge.at(huge.root(), 0).as_double() == none)
+        \\    let big = try json.parse("[100000000000000000000]")
+        \\    assert(big.element(0).as_long() == none)
+        \\    assert(big.element(0).as_double() != none)
+        \\
+        \\    # i_number_huge_exp: refused, and this is the one row the
+        \\    # union moved.  A lazy document could accept 1e999 and
+        \\    # answer absence when asked for its value; an eager one
+        \\    # would have to store an infinity, and infinity is not
+        \\    # JSON — so it could never be written back.  RFC 8259
+        \\    # section 6 allows an implementation to limit the range it
+        \\    # accepts, and this is that limit, named at the byte.
+        \\    assert(not accepted("[1e999]"))
         \\
         \\    # i_string_lone_second_surrogate, i_string_1st_surrogate_but_2nd_missing:
         \\    # refused.  A Luce string is UTF-8 and half a pair has
@@ -952,7 +1182,7 @@ test "json: the JSONTestSuite i_ cases, which parsers disagree about, and what t
         \\    assert(not accepted("[\"\\uDFAA\"]"))
         \\    assert(not accepted("[\"\\uD800\"]"))
         \\
-        \\    # i_structure_500_nested_arrays: refused, at 129 (see the
+        \\    # i_structure_500_nested_arrays: refused, at 65 (see the
         \\    # nesting spec above for why that number).
         \\    var deep = new builder()
         \\    for step in range(0, 500):
@@ -965,22 +1195,22 @@ test "json: the JSONTestSuite i_ cases, which parsers disagree about, and what t
 }
 
 // ---------------------------------------------------------------------------
-// The document as an object
+// The value as an object graph
 // ---------------------------------------------------------------------------
 
 test "json: documents parsed in a loop leave nothing behind" {
     try agreeOk(asks ++
         \\func main() -> !:
-        \\    # Every one of these owns a list of nodes, and every one
-        \\    # of them is freed by the scope that received it — which
-        \\    # is what the leak census at the end of this run checks.
+        \\    # Every one of these owns a tree of lists and maps, and
+        \\    # every one of them is freed by the scope that received it
+        \\    # — recursively, through the containers, which is what the
+        \\    # leak census at the end of this run checks.
         \\    var total: long = 0
         \\    for step in range(0, 50):
         \\        let doc = try json.parse("{\"a\": [1, 2, {\"b\": \"c\"}], \"d\": null}")
-        \\        total += doc.root().count()
-        \\        let items = doc.items(doc.root())
-        \\        total += len(items)
-        \\    assert(total == 200)
+        \\        total += doc.count()
+        \\        total += doc.element(0).count()
+        \\    assert(total == 250)
         \\
         \\    # A refused parse frees what it had built so far too.
         \\    for step in range(0, 50):
@@ -997,23 +1227,26 @@ test "json: the recipe for a file is three calls, and none of them is this modul
         \\import std.strings
         \\import std.json
         \\
-        \\func child(doc: json.Document, node: json.Node, name: string) -> json.Node:
-        \\    let found = doc.get(node, name)
-        \\    if found != none:
-        \\        return found
-        \\    trap("no such member: " + name)
-        \\
         \\func main() -> !:
         \\    # json touches nothing: the bytes come off the disk, the
-        \\    # text is a validation of those bytes, and the document is
-        \\    # a reading of that text.
+        \\    # text is a validation of those bytes, and the value is a
+        \\    # reading of that text.
         \\    let bytes = try files.read_bytes("config.json")
         \\    let text = strings.from_bytes(bytes) else ""
         \\    let doc = try json.parse(text)
-        \\    let root = doc.root()
-        \\    let host = child(doc, root, "host").as_text() else "?"
-        \\    let port = child(doc, root, "port").as_long() else 0
-        \\    print(host + ":" + string(port))
+        \\    # The walking form: the map inside the value is reached by
+        \\    # `match` and nothing is copied.
+        \\    match doc:
+        \\        object(fields):
+        \\            var host = "?"
+        \\            var port: long = 0
+        \\            if fields.has("host"):
+        \\                host = fields["host"].as_text() else "?"
+        \\            if fields.has("port"):
+        \\                port = fields["port"].as_long() else 0
+        \\            print(host + ":" + string(port))
+        \\        else:
+        \\            trap("a config file is an object")
         \\
     , provided,
         \\localhost:8080

@@ -634,10 +634,19 @@ A library that only reads what it wrote has proven nothing about ZIP.
 
 ## json
 
-JSON, in pure Luce.  Parse a document, walk it, read the leaves, print
-it back.  Nothing here is a builtin, nothing here imports anything
-(not even `std.strings`), and nothing here touches the world: `parse`
-takes a string and answers a document.
+JSON, in pure Luce.  Parse text into a value, ask a value what it is
+with `match`, build values directly, write one back.  Nothing here is
+a builtin, nothing here imports anything (not even `std.strings`), and
+nothing here touches the world: `parse` takes a string and answers a
+`Json`.
+
+**A JSON value is a union, because that is what a JSON value is.**
+RFC 8259 says a value is one of six things and two of the six contain
+more values; `union Json` says the same sentence in Luce.  This module
+is the customer `docs/UNION.md` was argued from, and since 2026-08-12
+it is written on top of it — the `enum Kind` + `struct Node` +
+document-of-indices design it used to have existed only because
+unions did not.
 
 **Written against RFC 8259**, and every rule in the source names the
 clause it implements — §2 the structural characters and the four
@@ -655,65 +664,89 @@ disagree about and this one decides out loud.
 ```text
 import std.json
 
-json.parse(text)                 # Document! — the whole grammar, or an
+union Json:
+    null
+    boolean(value: bool)
+    integer(value: long)
+    real(value: double)
+    text(value: string)
+    array(items: list(Json))
+    object(fields: map(string, Json))
+
+json.parse(text)                 # Json! — the whole grammar, or an
                                  # error naming the byte and the problem
 json.quote(text)                 # string -> a JSON string literal, the
                                  # escaping done right
 
-doc.root()                       # Node — the one top-level value
-doc.get(node, name)              # Node? — an object's member, or absent
-doc.at(node, index)              # Node — an element; past the end traps
-doc.items(node)                  # list(Node) — every child, in order
-doc.keys(node)                   # list(string) — every member name
-doc.write(node)                  # string — JSON with no whitespace
-doc.pretty(node, spaces)         # string — the same, indented
-
-node.kind()                      # Kind — object array text number
-                                 #        boolean null
-node.count()                     # long — members or elements; 0 for a leaf
-node.key()                       # string — its member name, decoded
-node.raw()                       # string — its text exactly as written
-node.is_null()                   # bool
-node.as_bool()  node.as_long()  node.as_double()  node.as_text()
+j.is_null()                      # bool — JSON's null, which is a value
+j.as_bool()  j.as_long()  j.as_double()  j.as_text()
                                  # bool? long? double? string?
+j.count()                        # long — members or elements; 0 for a leaf
+j.member(name)                   # Json? — an object's member, as a copy
+j.element(index)                 # Json — an element, as a copy; past
+                                 # the end traps
+j.write()                        # string — JSON with no whitespace
+j.pretty(spaces)                 # string — the same, indented
 ```
 
-**Lazy, in simdjson's On-Demand sense.**  A parse walks the text once,
-checks that every byte of it is grammatical, and records where each
-value begins and ends; it does not turn `"1e3"` into a double or a
-`𝄞` into 𝄞 until somebody asks.  A document read for one
-field pays for one field, and `node.raw()` is always exactly what the
-author wrote.
-
-**A document is flat, and a node is a value that points into it.**
-`Document` owns one `list(Node)` holding every value in document
-order; a `Node` is a plain value — a kind, two spans of text, three
-numbers — so it copies for nothing, returns from any function, and
-needs no ownership verb anywhere.  Each node records the index one
-past its own subtree, which is simdjson's tape: a container's first
-child is the node after it, and any value's next sibling is that
-index.  Navigation is therefore a method on the *document*, because a
-node on its own does not know where the rest of the document lives.
-
-That shape is what the language allows rather than a preference.  A
-nested tree of `list(Node)` children cannot answer `get(name) ->
-Node?` at all: returning an object-carrying struct read out of a
-container is refused (OWNERSHIP.md S17, S22), and returning a `copy`
-of one would deep-copy the whole subtree on every field access.  Flat
-costs one heap object for a document of any size, and the reading path
-allocates only what it hands back.
-
-Reaching a member is two steps, because `get` answers `Node?` and a
-method needs a `Node` — and the narrowing is a function, which is
-legal precisely because a node returns from one:
+**`match` is the door, and it copies nothing.**  There is no field
+access on a union value, so a walk names the member it wants and gets
+the container itself:
 
 ```text
-func child(doc: json.Document, node: json.Node, name: string) -> json.Node:
-    let found = doc.get(node, name)
-    if found != none:
-        return found
-    trap("no member named " + name)
+match doc:
+    object(fields):
+        if fields.has("port"):
+            port = fields["port"].as_long() else 8080
+    else:
+        trap("a config file is an object")
 ```
+
+`member` and `element` are the other half of that pair, for a caller
+who wants to *keep* what it found: a value read out of a container has
+an owner already ([S17], [S22]), so the only thing a function can hand
+back is a copy of its own — which for a leaf is a number or a string
+and for a subtree is the subtree.  The two are not duplicates of each
+other; they have different costs and say so.
+
+**Building one reads the way taking it apart does**, and ownership is
+taken once, at the outermost value — the map and the list *are* the
+builder, so there is no second construction API:
+
+```text
+var fields = new map(string, json.Json)
+fields["name"] = json.Json.text(value = "luce")
+fields["tags"] = json.Json.array(items = [json.Json.integer(value = 1)])
+let doc = json.Json.object(fields = give fields)
+```
+
+Every inner value there is fresh and silent (S20); the one `give` is
+on the last line, where a named object moves into a value that
+outlives the name (S24).  A `Json` carries objects, so it takes
+`give`/`copy` where any carrying value does and dies with the binding
+that received it, recursively, through the containers (S20) — no
+arena, no collector, and no `deinit` to remember.  The two-engine leak
+census over a tree built, walked, copied, mutated and freed is what
+proves it.
+
+**Eager, where the old design was lazy.**  A parse turns `"1e3"` into
+1000.0 and `"é"` into é once, on the way in; the document's bytes
+are not kept and there is no `raw()`.  So `write` is a *re-encoding*
+rather than an echo of the tokens that were read, and the property it
+keeps is the one that matters: **parsing what `write` produced gives
+an equal value, and writing that gives identical text.**
+
+The calls other parsers argue about, each with its reason:
+
+| | this module |
+|---|---|
+| **Numbers** | JSON has one number type and Luce has two, so the **notation is the member**: `42` is `Json.integer` and `4.2`, `42.0`, `4.2e1` are all `Json.real`.  The rule `as_long` used to enforce by re-reading the text is now a fact the compiler holds.  Zig's `std.json`, serde_json, Jackson and System.Text.Json all split the same way, because a language with no implicit narrowing cannot hand a `long` out of a `double` without inventing or discarding information.  A whole number too large for a `long` is a `real`, which is where its precision honestly is |
+| **A number past a `double`** | **refused**, by name, at the byte (§6: *"This specification allows implementations to set limits on the range and precision of numbers accepted"*).  The eager value would otherwise be an infinity, and infinity is not JSON — it could never be written back.  `1e309` is an error; `1e308` is a number.  This is the one JSONTestSuite `i_` row the union moved |
+| **Nesting** | bounded at **64** (§9 allows a limit).  A tree is walked by recursion at both ends — this module's reader and writer take one frame a level, and so does every caller that reads what they answer — and loom lets a program nest 128 calls before `call_depth_exceeded`.  Sixty-four is half of that, so a document this module accepts can be parsed, walked and written from a call stack already sixty deep.  The old bound was 128, chosen when the parser was iterative and only the *caller* recursed; a union has no iterative walk to offer, so the number moved to stay true |
+| **Duplicate names** | resolves to the **last** (§4: names SHOULD be unique, behaviour otherwise unpredictable), as JavaScript, Python and Go all do.  An object is a `map(string, Json)`, so the second `"a"` replaces the first in the place the first claimed — and unlike the old flat document, both are *not* kept: a mapping with two entries under one name is not a mapping |
+| **Unpaired surrogates** | **refused** by name at the byte (§8.2 warns; ECMA-404 permits the code unit).  A Luce string is UTF-8 and half a pair has none, so the alternatives were refusing and quietly substituting U+FFFD.  A well-formed pair is one codepoint |
+| **NaN, Infinity** | not JSON (§6 has one number grammar and no names in it), refused like any other unknown word on the way in — and a `Json.real` built by hand out of one **traps** on the way out, because there is no text this module could write that would read back as what it was given |
+| **`write`** | canonical, not an echo: the whitespace is gone, an escape with a shorter spelling gets it, a `\/` loses the solidus escape it never needed, and a `real` is written with the point that keeps it a `real`.  `parse → write → parse → write` is a fixed point |
 
 **Reading a file is three calls and this module makes none of them:**
 `files.read_bytes(path)`, then `strings.from_bytes(bytes)`, then
@@ -722,20 +755,10 @@ func child(doc: json.Document, node: json.Node, name: string) -> json.Node:
 construction and the encoding question was answered before the text
 arrived.
 
-The calls other parsers argue about, each with its reason:
-
-| | this module |
-|---|---|
-| **Nesting** | bounded at **128** (§9 allows a limit).  The parse is iterative and would not care, but a document is *walked* by callers, and loom lets a program nest 128 calls before `call_depth_exceeded` — so accepting a deeper one would hand a caller a tree no recursive function of theirs can walk.  serde_json's default is the same number from the other direction.  A 10,000-deep array is an error with a name, not a machine falling over |
-| **Duplicate names** | `get` resolves to the **last** (§4: names SHOULD be unique, behaviour otherwise unpredictable), as JavaScript, Python and Go all do.  The document is not edited to match — `count`, `items` and `keys` still show every member as written, because a reader who wants to know a document repeats itself should be able to find out |
-| **Unpaired surrogates** | **refused** by name at the byte (§8.2 warns; ECMA-404 permits the code unit).  A Luce string is UTF-8 and half a pair has none, so the alternatives were refusing and quietly substituting U+FFFD.  A well-formed pair is one codepoint |
-| **`as_long`** | reads the **notation**: `42` answers 42, and `4.2`, `42.0` and `4.2e1` all answer `none` and are read with `as_double`.  A number written as a real is a real; absence says so, where truncating would drop information silently.  Too large for a `long` is `none` too, exactly as `parse_int` says it |
-| **NaN, Infinity** | not JSON (§6 has one number grammar and no names in it), refused like any other unknown word |
-| **`write`** | not a byte-for-byte echo — the whitespace a document arrived with is not kept — but every *token* is the one that was read, escapes and number notation and all.  So `parse → write → parse → write` is a fixed point, and a document that arrived minified comes back identical |
-
-`has` is missing on purpose: it is a reserved name (`m.has(k)`, the map
-method), so `doc.get(node, name) != none` is the membership question
-and it is the same one call.
+`has` is missing on purpose: it is a reserved name (`m.has(k)`, the
+map method), so `j.member(name) != none` is the membership question
+for a caller holding a value, and `fields.has(name)` is it for a walk
+that already matched.
 
 ---
 

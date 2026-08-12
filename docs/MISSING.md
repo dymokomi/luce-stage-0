@@ -208,8 +208,12 @@ no new rule, the zero as the first declared member, recursion through
 owning containers with `Shape?` as the terminator that is not one,
 and a value that is a struct-shaped run `libluce_rt` walks without
 ever learning unions exist.  Sixteen two-engine specs and the refusal
-rows are the proof; `std.json` is the customer and is now writable
-against a real `union Json`.
+rows are the proof; `std.json` was the customer and **has since been
+rewritten onto it** (2026-08-12, `docs/UNION.md`'s "The customer, two
+days later"): a JSON value is the union, `match` is the whole
+navigation API, and the `enum Kind` + `struct Node` + flat
+document-of-indices design it had while unions did not exist is gone
+whole.  Nothing in the compiler or the runtime moved to allow it.
 
 
 **Owner direction, 2026-08-04 — the endgame is set.**  After the
@@ -1183,9 +1187,11 @@ Completed chronology lives in the tiers above.  The current queue is:
    refused `free(u)`), `format_version` 37 → 38, and `libluce_rt`
    untouched.  With it the ratified language roadmap is worked down:
    **typed channels (item 1) are the next queued design run**, and
-   `std.json` — written without unions as a lazy flat document — is
-   now writable against a real `union Json` if that proves the better
-   shape.
+   `std.json` — written without unions as a lazy flat document — was
+   **rewritten onto a real `union Json` on 2026-08-12**, which it
+   proved to be the better shape: the navigation type disappeared,
+   `match` became the API, and the module's only new cost is a call
+   frame per level of nesting, which moved its bound from 128 to 64.
 6. ~~**Stage 5 (HIR)**~~ — **landed 2026-08-10**, the seam built and
    the scaffolding taken down (`src/luce/05_hir/`).  The checker
    records a typed tree and emits nothing; one pass lowers it.  What

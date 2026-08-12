@@ -1,10 +1,10 @@
 # std.json
 
-JSON, in pure Luce. Parse a document, walk it, read the leaves, and
-print it back out. Nothing here is a builtin, nothing here imports
-anything — not even `std.strings` — and nothing here touches the host:
-`parse` takes a string and answers a document, and where the string
-came from is the caller's business.
+JSON, in pure Luce. Parse text into a value, ask a value what it is
+with `match`, build values directly, write one back. Nothing here is a
+builtin, nothing here imports anything — not even `std.strings` — and
+nothing here touches the host: `parse` takes a string and answers a
+`Json`, and where the string came from is the caller's business.
 
 ```
 import std.json
@@ -21,28 +21,106 @@ Nicolas Seriot's JSONTestSuite (*Parsing JSON is a Minefield*, 2016):
 the `y_` rows every parser must accept, the `n_` rows every parser
 must refuse, and the `i_` rows real parsers disagree about.
 
-## Reading a document
+## A JSON value is a union
 
-| Signature | Notes |
-|---|---|
-| `json.parse(content: string) -> Document!` | the whole grammar, or an error naming the byte and the problem |
-| `json.quote(content: string) -> string` | text as a JSON string literal, the escaping done right |
+RFC 8259 says a value is one of six things, and two of the six contain
+more values. That is the whole type:
+
+```text
+union Json:
+    null
+    boolean(value: bool)
+    integer(value: long)
+    real(value: double)
+    text(value: string)
+    array(items: list(Json))
+    object(fields: map(string, Json))
+```
+
+Seven members for six kinds, because JSON's one number type arrives
+here as the two Luce has — see [numbers](#numbers) below. `null` is
+first, so it is also the zero: what a `var j: json.Json` starts at,
+and what makes `list(json.Json)` constructible at all.
+
+`match` is the only door. There is no field access on a union value
+and no tag test, so asking a number for its members is not a checked
+error — it is a program that does not compile.
 
 ```luce run
 import std.json
 
-func child(doc: json.Document, node: json.Node, name: string) -> json.Node:
-    let found = doc.get(node, name)
-    if found != none:
-        return found
-    trap("no member named " + name)
+func label(held: json.Json) -> string:
+    match held:
+        null:
+            return "null"
+        boolean(value):
+            return "boolean " + string(value)
+        integer(value):
+            return "integer " + string(value)
+        real(value):
+            return "real " + string(value)
+        text(value):
+            return "text " + value
+        array(items):
+            return "array of " + string(len(items))
+        object(fields):
+            return "object of " + string(len(fields))
+
+func main() -> !:
+    let doc = try json.parse("[null, true, 7, 7.5, \"s\", [1], {\"a\": 1}]")
+    match doc:
+        array(items):
+            for item in items:
+                print(label(item))
+        else:
+            trap("a parsed array is an array")
+```
+
+```output
+null
+boolean true
+integer 7
+real 7.5
+text s
+array of 1
+object of 1
+```
+
+There is no `else` in `label`, so the day an eighth member is added,
+that function stops compiling and names it.
+
+## Reading
+
+| Signature | Notes |
+|---|---|
+| `json.parse(content: string) -> Json!` | the whole grammar, or an error naming the byte and the problem |
+| `json.quote(content: string) -> string` | text as a JSON string literal, the escaping done right |
+| `j.is_null() -> bool` | true for JSON's `null`, which is a value that is *there* |
+| `j.as_bool() -> bool?` | absent for every other member |
+| `j.as_long() -> long?` | absent unless the number was written whole |
+| `j.as_double() -> double?` | either number member; a whole one widens |
+| `j.as_text() -> string?` | the string, escapes already spent |
+| `j.count() -> long` | members or elements; 0 for a leaf |
+| `j.member(name: string) -> Json?` | an object's member **as a copy**, or absent |
+| `j.element(index: long) -> Json` | an element or a positioned member **as a copy**; past the end traps |
+| `j.write() -> string` | the value as JSON with nothing between the tokens |
+| `j.pretty(spaces: long) -> string` | the same, indented |
+
+The walking form copies nothing: `match` hands you the `map` or the
+`list` itself, and reading through that binding is a borrow.
+
+```luce run
+import std.json
 
 func main() -> !:
     let doc = try json.parse("{\"host\": \"localhost\", \"port\": 8080, \"debug\": false}")
-    let root = doc.root()
-    print(child(doc, root, "host").as_text() else "?")
-    print(string(child(doc, root, "port").as_long() else 0))
-    print(string(child(doc, root, "debug").as_bool() else true))
+    match doc:
+        object(fields):
+            print(fields["host"].as_text() else "?")
+            print(string(fields["port"].as_long() else 0))
+            print(string(fields["debug"].as_bool() else true))
+        else:
+            trap("a config file is an object")
 ```
 
 ```output
@@ -51,204 +129,233 @@ localhost
 false
 ```
 
-Reaching a member is two steps, because `get` answers `Node?` and a
-method needs a `Node`. That `child` is a *function* is the whole point
-of the design below: a node returns from one.
-
-## The document, and the nodes in it
-
-`Document` owns the parse. Every navigating call is a method on it,
-and takes the node to navigate from.
-
-| Signature | Notes |
-|---|---|
-| `doc.root() -> Node` | the one top-level value |
-| `doc.get(node: Node, name: string) -> Node?` | an object's member by name, or absent — for a name that is not there and for a value that is not an object |
-| `doc.at(node: Node, index: long) -> Node` | an element by position; past the end traps, because `count()` is right there |
-| `doc.items(node: Node) -> list(Node)` | every member or element, in order; a fresh list the caller owns |
-| `doc.keys(node: Node) -> list(string)` | every member name, decoded, in order |
-| `doc.write(node: Node) -> string` | the value as JSON with nothing between the tokens |
-| `doc.pretty(node: Node, spaces: long) -> string` | the same, indented |
-
-A `Node` is one value in that document. It answers what it is and what
-it was written as, and unpacks itself when asked.
-
-| Signature | Notes |
-|---|---|
-| `node.kind() -> Kind` | `object`, `array`, `text`, `number`, `boolean` or `null` |
-| `node.count() -> long` | members or elements; 0 for every leaf |
-| `node.key() -> string` | its member name, decoded; `""` when it is not a member |
-| `node.raw() -> string` | its text exactly as written; `""` for a container |
-| `node.is_null() -> bool` | true for JSON's `null`, which is a value that is *there* |
-| `node.as_bool() -> bool?` | absent for every other kind |
-| `node.as_long() -> long?` | absent for every other kind, for a number written with a fraction or an exponent, and for one too large to hold |
-| `node.as_double() -> double?` | absent for every other kind and for a magnitude past a double |
-| `node.as_text() -> string?` | the escapes decoded (§7); absent for every other kind |
-
-`Kind` is an enum, so a `match` over it needs no `else` — and the day
-a seventh kind of JSON value is invented, every one of these stops
-compiling until it says what to do.
+`member` and `element` are the other half of that pair, for a caller
+who wants to **keep** what it found. They answer a copy, and they have
+to: a value read out of a container has an owner already
+([S17](/ref/ownership/#s17), [S22](/ref/ownership/#s22)), so the only
+thing a function can hand back is one of its own. For a leaf that is a
+number or a string; for a subtree it is the subtree.
 
 ```luce run
 import std.json
 
-func describe(node: json.Node) -> string:
-    match node.kind():
-        object:
-            return "object of " + string(node.count())
-        array:
-            return "array of " + string(node.count())
-        text:
-            return "text " + (node.as_text() else "")
-        number:
-            return "number " + node.raw()
-        boolean:
-            return "boolean " + string(node.as_bool() else false)
-        null:
-            return "null"
+func child(value: json.Json, name: string) -> json.Json:
+    let found = value.member(name)
+    if found != none:
+        return found
+    trap("no member named " + name)
 
 func main() -> !:
-    let doc = try json.parse("[1, \"two\", true, null, [3], {\"a\": 4}]")
-    for item in doc.items(doc.root()):
-        print(describe(item))
+    let doc = try json.parse("{\"server\": {\"host\": \"localhost\", \"ports\": [80, 443]}}")
+    let server = child(doc, "server")
+    print(child(server, "host").as_text() else "?")
+    print(string(child(server, "ports").count()))
+    print(string(child(server, "ports").element(1).as_long() else 0))
+    print(string(doc.member("missing") == none))
 ```
 
 ```output
-number 1
-text two
-boolean true
-null
-array of 1
-object of 1
+localhost
+2
+443
+true
 ```
 
 There is no `has`. It is a reserved name in Luce — it is `m.has(k)`,
-the map method — so `doc.get(node, name) != none` is the membership
-question, and it is the same one call.
+the map method — so `j.member(name) != none` is the membership
+question for a caller holding a value, and `fields.has(name)` is it
+for a walk that already matched.
 
-## Lazy, in simdjson's sense
+## Building
 
-A parse walks the text once, checks that every byte of it is
-grammatical, and records where each value begins and ends. It does not
-turn `1e3` into a double or a `\ud834\udd1e` into 𝄞 until somebody
-asks. A document read for one field pays for one field, and `raw()` is
-always exactly what the author wrote — which is also why `write` can
-put the same bytes back.
+The map and the list *are* the builder, so ownership is taken once, at
+the outermost value. Every inner value is fresh and silent
+([S20](/ref/ownership/#s20)); the one `give` is on the last line,
+where a named object moves into a value that outlives the name
+([S24](/ref/ownership/#s24)).
+
+```luce run
+import std.json
+
+func main():
+    var fields = new map(string, json.Json)
+    fields["name"] = json.Json.text(value = "luce")
+    fields["version"] = json.Json.integer(value = 2)
+    fields["ratio"] = json.Json.real(value = 0.5)
+    fields["tags"] = json.Json.array(items = [json.Json.text(value = "lang")])
+    fields["nothing"] = json.Json.null
+    let doc = json.Json.object(fields = give fields)
+    print(doc.write())
+    print(doc.pretty(2))
+```
+
+```output
+{"name":"luce","version":2,"ratio":0.5,"tags":["lang"],"nothing":null}
+{
+  "name": "luce",
+  "version": 2,
+  "ratio": 0.5,
+  "tags": [
+    "lang"
+  ],
+  "nothing": null
+}
+```
+
+Editing works the same way from the other end: an arm's payload
+binding **aliases** what the scrutinee owns, so mutating the list or
+the map it names mutates the tree — no verb, no copy, no second owner.
+
+```luce run
+import std.json
+
+func bump(value: json.Json):
+    match value:
+        object(fields):
+            if fields.has("port"):
+                let held = fields["port"].as_long() else 0
+                fields["port"] = json.Json.integer(value = held + 1)
+            for name, entry in fields:
+                bump(entry)
+        array(items):
+            for item in items:
+                bump(item)
+        else:
+            return
+
+func main() -> !:
+    let doc = try json.parse("{\"servers\":[{\"port\":80},{\"port\":8080}],\"port\":1}")
+    bump(doc)
+    print(doc.write())
+```
+
+```output
+{"servers":[{"port":81},{"port":8081}],"port":2}
+```
+
+**Ownership** is scope ownership with nothing new in it. A `Json`
+carries objects, so it takes `give` and `copy` where any carrying
+value does, and the binding that received it frees it — recursively,
+through the containers. There is no arena, no collector, and no
+`deinit` to remember.
+
+## Numbers
+
+JSON has one number type and Luce has two, so the **notation is the
+member**: `42` is `Json.integer` and `4.2`, `42.0` and `4.2e1` are all
+`Json.real`. A language with no implicit narrowing cannot hand a
+`long` out of a `double` without inventing or discarding information,
+so the split is where it has to be — and it is the split Zig's
+`std.json`, serde_json, Jackson and System.Text.Json all make.
 
 ```luce run
 import std.json
 
 func main() -> !:
-    let doc = try json.parse("{\"ratio\": 1.500, \"huge\": 1e999, \"count\": 42}")
-    let root = doc.root()
-    let ratio = doc.at(root, 0)
-    print(ratio.key() + " was written " + ratio.raw())
-    print(string(ratio.as_double() else 0.0))
-    print(string(ratio.as_long() == none))
-    print(string(doc.at(root, 1).as_double() == none))
-    print(string(doc.at(root, 2).as_long() else 0))
+    let doc = try json.parse("[42, 42.0, 4.2e1, 9223372036854775808]")
+    print(string(doc.element(0)) + " " + string(doc.element(0).as_long() else -1))
+    print(string(doc.element(1)) + " " + string(doc.element(1).as_long() == none))
+    print(string(doc.element(2)) + " " + string(doc.element(2).as_double() else 0.0))
+    # Too large for a long, so it is a real — which is where its
+    # precision honestly is.
+    print(string(doc.element(3)) + " " + string(doc.element(3).as_long() == none))
 ```
 
 ```output
-ratio was written 1.500
-1.5
-true
-true
-42
+integer 42
+real true
+real 42
+real true
 ```
 
-Two of those answers are decisions worth reading twice. **`as_long`
-reads the notation, not the value**: `42` is a whole number and
-`42.0`, `4.2` and `4.2e1` are not, so they answer absence and are read
-with `as_double`. Truncating would drop information without saying so.
-And **a number too big for the machine parses and then reads as
-absent**: `1e999` is grammatical — RFC 8259 §6 sets no bound and says
-so — but no double holds it, and absence is the same answer
-`parse_float` gives.
+`as_long` therefore reads the notation and not the value, exactly as
+it always did — but the rule is now the member the value *is*, checked
+by the compiler, instead of a re-reading of the text.
 
-## A document is flat, and a node points into it
+A number past what a `double` can hold is **refused**, at the byte.
+§6 lets an implementation limit the range it accepts, and the eager
+alternative would be storing an infinity — which is not JSON, so it
+could never be written back.
 
-`Document` owns one `list(Node)` holding every value in document
-order. A `Node` is a plain value — a kind, two spans of text, three
-numbers — so it copies for nothing, returns from any function, and
-needs no ownership verb anywhere. Each node records the index one past
-its own subtree, which is simdjson's tape: a container's first child
-is the node after it, and any value's next sibling is that index.
+```luce run
+import std.json
 
-That is why navigation is a method on the *document*: a node on its
-own does not know where the rest of the document lives.
+func size(text: string) -> long!:
+    let doc = try json.parse(text)
+    return doc.count()
 
-The shape is what the language allows rather than a preference. A
-nested tree — a `Node` holding `list(Node)` children — cannot answer
-`get(name) -> Node?` at all, because returning an object-carrying
-struct read out of a container is refused
-([S17](/ref/ownership/#s17), [S22](/ref/ownership/#s22)), and
-returning a `copy` of one would deep-copy the whole subtree on every
-field access. Flat costs one heap object for a document of any size,
-and the reading path allocates only what it hands back.
+func refusal(text: string) -> string:
+    var count: long = 0
+    count = size(text) catch reason:
+        return reason
+    return "accepted"
 
-**Ownership**: the binding that receives the document owns it, and the
-end of that scope frees it — one list, however large the document. A
-node owns nothing at all. A node belongs to the document it came from;
-handing one to a *different* document reads whatever that document
-holds at the same index, so keep the pair together the way you would a
-slice and the thing it slices.
+func main():
+    print(refusal("[1e308]"))
+    print(refusal("[1e999]"))
+```
+
+```output
+accepted
+json: the number at byte 1 is past what a double can hold
+```
 
 ## Writing
 
-`write` is not a byte-for-byte echo: the whitespace a document arrived
-with is not kept. Every *token* is the one that was read, though —
-escapes and number notation and all — so `parse → write → parse →
-write` is a fixed point, and a document that arrived minified comes
-back identical.
+`write` is a **re-encoding of the value**, not an echo of the text it
+was parsed from: the value is what survived that parse, and the bytes
+are not kept. What it promises instead is the property that matters —
+parsing what `write` produced gives an equal value, and writing that
+gives identical text.
 
 ```luce run
 import std.json
 
 func main() -> !:
-    let doc = try json.parse("{ \"a\" : [1, 2] , \"b\" : {} }")
-    print(doc.write(doc.root()))
-    print(doc.pretty(doc.root(), 2))
+    let doc = try json.parse("[1e3, 42.0, -0, \"\\u0041\", \"a\\/b\"]")
+    let once = doc.write()
+    print(once)
+    let again = try json.parse(once)
+    print(string(again.write() == once))
     print(json.quote("say \"hi\""))
     print(json.quote("line\nbreak"))
     print(json.quote("caf" + chr(233)))
-    let dup = try json.parse("{\"a\": 1, \"a\": 2}")
-    let found = dup.get(dup.root(), "a")
-    if found != none:
-        print(string(found.as_long() else 0))
-    print(string(dup.root().count()))
-    print(dup.write(dup.root()))
 ```
 
 ```output
-{"a":[1,2],"b":{}}
-{
-  "a": [
-    1,
-    2
-  ],
-  "b": {}
-}
+[1000.0,42.0,0,"A","a/b"]
+true
 "say \"hi\""
 "line\nbreak"
 "café"
-2
-2
-{"a":1,"a":2}
 ```
 
-The last three lines are the **duplicate name** decision. RFC 8259 §4
-says names SHOULD be unique and that the behaviour when they are not
-is unpredictable; every mainstream parser keeps the last one, and so
-does `get`. The document is not edited to match — `count`, `items` and
-`keys` still show every member as written, because a reader who wants
-to know that a document repeats itself should be able to find out.
+An escape with a shorter spelling gets it, a `\/` loses the solidus
+escape it never needed, and a `real` is written with the point that
+keeps it a `real` — so `42.0` stays a real across the round trip
+rather than coming back an integer. `json.quote` escapes the quote,
+the backslash and the control characters, and nothing else: the
+solidus may be escaped and need not be, so it is not, and text outside
+ASCII goes out as UTF-8, which is what §8.1 asks for.
 
-`json.quote` escapes the quote, the backslash and the control
-characters, and nothing else: the solidus may be escaped and need not
-be, so it is not, and text outside ASCII goes out as UTF-8, which is
-what §8.1 asks for. It is the door for a program that builds JSON of
-its own out of a builder rather than parsing any.
+An object is a `map(string, Json)`, so a **duplicate member name**
+resolves to the last one written, in the place the first one claimed —
+what JavaScript, Python and Go all do — and both are not kept: a
+mapping with two entries under one name is not a mapping.
+
+```luce run
+import std.json
+
+func main() -> !:
+    let doc = try json.parse("{\"a\": 1, \"b\": 2, \"a\": 3}")
+    print(string(doc.count()))
+    print(doc.write())
+```
+
+```output
+2
+{"a":3,"b":2}
+```
 
 ## What it refuses
 
@@ -257,7 +364,7 @@ import std.json
 
 func size(text: string) -> long!:
     let doc = try json.parse(text)
-    return doc.root().count()
+    return doc.count()
 
 func report(text: string):
     let count = size(text) catch -1
@@ -290,9 +397,9 @@ refused  ['single']
 
 Every refusal is an error carrying a byte offset and a sentence —
 `json: a number may not have a leading zero, at byte 1`. `parse`
-answers `Document!` rather than `Document?` for exactly that reason:
-there are many distinct ways for a document to be wrong, and the one
-it met is worth carrying.
+answers `Json!` rather than `Json?` for exactly that reason: there are
+many distinct ways for a document to be wrong, and the one it met is
+worth carrying.
 
 Three of those rows are choices other parsers make differently:
 
@@ -302,16 +409,19 @@ Three of those rows are choices other parsers make differently:
   quietly substituting U+FFFD for what the document said. A
   well-formed pair — `\ud834\udd1e` — is one codepoint, 𝄞, and is
   read as one.
-- **Nesting is bounded at 128** (§9 lets a parser set a limit). The
-  parse is iterative and would not care, but a document is *walked* by
-  callers, and loom lets a Luce program nest 128 calls before it traps
-  `call_depth_exceeded` — so accepting a deeper document would hand a
-  caller a tree no recursive function of theirs could walk. serde_json
-  arrived at the same number from the other direction. A 10,000-deep
-  array is an error with a name, not a machine falling over.
+- **Nesting is bounded at 64** (§9 lets a parser set a limit). A tree
+  is walked by recursion at both ends: this module's reader and writer
+  take one frame a level, and so does every caller that reads what
+  they answer. loom lets a program nest 128 calls before it traps
+  `call_depth_exceeded`, so the bound is half of that — a document
+  this module accepts can be parsed, walked and written from a call
+  stack already sixty deep. A 10,000-deep array is an error with a
+  name, not a machine falling over.
 - **`NaN` and `Infinity` are not JSON.** §6 gives one number grammar
   and there are no names in it, so they are refused like any other
-  unknown word.
+  unknown word — and a `Json.real` built by hand out of one traps on
+  the way out, because there is no text that would read back as what
+  it was given.
 
 ## Reading a file
 
