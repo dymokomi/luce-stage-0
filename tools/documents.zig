@@ -64,6 +64,7 @@ pub const records = [_][]const u8{
     "docs/TESTING.md",
     "docs/BINDING.md",
     "docs/FILESYSTEM.md",
+    "docs/TERMUI.md",
     "docs/SELF.md",
     "docs/CONSTANTS.md",
 };
