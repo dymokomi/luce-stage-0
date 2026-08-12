@@ -418,6 +418,15 @@ pub const Parser = struct {
     /// only when there is no body to read on into.
     fn colonOrLayout(self: *Parser, what: []const u8) Error!bool {
         if (self.accept(.colon) != null) return true;
+        if (self.peekKind() == .left_brace) {
+            try self.report(
+                "luce.parse.expected",
+                self.peek().span,
+                "blocks open with ':' and an indented body; '{{' starts a map literal",
+                .{},
+            );
+            return false;
+        }
         try self.expected(what);
         return self.peekKind() == .newline and self.peekAhead(1) == .indent;
     }

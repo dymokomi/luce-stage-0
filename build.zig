@@ -221,6 +221,19 @@ pub fn build(b: *std.Build) void {
     specs.addOptions("build_options", runtime_path);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = specs })).step);
 
+    // Keep the highest-risk function/union composition seam addressable
+    // without waiting for the bundled applications.  This is a focused
+    // differential specification, not a replacement for the full suite.
+    const composition_tests = b.addTest(.{
+        .root_module = specs,
+        .filters = &.{"a bound method carries a union callback"},
+    });
+    const test_composition_step = b.step(
+        "test-composition",
+        "Run the bound-method and union-callback composition spec",
+    );
+    test_composition_step.dependOn(&b.addRunArtifact(composition_tests).step);
+
     // The documentation site's generator (`www/luce/src/`).  Its tests
     // are what keep the word tables it highlights with, its link
     // resolver and its Markdown honest, and they belong in `zig build

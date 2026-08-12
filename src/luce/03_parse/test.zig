@@ -1509,6 +1509,10 @@ test "the mistakes a beginner actually makes name the Luce spelling" {
             .wanted = .{ .code = "luce.parse.expected", .line = 3, .column = 1, .contains = "'if' block is empty" },
         },
         .{
+            .source = "func main():\n    if a {\n        return\n",
+            .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 10, .contains = "blocks open with ':'" },
+        },
+        .{
             .source = "struct Point:\n",
             .wanted = .{ .code = "luce.parse.expected", .line = 2, .column = 1, .contains = "'struct' block is empty" },
         },

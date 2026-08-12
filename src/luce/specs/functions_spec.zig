@@ -627,6 +627,54 @@ test "a stored bound method is called out of the map that holds it" {
     , "20\n30\n");
 }
 
+test "a bound method carries a union callback into another struct's function" {
+    // This is the composition seam where three representations meet: the
+    // bound method borrows its Envelope receiver, the receiver contains a
+    // tagged union with an optional function value, and Runner accepts that
+    // value through an ordinary function-typed parameter.
+    try agree.prints(
+        \\union Job:
+        \\    action(run: (func(long) -> long)?, value: long)
+        \\
+        \\struct Runner:
+        \\    bias: long
+        \\
+        \\    func apply(f: func(long) -> long, value: long) -> long:
+        \\        return f(value + self.bias)
+        \\
+        \\struct Envelope:
+        \\    job: Job
+        \\    runner: Runner
+        \\
+        \\    func run() -> long:
+        \\        match self.job:
+        \\            action(run, value):
+        \\                let chosen = run else identity
+        \\                return self.runner.apply(chosen, value)
+        \\
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\func identity(n: long) -> long:
+        \\    return n
+        \\
+        \\func main():
+        \\    let with_callback = Envelope(
+        \\        job = Job.action(run = twice, value = 5),
+        \\        runner = Runner(bias = 10),
+        \\    )
+        \\    let without_callback = Envelope(
+        \\        job = Job.action(run = none, value = 5),
+        \\        runner = Runner(bias = 10),
+        \\    )
+        \\    let first: func() -> long = with_callback.run
+        \\    let second: func() -> long = without_callback.run
+        \\    print(string(first()))
+        \\    print(string(second()))
+        \\
+    , "30\n15\n");
+}
+
 test "a field narrowed into a local is still called through the local" {
     // The path `packages/termui-0.1.0/rows.luc` takes, and the one a
     // storable function value will always take: a field cannot be
