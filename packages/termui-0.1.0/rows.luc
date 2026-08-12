@@ -1,0 +1,60 @@
+# The scrolling list (docs/TERMUI.md D8, D9).
+#
+# `Rows` shows data it does not own.  It holds no container: a
+# provider answers what row `index` says, so the widget reads app data
+# without owning it and without a type parameter.  Handing it the list
+# instead would make the widget the owner of app state, which S21
+# would then make the app give away — and the app still needs it.
+
+import termui
+import screen
+
+# What a key did to the list.  A widget's events are a small closed
+# set the widget owns, which is exactly what a union is for; the app
+# matches this and decides what "chosen" means.
+union RowsEvent:
+    moved(index: long)
+    chosen(index: long)
+
+struct Rows:
+    render: (func(long) -> string)?
+    count: long = 0
+    top: long = 0
+    selected: long = 0
+
+    func label(index: long) -> string:
+        let provider = self.render
+        if provider == none:
+            return ""
+        return provider(index)
+
+    # Keep the selection on the list and the window on the selection.
+    func adjust(height: long):
+        if self.count <= 0:
+            self.top = 0
+            self.selected = 0
+            return
+        self.selected = clamp(self.selected, 0, self.count - 1)
+        if self.selected < self.top:
+            self.top = self.selected
+        if height > 0 and self.selected >= self.top + height:
+            self.top = self.selected - height + 1
+        self.top = clamp(self.top, 0, max(self.count - 1, 0))
+
+    func move_by(steps: long) -> RowsEvent:
+        self.selected = clamp(self.selected + steps, 0, max(self.count - 1, 0))
+        return RowsEvent.moved(index = self.selected)
+
+    func choose() -> RowsEvent:
+        return RowsEvent.chosen(index = self.selected)
+
+    func draw(into: screen.Screen, area: termui.Rect, normal: termui.Style, highlight: termui.Style):
+        self.adjust(area.rows)
+        for row in range(0, area.rows):
+            let index = self.top + row
+            if index >= self.count:
+                return
+            var style = normal
+            if index == self.selected:
+                style = highlight
+            into.write(area, row, 0, self.label(index), style)

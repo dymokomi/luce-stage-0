@@ -1,0 +1,54 @@
+# Rect is arithmetic, and every operation is total.
+
+import termui
+
+func test_split_top_takes_from_the_top():
+    let full = termui.Rect(rows = 24, columns = 80)
+    let head, rest = full.split_top(3)
+    assert(head.row == 0)
+    assert(head.rows == 3)
+    assert(rest.row == 3)
+    assert(rest.rows == 21)
+    assert(head.columns == 80 and rest.columns == 80)
+
+func test_split_bottom_leaves_the_rest_on_top():
+    let full = termui.Rect(rows = 24, columns = 80)
+    let status, body = full.split_bottom(1)
+    assert(status.row == 23)
+    assert(status.rows == 1)
+    assert(body.row == 0)
+    assert(body.rows == 23)
+
+func test_split_left_and_right_divide_the_columns():
+    let full = termui.Rect(rows = 10, columns = 40)
+    let left, rest = full.split_left(12)
+    assert(left.column == 0 and left.columns == 12)
+    assert(rest.column == 12 and rest.columns == 28)
+    let right, remainder = full.split_right(12)
+    assert(right.column == 28 and right.columns == 12)
+    assert(remainder.column == 0 and remainder.columns == 28)
+
+# A small window is a resize, not a bug: a split past the edge answers
+# an empty rectangle instead of trapping.
+func test_every_split_is_total():
+    let full = termui.Rect(rows = 4, columns = 6)
+    let big, nothing = full.split_left(500)
+    assert(big.columns == 6)
+    assert(nothing.columns == 0)
+    assert(nothing.is_empty())
+    let none_taken, whole = full.split_top(-3)
+    assert(none_taken.is_empty())
+    assert(whole.rows == 4)
+
+func test_inset_shrinks_both_ways_and_stops_at_empty():
+    let full = termui.Rect(rows = 10, columns = 20)
+    let inner = full.inset(2)
+    assert(inner.row == 2 and inner.column == 2)
+    assert(inner.rows == 6 and inner.columns == 16)
+    assert(full.inset(50).is_empty())
+
+func test_a_rect_is_a_value():
+    let a = termui.Rect(rows = 3, columns = 3)
+    var b = a
+    b.rows = 9
+    assert(a.rows == 3)

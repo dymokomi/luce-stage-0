@@ -1,0 +1,57 @@
+import border
+import screen
+import termui
+
+func test_draw_answers_the_interior():
+    var s = screen.Screen.of(6, 20)
+    s.clear()
+    let frame = border.Border(title = "output")
+    let inside = frame.draw(s, s.area())
+    assert(inside.row == 1)
+    assert(inside.column == 1)
+    assert(inside.rows == 4)
+    assert(inside.columns == 18)
+
+func test_the_corners_and_edges_are_drawn():
+    var s = screen.Screen.of(4, 10)
+    s.clear()
+    let frame = border.Border()
+    frame.draw(s, s.area())
+    s.present()
+    assert(s.front[0, 0].text == "┌")
+    assert(s.front[0, 9].text == "┐")
+    assert(s.front[3, 0].text == "└")
+    assert(s.front[3, 9].text == "┘")
+    assert(s.front[0, 5].text == "─")
+    assert(s.front[2, 0].text == "│")
+    # Nothing was drawn inside.
+    assert(s.front[2, 5].text == " ")
+
+func test_a_title_sits_on_the_top_edge():
+    var s = screen.Screen.of(4, 14)
+    s.clear()
+    let frame = border.Border(title = "files")
+    frame.draw(s, s.area())
+    s.present()
+    assert(s.front[0, 2].text == " ")
+    assert(s.front[0, 3].text == "f")
+    assert(s.front[0, 7].text == "s")
+
+func test_a_title_too_long_is_clipped_not_overflowed():
+    var s = screen.Screen.of(4, 10)
+    s.clear()
+    let frame = border.Border(title = "a very long title indeed")
+    frame.draw(s, s.area())
+    s.present()
+    # The right corner survives: the title never reaches it.
+    assert(s.front[0, 9].text == "┐")
+
+func test_an_area_too_small_for_a_box_is_left_alone():
+    var s = screen.Screen.of(3, 3)
+    s.clear()
+    let frame = border.Border()
+    let tiny = termui.Rect(row = 0, column = 0, rows = 1, columns = 3)
+    let inside = frame.draw(s, tiny)
+    assert(inside.is_empty())
+    s.present()
+    assert(s.front[0, 0].text == " ")

@@ -614,6 +614,41 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&compile_program.step);
     }
 
+    // The packages are userland too, and they carry their own tests
+    // (docs/TESTING.md), so `zig build test` runs the runner over them
+    // rather than only compiling them.  This is the one place `luce
+    // test` is driven the way a person drives it — against a real
+    // package with a `luce.yaml` governing it — so a change that
+    // breaks discovery, the synthesized entry, or the per-test call
+    // fails the suite here and not in somebody's terminal.
+    const packages = [_]struct {
+        directory: []const u8,
+        modules: []const []const u8,
+        tests: []const []const u8,
+    }{
+        .{
+            .directory = "termui-0.1.0",
+            .modules = &.{ "termui", "screen", "events", "border", "rows" },
+            .tests = &.{ "layout", "screen", "events", "border", "rows" },
+        },
+    };
+    for (packages) |package| {
+        const test_package = b.addRunArtifact(compiler);
+        test_package.addArg("test");
+        test_package.setCwd(b.path(b.fmt("packages/{s}", .{package.directory})));
+        // Every source is an input, so editing one re-runs the tests
+        // instead of handing back the last result.
+        test_package.addFileInput(b.path(b.fmt("packages/{s}/luce.yaml", .{package.directory})));
+        for (package.modules) |module| {
+            test_package.addFileInput(b.path(b.fmt("packages/{s}/{s}.luc", .{ package.directory, module })));
+        }
+        for (package.tests) |one| {
+            test_package.addFileInput(b.path(b.fmt("packages/{s}/tests/{s}_test.luc", .{ package.directory, one })));
+        }
+        linkAgainstRuntime(test_package, install_runtime, runtime_directory, runtime_archive);
+        test_step.dependOn(&test_package.step);
+    }
+
     // The editor is also useful as a standalone command.  Keep this
     // executable in the build graph beside the `.lc`: the source and its
     // imported model are explicit inputs, so editing either one rebuilds

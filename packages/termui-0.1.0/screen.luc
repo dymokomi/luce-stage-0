@@ -1,0 +1,118 @@
+# The cell grid and its diff (docs/TERMUI.md D2).
+#
+# Two grids: `back` is what the next frame should be, `front` is what
+# the terminal is showing.  `present` writes only where they differ,
+# coalescing a horizontal run of changed cells that share a style into
+# one `term.write` and moving only when a run does not continue where
+# the last one ended.  That is the whole of the output optimisation.
+
+import std.strings
+import std.term
+import termui
+
+struct Cell:
+    text: string = " "
+    style: termui.Style = termui.Style()
+
+# What one `present` did.  Returned rather than printed so a test can
+# hold the library to its promise without a terminal in front of it.
+struct Painted:
+    cells: long = 0
+    runs: long = 0
+    moves: long = 0
+
+struct Screen:
+    back: array(Cell, _, _)
+    front: array(Cell, _, _)
+    rows: long = 0
+    columns: long = 0
+    # The terminal's contents after a resize are not knowable, so the
+    # first frame after one is written whole.
+    stale: bool = true
+
+    static func of(rows: long, columns: long) -> Screen:
+        let high = max(rows, 1)
+        let wide = max(columns, 1)
+        return Screen(
+            back = new array(Cell, high, wide),
+            front = new array(Cell, high, wide),
+            rows = high,
+            columns = wide,
+        )
+
+    func area() -> termui.Rect:
+        return termui.Rect(rows = self.rows, columns = self.columns)
+
+    func resize(rows: long, columns: long):
+        let high = max(rows, 1)
+        let wide = max(columns, 1)
+        if high == self.rows and wide == self.columns:
+            return
+        self.back = new array(Cell, high, wide)
+        self.front = new array(Cell, high, wide)
+        self.rows = high
+        self.columns = wide
+        self.stale = true
+
+    # Blank the frame being built.  `front` is untouched: it is what
+    # the terminal shows, and only `present` may claim to know that.
+    func clear():
+        for row in range(0, self.rows):
+            for column in range(0, self.columns):
+                self.back[row, column] = Cell()
+
+    func put(row: long, column: long, text: string, style: termui.Style):
+        if row < 0 or row >= self.rows or column < 0 or column >= self.columns:
+            return
+        self.back[row, column] = Cell(text = text, style = style)
+
+    # Write `text` inside `area`, clipped to it and to the screen.  The
+    # offsets are relative to the area, which is what makes a widget
+    # able to draw without knowing where it sits.
+    func write(area: termui.Rect, row: long, column: long, text: string, style: termui.Style):
+        if row < 0 or row >= area.rows:
+            return
+        var at = column
+        for character in text.characters():
+            if at >= area.columns:
+                return
+            if at >= 0:
+                self.put(area.row + row, area.column + at, character, style)
+            at += 1
+
+    func fill(area: termui.Rect, text: string, style: termui.Style):
+        for row in range(0, area.rows):
+            for column in range(0, area.columns):
+                self.put(area.row + row, area.column + column, text, style)
+
+    # Move `back` onto the terminal and onto `front`.
+    func present() -> Painted:
+        var painted = Painted()
+        for row in range(0, self.rows):
+            var column: long = 0
+            while column < self.columns:
+                if self.back[row, column] == self.front[row, column] and not self.stale:
+                    column += 1
+                    continue
+                # A run: changed cells, sharing a style, side by side.
+                let style = self.back[row, column].style
+                var stop = column
+                var text = new builder()
+                while stop < self.columns:
+                    let cell = self.back[row, stop]
+                    if cell.style != style:
+                        break
+                    if cell == self.front[row, stop] and not self.stale:
+                        break
+                    text.append(cell.text)
+                    self.front[row, stop] = cell
+                    stop += 1
+                term.move(row, column)
+                term.style(style.foreground, style.background, style.bold)
+                term.write(text.build())
+                painted.moves += 1
+                painted.runs += 1
+                painted.cells += stop - column
+                column = stop
+        self.stale = false
+        return painted

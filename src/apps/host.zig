@@ -731,7 +731,19 @@ pub const Host = struct {
 
     fn ensureScreen(self: *Host) error{OutOfMemory}!void {
         if (self.screen.active) return;
-        const saved = std.posix.tcgetattr(self.screen.handle) catch return;
+        if (self.screen.raw == .unavailable) return;
+        // The system call rather than `std.posix.tcgetattr`, and the
+        // reason is in `Screen.raw`: the wrapper's `else` arm reaches
+        // `unexpectedErrno`, which *prints a stack trace* before it
+        // hands back an error, and a pipe answers with an errno that
+        // arm covers.  Reading the number here is the difference
+        // between "this is not a terminal" and a screenful of traces.
+        var attributes: std.posix.termios = undefined;
+        if (std.posix.errno(std.posix.system.tcgetattr(self.screen.handle, &attributes)) != .SUCCESS) {
+            self.screen.raw = .unavailable;
+            return;
+        }
+        const saved = attributes;
         var raw = saved;
         raw.lflag.ICANON = false;
         raw.lflag.ECHO = false;
@@ -754,7 +766,11 @@ pub const Host = struct {
         // presented before the read, not instead of it.
         raw.cc[@intFromEnum(std.posix.V.MIN)] = 1;
         raw.cc[@intFromEnum(std.posix.V.TIME)] = 0;
-        std.posix.tcsetattr(self.screen.handle, .FLUSH, raw) catch return;
+        std.posix.tcsetattr(self.screen.handle, .FLUSH, raw) catch {
+            self.screen.raw = .unavailable;
+            return;
+        };
+        self.screen.raw = .available;
         self.screen.saved = saved;
         const size = windowSize();
         self.screen.last_rows = size.rows;
@@ -880,6 +896,8 @@ pub const Host = struct {
     }
 
     const Screen = struct {
+        pub const Raw = enum { unasked, available, unavailable };
+
         active: bool = false,
         /// Which descriptor *is* the terminal: raw mode is set on it,
         /// and both `key_read` and `read_line` take their bytes from
@@ -896,6 +914,19 @@ pub const Host = struct {
         /// below, and they set it to a real pipe rather than to a
         /// stand-in, so what they exercise is the shipped path.
         handle: std.posix.fd_t = std.posix.STDIN_FILENO,
+        /// Whether raw mode can be had on `handle`, asked once.
+        ///
+        /// A descriptor that is not a terminal is not going to become
+        /// one, and `tcgetattr` on a pipe does worse than fail: the
+        /// errno it fails with is one Zig's wrapper does not map, so
+        /// the standard library dumps a stack trace to standard error
+        /// before handing back `error.Unexpected`.  Retrying it per
+        /// escape sequence — which is what asking on every call came
+        /// to — buries a program's own output in traces the moment it
+        /// draws into a pipe.  `loom run editor.lc > frames.txt` is
+        /// that program, and so is every package test that presents a
+        /// frame.  `isatty` answers the same question without failing.
+        raw: Raw = .unasked,
         saved: std.posix.termios = undefined,
         buffer: std.ArrayList(u8) = .empty,
         /// Bytes read from standard input and not yet consumed — one
@@ -1957,6 +1988,20 @@ test "a descriptor that is not a terminal is drawn on without raw mode" {
     const drawn = scripted.out.written().len;
     scripted.host.restoreScreen();
     try testing.expectEqual(drawn, scripted.out.written().len);
+
+    // And the question was asked once.  It used to be asked on every
+    // escape sequence, because nothing recorded the answer — which
+    // cost a failing system call per cell run, and, since a pipe
+    // answers `tcgetattr` with an errno `std.posix`'s wrapper does not
+    // map, a *stack trace on standard error* per cell run with it.  A
+    // program drawing into a pipe is ordinary (`loom run editor.lc >
+    // frames.txt`, and every package test that presents a frame), so
+    // this is the difference between its output and a wall of traces.
+    try testing.expectEqual(Host.Screen.Raw.unavailable, scripted.host.screen.raw);
+    try scripted.host.move(0, 0);
+    try scripted.host.write("more");
+    try testing.expectEqual(Host.Screen.Raw.unavailable, scripted.host.screen.raw);
+    try testing.expect(!scripted.host.screen.active);
 }
 
 test "a diagnostic ends its line the way the screen it lands on needs" {

@@ -1,0 +1,91 @@
+# The provider reads app data the widget does not own.
+
+import rows
+import screen
+import termui
+
+struct Names:
+    names: list(string)
+
+    func at(index: long) -> string:
+        return self.names[index]
+
+func names_of(count: long) -> Names:
+    var held = Names(names = new list(string))
+    for i in range(0, count):
+        held.names.append("file" + string(i))
+    return held
+
+func test_a_provider_reads_the_list_it_does_not_own():
+    var held = names_of(3)
+    var pane = rows.Rows(render = held.at, count = 3)
+    assert(pane.label(0) == "file0")
+    assert(pane.label(2) == "file2")
+
+func test_a_pane_without_a_provider_shows_nothing():
+    var pane = rows.Rows(render = none, count = 3)
+    assert(pane.label(0) == "")
+
+func test_the_provider_sees_the_list_grow():
+    var held = names_of(2)
+    var pane = rows.Rows(render = held.at, count = 2)
+    held.names.append("file2")
+    pane.count = 3
+    assert(pane.label(2) == "file2")
+
+func test_moving_answers_where_it_landed_and_stops_at_the_ends():
+    var held = names_of(5)
+    var pane = rows.Rows(render = held.at, count = 5)
+    match pane.move_by(3):
+        moved(index):
+            assert(index == 3)
+        chosen(index):
+            assert(false)
+    match pane.move_by(99):
+        moved(index):
+            assert(index == 4)
+        chosen(index):
+            assert(false)
+    match pane.move_by(-99):
+        moved(index):
+            assert(index == 0)
+        chosen(index):
+            assert(false)
+
+func test_the_window_follows_the_selection():
+    var held = names_of(20)
+    var pane = rows.Rows(render = held.at, count = 20)
+    pane.move_by(15)
+    pane.adjust(5)
+    assert(pane.selected == 15)
+    assert(pane.top == 11)
+    pane.move_by(-15)
+    pane.adjust(5)
+    assert(pane.top == 0)
+
+func test_an_empty_list_has_nowhere_to_be():
+    var pane = rows.Rows(render = none, count = 0)
+    pane.adjust(4)
+    assert(pane.top == 0)
+    assert(pane.selected == 0)
+
+func test_a_pane_is_a_value():
+    var held = names_of(3)
+    var pane = rows.Rows(render = held.at, count = 3)
+    pane.move_by(2)
+    let snapshot = pane
+    pane.move_by(-2)
+    assert(snapshot.selected == 2)
+    assert(pane.selected == 0)
+
+func test_drawing_paints_the_visible_window():
+    var held = names_of(9)
+    var pane = rows.Rows(render = held.at, count = 9)
+    var s = screen.Screen.of(3, 8)
+    s.clear()
+    pane.move_by(7)
+    pane.draw(s, s.area(), termui.Style(), termui.Style(foreground = 4))
+    s.present()
+    # Selection 7 with three visible rows puts 5 at the top.
+    assert(s.front[0, 4].text == "5")
+    assert(s.front[2, 4].text == "7")
