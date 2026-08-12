@@ -16,7 +16,9 @@ without the import is a compile error that says so.
 
 All offsets are **byte** offsets, like the primitives. The module
 never splits a UTF-8 character: it slices at ASCII positions or at
-match positions of valid UTF-8 needles.
+match positions of valid UTF-8 needles. The one deliberate exception
+is the [character vocabulary](#characters) — `characters`, `width`,
+`take` and the two pads count characters, not bytes.
 
 ## Searching
 
@@ -58,7 +60,7 @@ true true true
 | `strings.lower(s)`, `strings.upper(s)` | ASCII folding; multibyte characters pass through whole |
 | `strings.replace(s, old, replacement) -> string` | every occurrence; an empty `old` changes nothing |
 | `strings.repeat(s, times) -> string` | zero or fewer gives `""` |
-| `strings.pad_left(s, width)`, `strings.pad_right(s, width)` | space-padded to `width` bytes |
+| `strings.pad_left(s, cells)`, `strings.pad_right(s, cells)` | space-padded to `cells` display cells |
 
 ```luce run
 import std.strings
@@ -81,6 +83,63 @@ Mixed CASE words
 [ababab]
 [    7][7    ]
 ```
+
+## Characters
+
+Everything else in this module counts **bytes**, because the
+primitives do. These three count **characters**, and so do the two
+pads above, because a person reading a column does.
+
+| Signature | Notes |
+|---|---|
+| `strings.characters(s) -> list(string)` | the code points, one string each, in order |
+| `strings.width(s) -> long` | display cells |
+| `strings.take(s, cells) -> string` | the longest prefix that fits; never cuts a character in half |
+
+A UTF-8 sequence is a lead byte followed by its continuation bytes, so
+a character begins at every byte that is **not** a continuation byte
+and runs to the next byte that does — the same rule
+[`s[a:b]`](/ref/types/) enforces, which is why every slice these cut
+is a legal one.
+
+```luce run
+import std.strings
+
+func main():
+    let label = "café"
+    print(f"{len(label)} bytes, {label.width()} cells")
+    print(f"[{label.pad_left(6)}]")
+    print(f"[{label.take(3)}]")
+    print(string(len(label.characters())))
+```
+
+```output
+5 bytes, 4 cells
+[  café]
+[caf]
+4
+```
+
+The middle line is the fix: `pad_left` counted **bytes** until this
+landed, so `café` measured five wide and the column lost a space to
+`é`'s second byte. Every label with a non-ASCII character in it did.
+
+**v0.1 counts code points, not terminal cells.** `width("日本")` is 2
+where a terminal draws 4, and a combining mark counts as a cell of its
+own. That is exactly what a Luce program walking text counted for
+itself before this existed, so nothing regressed — and unlike before,
+it is wrong in **one body** instead of in every program. `width` is
+the seam: `take` asks it what one character costs and the pads ask it
+what the whole text costs, so a width table lands there and nowhere
+else.
+
+**Malformed bytes are answered, never refused.** A `string` can hold
+bytes nobody checked — `read_line` and `env` carry the world's — so
+the walk validates nothing and terminates on any bytes at all. A stray
+continuation byte belongs to the character before it, a truncated
+sequence is the character it began, and continuation bytes at the very
+start of a string begin no character and are stepped over. Nothing
+here traps.
 
 ## Splitting and joining
 
@@ -146,7 +205,7 @@ func main():
 ```output
 100000000000000000000
 loom: trap: format_float needs decimals >= 0 [explicit_trap]
-    at strings.format_float (std/strings.luc:212:9)
+    at strings.format_float (std/strings.luc:309:9)
     at main (main.luc:5:5)
 ```
 

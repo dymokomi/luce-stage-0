@@ -409,7 +409,66 @@ test "strings: split keeps empties, whitespace mode drops them, join round-trips
     );
 }
 
-test "strings: pad_left and pad_right" {
+test "strings: characters and width count code points, and len still counts bytes" {
+    try agreeOk(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let mixed = "aé日🙂"
+        \\    assert(len(mixed) == 1 + 2 + 3 + 4)
+        \\    assert(strings.width(mixed) == 4)
+        \\    let parts = strings.characters(mixed)
+        \\    assert(len(parts) == 4)
+        \\    assert(parts[0] == "a" and parts[1] == "é")
+        \\    assert(parts[2] == "日" and parts[3] == "🙂")
+        \\    assert(strings.join(parts, "") == mixed)
+        \\    assert(strings.width("ascii") == len("ascii"))
+        \\    assert(strings.width("") == 0)
+        \\    assert(len(strings.characters("")) == 0)
+        \\    assert(strings.width(mixed) == len(strings.characters(mixed)))
+        \\
+    );
+    // The named v0.1 limitation, pinned so that landing a width table
+    // is a visible change and not a silent one (docs/TERMUI.md D11):
+    // a wide character is one cell here, and a combining mark is a
+    // cell of its own.
+    try agreeOk(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    assert(strings.width("日本") == 2)
+        \\    assert(strings.width("e" + chr(769)) == 2)
+        \\
+    );
+}
+
+test "strings: take cuts on a character boundary, at the end, and below zero" {
+    try agreeOk(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    let word = "héllo"
+        \\    assert(len(word) == 6)
+        \\    # The boundary case: two cells is three bytes, and a
+        \\    # byte-counted prefix would have cut é in half.
+        \\    assert(strings.take(word, 2) == "hé")
+        \\    assert(len(strings.take(word, 2)) == 3)
+        \\    assert(strings.take(word, 1) == "h")
+        \\    assert(strings.take(word, 5) == word)
+        \\    # Past the end is the whole string, not a trap.
+        \\    assert(strings.take(word, 99) == word)
+        \\    assert(strings.take(word, 0) == "")
+        \\    assert(strings.take(word, -4) == "")
+        \\    assert(strings.take("", 4) == "")
+        \\    assert(strings.width(strings.take(word, 3)) == 3)
+        \\
+    );
+}
+
+test "strings: pad_left and pad_right pad by cells, and ASCII is unchanged" {
+    // The regression guard.  Every ASCII answer this module has ever
+    // given is byte-counted and cell-counted at once, which is what
+    // makes counting cells a correction rather than a break.
     try agreeOk(
         \\import std.strings
         \\
@@ -418,8 +477,65 @@ test "strings: pad_left and pad_right" {
         \\    assert(strings.pad_right("7", 3) == "7  ")
         \\    assert(strings.pad_left("wide", 3) == "wide")
         \\    assert(strings.pad_right("wide", 4) == "wide")
+        \\    assert(strings.pad_left("", 2) == "  ")
+        \\    assert(strings.pad_right("x", -1) == "x")
         \\
     );
+    // And the bug D11 named: `é` is two bytes and one column, so the
+    // byte-counted pad dropped a space at every non-ASCII label and
+    // the column stopped lining up.
+    try agreeOk(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    assert(strings.pad_left("é", 3) == "  é")
+        \\    assert(strings.pad_right("é", 3) == "é  ")
+        \\    assert(strings.pad_left("naïve", 6) == " naïve")
+        \\    assert(strings.pad_left("🙂", 2) == " 🙂")
+        \\    # Padded by cells, measured in bytes: five bytes of text
+        \\    # plus one space.
+        \\    assert(len(strings.pad_left("naïve", 6)) == 7)
+        \\
+    );
+}
+
+test "strings: malformed UTF-8 is answered, never trapped" {
+    // A `string` can hold bytes nobody checked: `read_line` and `env`
+    // carry the world's, and neither engine validates them (both build
+    // the value straight off the host's buffer).  So the character
+    // walk has to terminate and slice safely on any bytes at all.
+    var world: agree.World = .{};
+    world.lines = &.{ "a\x80b", "\x80ab", "caf\xC3" };
+    try agree.okGiven(
+        \\import std.strings
+        \\
+        \\func main():
+        \\    # A stray continuation byte belongs to the character
+        \\    # before it, so "a\x80" is one character and "b" is another.
+        \\    let inside = read_line("") else ""
+        \\    assert(len(inside) == 3)
+        \\    assert(strings.width(inside) == 2)
+        \\    let two = strings.characters(inside)
+        \\    assert(len(two) == 2)
+        \\    assert(len(two[0]) == 2 and two[1] == "b")
+        \\    assert(strings.take(inside, 1) == two[0])
+        \\
+        \\    # Continuation bytes at the very start begin no character,
+        \\    # so every one of the three steps over them.
+        \\    let opening = read_line("") else ""
+        \\    assert(len(opening) == 3)
+        \\    assert(strings.width(opening) == 2)
+        \\    assert(strings.take(opening, 2) == "ab")
+        \\    assert(len(strings.characters(opening)) == 2)
+        \\
+        \\    # A truncated sequence is the character it began.
+        \\    let cut = read_line("") else ""
+        \\    assert(len(cut) == 4)
+        \\    assert(strings.width(cut) == 4)
+        \\    assert(strings.take(cut, 3) == "caf")
+        \\    assert(strings.take(cut, 9) == cut)
+        \\
+    , .{ .call_depth = 4096, .world = world });
 }
 
 test "strings: format_float rounds half away and carries" {

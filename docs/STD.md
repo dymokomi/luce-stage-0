@@ -185,9 +185,18 @@ strings.split(s, separator)      # list(string), keeps empty pieces;
                                  # "" separator = whitespace runs,
                                  # empties dropped (Python's split())
 strings.join(parts, separator)   # list(string) -> string
-strings.pad_left(s, width)  strings.pad_right(s, width)
 strings.format_float(x, decimals)    # fixed-point: "2.50"; rounds
                                      # half away from zero
+
+strings.characters(s)            # list(string) — the code points, one
+                                 # string each, in order
+strings.width(s)                 # long — display cells
+strings.take(s, cells)           # the longest prefix that fits in
+                                 # `cells` cells; never cuts a
+                                 # character in half
+strings.pad_left(s, cells)  strings.pad_right(s, cells)
+                                 # space-padded to `cells` display
+                                 # cells
 
 strings.to_bytes(s)              # list(byte) — total; a string always
                                  # has bytes
@@ -203,6 +212,48 @@ for the reason `parse_int` does: "not UTF-8" is the same reason every
 time, and a carried message adds nothing the name did not.  The
 validator behind it is `libluce_rt`'s — the same one `files.read` uses
 — so there is one answer to what "not text" means.
+
+### Characters (docs/TERMUI.md D11)
+
+Everything else in this module counts **bytes**, because the
+primitives do.  These four count **characters**, because a person
+reading a column does.  A UTF-8 sequence is a lead byte followed by
+its continuation bytes, so a character begins at every byte that is
+not a continuation byte and runs to the next byte that does — which is
+the same rule `s[a:b]` enforces, so every slice they cut is a legal
+one.
+
+`pad_left` and `pad_right` used to count bytes, and their doc comment
+said so.  That made every label carrying a non-ASCII character
+misalign by however many continuation bytes it had — one column lost
+per `é`.  They count cells now.  **For ASCII the two numbers are the
+same, which is why this is a correction and not a break**, and
+`std_spec.zig` proves both halves.
+
+**v0.1 counts code points, not terminal cells.**  `width("日本")` is
+2 where a terminal draws 4, and a combining mark counts as a cell of
+its own.  That is precisely what a Luce program walking text counted
+for itself before this module could — the example editor's private
+`Text` struct did exactly this — so nothing regresses.  What changes
+is that it is now wrong in **one body** instead of in every program:
+`width` is the seam, `take` asks it what one character costs, the two
+pads ask it what the whole text costs, and a width table lands there
+and nowhere else.
+
+**Malformed bytes are answered, never refused.**  A `string` can hold
+bytes nobody checked — `read_line` and `env` carry the world's — so
+the walk validates nothing and terminates on any bytes at all.  A
+stray continuation byte belongs to the character before it; a
+truncated sequence is the character it began; and continuation bytes
+at the very start of a string begin no character, so nothing here
+counts one or hands one back.  Nothing here traps, and `width` never
+slices at all.
+
+There is deliberately **no** public boundary walk, no `Char` type, no
+grapheme clusters and no east-asian width table.  A drawing loop
+clips with `take` and aligns with `pad_left`, neither of which
+allocates; `characters` is for the caller that genuinely wants the
+code points, and it hands back a fresh `list(string)` the caller owns.
 
 ## files
 

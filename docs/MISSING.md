@@ -527,12 +527,16 @@ it still hits.
     (`shift_out_of_range`), `0xFF`, `0b1010`, `_` separators; octal
     stays refused by name.  What it unblocks is `std.zip` — CRC-32
     and Huffman without division-and-modulo soup.
-12. **No codepoint iteration.**  `for c in "abc"` is refused; every
-    UTF-8 walk is hand-written.  The editor's two copies of the same
-    continuation-byte test — `Text.continuation` and
-    `Words.continuation_byte`, one per namespace — are down to one
-    (`editor.luc:67`, `Bytes.continuation`), but the walk itself is
-    still spelled out by hand in six functions.
+12. **No codepoint iteration in the language.**  `for c in "abc"` is
+    still refused.  The library half is closed:
+    `strings.characters(s)` hands back the code points and
+    `strings.width`/`strings.take` measure and clip by them
+    (docs/STD.md, docs/TERMUI.md D11), so `for c in s.characters()`
+    is the walk a program writes now.  What is left is the loop form
+    itself — an iteration that allocates no list — and the editor,
+    which still spells the walk out by hand in six functions around
+    `Bytes.continuation` (`editor.luc:67`) because it predates the
+    module.
 13. ~~**`catch` cannot see the reason.**~~  **Closed.**  `CALL catch
     NAME:` binds the error's message to an immutable `string` scoped
     to the handler block, and both callers the item named took it:

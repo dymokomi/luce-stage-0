@@ -10,6 +10,10 @@
 # cut at safe places: ASCII positions, or match positions of a valid
 # UTF-8 needle (a needle's first byte can never be a continuation
 # byte, so a match never starts or ends mid-character).
+#
+# The exception, and it is a deliberate one: `characters`, `width`,
+# `take` and the two pads count **characters** rather than bytes.
+# Their rule is stated once, above `continuation` below.
 
 # The byte offset of the first occurrence of needle at or after
 # `start`, or absence — for a match that never comes, and for a
@@ -197,12 +201,105 @@ func join(parts: list(string), separator: string) -> string:
         out.append(piece)
     return out.build()
 
-# Space-padded to `width` bytes; text already that wide is unchanged.
-func pad_left(s: string, width: long) -> string:
-    return repeat(" ", width - len(s)) + s
+# -- characters (docs/TERMUI.md D11) ----------------------------------
+#
+# The one place in the library that knows what a *character* is.  A
+# UTF-8 sequence is a lead byte followed by its continuation bytes, so
+# **a character begins at every byte that is not a continuation byte**
+# and runs to the next byte that does.  That is the same rule the
+# `s[a:b]` primitive enforces, which is why every slice cut below is a
+# legal one.
+#
+# **v0.1 counts code points, not terminal cells.**  `width` answers 1
+# for a wide CJK character that occupies two cells, and counts a
+# combining mark as a cell of its own.  That is exactly what a Luce
+# program walking text counted for itself before this existed, so
+# nothing regresses — and unlike before, it is wrong in **one body**
+# instead of in every program.  `width` is that body: `take` asks it
+# what one character costs and the two pads ask it what the whole text
+# costs, so a width table lands here and nowhere else.
+#
+# **Malformed bytes are answered, never refused.**  Nothing here
+# validates, so the walk terminates on any bytes at all — and a
+# `string` can hold bytes the world handed over, since `read_line` and
+# `env` carry text nobody checked.  A stray continuation byte belongs
+# to the character before it; a truncated sequence is the character it
+# began; and continuation bytes at the very start of a string begin no
+# character, so nothing here counts one or hands one back (they are
+# also the one place `s[a:b]` would refuse to cut, which is the same
+# fact).
 
-func pad_right(s: string, width: long) -> string:
-    return s + repeat(" ", width - len(s))
+private func continuation(b: byte) -> bool:
+    return b >= 128 and b < 192
+
+# Where the first character begins — 0 for every well-formed string.
+private func first_character(s: string) -> long:
+    var at: long = 0
+    while at < len(s) and continuation(s.byte_at(at)):
+        at += 1
+    return at
+
+# Where the character that begins at `at` ends: the next byte that
+# begins a character, or the end of the string.
+private func next_character(s: string, at: long) -> long:
+    var stop = at + 1
+    while stop < len(s) and continuation(s.byte_at(stop)):
+        stop += 1
+    return stop
+
+# The characters of `s`, one string each, in order.  A fresh
+# `list(string)` the caller owns; an empty string has no characters.
+func characters(s: string) -> list(string):
+    var out: list(string) = []
+    var at = first_character(s)
+    while at < len(s):
+        let stop = next_character(s, at)
+        out.append(s[at:stop])
+        at = stop
+    return out
+
+# How many display cells `s` occupies — **the seam** described above.
+# In v0.1 that is one cell per character, so `width(s)` is the
+# character count and `len(s)` is still the byte count.
+func width(s: string) -> long:
+    var cells: long = 0
+    var at = first_character(s)
+    while at < len(s):
+        at = next_character(s, at)
+        cells += 1
+    return cells
+
+# The longest prefix of `s` that fits in `cells` cells: the whole
+# string when it already fits, "" for a width of zero or less.  A
+# character is never cut in half, so the answer always ends where one
+# ends.
+func take(s: string, cells: long) -> string:
+    if cells <= 0:
+        return ""
+    let first = first_character(s)
+    var taken: long = 0
+    var at = first
+    while at < len(s):
+        let stop = next_character(s, at)
+        # What one character costs is `width`'s answer and nobody
+        # else's; that is what keeps the rule in one body.
+        let cost = width(s[at:stop])
+        if taken + cost > cells:
+            break
+        taken += cost
+        at = stop
+    return s[first:at]
+
+# Space-padded to `cells` display cells; text already that wide is
+# unchanged.  The count is `width`'s and not `len`'s, so a label
+# carrying a non-ASCII character lines up in a column instead of
+# losing a space per continuation byte.  For ASCII the two numbers are
+# the same, which is why this is a correction and not a change.
+func pad_left(s: string, cells: long) -> string:
+    return repeat(" ", cells - width(s)) + s
+
+func pad_right(s: string, cells: long) -> string:
+    return s + repeat(" ", cells - width(s))
 
 # A double as fixed-point text: format_float(2.5, 2) is "2.50",
 # rounded half away from zero.  Meant for display of ordinary

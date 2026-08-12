@@ -1140,8 +1140,11 @@ s.upper()            # ASCII case fold up
 s.replace(old, replacement)  # every occurrence; empty old is a no-op
 s.repeat(n)          # n copies (n <= 0 is "")
 s.split(sep)         # list(string); empty sep splits on whitespace
-s.pad_left(w)        # space-padded to w bytes
-s.pad_right(w)
+s.characters()       # list(string); the code points, one each
+s.width()            # display cells (v0.1: the character count)
+s.take(cells)        # the longest prefix that fits in `cells` cells
+s.pad_left(cells)    # space-padded to `cells` display cells
+s.pad_right(cells)
 words.join(", ")     # list(string) -> string
 strings.format_float(x, 2)   # fixed-point double display: "2.50"
 ```
