@@ -17,7 +17,7 @@
 const std = @import("std");
 const files = @import("files");
 const runner = @import("runner.zig");
-const palette_mod = @import("palette.zig");
+const palette_mod = @import("palette");
 const report = @import("report");
 
 const Allocator = std.mem.Allocator;

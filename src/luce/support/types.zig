@@ -30,6 +30,29 @@ pub const CompileOptions = struct {
     /// functions and all.  The name is older than the stage — it was
     /// one pass, dead-code elimination, when the flag was added.
     prune: bool = true,
+    /// Where the entry comes from (`04_semantics/entry.zig`).
+    entry: Entry = .declared,
+};
+
+/// Which function the runtime starts, and who wrote it.
+///
+/// There is one entry *mode* and there are four entry *shapes*; this
+/// says only whether the source declared the one being used or the
+/// compiler did.  Either way what comes out is a single row of the
+/// function table, started through the published ABI.
+pub const Entry = union(enum) {
+    /// The ordinary program: `func main` in the root module, in one of
+    /// the four shapes.
+    declared,
+    /// `luce test` (docs/TESTING.md D3): the root module's tests are
+    /// the program, and the compiler writes the fourth shape —
+    /// `func main(args: list(string)) -> !` — which reads one name out
+    /// of `args` and calls that test by direct call.  The names are
+    /// the runner's discovery, in declaration order; this stage
+    /// re-derives none of it and lets an unknown one refuse itself as
+    /// an ordinary unresolved call.  A `main` the source declares is
+    /// left as an ordinary function nothing reaches.
+    tests: []const []const u8,
 };
 
 // ---------------------------------------------------------------------------

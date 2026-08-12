@@ -1,6 +1,6 @@
 //! The function table: every declared function's signature, the two
-//! kinds of function the compiler adds to it, the entry, and the
-//! layout a return shape rides in.
+//! kinds of function the compiler adds to it, and the layout a return
+//! shape rides in.
 //!
 //! One collector serves every spelling — a file-scope function, a
 //! method with its implied receiver, a `static func` with none, on a
@@ -13,11 +13,13 @@
 //! signature, which is why neither is `collectFunction`, and both are
 //! checked and lowered by the same loop as everything else.
 //!
-//! `checkEntry` is here because the entry is a row in this table
-//! selected by name, and `synthesizeShapes` because a return shape is
-//! a signature's answer given the struct it travels in — settled
-//! after every signature is collected and before any body is lowered,
-//! which is load-bearing and argued where it is done.
+//! Which row the runtime starts is `entry.zig`'s, called from the end
+//! of `collectFunctions` because it needs every signature settled — it
+//! either selects the declared `main` or writes one for `luce test`.
+//! `synthesizeShapes` is here because a return shape is a signature's
+//! answer given the struct it travels in — settled after every
+//! signature is collected and before any body is lowered, which is
+//! load-bearing and argued where it is done.
 //!
 //! Free functions over `declarations.zig`'s `*Analyzer`; `pub` means
 //! visible to stage 4's own files, nothing wider.
@@ -29,6 +31,7 @@ const types = @import("../support/types.zig");
 const helpers = @import("helpers.zig");
 
 const defaults = @import("defaults.zig");
+const entry = @import("entry.zig");
 const naming = @import("naming.zig");
 const resolve = @import("resolve.zig");
 const shapes = @import("shapes.zig");
@@ -129,7 +132,7 @@ pub fn collectFunctions(self: *Analyzer) Error!void {
         }
     }
     self.diagnostics.scope = source_mod.root_file;
-    try checkEntry(self);
+    try entry.settle(self);
 }
 
 fn collectFunction(
@@ -159,7 +162,12 @@ fn collectFunction(
         return;
     }
 
-    const is_entry = top_level and in_root and std.mem.eql(u8, declaration.name, "main");
+    // `main` is the entry only where a program's entry is the declared
+    // one.  Under `luce test` the compiler writes the entry itself
+    // (`entry.zig`), and a `main` the test file happens to declare is
+    // an ordinary function nothing calls (docs/TESTING.md D1).
+    const is_entry = self.options.entry == .declared and
+        top_level and in_root and std.mem.eql(u8, declaration.name, "main");
     // The entry is selected by name and called by the runtime
     // through the ABI — there is no import edge for a marker to
     // gate, so `private` on it could only assert something false
@@ -204,8 +212,8 @@ fn collectFunction(
         try parameter_defaults.append(self.arena, null);
     }
     // The entry's written parameter is collected like every other
-    // one: it is the command line, it has a type, and `checkEntry`
-    // below is what says which type it has to be (S44).
+    // one: it is the command line, it has a type, and `entry.check`
+    // is what says which type it has to be (S44).
     for (declaration.parameters) |parameter| {
         const resolved = (try resolve.resolveType(self, module, parameter.type_name)) orelse continue;
         // D4: a public surface names public types.  Only the
@@ -444,63 +452,6 @@ pub fn registerStandardSpecialization(
     return index;
 }
 
-fn checkEntry(self: *Analyzer) Error!void {
-    const index = self.function_names.get("main") orelse {
-        try self.fail("luce.sema.main", .{ .start = 0, .end = 0 }, "missing func main():", .{});
-        return;
-    };
-    const info = self.functions.items[index];
-    const declaration = info.declaration;
-    // Four shapes are legal: `func main():` and
-    // `func main(args: list(string)):`, each with or without `-> !`
-    // — the mark is how a program says the world can stop it, and
-    // loom reports what it raised (docs/FAILURE.md).  A program
-    // that never reads a command line says nothing about one, which
-    // is why the parameter is optional rather than Java's mandatory
-    // ceremony (docs/METHODS.md).
-    //
-    // The name is free and the type is fixed: `args` is a binding
-    // like any other, so there is no misspelling of it to diagnose.
-    if (declaration.parameters.len > 1) {
-        try self.fail(
-            "luce.sema.main",
-            declaration.parameters[1].span,
-            "main takes at most one parameter, the command line; it has {d}",
-            .{declaration.parameters.len},
-        );
-    } else if (declaration.parameters.len == 1) {
-        const parameter = declaration.parameters[0];
-        if (parameter.mode == .give) {
-            // S13 says `give` appears at both ends, and the entry
-            // has one end: the runtime is the caller and there is
-            // no call site to say it back.
-            try self.fail(
-                "luce.sema.main",
-                parameter.span,
-                "main's parameter takes no verb; the runtime hands the list to main's scope [OWNERSHIP.md S44]",
-                .{},
-            );
-        } else if (info.parameter_types.len == 1 and
-            !isCommandLine(self, info.parameter_types[0]))
-        {
-            try self.fail(
-                "luce.sema.main",
-                parameter.type_name.span,
-                "main's parameter is the command line and must be list(string); it is {s} here",
-                .{try self.typeName(info.parameter_types[0])},
-            );
-        }
-    }
-    if (declaration.returnsSpan()) |written| {
-        try self.fail(
-            "luce.sema.main",
-            written,
-            "main returns nothing; use func main():, func main() -> !:, func main(args: list(string)):, or func main(args: list(string)) -> !:",
-            .{},
-        );
-    }
-}
-
 // -- pass one and a half: the layouts a return shape rides in -------
 //
 // `(double, double)` **is** a two-field product value, so it is
@@ -622,10 +573,4 @@ pub fn returnShapeOf(self: *const Analyzer, of: Type) ?types.StructLayout {
     const layout = self.structs.items[of.strukt];
     if (layout.name.len == 0 or layout.name[0] != '(') return null;
     return layout;
-}
-
-/// Whether a type is the one shape the entry's parameter may have.
-fn isCommandLine(self: *const Analyzer, of: Type) bool {
-    const descriptor = self.heapOf(of) orelse return false;
-    return descriptor == .list and descriptor.list == .string;
 }

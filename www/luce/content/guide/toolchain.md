@@ -9,7 +9,13 @@ fit together.
 luce build FILE [-o OUT] [--release] [--emit=WHAT]
 luce check FILE
 luce ir FILE [--full]
+luce test [PATH ...]
 ```
+
+The first three compile one file. `luce test` compiles and *runs*: it
+discovers every public `func test_*()` under `./tests`, or under the
+paths you name, and calls each one on its own.
+[Testing](/guide/testing/) is the page for it.
 
 `FILE` may be a `.luc` source file **or** a `.lcm` module — the same
 program either way, taken up from where it was left. A `.lcm` is the

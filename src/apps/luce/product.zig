@@ -33,6 +33,9 @@ const Allocator = std.mem.Allocator;
 const Install = harness.Install;
 const Ran = harness.Ran;
 const expected_version = std.fmt.comptimePrint("luce {s}\n", .{build_options.version});
+/// What a serialized module is called, for the "nothing was left
+/// behind" checks — spelled out because this suite links no compiler.
+const luce_module_extension = ".lcm";
 
 // ---------------------------------------------------------------------------
 // A miniature install tree
@@ -67,6 +70,19 @@ fn runLuce(
     try argv.append(gpa, compiler);
     try argv.appendSlice(gpa, arguments);
     return tree.spawn(gpa, argv.items, .{ .input = input });
+}
+
+/// The same, standing *inside* the tree — which is where `luce test`
+/// has to be run from, because the working directory is what it means
+/// by `tests/` and by every relative path in its report.
+fn runLuceHere(gpa: Allocator, tree: *const Install, arguments: []const []const u8) !Ran {
+    const compiler = try tree.at(gpa, "luce");
+    defer gpa.free(compiler);
+    var argv: std.ArrayList([]const u8) = .empty;
+    defer argv.deinit(gpa);
+    try argv.append(gpa, compiler);
+    try argv.appendSlice(gpa, arguments);
+    return tree.spawn(gpa, argv.items, .{ .in_tree = true });
 }
 
 const greeting =
@@ -646,4 +662,269 @@ test "a standalone binary reads the arguments it was given, past its own name" {
     var given = try tree.spawn(gpa, &.{ binary, "alpha", "beta" }, .{});
     defer given.deinit(gpa);
     try testing.expectEqualStrings("2\nalpha\nbeta\n", given.out);
+}
+
+// ---------------------------------------------------------------------------
+// luce test
+// ---------------------------------------------------------------------------
+//
+// `luce test` is a compiler *and* a runner (docs/TESTING.md), and every
+// part of it that matters is outside the process: the working
+// directory is what `tests/` means, a failing test's report is what a
+// person reads, the exit status is what a build script reads, and the
+// artifact it built has to be gone afterwards.  So it is proved here,
+// over a real tree, run exactly as a person would run it.
+
+/// A project laid out the way the memo assumes: code at the root under
+/// a `luce.yaml`, tests in `tests/` importing it by name.
+fn testedProject(gpa: Allocator) !Install {
+    var tree = try installTree(gpa);
+    errdefer tree.deinit(gpa);
+
+    try tree.write("luce.yaml",
+        \\name: geo
+        \\version: 0.1.0
+        \\
+    );
+    try tree.write("geo.luc",
+        \\func area(width: long, height: long) -> long:
+        \\    return width * height
+        \\
+        \\func at(xs: list(long), index: long) -> long:
+        \\    return xs[index]
+        \\
+    );
+    // Two passing tests and one that traps two frames down, so the
+    // trace has something to say.  The import is the whole reason the
+    // project has a root: `tests/geo_test.luc` reaching `geo` means
+    // the project's geo, not a phantom `tests/geo.luc` (D3).
+    try tree.write("tests/geo_test.luc",
+        \\import geo
+        \\
+        \\func helper(side: long) -> long:
+        \\    return geo.area(side, side)
+        \\
+        \\func test_area_of_unit_square():
+        \\    assert(geo.area(1, 1) == 1)
+        \\
+        \\func test_area_of_square():
+        \\    print("checking 5 x 5")
+        \\    assert(helper(5) == 25)
+        \\
+        \\func test_reads_past_the_end():
+        \\    var xs: list(long) = [1, 2, 3]
+        \\    assert(geo.at(xs, 7) == 0)
+        \\
+    );
+    // The two endings that are not a trap: an error the world raised,
+    // and a test that walked out.
+    try tree.write("tests/edge_test.luc",
+        \\func test_refuses() -> !:
+        \\    error("the world said no")
+        \\
+        \\func test_walks_out():
+        \\    exit(3)
+        \\
+    );
+    // A helper module: swept, holds no test, never claimed to.
+    try tree.write("tests/support.luc",
+        \\func doubled(value: long) -> long:
+        \\    return value * 2
+        \\
+    );
+    return tree;
+}
+
+test "luce test compiles a tests tree, runs each test on its own, and scores the run" {
+    const gpa = testing.allocator;
+    var tree = try testedProject(gpa);
+    defer tree.deinit(gpa);
+
+    var ran = try runLuceHere(gpa, &tree, &.{"test"});
+    defer ran.deinit(gpa);
+
+    // Red, because three of the six tests failed.
+    try testing.expectEqual(@as(u8, 1), ran.status);
+
+    // Files in sorted order, tests in declaration order — the report
+    // is a property of the tree, not of the filesystem's iteration.
+    const order = [_][]const u8{
+        "tests/edge_test.luc\n",
+        "test_refuses",
+        "test_walks_out",
+        "tests/geo_test.luc\n",
+        "test_area_of_unit_square",
+        "test_area_of_square",
+        "test_reads_past_the_end",
+    };
+    var at: usize = 0;
+    for (order) |word| {
+        const found = std.mem.indexOfPos(u8, ran.out, at, word) orelse {
+            std.debug.print("the report never says {s}\n", .{word});
+            return error.TestUnexpectedResult;
+        };
+        at = found;
+    }
+
+    // A passing test, and the test's own output arriving under its own
+    // name rather than after the verdict.
+    try testing.expect(ran.saysOut("  ok    test_area_of_unit_square\n"));
+    try testing.expect(std.mem.indexOf(u8, ran.out, "checking 5 x 5\n  ok    test_area_of_square") != null);
+
+    // A trap, rendered as every trap is, indented under the name that
+    // took it — and with the *called* frames in it, which is what makes
+    // a debug build the only build this command makes.
+    try testing.expect(ran.saysOut("  FAIL  test_reads_past_the_end\n"));
+    try testing.expect(ran.saysOut("        luce: trap: index out of bounds [index_bounds]"));
+    try testing.expect(ran.saysOut("            at geo.at ("));
+    try testing.expect(ran.saysOut("            at test_reads_past_the_end (tests/geo_test.luc:"));
+
+    // An error is not a trap and does not print a stack
+    // (docs/FAILURE.md); it prints where it was raised.
+    try testing.expect(ran.saysOut("        luce: error: the world said no [user_error]"));
+    try testing.expect(ran.saysOut("            raised in test_refuses (tests/edge_test.luc:2:5)"));
+
+    // A test that exits fails by name, whatever status it chose.
+    try testing.expect(ran.saysOut("        it called exit(3); a test returns\n"));
+
+    // One summary line, counting the helper module so a wrongly-silent
+    // file is one glance away.
+    try testing.expect(ran.saysOut(
+        "2 passed, 3 failed, 5 tests in 2 files, 1 file without tests\n",
+    ));
+
+    // Nothing was left behind: the artifacts were removed, and the
+    // `NAME.lc` a `luce build` would write was never touched.
+    try testing.expect(!tree.exists("tests/geo_test.lc"));
+    try testing.expect(!tree.exists("tests/edge_test.lc"));
+    for ([_][]const u8{ ".lc", luce_module_extension }) |suffix| {
+        try testing.expect(!try holdsAnythingUnder(&tree, "tests", suffix));
+    }
+}
+
+test "a green run says so and exits 0" {
+    // The other half of the exit status: a build script reads `$?` and
+    // needs it to mean something.
+    const gpa = testing.allocator;
+    var tree = try installTree(gpa);
+    defer tree.deinit(gpa);
+    try tree.write("tests/plain_test.luc",
+        \\func test_arithmetic():
+        \\    assert(2 + 2 == 4)
+        \\
+    );
+
+    var ran = try runLuceHere(gpa, &tree, &.{"test"});
+    defer ran.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), ran.status);
+    try testing.expect(ran.saysOut("  ok    test_arithmetic\n"));
+    try testing.expect(ran.saysOut("1 passed, 0 failed, 1 test in 1 file\n"));
+    try testing.expectEqualStrings("", ran.err);
+}
+
+test "a discovery refusal and a compile failure are reported, and the healthy files still run" {
+    // Both are "this file did not run", both make the run red, and
+    // neither may stop the file after it (D4).  The refusal is
+    // positioned so an editor can jump to it, and names the fix.
+    const gpa = testing.allocator;
+    var tree = try installTree(gpa);
+    defer tree.deinit(gpa);
+
+    try tree.write("tests/a_hidden_test.luc",
+        \\private func test_never_runs():
+        \\    assert(true)
+        \\
+    );
+    try tree.write("tests/b_broken_test.luc",
+        \\func test_typed():
+        \\    let count: long = "seven"
+        \\    assert(count == 7)
+        \\
+    );
+    try tree.write("tests/c_healthy_test.luc",
+        \\func test_still_ran():
+        \\    assert(true)
+        \\
+    );
+
+    var ran = try runLuceHere(gpa, &tree, &.{"test"});
+    defer ran.deinit(gpa);
+    try testing.expectEqual(@as(u8, 1), ran.status);
+
+    try testing.expect(ran.saysOut(
+        "tests/a_hidden_test.luc:1:14: test_never_runs is private and would never run",
+    ));
+    try testing.expect(ran.saysOut("drop private, or rename it if it is a helper"));
+    try testing.expect(ran.saysOut("tests/b_broken_test.luc:2:5:"));
+    try testing.expect(ran.saysOut("[luce.sema.type]"));
+    // The third file ran anyway, which is the claim.
+    try testing.expect(ran.saysOut("  ok    test_still_ran\n"));
+    try testing.expect(ran.saysOut("1 passed, 0 failed, 1 test in 1 file, 2 files not run\n"));
+}
+
+test "a named file with no tests is refused, and a swept one is a helper module" {
+    // The same silent file, twice, answered two ways (D2): naming it
+    // is a claim that it holds tests, and sweeping it is not.
+    const gpa = testing.allocator;
+    var tree = try testedProject(gpa);
+    defer tree.deinit(gpa);
+
+    var named = try runLuceHere(gpa, &tree, &.{ "test", "tests/support.luc" });
+    defer named.deinit(gpa);
+    try testing.expectEqual(@as(u8, 1), named.status);
+    try testing.expect(named.saysOut("tests/support.luc: no tests here"));
+
+    // Swept as part of a directory, it is counted and nothing else.
+    var swept = try runLuceHere(gpa, &tree, &.{ "test", "tests/geo_test.luc", "tests/support.luc" });
+    defer swept.deinit(gpa);
+    try testing.expect(swept.saysOut("no tests here"));
+
+    // And a `tests/` directory that is not there at all is a plain
+    // failure naming what was looked for, never a green run of nothing.
+    var bare = try installTree(gpa);
+    defer bare.deinit(gpa);
+    var nothing = try runLuceHere(gpa, &bare, &.{"test"});
+    defer nothing.deinit(gpa);
+    try testing.expectEqual(@as(u8, 1), nothing.status);
+    try testing.expect(nothing.saysErr("no tests directory here"));
+    try testing.expectEqualStrings("", nothing.out);
+}
+
+test "luce test takes paths and no build options" {
+    const gpa = testing.allocator;
+    var tree = try testedProject(gpa);
+    defer tree.deinit(gpa);
+
+    // One file, named: only its tests run.
+    var one = try runLuceHere(gpa, &tree, &.{ "test", "tests/edge_test.luc" });
+    defer one.deinit(gpa);
+    try testing.expect(one.saysOut("test_refuses"));
+    try testing.expect(!one.saysOut("test_area_of_unit_square"));
+
+    // A path that is neither file nor directory stops the command
+    // rather than being quietly swept up in nothing.
+    var absent = try runLuceHere(gpa, &tree, &.{ "test", "tests/nowhere_test.luc" });
+    defer absent.deinit(gpa);
+    try testing.expectEqual(@as(u8, 1), absent.status);
+    try testing.expect(absent.saysErr("no such file or directory"));
+    try testing.expectEqualStrings("", absent.out);
+
+    // `--release` would strip the trap origins the report is made of,
+    // so there is no option to give: it is a path, and it is not there.
+    var released = try runLuceHere(gpa, &tree, &.{ "test", "--release" });
+    defer released.deinit(gpa);
+    try testing.expectEqual(@as(u8, 1), released.status);
+    try testing.expect(released.saysErr("--release"));
+}
+
+/// Whether anything under `directory` in the tree ends in `suffix` —
+/// what "the artifact was removed" is a claim about.
+fn holdsAnythingUnder(tree: *const Install, directory: []const u8, suffix: []const u8) !bool {
+    var opened = tree.scratch.dir.openDir(io, directory, .{ .iterate = true }) catch return false;
+    defer opened.close(io);
+    var walk = opened.iterate();
+    while (try walk.next(io)) |entry| {
+        if (std.mem.endsWith(u8, entry.name, suffix)) return true;
+    }
+    return false;
 }

@@ -89,6 +89,7 @@ pub const sections = [_]Section{
             .{ .slug = "strings", .title = "Strings and copies", .blurb = "Immutable UTF-8 values with an owner, small-string optimisation, and the one benchmark still behind." },
             .{ .slug = "performance", .title = "Performance", .blurb = "The benchmark table against C twins, what it measures, and what it does not." },
             .{ .slug = "toolchain", .title = "The compiler and the terminal", .blurb = "luce, loom, the three artifacts, the one engine, and the two build modes." },
+            .{ .slug = "testing", .title = "Testing", .blurb = "luce test: a test is a func test_* in an ordinary file, and there is no framework." },
         },
     },
     .{

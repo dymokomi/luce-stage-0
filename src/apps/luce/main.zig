@@ -1,9 +1,15 @@
 //! The luce compiler: .luc source in, machine code out.
 //!
-//! Three commands over one pipeline:
+//! Four commands over one pipeline:
 //!   luce build FILE.luc [-o OUT]   compile and write an artifact
 //!   luce check FILE.luc            compile, report, write nothing
 //!   luce ir FILE.luc               compile and dump readable IR
+//!   luce test [PATH ...]           compile and run the tests found
+//!
+//! The front half every one of them needs is `front.zig`; `object.zig`
+//! is the back half `build` adds to it.  `test` is a *runner* as well
+//! as a compile and is `suite.zig`'s, with `discover.zig` deciding what
+//! it will run (docs/TESTING.md).
 //!
 //! **`build` writes a `.lc`, and a `.lc` is machine code** — a tagged
 //! shared library `loom` opens and calls (`docs/CODEGEN.md`).  There is
@@ -31,15 +37,20 @@
 //! A program is exactly `func main():`, or `func main() -> !:` when
 //! the world can stop it, and compiles with the host builtins allowed;
 //! whoever runs the artifact is the trusted boundary that decides
-//! which host services actually exist.
+//! which host services actually exist.  Under `luce test` the entry is
+//! the compiler's own, in the fourth of those shapes, and the file's
+//! `func test_*()` declarations are what it calls.
 
 const std = @import("std");
 const build_options = @import("build_options");
 const luce = @import("luce");
 const files = @import("files");
 const native = @import("native");
+const discover = @import("discover.zig");
 const object = @import("object.zig");
+const front = @import("front.zig");
 const streams = @import("streams");
+const suite = @import("suite.zig");
 
 pub fn main(init: std.process.Init.Minimal) !u8 {
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
@@ -69,9 +80,8 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
         return 0;
     }
 
-    if (arguments.len < 3) return usage(err);
+    if (arguments.len < 2) return usage(err);
     const command = arguments[1];
-    const path = arguments[2];
 
     // The environment, read once: `LUCE_LIB` serves both halves of the
     // toolchain — the directories holding `libluce_rt.a` for the link,
@@ -79,6 +89,22 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     var environment = try init.environ.createMap(gpa);
     defer environment.deinit();
     const library_path = environment.get("LUCE_LIB");
+
+    // `luce test` is the one command whose arguments may be empty: no
+    // paths means the `tests/` directory under the working directory,
+    // which is the convention and not a missing argument.
+    if (std.mem.eql(u8, command, "test")) {
+        const colored = environment.get("NO_COLOR") == null and
+            (std.Io.File.stdout().isTty(io) catch false);
+        return suite.run(gpa, io, out, err, arguments[2..], .{
+            .library_path = library_path,
+            .driver = environment.get("LUCE_CC"),
+            .palette = .{ .enabled = colored },
+        });
+    }
+
+    if (arguments.len < 3) return usage(err);
+    const path = arguments[2];
 
     if (std.mem.eql(u8, command, "build")) {
         // The file comes first and the options follow it.  An option
@@ -141,7 +167,12 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     }
     if (std.mem.eql(u8, command, "check")) {
         if (arguments.len != 3) return refuse(err, "check takes one file and no options", .{});
-        var program = (try compilePath(gpa, io, err, path, library_path)) orelse return 1;
+        var program = switch (try front.compilePath(gpa, io, err, path, .{
+            .library_path = library_path,
+        })) {
+            .program => |compiled| compiled,
+            .refused => return 1,
+        };
         defer program.deinit();
         try out.print("{s}: ok\n", .{files.displayName(path)});
         try out.flush();
@@ -157,7 +188,13 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
         } else if (arguments.len != 3) {
             return refuse(err, "ir takes one file and at most --full", .{});
         }
-        var program = (try compilePathPruned(gpa, io, err, path, library_path, !keep_unreachable)) orelse return 1;
+        var program = switch (try front.compilePath(gpa, io, err, path, .{
+            .library_path = library_path,
+            .prune = !keep_unreachable,
+        })) {
+            .program => |compiled| compiled,
+            .refused => return 1,
+        };
         defer program.deinit();
         const dump = try luce.mir.print(gpa, &program);
         defer gpa.free(dump);
@@ -278,7 +315,12 @@ fn buildNative(
         driver: ?[]const u8,
     },
 ) !u8 {
-    var program = (try compilePath(gpa, io, err, request.path, request.library_directory)) orelse return 1;
+    var program = switch (try front.compilePath(gpa, io, err, request.path, .{
+        .library_path = request.library_directory,
+    })) {
+        .program => |compiled| compiled,
+        .refused => return 1,
+    };
     defer program.deinit();
 
     // The same one thing release means everywhere: the artifact
@@ -357,140 +399,12 @@ fn stemOf(path: []const u8) []const u8 {
     return path;
 }
 
-/// Compile one script file; renders diagnostics to `err` and returns
-/// null on failure.  The caller owns the returned program.
-fn compilePath(
-    gpa: std.mem.Allocator,
-    io: std.Io,
-    err: *std.Io.Writer,
-    path: []const u8,
-    library_path: ?[]const u8,
-) !?luce.mir.Program {
-    return compilePathPruned(gpa, io, err, path, library_path, true);
-}
-
-fn compilePathPruned(
-    gpa: std.mem.Allocator,
-    io: std.Io,
-    err: *std.Io.Writer,
-    path: []const u8,
-    library_path: ?[]const u8,
-    prune: bool,
-) !?luce.mir.Program {
-    if (std.mem.endsWith(u8, path, luce.mir.module.extension)) return decodePath(gpa, io, err, path);
-
-    // The root file goes through the same door as every import, so a
-    // directory, a permission, or an oversized file reads the same
-    // whether it is the program or something the program imports.
-    const found = try files.readSource(gpa, io, path);
-    const source = switch (found) {
-        .text => |text| text.bytes,
-        .missing => {
-            try err.print("luce: cannot read {s}: no such file\n", .{path});
-            return null;
-        },
-        .unreadable => |why| {
-            try err.print("luce: cannot read {s}: {s}\n", .{ path, why });
-            return null;
-        },
-        // The root is one path the user typed; no host answers it in
-        // two places and no store machinery refuses it.  The arms
-        // exist because the seam carries them.
-        .ambiguous => {
-            try err.print("luce: cannot read {s}: it answered in more than one place\n", .{path});
-            return null;
-        },
-        .refused => |refusal| {
-            try err.print("luce: cannot read {s}: {s}\n", .{ path, refusal.message });
-            return null;
-        },
-    };
-    defer gpa.free(source);
-
-    // The luce.yaml governing the program, when one does: the root
-    // token the module registry keys by, and the want list the store
-    // probes are gated by (docs/PACKAGES.md D1, D3).  A broken
-    // manifest is refused here, early, by name.
-    var discovery = std.heap.ArenaAllocator.init(gpa);
-    defer discovery.deinit();
-    const governed: ?files.Governed = switch (try files.discoverProject(discovery.allocator(), io, path)) {
-        .rootless => null,
-        .governed => |project| project,
-        .refused => |why| {
-            try err.print("luce: {s}\n", .{why});
-            return null;
-        },
-    };
-    const source_root: []const u8 = if (governed) |project| project.root else "";
-    const shelves: []const []const u8 = if (library_path) |text|
-        try files.splitSearchPath(discovery.allocator(), text)
-    else
-        &.{};
-
-    // The path as the user wrote it, not its basename: `luce check
-    // sub/bad.luc` that answers `bad.luc:1:1` is a location nothing
-    // can jump to, and there may be a bad.luc in three directories.
-    var loader: files.FileLoader = .{
-        .io = io,
-        .directory = std.fs.path.dirname(path) orelse "",
-        .project_root = source_root,
-        .project = if (governed) |project| project.manifest else null,
-        .shelves = shelves,
-        .alerts = err,
-        .gpa = gpa,
-    };
-    defer loader.deinit();
-    var result = try luce.compile.compileProject(gpa, source, loader.loader(), .{
-        .allow_host = true,
-        .source_name = files.displayName(path),
-        .source_root = source_root,
-        .prune = prune,
-    });
-    switch (result) {
-        .success => |program| return program,
-        .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(gpa);
-            defer gpa.free(rendered);
-            try err.print("luce: compile failed\n{s}", .{rendered});
-            result.deinit();
-            return null;
-        },
-    }
-}
-
-/// Read a serialized module back into a program.
-///
-/// A `.lcm` has already been through the front end, so there is nothing
-/// to check and nothing to prune — `decode` re-runs the IR verifier,
-/// which is the whole of what this path owes a caller.
-fn decodePath(
-    gpa: std.mem.Allocator,
-    io: std.Io,
-    err: *std.Io.Writer,
-    path: []const u8,
-) !?luce.mir.Program {
-    const encoded = files.readWhole(gpa, io, path) catch {
-        try err.print("luce: cannot read {s}\n", .{path});
-        return null;
-    };
-    defer gpa.free(encoded);
-
-    return luce.mir.module.decode(gpa, encoded) catch |mistake| switch (mistake) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.UnsupportedVersion => {
-            try err.print("luce: {s} was built by a different luce; rebuild it from source\n", .{path});
-            return null;
-        },
-        error.InvalidModule => {
-            try err.print("luce: {s} is not a valid Luce module\n", .{path});
-            return null;
-        },
-    };
-}
-
 test {
     _ = luce;
+    _ = discover;
+    _ = front;
     _ = object;
+    _ = suite;
 }
 
 test "an artifact's name comes from the program's, whichever form it arrived in" {

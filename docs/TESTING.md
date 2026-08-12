@@ -1,6 +1,8 @@
-# `luce test`: the test runner (design)
+# `luce test`: the test runner
 
-**Status: PROPOSED — nothing below is built.**  Direction set in
+**Status: BUILT — 2026-08-11.**  The design below is as ratified; what
+shipped, and every departure from it, is in *As built* at the end.
+Direction set in
 conversation on 2026-08-10: tests are ordinary Luce in `tests/`
 subfolders, driven by `luce test`, asserting with the `assert` the
 language already has; the working directory is wherever the command
@@ -75,11 +77,11 @@ luce test tests/geo tests/io     # directories, recursively
 ## D3. Execution: the CLI drives, one runtime per test
 
 - **Anchoring**: a test file compiles with imports anchored at the
-  project root (`luce.zon` discovery, PACKAGES.md D1), so
+  project root (`luce.yaml` discovery, PACKAGES.md D1), so
   `tests/geo_test.luc` importing `geo` reaches the project's `geo`,
-  not a phantom `tests/geo.luc`.  Rootless (no `luce.zon`): the test
+  not a phantom `tests/geo.luc`.  Rootless (no `luce.yaml`): the test
   file's own directory, today's rule, and the limitation is reported
-  when an import fails ("tests without a luce.zon resolve imports
+  when an import fails ("tests without a luce.yaml resolve imports
   beside the test file").  **This makes `luce test` depend on
   PACKAGES.md step 1**, and the two memos name each other here on
   purpose.
@@ -162,6 +164,59 @@ bracketed by the per-call loop.
 4. Site: a `luce test` page under the toolchain guide.
 
 Step 1 of PACKAGES.md (project-root anchoring) precedes step 3's
-import story for `tests/` directories; until it lands, `luce test`
-on a file whose imports live above it reports the limitation rather
-than resolving wrongly.
+import story for `tests/` directories; it has landed, and `luce test`
+anchors on the `luce.yaml` it finds.  A rootless test file whose
+compile fails is told the limitation rather than left to guess at it.
+
+---
+
+## As built (2026-08-11)
+
+Built in one vertical, in the order the memo gives.  D1–D4 shipped as
+written; the memo left seven things the code had to decide, and each is
+here with its forcing reason and where it is proved.
+
+| | decision, and where it is proved |
+|---|---|
+| **A1** | **Discovery is the runner's, and the compiler is told the answer.**  D1's rules are a *policy about which functions this tool will call*, not a language rule, so `src/apps/luce/discover.zig` decides them over the parsed AST and hands the names down as `luce.types.Entry.tests`.  The forcing reason is D2: the zero-test rules — a named file refused, a `*_test.luc` refused, any other swept file a helper — have to be answered **before** anything is compiled, or a helper module would be compiled to discover that it is a helper and a syntax error in one would fail a run it is not part of.  What keeps this from being knowledge in two places is that the compiler validates the names by *calling* them: a name that does not exist, or is private, or takes a parameter, refuses itself through ordinary name resolution rather than through a second copy of D1. |
+| **A2** | **The entry is real AST, not hand-built IR.**  `04_semantics/entry.zig` writes `func main(args: list(string)) -> !` as `ast` nodes in the analyzer's arena and appends the settled signature to the ordinary function table, so the body is checked by `builder.zig`, lowered by `05_hir`, verified, optimized and emitted like any other function.  Hand-building MIR would have meant re-deriving `try`'s error propagation and the ownership of `args` in a second place; this way "round-trips the ordinary pipeline" is not a claim to test but the only path there is.  `specs/testing_spec.zig` runs it on both engines. |
+| **A3** | **The dispatch is flat, and every call is spanned at its test's own declaration.**  `if args[0] == "test_x": test_x(); return`, one statement per test, rather than an `elif` chain — a hundred tests would otherwise be a hundred levels of nesting for every later walk to descend.  Each conditional carries the span of the test's `name_span`, so a trap inside a test reports the entry frame at the line the test is written on (`at main (tests/geo_test.luc:10:6)`) rather than at a position nobody wrote. |
+| **A4** | **The entry checks the command line it was handed.**  `if len(args) != 1: error(...)` opens the body, and an unmatched name ends it with `error("luce test: no test named " + args[0])`.  Neither can happen when the runner is the caller; both are what the artifact says to a person who ran it by hand, and without the first that person meets `index_bounds` on the next line and reads a trap about the runner's contract as though it were the program's bug. |
+| **A5** | **A source `main` is not the entry, and is not merely ignored.**  `is_entry` is computed as `options.entry == .declared and …`, so under `luce test` a declared `main` is an ordinary function: it is not refused, its shape is not checked against the four, and — since nothing calls it — stage 7 drops it before the artifact is written.  `Analyzer.entry_function` is the one field that says which row the runtime starts, filled by whichever of the two rules applied; `checkEntry` moved out of `signatures.zig` into `entry.zig` beside its sibling, so the entry is decided in one file. |
+| **A6** | **The whole report goes to standard output, trap renderings included.**  It is one document a person reads top to bottom, and a failing test's trap is part of the report rather than a side channel; splitting it across two streams would make the interleaving of a test's own `print` with its verdict unpredictable.  A test's `print_error` is still its own and still goes to standard error.  `report.printTrap`, `printError` and `printLeaks` gained a leading `indent` — one rendering, positioned by whoever is reporting — and loom and `apps/start.zig` pass `""`. |
+| **A7** | **The artifact is written beside the source and removed.**  `tests/geo_test.luc.<pid>-<tid>.test.lc`, deleted when the file's tests are done.  Not `NAME.lc`: that is the name `luce build` writes, and a test runner must not be able to delete a built artifact.  Not the project's `.luce/cache/` either — that is loom's warm-run path, keyed on content for a program that will be run again, and a test artifact is used once by the process that built it.  `luce test` therefore leaves a directory exactly as it found it. |
+
+Three smaller calls.  `luce.zon` in D3 is `luce.yaml` throughout: that
+is what PACKAGES.md D1 shipped as, and the memo was written before it
+landed.  `apps/loom/palette.zig` moved up to `apps/palette.zig` with
+two styles added (`pass`, `fail`), because whether a stream is a
+terminal is one decision and it is not loom's.  And a leaking test is
+reported with `report.printLeaks`'s words — "N objects escaped
+ownership — please report this" — rather than D4's illustrative
+"leaked 3 objects": it is the same fact said once, by the file that
+already says it for loom and for a standalone binary, and it asks for
+the thing a reader should actually do about an engine bug.
+
+D3's rootless note is conditional, which the memo's "reported when an
+import fails" asks for and a naive reading would not have given: it is
+printed only when the failure actually named an import.  That is why
+`front.compilePath` answers an `Outcome` rather than an optional —
+`refused.import_failed` travels as the fact it is, because reading it
+back out of the rendered diagnostics would be parsing our own output,
+which is the shape this whole design refuses.
+
+**What a leaking test is, and why nothing in the corpus is one.**  D4's
+leak arm is real and is checked on every call, but scope ownership
+frees everything (OWNERSHIP.md S33), so no Luce source can reach it: it
+is a guard against an engine bug, not against a program.  It is proved
+where a guard nothing can reach has to be — `suite.verdictOf` is a pure
+function from `abi.Status` plus the census plus the exit status to a
+verdict, and its unit test reads all six arms including the three
+(`leaked`, `exhausted`, `unknown`) that no program can produce.  The
+product suite drives the four that a program can: passing, trapping,
+raising, and exiting.
+
+**Not built, and still deliberately absent**: everything under
+*Deliberately absent* above, unchanged.  Parallel files and a scripted
+host remain the two extensions this architecture was chosen to allow,
+and neither has a customer yet.

@@ -75,6 +75,11 @@ pub const exit_broken: u8 = 71;
 /// `message` what the program said, `trace` its calls innermost first,
 /// and `dropped` how many frames the runtime's own cap already cut.
 ///
+/// `indent` opens every line, and is `""` for a runner whose whole
+/// output is this report.  `luce test` passes spaces, because there a
+/// trap belongs *under* the name of the test that took it — one
+/// rendering, positioned by whoever is reporting (docs/TESTING.md D4).
+///
 /// **The program's words are sanitized, like every other host channel
 /// that reaches a terminal.**  A trap message carries program text —
 /// `trap(f"...")` says whatever the program says — and a source path
@@ -88,20 +93,21 @@ pub const exit_broken: u8 = 71;
 /// because the pipe closed.
 pub fn printTrap(
     err: *std.Io.Writer,
+    indent: []const u8,
     reporter: []const u8,
     code: []const u8,
     message: []const u8,
     trace: []const Frame,
     dropped: u32,
 ) void {
-    err.print("{s}: trap: ", .{reporter}) catch {};
+    err.print("{s}{s}: trap: ", .{ indent, reporter }) catch {};
     sanitize.write(err, message);
     err.print(" [{s}]\n", .{code}) catch {};
     // Innermost first, like Zig's own traces.  A --release artifact
     // has no lines; the function names still print.
     for (trace, 0..) |frame, index| {
         if (index == max_printed_frames) break;
-        err.writeAll("    at ") catch {};
+        err.print("{s}    at ", .{indent}) catch {};
         sanitize.write(err, frame.function);
         if (frame.line != 0) {
             err.writeAll(" (") catch {};
@@ -111,7 +117,7 @@ pub fn printTrap(
         err.writeAll("\n") catch {};
     }
     const hidden = dropped + @as(u32, @intCast(trace.len -| max_printed_frames));
-    if (hidden != 0) err.print("    ... {d} more frames\n", .{hidden}) catch {};
+    if (hidden != 0) err.print("{s}    ... {d} more frames\n", .{ indent, hidden }) catch {};
 }
 
 /// Report an uncaught error, in one shape for every runner.
@@ -120,22 +126,24 @@ pub fn printTrap(
 /// the stack is its diagnosis; an error is news, and the news is what
 /// the world said and where the program asked it (docs/FAILURE.md).
 /// `origin` is that one place; a frame with no function name prints
-/// nothing after the message.
+/// nothing after the message.  `indent` opens every line, as in
+/// `printTrap`.
 ///
 /// The words and the names are sanitized for the same reason
 /// `printTrap`'s are, and by the same rule.
 pub fn printError(
     err: *std.Io.Writer,
+    indent: []const u8,
     reporter: []const u8,
     code: []const u8,
     message: []const u8,
     origin: Frame,
 ) void {
-    err.print("{s}: error: ", .{reporter}) catch {};
+    err.print("{s}{s}: error: ", .{ indent, reporter }) catch {};
     sanitize.write(err, message);
     err.print(" [{s}]\n", .{code}) catch {};
     if (origin.function.len == 0) return;
-    err.writeAll("    raised in ") catch {};
+    err.print("{s}    raised in ", .{indent}) catch {};
     sanitize.write(err, origin.function);
     if (origin.line != 0) {
         err.writeAll(" (") catch {};
@@ -151,12 +159,13 @@ pub fn printError(
 ///
 /// It takes the `i64` the ABI hands over rather than a narrowed copy,
 /// so no caller has to decide what a negative count would mean — a
-/// number that is not zero is the bug, whatever its sign.
-pub fn printLeaks(err: *std.Io.Writer, reporter: []const u8, leaked: i64) void {
+/// number that is not zero is the bug, whatever its sign.  `indent`
+/// opens the line, as in `printTrap`.
+pub fn printLeaks(err: *std.Io.Writer, indent: []const u8, reporter: []const u8, leaked: i64) void {
     if (leaked == 0) return;
     err.print(
-        "{s}: internal error: {d} object{s} escaped ownership — please report this\n",
-        .{ reporter, leaked, if (leaked == 1) "" else "s" },
+        "{s}{s}: internal error: {d} object{s} escaped ownership — please report this\n",
+        .{ indent, reporter, leaked, if (leaked == 1) "" else "s" },
     ) catch {};
 }
 
@@ -192,17 +201,17 @@ test "a run that leaked says so, and one that did not says nothing" {
     var reported: std.Io.Writer.Allocating = .init(testing.allocator);
     defer reported.deinit();
 
-    printLeaks(&reported.writer, "loom", 0);
+    printLeaks(&reported.writer, "", "loom", 0);
     try testing.expectEqualStrings("", reported.written());
 
-    printLeaks(&reported.writer, "loom", 1);
+    printLeaks(&reported.writer, "", "loom", 1);
     try testing.expectEqualStrings(
         "loom: internal error: 1 object escaped ownership — please report this\n",
         reported.written(),
     );
 
     reported.clearRetainingCapacity();
-    printLeaks(&reported.writer, "luce", 4);
+    printLeaks(&reported.writer, "", "luce", 4);
     try testing.expectEqualStrings(
         "luce: internal error: 4 objects escaped ownership — please report this\n",
         reported.written(),
@@ -211,7 +220,7 @@ test "a run that leaked says so, and one that did not says nothing" {
     // A negative count is the same bug seen from the other side, and
     // is not silently a success.
     reported.clearRetainingCapacity();
-    printLeaks(&reported.writer, "loom", -2);
+    printLeaks(&reported.writer, "", "loom", -2);
     try testing.expect(std.mem.indexOf(u8, reported.written(), "-2 objects") != null);
 }
 
@@ -233,6 +242,7 @@ test "a trap report cannot smuggle terminal controls either" {
     };
     printTrap(
         &reported.writer,
+        "",
         "loom",
         "user_trap",
         "wiping\x1b[2J the screen\x07",
@@ -251,6 +261,7 @@ test "a trap report cannot smuggle terminal controls either" {
     reported.clearRetainingCapacity();
     printError(
         &reported.writer,
+        "",
         "loom",
         "io_failed",
         "cannot read \x1b]0;title\x07",

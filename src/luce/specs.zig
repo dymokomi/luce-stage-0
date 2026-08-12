@@ -74,6 +74,9 @@ pub const modules = @import("specs/modules_spec.zig");
 pub const optimizer = @import("specs/optimize_spec.zig");
 /// A serialized module read back from bytes is the same program.
 pub const module_format = @import("specs/format_spec.zig");
+/// The entry the compiler writes for `luce test`, run on both engines
+/// like any other program (docs/TESTING.md D3).
+pub const testing = @import("specs/testing_spec.zig");
 /// The flagship program, driven by a scripted keyboard: the only
 /// thing that says what `examples/editor/editor.luc` *does*.
 pub const editor = @import("specs/editor_spec.zig");
@@ -101,6 +104,7 @@ test {
     _ = modules;
     _ = optimizer;
     _ = module_format;
+    _ = testing;
     _ = editor;
     _ = adventure;
 

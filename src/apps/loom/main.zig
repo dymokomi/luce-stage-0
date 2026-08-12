@@ -122,7 +122,6 @@ fn usage(err: *std.Io.Writer) !u8 {
 }
 
 test {
-    _ = @import("palette.zig");
     _ = @import("runner.zig");
     _ = @import("shell.zig");
 }

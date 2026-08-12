@@ -322,6 +322,17 @@ pub fn build(b: *std.Build) void {
     const native_tests = b.addTest(.{ .root_module = app_native });
     test_step.dependOn(&b.addRunArtifact(native_tests).step);
 
+    // ANSI colour for the two binaries that write to a person: loom's
+    // shell prompt and `luce test`'s report.  Shared because there is
+    // one decision here and it is not loom's — whether this stream is
+    // a terminal, and what a style means when it is.
+    const app_palette = b.createModule(.{
+        .root_source_file = b.path("src/apps/palette.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app_palette })).step);
+
     // The one rule that keeps a program's own text from forging the
     // terminal (`src/apps/sanitize.zig`).  Its own module because it
     // has two unrelated consumers — the host's frame buffer, which
@@ -409,6 +420,13 @@ pub fn build(b: *std.Build) void {
             .{ .name = "native", .module = app_native },
             .{ .name = "emit", .module = emit },
             .{ .name = "streams", .module = app_streams },
+            // `luce test` runs what it builds, so the compiler wields
+            // the same real host and the same one rendering of a
+            // failure that loom and a standalone binary do
+            // (docs/TESTING.md D3, D4).
+            .{ .name = "host", .module = app_host },
+            .{ .name = "report", .module = app_report },
+            .{ .name = "palette", .module = app_palette },
         },
     });
 
@@ -479,6 +497,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "files", .module = app_files },
             .{ .name = "host", .module = app_host },
             .{ .name = "native", .module = app_native },
+            .{ .name = "palette", .module = app_palette },
             .{ .name = "report", .module = app_report },
             .{ .name = "streams", .module = app_streams },
         },

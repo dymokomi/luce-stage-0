@@ -814,10 +814,24 @@ improvement the audit exposed:
   22 fuses adjacent elementwise loops under *no* configuration of
   `-O3`.  That is a performance item decided in a language stage, and
   it cannot be taken back.
-- **No `luce fmt`, no `luce test`, no LSP, no debugger.**  A `luce test`
-  discovering `func test_*():` would be cheap and very Zig.  `fmt` and
-  an LSP both wanted stage 5's faithful tree first and now have it —
-  what is left for them is the tooling itself.
+- ~~**No `luce test`.**~~ — **landed 2026-08-11** (`docs/TESTING.md`,
+  `src/apps/luce/discover.zig` + `suite.zig`,
+  `src/luce/04_semantics/entry.zig`).  A test is a top-level public
+  zero-parameter `func test_*()` in an ordinary `.luc` file, asserting
+  with the `assert` the language already had; `luce test` sweeps
+  `./tests` or the paths it is given, refuses by name every `test_*`
+  that could never run, compiles each file once with a
+  **compiler-synthesized** `func main(args: list(string)) -> !`, and
+  calls the artifact **once per test** — so per-test isolation is the
+  `Runtime` that already existed and a trap fails one test rather than
+  the run.  A first draft put each test in a worker runtime and was
+  found structurally unable to keep that promise, because a worker's
+  trap is final at the join; the memo records both.  What is *not*
+  built there is named in its "Deliberately absent": no assertion
+  library, no fixtures, no filtering, no mocking, and no parallelism.
+- **No `luce fmt`, no LSP, no debugger.**  `fmt` and an LSP both wanted
+  stage 5's faithful tree first and now have it — what is left for them
+  is the tooling itself.
 - **Packages: the consuming half is built; producing and fetching are
   not.**  A program under a `luce.yaml` resolves dotted imports,
   hand-vendored packages in `.luce/packages/`, `LUCE_LIB` shelves and

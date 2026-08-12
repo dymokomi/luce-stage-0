@@ -76,8 +76,11 @@
 //!                      structs, names first and contents after.
 //!   signatures.zig   — the function table: every signature, the
 //!                      lambda and the specialization the compiler
-//!                      adds to it, the entry, and the layout a
-//!                      return shape rides in.
+//!                      adds to it, and the layout a return shape
+//!                      rides in.
+//!   entry.zig        — which row the runtime starts: the four shapes
+//!                      a program may declare, and the one the
+//!                      compiler writes for `luce test`.
 //!   defaults.zig     — the folded defaults of a parameter, a struct
 //!                      field, and a union payload field.
 //!   receiver.zig     — whether a method writes its implicit `self`.
@@ -148,6 +151,7 @@ test {
     _ = @import("04_semantics/shapes.zig");
     _ = @import("04_semantics/layouts.zig");
     _ = @import("04_semantics/signatures.zig");
+    _ = @import("04_semantics/entry.zig");
     _ = @import("04_semantics/defaults.zig");
     _ = @import("04_semantics/receiver.zig");
     _ = @import("04_semantics/builder.zig");

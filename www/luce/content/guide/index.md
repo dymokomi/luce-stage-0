@@ -1,6 +1,6 @@
 # Effective Luce
 
-Five pieces on the parts of Luce that are unusual enough to need more
+Six pieces on the parts of Luce that are unusual enough to need more
 than a reference entry, and on what has actually been measured rather
 than what would be nice.
 

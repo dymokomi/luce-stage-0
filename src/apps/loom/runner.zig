@@ -722,7 +722,7 @@ fn runLoaded(
     };
     switch (status) {
         .ok => {
-            report.printLeaks(err, "loom", services.leaked orelse 0);
+            report.printLeaks(err, "", "loom", services.leaked orelse 0);
             return if (delivered) report.exit_ok else report.exit_broken;
         },
         .trapped => {
@@ -730,7 +730,7 @@ fn runLoaded(
                 try err.print("loom: the program trapped and said nothing\n", .{});
                 return report.exit_trapped;
             };
-            report.printTrap(err, "loom", @tagName(trap.code), trap.message, trap.trace, trap.dropped);
+            report.printTrap(err, "", "loom", @tagName(trap.code), trap.message, trap.trace, trap.dropped);
             return report.exit_trapped;
         },
         .errored => {
@@ -738,7 +738,7 @@ fn runLoaded(
                 try err.print("loom: the program failed and said nothing\n", .{});
                 return report.exit_errored;
             };
-            report.printError(err, "loom", @tagName(raised.code), raised.message, raised.origin);
+            report.printError(err, "", "loom", @tagName(raised.code), raised.message, raised.origin);
             return report.exit_errored;
         },
         .exhausted => {

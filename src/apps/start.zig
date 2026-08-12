@@ -107,7 +107,7 @@ export fn main(argc: c_int, argv: [*][*:0]u8) callconv(.c) c_int {
 fn finish(services: *host_mod.Host, err: *std.Io.Writer, status: abi.Status) c_int {
     switch (status) {
         .ok => {
-            report.printLeaks(err, "luce", services.leaked orelse 0);
+            report.printLeaks(err, "", "luce", services.leaked orelse 0);
             return report.exit_ok;
         },
         .errored => {
@@ -115,7 +115,7 @@ fn finish(services: *host_mod.Host, err: *std.Io.Writer, status: abi.Status) c_i
                 err.print("luce: the program failed and said nothing\n", .{}) catch {};
                 return report.exit_errored;
             };
-            report.printError(err, "luce", @tagName(raised.code), raised.message, raised.origin);
+            report.printError(err, "", "luce", @tagName(raised.code), raised.message, raised.origin);
             return report.exit_errored;
         },
         .trapped => {
@@ -125,6 +125,7 @@ fn finish(services: *host_mod.Host, err: *std.Io.Writer, status: abi.Status) c_i
             };
             report.printTrap(
                 err,
+                "",
                 "luce",
                 @tagName(trap.code),
                 trap.message,

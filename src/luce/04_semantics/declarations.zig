@@ -198,6 +198,12 @@ pub const Analyzer = struct {
     variant_shapes: std.ArrayList(StructShape) = .empty,
     functions: std.ArrayList(FunctionDeclInfo) = .empty,
     function_names: std.StringHashMapUnmanaged(u32) = .empty,
+    /// Which row the runtime starts, once `entry.settle` has decided:
+    /// the declared `main`, or the one the compiler wrote for `luce
+    /// test`.  Null until then, and on a program that has no entry at
+    /// all — which is a diagnosed program, so the walk stops before
+    /// anything reads this.
+    entry_function: ?u32 = null,
     standard_specializations: std.ArrayList(signatures.StandardSpecialization) = .empty,
     /// The program's string constants.  A `Program` field, so the
     /// pool and its interning live in stage 6; this stage fills it as
@@ -306,7 +312,7 @@ pub const Analyzer = struct {
         defer lowered.deinit(self.arena);
         try self.lowerFunctions(bodies.items, &lowered);
 
-        const entry_index = self.function_names.get("main") orelse return null;
+        const entry_index = self.entry_function orelse return null;
 
         return .{
             .structs = try self.structs.toOwnedSlice(self.arena),
