@@ -657,7 +657,7 @@ A rendered-IR test (`08_llvm/test.zig`) pins one runtime call per
 construction and none per read, which is the inline-load promise made
 executable.  `abi.version` did not move.
 
-**Sixteen two-engine spec rows** in `specs/union_spec.zig` cover the
+**Twenty-two two-engine spec rows** in `specs/union_spec.zig` cover the
 memo's battery — construction and dispatch for every member shape,
 defaults on payload fields, value and object payload bindings,
 `give`/`copy` on a carrying union, a caught error unwinding past two
@@ -673,6 +673,25 @@ field list and unknown member, D11's shadowing arm binding, D12's
 self-containing union, D15's union map key, and D16's `==`, refused by
 a sentence naming `match`.  The worked `Json` example compiles and
 runs through the real toolchain on both engines.
+
+**The six rows added on 2026-08-12 are the temporary scrutinee**, and
+they are here because the sentence above — *"a temporary one lives to
+the end of the statement, and the `match` *is* the statement"* — was
+promised and not delivered.  `match make():` released the call's
+result before the arms ran and then read it back: the compiled path
+answered from freed memory and the oracle segfaulted on the dangling
+run, and nothing caught it because until that day no spec had ever
+matched anything but a name.  The cause was where the promise lives —
+the statement-temporary ledger — and the fix is that the scrutinee's
+park stays open across the arms and flushes in the merge, once, from
+one slot.  The rows now ask: a call's result, a carrying temporary
+whose census proves one release, a nested call, sixty-four rounds of a
+loop where a leak would accumulate, an arm that leaves early by
+`return`, `break` and `continue`, and an enum-valued call taking the
+same road.  `specs/ownership_spec.zig` carries the siblings under S3 —
+the iterable of a `for`, a narrowing test, `else`, a receiver, an
+index, an argument, and a fallible call's result — all of which were
+already right, and none of which had been asked either.
 
 ## The customer, two days later (2026-08-12)
 

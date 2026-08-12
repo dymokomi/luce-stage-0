@@ -482,3 +482,197 @@ test "D16: string(u) answers the member's name for every member" {
         \\
     );
 }
+
+// ---------------------------------------------------------------------------
+// A temporary scrutinee: the match *is* the statement (S3, D10)
+// ---------------------------------------------------------------------------
+//
+// `match make():` parks the call's result in a statement temporary and
+// carries it across the arms in a borrowing slot, because a register
+// never crosses a block.  Two slots, one owner: the park owns the run
+// and releases it once, in the merge, *after* every arm has read it —
+// an arm's payload binding aliases into that run (D10), so a release
+// above the dispatch would free what the arm then reads.  An arm that
+// leaves early releases it on its own way out, from the floor its
+// `return`, `break` or `continue` recorded.
+//
+// The census is what proves "once": released twice is a double free,
+// released never is a number, and the loop rows would accumulate
+// either.
+
+test "S3: a call's result is matched whole, and released once after the arms" {
+    var session = try agree.compare(
+        \\union E:
+        \\    a(n: long)
+        \\    b(n: long)
+        \\
+        \\func make() -> E:
+        \\    return E.b(n = 42)
+        \\
+        \\func main():
+        \\    match make():
+        \\        a(n):
+        \\            print("a " + string(n))
+        \\        b(n):
+        \\            print("b " + string(n))
+        \\
+    , .{});
+    defer session.deinit();
+    try std.testing.expectEqualStrings("b 42\n", session.printed());
+    try std.testing.expectEqual(agree.End{ .finished = 0 }, session.end);
+}
+
+test "S3: a carrying temporary survives its arms, and the census says it was freed once" {
+    try agree.ok(
+        \\union Bag:
+        \\    empty
+        \\    full(items: list(long), label: string)
+        \\
+        \\func make(fill: bool) -> Bag:
+        \\    if not fill:
+        \\        return Bag.empty
+        \\    var items = new list(long)
+        \\    items.append(4)
+        \\    items.append(6)
+        \\    return Bag.full(items = give items, label = "carried")
+        \\
+        \\func main():
+        \\    match make(true):
+        \\        empty:
+        \\            assert(false)
+        \\        full(items, label):
+        \\            assert(len(items) == 2)
+        \\            assert(items[0] + items[1] == 10)
+        \\            assert(label == "carried")
+        \\    match make(false):
+        \\        empty:
+        \\            assert(true)
+        \\        full(items, label):
+        \\            assert(false)
+        \\
+    );
+}
+
+test "S3: a nested call is one temporary the outer match owns to the end" {
+    try agree.ok(
+        \\union Json:
+        \\    null
+        \\    text(value: string)
+        \\    array(items: list(Json))
+        \\
+        \\func leaf(word: string) -> Json:
+        \\    return Json.text(value = word)
+        \\
+        \\func wrap(inner: give Json) -> Json:
+        \\    var items = new list(Json)
+        \\    items.append(give inner)
+        \\    return Json.array(items = give items)
+        \\
+        \\func depth(j: Json) -> long:
+        \\    match j:
+        \\        null:
+        \\            return 0
+        \\        text(value):
+        \\            return len(value)
+        \\        array(items):
+        \\            return 1 + depth(items[0])
+        \\
+        \\func main():
+        \\    match wrap(wrap(leaf("deep"))):
+        \\        null:
+        \\            assert(false)
+        \\        text(value):
+        \\            assert(false)
+        \\        array(items):
+        \\            assert(len(items) == 1)
+        \\            assert(depth(items[0]) == 5)
+        \\    assert(depth(wrap(wrap(leaf("deep")))) == 6)
+        \\
+    );
+}
+
+test "S3: a temporary scrutinee in a loop leaves nothing behind, round after round" {
+    try agree.ok(
+        \\union Bag:
+        \\    empty
+        \\    full(items: list(long))
+        \\
+        \\func make(round: long) -> Bag:
+        \\    if round % 3 == 0:
+        \\        return Bag.empty
+        \\    var items = new list(long)
+        \\    items.append(round)
+        \\    return Bag.full(items = give items)
+        \\
+        \\func main():
+        \\    var total: long = 0
+        \\    for round in range(0, 64):
+        \\        match make(round):
+        \\            empty:
+        \\                total = total + 1
+        \\            full(items):
+        \\                total = total + items[0]
+        \\    assert(total == 1345)
+        \\
+    );
+}
+
+test "S4: an arm that leaves early releases the temporary on its way out" {
+    try agree.ok(
+        \\union Bag:
+        \\    empty
+        \\    full(items: list(long))
+        \\
+        \\func make() -> Bag:
+        \\    var items = new list(long)
+        \\    items.append(4)
+        \\    return Bag.full(items = give items)
+        \\
+        \\func first() -> long:
+        \\    match make():
+        \\        empty:
+        \\            return -1
+        \\        full(items):
+        \\            return items[0]
+        \\
+        \\func main():
+        \\    assert(first() == 4)
+        \\    var seen: long = 0
+        \\    for round in range(0, 16):
+        \\        match make():
+        \\            empty:
+        \\                continue
+        \\            full(items):
+        \\                seen = seen + items[0]
+        \\                if seen >= 8:
+        \\                    break
+        \\    assert(seen == 8)
+        \\
+    );
+}
+
+test "S3: an enum-valued call is matched the same way, and nothing is left over" {
+    try agree.ok(
+        \\enum Method:
+        \\    stored
+        \\    deflated
+        \\
+        \\func chosen(raw: long) -> Method:
+        \\    if raw == 8:
+        \\        return Method.deflated
+        \\    return Method.stored
+        \\
+        \\func main():
+        \\    match chosen(8):
+        \\        stored:
+        \\            assert(false)
+        \\        deflated:
+        \\            assert(true)
+        \\    match chosen(0):
+        \\        stored:
+        \\            assert(true)
+        \\        deflated:
+        \\            assert(false)
+        \\
+    );
+}

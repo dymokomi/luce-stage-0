@@ -454,11 +454,11 @@ Each step lands green on its own.
 
 1. **The two compiler blockers this design's own prototype found**
    (below): `match` on a temporary, which is a wrong answer and
-   critical on its own account; and a function value not landing on a
-   nested assignment target, which is the wiring line `rows.luc`
-   needs. Neither blocks steps 2 and 3 — prototyping established that,
-   which is why they are listed as blocking step 4 rather than
-   everything.
+   critical on its own account — *fixed 2026-08-12*; and a function
+   value not landing on a nested assignment target, which is the
+   wiring line `rows.luc` needs. Neither blocks steps 2 and 3 —
+   prototyping established that, which is why they are listed as
+   blocking step 4 rather than everything.
 2. **`std.strings`' character vocabulary** (D11), with the
    `pad_left`/`pad_right` correction and its specs. *Built
    2026-08-12*; `screen.write` is already its customer.
@@ -484,19 +484,29 @@ The design was not only probed but **prototyped**: `termui.luc`,
 run, which is how the two findings that matter were found. Every
 number quoted in D2 comes from that prototype.
 
-- 🔴 **`match` on a temporary gives a wrong answer.** `match
-  pane.move_by(5):` took the wrong arm with a zeroed payload — and
-  the reduction is three lines: `match make():` where `make` answers
-  `E.b(n = 42)` prints `a 0`. The MIR says exactly why: the temporary
-  is stored into *two* slots, the first is `drop_storage`'d, and then
-  the second — the same storage — is read. Binding it first (`let e =
-  make()`) is correct, which is how it survived. UNION.md promises the
-  opposite in as many words: *a temporary one lives to the end of the
-  statement, and the `match` is the statement.* Both engines share the
-  lowering, so the differential oracle is blind to it — the same shape
-  as the function-value ownership hole. Filed critical, and it is the
-  reason a widget's event union is not usable at the call site
-  `RowsEvent` was designed for until it is fixed.
+- ✅ **`match` on a temporary gave a wrong answer; fixed 2026-08-12.**
+  `match pane.move_by(5):` took the wrong arm with a zeroed payload —
+  and the reduction is three lines: `match make():` where `make`
+  answers `E.b(n = 42)` printed `a 0`. The MIR said exactly why: the
+  temporary was stored into *two* slots, the first was
+  `drop_storage`'d, and then the second — the same storage — was
+  read. Binding it first (`let e = make()`) was correct, which is how
+  it survived. UNION.md promises the opposite in as many words: *a
+  temporary one lives to the end of the statement, and the `match` is
+  the statement.* The cause was the statement-temporary ledger: both
+  `04_semantics/statements.zig`'s match walks flushed the scrutinee's
+  park immediately after recording the held slot, and
+  `05_hir/lower.zig`'s `replayMatch` emitted that release before the
+  dispatch. The park now stays open across the arms and flushes in
+  the merge, so the release is once, from one slot, after every arm
+  has read it — and an arm that leaves early releases it on its own
+  way out, from the floor its `return`/`break`/`continue` records.
+  **The oracle was not blind to it**, which this memo assumed and the
+  fix disproved: the interpreter dereferenced the freed run and
+  segfaulted, so any spec that had matched a temporary would have
+  failed loudly. Nothing was asked. Six spec rows in
+  `specs/union_spec.zig` and two in `specs/ownership_spec.zig` ask
+  now.
 
 Six further compiler facts were probed rather than assumed — real
 files compiled by the installed toolchain and run. Four held, one is

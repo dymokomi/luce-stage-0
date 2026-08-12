@@ -2596,7 +2596,6 @@ const Replay = struct {
         const held = self.takeSlot(null, scrutinee_type, false);
         std.debug.assert(held == matched.held);
         try self.code.store(held, scrutinee);
-        try self.flushTemps(floor);
 
         const fallthrough = matched.else_body == null;
         const tested = if (fallthrough) matched.arms.len - 1 else matched.arms.len;
@@ -2639,6 +2638,14 @@ const Replay = struct {
             try self.replayMatchArm(matched.arms[matched.arms.len - 1]);
         }
         while (frames.pop()) |arms| try self.code.closeIf(arms);
+        // The scrutinee's temporary is released here, in the merge,
+        // and not before the arms: the held slot borrows the run and
+        // an arm's payload binding aliases into it, so a release
+        // above the dispatch would free what every arm then reads
+        // (S3, docs/UNION.md D10).  An arm that leaves early —
+        // `return`, `break`, `continue` — releases it on its own way
+        // out, from the floor its statement recorded.
+        try self.flushTemps(floor);
     }
 
     fn replayMatchArm(self: *Replay, arm: nodes.Statement.Match.Arm) Error!void {

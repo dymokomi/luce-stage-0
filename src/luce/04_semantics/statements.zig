@@ -287,9 +287,11 @@ fn lowerMatch(self: *FunctionBuilder, matched: ast.Match) Error!void {
     }
 
     // The scrutinee is read once and carried in a slot: a register
-    // never crosses a block, and every arm's test is a block.
+    // never crosses a block, and every arm's test is a block.  The
+    // slot borrows — the ledger keeps the scrutinee's own park open
+    // across the arms, because the match *is* the statement a
+    // temporary lives to the end of (S3).
     const held = try recorder.recordLocal(self, null, scrutinee.value_type, false, matched.scrutinee.span());
-    ledger.flushTemps(self, temps_floor);
 
     // Facts an arm proves are the arm's own, and one that assigns
     // over a narrowed name unproves it for everybody after
@@ -346,6 +348,12 @@ fn lowerMatch(self: *FunctionBuilder, matched: ast.Match) Error!void {
     for (matched.arms) |arm| flow.widenAssignedIn(self, arm.body);
     if (matched.else_block) |otherwise| flow.widenAssignedIn(self, otherwise);
     if (has_continuing_root) flow.rootRestore(self, joined_roots) else flow.rootRestore(self, root_entry);
+
+    // The scrutinee's temporary dies here, after the arms that read
+    // it through the held slot (S3, docs/UNION.md's "the match *is*
+    // the statement").  An arm that leaves early releases it on its
+    // own way out, from the floor its `return`/`break` records.
+    ledger.flushTemps(self, temps_floor);
 
     try recorder.recordStatement(self, .{ .match = .{
         .scrutinee = scrutinee.node,
@@ -425,9 +433,12 @@ fn lowerVariantMatch(
     }
 
     // The scrutinee is read once and carried in a slot: a register
-    // never crosses a block, and every arm's test is a block.
+    // never crosses a block, and every arm's test is a block.  The
+    // slot borrows — the ledger keeps the scrutinee's own park open
+    // across the arms, because the match *is* the statement a
+    // temporary lives to the end of (S3), and an arm's payload
+    // binding aliases the run that park owns (D10).
     const held = try recorder.recordLocal(self, null, scrutinee.value_type, false, matched.scrutinee.span());
-    ledger.flushTemps(self, temps_floor);
 
     // What an arm's payload aliases, for S23's sentence: the
     // scrutinee where it is a bare name, nothing otherwise.
@@ -489,6 +500,12 @@ fn lowerVariantMatch(
     for (matched.arms) |arm| flow.widenAssignedIn(self, arm.body);
     if (matched.else_block) |otherwise| flow.widenAssignedIn(self, otherwise);
     if (has_continuing_root) flow.rootRestore(self, joined_roots) else flow.rootRestore(self, root_entry);
+
+    // The scrutinee's temporary dies here, after the arms that read
+    // it through the held slot (S3, docs/UNION.md's "the match *is*
+    // the statement").  An arm that leaves early releases it on its
+    // own way out, from the floor its `return`/`break` records.
+    ledger.flushTemps(self, temps_floor);
 
     if (arms_recorded) {
         try recorder.recordStatement(self, .{ .match = .{

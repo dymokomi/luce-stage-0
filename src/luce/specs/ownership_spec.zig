@@ -142,6 +142,81 @@ test "S3: unbound temporaries die at the end of their statement" {
     );
 }
 
+// Every statement that *consumes* a temporary rather than merely
+// producing one: the value has to stand until the statement it belongs
+// to is over, and then be released once.  A `match` released its
+// scrutinee before its arms ran and read freed memory
+// (docs/UNION.md's "the match *is* the statement"); these are the
+// siblings that share the shape, each held to the same two facts —
+// the right answer, and a census of zero.
+test "S3: a statement that consumes a temporary keeps it to its own end" {
+    try agreeClean(
+        \\import std.strings
+        \\
+        \\func made() -> list(long):
+        \\    var xs = new list(long)
+        \\    xs.append(4)
+        \\    xs.append(6)
+        \\    return give xs
+        \\
+        \\func maybe(there: bool) -> list(long)?:
+        \\    if not there:
+        \\        return none
+        \\    return made()
+        \\
+        \\func words() -> string:
+        \\    return "a,b,c"
+        \\
+        \\func total(xs: list(long)) -> long:
+        \\    var sum: long = 0
+        \\    for x in xs:
+        \\        sum = sum + x
+        \\    return sum
+        \\
+        \\func main():
+        \\    # the iterable of a for-in
+        \\    var seen: long = 0
+        \\    for x in made():
+        \\        seen = seen + x
+        \\    assert(seen == 10)
+        \\    # a narrowing test, and the fallback form beside it
+        \\    if maybe(true) != none:
+        \\        assert(true)
+        \\    assert(len(maybe(false) else made()) == 2)
+        \\    # a receiver, an index, and an argument
+        \\    assert(len(words().split(",")) == 3)
+        \\    assert(made()[1] == 6)
+        \\    assert(total(made()) == 10)
+        \\
+    );
+}
+
+test "S3: a fallible call's temporary crosses its branch and dies with the statement" {
+    try agreeClean(
+        \\func risky(ok: bool) -> list(long)!:
+        \\    if not ok:
+        \\        error("no")
+        \\    var xs = new list(long)
+        \\    xs.append(5)
+        \\    return give xs
+        \\
+        \\func total(xs: list(long)) -> long:
+        \\    var sum: long = 0
+        \\    for x in xs:
+        \\        sum = sum + x
+        \\    return sum
+        \\
+        \\func main() -> !:
+        \\    assert(total(try risky(true)) == 5)
+        \\    assert(len(risky(false) catch new list(long)) == 0)
+        \\    var seen: long = 0
+        \\    for x in try risky(true):
+        \\        seen = seen + x
+        \\    assert(seen == 5)
+        \\
+    );
+}
+
 test "S4: return, break, and continue unwind what their scopes own" {
     try agreeClean(
         \\func early(flag: bool) -> string:
