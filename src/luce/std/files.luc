@@ -12,15 +12,101 @@
 # whether a read or a write lands, and a correct program given correct
 # input can still be told no, which is what makes it an error rather
 # than a trap (docs/FAILURE.md).  Call one with `try` to hand the
-# failure to your caller, or with `catch` to answer it here.  `exists`
-# is the exception and answers a plain bool — but it is a question
-# about the past, so it is never a guard for the call after it: read
-# the file, and handle what the read says.
+# failure to your caller, or with `catch` to answer it here.  There is
+# no exception, `exists` included — see the note above it.
+#
+# **There is no `close` and no `with`.**  A `file` is owned by the
+# binding that received it, so the end of that scope closes it, `free
+# f` closes it early, `give f` and `return f` move it, and using one
+# after it is closed traps like any use after free.  Python's `with`
+# is a per-call-site opt-in to a guarantee this language gives
+# unconditionally: a Luce program cannot leak a file by forgetting a
+# keyword, because there is no keyword to forget.
 
 import std.strings
+import std.paths
 
-func exists(path: string) -> bool:
-    return file_exists(path)
+# -- what is at a path (docs/FILESYSTEM.md) ---------------------------
+
+# What a path names.  Three members, because that is the set a program
+# branches on: recurse, read, or leave alone.  `other` is honest and
+# total — a socket, a device, a fifo, a filesystem that will not say
+# more — and it is one member rather than a taxonomy because a program
+# that must tell a block device from a door is writing an operating
+# system, not using one.
+#
+# There is no `symlink`: a link is what it points at (`kind` follows
+# them), and a broken one is nothing there.
+enum Kind:
+    file
+    directory
+    other
+
+# What is at this path, or none when nothing is.
+#
+# **This is the primitive question, and the three predicates below are
+# one line each over it.**  The two answers are different facts and get
+# different channels: `none` means *nothing is there* — the same
+# reason every time, no message worth carrying — and `!` means *the
+# world would not say*, a parent nobody may search, a device that
+# failed.
+#
+# Links are followed, so the kind describes the same file the next
+# line touches, and a dangling link is `none`.
+#
+# `match` does not dispatch over an optional, which is the guarantee
+# rather than the wart: bind it, answer the absent case, then match.
+#
+#     let what = try files.kind(p)
+#     if what == none:
+#         print(p + " is not there")
+#         return
+#     match what:
+#         directory: walk(p)
+#         file: visit(p)
+#         other: continue
+func kind(path: string) -> Kind?!:
+    let code = try path_kind(path)
+    if code == 1:
+        return Kind.file
+    if code == 2:
+        return Kind.directory
+    if code == 3:
+        return Kind.other
+    return none
+
+# Whether there is anything at all at this path.
+#
+# **It answers `bool!` and not `bool`, deliberately.**  A file that
+# certainly exists under a directory nobody may open is not absent —
+# the world refused to look — and a bool has no room to say so, which
+# is how the old `file_exists` came to answer `false` for both.
+# Python 3.14 made its three predicates swallow every OSError,
+# PermissionError included; Rust added `try_exists()` because that
+# swallowing was a bug source.  A program that wants Python's
+# behaviour writes `catch false`, which is three visible words.
+#
+# It is still a question about the past, so it is still never a guard
+# for the call after it: read the file, and handle what the read says.
+func exists(path: string) -> bool!:
+    let what = try kind(path)
+    return what != none
+
+# Whether an ordinary file is there — `os.path.isfile`.
+func is_file(path: string) -> bool!:
+    let what = try kind(path)
+    if what == none:
+        return false
+    return what == Kind.file
+
+# Whether a directory is there — `os.path.isdir`.  This is the
+# question `exists` is usually asked by mistake: a file holding the
+# name answers false here and true there.
+func is_dir(path: string) -> bool!:
+    let what = try kind(path)
+    if what == none:
+        return false
+    return what == Kind.directory
 
 func read(path: string) -> string!:
     return try file_read(path)
@@ -172,12 +258,58 @@ private func send(f: file, bytes: list(byte)) -> !:
         at += sent
     try f.flush()
 
-# The names in a directory, sorted.
+# -- listing a directory ----------------------------------------------
+
+# One thing in a directory: its name, the path that reaches it, and
+# what it is.  This is `os.scandir`'s `DirEntry`, and the two path
+# fields are not redundancy — they are the two things a caller wants.
+# A file pane prints `name`; a walk pushes `path`; neither writes a
+# join, and the join deleted from the top of every walk loop is the
+# one that was getting written wrong.
+struct Entry:
+    name: string
+    path: string
+    kind: Kind
+
+# What is in a directory, sorted by name, each entry carrying its kind
+# — `os.scandir`.
 #
 # Sorted because the host's order is whatever the file system felt
-# like, which differs between two machines holding the same files —
-# and a program that prints a listing should print the same listing.
-# The names are plain names, not paths: join them yourself.
+# like, which differs between two machines holding the same files, and
+# a program that prints a listing should print the same listing.
+#
+# `path` is the listed path with the name joined onto it, exactly as
+# Python's is: entries(".") answers "./notes", entries("src") answers
+# "src/luce.zig".
+#
+# An entry the listing named and whose kind has since become nothing
+# was removed while this loop was running; it is left out rather than
+# reported, because it is no longer there to report and a listing is a
+# statement about a moment.  A world that *refuses* to say is a
+# different matter and travels in the error channel like everything
+# else here.
+#
+# The kinds are fetched one per entry, which is one host call per name
+# on top of the listing.  That is an implementation detail behind this
+# signature: a host that could answer the whole listing at once would
+# change this function and not one program that calls it.
+func entries(path: string) -> list(Entry)!:
+    var names = try dir_list(path)
+    names.sort()
+    var found = new list(Entry)
+    for name in names:
+        let whole = paths.join(path, name)
+        let what = try kind(whole)
+        if what != none:
+            found.append(Entry(name = name, path = whole, kind = what))
+    return found
+
+# The names in a directory, sorted — `os.listdir`.
+#
+# The plain names, not paths: join them yourself, or call `entries`
+# and read `path`.  It survives beside `entries` for the reason Python
+# keeps both and PEP 471 says so — most callers only want the names —
+# and it asks the host for exactly that: the listing, and no kinds.
 func list(path: string) -> list(string)!:
     var names = try dir_list(path)
     names.sort()

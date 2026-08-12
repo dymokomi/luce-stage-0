@@ -211,14 +211,34 @@ resolves paths relative to the current directory).
 
 Everything that touches a file says `!`: the world decides whether a
 read or a write lands, so `try` it or `catch` it (docs/LANGUAGE.md).
-`exists` answers a plain bool and is the exception — but it is a
-question about the past, never a guard for the call after it. Read
-the file and handle what the read says.
+There is no exception, `exists` included — see below.  Asking is still
+never a guard for the call after it: read the file and handle what the
+read says.
+
+**There is no `close` and no `with`** (docs/FILESYSTEM.md D9).  A
+`file` is owned by the binding that received it, so the end of that
+scope closes it, `free f` closes it early, `give f` and `return f`
+move it, and using one after it is closed traps like any use after
+free.  Python's `with` is a per-call-site opt-in to a guarantee this
+language gives unconditionally — to every owned thing, rather than to
+the ones a library remembered to write an `__exit__` for — so a Luce
+program cannot leak a file by forgetting a keyword, because there is
+no keyword to forget.  `close()` is *refused* rather than merely
+absent, and the diagnostic says both halves: a working one would have
+to poison the receiver exactly as `free` does, making it `free` under
+a second name for one concept, and an idempotent one would need a
+"closed but not poisoned" state, which is the one state a resource
+must never hold.
 
 ```text
 import std.files
 
-files.exists(path)               # bool — a question, not a guard
+files.kind(path)                 # Kind?! — what is at the path, or
+                                 # none when nothing is.  The
+                                 # primitive question
+files.exists(path)               # bool! — is there anything here
+files.is_file(path)              # bool!
+files.is_dir(path)               # bool!
 files.read(path)                 # string!
 files.write(path, text)          # !
 files.read_lines(path)           # list(string)!, newlines stripped; a
@@ -236,11 +256,52 @@ files.delete(path)               # !
 files.rename(from, to)           # !; replaces `to` if it exists, so
                                  # write-then-rename replaces a file
                                  # without ever leaving half of one
+files.entries(path)              # list(Entry)!, sorted by name, each
+                                 # carrying its kind — os.scandir
 files.list(path)                 # list(string)!, sorted; plain names,
                                  # not paths, and no "." or ".."
 files.make_directory(path)       # !; the parents too, and a directory
                                  # already there is success
+
+enum Kind: file directory other  # what a path names
+struct Entry: name path kind     # os.scandir's DirEntry, exactly
 ```
+
+`kind` is the primitive and the three predicates are one line each
+over it.  Three things can happen and the language has exactly three
+ways to say them, so each gets its own: a member for what is there,
+`none` for *nothing is there* — the same reason every time, no message
+worth carrying — and `!` for *the world would not say*, a parent
+nobody may search, a device that failed.  `match` does not dispatch
+over an optional, which is the guarantee rather than the wart: the
+absent case is answered before the match, so a program cannot fall
+past it.
+
+Links are **followed** (`stat`, not `lstat`), because that is what
+`read`, `write` and `delete` already mean — a `kind` that answered
+otherwise would describe a different file from the one the next line
+touches.  A dangling link is therefore `none`, and `symlink` is
+deliberately not a member.
+
+**`exists`, `is_file` and `is_dir` answer `bool!`, and here Luce is
+deliberately better than Python.**  Python 3.14 made `exists()`,
+`is_dir()` and `is_file()` swallow every `OSError`, `PermissionError`
+included, for consistency with `os.path.exists()`; Rust added
+`try_exists()` in 1.63 *because* that swallowing was a bug source.  A
+file that certainly exists under a directory nobody may open is not
+absent, and a bool has no room to say so — which is exactly how the
+retired `file_exists` came to answer `false` for both.  A program that
+wants Python's behaviour writes `catch false`, which is three visible
+words and greppable on purpose.
+
+`entries` is `os.scandir` and carries both `name` and `path` for the
+two real callers: a file pane prints `name`, a walk pushes `path`, and
+neither writes a join.  `path` is the listed path with the name joined
+onto it, exactly as Python's is — `entries(".")` answers `./notes`.
+An entry the listing named and whose kind has since become nothing was
+removed while the loop was running, and is left out rather than
+reported; a world that *refuses* to say is a different matter and
+travels in the error channel like everything else here.
 
 `append_text` is spelled that way because `append` is a **reserved
 name** — it is `xs.append(v)`, the list method — and nothing
@@ -254,8 +315,9 @@ program that prints a listing should print the same listing.
 `make_directory` means "there is a directory at this path when I
 return", which decides its two rules together: it makes the parents,
 and a directory that was already there is success.  Anything else puts
-a splitting loop in every caller and a `files.exists` in front of every
-call — and that check is the race `exists` is documented never to be.
+a splitting loop in every caller and a `files.is_dir` in front of every
+call — and that check is the race an existence question is documented
+never to be.
 A *file* holding the name is still `io_failed`.
 
 The four new ones are `!` for the reason `read` and `write` are: the
@@ -325,6 +387,8 @@ paths.is_absolute(path)     # bool — starts at the root
 paths.join(head, tail)      # one separator at the seam; an empty side
                             # answers the other, an absolute tail
                             # answers itself
+paths.joined(parts)         # the fold over join, left to right; an
+                            # empty list answers """
 paths.base(path)            # the last element; trailing separators do
                             # not count; base("/") is "/"
 paths.dir(path)             # everything but the last element; a bare
@@ -333,6 +397,13 @@ paths.dir(path)             # everything but the last element; a bare
 paths.extension(path)       # the base's extension, dot included, or ""
 paths.stem(path)            # the base without its extension
 ```
+
+`joined` is where `os.path.join(a, b, c)` goes.  Luce has no variadics
+and no `/` operator, so the alternative was `join(join(a, b), c)` —
+and that is the shape that gets written wrong.  A list literal passes
+inline: `paths.joined([root, "build", name + ".out"])`.  It is not
+defaulted trailing parameters, which would cap the arity at whatever
+number the author guessed.
 
 Two invariants hold on every input, and the spec suite walks them:
 `join(dir(p), base(p))` names the same file `p` does — which is why a

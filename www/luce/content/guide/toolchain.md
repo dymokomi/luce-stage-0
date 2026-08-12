@@ -23,7 +23,7 @@ front end's hand-over to the back end, not something to ship; that is
 how `loom` gets a program compiled without carrying a code generator,
 by running this binary over the module it already has.
 
-The current `.lcm` format is **41**. Format 33 introduced the
+The current `.lcm` format is **42**. Format 33 introduced the
 program-root constant-container pool, its load instruction and
 `immutable_object`; 34 appends `ownership_cycle`; 35 appends the
 `shell_run` intrinsic behind `std.os.shell.run`; 36 appends
@@ -34,18 +34,22 @@ each shipping a `util` can never merge in one module; 40 adds the
 `dir_create` and `epoch_ms` intrinsics inside the host group, so the
 tags after them renumber; 41 grows a function value from a bare index to
 the function it names beside the receiver it carries, which widens
-`const_function`'s payload without moving a tag. The earlier
+`const_function`'s payload without moving a tag; 42 retires
+`file_exists` and adds `path_kind` after `dir_create`, so the tags
+between them and the end renumber. The earlier
 `call_inout` edge used by writing
-methods first moved it to 32. The published host ABI is **16**: version
+methods first moved it to 32. The published host ABI is **17**: version
 14 appended the `shell_run` host slot, version 15 appends terminal
-event data, and version 16 appends `dir_create` and `epoch_ms` — a
+event data, version 16 appends `dir_create` and `epoch_ms` — a
 directory made with its parents, and the wall clock `clock_ms`
-deliberately is not. Neither enums nor unions moved it — no union
+deliberately is not — and version 17 appends `path_kind` and retires
+`file_exists` from use, because one bit could not tell "nothing is
+there" from "I was not allowed to look". Neither enums nor unions moved it — no union
 crosses the host boundary.
 
 Current release label: `0.18` (`luce --version`, `loom --version`). The
-release label is intentionally separate from `format_version = 41` and
-`abi.version = 16`: the latter two describe artifact compatibility, while
+release label is intentionally separate from `format_version = 42` and
+`abi.version = 17`: the latter two describe artifact compatibility, while
 the former names the user-facing toolchain release.
 
 `FILE` may also be `-`, to read the program from standard input.

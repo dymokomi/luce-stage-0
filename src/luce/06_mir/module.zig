@@ -138,7 +138,17 @@ pub const magic = "LUCE";
 /// renumbered — one instruction's payload changed — which is exactly
 /// the kind of change a stale decoder would read straight past, so the
 /// version is what refuses it.
-pub const format_version: u32 = 41;
+///
+/// 42 — `file_exists` leaves `mir.Intrinsic` and `path_kind` takes a
+/// place in the host group after `dir_create` (docs/FILESYSTEM.md
+/// D17).  One name out and one name in, both in the middle of the
+/// union, so every tag after them renumbers *twice over* — which is
+/// safe for exactly one reason and it is this line: the version moved
+/// with them, so a module written under 41 is refused by name instead
+/// of decoded against the wrong tags.  Not a rename: the answer
+/// changed shape as well as spelling, from a bool that could not tell
+/// absence from refusal to a `long` beside the error channel.
+pub const format_version: u32 = 42;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -1770,8 +1780,12 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // payload widened while every tag stayed put.  The hash below did
     // not move, which is the shape-changed case the paragraph above
     // warns it cannot catch.
-    try testing.expectEqual(@as(u32, 41), format_version);
-    try testing.expectEqual(@as(u64, 1920569578452782657), hasher.final());
+    // 41 -> 42: `file_exists` leaves `mir.Intrinsic` and `path_kind`
+    // joins it after `dir_create` (docs/FILESYSTEM.md D17), so the
+    // hash moves with both names *and* every tag between `file_write`
+    // and the end of the union renumbers.
+    try testing.expectEqual(@as(u32, 42), format_version);
+    try testing.expectEqual(@as(u64, 2423410591163910601), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

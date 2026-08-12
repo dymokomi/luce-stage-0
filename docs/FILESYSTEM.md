@@ -1,6 +1,14 @@
 # The filesystem surface — `open()`, `std.files`, `std.paths`, and the three things that are actually missing
 
-**Status: PROPOSED.**  Nothing here is built.  Every fenced block is
+**Status: PARTLY BUILT (2026-08-12).**  The three genuinely missing
+pieces — `kind`, listings that carry kinds, and a multi-part join —
+and everything that follows from them are **built, on both engines,
+with specs**: steps 1 to 4 of Sequencing, plus the documentation.
+`open()`, `FileMode` and the seven file-surface methods (D4–D8, steps
+5 and 6) are **not** built and are the precise remainder; the As-built
+section at the bottom says what shipped, what departed and why, and
+what a second run picks up.  Everything below this line is the design
+memo as ratified, unaltered.  Every fenced block is
 ```` ```text ````, because a design memo's examples are the design's
 and not the build's — though every shape below that could be checked
 against the installed toolchain was, and the memo says so wherever that
@@ -957,3 +965,88 @@ spending a question on it.
 - **A second path separator, drive letters, or UNC paths** — and so no
   `splitdrive`, `altsep` or `os.sep`.  A path says `/` and says so out
   loud.  When a Windows host is real, it is a memo, not a flag.
+
+---
+
+## As built (2026-08-12) — the `kind` half
+
+Steps 1 to 4 of Sequencing, in one run, on both engines, with specs at
+each step.  The memo left several things open that the code had to
+answer, and it got two of its own sentences wrong; each is here with
+the reason, and each has a spec.
+
+| | decision, and where it is proved |
+|---|---|
+| **B1** | **`path_kind` is an ordinary host-slot intrinsic, not a `luce_rt_*` export.**  D17 said it would lower to `luce_rt_path_kind` "with the runtime raising the `io_failed` itself", by analogy with the byte channel.  The analogy does not hold: the byte channel lives in `libluce_rt` because a handle's **close** happens at a scope's end, where no generated code is standing to hand a host table in (`docs/BYTES.md` B6).  Nothing about asking what is at a path happens outside a standing engine, so it takes `dir_list`'s and `dir_create`'s shape instead — the engine calls the slot and raises — and `libluce_rt` learns nothing at all.  The observable behaviour is D17's; only the seam moved. |
+| **B2** | **The intrinsic answers a `long!` and the names live in `std.files`.**  Zero nothing, 1 file, 2 directory, 3 other.  The runtime is deliberately never handed the program's type table, so an enum could not cross the boundary — the same sentence that makes the byte channel's mode a number here and a named door there.  `files.kind` is the four-way `if` that turns the number into `Kind?`, and it is the only place the numbers are written down on the language side. |
+| **B3** | **The refusal's verb is `inspect`**, appended to `vocabulary.FileAct`: *"cannot inspect locked/inside.txt"*.  The act needed a name because both engines have to spell the same sentence, and "cannot read" would have been a lie about a call that never read anything.  Deliberately not the absent case — nothing is there travels in the value. |
+| **B4** | **`files.list` is *not* one line over `entries`.**  D14 said it would be, for "one host path and two surface names"; both spellings already have one host path, because both are `dir_list`.  What "one line over `entries`" would have added is one `path_kind` per name for a caller that asked for names, plus a behaviour change nobody wanted — an entry that vanished mid-listing would silently drop out of `os.listdir`.  So `list` is `dir_list` sorted, exactly as it was, and `entries` is the one that pays for kinds.  This is the memo's own §23 read the other way: the cost belongs in the module, and here the module is where it is *avoided*. |
+| **B5** | **`entries` drops an entry whose kind has become nothing**, and says so where it is declared.  The listing named it and it is no longer there, so there is nothing to report; a world that *refuses* to say is a different matter and travels in the error channel like everything else.  The alternative — an `Entry` with no kind — would have put an optional in the field that exists to remove one. |
+| **B6** | **`Entry.path` is `paths.join(listed, name)`, so `entries(".")` answers `./notes`.**  Exactly `os.scandir`'s behaviour, and the reason `path` is a field at all: the join it deletes from the top of every walk loop is the one that was getting written wrong.  The editor, which lists `"."`, is the customer that showed this needs a matching *un*-join — see B9. |
+| **B7** | **`file_exists` is retired everywhere: the builtin, the intrinsic, the reserved name, and the slot's contents.**  The `abi.Host` field keeps its position and its type — the table is append-only and nothing reorders — and every host in this tree leaves it null, exactly as the whole-file text slots were left at version 12.  It gains a `retired_builtins` row, which grows a table whose comment says "never to grow": the forcing reason is that it was a published builtin for the whole of v2 and is on the documentation site, so `unknown function file_exists` would point nowhere.  The row names both replacements and the `try`/`catch` the type change requires. |
+| **B8** | **`close()` is refused by name rather than by did-you-mean**, with both halves of the answer and the `with` sentence in the same breath: *"file has no method close: free f closes it, and the end of the owning scope closes it anyway — which is why there is no 'with' either"*.  D9 asked for the sentence in three places and it is in three: this diagnostic, `docs/STD.md`, and luce.luciaos.com's `std/files` page. |
+| **B9** | **The editor's file pane walks into a directory** rather than refusing one, which is the choice D-nothing left open and evidence 5 asked for.  A pane that can *see* a row is a directory is a pane whose reader will press Enter on it, and "src is a directory" leaves them exactly as stuck as *"cannot read src"* did.  So `State` gained a `directory`, the pane gained a `../` row when it is not at the top, and directories are marked with a trailing `/` — the mark and the walk are one decision.  One thing the walk forced: `State.under(here, name)` answers the bare name when the pane is showing `"."`, because `"./notes.txt"` and `"notes.txt"` are one file and a pane that renamed it opened a second buffer onto it.  That is B6's join and its inverse, and it is the only place in the tree that needs one. |
+| **B10** | **Zipper asks `files.is_dir`.**  `if not files.exists(into)` was right by accident, as evidence 1 measured: a *file* in the way passed the gate and the run failed later, inside the extraction loop, with a message about a directory nobody had asked for.  It now refuses up front and leaves the file untouched, which was checked by hand against a real tree as well as in the suite. |
+
+**What the memo checked and the build confirmed.**  Every shape
+evidence 14–24 measured held: `T?!` compiles and `try` leaves the `?`
+(`files.kind`); `match` refuses `Kind?` and the bind-test-match
+spelling is what `std.files`' own doc comment teaches; a list literal
+passes inline to `paths.joined`; `entries` is a legal name; there is
+no `pass`.  Two shapes the memo did not check and the build found:
+struct construction is `Entry(name = …)` and not `Entry(name: …)`,
+and a `catch` **block** cannot initialize a binding, so the editor's
+listing declares `found` first and guards the assignment.
+
+**The version numbers.**  `abi.version` 16 → **17** (one appended
+slot, one retired from use), `format_version` 41 → **42**
+(`file_exists` out of `mir.Intrinsic`, `path_kind` in after
+`dir_create`, so every tag between `file_write` and the end
+renumbers twice over).  The wire fingerprint moved with them and its
+comment records why.
+
+**The four lockstep sites**, as always: `src/apps/host.zig` (one
+`statFile` with links followed; `FileNotFound` and `NotDir` are the
+only two failures that mean "nothing is there", everything else is a
+refusal), `src/luce/specs/hosts.zig` (a `kinds` script and a
+`refused_kinds` prefix list on `World`, read by both test hosts),
+`src/luce/interpreter/machine.zig`, and `src/luce/08_llvm/lower.zig`.
+A host that withholds the slot traps `host_unavailable` on both
+engines, and `host_spec.zig` has the row.
+
+### What is left, precisely
+
+D4 through D8 and their consequences — **`open()`, `FileMode`, and the
+seven file-surface methods** — are untouched.  Concretely, a second
+run owes:
+
+- `FileMode` as the language's **first predeclared enum** (D5, R1):
+  a row in the table stage 4 already consults, a reserved word, three
+  interned member names.  This is the only language-surface change in
+  the remainder and the reason it was not carried here.
+- `open(path, mode = FileMode.read) -> file!` as a free host-gated
+  builtin replacing `file_open` (D4, D6), with `files.open`,
+  `files.create` and `files.append_to` retiring into it and
+  `std.files`' byte conveniences rewritten over it.  `open` joins
+  `reserved_names`, which costs the word to every struct in the
+  language (evidence 16).
+- `read_text`, `read_bytes`, `read_line`, `read_lines`, `write_text`,
+  `write_bytes`, `write_lines` on the `file` (D7), over **a read
+  buffer in `libluce_rt`** (D8) — the one genuinely new piece of
+  runtime — with the `f.read()` diagnostic D7 names.  `read`, `write`
+  and `flush` keep their names and their meaning (R3).
+- The specs the memo lists for those: `open` in each mode, reading
+  from a file opened for writing, `read_line` across a buffer boundary
+  and at end of file, `read_text` on bytes that are not text,
+  `write_lines` on an empty list.
+
+None of it moves anything this run built: no signature here changes,
+and `path_kind`, `Kind`, `Entry`, `entries`, the three predicates and
+`joined` are what they will be.  It costs one more `format_version`
+and no `abi.version` (D7 spends no slot), and the "do not race the
+version numbers" rule applies to it exactly as it applied here.
+
+**Can wait, unchanged** from the list above: the `dir_entries` fast
+path (D15, whose trigger is a measured walk — and B4 makes it a
+smaller win than the memo priced, since `list` no longer pays), the
+reserved-name narrowing, `paths.relative_to`, and `files.walk`.

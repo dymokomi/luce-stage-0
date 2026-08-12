@@ -472,6 +472,9 @@ const Module = struct {
             .file_read => builder.fnType(.i32, &.{ .ptr, .ptr, .i64, .ptr, .ptr }, .normal),
             .file_write => builder.fnType(.i32, &.{ .ptr, .ptr, .i64, .ptr, .i64 }, .normal),
             .file_exists => builder.fnType(.i32, &.{ .ptr, .ptr, .i64 }, .normal),
+            // A path in, a kind code in an out-parameter, an answer
+            // that may be "the world will not say".
+            .path_kind => builder.fnType(.i32, &.{ .ptr, .ptr, .i64, .ptr }, .normal),
             .arg_count, .term_rows, .term_cols => builder.fnType(.i64, &.{.ptr}, .normal),
             .term_event_data => builder.fnType(.i64, &.{ .ptr, .i64 }, .normal),
             .arg => builder.fnType(.i32, &.{ .ptr, .i64, .ptr, .ptr }, .normal),
@@ -7451,10 +7454,35 @@ const Body = struct {
                 try self.leaveUnwinding();
                 self.seek(try self.wip.block(0, "after.exit"));
             },
-            .file_exists => {
+            // What is at a path (docs/FILESYSTEM.md D16).  The kind
+            // comes back in an out-parameter and the `Answer` says
+            // only whether the world would look, which is what keeps
+            // "nothing is there" a value and "I was not allowed" an
+            // error.  The box is cleared first for `emitMaybeText`'s
+            // reason: a host that says no leaves it untouched, and
+            // the load after the branch must not read the stack.
+            .path_kind => {
                 const path, const path_length = try self.textParts(of[0], "path");
-                const answer = try self.callHost(.file_exists, &.{ path, path_length }, "exists");
-                self.produced[register].value = try self.saidYes(answer);
+                const box = try self.scratch(.i64, value_alignment, "kind.code");
+                _ = try self.wip.store(
+                    .normal,
+                    try self.module.builder.intValue(.i64, 0),
+                    box,
+                    value_alignment,
+                );
+                const answer = try self.callHost(
+                    .path_kind,
+                    &.{ path, path_length, box },
+                    "kind",
+                );
+                self.produced[register].outcome = try self.raiseIo(.inspect, answer, path, path_length);
+                self.produced[register].value = try self.wip.load(
+                    .normal,
+                    .i64,
+                    box,
+                    value_alignment,
+                    "kind.value",
+                );
             },
             .term_rows => {
                 self.produced[register].value = try self.callHostNumber(.term_rows, "rows");

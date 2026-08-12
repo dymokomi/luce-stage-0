@@ -295,8 +295,8 @@ carrying, it is neither — it is `T?`.
 
 The shared vocabulary currently carries **twenty-one trap codes**.  This
 rule moved the host's file boundary out of that set: a read or a write
-the world refuses is an error, because `file_exists` before
-`file_read` is a race no program can close.  Later language features
+the world refuses is an error, because asking whether a file is there
+before `file_read` is a race no program can close.  Later language features
 added their own traps without changing the rule — checked shifts,
 allocator refusal, mutation hidden behind a constant-container borrow,
 and an alias-hidden ownership cycle remain bugs rather than recoverable
@@ -1292,7 +1292,10 @@ file_write(path, content)    # !
 file_append(path, content)   # !
 file_delete(path)            # !
 file_rename(from, to)        # !
-file_exists(path)            # bool — a question, never a guard
+path_kind(path)              # long! — 0 nothing, 1 file, 2 directory,
+                             #   3 other; links followed.  `!` is the
+                             #   world refusing to say, which is not
+                             #   the same fact as "nothing is there"
 dir_list(path)               # list(string)! — plain names, unsorted
 dir_create(path)             # ! — the parents too; already there is ok
 file_open(path, mode)         # file! — 0 read, 1 write, 2 append
@@ -1326,10 +1329,22 @@ the machine facts' fallible shape and not `clock_ms`'s bare one.
 return."**  That one sentence decides its two rules together: it makes
 every directory leading to the one asked for, and a directory already
 there is success rather than a failure.  The alternative puts the same
-splitting loop in every program and a `file_exists` in front of every
-call — and that check is a race, which is exactly what `file_exists` is
-documented never to be a guard for.  A *file* holding the name is still
+splitting loop in every program and an existence check in front of
+every call — and that check is a race, which is exactly what such a
+question is documented never to be a guard for.  A *file* holding the name is still
 `io_failed`: the caller asked for a directory and there is not one.
+
+**`path_kind` is the one question the boundary was missing.**  Three
+things can happen at a path — something is there, nothing is there,
+and the world will not say — and a bool has two answers, which is why
+`file_exists` retired: it gave `false` to a file that certainly exists
+under a directory nobody may open, the same bit it gave a name nothing
+holds.  Here the number carries what is there and zero carries
+absence, while a refusal travels in the error channel.  A number and
+not an enum, for the reason the byte channel's mode is a number: a
+builtin speaks what the host slot speaks, and `std.files` is where it
+gets a name (`files.kind`, `files.exists`, `files.is_file`,
+`files.is_dir`, `files.entries`).
 
 `file_open` is the primitive under `std.files.open`, `create`, and
 `append_to`; ordinary code uses those named doors rather than the mode
@@ -1337,7 +1352,8 @@ numbers.  It answers a scope-owned `file`.  A file has three fallible
 methods: `f.read(buffer) -> long!`, `f.write(buffer, count) -> long!`,
 and `f.flush() -> !`, where the buffer is an `array(byte, _)`.  There
 is deliberately no `close`: `free(f)` closes early and the owning
-scope closes otherwise.  `parse_string(bytes) -> string?` is the pure
+scope closes otherwise — which is also why there is no `with`
+(docs/FILESYSTEM.md D9).  `parse_string(bytes) -> string?` is the pure
 boundary in the other direction — bytes that are not UTF-8 are absent,
 not an I/O error.
 

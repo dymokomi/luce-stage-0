@@ -203,23 +203,28 @@ never made to invent a number for a machine it could not measure.
 | `file_append(path: string, content: string) -> !` | adds to the end, creating the file if it is not there |
 | `file_delete(path: string) -> !` | an absent path is `io_failed`, not a quiet success |
 | `file_rename(from: string, to: string) -> !` | moves a file, **replacing** an existing target — which is what makes write-then-rename the way to replace a file without ever leaving half of one on disk |
-| `file_exists(path: string) -> bool` | a question about the past, not a guard |
+| `path_kind(path: string) -> long!` | what is at the path: 0 nothing, 1 a file, 2 a directory, 3 something else. Links are followed. `!` is the world **refusing to say** — a parent nobody may search — which is a different fact from "nothing is there". You write [`files.kind`](/std/files/), which gives the four codes their names |
 | `dir_list(path: string) -> list(string)!` | the names in a directory — plain names, not paths, without `.` and `..`, in whatever order the file system gave them. A fresh list the caller owns |
 | `dir_create(path: string) -> !` | makes a directory **and every directory leading to it**. A directory already there is success; a *file* holding the name is `io_failed` |
 | `file_open(path: string, mode: long) -> file!` | a handle your scope owns. `mode` is 0 read, 1 write, 2 append — and you write [`files.open`](/std/files/), [`files.create`](/std/files/) or [`files.append_to`](/std/files/) rather than a number |
 
-Every one that changes a file is fallible, because the world decides
-whether it lands. `file_exists` is the exception and answers a plain
-`bool` — but it is a question about the past, never a guard for the
-call after it.
+Every one is fallible, because the world decides. There is no
+exception any more: `file_exists` answered a plain `bool`, and a bool
+had no room to say that a file which certainly exists sits under a
+directory nobody may open. `path_kind` puts absence in the value and
+refusal in the error channel, which are the two things that can
+actually happen.
+
+Asking is still never a guard for the call after it: read the file,
+and handle what the read says.
 
 **`dir_create` means "there is a directory here when I return."** It
 makes the parents, so laying out `store/packages/geo-1.2.0` is one
 call rather than a splitting loop in every program; and a directory
 that was already there is success, so an install path never has to
-write `if not files.exists(p)` in front of it — which would be exactly
-the check-then-act race `file_exists` is not allowed to be. Write it as
-[`files.make_directory`](/std/files/).
+write `if not files.is_dir(p)` in front of it — which would be exactly
+the check-then-act race an existence question is not allowed to be.
+Write it as [`files.make_directory`](/std/files/).
 
 `file_read` and `file_write` are **defined over the handle**: each is
 an open, a loop of reads or writes, a close, and — for the reading

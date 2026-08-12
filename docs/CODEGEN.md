@@ -484,8 +484,10 @@ serialized module to **format 33**; none is a host service, so
 later appended `ownership_cycle` trap moves the module format to **34**;
 the subsequent `shell_run` host service moved it to **35** and the ABI
 to **14**; `term_event_data` moved the format to **36** and the ABI to
-**15**; and the `dir_create` and `epoch_ms` services moved the format
-to **40** and the ABI to **16**, which is where the ABI still is.
+**15**; the `dir_create` and `epoch_ms` services moved the format
+to **40** and the ABI to **16**; and the appended `path_kind` service,
+which retires `file_exists` beside it, moved the format to **42** and
+the ABI to **17**, which is where the ABI still is.
 
 Every generated entry path calls one private `luce.constants`
 materializer before user code.  It constructs rows through the same
@@ -554,8 +556,9 @@ program-root constants then moved it to 33, and the appended
 `shell_run` service moved the format to **35** and the host ABI to **14**;
 the appended `term_event_data` service moved the format to **36** and
 the ABI to **15**; the appended `dir_create` and `epoch_ms` services
-moved the format to **40** and the ABI to **16**, which is the current
-ABI.
+moved the format to **40** and the ABI to **16**; and the appended
+`path_kind` service moved the format to **42** and the ABI to **17**,
+which is the current ABI.
 
 ## Call depth, and the trace a trap carries
 
@@ -1052,7 +1055,7 @@ fits; generated code only ever *writes* the other form, and reads both
 ## The published host ABI
 
 `src/luce/08_llvm/abi.zig` is the contract and the only authority on
-it; `abi.version` is the number a loader checks, currently **15**.  A compiled artifact
+it; `abi.version` is the number a loader checks, currently **17**.  A compiled artifact
 exports one symbol:
 
 ```c
@@ -1214,8 +1217,9 @@ is a rebuild of every artifact there is and paying that twice in a week
 buys nothing.  `dir_create` makes a directory **and every directory
 leading to it**, and answers `yes` for one that was already there —
 both halves of "there is a directory at this path when I return",
-which is what keeps a caller out of the check-then-create race
-`file_exists` is documented never to be a guard against.  `epoch_ms`
+which is what keeps a caller out of the check-then-create race an
+existence question is documented never to be a guard against.
+`epoch_ms`
 answers milliseconds since the Unix epoch, which `clock_ms` cannot: that
 clock is monotonic with an unspecified origin, so only its differences
 mean anything.  It takes the machine facts' shape — an out-parameter
@@ -1223,6 +1227,21 @@ and an `Answer` — rather than `clock_ms`'s bare `i64`, because a host
 with no calendar has to be able to say so instead of inventing a date,
 and the program then traps `host_unavailable` exactly as it would
 against a null slot.
+
+**17** appended `path_kind` and retired `file_exists` from use.  The
+retirement is the point: a bool answered `false` both for a name
+nothing holds and for a file under a directory nobody may open, and a
+program could not tell the two apart.  `path_kind` widens the
+*payload* rather than the `Answer` — `yes` fills a kind code, 0
+nothing, 1 file, 2 directory, 3 other, and `no` is the world refusing
+to say, which the program meets as `io_failed`.  Inventing a fourth
+`Answer` for "there is nothing there" would have changed what `Answer`
+means at every other slot, and absence is not a refusal.  Links are
+followed, so the kind describes the same file the next call touches.
+The lowering is the machine facts' shape with a path in front of it:
+zero the box, call the slot, raise on `no`, load the code — and the
+code gets its names in `std.files`, exactly as the byte channel's mode
+does.
 
 Two shapes the version-8 slots settled, both of which stayed inside
 the conventions already there rather than inventing new ones:

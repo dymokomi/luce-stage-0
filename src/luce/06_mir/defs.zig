@@ -196,7 +196,6 @@ pub const Intrinsic = enum {
     print,
     file_read,
     file_write,
-    file_exists,
     term_rows,
     term_cols,
     term_clear,
@@ -276,6 +275,29 @@ pub const Intrinsic = enum {
     /// the world decides, and no non-racy check stands in for the
     /// result.
     dir_create,
+    /// `path_kind(path)` — what is at this path, as a number: 0
+    /// nothing, 1 a file, 2 a directory, 3 something else
+    /// (docs/FILESYSTEM.md D11).
+    ///
+    /// **The primitive `file_exists` was not.**  A bool answered
+    /// `false` for a name nothing holds *and* for a file under a
+    /// directory nobody may open, which are two different facts with
+    /// one bit between them — and it could not say "that is a
+    /// directory" at all, so a program could only find out by trying
+    /// to read one and reading the failure.  This asks the question
+    /// once and the three answers the language has are exactly the
+    /// three things that can happen: a number for what is there,
+    /// zero for nothing there, and the error channel for a world that
+    /// would not say (docs/FAILURE.md).
+    ///
+    /// A number and not an enum, because the runtime deliberately
+    /// does not know the program's type table: `std.files` is where
+    /// the four codes get their names, exactly as the byte channel's
+    /// mode is a number here and a named door there.
+    ///
+    /// Fallible on the same grounds as every other file service: the
+    /// world decides, and no non-racy check stands in for the result.
+    path_kind,
     /// The byte channel: a file reached through an open handle
     /// (docs/BYTES.md R4, R5).  `file_open` answers a `file` the
     /// caller's scope owns and whose end closes it — there is no
@@ -387,11 +409,11 @@ pub const Intrinsic = enum {
             .env_get,
             .clock_ms,
             .sleep_ms,
-            .file_exists,
             .file_delete,
             .file_rename,
             .dir_list,
             .dir_create,
+            .path_kind,
             .epoch_ms,
             .term_rows,
             .term_cols,
@@ -509,6 +531,7 @@ pub const Intrinsic = enum {
             // may refuse it, and a check in front of the call is a
             // race rather than a guard.
             .dir_create,
+            .path_kind,
             // The byte channel, on the same grounds.
             .file_open,
             .handle_read,
@@ -579,7 +602,6 @@ pub const Intrinsic = enum {
             .chr_code,
             .ord_text,
             .print,
-            .file_exists,
             .term_rows,
             .term_cols,
             .term_clear,
@@ -695,12 +717,12 @@ pub const Intrinsic = enum {
             .ord_text,
             .print,
             .file_write,
-            .file_exists,
             .file_append,
             .file_delete,
             .file_rename,
             .dir_list,
             .dir_create,
+            .path_kind,
             .term_rows,
             .term_cols,
             .term_clear,
@@ -799,12 +821,12 @@ pub const Intrinsic = enum {
             .print,
             .file_read,
             .file_write,
-            .file_exists,
             .file_append,
             .file_delete,
             .file_rename,
             .dir_list,
             .dir_create,
+            .path_kind,
             .term_rows,
             .term_cols,
             .term_clear,

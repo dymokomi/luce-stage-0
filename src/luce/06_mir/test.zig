@@ -28,7 +28,7 @@ test "runtime-mediated file services need no engine Effects guard" {
     }
 
     // Direct host calls remain the engine's responsibility.
-    try testing.expect(defs.Intrinsic.file_exists.reachesHost());
+    try testing.expect(defs.Intrinsic.path_kind.reachesHost());
     try testing.expect(defs.Intrinsic.file_delete.reachesHost());
 }
 
@@ -481,11 +481,11 @@ test "errored asks about a call that can fail, and must stand in its block" {
     var asking = try programOf(.{
         .instructions = &.{
             .{ .const_string = 0 }, // r0
-            .{ .intrinsic = .{ .kind = .file_exists, .arguments = &path } }, // r1: cannot fail
+            .{ .intrinsic = .{ .kind = .print, .arguments = &path } }, // r1: cannot fail
             .{ .intrinsic = .{ .kind = .errored, .arguments = &outcome } }, // r2
             .{ .ret = null }, // r3
         },
-        .result_types = &.{ .string, .boolean, .boolean, .none },
+        .result_types = &.{ .string, .none, .boolean, .none },
         .blocks = &.{&.{ 0, 1, 2, 3 }},
     });
     defer asking.deinit();

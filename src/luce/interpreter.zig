@@ -147,9 +147,15 @@ pub const Host = struct {
         arena: Allocator,
         index: u32,
     ) error{OutOfMemory}!?[]const u8 = null,
-    /// Whether a file is there.  A question about the past, and the
-    /// one file service that is not a byte channel.
-    file_exists: ?*const fn (context: *anyopaque, path: []const u8) bool = null,
+    /// What is at a path — 0 nothing, 1 a file, 2 a directory, 3
+    /// something else — or null for a world that will not say, which
+    /// the program meets as `io_failed` (docs/FILESYSTEM.md D16).
+    ///
+    /// **Links are followed**, so the kind is the kind of the thing
+    /// the path names and a dangling link is 0.  It replaces
+    /// `file_exists`, whose bool could not tell "nothing is there"
+    /// from "I was not allowed to look".
+    path_kind: ?*const fn (context: *anyopaque, path: []const u8) ?i64 = null,
     /// The file operations that are about a *name* rather than about
     /// bytes.  Each answers whether it happened; a `false` becomes the
     /// `io_failed` error the program meets, because the world decided

@@ -22,9 +22,9 @@ answer is simply "there is nothing there", with no reason worth
 carrying, it is neither — it is a `T?`.
 
 The current trap roster is for deterministic program bugs. A host file
-refusal is instead an error: `file_exists` before `file_read` is a race
-no program can close, so a read or write the world refuses cannot be
-made into a precondition. There are
+refusal is instead an error: asking whether a file is there before
+`file_read` is a race no program can close, so a read or write the
+world refuses cannot be made into a precondition. There are
 [21 trap codes](/ref/failure/#the-codes) and two error codes.
 
 ## try and catch

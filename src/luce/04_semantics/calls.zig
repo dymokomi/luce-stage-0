@@ -2347,12 +2347,36 @@ fn objectMethod(
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
                 return .{ .kind = .handle_flush, .result = .none };
             }
+            // The one name a Python programmer will certainly type,
+            // answered in full rather than left to a did-you-mean
+            // (docs/FILESYSTEM.md D9).  It is **refused** and not
+            // merely absent: a working `close` would have to poison
+            // the receiver exactly as `free` does, which is `free`
+            // under a second name for one concept, and an idempotent
+            // one would need a "closed but not poisoned" state — the
+            // one state a resource must never hold.  Both halves of
+            // the answer are here, because a reader who wanted
+            // `close` also wanted `with`.
+            if (std.mem.eql(u8, name, "close")) {
+                try self.fail(
+                    "luce.sema.method",
+                    method.span,
+                    "file has no method close: free f closes it, and the end of the owning scope closes it anyway — which is why there is no 'with' either (docs/FILESYSTEM.md)",
+                    .{},
+                );
+                return null;
+            }
             var suggestion = helpers.Suggestion.init(name);
             suggestion.offerAll(&file_methods);
             if (suggestion.best()) |closest| {
                 try self.fail("luce.sema.method", method.span, "file has no method {s}; did you mean {s}?", .{ name, closest });
             } else {
-                try self.fail("luce.sema.method", method.span, "file has no method {s} (read write flush; free f closes it)", .{name});
+                try self.fail(
+                    "luce.sema.method",
+                    method.span,
+                    "file has no method {s} (read write flush; free f closes it, and so does the end of the owning scope)",
+                    .{name},
+                );
             }
             return null;
         },

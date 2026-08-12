@@ -138,10 +138,10 @@ test "floats, structs, and the host services all lower" {
         \\    x: double
         \\    y: double
         \\
-        \\func main(args: list(string)):
+        \\func main(args: list(string)) -> !:
         \\    let p = Point(x = 1.5, y = -0.0)
         \\    print(string(p.x * 2.0) + string(long(p.y)) + string(sqrt(4.0)) + string(sqrt(p.x)))
-        \\    print(args[0] + string(len(args)) + string(file_exists("nowhere")))
+        \\    print(args[0] + string(len(args)) + string(try path_kind("nowhere")))
         \\    term_move(term_rows(), term_cols())
         \\    term_flush()
         \\
@@ -2129,9 +2129,9 @@ test "files, arguments, the screen, and the keyboard agree" {
     try agree(
         \\func main(args: list(string)) -> !:
         \\    print(string(len(args)) + " " + args[0] + "," + args[1])
-        \\    print(string(file_exists("notes.txt")))
+        \\    print(string(try path_kind("notes.txt")))
         \\    try file_write("notes.txt", "hello world")
-        \\    print(string(file_exists("notes.txt")) + " " + try file_read("notes.txt"))
+        \\    print(string(try path_kind("notes.txt")) + " " + try file_read("notes.txt"))
         \\    print(string(term_rows()) + "x" + string(term_cols()))
         \\    term_clear()
         \\    term_move(2, 3)
@@ -2229,9 +2229,9 @@ test "the file services beyond read and write agree, and so does what they refus
         \\    try file_append("notes.txt", "two\n")
         \\    print(try file_read("notes.txt"))
         \\    try file_rename("notes.txt", "kept.txt")
-        \\    print(string(file_exists("notes.txt")) + " " + string(file_exists("kept.txt")))
+        \\    print(string(try path_kind("notes.txt")) + " " + string(try path_kind("kept.txt")))
         \\    try file_delete("kept.txt")
-        \\    print(string(file_exists("kept.txt")))
+        \\    print(string(try path_kind("kept.txt")))
         \\    file_delete("kept.txt") catch:
         \\        print("nothing to delete")
         \\    file_rename("gone.txt", "elsewhere.txt") catch:
@@ -2403,7 +2403,7 @@ test "text carried across a try keeps the form it was in" {
         \\    try file_write("notes.txt", "a string well past the inline capacity of a value")
         \\    let lengthy = try file_read("notes.txt")
         \\    print(lengthy + "/" + string(len(lengthy)))
-        \\    print(string(file_exists("notes.txt")) + " " + try file_read("notes.txt"))
+        \\    print(string(try path_kind("notes.txt")) + " " + try file_read("notes.txt"))
         \\
     );
 }
@@ -2456,8 +2456,8 @@ test "an argument index out of range traps index_bounds on both engines" {
 
 test "a withheld service group fails closed on both engines" {
     try agreeGiven(
-        \\func main():
-        \\    print(string(file_exists("notes.txt")))
+        \\func main() -> !:
+        \\    print(string(try path_kind("notes.txt")))
         \\
     , .{ .files = false });
     try agreeGiven(

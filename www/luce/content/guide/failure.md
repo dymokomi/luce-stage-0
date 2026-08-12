@@ -20,9 +20,10 @@ of those is preventable by a check the caller could have written, so
 every one of them is a bug.
 
 If the check is inherently racy or impossible, it is an **error**.
-Reading a file is the canonical case: `file_exists` before `file_read`
-is a race no program can close, and the answer could change between
-the two calls. So the read is fallible and says `!`.
+Reading a file is the canonical case: asking whether it is there
+before `file_read` is a race no program can close, and the answer
+could change between the two calls. So the read is fallible and says
+`!`.
 
 If there is no reason worth carrying — just absence — it is a `T?`.
 `parse_int("hello")` fails the same way every time, and the function

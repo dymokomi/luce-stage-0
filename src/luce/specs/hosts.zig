@@ -84,6 +84,19 @@ pub const World = struct {
     /// The one directory this world will list, or null for a world
     /// whose listing fails.
     directory: ?[]const []const u8 = &default_directory,
+    /// What this world says is at each path, beyond the things it
+    /// already knows about — its one file, the directories it was made
+    /// to hold, and the directory it lists.  A script rather than a
+    /// simulated file system, for `clock`'s reason: what is under test
+    /// is that the four codes cross both host tables intact, not that
+    /// this file is a model of a disk.
+    kinds: []const KindRow = &default_kinds,
+    /// The paths this world will not answer *about* — the memo's
+    /// measured case, a `chmod 000` parent.  A prefix match, because
+    /// that is how a refused directory behaves: nothing under it can
+    /// be reached either.  `path_kind` answers `no`, which the program
+    /// meets as `io_failed` and never as "nothing is there".
+    refused_kinds: []const []const u8 = &.{},
     /// That listing, NUL-joined — the shape a compiled program takes
     /// it in.  Built from `directory` on demand rather than declared,
     /// so the two hosts can never say different things.
@@ -167,9 +180,26 @@ pub const World = struct {
     /// deeper tree than this is a spec about the file system.
     const max_made_directories = 16;
 
+    /// One path and what is at it (`abi.PathKindFn`'s four codes,
+    /// named).
+    pub const KindRow = struct {
+        path: []const u8,
+        kind: enum(i64) { nothing = 0, file = 1, directory = 2, other = 3 },
+    };
+
     const default_arguments = [_][]const u8{ "alpha", "beta" };
     const default_lines = [_][]const u8{ "first line", "second line" };
     const default_directory = [_][]const u8{ "alpha.txt", "beta.txt", "notes" };
+    /// What the default listing's three names are, plus the directory
+    /// they are in.  `notes` is a directory and the other two are
+    /// files, so one listing carries two kinds and a walk written
+    /// against it has both branches to take.
+    const default_kinds = [_]KindRow{
+        .{ .path = ".", .kind = .directory },
+        .{ .path = "alpha.txt", .kind = .file },
+        .{ .path = "beta.txt", .kind = .file },
+        .{ .path = "notes", .kind = .directory },
+    };
     const default_keys = [_]Key{
         .{ .name = "text", .text = "q" },
         .{ .name = "enter" },
@@ -354,6 +384,40 @@ pub const World = struct {
     fn exists(self: *const World, path: []const u8) bool {
         if (self.file_name_length == 0) return false;
         return std.mem.eql(u8, self.file_name[0..self.file_name_length], path);
+    }
+
+    /// What is at `path`, or null for a world that will not say
+    /// (`abi.PathKindFn`).
+    ///
+    /// The order is what a real `stat` would answer: a refusal beats
+    /// everything, because a world that will not look has not looked;
+    /// then the things this world *did* — a directory it was made to
+    /// hold, the one file it holds — because a spec that created
+    /// something must see it; and the script last, for the names
+    /// nothing in this world created.
+    fn kindOf(self: *const World, path: []const u8) ?i64 {
+        const wanted = normalizedPath(path);
+        for (self.refused_kinds) |refused| {
+            const under = normalizedPath(refused);
+            if (!std.mem.startsWith(u8, wanted, under)) continue;
+            if (wanted.len == under.len or wanted[under.len] == '/') return null;
+        }
+        if (self.hasDirectory(wanted)) return 2;
+        if (self.exists(wanted)) return 1;
+        for (self.kinds) |row| {
+            if (std.mem.eql(u8, normalizedPath(row.path), wanted)) return @intFromEnum(row.kind);
+        }
+        return 0;
+    }
+
+    /// A path as this world names it: without a trailing separator,
+    /// and without the `./` a listing's own `paths.join` puts in front
+    /// of every entry.  A world where `./notes` and `notes` are two
+    /// different things would be a world no file system is.
+    fn normalizedPath(path: []const u8) []const u8 {
+        var wanted = trimmedPath(path);
+        while (wanted.len > 2 and std.mem.startsWith(u8, wanted, "./")) wanted = wanted[2..];
+        return wanted;
     }
 
     fn argument(self: *const World, index: i64) ?[]const u8 {
@@ -955,7 +1019,9 @@ pub const Capture = struct {
             .finished = finished,
             .file_read = if (provided.files) fileRead else null,
             .file_write = if (provided.files) fileWrite else null,
-            .file_exists = if (provided.files) fileExists else null,
+            // Retired at ABI 17 (docs/FILESYSTEM.md D16); `path_kind`
+            // below is what asks the question now.
+            .file_exists = null,
             .arg_count = if (provided.arguments) argCount else null,
             .arg = if (provided.arguments) argAt else null,
             .term_rows = if (provided.terminal) termRows else null,
@@ -991,6 +1057,7 @@ pub const Capture = struct {
             .handle_close = if (provided.files) Handles.close else null,
             .worker_spawn = if (provided.threads) Threads.spawn else null,
             .worker_join = if (provided.threads) Threads.join else null,
+            .path_kind = if (provided.files) pathKind else null,
         };
     }
 
@@ -1112,12 +1179,15 @@ pub const Capture = struct {
         return if (wrote) .yes else .no;
     }
 
-    fn fileExists(
+    fn pathKind(
         context: ?*anyopaque,
         path: [*]const u8,
         path_length: i64,
+        kind: *i64,
     ) callconv(.c) abi.Answer {
-        return if (of(context).world.exists(path[0..@intCast(path_length)])) .yes else .no;
+        const found = of(context).world.kindOf(path[0..@intCast(path_length)]) orelse return .no;
+        kind.* = found;
+        return .yes;
     }
 
     fn argCount(context: ?*anyopaque) callconv(.c) i64 {
@@ -1401,7 +1471,7 @@ pub const Reference = struct {
         return .{
             .context = self,
             .print = if (self.provided.print) take else null,
-            .file_exists = if (self.provided.files) fileExists else null,
+            .path_kind = if (self.provided.files) pathKind else null,
             .file_delete = if (self.provided.files) deleteFile else null,
             .file_rename = if (self.provided.files) renameFile else null,
             .dir_list = if (self.provided.files) listDirectory else null,
@@ -1443,8 +1513,8 @@ pub const Reference = struct {
         try of(context).record("", text);
     }
 
-    fn fileExists(context: *anyopaque, path: []const u8) bool {
-        return of(context).world.exists(path);
+    fn pathKind(context: *anyopaque, path: []const u8) ?i64 {
+        return of(context).world.kindOf(path);
     }
 
     fn deleteFile(context: *anyopaque, path: []const u8) bool {

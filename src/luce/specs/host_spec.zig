@@ -53,7 +53,7 @@ test "print, arguments, and files flow through the host" {
         \\func main(args: list(string)) -> !:
         \\    print("args: " + string(len(args)))
         \\    let path = args[0]
-        \\    if file_exists(path):
+        \\    if (try path_kind(path)) != 0:
         \\        print(try file_read(path))
         \\    try file_write("out.txt", "saved")
         \\
@@ -311,6 +311,208 @@ test "a world that refuses writes makes no directory at all" {
 }
 
 // ---------------------------------------------------------------------------
+// What is at a path
+// ---------------------------------------------------------------------------
+//
+// The one question `file_exists` could not ask (docs/FILESYSTEM.md
+// D11).  Three things can happen and the language has exactly three
+// ways to say them, so each gets its own: a number for what is there,
+// zero for nothing there, and the error channel for a world that would
+// not say.  These specs hold all three apart.
+
+test "path_kind names what is there, and nothing there is an answer" {
+    var world: agree.World = .withFile("notes.txt", "body");
+    world.kinds = &[_]agree.World.KindRow{
+        .{ .path = "notes.txt", .kind = .file },
+        .{ .path = "papers", .kind = .directory },
+        .{ .path = "wire", .kind = .other },
+    };
+    var session = try agree.compare(
+        \\func main() -> !:
+        \\    print(string(try path_kind("notes.txt")))
+        \\    print(string(try path_kind("papers")))
+        \\    print(string(try path_kind("wire")))
+        \\    print(string(try path_kind("ghost.txt")))
+        \\
+    , .{ .world = world });
+    defer session.deinit();
+
+    // 1 file, 2 directory, 3 other, 0 nothing — and the zero arrived
+    // as a `yes`, which is the whole point: absence is an answer.
+    try testing.expectEqualStrings("1\n2\n3\n0\n", session.printed());
+}
+
+test "a world that will not say is an error, not an absence" {
+    // The measured case: `chmod 000` on a parent.  The file under it
+    // certainly exists, and `file_exists` answered `false` — the same
+    // bit it gave a name nothing holds.  Here the two are different
+    // sentences.
+    var world: agree.World = .{};
+    world.refused_kinds = &[_][]const u8{"locked"};
+    var session = try agree.compare(
+        \\func main() -> !:
+        \\    try path_kind("locked/inside.txt")
+        \\
+    , .{ .world = world });
+    defer session.deinit();
+
+    try testing.expectEqual(mir.ErrorCode.io_failed, session.end.errored);
+    try testing.expectEqualStrings("cannot inspect locked/inside.txt", session.message());
+}
+
+test "files.kind answers each member, and none for a name nothing holds" {
+    var world: agree.World = .withFile("notes.txt", "body");
+    world.kinds = &[_]agree.World.KindRow{
+        .{ .path = "notes.txt", .kind = .file },
+        .{ .path = "papers", .kind = .directory },
+        .{ .path = "wire", .kind = .other },
+    };
+    var session = try agree.compare(
+        \\import std.files
+        \\
+        \\func name_of(path: string) -> string!:
+        \\    let what = try files.kind(path)
+        \\    if what == none:
+        \\        return "nothing"
+        \\    match what:
+        \\        file:
+        \\            return "file"
+        \\        directory:
+        \\            return "directory"
+        \\        other:
+        \\            return "other"
+        \\
+        \\func main() -> !:
+        \\    print(try name_of("notes.txt"))
+        \\    print(try name_of("papers"))
+        \\    print(try name_of("wire"))
+        \\    print(try name_of("ghost.txt"))
+        \\
+    , .{ .world = world });
+    defer session.deinit();
+
+    try testing.expectEqualStrings("file\ndirectory\nother\nnothing\n", session.printed());
+}
+
+test "exists, is_file and is_dir answer bool! and let a refusal through" {
+    var world: agree.World = .withFile("notes.txt", "body");
+    world.kinds = &[_]agree.World.KindRow{
+        .{ .path = "notes.txt", .kind = .file },
+        .{ .path = "papers", .kind = .directory },
+    };
+    world.refused_kinds = &[_][]const u8{"locked"};
+    var session = try agree.compare(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    print(string(try files.exists("notes.txt")))
+        \\    print(string(try files.is_file("notes.txt")))
+        \\    print(string(try files.is_dir("notes.txt")))
+        \\    print(string(try files.is_dir("papers")))
+        \\    print(string(try files.is_file("papers")))
+        \\    print(string(try files.exists("ghost.txt")))
+        \\    files.exists("locked/inside.txt") catch reason:
+        \\        print(reason)
+        \\    print(string(files.exists("locked/inside.txt") catch false))
+        \\
+    , .{ .world = world });
+    defer session.deinit();
+
+    // The last line is Python's behaviour, spelled in three visible
+    // words rather than chosen for the caller by the library.
+    try testing.expectEqualStrings(
+        "true\ntrue\nfalse\ntrue\nfalse\nfalse\n" ++
+            "cannot inspect locked/inside.txt\nfalse\n",
+        session.printed(),
+    );
+}
+
+test "files.entries carries the kinds, sorted, with a path that reaches each one" {
+    // The default world lists three names into ".", and one of them
+    // is a directory — so one listing carries two kinds and a walk
+    // written against it has both branches to take.
+    var session = try agree.compare(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    for entry in try files.entries("."):
+        \\        match entry.kind:
+        \\            file:
+        \\                print("file " + entry.name + " " + entry.path)
+        \\            directory:
+        \\                print("dir  " + entry.name + " " + entry.path)
+        \\            other:
+        \\                print("othr " + entry.name + " " + entry.path)
+        \\
+    , .{});
+    defer session.deinit();
+
+    try testing.expectEqualStrings(
+        "file alpha.txt ./alpha.txt\n" ++
+            "file beta.txt ./beta.txt\n" ++
+            "dir  notes ./notes\n",
+        session.printed(),
+    );
+}
+
+test "files.list still answers the names alone, and entries is what carries kinds" {
+    var session = try agree.compare(
+        \\import std.files
+        \\import std.strings
+        \\
+        \\func main() -> !:
+        \\    let names = try files.list(".")
+        \\    print(names.join(","))
+        \\    free(names)
+        \\    let listed = try files.entries(".")
+        \\    print(string(len(listed)))
+        \\    free(listed)
+        \\
+    , .{});
+    defer session.deinit();
+
+    try testing.expectEqualStrings("alpha.txt,beta.txt,notes\n3\n", session.printed());
+}
+
+test "a listing the world refuses is an error on both engines" {
+    var session = try agree.compare(
+        \\import std.files
+        \\
+        \\func main():
+        \\    files.entries("elsewhere") catch reason:
+        \\        print(reason)
+        \\
+    , .{});
+    defer session.deinit();
+
+    try testing.expectEqualStrings("cannot list elsewhere\n", session.printed());
+}
+
+test "paths.joined folds join, and an empty list answers the empty path" {
+    var session = try agree.compare(
+        \\import std.paths
+        \\
+        \\func main():
+        \\    print("[" + paths.joined(new list(string)) + "]")
+        \\    print(paths.joined(["only"]))
+        \\    print(paths.joined(["a", "b", "c.luc"]))
+        \\    # An absolute part starts again, exactly as join does.
+        \\    print(paths.joined(["a", "/etc", "hosts"]))
+        \\    # Piled separators collapse at the seam, and an empty
+        \\    # part contributes nothing.
+        \\    print(paths.joined(["a/", "", "b"]))
+        \\    print(paths.joined(["/", "etc"]))
+        \\
+    , .{});
+    defer session.deinit();
+
+    try testing.expectEqualStrings(
+        "[]\nonly\na/b/c.luc\n/etc/hosts\na/b\n/etc\n",
+        session.printed(),
+    );
+}
+
+// ---------------------------------------------------------------------------
 // The wall clock
 // ---------------------------------------------------------------------------
 
@@ -407,6 +609,10 @@ test "every host service fails closed when the host withholds it" {
         ,
         \\func main() -> !:
         \\    try dir_create("x")
+        \\
+        ,
+        \\func main() -> !:
+        \\    print(string(try path_kind("x")))
         \\
         ,
         \\func main():

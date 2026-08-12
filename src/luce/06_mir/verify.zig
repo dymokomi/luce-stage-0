@@ -1527,10 +1527,14 @@ fn verifyIntrinsic(
             // in the channel, not a bool (docs/FAILURE.md).
             try expectType(result, .none);
         },
-        .file_exists => {
+        // What is at a path, as one of four numbers (0 nothing, 1
+        // file, 2 directory, 3 other).  A `long` and not an enum:
+        // the runtime is never handed the program's type table, so
+        // `std.files` is where the codes get their names.
+        .path_kind => {
             try exactly(arguments, 1);
             try expectType(arguments[0], .string);
-            try expectType(result, .boolean);
+            try expectType(result, .long);
         },
         .term_rows, .term_cols => {
             try exactly(arguments, 0);

@@ -149,7 +149,7 @@ The corpus that argued for it, item by item:
   silently swallowed write failure.  **Fixed, and unwritable**: the
   call answers nothing, so there is no bool to test and no branch to
   forget, and `main() -> !` reports what the disk said.
-- `editor.luc`, `wordcount.luc` — `file_exists` then
+- `editor.luc`, `wordcount.luc` — an existence check then
   `file_read`.  **Both gone.**  One read each, and what it answers
   decides: `catch:` sets the editor's greeting, `try` ends wordcount
   with the path it could not open.  What that removes is a window
@@ -1096,6 +1096,38 @@ that were one movement:
 What is left of the item is smaller and named in `docs/BYTES.md`: no
 seek on a handle, and no file metadata.
 
+~~**And no way to ask what is at a path**~~ — **closed** (ABI 17,
+docs/FILESYSTEM.md).  This entry's own sentence above — "no way to
+tell a directory from a file except by trying to read it" — was the
+last thing in it that a program actually hit, and two programs in this
+tree were paying for it.  `path_kind` is the appended slot:
+`yes` with 0 nothing / 1 file / 2 directory / 3 other, links followed,
+and `no` for a world that would not say.  `files.kind(path) -> Kind?!`
+is over it, and `files.exists`, `files.is_file`, `files.is_dir` and
+`files.entries` are over that.  `file_exists` retired in the same bump
+and its bool went with it: it answered `false` both for a name nothing
+holds and for a file under a `chmod 000` parent, which are two facts,
+and a program could not tell them apart.
+
+The two programs are the proof, and neither is hypothetical.
+`examples/editor/editor.luc`'s file pane listed `.` and read whatever
+was selected, so choosing a subdirectory produced *"cannot read src"*
+and nothing to do about it — it now lists `files.entries`, marks
+directories with a trailing `/` and **walks into one**, with a `../`
+row to walk back.  `examples/zipper/zipper.luc:116` wrote `if not
+files.exists(into)` where `into` must be a *directory*, so a file in
+the way sailed through the gate and failed later inside the extraction
+loop; it asks `files.is_dir` now and refuses up front, leaving the
+file untouched.
+
+What remains unasked, deliberately: **`stat`** — size, times, mode,
+owner, inode.  Every field is a promise the ABI must keep on every
+platform and no current customer wants one; the two usual reasons are
+answered elsewhere (the compile cache keys on the program's content
+hash, and "how big is it" is answered by reading it, since a size read
+before a read is the same race an existence check was).  If a customer
+names a field, that field and only it gets designed.
+
 ~~**The directory is the one that bites**~~ — **closed** (ABI 16).
 `dir_create(path)` is the slot this entry asked for, beside `dir_list`
 and with `files.make_directory` over it: one optional service,
@@ -1107,9 +1139,9 @@ the one asked for**, because both of its callers want a nested layout
 writing under a directory the archive named) and the alternative puts
 the same splitting loop in every program; and a directory that was
 **already there is success**, because the alternative makes every
-install path write `if not files.exists(p)` in front of the call, which
-is exactly the check-then-act race `file_exists` is documented never to
-be a guard against.  A *file* holding the name is still `io_failed`.
+install path write `if not files.is_dir(p)` in front of the call, which
+is exactly the check-then-act race such a question is documented never
+to be a guard against.  A *file* holding the name is still `io_failed`.
 `examples/zipper/zipper.luc` was the program that proved the ceiling
 and is the program that shows it gone: the pre-pass that named a
 missing directory and refused the archive is now a `make_directory`

@@ -16,6 +16,7 @@
 import editor_model
 import std.files
 import std.os
+import std.paths
 import std.strings
 import std.term
 
@@ -279,7 +280,7 @@ private const builtin_words = {
     "clamp": true, "clock_ms": true, "dir_create": true, "dir_list": true,
     "epoch_ms": true, "env": true,
     "error": true, "exit": true, "file_append": true, "file_delete": true,
-    "file_exists": true, "file_open": true, "file_read": true,
+    "path_kind": true, "file_open": true, "file_read": true,
     "file_rename": true, "file_write": true, "floor": true, "free": true,
     "key_read": true, "key_text": true, "len": true, "max": true,
     "min": true, "ord": true, "os_available_memory": true,
@@ -446,6 +447,9 @@ private struct State:
     message: string
     buffers: list(editor_model.Buffer)
     file_names: list(string)
+    # Which directory the file pane is showing.  It starts where the
+    # editor was started and moves when a person walks into a row.
+    directory: string = "."
     active: long = 0
     file_selected: long = 0
     output: string = ""
@@ -485,25 +489,90 @@ private struct State:
         self.dirty = buffer.dirty
         self.quit_pending = false
 
-    # Refresh the optional left pane from the current directory.  The
-    # active path is retained even when it was opened as a new file and
-    # therefore is not in the directory listing yet.
+    # The directory one level up from `here`.
+    #
+    # `..` rather than a lexical parent, because a lexical one is
+    # wrong across a symbolic link and this editor has no business
+    # deciding that.  Climbing out of a path that is already climbing
+    # adds another `..` instead of eating the one that is there.
+    static func parent_of(here: string) -> string:
+        if here == ".":
+            return ".."
+        if paths.base(here) == "..":
+            return here + "/.."
+        return paths.dir(here)
+
+    # `name`, as a path, from a pane showing `here`.
+    #
+    # The bare name when the pane is showing the directory the editor
+    # was started in, because that is what the command line said and
+    # what the status bar has always shown: "./notes.txt" and
+    # "notes.txt" are one file, and a pane that renamed it would open
+    # a second buffer onto it.
+    static func under(here: string, name: string) -> string:
+        if here == ".":
+            return name
+        return paths.join(here, name)
+
+    # Refresh the optional left pane from the directory it is showing.
+    #
+    # **The pane lists entries, not names** (`files.entries`), so it
+    # knows which rows are directories and marks them with a trailing
+    # "/" — the mark a reader expects and the editor could not draw
+    # before, because `files.list` answered names with no kinds.  A
+    # directory that is not the top of the tree gets a ".." row, so a
+    # person who walked in can walk back out.
+    #
+    # The active path is retained even when it was opened as a new file
+    # and is therefore not in the listing yet — but only while the pane
+    # is showing the directory that file is in, since a name from
+    # somewhere else in a listing of here would be a lie.
     func refresh_files():
-        self.file_names = files.list(".") catch reason:
+        var found = new list(files.Entry)
+        found = files.entries(self.directory) catch reason:
             self.message = reason
             return
-        if not self.file_names.contains(self.path):
-            self.file_names.append(self.path)
+        var names = new list(string)
+        if self.directory != ".":
+            names.append("../")
+        for entry in found:
+            match entry.kind:
+                directory:
+                    names.append(entry.name + "/")
+                file:
+                    names.append(entry.name)
+                other:
+                    names.append(entry.name)
+        free(found)
+        if paths.dir(self.path) == self.directory and not names.contains(paths.base(self.path)):
+            names.append(paths.base(self.path))
+        self.file_names = give names
         self.file_selected = 0
         for index in range(0, len(self.file_names)):
-            if self.file_names[index] == self.path:
+            if State.under(self.directory, self.file_names[index]) == self.path:
                 self.file_selected = index
                 return
 
+    # Open the selected row, or walk into it.
+    #
+    # **Selecting a directory enters it**, which is the whole reason
+    # the pane needed kinds: it used to hand a directory name to
+    # `files.read` and answer "cannot read src", with nowhere to go
+    # from there.  The mark and the walk are one decision — a row a
+    # person can see is a directory is a row they will expect to open.
     func open_selected():
         if len(self.file_names) == 0:
             return
-        let wanted = self.file_names[self.file_selected]
+        let row = self.file_names[self.file_selected]
+        if strings.ends_with(row, "/"):
+            if row == "../":
+                self.directory = State.parent_of(self.directory)
+            else:
+                self.directory = State.under(self.directory, row[0:len(row) - 1])
+            self.refresh_files()
+            self.message = "in " + self.directory
+            return
+        let wanted = State.under(self.directory, row)
         if wanted == self.path:
             self.focus = Focus.editor
             return

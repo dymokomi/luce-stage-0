@@ -34,8 +34,9 @@ of memo for the one remaining semantic hole.
 Applied to the **20** codes `06_mir/defs.zig` carried when this was
 written (`72fe8be^`), that rule moves almost nothing: **nineteen stay
 traps**, and exactly one moves. `file_read_failed` becomes an error —
-`file_exists` before `file_read` is a TOCTOU race, which is the
-canonical proof that a guard function cannot substitute for a result.
+asking whether a file is there before `file_read` is a TOCTOU race,
+which is the canonical proof that a guard function cannot substitute
+for a result.
 Parse failure moves too, but it was never a trap code to begin with:
 `parse_int` answers `Int?`, because "not a number" is the same reason
 every time and the function's name already implies it.
@@ -236,6 +237,19 @@ inventing those codes would be a lie.
 > deciding, and no non-racy check prevents it.
 >
 > `file_exists` stays a Bool. It is a question, not a failure.
+
+> **Overturned in the filesystem run (docs/FILESYSTEM.md D13).** The
+> memo was right that a question is not a failure and wrong that the
+> answer fits in a bool: three things can happen at a path — something
+> is there, nothing is there, and *the world would not say* — and a
+> file that certainly exists under a `chmod 000` parent answered
+> `false`, indistinguishable from a name nothing holds. That is the
+> same in-band answer this memo refused for `key_read`, decided the
+> other way by default rather than on purpose. `file_exists` is gone;
+> `files.kind` answers `Kind?!` — the member for what is there, `none`
+> for absence, `!` for refusal — and `files.exists`, `files.is_file`
+> and `files.is_dir` are `bool!` over it. `catch false` is the
+> deliberate discard, and it is three visible words.
 
 > **Corrected once built: `key_read` is `String?` too.** The memo's
 > corpus scan found the absence sites and missed one, because at the

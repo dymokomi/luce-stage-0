@@ -609,8 +609,8 @@ test "files: exists, read_lines, write_lines and write wrap the host builtins" {
         \\import std.files
         \\
         \\func main() -> !:
-        \\    assert(files.exists("notes.txt"))
-        \\    assert(not files.exists("ghost.txt"))
+        \\    assert(try files.exists("notes.txt"))
+        \\    assert(not try files.exists("ghost.txt"))
         \\    var lines = try files.read_lines("notes.txt")
         \\    assert(len(lines) == 2)
         \\    assert(lines[0] == "alpha" and lines[1] == "beta")
@@ -641,12 +641,12 @@ test "files: append, rename, delete and list reach the services beyond read and 
         \\    try files.append_lines("log.txt", new list(string))
         \\    print(try files.read("log.txt"))
         \\    try files.rename("log.txt", "kept.txt")
-        \\    assert(files.exists("kept.txt") and not files.exists("log.txt"))
+        \\    assert((try files.exists("kept.txt")) and not try files.exists("log.txt"))
         \\    let names = try files.list(".")
         \\    print(names.join(","))
         \\    free(names)
         \\    try files.delete("kept.txt")
-        \\    assert(not files.exists("kept.txt"))
+        \\    assert(not try files.exists("kept.txt"))
         \\
     , budget);
     defer session.deinit();

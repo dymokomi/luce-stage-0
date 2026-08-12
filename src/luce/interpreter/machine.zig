@@ -1876,10 +1876,21 @@ pub const Machine = struct {
                     registers[arguments[0]].asLong(),
                 ));
             },
-            .file_exists => {
+            .path_kind => {
                 const host = try self.service();
-                const callback = host.file_exists orelse return self.runtime.fail(.host_unavailable);
-                return .ofBoolean(callback(host.context, registers[arguments[0]].asString()));
+                const callback = host.path_kind orelse
+                    return self.runtime.fail(.host_unavailable);
+                const path = registers[arguments[0]].asString();
+                // Null is the world refusing to say, which is a
+                // different fact from "nothing is there" and travels
+                // in the other channel (docs/FAILURE.md).  The zero
+                // left behind is never read: the `errored` beside the
+                // call has already seen the error.
+                const code = callback(host.context, path) orelse {
+                    self.runtime.raiseIo(.inspect, path, self.placeOf(site));
+                    return .ofLong(0);
+                };
+                return .ofLong(code);
             },
             .term_rows => {
                 const screen = try self.terminal();

@@ -41,6 +41,26 @@ func join(head: string, tail: string) -> string:
         return trimmed + tail
     return trimmed + "/" + tail
 
+# Every part joined, left to right, with one separator at each seam:
+# joined(["a", "b", "c.luc"]) is "a/b/c.luc".
+#
+# The fold over `join`, with exactly `join`'s rules — an empty part
+# contributes nothing, an absolute part starts again, piled separators
+# collapse — so joined([a, b]) and join(a, b) are the same string.  An
+# empty list answers "".
+#
+# It exists because this is the one place chaining is missed: Python
+# writes os.path.join(a, b, c) and Luce has no variadics, so
+# join(join(a, b), c) was the alternative, and that is the shape that
+# gets written wrong.  A list literal passes inline —
+# paths.joined([root, "build", name + ".out"]) — and is released after
+# the call.
+func joined(parts: list(string)) -> string:
+    var whole = ""
+    for part in parts:
+        whole = join(whole, part)
+    return whole
+
 # The last element: base("a/b.luc") is "b.luc".  Trailing separators
 # do not count — base("a/b/") is still "b" — the root's name is "/",
 # and the empty path's is "".

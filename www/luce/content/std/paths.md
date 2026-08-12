@@ -20,6 +20,7 @@ hidden file's name, not an extension.
 |---|---|
 | `paths.is_absolute(path: string) -> bool` | true when the path starts at the root |
 | `paths.join(head: string, tail: string) -> string` | one separator at the seam; an empty side answers the other, an absolute `tail` answers itself |
+| `paths.joined(parts: list(string)) -> string` | every part joined left to right, with exactly `join`'s rules; an empty list answers `""` |
 | `paths.base(path: string) -> string` | the last element; trailing separators do not count; `base("/")` is `"/"` |
 | `paths.dir(path: string) -> string` | everything but the last element; a bare name answers `"."`, the root is its own directory |
 | `paths.extension(path: string) -> string` | the last element's extension, dot included, or `""`; a leading dot is a name, not an extension |
@@ -41,6 +42,30 @@ func main():
 /usr/local/bin
 luce
 src/main.luc
+```
+
+**`joined` is where `os.path.join(a, b, c)` goes.** Luce has no
+variadic parameters and no `/` operator, so the alternative was
+`join(join(a, b), c)` — and that is the shape that gets written wrong.
+A list literal passes inline and is released after the call.
+
+```luce run
+import std.paths
+
+func main():
+    print(paths.joined(["build", "out", "main.o"]))
+    print(paths.joined(new list(string)) + "(empty)")
+    # Exactly join's rules, folded: an empty part contributes nothing
+    # and an absolute part starts again.
+    print(paths.joined(["src/", "", "luce"]))
+    print(paths.joined(["ignored", "/etc", "hosts"]))
+```
+
+```output
+build/out/main.o
+(empty)
+src/luce
+/etc/hosts
 ```
 
 `dir` and `base` take a path apart so that `join` puts it back:

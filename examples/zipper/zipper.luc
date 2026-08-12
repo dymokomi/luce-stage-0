@@ -113,8 +113,13 @@ func method_of(entry: zip.Entry) -> string:
 func unzip_archive(path: string, into: string) -> !:
     let archive = try zip.read(path)
     let entries = try zip.entries(archive)
-    if not files.exists(into):
-        error("zipper: " + into + " is not there to extract into")
+    # The question this gate actually asks is "is there a *directory*
+    # here", and `exists` answered "is there an entry" — so a file
+    # holding the name sailed through and the run failed later, on the
+    # first `make_directory`, with a message about a directory nobody
+    # had asked for.  `is_dir` asks what the next twenty lines mean.
+    if not try files.is_dir(into):
+        error("zipper: " + into + " is not a directory to extract into")
 
     var names: list(string) = []
     for entry in entries:

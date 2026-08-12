@@ -227,7 +227,7 @@ pub const reserved_names = [_][]const u8{
     "assert",      "trap",         "parse_int",       "parse_float",         "chr",
     "ord",         "append",       "pop",             "insert",              "remove",
     "has",         "dim",          "free",            "print",               "file_read",
-    "file_write",  "file_exists",  "key_read",        "key_text",            "error",
+    "file_write",  "path_kind",    "key_read",        "key_text",            "error",
     "read_line",   "print_error",  "clock_ms",        "sleep_ms",            "env",
     "file_append", "file_delete",  "file_rename",     "dir_list",            "term_rows",
     "term_cols",   "term_clear",   "term_move",       "term_style",          "term_write",

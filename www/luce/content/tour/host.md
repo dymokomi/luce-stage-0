@@ -45,7 +45,7 @@ check against.
 ## Files
 
 The host's raw file builtins are `file_read`, `file_write`,
-`file_append`, `file_delete`, `file_rename`, `file_exists`,
+`file_append`, `file_delete`, `file_rename`, `path_kind`,
 `dir_list` and `dir_create`, plus `file_open` for a scope-owned handle;
 [`std.files`](/std/files/) is the honest layer over them. Every
 operation whose answer the world decides is **fallible**, so you `try`
@@ -65,7 +65,12 @@ func main() -> !:
     let whole = try files.read("stock.txt")
     print(f"{len(whole)} bytes on disk")
 
-    print(f"exists: {files.exists("stock.txt")}, missing: {files.exists("nope.txt")}")
+    let there = try files.exists("stock.txt")
+    let missing = try files.exists("nope.txt")
+    print(f"exists: {there}, missing: {missing}")
+    let plain = try files.is_file("stock.txt")
+    let folder = try files.is_dir("stock.txt")
+    print(f"is_file: {plain}, is_dir: {folder}")
 
     let text = files.read("nope.txt") catch "(could not read)"
     print(text)
@@ -78,13 +83,75 @@ func main() -> !:
   2: plum
 14 bytes on disk
 exists: true, missing: false
+is_file: true, is_dir: false
 (could not read)
 ```
 
-`exists` answers a plain `bool` and is the exception — but it is a
-question about the past, never a guard for the call after it. Read the
-file and handle what the read says; that window is one nothing can
-close.
+`exists`, `is_file` and `is_dir` are **fallible too**, and that is
+deliberate. A bool has exactly two answers and there are three things
+that can happen: it is there, it is not there, and the world would not
+say — a parent directory nobody may search is not the same fact as an
+empty name. Python answers `False` to all three; a Luce program that
+wants that writes `catch false`, which is three visible words.
+
+Underneath them is one question, [`files.kind`](/std/files/), which
+answers what is actually at the path.
+
+```luce run
+import std.files
+
+func main() -> !:
+    try files.write("stock.txt", "fig\n")
+    try files.make_directory("basket")
+
+    for name in ["stock.txt", "basket", "nope.txt"]:
+        let what = try files.kind(name)
+        if what == none:
+            print(f"{name}: nothing there")
+            continue
+        match what:
+            file:
+                print(f"{name}: a file")
+            directory:
+                print(f"{name}: a directory")
+            other:
+                print(f"{name}: something else")
+```
+
+```output
+stock.txt: a file
+basket: a directory
+nope.txt: nothing there
+```
+
+Asking is still never a guard for the call after it. Read the file and
+handle what the read says; that window is one nothing can close.
+
+A listing carries the kinds with it — [`files.entries`](/std/files/) is
+`os.scandir`, and each entry knows its own name, its path and what it
+is, so a walk never opens an entry to find out what it was.
+
+```luce run
+import std.files
+
+func main() -> !:
+    try files.make_directory("garden/beds")
+    try files.write("garden/plan.txt", "rows\n")
+
+    for entry in try files.entries("garden"):
+        match entry.kind:
+            directory:
+                print(f"{entry.name}/ at {entry.path}")
+            file:
+                print(f"{entry.name} at {entry.path}")
+            other:
+                continue
+```
+
+```output
+beds/ at garden/beds
+plan.txt at garden/plan.txt
+```
 
 Paths resolve relative to the current directory.
 

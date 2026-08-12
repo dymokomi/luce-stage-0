@@ -146,6 +146,12 @@ pub const FileAct = enum(i32) {
     /// not a directory holds the name.  Appended, so nothing
     /// renumbers.
     make,
+    /// The world would not say what is at a path (`path_kind`,
+    /// docs/FILESYSTEM.md D16).  **Not "there is nothing there"** —
+    /// absence is an answer and travels in the value as `none`; this
+    /// is the parent nobody may search, the device that failed.
+    /// Appended, so nothing renumbers.
+    inspect,
 
     /// A static string, with its trailing space; the caller owns
     /// nothing.
@@ -161,6 +167,7 @@ pub const FileAct = enum(i32) {
             .flush => "cannot flush ",
             .run => "cannot run ",
             .make => "cannot make directory ",
+            .inspect => "cannot inspect ",
         };
     }
 };

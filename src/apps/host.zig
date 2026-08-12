@@ -236,7 +236,10 @@ pub const Host = struct {
             // keep their positions without being filled.
             .file_read = null,
             .file_write = null,
-            .file_exists = cFileExists,
+            // Retired at ABI version 17 (docs/FILESYSTEM.md D16): one
+            // bit could not tell "nothing is there" from "I was not
+            // allowed to look", and `path_kind` below asks properly.
+            .file_exists = null,
             .arg_count = cArgCount,
             .arg = cArg,
             .term_rows = cTermRows,
@@ -273,6 +276,7 @@ pub const Host = struct {
             .worker_spawn = cWorkerSpawn,
             .worker_join = cWorkerJoin,
             .shell_run = cShellRun,
+            .path_kind = cPathKind,
         };
     }
 
@@ -491,10 +495,34 @@ pub const Host = struct {
         self.open_files.clearRetainingCapacity();
     }
 
-    fn fileExists(self: *Host, path: []const u8) bool {
-        const file = std.Io.Dir.cwd().openFile(self.io, path, .{}) catch return false;
-        file.close(self.io);
-        return true;
+    /// What is at `path`: 0 nothing, 1 a file, 2 a directory, 3
+    /// something else — or null for a world that would not say, which
+    /// the program meets as `io_failed` (`abi.PathKindFn`).
+    ///
+    /// **One `stat`, links followed**, which is what `openFile`,
+    /// `deleteFile` and `rename` here already mean, so the kind
+    /// describes the same file the next call touches and a dangling
+    /// link is 0.
+    ///
+    /// Only two failures are "nothing is there": the name has no
+    /// entry, and a component of the path is not a directory — in
+    /// both, the world looked and there was nothing at that name.
+    /// Everything else is a refusal and says so, which is the whole
+    /// difference from the `file_exists` this replaced: a file under a
+    /// `chmod 000` parent used to answer `false`, indistinguishable
+    /// from a name nothing holds.
+    fn pathKind(self: *Host, path: []const u8) ?i64 {
+        const found = std.Io.Dir.cwd().statFile(self.io, path, .{ .follow_symlinks = true }) catch |refused| {
+            return switch (refused) {
+                error.FileNotFound, error.NotDir => 0,
+                else => null,
+            };
+        };
+        return switch (found.kind) {
+            .file => 1,
+            .directory => 2,
+            else => 3,
+        };
     }
 
     fn deleteFile(self: *Host, path: []const u8) bool {
@@ -1019,12 +1047,15 @@ pub const Host = struct {
         return call_depth;
     }
 
-    fn cFileExists(
+    fn cPathKind(
         context: ?*anyopaque,
         path: [*]const u8,
         path_length: i64,
+        kind: *i64,
     ) callconv(.c) abi.Answer {
-        return if (of(context).fileExists(path[0..@intCast(path_length)])) .yes else .no;
+        const found = of(context).pathKind(path[0..@intCast(path_length)]) orelse return .no;
+        kind.* = found;
+        return .yes;
     }
 
     // -- the byte channel's five slots ---------------------------------
@@ -1785,7 +1816,7 @@ test "a program may name any path the process itself can" {
         "notes.txt",
     });
     defer testing.allocator.free(climbing);
-    try testing.expect(host.fileExists(climbing));
+    try testing.expectEqual(@as(?i64, 1), host.pathKind(climbing));
     var read_back: [16]u8 = undefined;
     var filled: i64 = 0;
     try testing.expectEqual(abi.Answer.yes, table.handle_open.?(
@@ -2007,7 +2038,10 @@ test "the C table offers every service, over the same implementation" {
     // deliberately empty because nothing indexes them any more
     // (docs/BYTES.md R2).  Naming them here rather than weakening the
     // sweep is the point: a fourth one going quiet would be caught.
-    const retired = [_][]const u8{ "file_read", "file_write", "file_append" };
+    // `file_exists` joined them at version 17, for its own reason:
+    // one bit could not tell absence from refusal (docs/FILESYSTEM.md
+    // D16), and `path_kind` is what asks now.
+    const retired = [_][]const u8{ "file_read", "file_write", "file_append", "file_exists" };
     inline for (@typeInfo(abi.Host).@"struct".fields) |field| {
         if (@typeInfo(field.type) == .optional) {
             var is_retired = false;
@@ -2029,10 +2063,14 @@ test "the C table offers every service, over the same implementation" {
     try testing.expectEqualStrings("beta", text[0..@intCast(length)]);
     try testing.expectEqual(abi.Answer.no, table.arg.?(table.context, 2, &text, &length));
 
+    var found_kind: i64 = -1;
     try testing.expectEqual(
-        abi.Answer.no,
-        table.file_exists.?(table.context, path.ptr, @intCast(path.len)),
+        abi.Answer.yes,
+        table.path_kind.?(table.context, path.ptr, @intCast(path.len), &found_kind),
     );
+    // Nothing there yet: an *answer*, not a refusal.  The two used to
+    // be one `false` (docs/FILESYSTEM.md D16).
+    try testing.expectEqual(@as(i64, 0), found_kind);
     // Writing and reading go through the byte channel now, which is
     // the whole of ABI version 12: the retired whole-file slots are
     // null above, and this is what stands in their place.
@@ -2061,8 +2099,16 @@ test "the C table offers every service, over the same implementation" {
     try testing.expectEqual(abi.Answer.no, table.handle_close.?(table.context, handle));
     try testing.expectEqual(
         abi.Answer.yes,
-        table.file_exists.?(table.context, path.ptr, @intCast(path.len)),
+        table.path_kind.?(table.context, path.ptr, @intCast(path.len), &found_kind),
     );
+    try testing.expectEqual(@as(i64, 1), found_kind);
+    // And the directory holding it is a directory, which is the
+    // question `file_exists` could not answer at all.
+    try testing.expectEqual(
+        abi.Answer.yes,
+        table.path_kind.?(table.context, directory.ptr, @intCast(directory.len), &found_kind),
+    );
+    try testing.expectEqual(@as(i64, 2), found_kind);
 
     var read_back: [16]u8 = undefined;
     var filled: i64 = 0;
@@ -2139,9 +2185,10 @@ test "the C table offers every service, over the same implementation" {
         @intCast(moved.len),
     ));
     try testing.expectEqual(
-        abi.Answer.no,
-        table.file_exists.?(table.context, path.ptr, @intCast(path.len)),
+        abi.Answer.yes,
+        table.path_kind.?(table.context, path.ptr, @intCast(path.len), &found_kind),
     );
+    try testing.expectEqual(@as(i64, 0), found_kind);
     // The listing arrives NUL-joined, which is the one shape the table
     // carries, and it holds the name the rename produced.
     try testing.expectEqual(abi.Answer.yes, table.dir_list.?(

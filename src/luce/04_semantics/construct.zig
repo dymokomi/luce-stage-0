@@ -1207,10 +1207,15 @@ pub fn lowerIntrinsic(
             // `try` and `catch` it means.
             result = .none;
         },
-        .file_exists => {
+        // What is at a path, as a number the library names: 0
+        // nothing, 1 file, 2 directory, 3 other.  Fallible, because
+        // "the world would not say" is a different answer from
+        // "nothing is there" and only one of them fits in the value
+        // (docs/FILESYSTEM.md D11).
+        .path_kind => {
             if (arguments[0].value_type != .string)
-                return failIntrinsic(self, call, "file_exists takes a string path");
-            result = .boolean;
+                return failIntrinsic(self, call, "path_kind takes a string path");
+            result = .long;
         },
         .term_rows, .term_cols => {
             result = .long;

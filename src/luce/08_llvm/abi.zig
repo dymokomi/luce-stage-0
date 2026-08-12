@@ -191,7 +191,30 @@ const trace = @import("../runtime/trace.zig");
 /// number for the reason the machine facts do: a host with no calendar
 /// must be able to say so instead of inventing a number.  No earlier
 /// field moves.
-pub const version: u32 = 16;
+///
+/// 17 — `path_kind` is appended, and `file_exists` retires from use
+/// (docs/FILESYSTEM.md D16).  One slot for one subject, and the
+/// subject is a question the boundary could not previously ask: *what
+/// is at this path*.  `file_exists` could only answer yes or no, and
+/// it answered `false` for both "nothing is there" and "I was not
+/// allowed to look" — two different facts with one bit between them,
+/// which is the shape docs/FAILURE.md refuses.  `path_kind` widens the
+/// *payload* rather than the `Answer`: `yes` fills a kind code — 0
+/// nothing, 1 file, 2 directory, 3 other — and `no` is the world
+/// refusing to say, which the program meets as `io_failed`.  Inventing
+/// a fourth `Answer` for "there is nothing there" would have changed
+/// what `Answer` means at every other slot, and absence is not a
+/// refusal.
+///
+/// Links are **followed**: the kind is the kind of the thing the path
+/// names, which is what `handle_open`, `file_delete` and `file_rename`
+/// already mean, so a dangling link is 0 and not a fourth code.
+///
+/// `file_exists` keeps its position and its signature — the table is
+/// append-only and nothing reorders — but no artifact built at this
+/// version indexes it, and the hosts in this tree leave it null,
+/// exactly as the whole-file text slots were left at version 12.
+pub const version: u32 = 17;
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the
@@ -414,6 +437,14 @@ pub const FileWriteFn = *const fn (
 ) callconv(.c) Answer;
 
 /// Whether a file exists.  `no` is the program-visible `false`.
+///
+/// **Retired at version 17** (docs/FILESYSTEM.md D16).  The type and
+/// the slot keep their positions, because the table is append-only and
+/// a field that never moves is a loader that never has to guess — but
+/// nothing indexes it and the hosts in this tree leave it null.  It is
+/// here as a record of a shape rather than as a service: one bit
+/// cannot tell "nothing is there" from "I was not allowed to look",
+/// and `path_kind` is what asks the question properly.
 pub const FileExistsFn = *const fn (
     context: ?*anyopaque,
     path: [*]const u8,
@@ -636,6 +667,42 @@ pub const EpochFn = *const fn (
     answer: *i64,
 ) callconv(.c) Answer;
 
+/// What is at `path` — the one question this boundary was missing
+/// (docs/FILESYSTEM.md D11, D16).
+///
+/// `yes` fills `kind` with one of four numbers:
+///
+///   * **0 — nothing is there.**  Absence, not refusal.  A host that
+///     looked and found no entry says `yes` with 0, because "there is
+///     nothing at this name" is an *answer*, and the program meets it
+///     as `none` rather than as an error.
+///   * **1 — an ordinary file**, the thing a read or a write means.
+///   * **2 — a directory**, the thing a listing means.
+///   * **3 — something else**: a socket, a device, a fifo, a name a
+///     filesystem will describe no further.  One code rather than a
+///     taxonomy, because a program that must tell a block device from
+///     a door is writing an operating system rather than using one.
+///
+/// `no` is the world **refusing to say** — a parent directory that
+/// will not be searched, a device that failed — which the program
+/// meets as `io_failed`.  This is the distinction `file_exists` could
+/// not draw: it answered `false` for a file that certainly exists
+/// under a directory nobody may open, and the bool had no room to say
+/// so.
+///
+/// **Links are followed** (`stat`, not `lstat`).  The kind is the kind
+/// of the thing the path *names*, which is what every other
+/// path-addressed service here already means, so a `kind` that
+/// answered otherwise would describe a different file from the one the
+/// next call touches.  A dangling link is therefore 0: nothing is
+/// there to read, which is exactly what the program will find.
+pub const PathKindFn = *const fn (
+    context: ?*anyopaque,
+    path: [*]const u8,
+    path_length: i64,
+    kind: *i64,
+) callconv(.c) Answer;
+
 // ---------------------------------------------------------------------------
 // The handle channel (version 12)
 // ---------------------------------------------------------------------------
@@ -811,6 +878,10 @@ pub const Host = extern struct {
     /// inventing a subject the two share.
     dir_create: ?DirCreateFn = null,
     epoch_ms: ?EpochFn = null,
+    /// Version 17: what is at a path (docs/FILESYSTEM.md).  Appended,
+    /// so every earlier field keeps its address — including
+    /// `file_exists`, which this retires from use without moving.
+    path_kind: ?PathKindFn = null,
 };
 
 /// The index of each `Host` field, as the generated code addresses it.
@@ -860,6 +931,7 @@ pub const Slot = enum(u32) {
     term_event_data = 40,
     dir_create = 41,
     epoch_ms = 42,
+    path_kind = 43,
 
     pub const count = @typeInfo(Slot).@"enum".fields.len;
 };

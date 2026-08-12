@@ -3944,6 +3944,59 @@ test "luce.sema.method: a file has read, write and flush and nothing else" {
     , "luce.sema.method");
 }
 
+test "luce.sema.method: close is refused by name, with both halves of the answer" {
+    // The one name a Python programmer will certainly type
+    // (docs/FILESYSTEM.md D9).  It is refused rather than offered —
+    // a working `close` would be `free` under a second name, and an
+    // idempotent one would need a state a resource must never hold —
+    // so the diagnostic has to teach both the early close and the
+    // automatic one, and say why `with` is missing too.
+    try expectHostSaying(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    var f = try files.open("notes.txt")
+        \\    f.close()
+        \\
+    , "luce.sema.method", "file has no method close: free f closes it, and the end of the owning scope closes it anyway");
+}
+
+test "luce.sema.fallible: an ignored files.exists is refused, not silently dropped" {
+    // The whole reason `exists` changed type (docs/FILESYSTEM.md
+    // D13): the answer it could not give is the refused one, so
+    // dropping the outcome has to be a compile error rather than a
+    // bool nobody looked at.
+    try expectHostSaying(
+        \\import std.files
+        \\
+        \\func main():
+        \\    if files.exists("notes.txt"):
+        \\        print("there")
+        \\
+    , "luce.sema.fallible", "files.exists can fail");
+}
+
+test "luce.sema.fallible: an ignored files.kind is refused too" {
+    try expectHostSaying(
+        \\import std.files
+        \\
+        \\func main():
+        \\    let what = files.kind("notes.txt")
+        \\
+    , "luce.sema.fallible", "files.kind can fail");
+}
+
+test "luce.sema.retired: file_exists names what replaced it" {
+    // A published builtin for the whole of v2, and on the
+    // documentation site — so a reader who types it is owed the
+    // replacement rather than "unknown function".
+    try expectHostSaying(
+        \\func main():
+        \\    print(string(file_exists("notes.txt")))
+        \\
+    , "luce.sema.retired", "file_exists was retired");
+}
+
 test "luce.sema.fallible: a handle's read is fallible like every file service" {
     try expectRejected(
         \\import std.files
@@ -5209,6 +5262,10 @@ test "luce.sema.host: file_read is gated" {
 
 test "luce.sema.host: file_open is gated" {
     try expectRejected("func main():\n    let f = file_open(\"x\", 0)\n", "luce.sema.host");
+}
+
+test "luce.sema.host: path_kind is gated" {
+    try expectRejected("func main() -> !:\n    let k = try path_kind(\"x\")\n", "luce.sema.host");
 }
 
 test "luce.sema.host: key_read is gated" {

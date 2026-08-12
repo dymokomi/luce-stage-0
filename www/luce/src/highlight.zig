@@ -74,7 +74,7 @@ pub const builtins = [_][]const u8{
     "assert",          "trap",                "error",        "parse_int",   "parse_float",
     "chr",             "ord",                 "print",        "print_error", "read_line",
     "env",             "clock_ms",            "sleep_ms",     "file_read",   "file_write",
-    "file_append",     "file_exists",         "file_delete",  "file_rename", "dir_list",
+    "file_append",     "path_kind",           "file_delete",  "file_rename", "dir_list",
     "term_rows",       "term_cols",           "term_clear",   "term_move",   "term_style",
     "term_write",      "term_flush",          "key_read",     "key_text",    "exit",
     "os_total_memory", "os_available_memory", "os_cpu_count", "shell_run",   "file_open",

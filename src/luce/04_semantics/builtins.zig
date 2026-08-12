@@ -101,7 +101,6 @@ pub const builtins = [_]Builtin{
     .{ .name = "print", .kind = .print, .parameters = &.{.{ .name = "text" }}, .host = true },
     .{ .name = "file_read", .kind = .file_read, .parameters = &.{.{ .name = "path" }}, .host = true },
     .{ .name = "file_write", .kind = .file_write, .parameters = &.{ .{ .name = "path" }, .{ .name = "content" } }, .host = true },
-    .{ .name = "file_exists", .kind = .file_exists, .parameters = &.{.{ .name = "path" }}, .host = true },
     .{ .name = "term_rows", .kind = .term_rows, .host = true },
     .{ .name = "term_cols", .kind = .term_cols, .host = true },
     .{ .name = "term_clear", .kind = .term_clear, .host = true },
@@ -126,6 +125,7 @@ pub const builtins = [_]Builtin{
     .{ .name = "file_rename", .kind = .file_rename, .parameters = &.{ .{ .name = "from" }, .{ .name = "to" } }, .host = true },
     .{ .name = "dir_list", .kind = .dir_list, .parameters = &.{.{ .name = "path" }}, .host = true },
     .{ .name = "dir_create", .kind = .dir_create, .parameters = &.{.{ .name = "path" }}, .host = true },
+    .{ .name = "path_kind", .kind = .path_kind, .parameters = &.{.{ .name = "path" }}, .host = true },
     .{ .name = "file_open", .kind = .file_open, .parameters = &.{ .{ .name = "path" }, .{ .name = "mode" } }, .host = true },
     .{ .name = "exit", .kind = .exit_program, .parameters = &.{.{ .name = "status" }}, .host = true, .pure = false },
     .{ .name = "os_total_memory", .kind = .os_total_memory, .host = true },
@@ -150,6 +150,18 @@ pub const retired_builtins = [_]struct {
 }{
     .{ .name = "arg", .instead = "declare func main(args: list(string)): and index args" },
     .{ .name = "arg_count", .instead = "declare func main(args: list(string)): and write len(args)" },
+    // Retired at ABI 17 (docs/FILESYSTEM.md D13).  A row rather than
+    // a plain unknown name for the reason the two above have one: it
+    // was a published builtin for the whole of v2 and it is on the
+    // documentation site, and a reader who types it is asking a real
+    // question that now has a better answer.  The `try`/`catch` is
+    // part of the replacement and not decoration — the bool it
+    // answered could not tell "nothing is there" from "I was not
+    // allowed to look", which is why it went.
+    .{
+        .name = "file_exists",
+        .instead = "import std.files and write files.exists(p) with try or catch, or files.kind(p) for what is there",
+    },
 };
 
 /// Whether a call to this builtin can leave a container different

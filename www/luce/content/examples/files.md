@@ -51,7 +51,7 @@ func main():
     files.write("/nowhere/at/all/x.txt", "data") catch:
         print("could not write outside the sandbox")
 
-    print(f"exists: {files.exists("does-not-exist.txt")}")
+    print(f"exists: {files.exists("does-not-exist.txt") catch false}")
 ```
 
 ```output
@@ -60,11 +60,15 @@ could not write outside the sandbox
 exists: false
 ```
 
-`exists` answers a plain `bool` and is the one call here that is not
-fallible — but it is a question about the past, never a guard for the
-call after it. There is a window between the two that nothing can
-close, and a guard could not tell "not there" from "would not open"
-anyway. Read the file and handle what the read says.
+`exists` is fallible too, and the `catch false` above is the reason:
+there are three things that can happen — it is there, it is not there,
+and the world would not say — and a bool has two answers. Python folds
+the third into `False`; Luce makes you write the fold, which is what
+makes it visible.
+
+It is a question about the past either way, never a guard for the call
+after it: there is a window between the two that nothing can close.
+Read the file and handle what the read says.
 
 ## A word count
 
