@@ -556,7 +556,9 @@ pub const Object = struct {
                 .short => .short,
                 .byte => .byte,
                 .boolean => .boolean,
-                .none, .string, .strukt, .object => .value,
+                // A function value is a boxed run like a struct's, so
+                // its cell is the 24-byte slot (docs/BINDING.md D12).
+                .none, .string, .strukt, .function, .object => .value,
             };
         }
     };
@@ -1630,7 +1632,10 @@ pub const Runtime = struct {
                 const copied = try self.objects.dupe(u8, text);
                 return .ofOutside(held.tag, copied);
             },
-            .strukt => {
+            // A function value's run is storage exactly as a struct's
+            // is, and is duplicated the same way — the tag differs only
+            // for the *object* walks (docs/BINDING.md D4).
+            .strukt, .function => {
                 const source = held.asStruct();
                 if (source.len == 0) return held;
                 const run = try self.objects.alloc(Value, source.len);
@@ -1643,7 +1648,7 @@ pub const Runtime = struct {
                     slot.* = try self.ownValue(field);
                     filled += 1;
                 }
-                return Value.ofStruct(run);
+                return if (held.tag == .function) Value.ofFunction(run) else Value.ofStruct(run);
             },
             else => return held,
         }
@@ -1665,7 +1670,7 @@ pub const Runtime = struct {
                 const start: [*]u8 = @ptrFromInt(@as(usize, @intCast(held.bits)));
                 self.objects.free(start[0..@intCast(held.length)]);
             },
-            .strukt => {
+            .strukt, .function => {
                 if (held.bits == 0 or held.length == 0) return;
                 const fields = held.asStruct();
                 for (fields) |field| self.dropStorage(field);
@@ -1683,7 +1688,7 @@ pub const Runtime = struct {
             // An emptied String is inline and zero bytes long, which
             // reads as `""` — the same thing it read as before, and
             // nothing to free.
-            .string, .strukt => .{ .tag = held.tag },
+            .string, .strukt, .function => .{ .tag = held.tag },
             else => held,
         };
     }
@@ -1731,13 +1736,28 @@ pub const Runtime = struct {
     /// on failure every one of them is released, so a caller that
     /// handed over a fresh value never has to take it back.
     pub fn makeStruct(self: *Runtime, fields: []const Value) Error!Value {
-        if (fields.len == 0) return Value.ofStruct(&.{});
+        return self.makeRun(fields, .strukt);
+    }
+
+    /// A function value's run: the same allocation `makeStruct` makes,
+    /// worn under the tag that says the objects inside it are borrowed
+    /// (docs/BINDING.md D4, D12).  A separate entry point rather than a
+    /// flag, because the two runs mean different things about ownership
+    /// and a caller that picked the wrong one would be picking that.
+    pub fn makeFunction(self: *Runtime, slots: []const Value) Error!Value {
+        return self.makeRun(slots, .function);
+    }
+
+    fn makeRun(self: *Runtime, fields: []const Value, tag: value.Tag) Error!Value {
+        if (fields.len == 0) {
+            return if (tag == .function) Value.ofFunction(&.{}) else Value.ofStruct(&.{});
+        }
         const stored = self.objects.alloc(Value, fields.len) catch |mistake| {
             for (fields) |field| self.dropStorage(field);
             return mistake;
         };
         @memcpy(stored, fields);
-        return Value.ofStruct(stored);
+        return if (tag == .function) Value.ofFunction(stored) else Value.ofStruct(stored);
     }
 
     /// `held` with field `index` replaced, as a fresh value that owns
@@ -1843,6 +1863,14 @@ pub const Runtime = struct {
                 }
             },
             .strukt => |fields| for (fields) |field| self.bind(field, serial, local),
+            // **A function value's run stops every object walk.**  It
+            // owns the run and never the objects inside it: the
+            // receiver is borrowed (docs/BINDING.md D4), so re-owning
+            // what it names would take a graph away from the binding
+            // that has it, with no verb written anywhere.  This arm is
+            // the only place that fact can be enforced, because a walk
+            // cannot tell a borrowed run from an owning one by looking.
+            .function => {},
             else => {},
         }
     }
@@ -1876,6 +1904,7 @@ pub const Runtime = struct {
             .strukt => |fields| for (fields) |field| {
                 try self.ensureAcyclicAdoption(parent, field);
             },
+            .function => {}, // a borrowed run: see `bind` (docs/BINDING.md D4)
             else => {},
         }
     }
@@ -1892,6 +1921,7 @@ pub const Runtime = struct {
                 if (object.owner.kind != .program) object.owner = .containedBy(parent);
             },
             .strukt => |fields| for (fields) |field| self.adoptInto(parent, field),
+            .function => {}, // a borrowed run: see `bind` (docs/BINDING.md D4)
             else => {},
         }
     }
@@ -1905,6 +1935,7 @@ pub const Runtime = struct {
                 if (object.owner.kind != .program) object.owner = .loose;
             },
             .strukt => |fields| for (fields) |field| self.loosen(field),
+            .function => {}, // a borrowed run: see `bind` (docs/BINDING.md D4)
             else => {},
         }
     }
@@ -1922,6 +1953,7 @@ pub const Runtime = struct {
                 }
             },
             .strukt => |fields| for (fields) |field| self.loosenFromFrame(field, serial),
+            .function => {}, // a borrowed run: see `bind` (docs/BINDING.md D4)
             else => {},
         }
     }
@@ -1941,6 +1973,7 @@ pub const Runtime = struct {
                 }
             },
             .strukt => |fields| for (fields) |field| self.unbind(field, serial, local),
+            .function => {}, // a borrowed run: see `bind` (docs/BINDING.md D4)
             else => {},
         }
     }
@@ -2018,6 +2051,7 @@ pub const Runtime = struct {
         switch (held.view()) {
             .object => |handle| self.freeObject(handle),
             .strukt => |fields| for (fields) |field| self.freeObjectsIn(field),
+            .function => {}, // a borrowed run: see `bind` (docs/BINDING.md D4)
             else => {},
         }
     }
@@ -2046,6 +2080,7 @@ pub const Runtime = struct {
                 }
             },
             .strukt => |fields| for (fields) |field| try self.checkGivable(field, expected),
+            .function => {}, // a borrowed run: see `bind` (docs/BINDING.md D4)
             else => {},
         }
     }
@@ -2227,6 +2262,12 @@ pub const Runtime = struct {
                 }
                 return Value.ofStruct(copied);
             },
+            // **A function value copies as its run and nothing more.**
+            // A deep copy of a struct holding one duplicates the two
+            // slots and keeps the receiver's graph aliased, because the
+            // value borrows that graph and a copy of a borrow is a
+            // borrow (docs/BINDING.md D4).  `ownValue` is exactly that.
+            .function => return self.ownValue(held),
             // A String is a value, and the copy owns its own bytes:
             // `copy xs` of a `List(String)` used to hand back a second
             // container sharing the first's (docs/STRINGS.md).

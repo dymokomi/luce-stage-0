@@ -600,6 +600,10 @@ fn carriesObject(held: Value) bool {
             }
             break :blk false;
         },
+        // A function value borrows the receiver it may carry and owns
+        // none of it (docs/BINDING.md D4), so nothing inside one is an
+        // object this value is answerable for.
+        .function => false,
         else => false,
     };
 }

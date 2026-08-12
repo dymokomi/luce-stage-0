@@ -155,7 +155,12 @@ of capture (S3, D10 there) stands permanently.
 
 D2's "a function value is an index" is likewise one version old: it is
 now the pair `{function, receiver}`, carried as a two-slot field run.
-`libluce_rt` still learns nothing — the run is a struct's run.
+The run's *shape* is a struct's; its **tag is its own**, because a
+function value owns the run and never the objects inside it, so every
+ownership walk in `libluce_rt` has to stop at one rather than re-own
+somebody else's graph (docs/BINDING.md, third *As built*).  That is
+the one semantic the runtime learns about function values, and it is
+what makes a stored bound method safe.
 
 **D3's equality is retired** (docs/BINDING.md D6, 2026-08-11).  "Same
 function or not" was the whole answer while a function value *was* a
@@ -165,6 +170,24 @@ method equal whatever they carry.  `==` and `!=` on a function value
 are refused with that sentence, beside the ordering refusal D3 already
 made, and `string(f)` is how a program asks what a value names.  The
 rest of D3 stands: function values copy freely and take no verbs.
+
+**S2's "where a function type may stand" is widened** (docs/BINDING.md
+D7, 2026-08-11).  A function value is **storable**: a struct field, a
+list element, an array cell and a union payload field hold one as
+`(func(...) -> R)?`, absence is the zero, and calling through one takes
+the narrowing or the `else` any other optional takes.  A map value is
+written **bare** — `m.get(k)` already answers `V?`, so the absence is
+the missing key and a second `?` would be a `V??`.  A bare `func` type
+still stands where a value is always present: a parameter, a `let`, a
+return.
+
+The spelling is the **parenthesized type**, and the rule is uniform:
+`(T)` is `T`, wherever a type may stand.  Parentheses group and are
+never required — `func(string) -> long?` is unchanged and still means
+*a function answering a `long?`*, which is how `parse_int` is written
+as a value, and `(func(string) -> long)?` is the optional function.
+`(long)?` is legal and says nothing extra, which is the price of
+having one rule instead of a special case.
 
 **D5's worker sentence is narrowed** by the same fact: a function
 value borrows the receiver it may carry, a borrow cannot cross into a

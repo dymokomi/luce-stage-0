@@ -413,8 +413,26 @@ fn lowerIndirectCall(
     call: ast.Call,
     as_statement: bool,
 ) Error!?Typed {
-    const local_type = recorder.localType(self, found.info.local);
+    const declared = recorder.localType(self, found.info.local);
+    // A slot holding the storable form — `(func(...) -> R)?` — is
+    // callable exactly where the flow analysis has proved the value is
+    // there, which is the same narrowing every other `T?` gets
+    // (docs/BINDING.md D7).  Unproved, the sentence below names the
+    // optional the reader wrote, and `absenceAdvice` says what to do.
+    const narrowed = declared == .optional and
+        declared.optional == .function and
+        flow.isNarrowed(self, found.info.local);
+    const local_type = if (narrowed) declared.held().? else declared;
     if (local_type != .function) {
+        if (local_type == .optional and local_type.optional == .function) {
+            try self.fail(
+                "luce.sema.call",
+                call.span,
+                "{s} is {s} and may hold none; test it first (if {s} != none:) or supply a fallback ({s} else …) [BINDING.md D7]",
+                .{ call.callee, try self.analyzer.typeName(local_type), call.callee, call.callee },
+            );
+            return null;
+        }
         try self.fail(
             "luce.sema.call",
             call.span,
@@ -516,7 +534,11 @@ fn lowerIndirectCall(
     return .{
         .node = try recorder.recordCallNode(
             self,
-            .{ .indirect = .{ .local = found.info.local, .signature = local_type.function } },
+            .{ .indirect = .{
+                .local = found.info.local,
+                .signature = local_type.function,
+                .narrowed = narrowed,
+            } },
             entries,
             entries.len,
             false,
@@ -679,7 +701,7 @@ fn lowerUserCall(
         // runtime that spawned it.  Refuse those types here rather
         // than letting `spawn` or `wait` reach the runtime's
         // defensive `not_owned` trap.
-        if (info.results.len == 1 and try shapes.carriesResource(self.analyzer, info.return_type)) {
+        if (info.results.len == 1 and try shapes.carries(self.analyzer, info.return_type, .resource)) {
             try self.fail(
                 "luce.sema.own",
                 span,
@@ -696,11 +718,17 @@ fn lowerUserCall(
         // receiver at all, so the boundary cannot ask; it refuses the
         // type instead, which is the same conservatism the resource
         // checks either side of this one apply.
-        if (info.results.len == 1 and info.return_type == .function) {
+        //
+        // **Through the whole type graph, since D7**: a function value
+        // now sits in a struct field and a container element, and a
+        // `list((func() -> long)?)` crossing would deep-copy every
+        // receiver into the worker's runtime with nothing there owning
+        // what it aliases.  The walk is the resource check's own.
+        if (info.results.len == 1 and try shapes.carries(self.analyzer, info.return_type, .function)) {
             try self.fail(
                 "luce.sema.own",
                 span,
-                "{s} answers {s}, and a function value borrows the receiver it may carry; a borrow cannot cross back through wait, and a function type cannot say whether this one carries anything [THREADS.md D4, BINDING.md D4]",
+                "{s} answers {s}, which carries a function value, and a function value borrows the receiver it may carry; a borrow cannot cross back through wait, and a function type cannot say whether this one carries anything [THREADS.md D4, BINDING.md D4]",
                 .{ name, try self.analyzer.typeName(info.return_type) },
             );
             return null;
@@ -708,16 +736,16 @@ fn lowerUserCall(
         // A borrow cannot cross: the callee's runtime is not this
         // one, so there is nothing here for it to borrow *from*.
         for (info.parameter_types, info.parameter_modes, info.declaration.parameters) |held, mode, parameter| {
-            if (held == .function) {
+            if (try shapes.carries(self.analyzer, held, .function)) {
                 try self.fail(
                     "luce.sema.own",
                     span,
-                    "parameter {s} of {s} is {s}, and a function value borrows the receiver it may carry; a borrow cannot cross a worker boundary, and a function type cannot say whether this one carries anything — name the function the worker should call instead [THREADS.md D2, BINDING.md D4]",
+                    "parameter {s} of {s} is {s}, which carries a function value, and a function value borrows the receiver it may carry; a borrow cannot cross a worker boundary, and a function type cannot say whether this one carries anything — name the function the worker should call instead [THREADS.md D2, BINDING.md D4]",
                     .{ parameter.name, name, try self.analyzer.typeName(held) },
                 );
                 return null;
             }
-            if (try shapes.carriesResource(self.analyzer, held)) {
+            if (try shapes.carries(self.analyzer, held, .resource)) {
                 try self.fail(
                     "luce.sema.own",
                     span,
@@ -1884,10 +1912,16 @@ fn methodTakes(
         return false;
     }
     for (arguments, wanted, 0..) |*argument, want, index| {
-        if (argument.value_type.widensTo(want)) {
-            argument.* = try self.widenNumeric(argument.*, want);
+        // `fit` rather than a widen-then-compare, because it is the one
+        // place the language's two implicit conversions are spelled and
+        // an intrinsic method's parameter can now be a `T?`: since D7 a
+        // container element may be `(func(...) -> R)?`, so
+        // `steps.append(twice)` has to wrap exactly as
+        // `var f: (func() -> long)? = twice` does.
+        if (try self.fit(argument.*, want)) |fitted| {
+            argument.* = fitted;
+            continue;
         }
-        if (argument.value_type.eql(want)) continue;
         try self.fail(
             "luce.sema.type",
             method.arguments[index].span,
@@ -2228,7 +2262,7 @@ fn objectMethod(
                 // owns a deep copy of every map value.  A resource
                 // has one owner, so no resource-carrying value type
                 // can take that copying path (S31, S32).
-                if (try shapes.carriesResource(self.analyzer, pair.value)) {
+                if (try shapes.carries(self.analyzer, pair.value, .resource)) {
                     try self.fail(
                         "luce.sema.own",
                         method.span,

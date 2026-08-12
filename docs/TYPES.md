@@ -1021,6 +1021,36 @@ integer* — `"array indices are Int"`, `"lists index with one Int"`,
 three Floats"`, `"Int() converts Float"` — and each becomes a sentence
 about a family rather than a type.
 
+## D9 — a parenthesized type is that type (ratified 2026-08-11)
+
+`(T)` is `T`, accepted **wherever a type may stand**.  Parentheses in
+a type are grouping and are required nowhere: `long?` is unchanged and
+idiomatic, `(long)?` parses to the same type and says nothing extra,
+and no annotation anywhere in the tree needs rewriting.
+
+The rule exists for one shape.  A function type's result is parsed by
+the ordinary type production and consumes its own `?` first, so
+`func(long) -> string?` means *a function answering a `string?`* — and
+it must keep meaning that, because that is how `parse_int` is written
+as a value.  The only way left to say "a function that may be absent"
+is to close the function type before the `?` reaches it:
+`(func(long) -> string)?`, which is the storable form of every
+function value (docs/BINDING.md D7).  It is Swift's answer and readers
+already know it.
+
+Uniform rather than narrow — parentheses accepted only where they
+disambiguate would cost the reader a rule about *where* they are
+allowed, and buy nothing.  The one place a `(` is genuinely ambiguous
+is after `->` in a declaration, where it may open a **return shape**
+(docs/RETURNS.md).  The arity decides, and it is the only thing that
+can: one type in parentheses is a parenthesized type, two or more is a
+return shape.  So `-> (long)` is `-> long`, and `-> (long, long)` is
+two answers.
+
+A comma inside parentheses anywhere else is refused by the sentence it
+always was: *a return shape is not a type; a pair that travels
+together is a struct.*
+
 ## D8 — builtin types are lowercase (ratified 2026-08-04)
 
 The owner, verbatim: *"all builtin types should be lowercase. short,

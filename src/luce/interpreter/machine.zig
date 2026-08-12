@@ -914,10 +914,13 @@ pub const Machine = struct {
                     },
                     // A function value is a two-slot run: the function
                     // it names, then the receiver it carries or `none`
-                    // (docs/BINDING.md D12).  A struct value, built the
-                    // way struct values are built, so the compiled path
-                    // holds the same bytes and the two engines compare
-                    // and print alike.
+                    // (docs/BINDING.md D12).  Built the way a struct
+                    // value is built and worn under a tag of its own,
+                    // so every ownership walk stops at it — the
+                    // receiver is borrowed and the run owns none of it
+                    // (D4) — and so the compiled path holds the same
+                    // bytes and the two engines compare and print
+                    // alike.
                     .const_function => |named| {
                         self.field_scratch.clearRetainingCapacity();
                         try self.field_scratch.ensureTotalCapacity(
@@ -928,7 +931,7 @@ pub const Machine = struct {
                         self.field_scratch.appendAssumeCapacity(
                             if (named.receiver) |receiver| registers[receiver] else .none,
                         );
-                        registers[item] = self.runtime.makeStruct(self.field_scratch.items) catch |mistake|
+                        registers[item] = self.runtime.makeFunction(self.field_scratch.items) catch |mistake|
                             return self.caught(mistake);
                     },
                     .local_get => |local| registers[item] = self.localSlot(frame, local).*,
@@ -1277,7 +1280,7 @@ pub const Machine = struct {
     /// refusal is written once and says the same thing the compiled
     /// path's `namedFunction` says at the same place.
     fn boundValue(self: *Machine, held: RuntimeValue) ?Bound {
-        if (held.tag != .strukt or held.bits == 0) return null;
+        if (held.tag != .function or held.bits == 0) return null;
         const slots = held.asStruct();
         if (slots.len != mir.function_run_length) return null;
         const named = slots[mir.function_run_named].asInt();
@@ -1326,7 +1329,7 @@ pub const Machine = struct {
             // and every reader of one refuses the run that is nowhere,
             // exactly as the compiled path does (docs/FUNCTIONS.md, As
             // built; docs/BINDING.md D12).
-            .function => .{ .tag = .strukt },
+            .function => .{ .tag = .function },
             .strukt => |layout_index| blk: {
                 // One shared zero template per layout, built on first
                 // use.  Sharing the fields slice across every

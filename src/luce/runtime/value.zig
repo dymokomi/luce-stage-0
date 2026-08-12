@@ -78,6 +78,24 @@ pub const Tag = enum(u8) {
     byte = 9,
     short = 10,
     half = 11,
+    /// A **function value**: `bits` addresses `length` slots, exactly
+    /// as `strukt` does, and the two slots are the function it names
+    /// and the receiver it carries (docs/BINDING.md D12).
+    ///
+    /// **It is a tag of its own for one reason, and it is a semantic
+    /// one**: a function value owns the run that holds it and never
+    /// owns the objects inside it (docs/BINDING.md D4).  The receiver
+    /// is *borrowed*, so every ownership walk — bind, unbind, adopt,
+    /// loosen, free, the givable check — must stop at this run instead
+    /// of descending into it and re-owning somebody else's graph.  A
+    /// walk cannot tell a borrowed run from an owning one by looking,
+    /// so the tag says it.  Storage is the other half and is unchanged:
+    /// `ownValue` duplicates this run and `dropStorage` frees it, both
+    /// exactly as for `strukt`, because the run itself *is* owned.
+    ///
+    /// Appended, like every tag since `strukt`: no number above ever
+    /// changes what it means.
+    function = 12,
 };
 
 /// The index no object ever has.  The zero value of an object-typed
@@ -233,6 +251,13 @@ pub const Value = extern struct {
         return .{ .tag = .strukt, .bits = @intFromPtr(fields.ptr), .length = fields.len };
     }
 
+    /// A function value's run — the same bytes `ofStruct` makes, worn
+    /// under the tag that says the objects inside it are borrowed
+    /// (docs/BINDING.md D4, D12).
+    pub fn ofFunction(slots: []Value) Value {
+        return .{ .tag = .function, .bits = @intFromPtr(slots.ptr), .length = slots.len };
+    }
+
     pub fn ofObject(handle: Handle) Value {
         return .{
             .tag = .object,
@@ -303,7 +328,7 @@ pub const Value = extern struct {
     pub fn ownsStorage(self: Value) bool {
         return switch (self.tag) {
             .string => !self.textIsInline() and self.bits != 0 and self.length != 0,
-            .strukt => self.bits != 0 and self.length != 0,
+            .strukt, .function => self.bits != 0 and self.length != 0,
             else => false,
         };
     }
@@ -385,6 +410,7 @@ pub const Value = extern struct {
             .double => .{ .double = self.asDouble() },
             .string => .{ .string = self.asString() },
             .strukt => .{ .strukt = self.asStruct() },
+            .function => .{ .function = self.asStruct() },
             .object => .{ .object = self.asObject() },
         };
     }
@@ -404,6 +430,10 @@ pub const View = union(enum) {
     double: f64,
     string: []const u8,
     strukt: []Value,
+    /// A function value's run: the same shape a struct's run has, and a
+    /// separate arm because the objects inside one are **borrowed**, so
+    /// every ownership walk stops here (`Tag.function`).
+    function: []Value,
     object: Handle,
 };
 

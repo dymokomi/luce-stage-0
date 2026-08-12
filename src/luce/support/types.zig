@@ -176,6 +176,22 @@ pub const Type = union(enum) {
         /// `Shape?` — the one absence a recursive union terminates at
         /// that is not a container (docs/UNION.md D14).
         variant: u32,
+        /// `(func(T, ...) -> R)?` — **the storable form of a function
+        /// value** (docs/BINDING.md D7).
+        ///
+        /// A bare `func` type stands where a value is always present:
+        /// a parameter, a `let`.  A struct field, a container element
+        /// and a map value are slots that exist before anything fills
+        /// them, and a function value has no zero — every value of the
+        /// type names a function, and an empty slot names none.  So the
+        /// storable shape is the optional, whose zero is the absence
+        /// `T?` already means, and calling through one takes the
+        /// narrowing or the `else` any other optional takes.
+        ///
+        /// The written spelling needs its parentheses: `func(long) ->
+        /// string?` is a function *answering* an optional, because a
+        /// result type consumes its own `?` first.
+        function: u32,
 
         pub fn asType(self: Payload) Type {
             return switch (self) {
@@ -192,6 +208,7 @@ pub const Type = union(enum) {
                 .heap => |index| .{ .heap = index },
                 .enumeration => |reference| .{ .enumeration = reference },
                 .variant => |index| .{ .variant = index },
+                .function => |index| .{ .function = index },
             };
         }
 
@@ -202,6 +219,7 @@ pub const Type = union(enum) {
                 .enumeration => |reference| other == .enumeration and
                     other.enumeration.index == reference.index,
                 .variant => |index| other == .variant and other.variant == index,
+                .function => |index| other == .function and other.function == index,
                 else => std.meta.activeTag(self) == std.meta.activeTag(other),
             };
         }
@@ -416,11 +434,11 @@ pub const Type = union(enum) {
     /// has no value to be absent, and `T??` does not exist.
     pub fn optionalOf(base: Type) ?Type {
         return switch (base) {
-            // A function value has no absent form in this run: `Payload`
-            // has no `.function`, so `func(long) -> bool?` is
-            // unrepresentable rather than merely refused, exactly as
-            // `T??` is (docs/FUNCTIONS.md, As built).
-            .none, .function, .optional => null,
+            .none, .optional => null,
+            // `(func(...) -> R)?` — the storable form of a function
+            // value (docs/BINDING.md D7).  The parentheses are the
+            // written spelling's business; here it is one more payload.
+            .function => |index| .{ .optional = .{ .function = index } },
             .boolean => .{ .optional = .boolean },
             .byte => .{ .optional = .byte },
             .short => .{ .optional = .short },
@@ -874,7 +892,16 @@ fn writeTypeName(
             }
         },
         .optional => |payload| {
+            // **A function payload is parenthesized**, because that is
+            // the only spelling that reads back as this type: a bare
+            // `func(long) -> string?` is a function *answering* an
+            // optional (docs/BINDING.md D7).  Every other payload takes
+            // the `?` bare, and adding parentheses there would put a
+            // second spelling of every type into diagnostics.
+            const parenthesized = payload == .function;
+            if (parenthesized) try written.appendSlice(allocator, "(");
             try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, payload.asType());
+            if (parenthesized) try written.appendSlice(allocator, ")");
             try written.appendSlice(allocator, "?");
         },
     }

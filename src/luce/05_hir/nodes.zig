@@ -730,7 +730,17 @@ pub const ResolvedCallee = union(enum) {
     /// (docs/UNION.md D16).
     variant_name: u32,
 
-    pub const Indirect = struct { local: LocalId, signature: u32 };
+    pub const Indirect = struct {
+        local: LocalId,
+        signature: u32,
+        /// The slot holds `(func(...) -> R)?` and the flow analysis has
+        /// proved it is there — the storable form of a function value
+        /// (docs/BINDING.md D7), read through the same unwrap
+        /// `narrowed_get` uses when a narrowed name is read as a value.
+        /// Recorded rather than re-derived, because what the checker
+        /// proved is exactly what the tree is for.
+        narrowed: bool = false,
+    };
 };
 
 /// A call's — or a construction's — operands in **evaluation order**:

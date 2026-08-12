@@ -1441,7 +1441,7 @@ test "S31: copy is deep and always legal on readable copyable objects" {
 }
 
 test "S31: resource-free recursive object types remain copyable" {
-    // `carriesResource` walks this legal Node -> list(Node) cycle and
+    // `shapes.carries` walks this legal Node -> list(Node) cycle and
     // must answer false rather than looping or conservatively refusing
     // every recursive object type.
     try agreeClean(

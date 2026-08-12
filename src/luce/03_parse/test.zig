@@ -2005,6 +2005,62 @@ test "a trailing ? makes a type optional, and there is no second one" {
     }});
 }
 
+test "a parenthesized type is that type, and grouping is never required" {
+    // The uniform rule (docs/BINDING.md D7): parentheses group a type
+    // and change nothing about it.  What matters is what did *not*
+    // move — `long?` and `func(long) -> string?` parse exactly as they
+    // always did, and the parenthesized spellings land on the same
+    // shapes rather than on new ones.
+    var parsed = try expectClean(
+        \\func f(bare: long?, grouped: (long)?, answering: func(long) -> string?, absent: (func(long) -> string)?) -> (long):
+        \\    return 1
+        \\
+    );
+    defer parsed.deinit();
+    const found = parsed.program.functions[0];
+
+    // `long?` and `(long)?` are one type written two ways.
+    try testing.expectEqualStrings("long", found.parameters[0].type_name.name);
+    try testing.expect(found.parameters[0].type_name.optional);
+    try testing.expectEqualStrings("long", found.parameters[1].type_name.name);
+    try testing.expect(found.parameters[1].type_name.optional);
+
+    // `func(long) -> string?` still answers an optional string, and
+    // the function type itself is present.
+    const answering = found.parameters[2].type_name;
+    try testing.expectEqualStrings("func", answering.name);
+    try testing.expect(!answering.optional);
+    try testing.expect(answering.result.?.optional);
+
+    // `(func(long) -> string)?` is the one thing newly writable: the
+    // `?` lands on the function and the result keeps its own.
+    const absent = found.parameters[3].type_name;
+    try testing.expectEqualStrings("func", absent.name);
+    try testing.expect(absent.optional);
+    try testing.expect(!absent.result.?.optional);
+
+    // `-> (long)` is one type in parentheses, so it is `-> long` —
+    // the arity is what separates a parenthesized type from a return
+    // shape, and one element is never a shape.
+    try testing.expectEqual(@as(usize, 1), found.returns.len);
+    try testing.expectEqualStrings("long", found.returns[0].name);
+
+    // A `?` inside the parentheses has taken the one level of absence
+    // there is, wherever the parentheses stand.
+    try expectDiagnostics("func main():\n    var n: (long?)? = none\n", &.{.{
+        .code = "luce.parse.type",
+        .line = 2,
+        .column = 19,
+        .contains = "one '?' is all there is",
+    }});
+    try expectDiagnostics("func f() -> (long?)?:\n    return none\n", &.{.{
+        .code = "luce.parse.type",
+        .line = 1,
+        .column = 20,
+        .contains = "one '?' is all there is",
+    }});
+}
+
 test "else is an infix operator: right-associative, above comparison, below +" {
     var parsed = try expectClean(
         \\func main():

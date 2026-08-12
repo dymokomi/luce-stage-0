@@ -81,7 +81,7 @@ pub fn lowerGive(self: *FunctionBuilder, give: ast.Give) Error!?Typed {
         return null;
     }
     if (try self.checkPoisoned(info, name, give.span)) return null;
-    const carries_resource = try shapes.carriesResource(self.analyzer, local_type);
+    const carries_resource = try shapes.carries(self.analyzer, local_type, .resource);
     if (local_type == .optional and !flow.isNarrowed(self, local)) {
         if (carries_resource) {
             try self.fail(
@@ -398,7 +398,7 @@ pub fn emitConstantValue(self: *FunctionBuilder, value: ConstantValue, value_typ
 /// Resources have one owner and cannot occur anywhere in that copy.
 pub fn lowerCopy(self: *FunctionBuilder, copied: ast.Copy) Error!?Typed {
     const value = (try self.lowerExpression(copied.operand, false)) orelse return null;
-    const carries_resource = try shapes.carriesResource(self.analyzer, value.value_type);
+    const carries_resource = try shapes.carries(self.analyzer, value.value_type, .resource);
     // The ordinary optional diagnostic says to test and continue,
     // but that would only reveal the next refusal here: a present
     // resource graph is still non-copyable.  Say both facts once
@@ -853,7 +853,7 @@ pub fn lowerSliceRange(self: *FunctionBuilder, slice: ast.SliceRange) Error!?Typ
         if (end_constant) |to| from == to else false
     else
         false;
-    if (!is_string and !empty and try shapes.carriesResource(self.analyzer, target.value_type)) {
+    if (!is_string and !empty and try shapes.carries(self.analyzer, target.value_type, .resource)) {
         try self.fail(
             "luce.sema.own",
             slice.span,

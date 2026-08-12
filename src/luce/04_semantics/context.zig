@@ -99,7 +99,7 @@ pub fn literalLandingType(expected: Type) ?Type {
             .double => .double,
             // A number never lands on an enum: `Method` is a set of
             // names and `Method(8)` is the only way in (D4, R2).
-            .boolean, .string, .strukt, .heap, .enumeration, .variant => null,
+            .boolean, .string, .strukt, .heap, .enumeration, .variant, .function => null,
         },
         .none, .boolean, .string, .strukt, .heap, .enumeration, .variant, .function => null,
     };

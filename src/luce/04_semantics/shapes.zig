@@ -16,8 +16,8 @@
 //! read back — `carriesObjects` and `valueCount` are array reads, and
 //! both were exponential when they were recursive queries — beside
 //! the two that need no table at all: `ownsStorage`, which is about a
-//! run of bytes rather than an object, and `carriesResource`, whose
-//! own iterative walk keeps a legitimately cyclic *type* graph
+//! run of bytes rather than an object, and `carries`, whose own
+//! iterative walk keeps a legitimately cyclic *type* graph
 //! (`struct Node: kids: list(Node)`) linear.
 //!
 //! Free functions over `declarations.zig`'s `*Analyzer`; `pub` means
@@ -63,10 +63,26 @@ pub fn carriesObjects(self: *const Analyzer, of: Type) bool {
     };
 }
 
-/// Whether `of` contains a scope-owned resource anywhere in its
-/// type graph.  Files and tasks are tied to the `Runtime` that made
-/// them: neither can be duplicated by `copy` or re-owned into a
-/// worker's separate runtime by `Runtime.copyFrom`.
+/// What the one type-graph walk can be asked to look for.  Both
+/// questions are asked by the worker boundary and by nothing else that
+/// needs to see through a container, and both have the same answer
+/// shape — *is one of these anywhere in this type* — so they are one
+/// walk rather than two that would drift apart.
+pub const Carried = enum {
+    /// A `file` or a `task`: tied to the `Runtime` that made it,
+    /// duplicable by nothing and re-ownable into no other runtime.
+    resource,
+    /// A function value: it borrows the receiver it may carry
+    /// (docs/BINDING.md D4), and a borrow has nothing to borrow *from*
+    /// on the far side of a worker boundary.  The type cannot say
+    /// whether a given value carries a receiver, so the boundary
+    /// refuses the type — and since D7 a function value can sit in a
+    /// field or an element, the question has to see through those.
+    function,
+};
+
+/// Whether `of` reaches something of `sought` anywhere in its type
+/// graph.
 ///
 /// This is an iterative graph walk, not a recursive type query.  A
 /// source program may legitimately make `Node` contain
@@ -74,7 +90,7 @@ pub fn carriesObjects(self: *const Analyzer, of: Type) bool {
 /// also makes the type graph cyclic.  The two visited tables keep
 /// that cycle, and shared subgraphs, linear in the number of layouts
 /// and interned heap shapes rather than in the number of paths.
-pub fn carriesResource(self: *const Analyzer, of: Type) Error!bool {
+pub fn carries(self: *const Analyzer, of: Type, sought: Carried) Error!bool {
     const seen_structs = try self.temporary.alloc(bool, self.structs.items.len);
     defer self.temporary.free(seen_structs);
     @memset(seen_structs, false);
@@ -113,7 +129,7 @@ pub fn carriesResource(self: *const Analyzer, of: Type) Error!bool {
                     },
                     .array => |shape| try pending.append(self.temporary, shape.element),
                     .builder => {},
-                    .file, .task => return true,
+                    .file, .task => if (sought == .resource) return true,
                 }
             },
             .variant => |index| {
@@ -125,6 +141,7 @@ pub fn carriesResource(self: *const Analyzer, of: Type) Error!bool {
                     }
                 }
             },
+            .function => if (sought == .function) return true,
             .none,
             .boolean,
             .byte,
@@ -136,7 +153,6 @@ pub fn carriesResource(self: *const Analyzer, of: Type) Error!bool {
             .double,
             .string,
             .enumeration,
-            .function,
             => {},
         }
     }

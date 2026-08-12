@@ -44,11 +44,15 @@ pub fn boxTag(of: Type) ?value.Tag {
         // and what it has to know about one is its width.
         .enumeration => |reference| boxTag(reference.backing.asType()),
         // A function value is a two-slot field run — the function it
-        // names and the receiver it carries — so it boxes as the struct
-        // it is (docs/BINDING.md D12).  The runtime is handed a run and
-        // never a program's type table, which is the whole reason a
-        // receiver of any shape can travel in one.
-        .function => .strukt,
+        // names and the receiver it carries (docs/BINDING.md D12) — and
+        // it wears a **tag of its own**, not `strukt`.  The shape is a
+        // struct's; the ownership is not.  A function value owns the run
+        // and never the objects inside it (D4), so every ownership walk
+        // in `libluce_rt` has to stop at one instead of descending — and
+        // a walk cannot tell a borrowed run from an owning one by
+        // looking.  That is the one semantic the runtime learns here,
+        // and the tag is how it is told.
+        .function => .function,
         .optional => null,
     };
 }

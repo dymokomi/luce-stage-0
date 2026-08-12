@@ -225,11 +225,12 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
         return;
     }
     // The value was lowered before the chain named a type for it,
-    // so a wider place widens it here (docs/TYPES.md §2).
+    // so `fit` applies the language's two implicit conversions here —
+    // a wider number widens, and a `T` reaching a `T?` wraps, which is
+    // how a function value reaches its storable form
+    // (docs/TYPES.md §2, docs/BINDING.md D7).
     var placed = value;
-    if (placed.value_type.widensTo(current_type)) {
-        placed = try self.widenNumeric(placed, current_type);
-    }
+    if (try self.fit(placed, current_type)) |fitted| placed = fitted;
     if (!placed.value_type.eql(current_type)) {
         try self.fail("luce.sema.type", assign.span, "this place holds {s} but the value is {s}", .{
             try self.analyzer.typeName(current_type),
@@ -468,7 +469,7 @@ fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign:
             // of `tasks` is the same graph with the same problem.
             // Name that no-op/ownership conflict directly instead
             // of manufacturing a second error (S5, S8, S21).
-            if (try shapes.carriesResource(self.analyzer, value.value_type) and assign.value.* == .name) {
+            if (try shapes.carries(self.analyzer, value.value_type, .resource) and assign.value.* == .name) {
                 const source_root = try statements.visibleOwnershipRoot(self, assign.value);
                 if (source_root != null and source_root.? == local) {
                     try self.fail(
@@ -682,10 +683,11 @@ fn lowerAssignIndex(self: *FunctionBuilder, target: ast.IndexTarget, assign: ast
     if (try flow.refuseConstantWrite(self, object.root, target.span, "an indexed store")) return;
     const element_type = (try checkIndex(self, object.value_type, indices, target.span)) orelse return;
     // The value was lowered before the container named a type for
-    // it, so a wider element widens it here (docs/TYPES.md §2).
-    if (value.value_type.widensTo(element_type)) {
-        value.* = try self.widenNumeric(value.*, element_type);
-    }
+    // it, so `fit` applies both implicit conversions here — a wider
+    // number widens, and a `T` reaching a `T?` wraps, which is how a
+    // function value reaches its storable form (docs/TYPES.md §2,
+    // docs/BINDING.md D7).
+    if (try self.fit(value.*, element_type)) |fitted| value.* = fitted;
     if (!value.value_type.eql(element_type)) {
         try self.fail("luce.sema.type", assign.span, "this place holds {s} but the value is {s}", .{
             try self.analyzer.typeName(element_type),

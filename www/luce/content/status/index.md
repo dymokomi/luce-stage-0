@@ -145,9 +145,13 @@ These are decisions with reasons written down, not gaps.
   is a struct the program declared. It owns the run that holds it and
   never owns objects — a value-only receiver is copied in, a carrying
   one is borrowed — so no lifetime story or new ownership rule was
-  needed. Behavior plus state remains a struct with a method. Still
-  missing: a function value is not yet a struct field or a container
-  element, which wants `func(...)?` as the storable form.
+  needed. Behavior plus state remains a struct with a method. A
+  function value is **storable**: a struct field, a list element, an
+  array cell and a union payload field hold one as
+  `(func(...) -> R)?`, absence is the zero, and a map value is written
+  bare because `get` already answers `V?`. Still missing: a fallible
+  function type, so `func(T) -> R!` cannot be written and a fallible
+  method does not bind.
 
 ## Approved next, and shipped on the way
 

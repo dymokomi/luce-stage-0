@@ -769,15 +769,20 @@ improvement the audit exposed:
   conservatively so.  `==` on a function value is refused with it (D6),
   because no type can say which of its values carries a receiver, and
   no function value crosses a worker boundary for the same reason.
-  Union member constructors are function values (D11).  **What is still
-  missing of that memo**: `func(...)?` is not yet the storable form, so
-  a function value is still not a struct field, a container element or
-  an optional payload (D7) — and the blocker in front of it is a
-  *spelling*, since `func(long) -> string?` already parses as a
-  function answering an optional string, so the memo recommends
-  parenthesized types (`(func(long) -> string)?`) and the decision is
-  the owner's; `func(T) -> R!` does not exist, so a fallible method
-  does not bind (D8); and an **owning** bind — a callback that is the
+  Union member constructors are function values (D11).  A function
+  value is **storable** (D7, 2026-08-11): `(func(...) -> R)?` is the
+  form a struct field, a list element, an array cell and a union
+  payload field hold one in, absence is the zero, and a map value is
+  written bare because `get` already answers `V?`.  The spelling is
+  the ratified one — a parenthesized type is that type, accepted
+  wherever a type stands and required nowhere — and the invariant is
+  now true in the runtime as well as the type system: a function
+  value's run wears a `Tag` of its own so no ownership walk descends
+  into the receiver it borrows.  **What is still missing of that
+  memo**: `func(T) -> R!` does not exist, so a fallible function is
+  not a value and a fallible method does not bind (D8), and the
+  step-by-step remainder is written down in BINDING.md's third *As
+  built*; and an **owning** bind — a callback that is the
   sole owner of a graph — stays refused, with per-value tracking (the
   `nodes.provenance` shape) named as its reopening path if a customer
   ever bleeds for it.

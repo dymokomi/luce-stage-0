@@ -190,20 +190,68 @@ does not: a fallible function cannot be used as a value because a
 function type has no `!` with which to carry the obligation.
 
 A function type may annotate a parameter or local, be a function's
-result, and nest inside another function signature. It may not be a
-container element, struct field or optional payload. A file-scope
+result, and nest inside another function signature. A file-scope
 `const` cannot hold one because function declarations and lambdas are
-not constant expressions, and `var f: func(long)` without an
-initializer is refused because there is no zero function.
+not constant expressions.
+
+**A slot holds the optional form: `(func(...) -> R)?`.** A struct
+field, a list element, an array cell and a union payload field all
+exist before anything fills them, and a function value has no zero —
+every value of the type names a function, and an empty slot names
+none. So absence is the zero, and reaching the value takes the
+narrowing or the `else` any other optional takes. A late `var` is the
+same slot and takes the same form.
+
+```luce run
+struct Button:
+    label: string
+    on_click: (func(long) -> long)?
+
+func main():
+    let wired = Button(label = "double", on_click = (n) -> n * 2)
+    let action = wired.on_click
+    if action != none:
+        print(wired.label + " " + string(action(21)))
+```
+
+```output
+double 42
+```
+
+A **map value** is the one slot no container ever creates — it exists
+because a store created it — and `m.get(k)` already answers `V?`, so
+the function type is written bare there and the absence is the missing
+key. Writing the `?` as well would make `get` answer a `V??`, which
+does not exist.
+
+```luce run
+func twice(n: long) -> long:
+    return n * 2
+
+func main():
+    var actions = new map(string, func(long) -> long)
+    actions["double"] = twice
+    let found = actions.get("double")
+    if found != none:
+        print(string(found(4)))
+    print(string(actions.get("missing") == none))
+```
+
+```output
+8
+true
+```
 
 A top-level or static namespace function becomes a value where a function
 type is expected, and so does a **reading method bound to its
 receiver** — `doubling.times`, whose type is the method's with the
 receiver's parameter dropped. The expected signature supplies the
 landing shape, so an unannotated `let f = named_function` is refused.
-Function values copy freely, compare with `==` and `!=`, have no
-ordering, and `string(f)` gives the declared or compiler-generated
-function name — for a bound value, the method's qualified name.
+Function values copy freely and have neither ordering nor equality —
+a value is the function it names *and* the receiver it may carry, and
+its type cannot say which, so no comparison has an honest answer.
+`string(f)` gives the declared or compiler-generated function name —
+for a bound value, the method's qualified name.
 See [calls and lambdas](../expressions/#function-values-and-lambdas)
 for the expression forms, the bind and the capture rule.
 
@@ -522,8 +570,12 @@ func main():
 luce: compile failed
 main.luc:2:12: a return shape is not a type: a pair that travels together is a struct [luce.parse.type]
         let p: (long, long) = 1
-               ^
+               ^~~~~~
 ```
+
+The comma is what makes it a shape. **One type in parentheses is a
+parenthesized type**, which is that type — so `-> (long)` answers a
+`long`, exactly as `(long)` is `long` wherever a type stands.
 
 A pair that travels together is a struct. A pair that only ever
 travels *outward* — never a parameter, never a field, never a
@@ -549,7 +601,28 @@ hold it.
   union end at absence
 
 `T?` may **not** be a container element type or a map value type, and
-there is no `T??` — one `?` is all there is.
+there is no `T??` — one `?` is all there is. The one exception is a
+**function value**, whose storable form *is* the optional: see
+[function](#function).
+
+### Parentheses in a type {#parenthesized-types}
+
+`(T)` is `T`, wherever a type may stand. Parentheses group and are
+required nowhere — `long?` and `(long)?` are one type.
+
+They exist for one shape. A function type's result consumes its own
+`?`, so `func(string) -> long?` means *a function answering a `long?`*
+— which is how `parse_int` is written as a value. Closing the function
+type first is what says the **function** may be absent:
+
+```text
+func(string) -> long?     a function answering long?
+(func(string) -> long)?   a function, or none
+```
+
+After `->` in a declaration a `(` may instead open a
+[return shape](#return-shapes); the arity decides, so `-> (long)` is
+`-> long` and `-> (long, long)` is two answers.
 
 Absence owns nothing: a `list(T)?` holding an object owns it exactly
 as a `list(T)` would, and holding `none` owns nothing.

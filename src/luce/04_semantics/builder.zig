@@ -941,7 +941,24 @@ pub const FunctionBuilder = struct {
     pub fn wantPlace(self: *FunctionBuilder, expected: Type) void {
         self.wanted = context.literalLandingType(expected);
         self.wanted_container = self.containerPlace(expected);
-        self.wanted_function = if (expected == .function) expected.function else null;
+        self.wanted_function = switch (expected) {
+            .function => |index| index,
+            // **A place that may hold none is still a place.**  The
+            // storable form of a function value is `(func(...) -> R)?`
+            // (docs/BINDING.md D7), so a struct field, a container
+            // element and a slot declared before it is filled are all
+            // optional places — and a bare function name, a lambda and
+            // a bind land on the signature *inside* one exactly as they
+            // land on a bare `func` place.  `fit` then wraps the value
+            // it made, which is the same two steps `let x: double? = 1`
+            // takes; `literalLandingType` looks through the same layer
+            // one line above, for the same reason.
+            .optional => |payload| switch (payload) {
+                .function => |index| index,
+                else => null,
+            },
+            else => null,
+        };
     }
 
     /// A number at the type an operator computes it at — `int` for a
@@ -1313,7 +1330,7 @@ pub const FunctionBuilder = struct {
             // S8 tells about a list has no counterpart for a `file` or
             // a `task`.  Asked of the receiver's type, where the answer
             // is exact.
-            if (try shapes.carriesResource(self.analyzer, receiver.value_type)) {
+            if (try shapes.carries(self.analyzer, receiver.value_type, .resource)) {
                 try self.fail(
                     "luce.sema.own",
                     field.span,

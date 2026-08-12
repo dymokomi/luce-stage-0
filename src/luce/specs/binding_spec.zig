@@ -474,3 +474,212 @@ test "a plain function, a lambda and a bind fill one function-typed place" {
         \\
     , "10\n10\n10\n");
 }
+
+// ---------------------------------------------------------------------------
+// The storable form: `(func(...) -> R)?` (D7)
+// ---------------------------------------------------------------------------
+//
+// A slot exists before anything fills it, and a function value has no
+// zero — every value of the type names a function, and an empty slot
+// names none.  So the storable shape is the optional, whose zero is the
+// absence `T?` already means, and reaching the value takes the
+// narrowing or the `else` any other optional takes.
+
+test "a function value lives in a struct field and is called through narrowing" {
+    try agree.prints(
+        \\struct Button:
+        \\    label: string
+        \\    on_click: (func(long) -> long)?
+        \\
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\func main():
+        \\    let wired = Button(label = "double", on_click = twice)
+        \\    let bare = Button(label = "plain", on_click = none)
+        \\    for held in [wired, bare]:
+        \\        let action = held.on_click
+        \\        if action != none:
+        \\            print(held.label + " " + string(action(21)))
+        \\        else:
+        \\            print(held.label + " none")
+        \\
+    , "double 42\nplain none\n");
+}
+
+test "a function value lives in a list element and is called through else" {
+    try agree.prints(
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\func negate(n: long) -> long:
+        \\    return 0 - n
+        \\
+        \\func same(n: long) -> long:
+        \\    return n
+        \\
+        \\func main():
+        \\    var steps = new list((func(long) -> long)?)
+        \\    steps.append(twice)
+        \\    steps.append(none)
+        \\    steps.append(negate)
+        \\    var n: long = 3
+        \\    for step in steps:
+        \\        let run = step else same
+        \\        n = run(n)
+        \\    print(string(n))
+        \\
+    , "-6\n");
+}
+
+test "a map value is written bare, and get carries the absence" {
+    // **The one slot no container creates.**  A map value exists
+    // because `put` created it, and `get` already answers `V?` — so the
+    // function type is written bare there and the optional D7 asks for
+    // is the missing key.  Writing the `?` as well would make `get`
+    // answer a `V??`, which has no representation.
+    try agree.prints(
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\func main():
+        \\    var actions = new map(string, func(long) -> long)
+        \\    actions["double"] = twice
+        \\    let found = actions.get("double")
+        \\    if found != none:
+        \\        print(string(found(4)))
+        \\    print(string(actions.get("missing") == none))
+        \\
+    , "8\ntrue\n");
+}
+
+test "a function value lives in an array cell, absent until it is filled" {
+    try agree.prints(
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\func main():
+        \\    var cells = new array((func(long) -> long)?, 2)
+        \\    print(string(cells[0] == none))
+        \\    cells[1] = twice
+        \\    let second = cells[1]
+        \\    if second != none:
+        \\        print(string(second(5)))
+        \\
+    , "true\n10\n");
+}
+
+test "absence is the zero of a slot declared before it is filled" {
+    try agree.prints(
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\struct Row:
+        \\    action: (func(long) -> long)?
+        \\
+        \\func main():
+        \\    var slot: (func(long) -> long)?
+        \\    print(string(slot == none))
+        \\    slot = twice
+        \\    print(string(slot(3)))
+        \\    var row: Row
+        \\    print(string(row.action == none))
+        \\
+    , "true\n6\ntrue\n");
+}
+
+test "a bound method is stored in a field and called out of it" {
+    try agree.prints(
+        \\struct Scale:
+        \\    factor: long
+        \\
+        \\    func times(n: long) -> long:
+        \\        return n * self.factor
+        \\
+        \\struct Step:
+        \\    name: string
+        \\    action: (func(long) -> long)?
+        \\
+        \\func main():
+        \\    let three = Scale(factor = 3)
+        \\    let step = Step(name = "triple", action = three.times)
+        \\    let action = step.action
+        \\    if action != none:
+        \\        print(step.name + " " + string(action(7)))
+        \\
+    , "triple 21\n");
+}
+
+test "a stored bind whose receiver's owner is gone traps at the call, not before" {
+    // **The invariant D7 must not open a hole in**: a function value
+    // owns the two-slot run that holds it and never owns the objects
+    // inside it, so a bind of a carrying receiver is an *alias* (S26).
+    // Storing one is storing an alias, and an alias that outlives its
+    // owner meets `use_after_free` at the call — deterministically,
+    // because a handle carries the generation of the row it names, so a
+    // freed row can never be mistaken for a live one (S9).  That is the
+    // same net every source alias meets, which is why no storage shape
+    // has to be refused for the alias reason.
+    try agree.trap(
+        \\struct Bag:
+        \\    items: list(long)
+        \\
+        \\    func at(i: long) -> long:
+        \\        return self.items[i]
+        \\
+        \\func collect(into: list((func(long) -> long)?)):
+        \\    var bag = Bag(items = [1, 2])
+        \\    into.append(bag.at)
+        \\
+        \\func main():
+        \\    var readers = new list((func(long) -> long)?)
+        \\    collect(readers)
+        \\    let held = readers[0]
+        \\    if held != none:
+        \\        print(string(held(0)))
+        \\
+    , .use_after_free);
+}
+
+test "a stored function value is released with what holds it" {
+    // The value owns its run and nothing else, so a list of them is a
+    // list of runs: the census is zero when the list dies, and the
+    // receiver's own graph is released by its own owner.
+    try agree.prints(
+        \\struct Scale:
+        \\    factor: long
+        \\
+        \\    func times(n: long) -> long:
+        \\        return n * self.factor
+        \\
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\func main():
+        \\    let three = Scale(factor = 3)
+        \\    var steps = new list((func(long) -> long)?)
+        \\    steps.append(twice)
+        \\    steps.append(three.times)
+        \\    steps.append(none)
+        \\    var total: long = 0
+        \\    for step in steps:
+        \\        let run = step else twice
+        \\        total = total + run(1)
+        \\    print(string(total))
+        \\
+    , "7\n");
+}
+
+test "a lambda stored in a slot is a function value like any other" {
+    try agree.prints(
+        \\struct Row:
+        \\    action: (func(long) -> long)?
+        \\
+        \\func main():
+        \\    let row = Row(action = (n) -> n + 1)
+        \\    let action = row.action
+        \\    if action != none:
+        \\        print(string(action(41)))
+        \\
+    , "42\n");
+}

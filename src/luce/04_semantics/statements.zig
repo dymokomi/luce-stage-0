@@ -1136,15 +1136,17 @@ fn lowerLateDeclaration(
     const declared = (try resolve.resolveType(self.analyzer, self.module, written)) orelse
         return refusals.forgetName(self, name);
     // A function value has no zero: every value of the type names a
-    // function, and there is no function to name here.  So the one
-    // shape a function-typed binding takes is the one that says
-    // which function it is (docs/FUNCTIONS.md, As built).
+    // function, and there is no function to name here.  A slot that
+    // starts empty is exactly what `(func(...) -> R)?` is for
+    // (docs/BINDING.md D7), so the sentence names both ways out — say
+    // which function it is now, or declare the slot as one that may
+    // hold none.
     if (declared == .function) {
         try self.fail(
             "luce.sema.type",
             written.span,
-            "a function value has no zero: write {s} = the function it names [FUNCTIONS.md]",
-            .{name},
+            "a function value has no zero: write {s} = the function it names, or var {s}: ({s})? for a slot that starts empty [BINDING.md D7]",
+            .{ name, name, try self.analyzer.typeName(declared) },
         );
         return refusals.forgetName(self, name);
     }
@@ -1476,7 +1478,7 @@ fn refuseBorrowedReturn(
     resource_conflict: bool,
 ) Error!bool {
     if (info.class == .owned) return false;
-    const carries_resource = try shapes.carriesResource(self.analyzer, value_type);
+    const carries_resource = try shapes.carries(self.analyzer, value_type, .resource);
     switch (info.class) {
         .owned => unreachable,
         .borrow_param => {
@@ -1867,7 +1869,7 @@ fn lowerReturn(self: *FunctionBuilder, returned: ast.Return) Error!void {
                 },
                 else => {
                     if (!(try self.yieldsOwnership(expression))) {
-                        if (try shapes.carriesResource(self.analyzer, value.value_type)) {
+                        if (try shapes.carries(self.analyzer, value.value_type, .resource)) {
                             try self.fail(
                                 "luce.sema.own",
                                 returned.span,
@@ -2119,7 +2121,7 @@ fn movesOut(
         },
         else => {
             if (!(try self.yieldsOwnership(expression))) {
-                if (try shapes.carriesResource(self.analyzer, value.value_type)) {
+                if (try shapes.carries(self.analyzer, value.value_type, .resource)) {
                     try self.fail(
                         "luce.sema.own",
                         expression.span(),

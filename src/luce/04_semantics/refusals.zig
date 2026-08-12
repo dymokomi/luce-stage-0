@@ -412,7 +412,7 @@ pub fn failNeedsOwnership(
     value_type: Type,
     situations: []const u8,
 ) Error!void {
-    const carries_resource = try shapes.carriesResource(self.analyzer, value_type);
+    const carries_resource = try shapes.carries(self.analyzer, value_type, .resource);
     if (value_type == .optional) {
         if (carries_resource) {
             const advice = try resourceMoveAdvice(self, value);

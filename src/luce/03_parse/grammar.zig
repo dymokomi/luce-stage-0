@@ -870,21 +870,7 @@ pub const Parser = struct {
         if (!try self.enter("type")) return null;
         defer self.leave();
 
-        // `(long, long)` where a type belongs.  A return shape is
-        // written in exactly one place — after `->` in a declaration —
-        // and it is not a type: it cannot annotate a binding, fill a
-        // parameter or a field, or stand inside a container
-        // (docs/RETURNS.md).  Without this the reader is told a type
-        // name was expected, which does not say why.
-        if (self.peekKind() == .left_paren) {
-            try self.report(
-                "luce.parse.type",
-                self.peek().span,
-                "a return shape is not a type: a pair that travels together is a struct",
-                .{},
-            );
-            return null;
-        }
+        if (self.peekKind() == .left_paren) return self.parenthesizedTypeName();
         if (self.peekKind() == .keyword_func) return self.functionTypeName();
         const item = (try self.expect(.identifier, "a type name")) orelse return null;
         var written: ast.TypeName = .{ .name = self.text(item), .span = item.span };
@@ -961,6 +947,63 @@ pub const Parser = struct {
         written.wildcards = wildcards;
         written.span = .{ .start = item.span.start, .end = closing.span.end };
         return self.optionalSuffix(written);
+    }
+
+    /// `(T)` — a parenthesized type is that type.
+    ///
+    /// **One rule, everywhere a type may stand**, rather than a rule
+    /// that fires only where it disambiguates: a reader then never has
+    /// to learn where parentheses are permitted, and `(long)` is legal
+    /// and says nothing extra, which is the whole price of having no
+    /// special case (SOFTWARE_DESIGN.md §26).
+    ///
+    /// It exists because a function type's result consumes its own `?`:
+    /// `func(long) -> string?` already means *a function answering a
+    /// `string?`*, and it must keep meaning that, because that is how
+    /// `parse_int` is written as a value.  So the only way to say "a
+    /// function that may be absent" is to close the function type
+    /// before the `?` reaches it — `(func(long) -> string)?`, which is
+    /// Swift's answer and the storable shape of every function value
+    /// (docs/BINDING.md D7).
+    ///
+    /// A comma inside is the *other* thing parentheses spell in this
+    /// language, a return shape, and a return shape is not a type
+    /// (docs/RETURNS.md) — so the arity is what tells the two apart,
+    /// and it is the only thing that can.
+    fn parenthesizedTypeName(self: *Parser) Error!?ast.TypeName {
+        const opener = self.advance(); // (
+        const inner = (try self.typeName()) orelse return null;
+        if (self.peekKind() == .comma) {
+            try self.report(
+                "luce.parse.type",
+                .{ .start = opener.span.start, .end = self.peek().span.end },
+                "a return shape is not a type: a pair that travels together is a struct",
+                .{},
+            );
+            return null;
+        }
+        const closing = (try self.expectClose(.right_paren, opener)) orelse return null;
+        var written = inner;
+        written.span = .{ .start = opener.span.start, .end = closing.span.end };
+        if (!try self.refuseSecondQuestion(written)) return null;
+        return self.optionalSuffix(written);
+    }
+
+    /// A `?` written *inside* the parentheses has already taken the one
+    /// level of absence there is, so a second outside them is `T??` —
+    /// the same refusal `optionalSuffix` makes of two adjacent ones,
+    /// which cannot see this one because a `)` stands between them.
+    ///
+    /// True when nothing was wrong.
+    fn refuseSecondQuestion(self: *Parser, inner: ast.TypeName) Error!bool {
+        if (!inner.optional or self.peekKind() != .question) return true;
+        try self.report(
+            "luce.parse.type",
+            self.peek().span,
+            "one '?' is all there is: a value is absent or it is not",
+            .{},
+        );
+        return false;
     }
 
     /// `func(T, ...) -> R` — a function type, spelled the way a
@@ -1777,19 +1820,6 @@ pub const Parser = struct {
         }
         var previous_end = opener.span.end;
         while (!expr.endsList(self.peekKind(), .right_paren)) {
-            // `-> ((long, long), long)`.  `typeName` refuses a `(` where a
-            // type belongs and says a return shape is not a type; here
-            // the reader was writing one, so the sentence is the rule
-            // they crossed rather than the one they misused.
-            if (self.peekKind() == .left_paren) {
-                try self.report(
-                    "luce.parse.type",
-                    self.peek().span,
-                    "return shapes do not nest: there are no tuples",
-                    .{},
-                );
-                return false;
-            }
             const element = (try self.typeName()) orelse return false;
             try into.append(self.arena, element);
             previous_end = element.span.end;
@@ -1798,13 +1828,20 @@ pub const Parser = struct {
         if (try self.missingSeparator(previous_end)) return false;
         const closing = (try self.expectClose(.right_paren, opener)) orelse return false;
         if (into.items.len == 1) {
-            try self.report(
-                "luce.parse.type",
-                .{ .start = opener.span.start, .end = closing.span.end },
-                "one value needs no parentheses: write -> {s}",
-                .{self.source[into.items[0].span.start..into.items[0].span.end]},
-            );
-            return false;
+            // Not a return shape at all: one type in parentheses is a
+            // **parenthesized type**, which is that type, and the `?` a
+            // reader came here for belongs to it — `-> (func() -> long)?`
+            // answers an optional function.  The arity is what tells
+            // the two productions apart, and it is the only thing that
+            // can: both open with `(` and the difference does not
+            // appear until the comma does or does not (docs/BINDING.md
+            // D7).  So `-> (long)` is `-> long`, exactly as `(long)` is
+            // `long` anywhere else a type stands.
+            var only = into.items[0];
+            only.span = .{ .start = opener.span.start, .end = closing.span.end };
+            if (!try self.refuseSecondQuestion(only)) return false;
+            into.items[0] = (try self.optionalSuffix(only)) orelse return false;
+            return true;
         }
         // `-> (long, long)?` — the `?` would be marking the *shape*, and
         // a shape is not a value that can be absent.  Each element may

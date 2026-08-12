@@ -1168,7 +1168,15 @@ const Replay = struct {
         const registers = try self.arena().alloc(Register, entries.len);
         for (entries, batch.slots) |entry, slot| registers[slot] = entry.register;
         // The callee is read after the arguments (nodes.ResolvedCallee).
-        const callee = try self.code.load(through.local);
+        var callee = try self.code.load(through.local);
+        if (through.narrowed) {
+            const held = try self.arena().alloc(Register, 1);
+            held[0] = callee;
+            callee = try self.code.emit(
+                .{ .intrinsic = .{ .kind = .optional_unwrap, .arguments = held } },
+                .{ .function = through.signature },
+            );
+        }
         const call = try self.code.emit(.{ .call_indirect = .{
             .callee = callee,
             .signature = through.signature,

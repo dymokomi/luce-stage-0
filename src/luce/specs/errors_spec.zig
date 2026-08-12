@@ -700,7 +700,7 @@ test "luce.lex.indent: an over-nested file is one message, not a hundred and fif
 // anything, it cannot nest, it cannot take a `?`, and there is no
 // expression that produces one.
 
-test "luce.parse.type: the four shapes a return list is not" {
+test "luce.parse.type: the three shapes a return list is not" {
     try expectSaying(
         \\func f() -> ():
         \\    return
@@ -710,15 +710,11 @@ test "luce.parse.type: the four shapes a return list is not" {
         \\
     , "luce.parse.type", "a function that answers nothing writes no arrow");
 
-    try expectSaying(
-        \\func f() -> (long):
-        \\    return 1
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.parse.type", "one value needs no parentheses: write -> long");
-
+    // A nested list is still refused, and now by the sentence that says
+    // what parentheses around one type *do* mean: `(long, long)` is a
+    // return shape wherever it is written, and a return shape is not a
+    // type (docs/RETURNS.md).  `-> (long)` is no longer here, because a
+    // parenthesized type is that type and it means `-> long`.
     try expectSaying(
         \\func f() -> ((long, long), long):
         \\    return 1
@@ -726,7 +722,7 @@ test "luce.parse.type: the four shapes a return list is not" {
         \\func main():
         \\    return
         \\
-    , "luce.parse.type", "return shapes do not nest: there are no tuples");
+    , "luce.parse.type", "a return shape is not a type: a pair that travels together is a struct");
 
     try expectSaying(
         \\func f() -> (long, long)?:
@@ -8006,18 +8002,29 @@ test "luce.parse.type: a function type carries no bang" {
     , "luce.parse.type", "a function type carries no '!'");
 }
 
-test "luce.sema.type: a container element cannot be a function yet" {
-    // Deferred, not refused: a container of behaviour is a real
-    // question of its own, and no customer needs it in this run.
+test "luce.sema.type: a slot holds the optional form of a function value" {
+    // Not a wall: a slot exists before anything fills it and a
+    // function value has no zero, so the storable form is the optional
+    // and the sentence spells it (docs/BINDING.md D7).  A list
+    // element, an array element, a map value, a struct field and a
+    // union payload field are the five slots there are.
     try expectHostSaying(
         \\func main():
         \\    var fs = new list(func(long) -> long)
         \\    print(string(len(fs)))
         \\
-    , "luce.sema.type", "a list element cannot be a function yet");
-}
+    , "luce.sema.type", "a list element starts before anything fills it and a function value has no zero: write (func(long) -> long)?");
 
-test "luce.sema.type: a struct field cannot be a function yet" {
+    // The map is the exception, and it is stated as one: `get` already
+    // answers `V?`, so the function type is written bare there and the
+    // `?` would be a `V??`.
+    try expectHostSaying(
+        \\func main():
+        \\    var fs = new map(string, (func(long) -> long)?)
+        \\    print(string(len(fs)))
+        \\
+    , "luce.sema.type", "a map value is written bare: get already answers (func(long) -> long)?, and a second '?' would be a V??");
+
     try expectHostSaying(
         \\struct Handler:
         \\    run: func(long) -> long
@@ -8025,18 +8032,56 @@ test "luce.sema.type: a struct field cannot be a function yet" {
         \\func main():
         \\    print("hi")
         \\
-    , "luce.sema.type", "a struct field cannot be a function yet");
-}
+    , "luce.sema.type", "a struct field starts before anything fills it and a function value has no zero: write (func(long) -> long)?");
 
-test "luce.sema.type: a function value has no absent form" {
     try expectHostSaying(
-        \\func apply(f: func(long)?, x: long) -> long:
-        \\    return x
+        \\union Step:
+        \\    run(with: func(long) -> long)
         \\
         \\func main():
         \\    print("hi")
         \\
-    , "luce.sema.type", "no absent form yet");
+    , "luce.sema.type", "a union payload field starts before anything fills it");
+}
+
+test "luce.sema.call: an unwrapped optional function is not callable" {
+    // The storable form may hold none, so calling one takes the proof
+    // every other `T?` takes (docs/BINDING.md D7).
+    try expectHostSaying(
+        \\struct Row:
+        \\    action: (func(long) -> long)?
+        \\
+        \\func main():
+        \\    let row = Row(action = (n) -> n + 1)
+        \\    let held = row.action
+        \\    print(string(held(1)))
+        \\
+    , "luce.sema.call", "held is (func(long) -> long)? and may hold none; test it first (if held != none:)");
+}
+
+test "luce.parse.type: one '?' is all there is, inside parentheses too" {
+    try expectSaying(
+        \\func main():
+        \\    var n: (long?)? = none
+        \\
+    , "luce.parse.type", "one '?' is all there is");
+}
+
+test "luce.sema.own: a container of function values does not cross a worker boundary" {
+    // The refusal used to compare the top-level type; since a function
+    // value is storable it walks the whole type graph, because the
+    // receiver a value may borrow has nothing to borrow from over
+    // there (docs/BINDING.md D4, D7).
+    try expectHostSaying(
+        \\func work(steps: give list((func(long) -> long)?)) -> long:
+        \\    return len(steps)
+        \\
+        \\func main():
+        \\    var steps = new list((func(long) -> long)?)
+        \\    let t = spawn work(give steps)
+        \\    print(string(t.wait()))
+        \\
+    , "luce.sema.own", "which carries a function value");
 }
 
 test "luce.sema.type: a function value has no zero, so a late var is refused" {
@@ -8045,7 +8090,7 @@ test "luce.sema.type: a function value has no zero, so a late var is refused" {
         \\    var f: func(long) -> long
         \\    print(string(f(1)))
         \\
-    , "luce.sema.type", "a function value has no zero");
+    , "luce.sema.type", "a function value has no zero: write f = the function it names, or var f: (func(long) -> long)? for a slot that starts empty");
 }
 
 test "luce.sema.call: a value that is not a function cannot be called" {

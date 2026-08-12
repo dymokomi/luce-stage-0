@@ -174,6 +174,64 @@ alias in Luce costs: keep the receiver alive. A bound value whose
 receiver's owner is gone meets `use_after_free` at the call, on the
 line that made it.
 
+## Keeping one for later
+
+A function value goes in a struct field, a list, an array — anywhere a
+value goes. The written type takes a `?`, and the parentheses matter:
+
+```text
+(func(long) -> long)?
+```
+
+A slot exists before anything fills it, and a function value has no
+zero: every value of the type names a function, and an empty slot
+names none. So the storable form is the optional, absence is the zero,
+and you reach the value the way you reach any other optional.
+
+```luce run
+struct Scale:
+    factor: long
+
+    func times(n: long) -> long:
+        return n * self.factor
+
+struct Step:
+    name: string
+    action: (func(long) -> long)?
+
+func main():
+    let three = Scale(factor = 3)
+    let steps = [
+        Step(name = "triple", action = three.times),
+        Step(name = "nothing", action = none),
+    ]
+    for step in steps:
+        let action = step.action
+        if action != none:
+            print(step.name + " " + string(action(7)))
+        else:
+            print(step.name)
+```
+
+```output
+triple 21
+nothing
+```
+
+The parentheses are there because `func(long) -> string?` already means
+*a function answering an optional string* — the result type takes its
+own `?` first. Closing the function type before the `?` is what says
+the function may be absent. A parenthesized type is just that type, so
+`(long)?` is `long?` and nothing you have written needs changing.
+
+A **map value** is the one place you write the function type bare:
+`m.get(k)` already answers `V?`, so the absence is the missing key.
+
+Storing a bound value changes nothing about who owns what. The
+receiver is still borrowed, the container owns the run and not the
+graph, and a stored bind whose receiver's owner is gone still meets
+`use_after_free` at the call — never a stale read.
+
 Two facts follow from the same place, because a function type cannot
 say which of its values carries a receiver. A function value has **no
 equality**: two binds of one method with different receivers are

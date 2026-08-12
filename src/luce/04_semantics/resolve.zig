@@ -41,15 +41,6 @@ const Analyzer = @import("declarations.zig").Analyzer;
 pub fn resolveType(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Type {
     const base = (try resolveBase(self, module, written)) orelse return null;
     if (!written.optional) return base;
-    if (base == .function) {
-        try self.fail(
-            "luce.sema.type",
-            written.span,
-            "a function value has no absent form yet: drop the '?' [FUNCTIONS.md]",
-            .{},
-        );
-        return null;
-    }
     return Type.optionalOf(base) orelse {
         try self.fail("luce.sema.type", written.span, "None? is not a type: there is nothing there to be absent", .{});
         return null;
@@ -61,6 +52,14 @@ pub fn resolveType(self: *Analyzer, module: usize, written: ast.TypeName) Error!
 /// representation for an absent element that the containers do not
 /// have, and PEP 505's objection to that gap is the one that
 /// transfers.
+///
+/// **A function payload is the one exception, and it is not one**:
+/// `(func() -> long)?` is the *only* form a function value takes in a
+/// slot (docs/BINDING.md D7), because a function value has no zero and
+/// a slot exists before anything fills it.  So the absence is not a
+/// second way to spell an element type here; it is the element type,
+/// and the objection above — that an absent element has no
+/// representation — is answered by the absence `T?` already is.
 pub fn refuseOptionalPart(
     self: *Analyzer,
     part: Type,
@@ -68,6 +67,7 @@ pub fn refuseOptionalPart(
     role: []const u8,
 ) Error!bool {
     if (part != .optional) return false;
+    if (part.optional == .function) return false;
     try self.fail("luce.sema.type", written.span, "a {s} cannot be optional: write {s} and keep the absence in a name of its own", .{
         role,
         try self.typeName(part.held().?),
@@ -164,8 +164,26 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
                 return null;
             }
             const value = (try resolveType(self, module, written.arguments[1])) orelse return null;
+            // **A map value is the one slot no container ever creates.**
+            // A list cell, an array cell and a struct field all exist,
+            // zeroed, before anything fills them, which is why a
+            // function value takes its optional form in those
+            // (docs/BINDING.md D7).  A map value exists because `put`
+            // created it, and `get` already answers `V?` — so the
+            // absence D7 asks for is the missing key, the type is
+            // written bare, and there is no `refuseFunctionPart` here.
+            // Writing the `?` as well would make `get` answer a `V??`,
+            // which has no representation to answer with.
+            if (value == .optional and value.optional == .function) {
+                try self.fail(
+                    "luce.sema.type",
+                    written.arguments[1].span,
+                    "a map value is written bare: get already answers {s}, and a second '?' would be a V?? [BINDING.md D7]",
+                    .{try self.typeName(value)},
+                );
+                return null;
+            }
             if (try refuseOptionalPart(self, value, written.arguments[1], "map value")) return null;
-            if (try refuseFunctionPart(self, value, written.arguments[1].span, "map value")) return null;
             return try internHeapType(self, .{ .map = .{ .key = key, .value = value } });
         },
         .array => {
@@ -298,12 +316,11 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
 /// `func(T, ...) -> R` — the written function type, interned
 /// (docs/FUNCTIONS.md S2).
 ///
-/// **Where a function type may stand is a short list in this run**:
-/// a parameter and a `let`.  A container element and a struct field
-/// are refused by the two callers that ask for one, because each is
-/// a real question of its own — a struct carrying behaviour is
-/// dispatch — and neither is needed by the customers.  The sentence
-/// says "not yet", because that is what it is.
+/// **A bare function type stands where a value is always present**: a
+/// parameter, a `let`, a return.  Where a slot exists before anything
+/// fills it — a struct field, a container element, a map value — the
+/// type is written `(func(...) -> R)?` and `refuseFunctionPart` says
+/// so (docs/BINDING.md D7).
 fn resolveSignature(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Type {
     const parameters = try self.arena.alloc(types.Signature.Parameter, written.arguments.len);
     for (written.arguments, parameters) |part, *parameter| {
@@ -326,9 +343,14 @@ fn resolveSignature(self: *Analyzer, module: usize, written: ast.TypeName) Error
     return try internSignature(self, .{ .parameters = parameters, .result = result });
 }
 
-/// The "not yet" a function type is told where it may not stand.
-/// One sentence, said by every position that defers it, so a reader
-/// meets the same words wherever they meet the wall.
+/// The `?` a function type is told to wear where it stands in a slot.
+///
+/// A struct field, a container element and a map value all exist
+/// before anything fills them, and a function value has no zero: every
+/// value of the type names a function, and an empty slot names none.
+/// So the storable form is `(func(...) -> R)?`, whose zero is absence
+/// (docs/BINDING.md D7) — one sentence, said by every position that
+/// holds a slot, naming the spelling rather than a wall.
 pub fn refuseFunctionPart(
     self: *Analyzer,
     part: Type,
@@ -339,8 +361,8 @@ pub fn refuseFunctionPart(
     try self.fail(
         "luce.sema.type",
         span,
-        "a {s} cannot be a function yet: a function type stands on a parameter or a let [FUNCTIONS.md]",
-        .{role},
+        "a {s} starts before anything fills it and a function value has no zero: write ({s})? [BINDING.md D7]",
+        .{ role, try self.typeName(part) },
     );
     return true;
 }

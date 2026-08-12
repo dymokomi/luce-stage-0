@@ -996,6 +996,22 @@ pub export fn luce_rt_struct_make(
     return survived;
 }
 
+/// A function value's run: `count` consecutive `Value`s under the tag
+/// that says the objects inside are **borrowed** (docs/BINDING.md D4).
+/// Its own entry point rather than a flag on `struct_make`, because
+/// what differs is what the ownership walks do with the result, and a
+/// caller that picked the wrong one would be picking that.
+pub export fn luce_rt_function_make(
+    runtime: *Runtime,
+    slots: [*]const Value,
+    count: i64,
+    out: *Value,
+) callconv(.c) i32 {
+    out.* = runtime.makeFunction(slots[0..@intCast(count)]) catch |mistake|
+        return failed(runtime, mistake);
+    return survived;
+}
+
 pub export fn luce_rt_struct_set(
     runtime: *Runtime,
     held: *const Value,

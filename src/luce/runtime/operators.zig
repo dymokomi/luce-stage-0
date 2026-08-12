@@ -223,6 +223,11 @@ pub fn compare(op: vocabulary.BinaryOp, left: Value, right: Value) bool {
             const same = held.same(right.asObject());
             return if (op == .equal) same else !same;
         },
+        // A function value has no equality at all (docs/BINDING.md D6):
+        // it is the function it names *and* the receiver it may carry,
+        // and its type cannot say which, so stage 4 refuses `==` before
+        // anything reaches here.
+        .function => unreachable,
         // Handled above, before the payload dispatch.
         .none => unreachable,
     }
@@ -484,7 +489,7 @@ fn integerTag(tag: value.Tag) bool {
     return switch (tag) {
         .byte, .short, .int, .long => true,
         .half, .float, .double => false,
-        .none, .boolean, .string, .strukt, .object => unreachable,
+        .none, .boolean, .string, .strukt, .function, .object => unreachable,
     };
 }
 

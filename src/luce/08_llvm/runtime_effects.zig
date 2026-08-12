@@ -183,6 +183,10 @@ pub const Service = enum {
     // -- struct values ------------------------------------------------
     luce_rt_struct_make,
     luce_rt_struct_set,
+    /// A function value's run — the same allocation `struct_make`
+    /// makes, under the tag that says its objects are borrowed
+    /// (docs/BINDING.md D4).
+    luce_rt_function_make,
 
     // -- containers ---------------------------------------------------
     luce_rt_len,
@@ -735,7 +739,7 @@ pub fn describe(service: Service) Effect {
         // -- struct values --------------------------------------------
         //
         // Both allocate a fresh run of fields.
-        .luce_rt_struct_make => .{
+        .luce_rt_struct_make, .luce_rt_function_make => .{
             .memory = touches_text,
             .parameters = &.{ .run, .values_in, .plain, .value_out },
         },

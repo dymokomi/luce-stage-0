@@ -967,9 +967,9 @@ const Module = struct {
                 .i64,
             ) },
             .enumeration => unreachable, // answered by storage() above
-            // A struct field is never a function value in this run:
-            // the storable form is `func(...)?` and that type does not
-            // exist yet (docs/FUNCTIONS.md S2, docs/BINDING.md D7).
+            // A struct field is never a *bare* function value: the
+            // storable form is `(func(...) -> R)?`, which zeroes at the
+            // `.optional` arm above (docs/BINDING.md D7).
             .function => unreachable, // not a field type
         };
         const length: u64 = switch (of) {
@@ -2151,9 +2151,14 @@ const Module = struct {
                 // {i32, i1} and {float, i1} align to 4, so eight
                 // bytes rather than sixteen.
                 .int, .float => 8,
-                .long, .double, .strukt, .variant, .heap => 16,
+                // A function value travels as the pointer to its run,
+                // so `(func(...) -> R)?` is a pointer beside the bit —
+                // the storable form of every function value
+                // (docs/BINDING.md D7), and the one payload that
+                // reaches here through a *type* rather than a width.
+                .long, .double, .strukt, .variant, .heap, .function => 16,
                 .string => 24,
-                .none, .enumeration, .function, .optional => unreachable, // a payload is a value of a width
+                .none, .enumeration, .optional => unreachable, // a payload is a value of a width
             },
             // Never reached: a function returning nothing has no slot.
             .none => 0,
@@ -4053,6 +4058,9 @@ const Body = struct {
             // type keeps the 24-byte slot.
             .none, .string, .strukt, .variant, .heap, .optional => self.module.value_type,
             .enumeration => unreachable, // answered by storage() above
+            // A bare function type is never an element type: the
+            // storable form is `(func(...) -> R)?`, which arrives at
+            // the `.optional` arm above (docs/BINDING.md D7).
             .function => unreachable, // not an element type
         };
     }
@@ -4072,6 +4080,9 @@ const Body = struct {
             .optional,
             => Builder.Alignment.fromByteUnits(8),
             .enumeration => unreachable, // answered by storage() above
+            // A bare function type is never an element type: the
+            // storable form is `(func(...) -> R)?`, which arrives at
+            // the `.optional` arm above (docs/BINDING.md D7).
             .function => unreachable, // not an element type
         };
     }
@@ -4095,6 +4106,9 @@ const Body = struct {
             // asserted against it by `runtime/test.zig`.
             .none, .string, .strukt, .variant, .heap, .optional => @sizeOf(runtime.Value),
             .enumeration => unreachable, // answered by storage() above
+            // A bare function type is never an element type: the
+            // storable form is `(func(...) -> R)?`, which arrives at
+            // the `.optional` arm above (docs/BINDING.md D7).
             .function => unreachable, // not an element type
         };
     }
@@ -4403,6 +4417,9 @@ const Body = struct {
                 "element",
             ),
             .enumeration => unreachable, // answered by storage() above
+            // A bare function type is never an element type: the
+            // storable form is `(func(...) -> R)?`, which arrives at
+            // the `.optional` arm above (docs/BINDING.md D7).
             .function => unreachable, // not an element type
         };
     }
@@ -4434,6 +4451,9 @@ const Body = struct {
                 held,
             ),
             .enumeration => unreachable, // answered by storage() above
+            // A bare function type is never an element type: the
+            // storable form is `(func(...) -> R)?`, which arrives at
+            // the `.optional` arm above (docs/BINDING.md D7).
             .function => unreachable, // not an element type
         }
     }
@@ -6460,7 +6480,7 @@ const Body = struct {
         } else {
             try self.noneAt(run, mir.function_run_receiver);
         }
-        try self.callAnswering(register, .luce_rt_struct_make, &.{
+        try self.callAnswering(register, .luce_rt_function_make, &.{
             self.runtime,
             run,
             try self.module.builder.intValue(.i64, mir.function_run_length),

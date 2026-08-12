@@ -155,6 +155,12 @@ func main(args: list(string)):
 It may not be a container element or a map value, and there is no
 `T??` — one `?` is all there is.
 
+The one optional that *is* a container element is a **function value**:
+`(func(...) -> R)?` is the form a function value takes in any slot
+that exists before something fills it, because a function value has no
+zero and absence is that zero (docs/BINDING.md D7).  The parentheses
+are the general rule below.
+
 A struct field typed `Struct?` is how a value struct holds one of
 itself: the recursion stops at absence rather than at a layout, so a
 linked list of value structs needs no new machinery and no reference
@@ -528,13 +534,42 @@ neither does `!`.  A fallible function is not a value in this run: a
 function type has nowhere to carry the obligation to write `try` or
 `catch`.
 
-A function type may annotate a parameter or local and may be a
-function's result.  It may nest inside another function signature.
-It is not yet a container element, struct field or optional payload,
-and a late `var` cannot use it because there is no zero function.
-File-scope `const` is a compile-time fold, and neither a function
-declaration nor a lambda is a constant expression, so a `const` cannot
-hold a function value.
+A function type may annotate a parameter or local, may be a function's
+result, and may nest inside another function signature.  File-scope
+`const` is a compile-time fold, and neither a function declaration nor
+a lambda is a constant expression, so a `const` cannot hold one.
+
+**A slot holds the optional form.**  A struct field, a list element,
+an array cell and a union payload field all exist before anything
+fills them, and a function value has no zero — every value of the type
+names a function, and an empty slot names none.  So the type is
+written `(func(...) -> R)?` there, absence is the zero, and reaching
+the value takes the narrowing or the `else` any other optional takes.
+A late `var` is the same slot and takes the same form.  A **map
+value** is the one exception and is written bare: `m.get(k)` already
+answers `V?`, so the absence is the missing key.
+
+```luce
+struct Button:
+    label: string
+    on_click: (func(long) -> long)?
+
+func main():
+    let wired = Button(label = "double", on_click = (n) -> n * 2)
+    let action = wired.on_click
+    if action != none:
+        print(wired.label + " " + string(action(21)))
+```
+
+**Parentheses in a type are grouping, and a parenthesized type is that
+type.**  They are accepted wherever a type may stand and required
+nowhere: `long?` and `(long)?` are one type, and `func(string) ->
+long?` still means *a function answering a `long?`* — which is how
+`parse_int` is written as a value.  The one thing they make writable
+is the optional function, where the `?` would otherwise be consumed by
+the result type: `(func(string) -> long)?`.  After `->` in a
+declaration the arity decides which production a `(` opened — one type
+is a parenthesized type, two or more is a return shape.
 
 ```luce
 func ascending(a: long, b: long) -> bool:

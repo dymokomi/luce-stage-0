@@ -1,9 +1,15 @@
 # Bound methods — the method travels with its struct
 
-> **Status (2026-08-11, second run): built, with D4 amended and D7/D8
+> **Status (2026-08-11, third run): built, with D4 amended and D8
 > outstanding — see *As built* below.**
 > D1, D2, D3, D4 (amended: the borrowing bind, the owning bind
-> refused), D5, D6, D9, D11 and D12 are built; D7 and D8 are not.
+> refused), D5, D6, D7, D9, D11 and D12 are built; D8 is not.
+>
+> **D7 landed with one refinement and one runtime change**, both
+> argued in *As built, third run*: a map value is written bare because
+> `get` already answers `V?`, and a function value wears a runtime tag
+> of its own so that no ownership walk descends into the run it
+> borrows through.
 >
 > **D4's amendment is the owner's, made deliberately on 2026-08-11**:
 > a bound value may copy a value-only receiver or **borrow** a carrying
@@ -338,3 +344,191 @@ the three-state the enum and union member paths already used for
 exactly this reason, which is now shared rather than duplicated.  The
 writer and fallible refusals inherited the fix.
 
+## As built, third run — 2026-08-11
+
+**D7 is built, and the spelling is parenthesized types.**  A function
+value is storable: a struct field, a list element, an array cell and a
+union payload field hold one as `(func(...) -> R)?`, absence is the
+zero, and reaching the value takes the narrowing or the `else` any
+other optional takes.  D8 is **not** built and is the whole of what
+remains; the precise list is at the end.
+
+### The grammar rule: a parenthesized type is that type
+
+`func(long) -> string?` already parses, and means *a function
+answering an optional string* — the result type is parsed by the
+ordinary type production and consumes its own `?` first.  It must keep
+meaning that, because that is how `parse_int` is written as a value.
+So the only way to say "a function that may be absent" is to close the
+function type before the `?` reaches it.
+
+The rule shipped is the **uniform** one: `(T)` is `T`, accepted
+wherever a type may stand.  Parentheses are grouping and are never
+required — `long?` is unchanged and idiomatic, `(long)?` parses to the
+same type and says nothing extra, and `(func(long) -> string)?` is the
+one thing that becomes newly writable.  Nothing that compiled before
+compiles differently.
+
+The narrow alternative — parentheses accepted only where they
+disambiguate — was refused by SOFTWARE_DESIGN.md §26: it costs the
+reader a rule about *where* parentheses are allowed, and buys nothing
+the uniform rule does not already give.  The uniform rule's whole
+price is one retired diagnostic: `-> (long)` used to be refused with
+"one value needs no parentheses" and now means `-> long`, because
+under the rule it does.  **In return position the arity is what
+separates the two productions** — one type in parentheses is a
+parenthesized type, two or more is a return shape — and it is the only
+thing that can be, since both open with `(` and the difference does
+not appear until the comma does or does not.
+
+`writeTypeName` parenthesizes a function payload and nothing else, so
+a diagnostic's spelling is one the parser reads back as the same type.
+
+### Where a function value may stand, and why the map is different
+
+| slot | written | why |
+|---|---|---|
+| struct field | `(func(...) -> R)?` | `var row: Row` creates it zeroed |
+| array cell | `(func(...) -> R)?` | `new array(T, n)` creates it filled |
+| list element | `(func(...) -> R)?` | uniform with the two above |
+| union payload field | `(func(...) -> R)?` | a union's zero is its first member, fields at their own zeros |
+| **map value** | `func(...) -> R` | see below |
+| parameter, `let`, return | `func(...) -> R` | a value is always present |
+
+The rule is one sentence: **a slot that exists before anything fills
+it needs a zero, a function value has no zero, and absence is the zero
+`T?` already means.**  A bare `func` type in one of those four is
+refused by name, and the sentence spells the optional.
+
+**A map value is the one slot no container ever creates.**  It exists
+because `put` created it, and `m.get(k)` already answers `V?` — so the
+absence D7 asks for is the missing key, the type is written bare, and
+`map(K, (func(...) -> R)?)` is refused because it would make `get`
+answer a `V??`, which has no representation and never will.  This is a
+refinement of D7's letter ("container elements and map values land as
+optionals") forced by a wall D7 did not see; the spirit is intact,
+because the reader still writes exactly one `?` and gets it from `get`.
+
+### The invariant, and the hole that had to be closed to keep it
+
+> A function value owns the two-slot run that holds it, and never owns
+> the objects inside it.
+
+Storing one is where that sentence stopped being true, and the defect
+was real, measured, and silent.  `libluce_rt`'s ownership walks —
+`bind`, `unbind`, `adoptInto`, `loosen`, `loosenFromFrame`,
+`freeObjectsIn`, `checkGivable`, `ensureAcyclicAdoption` — walk a
+`Value` graph and re-own every object they find.  A function value's
+run was tagged `strukt`, so appending a bound method into a list made
+the **list** the owner of the receiver's graph: no verb was written
+anywhere, the binding that still named the list kept reading it, and
+when the container died the receiver's list died with it.  The probe:
+
+```text
+var bag = Bag(items = [1, 2])
+if true:
+    var readers = new list((func(long) -> long)?)
+    readers.append(bag.at)
+print(string(bag.items[0]))     # traps use_after_free — bag gave nothing away
+```
+
+The three answers weighed were: refuse every storage shape (which is
+refusing D7), track the class per value in the checker (the reopening
+path D4 named, and the one that dies exactly here), and **tell the
+runtime**.  The third is the one that makes the invariant true rather
+than aspirational, so a function value now wears a **`Tag` of its
+own** — `value.Tag.function`, appended, `12` — and every object walk
+stops at it.  Storage is unchanged and shares the struct's code:
+`ownValue` duplicates the run, `dropStorage` frees it, `copyFrom`
+duplicates the run and keeps the receiver's graph aliased, because a
+copy of a borrow is a borrow.  `luce_rt_function_make` is the run's
+own constructor beside `luce_rt_struct_make`; both engines build one.
+
+**`libluce_rt` learns exactly one semantic here, and it is D4's own
+sentence**: the objects in this run belong to somebody else.  That is
+a real widening of the first run's "a shape, not a semantic", and it
+is argued rather than slipped in — a walk cannot tell a borrowed run
+from an owning one by looking, so nothing above the runtime can
+enforce it, and the alternative was a language feature that silently
+transfers ownership.
+
+With that in place, **no storage shape has to be refused for the alias
+reason**: a bound value's handles alias the receiver's graph (S26), an
+alias that outlives its owner meets `use_after_free` at the call, and
+a handle carries the generation of the row it names, so a freed row
+can never be mistaken for a live one (S9).  That is the same net every
+source alias meets, and `binding_spec` proves both directions — the
+stored alias traps at the call, and the receiver's owner keeps what it
+never gave away.
+
+**The worker boundary now asks the whole type graph.**  A function
+value cannot cross one (second run), and since a `list((func() ->
+long)?)` can be written, the check that used to compare the top-level
+type walks the type graph instead — `shapes.carries(t, .function)`,
+which is the resource walk with the thing it is looking for named.
+
+### Two seams that had to learn the optional
+
+- **Landing.**  `wantPlace` looks through one optional layer for the
+  signature a bare function name, a lambda and a bind land on, exactly
+  as `literalLandingType` does for a number; `fit` then wraps.  So
+  `Row(action = three.times)` and `steps.append(twice)` land and wrap
+  with no new rule.
+- **Calling.**  A narrowed `(func(...))?` local is callable, and the
+  resolved callee records that it was narrowed (`ResolvedCallee.
+  Indirect.narrowed`), so lower reads the slot and unwraps it — the
+  same `optional_unwrap` a narrowed name already lowers to.  Unproved,
+  the diagnostic names the two ways out.
+
+Three argument paths gained `fit` where they had a widen-then-compare:
+an intrinsic method's arguments, an indexed store, and a nested place's
+store.  All three could not meet a `T?` destination before D7 and can
+now.
+
+### Versions
+
+`format_version` did **not** move and `abi.version` did not either.
+`Payload` grew a `.function` arm, but `Payload` is not wire surface: a
+type travels as its outer `Type` tag and an optional writes its
+payload as a whole `Type`, so no tag renumbered and the fingerprint
+did not move.  What changed on the wire is only which modules
+*decode*: `optional(function)` used to be rejected as damaged and now
+loads.  A stale toolchain therefore refuses a new module rather than
+misreading one, which is what a version exists to guarantee.  The
+runtime `Tag` did move — by appending — and that is not module surface
+at all; it is `libluce_rt`'s own vocabulary, and an artifact built
+against the old one is refused by the `generator` identity the tag is
+computed into, by name.
+
+### What remains: D8
+
+Fallible function types are not built.  `func(T) -> R!` and `func() ->
+!` are still refused where they are written, in two places with one
+sentence, and a fallible method is refused at the bind.  The work, in
+the order it has to happen:
+
+1. `03_parse/grammar.zig`'s `functionTypeName` — stop refusing the
+   `!` in both positions; record it (`ast.TypeName` already carries a
+   `fallible` bit, today reserved for `task(T!)`).
+2. `support/types.zig` — `Signature.fallible`, and `eql` must compare
+   it or two differently-fallible types intern to one row.  Render it
+   in `writeTypeName`, beside the `task` arm that already does.
+3. `04_semantics/resolve.zig`'s `resolveSignature` — carry it into the
+   interned row.
+4. `04_semantics/builder.zig` — delete the two refusals (the function
+   value's and the bind's), add the comparison to `matchesSignature`
+   and the stamp to `writtenSignature`.
+5. `04_semantics/calls.zig`'s `lowerIndirectCall` — consult
+   `signature.fallible`, emit `luce.sema.fallible` when the site is
+   not a `try`/`catch`, pass `true` to `recordCallNode`, and call
+   `openFallible`.  Stages 5 and 6 and the interpreter need **no**
+   change: `replayIndirectCall` already ends in `finishFallible`.
+6. `06_mir/verify.zig` — `expectSignature` compares `callee.fallible`
+   against the signature's instead of refusing a fallible callee, and
+   `raisesError` grows its `.call_indirect` arm.
+7. `08_llvm/lower.zig`'s `emitIndirectCall` — `propagateTrapOnly` and
+   record the outcome when the signature is fallible.  The
+   `luce.bound.N` adapters already forward the outcome word untouched.
+8. `06_mir/module.zig` — one `u8` per signature row, and
+   `format_version` **must** bump: the fingerprint hashes
+   `types.Signature`'s field names.  `abi.version` still does not move.
