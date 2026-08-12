@@ -467,13 +467,30 @@ long)?)` can be written, the check that used to compare the top-level
 type walks the type graph instead — `shapes.carries(t, .function)`,
 which is the resource walk with the thing it is looking for named.
 
-### Two seams that had to learn the optional
+### The seams that had to learn the optional
 
 - **Landing.**  `wantPlace` looks through one optional layer for the
   signature a bare function name, a lambda and a bind land on, exactly
   as `literalLandingType` does for a number; `fit` then wraps.  So
   `Row(action = three.times)` and `steps.append(twice)` land and wrap
   with no new rule.
+- **Landing at depth** (corrected 2026-08-12).  The seam above reaches
+  a place only where a place is *known*, and a **nested** store did not
+  name one: `assign.lowerAssignChain` lowered its operands under
+  `Landing.nothing`, so `pane.render = plain` landed and
+  `self.pane.render = plain` — the canonical wiring line of
+  docs/TERMUI.md D8 — was refused for want of a function type, as were
+  `slots[0].render = plain` and every path an index or a second field
+  ran through.  It was never a fact about function values: a bare
+  `none` and a number reaching a `byte` were refused at the same
+  depths, for the same missing landing.  The fix is `Landing.chain`,
+  the nested sibling of `stored_element`: the written path *is* the
+  landing, because a field names its type and a container names its
+  element, so the leaf is known before an operand is lowered however
+  deep it sits.  Nothing was special-cased for depth, and nothing was
+  inferred from the right-hand side — the landing place still types the
+  value, as FUNCTIONS D2 says it must.  Proved in `binding_spec.zig`'s
+  *The landing place, at every depth*.
 - **Calling.**  A narrowed `(func(...))?` local is callable, and the
   resolved callee records that it was narrowed (`ResolvedCallee.
   Indirect.narrowed`), so lower reads the slot and unwraps it — the

@@ -186,6 +186,18 @@ const MethodLanding = struct {
     arguments: []const ast.Argument,
 };
 
+/// A nested store's written path: the root local's type, and the
+/// accessors from it down to the leaf in written order.
+///
+/// Every landing the batch needs is a walk of this and nothing else —
+/// a field names its own type and a container names its element — so
+/// the leaf is known before a single operand is lowered, however deep
+/// the path runs.
+const ChainLanding = struct {
+    root: Type,
+    steps: []const *const ast.Expression,
+};
+
 pub const Landing = union(enum) {
     /// Nothing is written down; every operand takes the default.
     nothing,
@@ -203,6 +215,18 @@ pub const Landing = union(enum) {
     /// Operand zero is a container, the last operand is a value
     /// going into it, and everything between is an index.
     stored_element,
+    /// The operands of a **nested** store: every subscript of the
+    /// written path in order, then the value at the end.
+    ///
+    /// `stored_element` at depth, and the reason it is a landing of
+    /// its own rather than that one: a nested place's leaf is not
+    /// operand zero's element but the end of a written path, and the
+    /// path says what it is with nothing lowered.  Without it a place
+    /// one field deep would take a bare function name, a lambda, a
+    /// union constructor and a bare `none` while the same place two
+    /// deep refused them — a rule about how far away a slot is
+    /// (docs/BINDING.md D7, docs/FUNCTIONS.md D2).
+    chain: ChainLanding,
     /// Operand zero is a container or a string and every other
     /// operand subscripts it — an index or a slice bound.  The
     /// read half of `stored_element`, and it exists because
@@ -1563,7 +1587,49 @@ pub const FunctionBuilder = struct {
                 if (index == 0) return null;
                 return self.subscriptType(values[0].value_type);
             },
+            .chain => |path| return self.chainPlace(path, index, count),
         }
+    }
+
+    /// Where operand `index` of a nested store lands: a subscript
+    /// takes the position its container is addressed by, and the
+    /// value at the end takes the leaf the written path reaches.
+    ///
+    /// **Silent, like every other answer here.**  A step this walk
+    /// cannot follow — a field of something that is not a struct, a
+    /// name no layout has, an index of something that is not a
+    /// container — answers null and leaves every word of the report
+    /// to the descent that checks the same path afterwards
+    /// (`assign.lowerAssignChain`), which is the division a method's
+    /// landing already keeps.
+    fn chainPlace(self: *FunctionBuilder, path: ChainLanding, index: usize, count: usize) ?Type {
+        var reached = path.root;
+        var subscripts_seen: usize = 0;
+        for (path.steps) |node| {
+            switch (node.*) {
+                .field => |field| {
+                    if (reached != .strukt) return null;
+                    const layout = self.analyzer.structs.items[reached.strukt];
+                    const field_index = layout.findField(field.name) orelse return null;
+                    reached = layout.fields[field_index].field_type;
+                },
+                .index => |subscripted| {
+                    const past = subscripts_seen + subscripted.indices.len;
+                    if (index >= subscripts_seen and index < past) return self.subscriptType(reached);
+                    subscripts_seen = past;
+                    const descriptor = self.analyzer.heapOf(reached) orelse return null;
+                    reached = switch (descriptor) {
+                        .list => |element| element,
+                        .array => |shape| shape.element,
+                        .map => |pair| pair.value,
+                        .builder, .file, .task => return null,
+                    };
+                },
+                else => return null, // only field and index steps are collected
+            }
+        }
+        // Every subscript answered above; what is left is the value.
+        return if (index + 1 == count) reached else null;
     }
 
     /// What a subscript of `container` lands on: a map takes its key

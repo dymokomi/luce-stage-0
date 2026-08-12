@@ -683,3 +683,206 @@ test "a lambda stored in a slot is a function value like any other" {
         \\
     , "42\n");
 }
+
+// ---------------------------------------------------------------------------
+// The landing place, at every depth
+// ---------------------------------------------------------------------------
+//
+// **The landing place is what types a function value** (FUNCTIONS D2),
+// so D7's storable slots are only reachable where the place is *known*.
+// A written path names its own leaf — a field names its type and a
+// container names its element — so the leaf of `self.pane.render` is as
+// well written down as the leaf of `pane.render`, and the depth of a
+// slot is not something the language has an opinion about.
+//
+// These prove the whole path, not the prefix: a store through a field,
+// through `self`, through a list, an array and a map index, and a call
+// back out of the slot afterwards — because typechecking a store proves
+// nothing about what it stored.
+
+test "a function value lands on a field two steps in, through a local and through self" {
+    try agree.prints(
+        \\func plain(index: long) -> string:
+        \\    return "plain " + string(index)
+        \\
+        \\struct Rows:
+        \\    render: (func(long) -> string)? = none
+        \\
+        \\struct App:
+        \\    rows: Rows
+        \\
+        \\    func wire():
+        \\        self.rows.render = plain
+        \\
+        \\    func read(index: long) -> string:
+        \\        let action = self.rows.render
+        \\        if action != none:
+        \\            return action(index)
+        \\        return "none"
+        \\
+        \\func main():
+        \\    var written = App(rows = Rows())
+        \\    written.rows.render = plain
+        \\    print(written.read(1))
+        \\    var wired = App(rows = Rows())
+        \\    wired.wire()
+        \\    print(wired.read(2))
+        \\    print(App(rows = Rows()).read(3))
+        \\
+    , "plain 1\nplain 2\nnone\n");
+}
+
+test "a function value lands on the field of an element, in a list, an array and a map" {
+    // The step in front of the leaf is an *index* here, which is the
+    // shape that has no operand of its own to ask: the container is
+    // named by the path, not by a value already lowered.  All three
+    // spellings of a function value are stored through one, and each is
+    // read back out through the narrowing D7 asks for.
+    try agree.prints(
+        \\struct Names:
+        \\    items: list(string)
+        \\
+        \\    func at(index: long) -> string:
+        \\        return self.items[index]
+        \\
+        \\struct Cell:
+        \\    render: (func(long) -> string)? = none
+        \\
+        \\func plain(index: long) -> string:
+        \\    return "plain " + string(index)
+        \\
+        \\func main():
+        \\    var names = Names(items = new list(string))
+        \\    names.items.append("zero")
+        \\    names.items.append("one")
+        \\    var rows = new list(Cell)
+        \\    rows.append(Cell())
+        \\    rows[0].render = (n) -> "lambda " + string(n)
+        \\    var grid = new array(Cell, 2, 2)
+        \\    grid[1, 1].render = names.at
+        \\    var by_name = new map(string, Cell)
+        \\    by_name["head"] = Cell()
+        \\    by_name["head"].render = plain
+        \\    let listed = rows[0].render
+        \\    if listed != none:
+        \\        print(listed(4))
+        \\    let celled = grid[1, 1].render
+        \\    if celled != none:
+        \\        print(celled(1))
+        \\    let keyed = by_name["head"].render
+        \\    if keyed != none:
+        \\        print(keyed(6))
+        \\
+    , "lambda 4\none\nplain 6\n");
+}
+
+test "a nested place takes a union constructor, a match arm, a guarded call and the bare none" {
+    // Every other thing that has no type until it lands: a member
+    // constructor as a value (D11), a `catch` fallback, and `none`
+    // itself — which has no type at all and takes the leaf's.  The
+    // store inside the `match` arm is the same statement in a narrower
+    // scope, and proves the landing is a property of the path rather
+    // than of where the statement stands.
+    try agree.prints(
+        \\union Msg:
+        \\    quit
+        \\    query(text: string)
+        \\
+        \\func plain(index: long) -> string:
+        \\    return "plain " + string(index)
+        \\
+        \\func chosen(flag: bool) -> (func(long) -> string)?!:
+        \\    if flag:
+        \\        return plain
+        \\    error("no")
+        \\
+        \\struct Rows:
+        \\    make: (func(string) -> Msg)? = none
+        \\    render: (func(long) -> string)? = none
+        \\
+        \\struct App:
+        \\    rows: Rows
+        \\
+        \\func main():
+        \\    var app = App(rows = Rows())
+        \\    app.rows.make = Msg.query
+        \\    let build = app.rows.make
+        \\    if build != none:
+        \\        match build("hello"):
+        \\            quit:
+        \\                print("quit")
+        \\            query(text):
+        \\                print("query " + text)
+        \\    match Msg.quit:
+        \\        quit:
+        \\            app.rows.render = plain
+        \\        query(text):
+        \\            print(text)
+        \\    let armed = app.rows.render
+        \\    if armed != none:
+        \\        print(armed(1))
+        \\    app.rows.render = none
+        \\    print(string(app.rows.render == none))
+        \\    app.rows.render = chosen(false) catch plain
+        \\    let caught = app.rows.render
+        \\    if caught != none:
+        \\        print(caught(2))
+        \\
+    , "query hello\nplain 1\ntrue\nplain 2\n");
+}
+
+test "a nested place under try lands what the call answers" {
+    try agree.prints(
+        \\func plain(index: long) -> string:
+        \\    return "plain " + string(index)
+        \\
+        \\func chosen(flag: bool) -> (func(long) -> string)?!:
+        \\    if flag:
+        \\        return plain
+        \\    error("no")
+        \\
+        \\struct Rows:
+        \\    render: (func(long) -> string)? = none
+        \\
+        \\struct App:
+        \\    rows: Rows
+        \\
+        \\func main() -> !:
+        \\    var app = App(rows = Rows())
+        \\    app.rows.render = try chosen(true)
+        \\    let held = app.rows.render
+        \\    if held != none:
+        \\        print(held(5))
+        \\
+    , "plain 5\n");
+}
+
+test "the leaf of a nested place names the width its value is read at" {
+    // **Not a function-value rule.**  What a nested place had been
+    // missing was the landing itself, and a number is the other thing
+    // that has no type until it lands (docs/TYPES.md §1) — so `200`
+    // reaching a `byte` three steps in reads as a `byte`, exactly as it
+    // does one step in, rather than reading as an `int` and then being
+    // refused for not narrowing.  A compound assignment combines at the
+    // same leaf.
+    try agree.prints(
+        \\struct Inner:
+        \\    small: byte = 0
+        \\    wide: long = 0
+        \\    ratio: double = 0.0
+        \\
+        \\struct Outer:
+        \\    inner: Inner
+        \\
+        \\func main():
+        \\    var outer = Outer(inner = Inner())
+        \\    outer.inner.small = 200
+        \\    outer.inner.small += 1
+        \\    outer.inner.wide = 3000000000
+        \\    outer.inner.ratio = 3
+        \\    print(string(outer.inner.small))
+        \\    print(string(outer.inner.wide))
+        \\    print(string(outer.inner.ratio))
+        \\
+    , "201\n3000000000\n3\n");
+}

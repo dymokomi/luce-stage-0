@@ -140,6 +140,14 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
     // facts together even across short-circuit block splits, so
     // the descent below is pure structure and every recorded
     // subscript carries its own flags.
+    //
+    // **The written path is the landing** (`Landing.chain`): each
+    // subscript lands where its container is addressed, and the
+    // value lands on the leaf — which the path names before
+    // anything is lowered, at any depth.  So a bare function name,
+    // a lambda, a union constructor and a bare `none` reach a slot
+    // three steps in exactly as they reach one a single field away
+    // (docs/BINDING.md D7, docs/FUNCTIONS.md D2).
     var operand_list: std.ArrayList(*ast.Expression) = .empty;
     defer operand_list.deinit(self.temporary());
     for (steps.items) |node| {
@@ -148,7 +156,8 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
         }
     }
     try operand_list.append(self.temporary(), assign.value);
-    const run = (try self.lowerOperandsIntoTracking(operand_list.items, .nothing, null)) orelse return;
+    const landing: builder.Landing = .{ .chain = .{ .root = root_type, .steps = steps.items } };
+    const run = (try self.lowerOperandsIntoTracking(operand_list.items, landing, null)) orelse return;
     const operands = run.values;
     const value = operands[operands.len - 1];
     var next_operand: usize = 0;
