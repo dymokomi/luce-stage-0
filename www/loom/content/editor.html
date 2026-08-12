@@ -1,9 +1,9 @@
 <!-- Facts on this page are read from examples/editor/editor.luc and
-     src/apps/loom/shell.zig in the LuciaOS repository. -->
+     build.zig in the LuciaOS repository. -->
 
 <figure class="sample">
 <figcaption class="cap shell">Shell</figcaption>
-<div class="code"><pre><samp><span class="prompt">$</span> <kbd>loom edit notes.txt</kbd></samp></pre></div>
+<div class="code"><pre><samp><span class="prompt">$</span> <kbd>loom run examples/editor/editor.lc notes.txt</kbd></samp></pre></div>
 </figure>
 
 <p>A full-screen editor opens: line numbers down the left, the file in the
@@ -29,27 +29,31 @@ redrawn on every keystroke, a file read and written, a key loop that must not mi
 keystroke, and a memory story that must not leak across thousands of edits. When
 the editor works, the language works.</p>
 
-<h2 id="embedded">It travels inside the binary</h2>
+<h2 id="installed">It is an installed program, not a feature of loom</h2>
 
-<p>The editor's source is embedded in the loom binary, so <code>loom edit</code>
-needs no path, no install step, and no file on disk to find. Because it has no
-file of its own, its compiled artifact cannot go beside its source; it goes to
-the private artifact directory under its content hash instead, which is the
-<a href="@/running/#spare">same cache with a different address</a>. The first
-<code>loom edit</code> on a machine compiles it once; every one after that opens
-it.</p>
+<p>The build installs it twice: as <code>examples/editor/editor.lc</code>, which
+<a href="@/running/">loom runs</a> like any other artifact, and as a standalone
+<code>editor</code> executable that needs no loom at all. Loom carries no editor
+of its own and has no <code>edit</code> command — an editor is a program, and
+programs are what loom runs.</p>
 
-<p>Nothing about that makes it special. <code>loom run editor.lc FILE</code> runs
-a compiled one exactly like any other program, and:</p>
+<p>Which also means yours can replace it: an editor you write is a
+<code>.luc</code> file you compile and run, with exactly the same standing as
+this one. A test in the repository builds this one on every build so it can
+never rot silently.</p>
 
-<figure class="sample">
-<figcaption class="cap shell">Shell</figcaption>
-<div class="code"><pre><samp><span class="prompt">$</span> <kbd>LOOM_EDITOR=~/my-editor.luc loom edit notes.txt</kbd></samp></pre></div>
-</figure>
+<h2 id="termui">It draws through a package</h2>
 
-<p>swaps in a different editor without rebuilding anything. The editor is a
-default, not a fixture. A test in the repository compiles the embedded source on
-every build so it can never rot silently.</p>
+<p>The editor is the first Luce program to carry a <strong>dependency</strong>.
+It imports <code>termui</code>, which owns the cell grid, the frame diff, the
+rectangles its panes are laid out on and the union its keys and mouse reports
+arrive as. The package is ordinary Luce source, resolved by the compiler from
+the want list in the editor's own <code>luce.yaml</code> — nothing about it is
+loom's business, and loom never sees it.</p>
+
+<p>What that bought is visible from outside: the editor used to repaint every
+cell of the screen on every keystroke, and now it writes only the cells that
+changed.</p>
 
 <h2 id="keys">Keys</h2>
 
@@ -76,8 +80,8 @@ sees from <code>key_read()</code>. The editor is reading exactly what
 
 <p>Per line, as it draws: keywords, capitalized type names, builtins, string
 literals, numbers, and comments. It is Luce highlighting written in Luce — a
-small scanner over the line being drawn, deciding a colour per run of characters
-and calling <code>term_style</code> before <code>term_write</code>.</p>
+small scanner over the line being drawn, deciding a style per run of characters
+and writing the run into the frame it is building.</p>
 
 <p>The status bar carries the path, a <code>+</code> when the buffer is modified,
 the line and column, any message the last action produced, and the two key hints
@@ -86,9 +90,8 @@ on the right.</p>
 <h2 id="limits">What it does not do</h2>
 
 <p>Honestly and currently: no search, no replace, no undo, no selection, no copy
-and paste, no multiple buffers, no mouse, no configuration file, and no
-line-wrapping — a long line scrolls off the right edge. Saving writes the whole
-file.</p>
+and paste, no configuration file, and no line-wrapping — a long line scrolls off
+the right edge. Saving writes the whole file.</p>
 
 <p>Some of that is waiting on the terminal growing (mouse and bracketed paste are
 named as future work on the host side); the rest is waiting on somebody wanting

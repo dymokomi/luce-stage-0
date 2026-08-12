@@ -32,9 +32,31 @@ const testing = std.testing;
 /// transcript against its own inline copy of a program pins nothing.
 const editor = @embedFile("editor.luc");
 const editor_model = @embedFile("editor_model.luc");
+
+/// The editor's dependency, served the way a store serves it
+/// (docs/PACKAGES.md D4): the consumer spells `termui.screen`, the
+/// package's own files spell `screen`, and both rows carry the same
+/// root token and the same path, so the two spellings are one module
+/// and `Screen` is one type across the boundary.
 const editor_files = [_]agree.File{
     .{ .name = "editor_model", .source = editor_model },
-};
+} ++ termui_files;
+
+const termui_root = "termui-0.1.0";
+const termui_files = package("termui", @embedFile("termui/termui.luc")) ++
+    package("screen", @embedFile("termui/screen.luc")) ++
+    package("events", @embedFile("termui/events.luc")) ++
+    package("border", @embedFile("termui/border.luc")) ++
+    package("rows", @embedFile("termui/rows.luc"));
+
+/// One package module under both of its spellings.
+fn package(comptime name: []const u8, comptime source: []const u8) [2]agree.File {
+    const at = termui_root ++ "/" ++ name ++ ".luc";
+    return .{
+        .{ .name = name, .source = source, .path = at, .root = termui_root },
+        .{ .name = "termui." ++ name, .source = source, .path = at, .root = termui_root },
+    };
+}
 
 /// Every key the editor handles, in an order where each one can be
 /// seen to have changed what the next one did: type, move by word and
@@ -96,13 +118,16 @@ test "the editor draws the same frames, key for key, on both engines" {
     // update by pasting whatever came out.  A number cannot be updated
     // that way without noticing.  What a person *can* read is the file
     // the keys left behind, which the test below pins in full.
-    // Recorded from the editor as it stood before the merge into
-    // `struct State`.  If this moves, the restructuring changed what
-    // the program draws — which is exactly the thing docs/METHODS.md
-    // said could go quietly wrong.
-    try testing.expectEqual(@as(usize, 31856), session.printed().len);
+    // Re-recorded when the editor migrated onto termui
+    // (docs/TERMUI.md step 5).  **The number itself is the headline**:
+    // the same eighteen keys over the same file used to leave 31,856
+    // bytes of terminal traffic and now leave 5,907 — the editor
+    // repainted all 1,920 cells of every frame, and the screen it
+    // draws on now emits only the cells that changed (D2).  If this
+    // moves, the program draws something else.
+    try testing.expectEqual(@as(usize, 5907), session.printed().len);
     try testing.expectEqual(
-        @as(u64, 5049734095918354461),
+        @as(u64, 6755786775076388343),
         std.hash.Wyhash.hash(0, session.printed()),
     );
 }
@@ -265,21 +290,57 @@ test "a mouse click lands the cursor before editing" {
     try testing.expectEqualStrings("hello\nwZorld\n", session.file().?.content);
 }
 
-/// The characters a transcript put on the screen, with the frame
-/// bookkeeping taken out.
+/// What the screen said, frame by frame.
 ///
-/// The editor colours per character, so it calls `term_write` once per
-/// character and the transcript is one `[write]` line each: what a
-/// reader sees as a sentence is never a substring of it.  The caller
-/// owns the result.
+/// **This has to replay the transcript now, and that is the migration
+/// showing through.**  The editor used to repaint every cell of every
+/// frame, so concatenating the `[write]` payloads *was* the screen.
+/// It draws through termui now, which writes only the cells that
+/// changed since the last frame (docs/TERMUI.md D2) — so a sentence
+/// on the screen is no longer a substring of the transcript unless
+/// every one of its cells happened to change.  So the moves and the
+/// writes go back into a grid, and every `[flush]` — one per frame —
+/// appends what a person was looking at.  The answer is what the
+/// editor showed at any point in the session, which is what the
+/// assertions below have always been asking.  The caller owns it.
 fn screenText(transcript: []const u8) ![]u8 {
+    const rows = 24;
+    const columns = 80;
+    // One cell holds one character, which may be several bytes.
+    const Cell = struct { bytes: [8]u8 = " ".* ++ [_]u8{0} ** 7, length: u8 = 1 };
+    var grid: [rows][columns]Cell = @splat(@splat(.{}));
+    var row: usize = 0;
+    var column: usize = 0;
+
     var shown: std.ArrayList(u8) = .empty;
     errdefer shown.deinit(testing.allocator);
     var lines = std.mem.splitScalar(u8, transcript, '\n');
     while (lines.next()) |line| {
-        const prefix = "[write]";
-        if (!std.mem.startsWith(u8, line, prefix)) continue;
-        try shown.appendSlice(testing.allocator, line[prefix.len..]);
+        if (std.mem.startsWith(u8, line, "[clear]")) {
+            grid = @splat(@splat(.{}));
+            row = 0;
+            column = 0;
+        } else if (std.mem.startsWith(u8, line, "[move]")) {
+            const text = line["[move]".len..];
+            const comma = std.mem.indexOfScalar(u8, text, ',') orelse continue;
+            row = std.fmt.parseInt(usize, text[0..comma], 10) catch continue;
+            column = std.fmt.parseInt(usize, text[comma + 1 ..], 10) catch continue;
+        } else if (std.mem.startsWith(u8, line, "[write]")) {
+            var characters = (std.unicode.Utf8View.init(line["[write]".len..]) catch continue).iterator();
+            while (characters.nextCodepointSlice()) |character| {
+                if (row < rows and column < columns and character.len <= 8) {
+                    var cell: Cell = .{ .length = @intCast(character.len) };
+                    @memcpy(cell.bytes[0..character.len], character);
+                    grid[row][column] = cell;
+                }
+                column += 1;
+            }
+        } else if (std.mem.startsWith(u8, line, "[flush]")) {
+            for (grid) |painted| {
+                for (painted) |cell| try shown.appendSlice(testing.allocator, cell.bytes[0..cell.length]);
+                try shown.append(testing.allocator, '\n');
+            }
+        }
     }
     return shown.toOwnedSlice(testing.allocator);
 }

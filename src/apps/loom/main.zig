@@ -3,7 +3,6 @@
 //!   loom                       the interactive shell
 //!   loom run PROGRAM.lc [ARGS] run a compiled program
 //!   loom luce PROGRAM.luc [..] compile a source file and run it
-//!   loom edit FILE [FILE ...]  open the Luce editor on one or more files
 //!   loom PROGRAM.lc [ARGS]     sugar for run (and .luc for luce)
 //!
 //! `run` takes a `.lc`, which is machine code: one `dlopen`, one
@@ -49,7 +48,6 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
     var environ_map = try init.environ.createMap(gpa);
     defer environ_map.deinit();
     const no_color = environ_map.get("NO_COLOR") != null;
-    const editor_override = environ_map.get("LOOM_EDITOR");
     // Where the compiler is and where a built artifact may go, read
     // once: it is process policy, not something a program or a command
     // can change (runner.zig).
@@ -73,7 +71,6 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
         .out = out,
         .err = err,
         .palette = .{ .enabled = colored },
-        .editor_override = editor_override,
         .policy = policy,
     };
 
@@ -94,10 +91,6 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
         if (arguments.len < 3) return usage(err);
         return runner.runScript(gpa, io, out, err, policy, arguments[2], arguments[3..]);
     }
-    if (std.mem.eql(u8, command, "edit")) {
-        if (arguments.len < 3) return usage(err);
-        return shell.edit(arguments[2..]);
-    }
     if (std.mem.endsWith(u8, command, ".lc")) {
         return runner.runModule(gpa, io, out, err, command, arguments[2..]);
     }
@@ -114,7 +107,6 @@ fn usage(err: *std.Io.Writer) !u8 {
             "  loom                        interactive shell\n" ++
             "  loom run PROGRAM.lc [ARGS]  run a compiled program\n" ++
             "  loom luce PROGRAM.luc [..]  compile a source file and run it\n" ++
-            "  loom edit FILE [FILE ...]   open the Luce editor\n" ++
             "  loom PROGRAM.lc [ARGS]      shorthand for run\n",
         .{},
     );

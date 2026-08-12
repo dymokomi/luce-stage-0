@@ -12,7 +12,6 @@ loom — the luce environment. help lists commands.
 loom ▸ <kbd>help</kbd>
   run PROGRAM.lc [ARGS]   run a compiled Luce program
   luce PROGRAM.luc [ARGS] compile and run a Luce source file
-  edit FILE              open the Luce editor (LOOM_EDITOR overrides)
   clear                  clear the screen
   exit                   leave loom
   a bare PROGRAM.lc or .luc path runs it directly
@@ -28,8 +27,6 @@ loom ▸ <kbd>exit</kbd></samp></pre></div>
 calls it — <a href="@/running/">Running programs</a></td></tr>
 <tr><td><code>luce PROGRAM.luc [ARGS]</code></td><td>Compiles a source file if
 needed, then runs it</td></tr>
-<tr><td><code>edit FILE</code></td><td>Opens the <a href="@/editor/">editor</a> on
-one file</td></tr>
 <tr><td><code>clear</code></td><td>Clears the screen</td></tr>
 <tr><td><code>help</code></td><td>Lists the rest — a test in the repository fails
 if it ever stops naming one of them</td></tr>
@@ -47,9 +44,8 @@ missing feature:</p>
 <div class="code result bad"><pre><samp>loom: unknown command rnu (try help)</samp></pre></div>
 </figure>
 
-<p><code>edit</code> takes exactly one file, and a second one is refused rather
-than ignored: an editor opening the wrong file is worse than one that does not
-open.</p>
+<p>The <a href="@/editor/">editor</a> is not among them: it is a program, and a
+program is what <code>run</code> is for.</p>
 
 <h2 id="nothing">What the shell deliberately does not have</h2>
 

@@ -147,10 +147,10 @@ failed build is litter you did not make.</p>
 
 <h3 id="spare">When there is nowhere to write beside the program</h3>
 
-<p>A read-only directory, or a program with no path at all — the editor loom
-carries inside itself — has nothing to sit beside. The artifact then goes to a
-directory named <code>luce-artifacts</code> inside <code>TMPDIR</code>, keyed on
-the hash because there is no name to key on.</p>
+<p>A read-only directory, or a program with no path at all, has nothing to sit
+beside. The artifact then goes to a directory named
+<code>luce-artifacts</code> inside <code>TMPDIR</code>, keyed on the hash
+because there is no name to key on.</p>
 
 <p>That directory is created <code>rwx------</code> and is used <em>only</em> if
 what is really there is a directory with no group or other permissions at all; a
@@ -293,8 +293,6 @@ directory loom's own binary sits in</td></tr>
 beside its program; <code>/tmp</code> when unset</td></tr>
 <tr><td><code>NO_COLOR</code></td><td>Set to any value and the shell prints no
 escape sequences</td></tr>
-<tr><td><code>LOOM_EDITOR</code></td><td>A <code>.luc</code> file to use in place
-of the built-in <a href="@/editor/">editor</a></td></tr>
 </table>
 </div>
 

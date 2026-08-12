@@ -447,15 +447,6 @@ test "a .luc with no luce to compile it says which binary is missing and where i
     // Nothing was built, and nothing was left behind pretending to be.
     try testing.expect(!install.exists("sums.lc"));
     try testing.expect(!try install.holdsAnything(luce.mir.module.extension));
-
-    // `loom edit` reaches the same wall, because the editor is a Luce
-    // program like any other and there is nothing here to build it
-    // with.  This is also the whole of what `edit` does without a
-    // terminal to draw on: it says why, and stops.
-    var edited = try runLoom(gpa, &install, &.{ "edit", program }, &bare, null);
-    defer edited.deinit(gpa);
-    try testing.expectEqual(@as(u8, 1), edited.status);
-    try testing.expect(edited.saysErr("`luce`"));
 }
 
 test "a compiler that refuses the program is asked once; one that fails a place is asked again" {
@@ -520,15 +511,13 @@ test "every form loom does not have answers with usage, and every usage names th
     defer install.deinit(gpa);
 
     // A command nobody has; a path that is neither of the two
-    // extensions loom knows; and each of the three commands with the
-    // file left off.  `edit` accepts one or more files, so a multi-file
-    // invocation is intentionally not in this refusal table.
+    // extensions loom knows; and each of the two commands with the
+    // file left off.
     const wrong = [_][]const []const u8{
         &.{"polish"},
         &.{"notes.txt"},
         &.{"run"},
         &.{"luce"},
-        &.{"edit"},
     };
     for (wrong) |arguments| {
         var ran = try runLoom(gpa, &install, arguments, null, null);
@@ -539,7 +528,6 @@ test "every form loom does not have answers with usage, and every usage names th
         for ([_][]const u8{
             "loom run PROGRAM.lc",
             "loom luce PROGRAM.luc",
-            "loom edit FILE [FILE ...]",
         }) |form| {
             try testing.expect(ran.saysErr(form));
         }
@@ -748,37 +736,6 @@ test "a script piped into loom ends on the worst thing any line did" {
     var raised = try runLoom(gpa, &install, &.{}, null, raising);
     defer raised.deinit(gpa);
     try testing.expectEqual(@as(u8, 3), raised.status);
-}
-
-test "LOOM_EDITOR names the program edit runs, in place of the embedded one" {
-    // The override is what lets a person keep their own editor, and it
-    // is the one thing about `edit` that can be proved without a
-    // terminal to draw on.
-    const gpa = testing.allocator;
-    var install = try installTree(gpa, true);
-    defer install.deinit(gpa);
-    try install.write("mine.luc",
-        \\func main(args: list(string)):
-        \\    print("editing " + args[0])
-        \\
-    );
-    const editor = try install.at(gpa, "mine.luc");
-    defer gpa.free(editor);
-
-    var environment = try environmentWith(gpa, &.{.{ "LOOM_EDITOR", editor }});
-    defer environment.deinit();
-
-    var ran = try runLoom(gpa, &install, &.{ "edit", "notes.txt" }, &environment, null);
-    defer ran.deinit(gpa);
-    try testing.expectEqual(@as(u8, 0), ran.status);
-    try testing.expectEqualStrings("editing notes.txt\n", ran.out);
-
-    // And through the shell, where `edit` is a command rather than a
-    // command line.
-    var piped = try runLoom(gpa, &install, &.{}, &environment, "edit other.txt\nexit\n");
-    defer piped.deinit(gpa);
-    try testing.expectEqual(@as(u8, 0), piped.status);
-    try testing.expect(piped.saysOut("editing other.txt\n"));
 }
 
 // ---------------------------------------------------------------------------

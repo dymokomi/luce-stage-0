@@ -216,16 +216,20 @@ Two programs cannot be shown here, because they draw on a real screen.
 `examples/life/life.luc` is Conway's Life on the terminal grid.
 
 `examples/editor/editor.luc` is the flagship: a full-screen editor with
-movement, editing, scrolling, line numbers, a status bar and per-line
-Luce syntax highlighting — 589 lines, written entirely in Luce. Its
-source ships embedded in the `loom` binary, so `loom edit` always
-works, and a test in the repository compiles the embedded copy so it
-can never rot, while another drives it through every key it handles
-and compares the whole terminal transcript, byte for byte, on both
-engines.
+movement, editing, scrolling, line numbers, a status bar, a file pane,
+an output pane and per-line Luce syntax highlighting — about 1,100
+lines, written entirely in Luce. It is also the first Luce program to
+carry a **dependency**: it draws through the `termui` package, which
+owns the cell grid, the frame diff, the rectangles and the event
+union, so the editor writes what should be on the screen and never an
+escape byte. The build installs it as an ordinary program — `loom run
+examples/editor/editor.lc notes.txt`, or the standalone `editor`
+command — and compiles it on every build so it cannot rot, while a
+test drives it through every key it handles and compares the whole
+terminal transcript, byte for byte, on both engines.
 
 ```sh
-build/loom edit notes.txt          # Ctrl-S saves, Ctrl-Q quits
+build/editor notes.txt             # Ctrl-S saves, Ctrl-Q quits
 build/loom run examples/life/life.lc
 ```
 

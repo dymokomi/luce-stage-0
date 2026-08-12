@@ -1,6 +1,13 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
+/// termui's modules, entry module first (docs/TERMUI.md D12).  The
+/// package is userland, and three things in this file need to name its
+/// files: the editor's compiles (it imports them), the specs (they
+/// compile the editor), and the package's own test run.
+const termui_version = "0.1.0";
+const termui_modules = [_][]const u8{ "termui", "screen", "events", "border", "rows" };
+
 // LuciaOS v2 builds two executables from one language module:
 //
 //   luce  — the compiler (.luc source in, a native .lc out)
@@ -8,8 +15,9 @@ const builtin = @import("builtin");
 //
 // zig build installs both plus the compiled bundled programs
 // (examples/*/*.luc -> PREFIX/examples/*/*.lc); zig build test runs the
-// language suite and both app suites.  The editor rides inside the
-// loom binary as embedded Luce source, so `loom edit` needs no paths.
+// language suite and both app suites.  The editor is one of those
+// bundled programs and is installed as a standalone `editor` binary
+// too — loom carries no editor of its own (owner, 2026-08-12).
 //
 // **Only `luce` links libLLVM, and that is a decision about what the
 // two binaries are.**  libLLVM is 164 MB; dyld maps and binds it before
@@ -156,6 +164,13 @@ pub fn build(b: *std.Build) void {
     specs.addAnonymousImport("editor_model.luc", .{
         .root_source_file = b.path("examples/editor/editor_model.luc"),
     });
+    // …and the package it draws through, which `editor_spec.zig`
+    // serves to the compile as a store would (docs/PACKAGES.md D4).
+    for (termui_modules) |module| {
+        specs.addAnonymousImport(b.fmt("termui/{s}.luc", .{module}), .{
+            .root_source_file = b.path(b.fmt("packages/termui-0.1.0/{s}.luc", .{module})),
+        });
+    }
 
     // The five files of the adventure engine, for the same reason and
     // by the same road: a spec that drives the game has to drive the
@@ -487,7 +502,7 @@ pub fn build(b: *std.Build) void {
     compiler_product.addOptions("build_options", compiler_pieces);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = compiler_product })).step);
 
-    // The loom terminal, with the editor source embedded.
+    // The loom terminal.
     const terminal_module = b.createModule(.{
         .root_source_file = b.path("src/apps/loom/main.zig"),
         .target = target,
@@ -501,12 +516,6 @@ pub fn build(b: *std.Build) void {
             .{ .name = "report", .module = app_report },
             .{ .name = "streams", .module = app_streams },
         },
-    });
-    terminal_module.addAnonymousImport("editor.luc", .{
-        .root_source_file = b.path("examples/editor/editor.luc"),
-    });
-    terminal_module.addAnonymousImport("editor_model.luc", .{
-        .root_source_file = b.path("examples/editor/editor_model.luc"),
     });
     const terminal_options = b.addOptions();
     terminal_options.addOption([]const u8, "version", project_version);
@@ -580,9 +589,16 @@ pub fn build(b: *std.Build) void {
     // is a file input so a change to the runtime rebuilds every
     // program that carries a copy of it.
     const runtime_directory = b.getInstallPath(.lib, "");
-    const bundled = [_]struct { name: []const u8, deps: []const []const u8 = &.{} }{
+    const bundled = [_]struct {
+        name: []const u8,
+        deps: []const []const u8 = &.{},
+        /// True for a program under a `luce.yaml` that wants termui:
+        /// its manifest and the package's files are inputs too, so
+        /// editing either recompiles it.
+        wants_termui: bool = false,
+    }{
         .{ .name = "hello" },
-        .{ .name = "editor" },
+        .{ .name = "editor", .wants_termui = true },
         .{ .name = "sort" },
         .{ .name = "bf" },
         .{ .name = "wordcount" },
@@ -603,6 +619,7 @@ pub fn build(b: *std.Build) void {
             compile_program.addFileInput(b.path(b.fmt("examples/{s}/{s}.luc", .{ program.name, dependency })));
         }
         linkAgainstRuntime(compile_program, install_runtime, runtime_directory, runtime_archive);
+        if (program.wants_termui) addTermuiPackage(b, compile_program, runtime_directory, program.name);
         const install_program = b.addInstallFile(
             artifact_file,
             b.fmt("examples/{s}/{s}.lc", .{ program.name, program.name }),
@@ -628,7 +645,7 @@ pub fn build(b: *std.Build) void {
     }{
         .{
             .directory = "termui-0.1.0",
-            .modules = &.{ "termui", "screen", "events", "border", "rows" },
+            .modules = &termui_modules,
             .tests = &.{ "layout", "screen", "events", "border", "rows" },
         },
     };
@@ -649,6 +666,21 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&test_package.step);
     }
 
+    // The editor carries tests of its own now that its pure pieces —
+    // the layout arithmetic and the keymap — are a module a test can
+    // import (docs/TESTING.md).  Same runner, same shape as a
+    // package's, driven from the editor's own project root.
+    const test_editor = b.addRunArtifact(compiler);
+    test_editor.addArg("test");
+    test_editor.setCwd(b.path("examples/editor"));
+    test_editor.addFileInput(b.path("examples/editor/editor_model.luc"));
+    for ([_][]const u8{ "layout", "keymap" }) |one| {
+        test_editor.addFileInput(b.path(b.fmt("examples/editor/tests/{s}_test.luc", .{one})));
+    }
+    linkAgainstRuntime(test_editor, install_runtime, runtime_directory, runtime_archive);
+    addTermuiPackage(b, test_editor, runtime_directory, "editor");
+    test_step.dependOn(&test_editor.step);
+
     // The editor is also useful as a standalone command.  Keep this
     // executable in the build graph beside the `.lc`: the source and its
     // imported model are explicit inputs, so editing either one rebuilds
@@ -666,6 +698,7 @@ pub fn build(b: *std.Build) void {
     compile_editor.step.dependOn(&install_start.step);
     compile_editor.addFileInput(start_library.getEmittedBin());
     linkAgainstRuntime(compile_editor, install_runtime, runtime_directory, runtime_archive);
+    addTermuiPackage(b, compile_editor, runtime_directory, "editor");
     const install_editor = b.addInstallFile(editor_executable, "editor");
     const install_editor_example = b.addInstallFile(editor_executable, "examples/editor/editor");
     b.getInstallStep().dependOn(&install_editor.step);
@@ -699,6 +732,33 @@ pub fn build(b: *std.Build) void {
 }
 
 /// Give one `luce build` run what it needs to link: the installed
+/// Let one `luce` run resolve the termui package: `packages/` joins
+/// the runtime's directory on `LUCE_LIB`, which is a search path
+/// serving both of its meanings — where `libluce_rt.a` is, and which
+/// shelves hold packages (docs/PACKAGES.md D3).  The program's
+/// manifest is what makes the shelf answer at all, and every file the
+/// dependency contributes is an input, so editing one recompiles the
+/// programs that draw with it.
+///
+/// Call this *after* `linkAgainstRuntime`, whose `LUCE_LIB` this
+/// widens.
+fn addTermuiPackage(
+    b: *std.Build,
+    run: *std.Build.Step.Run,
+    runtime_directory: []const u8,
+    program: []const u8,
+) void {
+    run.setEnvironmentVariable("LUCE_LIB", b.fmt("{s}{c}{s}", .{
+        runtime_directory,
+        std.fs.path.delimiter,
+        b.pathFromRoot("packages"),
+    }));
+    run.addFileInput(b.path(b.fmt("examples/{s}/luce.yaml", .{program})));
+    for (termui_modules) |module| {
+        run.addFileInput(b.path(b.fmt("packages/termui-{s}/{s}.luc", .{ termui_version, module })));
+    }
+}
+
 /// runtime library on `LUCE_LIB`, the install ordered before the
 /// compile, and the library itself as an input so the cached result is
 /// thrown away when the runtime changes.

@@ -1,9 +1,9 @@
 //! The loom shell: a small colored line terminal over the runner.
 //!
 //! Commands launch Luce programs; everything durable belongs to the
-//! programs and the filesystem, not to the shell.  The editor is a
-//! Luce program too — its source ships inside the loom binary (see
-//! build.zig), and LOOM_EDITOR overrides it with a .luc file on disk.
+//! programs and the filesystem, not to the shell.  The editor is an
+//! ordinary installed program — `examples/editor/editor.lc`, run like
+//! any other (owner, 2026-08-12: loom does not carry one).
 //!
 //! ## Interactive and not are different about failure
 //!
@@ -15,17 +15,11 @@
 //! loom's own (`apps/host.zig` names the numbers).
 
 const std = @import("std");
-const files = @import("files");
 const runner = @import("runner.zig");
 const palette_mod = @import("palette");
 const report = @import("report");
 
 const Allocator = std.mem.Allocator;
-
-const embedded_editor = @embedFile("editor.luc");
-const embedded_editor_files = [_]files.MemoryFile{
-    .{ .name = "editor_model", .source = @embedFile("editor_model.luc") },
-};
 
 pub const Shell = struct {
     gpa: Allocator,
@@ -33,7 +27,6 @@ pub const Shell = struct {
     out: *std.Io.Writer,
     err: *std.Io.Writer,
     palette: palette_mod.Palette,
-    editor_override: ?[]const u8,
     /// Where a program launched from here gets compiled (runner.zig).
     policy: runner.Policy = .{},
 
@@ -141,11 +134,6 @@ pub const Shell = struct {
                 rest[1..],
             ) };
         }
-        if (std.mem.eql(u8, command, "edit")) {
-            if (rest.len == 0) return self.complain("edit FILE [FILE ...]");
-            return .{ .status = try self.edit(rest) };
-        }
-
         // A bare program path runs directly: hello.lc, tools/fmt.luc 2 3.
         if (std.mem.endsWith(u8, command, ".lc")) {
             return .{ .status = try runner.runModule(
@@ -179,30 +167,6 @@ pub const Shell = struct {
         return .{ .status = report.exit_trapped };
     }
 
-    /// Run the editor on one or more files: the LOOM_EDITOR script when
-    /// set, the embedded editor otherwise.
-    pub fn edit(self: *Shell, arguments: []const []const u8) !u8 {
-        if (self.editor_override) |editor_path| {
-            return runner.runScript(self.gpa, self.io, self.out, self.err, self.policy, editor_path, arguments);
-        }
-        var loader: files.MemoryLoader = .{ .files = &embedded_editor_files };
-        return runner.runSource(
-            self.gpa,
-            self.io,
-            self.out,
-            self.err,
-            self.policy,
-            "editor",
-            embedded_editor,
-            loader.loader(),
-            // No discovery for an in-memory program: `loom edit`
-            // inside somebody's project must not resolve the editor's
-            // own imports against that project (docs/PACKAGES.md D1).
-            "",
-            arguments,
-        );
-    }
-
     fn help(self: *Shell) !void {
         const accent = self.palette.sgr(.prompt);
         const dim = self.palette.sgr(.dim);
@@ -210,12 +174,10 @@ pub const Shell = struct {
         try self.out.print(
             "  {s}run{s} PROGRAM.lc [ARGS]   {s}run a compiled Luce program{s}\n" ++
                 "  {s}luce{s} PROGRAM.luc [ARGS] {s}compile and run a Luce source file{s}\n" ++
-                "  {s}edit{s} FILE [FILE ...]     {s}open the Luce editor (LOOM_EDITOR overrides){s}\n" ++
                 "  {s}clear{s}                  {s}clear the screen{s}\n" ++
                 "  {s}exit{s}                   {s}leave loom{s}\n" ++
                 "  {s}a bare PROGRAM.lc or .luc path runs it directly{s}\n",
             .{
-                accent, reset, dim, reset,
                 accent, reset, dim, reset,
                 accent, reset, dim, reset,
                 accent, reset, dim, reset,
@@ -269,7 +231,6 @@ fn scripted(text: []const u8, out: *std.Io.Writer.Allocating, err: *std.Io.Write
         .out = &out.writer,
         .err = &err.writer,
         .palette = .{ .enabled = false },
-        .editor_override = null,
     };
     return shell.run(&reader, false);
 }
@@ -311,8 +272,7 @@ test "a non-interactive loom exits with the worst status any line produced" {
     );
 }
 
-/// One line, put through `dispatch` with both channels captured and
-/// the shell told what to use for an editor.
+/// One line, put through `dispatch` with both channels captured.
 ///
 /// Every command the shell has goes through that one function, and
 /// until this existed nothing had ever called it: the two tests above
@@ -325,7 +285,7 @@ const Dispatched = struct {
     out: std.Io.Writer.Allocating,
     err: std.Io.Writer.Allocating,
 
-    fn of(self: *Dispatched, line: []const u8, colored: bool, editor: ?[]const u8) !void {
+    fn of(self: *Dispatched, line: []const u8, colored: bool) !void {
         self.out = .init(testing.allocator);
         errdefer self.out.deinit();
         self.err = .init(testing.allocator);
@@ -336,7 +296,6 @@ const Dispatched = struct {
             .out = &self.out.writer,
             .err = &self.err.writer,
             .palette = .{ .enabled = colored },
-            .editor_override = editor,
         };
         self.outcome = try shell.dispatch(line);
     }
@@ -351,7 +310,7 @@ const Dispatched = struct {
 /// nothing on standard error.
 fn expectQuiet(line: []const u8) !void {
     var ran: Dispatched = undefined;
-    try ran.of(line, false, null);
+    try ran.of(line, false);
     defer ran.deinit();
     try testing.expect(ran.outcome.keep_going);
     try testing.expectEqual(@as(u8, report.exit_ok), ran.outcome.status);
@@ -362,7 +321,7 @@ fn expectQuiet(line: []const u8) !void {
 /// standard error, and scores the line as failed.
 fn expectRejected(line: []const u8, mentioning: []const u8) !void {
     var ran: Dispatched = undefined;
-    try ran.of(line, false, null);
+    try ran.of(line, false);
     defer ran.deinit();
     try testing.expect(ran.outcome.keep_going);
     try testing.expectEqual(@as(u8, report.exit_trapped), ran.outcome.status);
@@ -391,7 +350,7 @@ test "a blank line is not a command, and too many words is not one either" {
 test "leaving is spelled two ways and both stop the shell without a word" {
     for ([_][]const u8{ "exit", "quit" }) |word| {
         var ran: Dispatched = undefined;
-        try ran.of(word, false, null);
+        try ran.of(word, false);
         defer ran.deinit();
         try testing.expect(!ran.outcome.keep_going);
         try testing.expectEqual(@as(u8, report.exit_ok), ran.outcome.status);
@@ -401,26 +360,26 @@ test "leaving is spelled two ways and both stop the shell without a word" {
     // Arguments after it are not an error: `exit 0` is what a hand
     // types, and there is nothing for the number to mean here.
     var with_argument: Dispatched = undefined;
-    try with_argument.of("exit 0", false, null);
+    try with_argument.of("exit 0", false);
     defer with_argument.deinit();
     try testing.expect(!with_argument.outcome.keep_going);
 }
 
 test "help names every command the shell has" {
     var ran: Dispatched = undefined;
-    try ran.of("help", false, null);
+    try ran.of("help", false);
     defer ran.deinit();
     try testing.expect(ran.outcome.keep_going);
     try testing.expectEqualStrings("", ran.err.written());
     // Help that does not list a command is help that hides one.
-    for ([_][]const u8{ "run", "luce", "edit", "clear", "exit" }) |command| {
+    for ([_][]const u8{ "run", "luce", "clear", "exit" }) |command| {
         try testing.expect(std.mem.indexOf(u8, ran.out.written(), command) != null);
     }
 }
 
 test "clear writes the escape sequence only where escapes are read" {
     var colored: Dispatched = undefined;
-    try colored.of("clear", true, null);
+    try colored.of("clear", true);
     defer colored.deinit();
     try testing.expectEqualStrings("\x1b[2J\x1b[H", colored.out.written());
 
@@ -428,7 +387,7 @@ test "clear writes the escape sequence only where escapes are read" {
     // because a `clear` in a piped script would otherwise put an
     // escape sequence in somebody's log file.
     var plain: Dispatched = undefined;
-    try plain.of("clear", false, null);
+    try plain.of("clear", false);
     defer plain.deinit();
     try testing.expectEqualStrings("", plain.out.written());
 }
@@ -436,21 +395,11 @@ test "clear writes the escape sequence only where escapes are read" {
 test "every command that takes a file says so when it is given none" {
     try expectRejected("run", "run PROGRAM.lc [ARGS]");
     try expectRejected("luce", "luce PROGRAM.luc [ARGS]");
-    try expectRejected("edit", "edit FILE [FILE ...]");
-}
-
-test "edit passes multiple files to the selected editor" {
-    var ran: Dispatched = undefined;
-    try ran.of("edit one.txt two.txt", false, "no/such/editor.luc");
-    defer ran.deinit();
-    try testing.expect(ran.outcome.keep_going);
-    try testing.expectEqual(@as(u8, 1), ran.outcome.status);
-    try testing.expect(std.mem.indexOf(u8, ran.err.written(), "no/such/editor.luc") != null);
 }
 
 test "a command nobody has is named back, and counts as a line that failed" {
     var ran: Dispatched = undefined;
-    try ran.of("rnu hello.lc", false, null);
+    try ran.of("rnu hello.lc", false);
     defer ran.deinit();
     try testing.expect(ran.outcome.keep_going);
     try testing.expectEqual(@as(u8, report.exit_trapped), ran.outcome.status);
@@ -475,19 +424,6 @@ test "a bare path runs, and reaches the same refusals the named commands do" {
     try expectRejected("no/such/program.lc alpha beta", "no such file");
 }
 
-test "edit runs the editor LOOM_EDITOR names, in place of the embedded one" {
-    // The override is what lets a person use their own editor, and
-    // what keeps the embedded one out of a test that has no compiler
-    // to build it with.  A file that is not there proves the override
-    // was taken: the message names *that* path, not `editor`.
-    var ran: Dispatched = undefined;
-    try ran.of("edit notes.txt", false, "no/such/editor.luc");
-    defer ran.deinit();
-    try testing.expectEqual(@as(u8, 1), ran.outcome.status);
-    try testing.expect(std.mem.indexOf(u8, ran.err.written(), "no/such/editor.luc") != null);
-    try testing.expect(std.mem.indexOf(u8, ran.err.written(), "no such file") != null);
-}
-
 test "an interactive loom always leaves cleanly" {
     // The other half of the rule: a person at a prompt has already
     // been shown every failure, and a shell that exited nonzero
@@ -505,27 +441,6 @@ test "an interactive loom always leaves cleanly" {
         .out = &out.writer,
         .err = &err.writer,
         .palette = .{ .enabled = false },
-        .editor_override = null,
     };
     try testing.expectEqual(@as(u8, 0), try shell.run(&reader, true));
-}
-
-test "the embedded editor source compiles as a hosted script" {
-    var loader: files.MemoryLoader = .{ .files = &embedded_editor_files };
-    var result = try @import("luce").compile.compileProject(
-        testing.allocator,
-        embedded_editor,
-        loader.loader(),
-        runner.compile_options,
-    );
-    defer result.deinit();
-    switch (result) {
-        .success => {},
-        .failure => |*diagnostics| {
-            const rendered = try diagnostics.render(testing.allocator);
-            defer testing.allocator.free(rendered);
-            std.debug.print("editor diagnostics:\n{s}", .{rendered});
-            return error.TestUnexpectedResult;
-        },
-    }
 }

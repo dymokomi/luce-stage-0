@@ -250,11 +250,11 @@ pub fn runScript(
 
 /// Compile source bytes (already in memory) and run them.  `name` is
 /// the path they came from when there is one — it names diagnostics
-/// and decides where a native artifact is kept.  The embedded editor
-/// passes a bare name, which has no directory and so caches by hash.
-/// `source_root` is the project root token discovery answered for the
-/// path — the same token the loader will stamp on every module it
-/// answers — and "" for rootless and in-memory programs.
+/// and decides where a native artifact is kept; a bare name has no
+/// directory and so caches by hash.  `source_root` is the project root
+/// token discovery answered for the path — the same token the loader
+/// will stamp on every module it answers — and "" for rootless
+/// programs.
 pub fn runSource(
     gpa: Allocator,
     io: std.Io,

@@ -834,7 +834,7 @@ pub const Host = struct {
     /// of zero bytes on a descriptor set to block is end of input and
     /// nothing else — the pipe closed, the file ran out — so going
     /// round again asks a question already answered, forever, at the
-    /// speed of the loop.  That is what it used to do: `loom edit`
+    /// speed of the loop.  That is what it used to do: the editor
     /// with standard input on `/dev/null` never returned, at 97% of a
     /// core.
     ///

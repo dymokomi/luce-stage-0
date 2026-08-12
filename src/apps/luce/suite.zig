@@ -107,7 +107,7 @@ pub fn run(
             // own words, and there is nothing to run afterwards.
             .unparsed => {
                 try out.print("{s}\n", .{found.path});
-                switch (try compile(gpa, io, out, found.path, &.{})) {
+                switch (try compile(gpa, io, out, options.library_path, found.path, &.{})) {
                     .program => |compiled| {
                         var program = compiled;
                         program.deinit();
@@ -123,6 +123,7 @@ pub fn run(
                 err,
                 &tools,
                 options.palette,
+                options.library_path,
                 found.path,
                 names,
                 &tally,
@@ -155,13 +156,14 @@ fn runFile(
     err: *std.Io.Writer,
     tools: *const native.Tools,
     palette: Palette,
+    library_path: ?[]const u8,
     path: []const u8,
     names: []const []const u8,
     tally: *Tally,
 ) !void {
     try out.print("{s}\n", .{path});
 
-    var program = switch (try compile(gpa, io, out, path, names)) {
+    var program = switch (try compile(gpa, io, out, library_path, path, names)) {
         .program => |compiled| compiled,
         .refused => |why| {
             // An import that could not be reached from a rootless test
@@ -254,10 +256,16 @@ fn compile(
     gpa: Allocator,
     io: std.Io,
     out: *std.Io.Writer,
+    library_path: ?[]const u8,
     path: []const u8,
     names: []const []const u8,
 ) !front.Outcome {
     return front.compilePath(gpa, io, out, path, .{
+        // The same `LUCE_LIB` a build reads, for the same reason: a
+        // test file imports what its program imports, and a package
+        // that resolves for `luce build` and not for `luce test` is a
+        // suite that cannot be run (docs/PACKAGES.md D3).
+        .library_path = library_path,
         // `luce test` takes no build options and always builds debug:
         // the report leans on trap origins, and `--release` strips
         // them (docs/TESTING.md D2).

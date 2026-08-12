@@ -1027,45 +1027,6 @@ fn probePackage(
     return probeTree(io, arena, package.directory, name, package.token);
 }
 
-/// A loader for a small set of sources already held by the host.  Loom
-/// uses it for the editor bundled inside the binary: the root editor and
-/// its sibling modules still go through the ordinary project loader, but
-/// no temporary source files have to be created just to start `loom edit`.
-pub const MemoryFile = struct {
-    name: []const u8,
-    source: []const u8,
-};
-
-pub const MemoryLoader = struct {
-    files: []const MemoryFile,
-
-    fn load(
-        context: *anyopaque,
-        arena: Allocator,
-        name: []const u8,
-        from_root: []const u8,
-    ) error{OutOfMemory}!luce.source.Found {
-        const self: *MemoryLoader = @ptrCast(@alignCast(context));
-        for (self.files) |file| {
-            if (!std.mem.eql(u8, file.name, name)) continue;
-            return .{
-                .text = .{
-                    .bytes = try arena.dupe(u8, file.source),
-                    .path = try std.fmt.allocPrint(arena, "{s}.luc", .{name}),
-                    // No discovery ever ran for these files, so the only
-                    // token in play is the one the compile was given.
-                    .root = from_root,
-                },
-            };
-        }
-        return .missing;
-    }
-
-    pub fn loader(self: *MemoryLoader) luce.compile.Loader {
-        return .{ .context = self, .load = load };
-    }
-};
-
 /// Why a thing that is not a regular file cannot be a module.  Saying
 /// which kind it is costs nothing and is the difference between "fix
 /// the path" and "why not?".
@@ -1514,9 +1475,9 @@ test "discovery is lexical: a symlinked directory resolves against the tree that
 }
 
 test "standard input gets no discovery" {
-    // `loom edit` inside somebody's project must not resolve against
-    // that project, and neither may a program piped from anywhere: a
-    // pathless root has no directory to walk from, so none is invented.
+    // A program piped from anywhere must not resolve against whatever
+    // project the cwd happens to sit in: a pathless root has no
+    // directory to walk from, so none is invented.
     var arena = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena.deinit();
     try testing.expect((try discoverProject(arena.allocator(), testing.io, standard_input)) == .rootless);

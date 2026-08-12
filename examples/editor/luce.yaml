@@ -1,0 +1,13 @@
+# The editor is the first dependency-carrying program (docs/PACKAGES.md).
+#
+# The want list is the gate: `termui` at exactly this version, resolved
+# from whichever shelf `LUCE_LIB` names — `packages/` in this
+# repository, which is what `build.zig` puts there and what a person
+# building the editor by hand supplies:
+#
+#   LUCE_LIB=$PWD/build/lib:$PWD/packages luce build examples/editor/editor.luc
+name: editor
+version: 1.0.0
+
+packages:
+  termui: 0.1.0

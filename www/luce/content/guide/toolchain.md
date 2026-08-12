@@ -112,7 +112,6 @@ target — is not built yet.
 loom                        the interactive shell
 loom run PROGRAM.lc [ARGS]  run a compiled program
 loom luce PROGRAM.luc [..]  compile a source file and run it
-loom edit FILE              open the Luce editor
 loom PROGRAM.lc [ARGS]      shorthand for run
 ```
 

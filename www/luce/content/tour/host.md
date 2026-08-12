@@ -296,7 +296,7 @@ scrolling, line numbers, a status bar and per-line Luce syntax
 highlighting, written entirely in Luce.
 
 ```sh
-build/loom edit notes.txt
+build/editor notes.txt
 ```
 
 ## The host gate

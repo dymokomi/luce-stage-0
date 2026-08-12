@@ -1,9 +1,11 @@
 # The loom editor — a modern terminal editor written in Luce, for Luce.
 #
-# Runs on the loom terminal builtins: the host owns raw mode and escape
-# sequences, this program owns every editing decision.  Per-line syntax
-# highlighting for Luce: keywords, capitalized type names, builtins,
-# strings, numbers, and comments.
+# The first Luce program to carry a dependency: it draws through
+# **termui** (docs/TERMUI.md), which owns the cell grid, the diff, the
+# rectangles and the event union, while the host owns raw mode and
+# every escape byte and this program owns every editing decision.
+# Per-line syntax highlighting for Luce: keywords, capitalized type
+# names, builtins, strings, numbers, and comments.
 #
 #   loom edit FILE [FILE ...] (or: loom run editor.lc FILE [FILE ...])
 #   Ctrl-S save   Ctrl-B build/run   Ctrl-Q quit (twice to discard changes)
@@ -11,51 +13,56 @@
 #
 # Nothing here is reachable from another module, so everything but
 # `main` is `private` (docs/VISIBILITY.md): the file is the unit, and
-# what a program's insides are called is nobody else's business.
+# what a program's insides are called is nobody else's business.  What
+# a *test* can drive — the layout arithmetic, the keymap — lives in
+# `editor_model.luc` beside it, and `tests/` drives it there.
 
-import editor_model
+import editor_model as model
 import std.files
 import std.os
 import std.paths
 import std.strings
 import std.term
+import termui
+import termui.events
+import termui.rows
+import termui.screen
 
+# **termui ships no theme, deliberately** (docs/TERMUI.md D3): a
+# library that owns the palette owns the app's identity, and the
+# editor's syntax colours are the editor's.  A theme is a struct of
+# styles the app declares as a constant, which is exactly what this is.
 private struct Theme:
-    keyword: long
-    type_name: long
-    builtin: long
-    text: long
-    number: long
-    comment: long
-    plain: long
-    punct: long
-    gutter: long
-    gutter_current: long
-    status_fg: long
-    status_bg: long
-    alert: long
-    pane_border: long
-    pane_active: long
-    pane_active_bg: long
+    keyword: termui.Style
+    type_name: termui.Style
+    builtin: termui.Style
+    text: termui.Style
+    number: termui.Style
+    comment: termui.Style
+    plain: termui.Style
+    punct: termui.Style
+    gutter: termui.Style
+    gutter_current: termui.Style
+    status: termui.Style
+    selected: termui.Style
+    pane_border: termui.Style
+    pane_active: termui.Style
 
-# One file-scope constant instead of a function per color.
 private const theme = Theme(
-    keyword = 176,
-    type_name = 80,
-    builtin = 74,
-    text = 114,
-    number = 215,
-    comment = 244,
-    plain = 252,
-    punct = 249,
-    gutter = 240,
-    gutter_current = 250,
-    status_fg = 252,
-    status_bg = 237,
-    alert = 215,
-    pane_border = 238,
-    pane_active = 255,
-    pane_active_bg = 236,
+    keyword = termui.Style(foreground = 176, bold = true),
+    type_name = termui.Style(foreground = 80),
+    builtin = termui.Style(foreground = 74),
+    text = termui.Style(foreground = 114),
+    number = termui.Style(foreground = 215),
+    comment = termui.Style(foreground = 244),
+    plain = termui.Style(foreground = 252),
+    punct = termui.Style(foreground = 249),
+    gutter = termui.Style(foreground = 240),
+    gutter_current = termui.Style(foreground = 250),
+    status = termui.Style(foreground = 252, background = 237),
+    selected = termui.Style(foreground = 252, background = 237, bold = true),
+    pane_border = termui.Style(foreground = 238),
+    pane_active = termui.Style(foreground = 255, background = 236, bold = true),
 )
 
 # Luce's lexer uses the same four-column step, and the editor writes
@@ -87,6 +94,10 @@ private struct Bytes:
         return Bytes.is_word_start(byte) or Bytes.is_digit(byte) or Bytes.continuation(byte)
 
 # UTF-8 boundaries, lines and columns over a whole buffer.
+#
+# This is where the cursor lives, so it is bytes and boundaries rather
+# than display cells; how wide a string *draws* is `strings.width`,
+# which termui made the one answer to that question (D11).
 private struct Text:
     static func previous_boundary(value: string, cursor: long) -> long:
         if cursor <= 0:
@@ -206,14 +217,6 @@ private struct Text:
             current = current + 1
         return at
 
-    static func width(value: string) -> long:
-        var at: long = 0
-        var columns = 0
-        while at < len(value):
-            at = Text.next_boundary(value, at)
-            columns = columns + 1
-        return columns
-
 private struct Editing:
     static func splice(value: string, cursor: long, extra: string) -> string:
         return value[0:cursor] + extra + value[cursor:len(value)]
@@ -293,7 +296,7 @@ private const builtin_words = {
     "trap": true, "trunc": true,
 }
 
-# What a word in a source line is, and the color that says so.
+# What a word in a source line is, and the style that says so.
 #
 # This used to be a `long` and the comment `# 1 keyword, 2 type name,
 # 3 builtin, 0 plain` — an enum written down in prose, dispatched on
@@ -326,146 +329,76 @@ private enum Word:
             return Word.builtin
         return Word.plain
 
-    func style():
+    # A style is a value, so this answers one instead of performing
+    # one: what the screen does with it is the screen's business.
+    func style() -> termui.Style:
         match self:
             keyword:
-                term.style(theme.keyword, bold = true)
+                return theme.keyword
             type_name:
-                term.style(theme.type_name)
+                return theme.type_name
             builtin:
-                term.style(theme.builtin)
+                return theme.builtin
             plain:
-                term.style(theme.plain)
+                return theme.plain
 
-# What a keystroke means to the editor.
+# What the file pane shows, and the one thing that owns it.
 #
-# **The wart this deletes.**  `State.key` used to take the host's key
-# *name* and dispatch on it with fifteen string comparisons in one
-# `elif` chain with no final `else`: a misspelled `"page_dwon"`
-# compiled and silently did nothing, and exhaustiveness is exactly the
-# property a chain of comparisons cannot state (docs/ENUMS.md).  The
-# host's stable key names (`src/apps/host.zig`'s `keyView`) are
-# translated to intents *once*, here at the edge, and every key the
-# editor does not bind arrives as `ignored` — named, not fallen
-# through.  Past this function the editor never compares a string to
-# decide what to do, and `match` refuses to compile with a member
-# missing an arm.
-private enum Intent:
-    move_left
-    move_right
-    move_up
-    move_down
-    page_up
-    page_down
-    line_start
-    line_end
-    erase_left
-    erase_right
-    newline
-    indent
-    # `insert_text` rather than `insert`: `insert` is a list method,
-    # and the language reserves the method names for the receivers
-    # that answer to them (`luce.sema.reserved`).
-    insert_text
-    save
-    build
-    toggle_files
-    toggle_output
-    next_pane
-    escape
-    quit
-    # Every other key the terminal can send — `escape`, `ctrl_a`, a
-    # control the editor has no use for.  It is a member, so the
-    # `match` that handles it has to say so out loud.
-    ignored
+# **This struct exists for an ownership reason, and it is the one thing
+# the migration had to learn.**  A bound method takes its receiver by
+# *borrow*: the function value's two-slot run holds the receiver's
+# handles the way a struct copy would (docs/BINDING.md, OWNERSHIP.md
+# S26).  So a receiver whose container field is later **replaced**
+# leaves the provider pointing at a list that has since been freed —
+# `use_after_free`, at the first row the pane draws.  A listing that is
+# emptied and refilled in place can never do that, and a struct of its
+# own is what makes the rule small enough to state and keep.
+private struct Names:
+    rows: list(string)
 
-    # The whole of the translation, and the only place in the editor
-    # a key name is a string.  A name this does not know is `ignored`
-    # by the last line rather than by falling off the end of a chain.
-    static func of(name: string) -> Intent:
-        if name == "left":
-            return Intent.move_left
-        if name == "right":
-            return Intent.move_right
-        if name == "up":
-            return Intent.move_up
-        if name == "down":
-            return Intent.move_down
-        if name == "page_up":
-            return Intent.page_up
-        if name == "page_down":
-            return Intent.page_down
-        if name == "home":
-            return Intent.line_start
-        if name == "end":
-            return Intent.line_end
-        if name == "backspace":
-            return Intent.erase_left
-        if name == "delete":
-            return Intent.erase_right
-        if name == "enter":
-            return Intent.newline
-        if name == "tab":
-            return Intent.indent
-        if name == "text":
-            return Intent.insert_text
-        if name == "ctrl_s":
-            return Intent.save
-        if name == "ctrl_b":
-            return Intent.build
-        if name == "ctrl_e":
-            return Intent.toggle_files
-        if name == "ctrl_o":
-            return Intent.toggle_output
-        if name == "ctrl_w":
-            return Intent.next_pane
-        if name == "escape":
-            return Intent.escape
-        if name == "ctrl_q":
-            return Intent.quit
-        return Intent.ignored
+    # The provider: what row `index` says.
+    func at(index: long) -> string:
+        return self.rows[index]
+
+    func count() -> long:
+        return len(self.rows)
+
+    # Replace the listing without replacing the list.
+    func refill(fresh: list(string)):
+        self.rows.clear()
+        for name in fresh:
+            self.rows.append(name)
 
 # The editor's whole state, and the operations on it.
 #
-# `Handle` used to stand at the bottom of this file with four
-# functions that all took `state: State`, opened with `var next =
-# state` and ended with `return next`; every call site wrote `state =
-# Handle.key(state, …)`.  Those were the two halves of a write-back
-# spelled by hand at seven sites.  The methods below update their
-# implied receiver directly, so every call site says only `state.key(…)`.
-#
-# `State` happens to carry only string, long and bool; receiver syntax
-# does not expose that representation fact at the call site.
-private enum Focus:
-    editor
-    files
-    output
-
+# `State` owns the text, the buffers, the listing behind the file pane
+# and the file pane's own widget value.  What it does *not* own is the
+# screen: a `Screen` is passed in to be drawn on, because the loop that
+# owns it is `main`'s (docs/TERMUI.md D1).
 private struct State:
     path: string
     content: string
     message: string
-    buffers: list(editor_model.Buffer)
-    file_names: list(string)
+    buffers: list(model.Buffer)
+    names: Names
+    # The file pane.  A `Rows` holds no container — it holds counters
+    # and a provider — so it is a value, and `self.files` is a field
+    # like any other (docs/TERMUI.md D8).
+    files: rows.Rows
     # Which directory the file pane is showing.  It starts where the
     # editor was started and moves when a person walks into a row.
     directory: string = "."
     active: long = 0
-    file_selected: long = 0
     output: string = ""
     output_scroll: long = 0
     file_pane: bool = false
     output_pane: bool = false
-    focus: Focus = Focus.editor
+    focus: model.Focus = model.Focus.editor
     cursor: long = 0
     scroll: long = 0
     dirty: bool = false
     quit_pending: bool = false
     quit: bool = false
-    layout_rows: long = 0
-    layout_editor_height: long = 1
-    layout_file_width: long = 0
-    layout_text_start: long = 5
 
     # Park the active view before changing files.  Keeping this copy in
     # the module-owned buffer list is what lets two unsaved files live in
@@ -488,6 +421,11 @@ private struct State:
         self.scroll = buffer.scroll
         self.dirty = buffer.dirty
         self.quit_pending = false
+
+    # One line of the build output, by index.
+    func output_line(index: long) -> string:
+        let start = Text.line_at(self.output, index)
+        return self.output[start:Text.line_end(self.output, start)]
 
     # The directory one level up from `here`.
     #
@@ -546,24 +484,25 @@ private struct State:
         free(found)
         if paths.dir(self.path) == self.directory and not names.contains(paths.base(self.path)):
             names.append(paths.base(self.path))
-        self.file_names = give names
-        self.file_selected = 0
-        for index in range(0, len(self.file_names)):
-            if State.under(self.directory, self.file_names[index]) == self.path:
-                self.file_selected = index
+        self.names.refill(names)
+        free(names)
+        self.files.selected = 0
+        for index in range(0, self.names.count()):
+            if State.under(self.directory, self.names.rows[index]) == self.path:
+                self.files.selected = index
                 return
 
-    # Open the selected row, or walk into it.
+    # Open the row at `index`, or walk into it.
     #
     # **Selecting a directory enters it**, which is the whole reason
     # the pane needed kinds: it used to hand a directory name to
     # `files.read` and answer "cannot read src", with nowhere to go
     # from there.  The mark and the walk are one decision — a row a
     # person can see is a directory is a row they will expect to open.
-    func open_selected():
-        if len(self.file_names) == 0:
+    func open_selected(index: long):
+        if index < 0 or index >= self.names.count():
             return
-        let row = self.file_names[self.file_selected]
+        let row = self.names.rows[index]
         if strings.ends_with(row, "/"):
             if row == "../":
                 self.directory = State.parent_of(self.directory)
@@ -574,23 +513,23 @@ private struct State:
             return
         let wanted = State.under(self.directory, row)
         if wanted == self.path:
-            self.focus = Focus.editor
+            self.focus = model.Focus.editor
             return
         self.remember()
-        for index in range(0, len(self.buffers)):
-            if self.buffers[index].path == wanted:
-                self.active = index
+        for other in range(0, len(self.buffers)):
+            if self.buffers[other].path == wanted:
+                self.active = other
                 self.restore()
-                self.focus = Focus.editor
+                self.focus = model.Focus.editor
                 return
         var content = ""
         content = files.read(wanted) catch reason:
             self.message = reason
             return
-        self.buffers.append(editor_model.Buffer(path = wanted, content = content))
+        self.buffers.append(model.Buffer(path = wanted, content = content))
         self.active = len(self.buffers) - 1
         self.restore()
-        self.focus = Focus.editor
+        self.focus = model.Focus.editor
 
     # One shell word, including paths with spaces or shell punctuation.
     static func shell_quote(value: string) -> string:
@@ -610,171 +549,111 @@ private struct State:
             self.message = "build/run finished"
         self.output_scroll = 0
         self.output_pane = true
-        self.focus = Focus.output
+        self.focus = model.Focus.output
 
     func toggle_files():
         self.file_pane = not self.file_pane
         if self.file_pane:
             self.refresh_files()
-        elif self.focus == Focus.files:
-            self.focus = Focus.editor
+        elif self.focus == model.Focus.files:
+            self.focus = model.Focus.editor
 
     func toggle_output():
         self.output_pane = not self.output_pane
         if self.output_pane:
-            self.focus = Focus.output
-        elif self.focus == Focus.output:
-            self.focus = Focus.editor
+            self.focus = model.Focus.output
+        elif self.focus == model.Focus.output:
+            self.focus = model.Focus.editor
 
     func next_pane():
-        if self.focus == Focus.editor:
+        if self.focus == model.Focus.editor:
             if self.file_pane:
-                self.focus = Focus.files
+                self.focus = model.Focus.files
             elif self.output_pane:
-                self.focus = Focus.output
-        elif self.focus == Focus.files:
+                self.focus = model.Focus.output
+        elif self.focus == model.Focus.files:
             if self.output_pane:
-                self.focus = Focus.output
+                self.focus = model.Focus.output
             else:
-                self.focus = Focus.editor
+                self.focus = model.Focus.editor
         else:
             if self.file_pane:
-                self.focus = Focus.files
+                self.focus = model.Focus.files
             else:
-                self.focus = Focus.editor
+                self.focus = model.Focus.editor
 
     # A left click changes the active pane and, in the editor, lands the
-    # cursor at the nearest UTF-8 boundary.  The host has already converted
-    # terminal coordinates to zero based cells; this method only knows the
-    # layout the last frame drew.
-    func pointer(name: string, row: long, column: long, button: long, value: long):
-        if name == "mouse_wheel":
-            if self.focus == Focus.output:
-                self.output_scroll = max(self.output_scroll - value, 0)
-            elif self.focus == Focus.editor:
-                self.scroll = max(self.scroll - value, 0)
+    # cursor at the nearest UTF-8 boundary.  The host has already
+    # converted terminal coordinates to zero based cells, and the whole
+    # report arrives as one `Mouse` value with its numbers copied in
+    # (docs/TERMUI.md D6) rather than as five host calls that the next
+    # event would overwrite.  Where each pane sat is the layout the
+    # frame was just drawn with, handed over rather than remembered.
+    func pointer(mouse: events.Mouse, layout: model.Layout):
+        if mouse.kind == events.Pointer.wheel:
+            if self.focus == model.Focus.output:
+                self.output_scroll = max(self.output_scroll - mouse.wheel, 0)
+            elif self.focus == model.Focus.editor:
+                self.scroll = max(self.scroll - mouse.wheel, 0)
             return
-        if name != "mouse_press" or button != 0:
+        if mouse.kind != events.Pointer.press or mouse.button != 0:
             return
-        if row < 0 or row >= self.layout_rows - 1:
+        let where = layout.pane_at(mouse.row, mouse.column)
+        if where == none:
             return
-        if self.file_pane and column >= 0 and column < self.layout_file_width:
-            self.focus = Focus.files
-            if row > 0 and row - 1 < len(self.file_names):
-                self.file_selected = row - 1
-                self.open_selected()
-                self.focus = Focus.files
-            return
-        if self.output_pane and row >= self.layout_editor_height:
-            self.focus = Focus.output
-            let output_line = row - self.layout_editor_height - 1
-            if output_line >= 0:
-                self.output_scroll = max(output_line, 0)
-            return
-        if row >= self.layout_editor_height:
-            return
-        self.focus = Focus.editor
-        let line_index = self.scroll + row
-        let total = Text.count_lines(self.content)
-        if line_index >= total:
-            return
-        let start = Text.line_at(self.content, line_index)
-        let wanted = max(column - self.layout_text_start, 0)
-        self.cursor = Text.at_column(self.content, start, wanted)
+        match where:
+            files:
+                self.focus = model.Focus.files
+                if mouse.row > 0:
+                    let index = self.files.top + mouse.row - 1
+                    if index < self.names.count():
+                        self.files.selected = index
+                        self.open_selected(index)
+                        self.focus = model.Focus.files
+            output:
+                self.focus = model.Focus.output
+                let line = mouse.row - layout.output.row - 1
+                if line >= 0:
+                    self.output_scroll = max(line, 0)
+            editor:
+                self.focus = model.Focus.editor
+                let line_index = self.scroll + mouse.row
+                if line_index < Text.count_lines(self.content):
+                    let start = Text.line_at(self.content, line_index)
+                    let wanted = max(mouse.column - layout.text_start(), 0)
+                    self.cursor = Text.at_column(self.content, start, wanted)
 
-    func file_key(intent: Intent):
-        let total = len(self.file_names)
-        if total == 0:
+    # The file pane's keys.  Movement is the widget's — `move_by`
+    # answers where it landed — and Enter is `choose()`, whose answer
+    # the editor reads as "open that row" (docs/TERMUI.md D9).
+    func file_key(intent: model.Intent):
+        if self.names.count() == 0:
             return
-        match intent:
-            move_up:
-                self.file_selected = max(self.file_selected - 1, 0)
-            move_down:
-                self.file_selected = min(self.file_selected + 1, total - 1)
-            page_up:
-                self.file_selected = max(self.file_selected - 8, 0)
-            page_down:
-                self.file_selected = min(self.file_selected + 8, total - 1)
-            newline:
-                self.open_selected()
-            move_left:
-                self.focus = Focus.editor
-            escape:
-                self.focus = Focus.editor
-            ignored:
-                return
-            move_right:
-                return
-            line_start:
-                return
-            line_end:
-                return
-            erase_left:
-                return
-            erase_right:
-                return
-            indent:
-                return
-            insert_text:
-                return
-            save:
-                return
-            build:
-                return
-            toggle_files:
-                return
-            toggle_output:
-                return
-            next_pane:
-                return
-            quit:
-                return
+        if intent == model.Intent.newline:
+            match self.files.choose():
+                moved(index):
+                    return
+                chosen(index):
+                    self.open_selected(index)
+            return
+        if intent == model.Intent.move_left or intent == model.Intent.escape:
+            self.focus = model.Focus.editor
+            return
+        let steps = model.steps_of(intent)
+        if steps == 0:
+            return
+        # A widget writer needs a bare `var` binding (docs/SELF.md), so
+        # a pane held in a field is moved through one and put back.
+        var pane = self.files
+        pane.move_by(steps)
+        self.files = pane
 
-    func output_key(intent: Intent):
+    func output_key(intent: model.Intent):
+        let steps = model.steps_of(intent)
+        if steps == 0:
+            return
         let total = Text.count_lines(self.output)
-        match intent:
-            move_up:
-                self.output_scroll = max(self.output_scroll - 1, 0)
-            move_down:
-                self.output_scroll = min(self.output_scroll + 1, max(total - 1, 0))
-            page_up:
-                self.output_scroll = max(self.output_scroll - 8, 0)
-            page_down:
-                self.output_scroll = min(self.output_scroll + 8, max(total - 1, 0))
-            move_left:
-                return
-            move_right:
-                return
-            line_start:
-                return
-            line_end:
-                return
-            erase_left:
-                return
-            erase_right:
-                return
-            newline:
-                return
-            indent:
-                return
-            insert_text:
-                return
-            save:
-                return
-            build:
-                return
-            toggle_files:
-                return
-            toggle_output:
-                return
-            next_pane:
-                return
-            escape:
-                return
-            quit:
-                return
-            ignored:
-                return
+        self.output_scroll = clamp(self.output_scroll + steps, 0, max(total - 1, 0))
 
     func vertical(target_line: long):
         let total = Text.count_lines(self.content)
@@ -798,36 +677,36 @@ private struct State:
         self.message = f"saved {self.path}"
         self.remember()
 
-    func key(intent: Intent, inserted: string, visible: long):
-        if intent == Intent.save:
+    func key(intent: model.Intent, inserted: string, visible: long):
+        if intent == model.Intent.save:
             self.save()
             return
-        if intent == Intent.quit:
+        if intent == model.Intent.quit:
             if self.dirty and not self.quit_pending:
                 self.quit_pending = true
                 self.message = "unsaved changes; Ctrl-Q again to discard"
             else:
                 self.quit = true
             return
-        if intent == Intent.build:
+        if intent == model.Intent.build:
             self.build()
             return
-        if intent == Intent.toggle_files:
+        if intent == model.Intent.toggle_files:
             self.toggle_files()
             return
-        if intent == Intent.toggle_output:
+        if intent == model.Intent.toggle_output:
             self.toggle_output()
             return
-        if intent == Intent.next_pane:
+        if intent == model.Intent.next_pane:
             self.next_pane()
             return
-        if intent == Intent.escape:
-            self.focus = Focus.editor
+        if intent == model.Intent.escape:
+            self.focus = model.Focus.editor
             return
-        if self.focus == Focus.files:
+        if self.focus == model.Focus.files:
             self.file_key(intent)
             return
-        if self.focus == Focus.output:
+        if self.focus == model.Focus.output:
             self.output_key(intent)
             return
         let line = Text.line_of(self.content, self.cursor)
@@ -913,246 +792,238 @@ private struct State:
         elif cursor_line >= self.scroll + visible:
             self.scroll = cursor_line - visible + 1
 
-    # The two `Draw` functions that took a `State`: they read their
-    # implied receiver and perform no receiver writes.  Everything else
-    # in `Draw` operates on text and columns rather than on the editor,
-    # and remains a static namespace function.
-    func status(rows: long, cols: long, line: long, column: long):
-        term.move(rows - 1, 0)
+    # --- drawing -----------------------------------------------------
+    #
+    # Every frame is one `clear`, one pass of writes into the back
+    # buffer, and one `present` that emits only the cells that changed
+    # (docs/TERMUI.md D2).  Nothing below reaches the terminal: the
+    # screen is handed in, and where each pane sits arrived as
+    # rectangles.
+
+    func paint(view: screen.Screen, layout: model.Layout):
+        view.clear()
+        self.paint_text(view, layout)
+        if self.file_pane:
+            self.paint_files(view, layout)
+        if self.output_pane:
+            self.paint_output(view, layout)
+        self.paint_status(view, layout)
+
+    func paint_text(view: screen.Screen, layout: model.Layout):
+        let source = layout.source()
+        let cursor_line = Text.line_of(self.content, self.cursor)
+        let total = Text.count_lines(self.content)
+        let active = self.focus == model.Focus.editor
+        var at = Text.line_at(self.content, self.scroll)
+        for row in range(0, layout.text.rows):
+            let line_index = self.scroll + row
+            if line_index >= total:
+                view.write(layout.text, row, 0, "   ~", theme.gutter)
+                continue
+            Draw.gutter(
+                view,
+                layout.text,
+                row,
+                line_index + 1,
+                current = line_index == cursor_line,
+                active = active,
+            )
+            let finish = Text.line_end(self.content, at)
+            Draw.line(view, source, row, self.content, from = at, to = finish)
+            at = finish + 1
+
+    func paint_files(view: screen.Screen, layout: model.Layout):
+        let area = layout.files
+        if area.columns < 2 or area.rows < 1:
+            return
+        let interior = Draw.inside(area)
+        let active = self.focus == model.Focus.files
+        var pane = self.files
+        pane.count = self.names.count()
+        # Where the window sits is the widget's answer, and the frame
+        # needs it before it can highlight the selected row's edge.
+        pane.adjust(interior.rows)
+        Draw.pane_frame(view, area, " files ", active, pane.selected - pane.top + 1)
+        # A selected row is a bar across the pane, so the row is filled
+        # before the name is written over it: `Rows` writes the label
+        # and no more, which is the right amount of opinion for a
+        # widget to have about somebody else's palette.
+        let picked = pane.selected - pane.top
+        if pane.count > 0 and picked >= 0 and picked < interior.rows:
+            view.fill(
+                termui.Rect(
+                    row = interior.row + picked,
+                    column = interior.column,
+                    rows = 1,
+                    columns = interior.columns,
+                ),
+                " ",
+                theme.selected,
+            )
+        pane.draw(view, interior, theme.plain, theme.selected)
+        self.files = pane
+
+    func paint_output(view: screen.Screen, layout: model.Layout):
+        let area = layout.output
+        if area.columns < 2 or area.rows < 1:
+            return
+        let active = self.focus == model.Focus.output
+        Draw.output_frame(view, area, layout.split_column(), " output ", active)
+        # The output pane is a viewport, not a selection list, so it is
+        # the one pane `Rows` does not fit: `Rows` scrolls to follow a
+        # selection and this scrolls because a person said down.  Four
+        # lines of loop is the honest price (docs/TERMUI.md, as built).
+        let interior = Draw.inside(area)
+        let total = Text.count_lines(self.output)
+        for row in range(0, interior.rows):
+            let index = self.output_scroll + row
+            if index >= total:
+                return
+            view.write(interior, row, 0, self.output_line(index), theme.plain)
+
+    func paint_status(view: screen.Screen, layout: model.Layout):
+        let area = layout.status
+        let line = Text.line_of(self.content, self.cursor)
+        let column = Text.column_of(self.content, self.cursor)
         var flag = ""
         if self.dirty:
             flag = " +"
         var left = f" {self.path}{flag}  {line + 1}:{column + 1}"
         if len(self.message) > 0:
             left = left + f"  — {self.message}"
-        if self.focus == Focus.files:
+        if self.focus == model.Focus.files:
             left = left + "  [files]"
-        elif self.focus == Focus.output:
+        elif self.focus == model.Focus.output:
             left = left + "  [output]"
         else:
             left = left + "  [editor]"
         let hint = "Ctrl-B build/run  Ctrl-W focus  Ctrl-S save  Ctrl-Q quit "
-        # Padded in one call rather than one append per column: the
-        # loop this replaces built a fresh string per space, every
-        # frame.  `repeat` answers "" for a width already overrun.
-        let bar = left + strings.repeat(" ", cols - Text.width(left) - Text.width(hint)) + hint
-        term.style(theme.status_fg, theme.status_bg)
-        let ignored = Draw.emit(bar, from = 0, to = len(bar), remaining = cols)
+        # Padded in one call rather than one append per column, and
+        # written in one call rather than one per character: `repeat`
+        # answers "" for a width already overrun, and the screen clips
+        # what will not fit.
+        let bar = left + strings.repeat(" ", area.columns - left.width() - hint.width()) + hint
+        view.write(area, 0, 0, bar, theme.status)
 
-    func frame():
-        let rows = max(term.rows(), 2)
-        let cols = max(term.cols(), 10)
-        var output_height: long = 0
-        if self.output_pane:
-            output_height = long(rows / 3)
-            if output_height < 3:
-                output_height = 3
-            if output_height > 8:
-                output_height = 8
-            if output_height > rows - 2:
-                output_height = rows - 2
-            if output_height < 0:
-                output_height = 0
-        let editor_height = max(rows - 1 - output_height, 1)
-        let visible = editor_height
-        let side: long = 5
-        var file_width: long = 0
-        if self.file_pane:
-            file_width = long(cols / 4)
-            if file_width < 18:
-                file_width = 18
-            if file_width > 24:
-                file_width = 24
-            if file_width + side + 1 >= cols:
-                file_width = max(cols - side - 1, 1)
-        var text_start = side
-        if self.file_pane:
-            text_start = file_width + 1 + side
-        let text_width = max(cols - text_start, 1)
-        self.layout_rows = rows
-        self.layout_editor_height = editor_height
-        self.layout_file_width = file_width
-        self.layout_text_start = text_start
-        let cursor_line = Text.line_of(self.content, self.cursor)
-        let cursor_column = Text.column_of(self.content, self.cursor)
-        let total = Text.count_lines(self.content)
+    # Where the terminal's own cursor belongs after the frame.
+    func cursor_at(layout: model.Layout) -> (long, long):
+        if self.focus == model.Focus.files:
+            return clamp(self.files.selected - self.files.top + 1, 0, max(layout.files.rows - 1, 0)), 0
+        if self.focus == model.Focus.output:
+            return layout.output.row, 0
+        let line = Text.line_of(self.content, self.cursor)
+        let column = Text.column_of(self.content, self.cursor)
+        let last_row = max(layout.text.rows - 1, 0)
+        let last_column = max(layout.text.column + layout.text.columns - 1, 0)
+        let landing = clamp(layout.text_start() + column, 0, last_column)
+        return clamp(line - self.scroll, 0, last_row), landing
 
-        term.clear()
-        var at = Text.line_at(self.content, self.scroll)
-        for row in range(0, visible):
-            let line_index = self.scroll + row
-            term.move(row, 0)
-            if self.file_pane:
-                Draw.file_line(
-                    self.file_names,
-                    row,
-                    self.file_selected,
-                    file_width,
-                    active = self.focus == Focus.files,
-                )
-                term.move(row, file_width)
-                Draw.pane_style(self.focus == Focus.files)
-                if row == 0:
-                    term.write(term.ui.junction(top = false, right = false, bottom = true, left = true))
-                else:
-                    term.write(term.ui.vertical())
-                term.move(row, file_width + 1)
-            if line_index < total:
-                Draw.gutter(
-                    line_index + 1,
-                    current = line_index == cursor_line,
-                    active = self.focus == Focus.editor,
-                )
-                let finish = Text.line_end(self.content, at)
-                Draw.line(self.content, from = at, to = finish, width = text_width)
-                at = finish + 1
-            else:
-                term.style(theme.gutter)
-                term.write("   ~")
-        if self.output_pane:
-            var split: long = 0
-            if self.file_pane:
-                split = file_width
-            self.output_frame(
-                start = editor_height,
-                finish = rows - 1,
-                cols = cols,
-                split = split,
-            )
-        self.status(rows = rows, cols = cols, line = cursor_line, column = cursor_column)
-        if self.focus == Focus.files:
-            term.move(clamp(self.file_selected, 0, visible - 1), 0)
-        elif self.focus == Focus.output:
-            term.move(editor_height, 0)
-        else:
-            term.move(
-                clamp(cursor_line - self.scroll, 0, visible - 1),
-                clamp(text_start + cursor_column, 0, cols - 1),
-            )
-        term.flush()
-
-    func output_frame(start: long, finish: long, cols: long, split: long):
-        let total = Text.count_lines(self.output)
-        let interior = max(cols - 2, 0)
-        for row in range(start, finish):
-            term.move(row, 0)
-            if row == start:
-                Draw.horizontal_border(
-                    cols,
-                    split,
-                    "output",
-                    active = self.focus == Focus.output,
-                )
-            else:
-                Draw.pane_style(self.focus == Focus.output)
-                term.write(term.ui.vertical())
-                let line_index = self.output_scroll + row - start - 1
-                var used: long = 0
-                if line_index < total:
-                    let line_start = Text.line_at(self.output, line_index)
-                    let line_finish = Text.line_end(self.output, line_start)
-                    term.style(theme.plain)
-                    used = Draw.emit(
-                        self.output,
-                        from = line_start,
-                        to = line_finish,
-                        remaining = interior,
-                    )
-                if used < interior:
-                    term.write(strings.repeat(" ", interior - used))
-                term.move(row, cols - 1)
-                Draw.pane_style(self.focus == Focus.output)
-                term.write(term.ui.vertical())
-
+# Everything that puts characters in the back buffer and is not about
+# editing.
+#
+# What is left here after the migration is the syntax highlighter and
+# the two frames the editor draws itself: both of its panes are
+# three-sided and share their edges with each other, which is the
+# junction-merging compositor `termui.border` deliberately defers to
+# v0.2 (docs/TERMUI.md D12).  `Border.draw` would draw four sides and
+# take a row of output away.
 private struct Draw:
-    static func pane_style(active: bool):
+    static func pane_style(active: bool) -> termui.Style:
         if active:
-            term.style(theme.pane_active, theme.pane_active_bg, bold = true)
-        else:
-            term.style(theme.pane_border)
+            return theme.pane_active
+        return theme.pane_border
 
-    static func horizontal_border(width: long, split: long, label: string, active: bool):
-        Draw.pane_style(active)
-        let title = " " + label + " "
+    # The space inside one of the editor's three-sided frames: a rule
+    # down each side, a title along the top, and the status bar where
+    # a bottom edge would be.
+    static func inside(area: termui.Rect) -> termui.Rect:
+        return termui.Rect(
+            row = area.row + 1,
+            column = area.column + 1,
+            rows = max(area.rows - 1, 0),
+            columns = max(area.columns - 2, 0),
+        )
+
+    # Write `text` at `column` inside `area`, clipped to `remaining`
+    # display columns, and answer the columns it took.
+    static func emit(view: screen.Screen, area: termui.Rect, row: long, column: long, text: string, style: termui.Style, remaining: long) -> long:
+        if remaining <= 0:
+            return 0
+        let shown = text.take(remaining)
+        view.write(area, row, column, shown, style)
+        return shown.width()
+
+    # The file pane's frame: a corner, a title, and a rule down each
+    # side.  There is no bottom edge — the status bar is the bottom —
+    # and the right-hand rule is the one the text pane sits against.
+    static func pane_frame(
+        view: screen.Screen,
+        area: termui.Rect,
+        title: string,
+        active: bool,
+        highlight_row: long,
+    ):
+        let border = Draw.pane_style(active)
+        let room = max(area.columns - 2, 0)
+        view.write(area, 0, 0, term.ui.junction(top = false, right = true, bottom = true, left = false), border)
+        let shown = title.take(room)
+        view.write(area, 0, 1, shown, border)
+        let used = shown.width()
+        if used < room:
+            view.write(area, 0, 1 + used, strings.repeat(term.ui.horizontal(), room - used), border)
+        view.write(area, 0, area.columns - 1, term.ui.junction(top = false, right = false, bottom = true, left = true), border)
+        for row in range(1, area.rows):
+            view.write(area, row, 0, term.ui.vertical(), Draw.pane_style(active and row == highlight_row))
+            view.write(area, row, area.columns - 1, term.ui.vertical(), border)
+
+    # The output pane's frame: a top edge that meets the file pane's
+    # rule where they cross, and a rule down each side.
+    static func output_frame(
+        view: screen.Screen,
+        area: termui.Rect,
+        split: long,
+        title: string,
+        active: bool,
+    ):
+        let border = Draw.pane_style(active)
         var title_at: long = 2
         if split > 0:
             title_at = split + 2
-        if title_at + len(title) >= width - 1:
+        if title_at + len(title) >= area.columns - 1:
             title_at = -1
-        for column in range(0, width):
+        for column in range(0, area.columns):
+            var glyph = term.ui.horizontal()
             if column == 0:
-                if split > 0:
-                    term.write(term.ui.junction(top = true, right = true, bottom = true, left = false))
-                else:
-                    term.write(term.ui.junction(top = false, right = true, bottom = true, left = false))
-            elif column == width - 1:
-                term.write(term.ui.junction(top = false, right = false, bottom = true, left = true))
+                glyph = term.ui.junction(top = split > 0, right = true, bottom = true, left = false)
+            elif column == area.columns - 1:
+                glyph = term.ui.junction(top = false, right = false, bottom = true, left = true)
             elif split > 0 and column == split:
-                term.write(term.ui.junction(top = true, right = true, bottom = false, left = true))
+                glyph = term.ui.junction(top = true, right = true, bottom = false, left = true)
             elif title_at >= 0 and column >= title_at and column < title_at + len(title):
                 let offset = column - title_at
-                term.write(title[offset:offset + 1])
-            else:
-                term.write(term.ui.horizontal())
+                glyph = title[offset:offset + 1]
+            view.write(area, 0, column, glyph, border)
+        for row in range(1, area.rows):
+            view.write(area, row, 0, term.ui.vertical(), border)
+            view.write(area, row, area.columns - 1, term.ui.vertical(), border)
 
-    # Write [from, to) clipped to `remaining` display columns; returns
-    # the columns actually used.
-    static func emit(value: string, from: long, to: long, remaining: long) -> long:
-        var at = from
-        var used = 0
-        while at < to and used < remaining:
-            let stop = Text.next_boundary(value, at)
-            term.write(value[at:stop])
-            at = stop
-            used = used + 1
-        return used
-
-    static func file_line(names: list(string), row: long, selected: long, width: long, active: bool):
-        if row == 0:
-            Draw.pane_style(active)
-            term.write(term.ui.junction(top = false, right = true, bottom = true, left = false))
-            let title = " files "
-            let room = max(width - 1, 0)
-            let shown = min(len(title), room)
-            term.write(title[0:shown])
-            if shown < room:
-                term.write(strings.repeat(term.ui.horizontal(), room - shown))
-            return
-        Draw.pane_style(active and row == selected + 1)
-        term.write(term.ui.vertical())
-        let room = max(width - 1, 0)
-        let index = row - 1
-        if index < len(names):
-            if index == selected:
-                term.style(theme.status_fg, theme.status_bg, bold = true)
-            else:
-                term.style(theme.plain)
-            let name = names[index]
-            let used = Draw.emit(name, from = 0, to = len(name), remaining = room)
-            if used < room:
-                term.write(strings.repeat(" ", room - used))
-        else:
-            term.write(strings.repeat(" ", room))
-
-    # One source line with Luce highlighting, clipped to `width`.
-    static func line(content: string, from: long, to: long, width: long):
+    # One source line with Luce highlighting, clipped to `area`.
+    static func line(view: screen.Screen, area: termui.Rect, row: long, content: string, from: long, to: long):
         var at = from
         var used: long = 0
+        let width = area.columns
         while at < to and used < width:
             let byte = content.byte_at(at)
             if byte == 35:
-                term.style(theme.comment)
-                used = used + Draw.emit(content, from = at, to = to, remaining = width - used)
+                used = used + Draw.emit(view, area, row, used, content[at:to], theme.comment, width - used)
                 at = to
             elif byte == 102 and at + 1 < to and content.byte_at(at + 1) == 34 and (at == from or not Bytes.is_word(content.byte_at(at - 1))):
                 let close = Text.quoted_end(content, to, at + 1)
-                term.style(theme.text)
-                used = used + Draw.emit(content, from = at, to = close, remaining = width - used)
+                used = used + Draw.emit(view, area, row, used, content[at:close], theme.text, width - used)
                 at = close
             elif byte == 34:
                 let close = Text.quoted_end(content, to, at)
-                term.style(theme.text)
-                used = used + Draw.emit(content, from = at, to = close, remaining = width - used)
+                used = used + Draw.emit(view, area, row, used, content[at:close], theme.text, width - used)
                 at = close
             elif Bytes.is_digit(byte):
                 var stop = at + 1
@@ -1177,36 +1048,32 @@ private struct Draw:
                             stop = stop + 1
                         while stop < to and (Bytes.is_digit(content.byte_at(stop)) or content.byte_at(stop) == 95):
                             stop = stop + 1
-                term.style(theme.number)
-                used = used + Draw.emit(content, from = at, to = stop, remaining = width - used)
+                used = used + Draw.emit(view, area, row, used, content[at:stop], theme.number, width - used)
                 at = stop
             elif Bytes.is_word_start(byte):
                 var stop = at + 1
                 while stop < to and Bytes.is_word(content.byte_at(stop)):
                     stop = stop + 1
                 let word = Word.of(content[at:stop])
-                word.style()
-                used = used + Draw.emit(content, from = at, to = stop, remaining = width - used)
+                used = used + Draw.emit(view, area, row, used, content[at:stop], word.style(), width - used)
                 at = stop
             else:
                 var stop = Text.next_boundary(content, at)
                 stop = min(stop, to)
-                term.style(theme.punct)
-                used = used + Draw.emit(content, from = at, to = stop, remaining = width - used)
+                used = used + Draw.emit(view, area, row, used, content[at:stop], theme.punct, width - used)
                 at = stop
 
-    static func gutter(number: long, current: bool, active: bool):
+    static func gutter(view: screen.Screen, area: termui.Rect, row: long, number: long, current: bool, active: bool):
+        var style = theme.gutter
         if current and active:
-            term.style(theme.gutter_current)
-        else:
-            term.style(theme.gutter)
-        term.write(strings.pad_left(string(number), 4) + " ")
+            style = theme.gutter_current
+        view.write(area, row, 0, strings.pad_left(string(number), 4) + " ", style)
 
 func main(args: list(string)):
     if len(args) == 0:
         print("usage: editor FILE [FILE ...]")
         return
-    var buffers = new list(editor_model.Buffer)
+    var buffers = new list(model.Buffer)
     for path in args:
         # One read, and what it answers decides the greeting.  The
         # exists-then-read this used to write had a window between the two
@@ -1216,7 +1083,7 @@ func main(args: list(string)):
         var greeting = ""
         opening = files.read(path) catch:
             greeting = "new file"
-        buffers.append(editor_model.Buffer(
+        buffers.append(model.Buffer(
             path = path,
             content = opening,
             message = greeting,
@@ -1229,34 +1096,46 @@ func main(args: list(string)):
         path = first.path,
         content = first.content,
         message = first.message,
-            buffers = give buffers,
-        file_names = new list(string),
+        buffers = give buffers,
+        names = Names(rows = new list(string)),
+        files = rows.Rows(render = none),
         cursor = first.cursor,
         scroll = first.scroll,
         dirty = first.dirty,
     )
+    # **The wiring line the package was designed around**: the pane
+    # reads the editor's listing through a bound method, which borrows
+    # the receiver rather than taking it, so the list stays the
+    # editor's (docs/BINDING.md, docs/TERMUI.md D8).
+    state.files.render = state.names.at
     state.refresh_files()
+    # The app owns the loop (D1): termui supplies a screen, a layout
+    # vocabulary and an event stream, and never takes control.
+    var view = screen.Screen.of(term.rows(), term.cols())
+    var input = events.Events()
     while not state.quit:
-        let visible = max(term.rows() - 1, 1)
-        state.adjust(visible)
-        state.frame()
-        # `term.io.read` answers `string?`: `none` is the keyboard running
-        # dry — a pipe that ended, a terminal that closed — and there
-        # is no one left to ask what to do about unsaved work, so the
-        # editor stops rather than asking forever.  Mouse and resize
-        # events use the same stream, with their numeric data in `io`.
-        let name = term.io.read()
-        if name == none:
-            break
-        if name == "resize":
-            continue
-        if name == "mouse_press" or name == "mouse_wheel":
-            state.pointer(
-                name,
-                row = term.io.row(),
-                column = term.io.column(),
-                button = term.io.button(),
-                value = term.io.value(),
-            )
-            continue
-        state.key(Intent.of(name), term.io.text(), visible)
+        # A resize is a new grid and a full repaint; an unchanged size
+        # answers immediately, so this is the whole of resize handling.
+        view.resize(term.rows(), term.cols())
+        let layout = model.Layout.of(view.area(), state.file_pane, state.output_pane)
+        state.adjust(layout.text.rows)
+        state.paint(view, layout)
+        view.present()
+        let cursor_row, cursor_column = state.cursor_at(layout)
+        term.move(cursor_row, cursor_column)
+        term.flush()
+        match input.next():
+            closed:
+                # The keyboard ran dry — a pipe that ended, a terminal
+                # that closed — and there is no one left to ask what to
+                # do about unsaved work, so the editor stops rather
+                # than asking forever.
+                break
+            resize:
+                continue
+            key(pressed):
+                state.key(model.intent_of(pressed), "", layout.text.rows)
+            text(typed):
+                state.key(model.Intent.insert_text, typed, layout.text.rows)
+            mouse(pointer):
+                state.pointer(pointer, layout)

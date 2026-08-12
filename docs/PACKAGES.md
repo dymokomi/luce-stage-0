@@ -71,10 +71,10 @@ in the project root is that anchor.
   anything.
 - **A pathless root gets no discovery.**  `luce build -` (stdin)
   anchors to the cwd only if a `luce.yaml` is found by walking from the
-  cwd; the in-memory loader loom uses for the embedded editor
-  (`files.zig`'s `MemoryLoader`) does no discovery at all — `loom
-  edit` inside somebody's project must not resolve the editor's own
-  imports against that project's packages.
+  cwd.  (This clause once continued into the in-memory loader loom
+  used for the embedded editor; that loader and that editor are both
+  gone — owner, 2026-08-12 — and the rule it illustrated is the
+  general one: a root with no path gets no discovery.)
 - **Absent is fine and means the current behaviour**: no project file,
   no subfolder imports, no packages — a single directory of `.luc`
   files stays exactly as cheap as it is today.
@@ -329,16 +329,26 @@ The review's second blocker, adopted as the implementation contract:
   loop owned by the app, widget event unions instead of generic
   messages, a pure cell buffer diffed in Luce with the host keeping
   every escape byte) — followed by **the editor migrating onto it**,
-  which makes `loom edit`'s editor the first dependency-carrying
-  program.  `semver` joins as the registry server's first dependency
+  which makes the editor the first dependency-carrying program.  `semver` joins as the registry server's first dependency
   (the first real transitive chain), and `datetime` follows the
   wall-clock host slot.
-- **The embedded editor must keep working pathlessly**: once the
-  editor imports `termui`, loom embeds the dependency's sources
-  beside the editor's own, and the `MemoryLoader` serves them as a
-  static package set — the proof that a vendored store can ride
-  inside a binary.  This is a named requirement on step 3's
-  resolution work, not an afterthought.
+- **The embedded editor must keep working pathlessly** — *retired by
+  the owner, 2026-08-12, and kept here because it was a named
+  requirement on step 3's resolution work and a record should say what
+  was dropped.*  The requirement was that once the editor imported
+  `termui`, loom would embed the dependency's sources beside the
+  editor's own and `files.MemoryLoader` would serve them as a static
+  package set — "the proof that a vendored store can ride inside a
+  binary".  It was built, and then reversed the same day with the
+  embedded editor itself: **packages link statically and by source, and
+  loom carries no editor**, because an editor is a program a person
+  installs and `loom edit` was a second way to start one.  So there is
+  no `loom edit`, no `LOOM_EDITOR`, and no `MemoryLoader` — the editor
+  resolves `termui` the way any program resolves any package, from a
+  want list in its own `luce.yaml` against a `LUCE_LIB` shelf (D3), and
+  `build.zig` puts `packages/` on that path.  What the reversal costs
+  is named: nothing proves a store can ride inside a binary, and
+  nothing needs to until something wants one.
 
 ## Implementation order (each step lands green on its own)
 

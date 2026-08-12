@@ -57,17 +57,17 @@ loom — the luce environment. help lists commands.
 loom ▸ <kbd>help</kbd>
   run PROGRAM.lc [ARGS]   run a compiled Luce program
   luce PROGRAM.luc [ARGS] compile and run a Luce source file
-  edit FILE              open the Luce editor (LOOM_EDITOR overrides)
   clear                  clear the screen
   exit                   leave loom
   a bare PROGRAM.lc or .luc path runs it directly
 loom ▸ <kbd>exit</kbd></samp></pre></div>
 </figure>
 
-<h2 id="four-parts">The four parts</h2>
+<h2 id="four-parts">The parts</h2>
 
-<p>loom is one small binary made of four things, and this site has a page for
-each of them.</p>
+<p>loom is one small binary made of three things, and this site has a page for
+each of them — and a page for the editor, which is a program loom runs rather
+than a part of loom.</p>
 
 <div class="cards">
 <a class="card" href="@/running/"><strong>The runner</strong><span>Opens a
@@ -75,14 +75,14 @@ each of them.</p>
 result beside the source. Refuses an artifact built for another machine, another
 host ABI or another code generator — by name, before a single instruction of it
 runs.</span></a>
-<a class="card" href="@/shell/"><strong>The shell</strong><span>Six commands and a
+<a class="card" href="@/shell/"><strong>The shell</strong><span>Five commands and a
 bare program path. Colour when a terminal is reading, none when a log file is.
 An interactive shell always leaves cleanly; a piped script exits with the worst
 status any line produced.</span></a>
 <a class="card" href="@/editor/"><strong>The editor</strong><span>A full-screen
-editor with per-line Luce syntax highlighting, written entirely in Luce, carried
-inside the loom binary so <code>loom edit</code> never needs a
-path.</span></a>
+editor with per-line Luce syntax highlighting, written entirely in Luce and
+drawing through a package — an installed program loom runs, not a command loom
+has.</span></a>
 <a class="card" href="@/host/"><strong>The host</strong><span>Every effect a
 program can have — printing, files, the terminal, the clock, the command line —
 is a service loom hands it. A service the host does not offer refuses; it never

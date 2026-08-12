@@ -1,19 +1,21 @@
 # termui: the terminal UI package (design)
 
-**Status: BUILT — 2026-08-12, through step 4.** `packages/termui-0.1.0/`
-is all five modules with twenty-nine tests, run by `zig build test`
-through `luce test`; every decision below shipped as written, and the
-*As built* section at the bottom records the three that met the
-compiler and what happened. What remains is the editor's migration
-(step 5), loom embedding the dependency (step 6) and the site page
-(step 7). Everything between this line and *As built* is the design
-memo as ratified, unaltered.
+**Status: BUILT — 2026-08-12, through step 5, and step 6 is retired.**
+`packages/termui-0.1.0/` is all five modules with twenty-nine tests,
+run by `zig build test` through `luce test`; every decision below
+shipped as written, and the *As built* sections at the bottom record
+the three that met the compiler, and then what the editor's migration
+(step 5) found. **Step 6 — loom embedding the dependency — was
+reversed by the owner on 2026-08-12**, along with `loom edit` itself:
+packages link statically from source, and the editor is an ordinary
+installed program rather than something loom carries. Everything
+between this line and *As built* is the design memo as ratified,
+unaltered.
 
 This memo designs `termui`, the package PACKAGES.md names as the
 flagship — the retained terminal UI that was deliberately kept out of
 `std` and returns as a package — and the editor's migration onto it,
-which makes `loom edit`'s editor the first dependency-carrying
-program.
+which makes the editor the first dependency-carrying program.
 
 It is written last on purpose. Every decision below spends something
 the language did not have three weeks ago: tagged unions carry the
@@ -483,9 +485,15 @@ Each step lands green on its own.
    sources beside the editor's own as a static package set, which is
    PACKAGES.md's named requirement on step 3's resolution work and the
    proof that a vendored store can ride inside a binary.
+   *Retired by the owner, 2026-08-12, on the day it was built:
+   packages link statically and by source for now, and `loom edit`
+   goes with it — an editor is a program a person installs, and loom's
+   job is running programs. `MemoryLoader` was deleted with its one
+   customer; the editor resolves `termui` from a `LUCE_LIB` shelf like
+   any other consumer.*
 7. **Docs and site**: `docs/STD.md` for the strings additions,
-   loom.luciaos.com for `loom edit`'s new dependency, and this memo's
-   as-built note.
+   loom.luciaos.com for the editor's new dependency and its new
+   standing as an installed program, and this memo's as-built note.
 
 ## Findings from designing it
 
@@ -619,4 +627,105 @@ the language is one way to find the shapes nobody thought to write.
 compositor (v0.2, named in D12), a text field, a scrollbar, tabs, a
 menu — and a keymap, which remains the app's because termui cannot
 name the app's intent type. The editor's migration is what will say
-whether that last one was right.
+whether that last one was right.  (It was: the editor's keymap is a
+twenty-row constant map keyed by `Key`, and no library could have
+written it.)
+
+---
+
+## As built — the editor's migration, 2026-08-12 (step 5)
+
+**The editor draws through termui.**
+`examples/editor/editor.luc` went from
+1,262 lines to 1,141 and its `luce.yaml` names one dependency; the
+pure half it could not test before — the layout arithmetic and the
+keymap — moved to `editor_model.luc`, which has a `tests/` tree of its
+own with twelve tests.  Behaviour is unchanged key for key: the two
+editors were built side by side and driven through the same scripted
+keys, and the screens they left were compared cell for cell.
+
+**The number that says what D2 bought.**  The eighteen keys of
+`editor_spec.zig`'s long script used to leave **31,856 bytes** of
+terminal traffic and now leave **5,907** — the old editor cleared the
+screen and repainted all 1,920 cells for every keystroke, and the new
+one emits the cells that changed.  The spec's own `screenText` helper
+had to learn that: concatenating the `[write]` payloads *was* the
+screen when every cell was written every frame, so it replays the
+moves and the writes into a grid now and hands back what a person was
+looking at, frame by frame.  That is a better question than the one it
+was asking.
+
+**What went away, and what did not.**  `Intent.of`'s 43-line
+if-chain over key names is a twenty-row `map(Key, Intent)` constant —
+the editor never sees a key *name* now, because `events.Events` hands
+it a `Key`.  `output_key`'s twenty-two-arm match is seven lines over a
+second small table, `file_key`'s is twenty-two, and the loop's
+five-call mouse read is one `Mouse` value.  `frame()`'s ninety-two
+lines of layout arithmetic are a sixty-line `Layout` over `Rect`
+splits, with the clamps still the editor's (D4) and now under test.
+`Draw.file_line` is gone: the file pane is a `Rows` with
+`state.files.render = state.names.at`, the bound-method provider D8
+exists for.
+
+What stayed is worth naming.  The **syntax highlighter** (sixty lines)
+was never plumbing.  The **two frames** are still the editor's own
+fifty-odd lines, because both of its panes are three-sided and share
+their edges with each other — `Border.draw` draws four sides and would
+take a row of output away, and merging the junctions where two panes
+meet is exactly what D12 defers to v0.2.  So `border.luc` ships with
+no consumer, which is the honest status of the one v0.1 module the
+flagship could not use.
+
+**`Rows` did not fit the output pane, and that is a shape rather than
+a bug.**  `Rows` scrolls to follow a *selection*; the output pane
+scrolls because a person pressed Down, and pinning `selected` to `top`
+to fake that would misuse both.  The editor draws it with a four-line
+loop over `screen.write` and keeps its own `output_scroll`.  A
+selectionless viewport — or a `top`-driven mode on `Rows` — is what
+v0.2 should look at, and this is the customer for it.
+
+**A widget writer needs a bare `var`, so the app's tree is `main`'s
+locals for one of its three fields.**  D7 says the app's own struct is
+the tree, and it mostly is — `State` holds the file pane.  But
+`docs/SELF.md`'s as-built narrowing means `self.files.draw(...)` is
+refused: a writing method takes a bare mutable binding, not a nested
+place.  So a pane held in a field is moved through a local and put
+back (`var pane = self.files` … `self.files = pane`), which is three
+lines wherever the editor calls `move_by` or `draw`, and the `Screen`
+and the `Events` live in `main` where `present()` and `next()` can
+reach them.  Nothing about this is unsound — it is the write-back the
+receiver rules already require — but a widget library whose every
+interesting method is a writer meets it constantly, and D7 should say
+so.
+
+**The one thing the migration had to learn, and it is an ownership
+rule.**  A bound method takes a carrying receiver by *borrow*: the
+function value's run holds the receiver's handles the way a struct
+copy does (BINDING, OWNERSHIP.md S26).  So a receiver whose container
+field is later **replaced** leaves the provider pointing at a freed
+list — `use_after_free` at the first row the pane draws (S9), which is
+exactly what `state.files.render = state.name_at` did the first time
+it ran, because `refresh_files` answered a fresh list and assigned it
+over the old one.  The fix is not a verb, it is a shape: the listing
+lives in a `Names` struct that is emptied and refilled in place, and
+the provider binds `state.names.at`.  D8's own example (`Names.at`
+over a list that only grows) is right for this reason and does not say
+so; a program that binds a method of a struct it also *replaces
+fields of* is the hazard, and it deserves a sentence in BINDING.
+
+**Step 6 was built and then retired, the same day.**  `MemoryLoader`
+grew a package table and `loom edit` compiled the editor with termui
+served out of the loom binary; the owner reversed it (2026-08-12):
+packages link statically from source, and loom carries no editor,
+because an editor is a program a person installs.  `loom edit`,
+`LOOM_EDITOR` and `MemoryLoader` are gone; the editor is installed as
+`build/editor` and `build/examples/editor/editor.lc`, and it resolves
+termui the way any consumer does — a want list in its own `luce.yaml`
+against a `LUCE_LIB` shelf, which `build.zig` points at `packages/`.
+
+**That reversal found a real hole in `luce test`**: the runner never
+passed `LUCE_LIB` to the compile it drives, so a test tree could
+resolve a package only out of `<root>/.luce/packages/` and never from
+a shelf — `luce build` and `luce test` disagreed about what a program
+meant.  `suite.zig` threads the search path through now, which is what
+lets the editor's own `tests/` import `termui` at all.

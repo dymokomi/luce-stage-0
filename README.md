@@ -70,8 +70,8 @@ snapshot cannot change what repository development exercises.
 build/luce build examples/hello/hello.luc   # hello.luc -> hello.lc (machine code)
 build/loom run examples/hello/hello.lc you  # hello, you
 build/loom                            # the interactive shell
-build/loom edit examples/editor/editor.luc  # the editor, written in Luce
-build/editor examples/editor/editor.luc       # standalone editor command
+build/loom run build/examples/editor/editor.lc notes.txt  # the editor, in Luce
+build/editor notes.txt                      # the same editor, standalone
 ```
 
 The compiler:
@@ -129,9 +129,8 @@ The terminal:
 loom                        interactive shell (help lists commands)
 loom run PROGRAM.lc [ARGS]  run a compiled program
 loom luce PROGRAM.luc [..]  compile a source file and run it
-loom edit FILE              open the embedded Luce editor
-editor FILE                 open the standalone editor
 loom PROGRAM.lc [ARGS]      shorthand for run
+editor FILE [FILE ...]      the editor, an ordinary installed program
 ```
 
 **A `.lc` is machine code.**  `loom run FILE.lc` is one `dlopen`, one
@@ -175,11 +174,14 @@ func main(args: list(string)):
 
 `examples/editor/editor.luc` is a full-screen terminal editor written
 entirely in Luce: movement, editing, scrolling, line numbers, panes, a
-status bar, and per-line Luce syntax highlighting.  Its source ships
-embedded in the loom binary (`loom edit` always works), and `./build.sh`
-also produces the standalone `build/editor` command.  Set
-`LOOM_EDITOR=path/to/editor.luc` to hack on your own copy without
-rebuilding loom.  `Ctrl-S` saves, `Ctrl-Q` quits.
+status bar, and per-line Luce syntax highlighting.  It is the first
+Luce program to carry a **dependency** — it draws through the `termui`
+package (`packages/termui-0.1.0`, docs/TERMUI.md), which owns the cell
+grid, the frame diff and the event union.  `./build.sh` installs it
+twice: `build/examples/editor/editor.lc`, which `loom run` starts like
+any other artifact, and the standalone `build/editor` command.  It is a
+program, not a feature of loom, so replacing it is writing another one.
+`Ctrl-S` saves, `Ctrl-Q` quits.
 
 ## Packages
 
