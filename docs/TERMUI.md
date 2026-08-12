@@ -1,10 +1,19 @@
 # termui: the terminal UI package (design)
 
-**Status: DESIGN.** Nothing below is built. This memo designs
-`termui`, the package PACKAGES.md names as the flagship — the retained
-terminal UI that was deliberately kept out of `std` and returns as a
-package — and the editor's migration onto it, which makes `loom
-edit`'s editor the first dependency-carrying program.
+**Status: BUILT — 2026-08-12, through step 4.** `packages/termui-0.1.0/`
+is all five modules with twenty-nine tests, run by `zig build test`
+through `luce test`; every decision below shipped as written, and the
+*As built* section at the bottom records the three that met the
+compiler and what happened. What remains is the editor's migration
+(step 5), loom embedding the dependency (step 6) and the site page
+(step 7). Everything between this line and *As built* is the design
+memo as ratified, unaltered.
+
+This memo designs `termui`, the package PACKAGES.md names as the
+flagship — the retained terminal UI that was deliberately kept out of
+`std` and returns as a package — and the editor's migration onto it,
+which makes `loom edit`'s editor the first dependency-carrying
+program.
 
 It is written last on purpose. Every decision below spends something
 the language did not have three weeks ago: tagged unions carry the
@@ -20,8 +29,8 @@ Every fenced block below is ```` ```text ````, for the reason
 and not the build's, and none of these fragments — signatures without
 bodies, structs naming types from other modules — is a program. What
 *was* checked against the installed toolchain is checked, and said so:
-the four probes under "Findings from designing it" are real compiles
-of real files, and one of them found a blocker.
+everything under "Findings from designing it" is a real compile of a
+real file, and two of them found blockers.
 
 ---
 
@@ -551,3 +560,62 @@ provider shows nothing. Neither was a typo. That is the whole argument
 for checking a design memo's code: a design that cannot be written
 down is not yet a design, and both of these were found before a line
 of the package existed.
+
+---
+
+## As built — 2026-08-12
+
+**Every decision shipped as written.** `packages/termui-0.1.0/` is
+`termui.luc`, `screen.luc`, `events.luc`, `border.luc` and `rows.luc`
+with a `luce.yaml` and twenty-nine tests under `tests/`, wired into
+`zig build test` through `luce test` — which makes it the one place
+the runner is driven the way a person drives it, against a real
+package with a root governing it. There is no D13; nothing had to be
+added to make the design fit.
+
+**The two blockers were fixed rather than designed around**, and both
+are worth more than this package. `match` on a temporary released the
+scrutinee before dispatching on it — a wrong answer in a ratified
+feature, found because `match pane.move_by(5)` is the first thing a
+widget event union asks anyone to write. And a function value did not
+land on a nested assignment target, which turned out not to be about
+function values at all: the nested place lowered its right-hand side
+under no landing at all, so a bare `none` and every numeric literal
+were wrong at those depths too. Both are in the commits before this
+one.
+
+**The correction that matters most is about the oracle, not the bug.**
+This memo first recorded the `match` fault as one both engines shared
+— a place the differential harness could not see. That was wrong: the
+interpreter *segfaults* on the dangling run while the compiled path
+quietly reads zeroes, so the two engines disagree as loudly as they
+can. What was missing was a spec. Before this package, every `match`
+in every spec, in std and in the examples had a bare-name scrutinee,
+so the shape had simply never been run. A differential harness is only
+as good as the shapes it is pointed at, and prototyping a design in
+the language is one way to find the shapes nobody thought to write.
+
+**Three things the build learned that the design had not.**
+
+- **A border's title must stop four columns short**, not three. The
+  off-by-one overwrote the top-right corner, and the test that caught
+  it was written before the code was believed. It is the only defect
+  the package's own tests found in the package.
+- **`assert` takes parentheses** and `copy` is a keyword, so it cannot
+  name a local. Both are the language being itself; both were found by
+  running the tests rather than by reading them.
+- **Drawing into a pipe printed stack traces**, one per cell run.
+  `ensureScreen` asked `tcgetattr` for a terminal on every escape
+  sequence because nothing recorded the answer, and a pipe answers
+  with an errno `std.posix`'s wrapper does not map — so its `else` arm
+  reached `unexpectedErrno`, which dumps a trace before returning.
+  This was not termui's bug and it was not new; it needed a program
+  that draws without a terminal in front of it, and the package's
+  tests were the first. `loom run editor.lc > frames.txt` is an
+  ordinary thing to do and it was unusable.
+
+**What v0.1 does not have, still deliberately**: the junction-merging
+compositor (v0.2, named in D12), a text field, a scrollbar, tabs, a
+menu — and a keymap, which remains the app's because termui cannot
+name the app's intent type. The editor's migration is what will say
+whether that last one was right.
