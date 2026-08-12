@@ -23,6 +23,39 @@ builds, a compiled artifact reports a trap through the host's `trap`
 channel, and `luce_rt_leaked` answers the census.  What is missing is
 discovery, a synthesized entry, and a report — and no new semantic.
 
+## Engineering lanes for the compiler
+
+The language test suite has a second layer below `luce test`: tests beside
+compiler stages prove the structures that a Luce program cannot inspect.
+Their property targets are named `fuzz:` so the build can run them as a
+coherent lane.
+
+```text
+zig build test
+```
+
+The normal build runs the full deterministic corpus, including every
+checked-in fuzz seed.  This is the release gate and also runs the executable
+specification, product suites, documentation checks, and bundled-program
+builds described in `CONTRIBUTING.md`.
+
+```text
+zig build test-hardening
+```
+
+This focused lane runs the property corpus and the fixed-seed near-miss
+parser stress test.  It is the quick feedback loop for changes at the source,
+front-end, verifier, or module boundaries.
+
+```text
+zig build test-fuzz --fuzz=10000
+```
+
+Zig's coverage-guided test fuzzer explores the same `fuzz:` targets from
+their checked-in seeds.  A generated failure is a reproducible input to
+minimize, promote into the corpus, and pin with a normal regression test;
+the corpus is not a substitute for semantic examples or differential specs.
+
 ## D1. A test is `func test_*()` in an ordinary `.luc` file
 
 ```text

@@ -50,6 +50,16 @@ installed `libluce_rt.a` are prerequisites of testing too.
 
 It does **not** refresh `build/`.  Run `./build.sh` for that.
 
+The focused hardening lanes are useful while changing a front-end seam:
+
+```sh
+zig build test-hardening          # deterministic fuzz corpus + near misses
+zig build test-fuzz --fuzz=10000  # coverage-guided iterations from that corpus
+```
+
+Fuzz failures should be reduced to a small checked-in corpus entry and an
+ordinary regression test before the change is committed.
+
 ## Where a test goes
 
 One rule decides it:

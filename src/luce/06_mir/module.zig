@@ -1994,3 +1994,40 @@ test "an enum register holding no member is refused" {
     defer testing.allocator.free(encoded);
     try testing.expectError(error.InvalidModule, decode(testing.allocator, encoded));
 }
+
+// The module boundary is hostile-input code: a `.lcm` may have come from a
+// stale cache or from a process that is not ours.  The property is stronger
+// than "decode does not crash": every accepted byte string must still be a
+// verified program, and every refusal must stay within the decoder's public
+// error set.
+test "fuzz: arbitrary module bytes either refuse or produce verified MIR" {
+    try testing.fuzz({}, decodeAnything, .{ .corpus = &.{
+        "",
+        "LUCE",
+        "LUCE\x00\x00\x00\x00",
+        "LUCE\x2A\x00\x00\x00",
+        "LUCE\x29\x00\x00\x00",
+        "LUCE\x2A\x00\x00\x00\x00\x00\x00\x00",
+    } });
+}
+
+fn decodeAnything(_: void, smith: *testing.Smith) anyerror!void {
+    var buffer: [1024]u8 = undefined;
+    const length = smith.sliceWeightedBytes(&buffer, &.{
+        .rangeAtMost(u8, 0x00, 0xff, 1),
+        .value(u8, 'L', 4),
+        .value(u8, 'U', 4),
+        .value(u8, 'C', 4),
+        .value(u8, 'E', 4),
+        .value(u8, 0x2A, 4),
+        .value(u8, 0x00, 4),
+    });
+
+    const decoded = decode(testing.allocator, buffer[0..length]) catch |failure| switch (failure) {
+        error.InvalidModule, error.UnsupportedVersion => return,
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    var program = decoded;
+    defer program.deinit();
+    try mir.verify(testing.allocator, &program);
+}

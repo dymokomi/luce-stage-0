@@ -121,6 +121,35 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run the Luce and loom test suites");
     test_step.dependOn(&run_luce_tests.step);
 
+    // Keep the property corpus addressable on its own.  The ordinary test
+    // step runs the checked-in corpus; this lane is where a developer turns
+    // on Zig's coverage-guided fuzzer (`zig build test-fuzz --fuzz=10000`)
+    // without making the product and documentation suites part of each fuzz
+    // iteration.
+    const fuzz_luce = b.createModule(.{
+        .root_source_file = b.path("src/luce/luce.zig"),
+        .target = target,
+        // Zig 0.16's fuzz runner expects release-style error handling; using
+        // ReleaseSafe here also keeps generated-input failures reproducible
+        // instead of depending on debug-only error-return traces.
+        .optimize = .ReleaseSafe,
+        .link_libc = true,
+    });
+    fuzz_luce.addOptions("build_options", generator);
+    const fuzz_tests = b.addTest(.{ .root_module = fuzz_luce, .filters = &.{"fuzz:"} });
+    const run_luce_fuzz_tests = b.addRunArtifact(fuzz_tests);
+    const test_fuzz_step = b.step("test-fuzz", "Run the Luce fuzz and property corpus");
+    test_fuzz_step.dependOn(&run_luce_fuzz_tests.step);
+
+    // The deterministic hardening lane adds the fixed-seed near-miss parser
+    // stress test to the corpus.  It is cheap enough for local changes and
+    // keeps long-input recovery visibly separate from ordinary unit tests.
+    const stress_tests = b.addTest(.{ .root_module = luce, .filters = &.{"near-miss programs"} });
+    const run_luce_stress_tests = b.addRunArtifact(stress_tests);
+    const test_hardening_step = b.step("test-hardening", "Run deterministic Luce hardening tests");
+    test_hardening_step.dependOn(&run_luce_fuzz_tests.step);
+    test_hardening_step.dependOn(&run_luce_stress_tests.step);
+
     // The one module that calls libLLVM: bitcode in, object code out
     // (`src/luce/08_llvm/emit.zig`).  It carries the backend's
     // end-to-end proof too, because that test is the one thing that

@@ -3116,3 +3116,65 @@ test "the artifact cache key moves with a package file and with its resolution (
     defer testing.allocator.free(rerooted);
     try testing.expect(!std.mem.eql(u8, baseline, rerooted));
 }
+
+// The compiler's public contract is deliberately two-valued: trusted MIR or
+// diagnostics.  This target walks arbitrary prepared source through every
+// front-end stage and checks the boundary that later stages rely on.  It is
+// intentionally separate from the parser fuzzer: parser recovery can be
+// correct while name resolution, lowering, or optimization still mishandles
+// the recovered tree.
+test "fuzz: compilation yields verified MIR or bounded diagnostics" {
+    try testing.fuzz({}, compileAnything, .{ .corpus = &.{
+        "",
+        "func main():\n    return\n",
+        "func main():\n    let value = (1 + 2) * 3\n",
+        "struct Point:\n    x: double\n    y: double\n\nfunc main():\n    let p = Point(x = 1.0, y = 2.0)\n",
+        "union Shape:\n    circle(radius: double)\n    square(side: double)\n\nfunc main():\n    let s = Shape.circle(radius = 1.0)\n",
+        "func main():\n    let broken = (1 +\n",
+    } });
+}
+
+fn compileAnything(_: void, smith: *testing.Smith) anyerror!void {
+    var buffer: [512]u8 = undefined;
+    const length = smith.sliceWeightedBytes(&buffer, &.{
+        .rangeAtMost(u8, 0x00, 0xff, 1),
+        .rangeAtMost(u8, 0x20, 0x7e, 5),
+        .value(u8, ' ', 5),
+        .value(u8, '\n', 5),
+        .value(u8, ':', 3),
+        .value(u8, '(', 3),
+        .value(u8, ')', 3),
+        .value(u8, '"', 2),
+        .value(u8, '{', 2),
+        .value(u8, '}', 2),
+    });
+
+    const prepared = try luce_source.prepare(testing.allocator, buffer[0..length]);
+    const source = switch (prepared) {
+        .problem => return,
+        .text => |text| text,
+    };
+    defer testing.allocator.free(source);
+
+    var result = try compile_mod.compile(testing.allocator, source, .{ .source_name = "fuzz.luc" });
+    defer result.deinit();
+    switch (result) {
+        .success => |*program| try mir.verify(testing.allocator, program),
+        .failure => |*diagnostics| {
+            try testing.expect(diagnostics.count() != 0);
+            for (0..diagnostics.count()) |index| {
+                const item = diagnostics.at(index).?;
+                try testing.expect(item.code.len != 0);
+                try testing.expect(item.span.start <= item.span.end);
+                if (diagnostics.sources.at(item.file)) |file| {
+                    try testing.expect(item.span.end <= file.text.len);
+                } else {
+                    try testing.expectEqual(@as(usize, 0), item.span.start);
+                    try testing.expectEqual(@as(usize, 0), item.span.end);
+                }
+            }
+            const rendered = try diagnostics.render(testing.allocator);
+            defer testing.allocator.free(rendered);
+        },
+    }
+}
