@@ -49,6 +49,10 @@ human-reviewed.  These files are the reasoning behind it.
 | [SOFTWARE_DESIGN.md](SOFTWARE_DESIGN.md) | How to decide what a module is, what it hides, and what it is called — deep modules, information hiding, and the red flags that say an abstraction is not paying for itself. The guide above wins on anything it covers. |
 | [MISSING.md](MISSING.md) | The honest gap list, re-derived against the tree rather than carried forward. The closest thing to a work queue. |
 
+Where a gap **closes**, its entry leaves MISSING.md for
+[RESOLVED.md](RESOLVED.md) below, so the gap list can be read as a
+to-do list rather than as a history.
+
 ## Decision records — frozen, and true of when they were written
 
 Each of these argues its way to a decision and keeps the measurements
@@ -84,6 +88,7 @@ and each says so in its own preamble.
 | [TERMUI.md](TERMUI.md) | **Design, not built.** The flagship package: the app keeps its own loop, the screen is a diffed cell grid, layout is four total splits, input is one `Event` union with a `Key` enum, and there is no widget tree — the app's own struct is the tree, because a `Widget` union in a package would be a ceiling. Generic-free widgets by reading providers in and per-widget event unions out. |
 | [SELF.md](SELF.md) | Self implied, `static` for the functions without one, and a call site that cannot lie: `f(x)` never mutates a value, `x.advance(8)` may — and reads like it. `var self` and `var` parameters retired. Ratified and built. |
 | [CONSTANTS.md](CONSTANTS.md) | Constant containers: file-scope `const`, the program root, `{k: v}` maps, flat lists and rank-1 arrays, and the static line with one runtime trap behind it. Ratified and built; the EOF appendix records where the implementation superseded the proposal prose. |
+| [RESOLVED.md](RESOLVED.md) | **Not a decision — a record of closures.** What Luce was missing and no longer is, chronologically: what was missing, when and how it closed, and where the detail lives. It exists so MISSING.md can be read as a to-do list; the arguments and measurements that live nowhere else moved here verbatim. |
 
 ## History
 

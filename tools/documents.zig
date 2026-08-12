@@ -67,6 +67,7 @@ pub const records = [_][]const u8{
     "docs/TERMUI.md",
     "docs/SELF.md",
     "docs/CONSTANTS.md",
+    "docs/RESOLVED.md",
 };
 
 /// Both, living first — so "the living documents carry no exemptions"

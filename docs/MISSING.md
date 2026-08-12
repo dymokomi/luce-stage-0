@@ -1,756 +1,355 @@
 # What Luce is still missing — the honest inventory
 
-Rewritten 2026-08-02, after the front-end hardening pass, the `std.`
-namespace, the LLVM backend, and `docs/FAILURE.md`; refreshed
-2026-08-08 after file-scope `const` and program-root constant
-containers shipped.  Older point-in-time measurements keep their
-original commit and line context.  Where a doc and the code disagree,
-the code wins and it is said so.
+Rewritten 2026-08-12: **this file is the live inventory and nothing
+else.**  What is still missing, broken, refused-but-legal, or below the
+standard the good parts set.  Everything that closed moved to
+[RESOLVED.md](RESOLVED.md) — a record, ordered chronologically, keeping
+the arguments and the measurements that were made once and cannot be
+retaken.  Read that one for history; read this one as a to-do list.
+Where a doc and the code disagree, the code wins and it is said so.
 
 A gap list whose numbers cannot be trusted is still useful and is no
 longer *authoritative*, which is the thing it is for.  Every count and
-every `file:line` here was re-derived rather than carried forward.
+every `file:line` here was re-derived rather than carried forward, on
+2026-08-12, against the tree at that commit.  Line numbers in a file
+under active change go stale first; where one no longer resolves, the
+name beside it is what to search for.
+
+**Tier 0 and Tier 1 have new occupants.**  Their old ones — the memory
+wall, the unrunnable backend, the optional/failure hole — closed and
+are in RESOLVED.md.  The tier numbers are ranks, not identities: Tier 0
+is what breaks or lies, and the ranking runs down from there.
 
 ## Scorecard
 
 The **shipped language core is locked.**  Ten conceptual stages, eight
-stage folders, and a front end whose diagnostics mostly name the fix
-rather than the parser's predicament — mostly, because the ownership,
-optional and failure families set a standard that fifteen other places
-do not yet meet (Tier 5b).  `T?` closed absence and `T!` closed
-failure.  One approved extension is deliberately next rather than
-silently counted as shipped: typed channels between workers
-(`docs/THREADS.md` D12).
+stage folders (`01_source` .. `08_llvm`), and a front end whose
+diagnostics mostly name the fix rather than the parser's predicament.
+The serialized module is `format_version` 42 and the published host ABI
+is 17.  `T?` closed absence, `T!` closed failure, enums and unions
+closed sum types, function values and bound methods closed callable
+values, and packages closed *consuming* a library.  One approved
+extension is deliberately next rather than silently counted as shipped:
+typed channels between workers (`docs/THREADS.md` D12 — and D12
+ratifies the **direction only**).
 
-The **runtime is not done**, but the wall is down.  Tier 0 held two
-items, both properties of what existed rather than missing features,
-and **both are now closed**: the C-parity backend is reachable from
-`loom run` and from `luce build --emit=exe`, and memory is given back
-— object identity was reclaimed first, string bytes and struct field
-runs second.  A Luce program can run all day.
+The **runtime is not done.**  Memory is given back and a Luce program
+can run all day, which is what Tier 0 used to be about.  What is there
+now is smaller and worse-behaved: **a crash on the ordinary release
+path** — a scope-end release of a deep enough graph exhausts the native
+stack — and **two places a program is handed a wrong number without
+being told**.  A language whose whole pitch is that unsafety is
+unrepresentable owes those three the top of its own list.
 
----
+The **executable specification is not as strong as it reads.**  Two
+holes in `src/luce/specs/agree.zig` mean a whole class of specs asserts
+less than its title: the leak census is skipped on any run that ended
+errored or trapped, and `agree.prints` never checks *how* a program
+ended.  Tier 1.
 
-## Tier 0 — ~~the one wall left~~ — **closed**
-
-### 1. ~~Memory is never given back for values~~ — **closed**
-
-`runtime.Memory` still splits storage in two, but the line moved:
-`Memory.objects` now holds everything with a death point — container
-contents, the object table, **and every string's bytes and every
-struct value's field run** — while `Memory.arena` keeps only what a
-program cannot grow without bound (a trap's words, the per-layout
-struct zero templates, host text on its way into owned storage).
-
-- ~~Object table rows are never reused~~ — **closed.**  A handle is
-  `{index, generation}` and a freed row goes on a free list, so the
-  table grows to a program's peak object count rather than to the
-  number of objects it ever made, and S9 stays a clean
-  `use_after_free` trap because a stale handle's generation is not the
-  row's (docs/MEMORY.md).  Measured on a loop making and freeing one
-  list per iteration: **281 MB → 21.2 MB at 1M iterations, 593 MB →
-  21.3 MB at 4M**, flat where it was linear.
-- ~~string bytes go to a run-lifetime arena and are never reclaimed~~
-  — **closed.**  A string's bytes and a struct's field run have
-  exactly one owner, and any store into something that outlives the
-  current statement copies them, so no owner ever holds a view of
-  bytes it did not allocate (`docs/STRINGS.md`).  The same churn loop
-  — one string built and discarded per iteration, retaining nothing —
-  read off the runtime's own arena: **15.5 / 29.4 / 59.9 / 121.0 MB →
-  1.8 / 1.8 / 1.9 / 1.8 MB at 0.5M / 1M / 2M / 4M iterations**, and
-  flat out to 16M; in the artifact, 20.4 MB of allocator working set
-  and equally flat.  Reference counting, ARC, COW and tracing GC stay
-  permanently refused (`docs/MEMORY.md`); what replaced them is the
-  language's own claim made literal — *values copy*.
-
-The flagship program was the worked example and is now the proof.
-`Editing.splice` (`examples/editor/editor.luc:146`) is
-`value[0:cursor] + extra + value[cursor:len(value)]`, and 20,000
-keystrokes into a 40 KB file peaked at **1204 MB RSS**.  The same
-simulation now peaks at **3.3 MB**, and costs 24 µs a keystroke
-instead of 9 — three orders of magnitude inside a 16 ms frame either
-way.
-
-What it cost, measured by `bench/compare.sh` on one host: five of the
-six benchmarks moved less than 1%, and `bench/strings` went **2.35× C
-→ 3.40× C**.  That was allocation, not copying — 800,000 small
-allocate-and-free pairs where there used to be unreclaimed bump
-allocations and shared views — and **small-string optimisation took
-most of it back**: a string of 22 bytes or fewer now lives inside the
-`Value` holding it, `string(long)` and `chr` never allocate at all, and
-`bench/strings` came back to **within 12% of where it stood before
-copy-on-store** (step 5 of `docs/STRINGS.md`, which records the
-phase-by-phase measurement).  What is left is the copying itself —
-400,001 twelve-byte duplications into list elements — and step 6 is
-what removes those.
-
-### 2. ~~The engine that reaches C parity cannot be run~~ — **closed**
-
-It is the only engine now.  **A `.lc` *is* machine code** — the
-tagged shared library `luce build` writes — and `loom run FILE.lc` is
-one `dlopen`, one symbol lookup and one call.  `--emit=exe` writes a
-standalone binary, `--emit=object` a relocatable object, and there is
-nothing left to fall back to or select between (docs/ENGINE.md).
-
-What that delivered, measured through `loom run` against the engine
-it replaced, while there was still one to measure against: **loops
-6995 ms → 92 ms, matmul 5767 ms → 22 ms, strings 931 ms → 57 ms.**  Startup is 3–4 ms and
-compiles nothing; compiling is `luce build`'s job and happens when it
-is asked for.
-
-The three decisions, all in `docs/CODEGEN.md`: `cc` links, at build
-time only, so the *run* path still invokes nothing; a standalone
-binary gets **loom's own host**, terminal included, because a
-program's behaviour must not depend on who started it; and every
-artifact carries an `artifact.Artifact` tag — machine, ABI version, a
-content hash of the program, and the identity of the code generator —
-so a stale or foreign one is refused by name instead of crashing.  The
-key is content, never mtime.
-
-What is left of this item is named in docs/ENGINE.md: **an artifact is
-mostly `libluce_rt` by size**, because the runtime is linked
-statically into each one, so what a program says barely moves the
-number — `hello.lc` is 756 KB and the largest bundled program,
-`adventure.lc`, is 871 KB.  A shared `libluce_rt` is the named
-future optimization; and a `.lc` runs only on the machine that built
-it, because cross-compilation needs one `libluce_rt` per target and a
-linker willing to take it.
+The **diagnostics** are in genuinely good shape — three sweeps closed
+everything the hostile-user list ranked but three, and the ownership,
+optional and failure families are the standard.  The **three** left are
+the ones a sweep has to look for rather than trip over (Tier 5b).
 
 ---
 
-## Tier 1 — ~~the semantic hole~~ — **closed**
+## Tier 0 — what breaks, and what lies
 
-**Optionals are done.**  `T?`, `none`, narrowing and `else` lower to
-`{T, i1}` through LLVM, so a
-program that says `T?` is compiled like any other — `parse_int` and
-`parse_float` answer `long?`/`double?` and every bundled program that
-calls them runs as native code.  What the lowering cost that
-`docs/FAILURE.md` did not predict is one refused shortcut, recorded in
-docs/CODEGEN.md: the null handle cannot stand in for absence, because
-it already names a value that is *there*.
+Three items.  The first is a segfault, and the other two hand a program
+a number that is wrong with nothing said about it.  Nothing else in
+this document outranks them.
 
-**Errors are done too.**  `T!`, `try`, `catch` and `error(...)` lower
-through LLVM as the
-outcome word a Luce function already answered, so the success path of
-a `try` reads nothing at all.  `T!` really did leave `types.Type`
-untouched — fallibility is a bool on `mir.Function`, and not one
-`Type` switch grew an arm — which is the one prediction docs/FAILURE.md
-made about the cost that survived contact whole.  What it got wrong is
-recorded there: ABI 6 rather than 5, `catch` needing a statement form
-as well as an expression one, and `file_write` having to become
-fallible too, without which the live bug below stayed writable.  The
-binding form that memo promised "later" has since landed as `catch
-NAME:`, which is the one thing on this page that closed by being
-built rather than by being argued away.
+### 1. Ordinary scope-end release of a deep graph segfaults
 
-The corpus that argued for it, item by item:
+`src/luce/runtime/heap.zig:2052` (`freeObjectsIn`) → `:1994`
+(`freeObject`) → `destroyObject` → `freeValue` → `freeObjectsIn`.  The
+release walk is **native recursion with no bound**, so a graph deep
+enough to exhaust the C stack takes the process down at scope end.  No
+`copy`, no slice, no `map.values()` is involved — this is the death
+point every owned thing goes through.
 
-- `dice.luc:41` — `if files.write_lines(...)` with **no else**, a
-  silently swallowed write failure.  **Fixed, and unwritable**: the
-  call answers nothing, so there is no bool to test and no branch to
-  forget, and `main() -> !` reports what the disk said.
-- `editor.luc`, `wordcount.luc` — an existence check then
-  `file_read`.  **Both gone.**  One read each, and what it answers
-  decides: `catch:` sets the editor's greeting, `try` ends wordcount
-  with the path it could not open.  What that removes is a window
-  between two calls that nothing could close, and a guard that could
-  not tell "not there" from "would not open" anyway.
-- `calc.luc` — four `trap(...)` calls about the *user's* typing.  Now
-  four `error(...)` calls carried up through four frames of recursion
-  by `try`, with no `if` written for any of them.  It is the worked
-  example.
-- `std/files.luc` — real signatures throughout.
+Measured on this host (macOS arm64, the installed ReleaseSafe build) on
+a chain of `struct Node: kids: list(Node)`, one child per level:
 
-**Still open, and the honest remainder:**
+| depth | main thread | worker thread |
+|---|---|---|
+| 35,000 | ok | ok |
+| 40,000 | **segfault** | **segfault** |
 
-- ~~`wordcount.luc:25` — `counts.has(word)` then index: three hash
-  lookups on the hit path.~~ — **settled, and not the way this entry
-  expected.**  The counter did not need a `V?`-returning `m.get` at
-  all: it needed the language to admit that `counts[word] += 1` is a
-  *write*.  A compound store now defines its key at the value type's
-  zero (docs/LANGUAGE.md, "Zero values"), the program says one line
-  where it said four, and the hit path is two hash lookups.  A plain
-  read of an absent key still traps, which is what keeps the `V?`
-  question a real one for the cases that are genuinely asking.
-- `wordcount.luc:38` — `var best = ""` as "no answer",
-  indistinguishable from an empty key.
-- ~~11 `trap(...)` calls in `std/math.luc`~~ — **settled.**  The five
-  reductions answer `double?`: an empty array has no mean, and that is
-  absence rather than failure, so they took `?` and not `!`.  The
-  seven left are domains the caller was handed and could have
-  checked, which is the rule's definition of a bug.
-- `strings.find` returns `-1` because `long?` did not exist.  It does
-  now, so the sentinel is a wart with nothing holding it up any more.
-  The two-declaration half of this entry is settled: `find_from`
-  merged into `find(s, needle, start = 0)` (docs/ARGS.md §9), so there
-  is one function and one answer to a `start` outside the string —
-  `-1`, an *argument error* the old `find` could never reach.  What
-  remains open is the sentinel itself, and the empty-needle
-  disagreement with `count` (a match at `start` there, zero here).
+The program prints its result first and dies on the way out, which is
+the worst shape a failure can have: the work is done and the exit is a
+crash.  The trace is `freeObjectsIn` calling itself past ten thousand
+frames.
+
+**This is the one place CLAUDE.md's "call depth is policy, never a
+native-stack segfault" is false.**  That promise is about *Luce*
+frames, and it is kept: `%depth` rides every generated call and
+`call_depth_exceeded` traps at the call that would exhaust it.  The
+runtime's own release walk carries no such counter, and neither engine
+does — the oracle reaches the same recursion through the same
+`libluce_rt`.
+
+The existing note about `copy`, `list_slice` and `map_values`
+withholding `willreturn` (RESOLVED.md, the channel prerequisites) named
+the *same* hazard on three fresh-allocation paths and did not name this
+one.  The fix is the same shape for all four: an explicit worklist in
+`heap.zig` instead of the call stack, which is a runtime change with no
+language surface and no ABI move.  Anything less — a depth counter that
+traps — turns a correct program into a trapping one, which is not what
+a release path may do.
+
+### 2. `sin` and `cos` go quietly wrong past about 1e4
+
+`src/luce/std/math.luc:6`, and the source comment argues it in full:
+the series are range-reduced with a pi carrying ~20 digits, so each
+decade of magnitude past ~1e4 costs a digit — **1e-14 at 1e3 through
+8e-3 at 1e15**, measured against libm.  *"Nothing traps: a huge angle
+answers a plausible number that is simply wrong."*
+
+It is the one place in the tree a program gets a silently wrong answer
+from a function that looks total.  Three ways out and the memo has
+picked none: refuse the domain (`double?`, absence past the reduction's
+honest range), pay for a two-word or Payne–Hanek reduction, or leave it
+and say so on the documentation site next to the function rather than
+only in the source.  The current state — argued correctly in a comment
+nobody reading `math.sin` will open — is the one option that is not a
+decision.
+
+### 3. Floating-point floor-mod can return the divisor
+
+`src/luce/runtime/operators.zig:135`, restated and pinned as a test in
+the same file (search `The wart §3 records`): `-1e-100 % 1.0` is exactly `1.0`, because the true answer is a
+hair under 1.0 and rounds up.  The invariant `0 <= r < m` a reader
+takes from `%` is therefore false in floating point.
+
+**It is argued, and the argument is good**: `%` floors with the integer
+one or promotion introduces a discontinuity — `-7 % 3` answering `2`
+and `-7 % 3.0` answering `-1.0`, with an invisible widening choosing
+between them.  Python has lived with it since 2.0 and
+`docs/NUMERICS.md` §3 takes the same trade.  What is missing is that
+the wart is **stated in a Zig comment and in nothing a Luce programmer
+reads**: neither `docs/NUMERICS.md`'s user-facing text nor the site's
+`%` reference says the range can be violated.  A one-sentence
+disclosure closes this; a semantic change does not, and should not be
+attempted.
 
 ---
 
-## Tier 2 — sum types: shipped, both halves
+## Tier 1 — what the executable specification does not actually check
 
-**Enums are built (docs/ENUMS.md, 2026-08-06).**  `enum Method:` and
-`enum Method(byte):`, members namespaced and folding as constants,
-`int(m)`/`string(m)` and `Method(n) -> Method?`, equality only,
-methods and namespace functions, containers at the backing width —
-and `match`, with an arm for every member or an `else`.  `std.zip`
-converted the day it landed: a compression method and a DEFLATE block
-type, read through the enums rather than through `== 8` and an `elif`
-chain.  **Unions are built too (docs/UNION.md, as built,
-2026-08-10)**: members carrying named payload fields, constructed as
-namespaced calls with named arguments, `match` extended with payload
-arms that bind each field by its own name as an alias — the only door
-to a payload, so wrong-arm access is unrepresentable — ownership with
-no new rule, the zero as the first declared member, recursion through
-owning containers with `Shape?` as the terminator that is not one,
-and a value that is a struct-shaped run `libluce_rt` walks without
-ever learning unions exist.  Sixteen two-engine specs and the refusal
-rows are the proof; `std.json` was the customer and **has since been
-rewritten onto it** (2026-08-12, `docs/UNION.md`'s "The customer, two
-days later"): a JSON value is the union, `match` is the whole
-navigation API, and the `enum Kind` + `struct Node` + flat
-document-of-indices design it had while unions did not exist is gone
-whole.  Nothing in the compiler or the runtime moved to allow it.
+`src/luce/specs/` is the project's strongest claim: every program runs
+on both engines and is compared on prints, trap code, trap message,
+call trace, **leak census** and the world left behind.  Two of those
+comparisons are skipped more often than the sentence suggests.
 
+### 1. The census is not compared on an errored or trapped run
 
-**Owner direction, 2026-08-04 — the endgame is set.**  After the
-ratified roadmap (named args, visibility, bitwise/hex) come **enums**,
-then **union**, "and I think we're good."  Enums lean C: explicit
-member values (bytes or numbers) when written, sequential defaults
-when not; the design memo brings the backing-type, conversion, and
-exhaustive-dispatch questions.  Union's one deciding question —
-tagged vs raw — is **ratified: tagged** (owner, 2026-08-04: "Tagged
-unions obviously").  A raw overlay would have been an unchecked cast
-in a language whose every guarantee assumes values are what they say;
-the bits-reinterpretation view (TYPES.md D4) remains the principled
-home for genuine raw-overlay needs.  The design memo, when its turn
-comes, designs the tagged world: payload-per-member over the enum
-machinery, checked access, exhaustive dispatch, and the question of
-whether `T?` becomes a two-member tagged union under the hood.  The
-resulting `docs/UNION.md` recorded eighteen drafted decisions and held
-three questions; all eighteen shipped as written on 2026-08-10, with
-the three held questions taken as their written recommendations
-(`T?` stayed its own mechanism — D14 — and did not become a union
-under the hood).
+`agree.zig:407` and `:398`.  `settle()` compares status, code, words
+and origin for an errored run and returns without touching `leaked`;
+the trapped arm does the same.  Only the `ok` and `exited` arms compare
+the census (`:425`, `:430`).
 
+The errored arm even argues for itself — *"a run that ended errored
+publishes nothing, on either engine"* — and `docs/FAILURE.md:378` is
+the reason that argument is backwards: an error *"unwinds **through**
+releases, which is the whole difference from a trap."*  An errored run
+is precisely the run that must end at zero.  A trap unwinding past
+every release (S34) is the other case, where the number is nonzero but
+still a fact both engines must agree on.
 
-Tagged unions were, until that run, the second-order blocker
-`docs/FAILURE.md` refused `Result<T, E>` for, which is what forced
-`T!` to be a function attribute.  That refusal **stands** even with
-the blocker gone: R3 promised this run nothing about error shapes,
-the attribute is what gave Luce Ok-wrapping for free and kept
-`types.Type` out of the feature entirely, and whether an error reason
-may one day be a value-only union is a question `std.json`'s callers
-get to ask, not this entry.
+What it covers: every raising spec.  `agree.errors` has six direct
+callers, and two of them are the local `agreeRaises` wrappers —
+`src/luce/specs/json_spec.zig:37` with fourteen call sites and
+`src/luce/specs/zip_spec.zig:33` with eleven — plus
+`threads_spec.zig:386`, `std_spec.zig:781` and `:794`, and
+`behavior_spec.zig:5702`.  **That last one is the sharpest case**:
+`behavior_spec.zig:5689` is titled *"a call that raises leaves nothing
+where its value would have gone"* and is a regression test for a
+failure-path memory bug found in `std.zip` — a raising call handing a
+freed struct run to the release at frame end.  It is the exact test
+whose census would catch a regression, and the census is off.
 
-The corpus has since been paid back, in the file that predated all of
-it.  All three of the debts this section listed are gone from
-`editor.luc`:
+### 2. `agree.prints` never checks how the program ended
 
-- key handling was one `elif` chain of **15 string comparisons** with
-  no final `else`, so a misspelled `"page_dwon"` compiled and silently
-  did nothing.  It is `enum Intent` — sixteen members, the host's key
-  names translated to it once at the edge, the unbound case named
-  `ignored` rather than fallen through, and a `match` with an arm for
-  every member.  Past `Intent.of` the editor never compares a string
-  to decide what to do.
-- `# 1 keyword, 2 type name, 3 builtin, 0 plain.` — an enum written as
-  a long with a comment — is `enum Word`, and the `elif` chain over
-  those numbers is a four-arm `match` with no `else`.
-- `is_keyword`/`is_builtin` as **46 `word == "…"` comparisons** — a
-  hash set written as a truth table — first became two space-fenced
-  strings, then immutable `map(string, bool)` constants once the
-  language could state them.  Lookup is now O(1), the compiler rejects
-  a duplicate key, and the boundary left is the hand-maintained copy of
-  the compiler vocabulary rather than the data structure.
+`agree.zig:619`.  It runs `compare` — which does make the two engines
+agree with each other about the ending — and then asserts the
+transcript alone.  So **a program that prints the right bytes and then
+traps passes**, as long as it traps identically on both arms.
 
-Two things the rewrite found that no feature would have: the word
-lists had drifted eight language generations (ten keywords and
-twenty-one builtins missing, two names present that are not free
-builtins), and an enum member may not be named `insert`, because the
-list-method table reserves it.
+`threads_spec.zig:270, 288, 301, 316, 334, 344` are all `prints`
+assertions *about termination and release* — an unwaited task joining
+at scope end, `free` as an early join, a task returned and waited on
+elsewhere, tasks joined in list order — and the transcript is the only
+thing being checked.
 
-**The enum half was decided on that evidence, and the union half was
-built on the machinery it left**: the type tag, the per-program
-table, the compare-and-branch tree, and the `match` whose bare arms
-were already the shape `circle(radius):` extends.  `T?` was *not*
-subsumed — D14 kept it its own mechanism, for the five reasons the
-research priced — and `Shape?` became writable instead, which is what
-gives a recursive union a terminator that is not a container.
+The clearest instance is `threads_spec.zig:547`, titled **"a worker
+that leaks is counted in this program's census"**.  Its body asserts
+`session.end.trapped == divide_by_zero` and never reads `leaked` — and
+cannot, because item 1 above means the trapped path never populated a
+comparison to read.  The test's title states a claim the test does not
+make.
 
-**Concurrency has a separate approved next run.**  Workers and owned
-`task` joins are built.  D12 reserves typed channels whose
-`send(give x)` transfers ownership between worker runtimes; with the
-union run landed, it is the next language extension.  That is the
-ratified direction, not a complete channel surface: the channel type,
-buffering and back-pressure, receive result, close behavior and failure
-surface still need an owner decision.
+**The fix is one shape for both.**  Give `settle()` the census on every
+arm, and give the `prints` family an ending to assert (or a sibling
+that takes one).  Both are test-harness changes with no compiler or
+runtime surface; both will fail some specs when they land, and those
+failures are the point.
 
-The language-lock audit also found six channel-prerequisite checks.
-All six are closed before channel syntax is frozen.  Subsequent closeout
-reviews closed three more design-independent seams, and a failure-path
-audit made the existing cross-runtime copy primitive transactional before
-a queue can depend on it:
+### 3. The dual-engine world does not compare file-handle state
 
-- **Closed here:** LLVM's runtime table now withholds `willreturn` from
-  exactly the calls that cannot promise termination.  The direct
-  host/blocking set is `report`, `report_error`, `args_list`,
-  `file_open`, `file_read`, `file_write`, `file_flush`,
-  `file_read_text`, `file_write_text`, `spawn`, `task_wait`, and
-  `effects_enter`.  Resource release can transitively call the host's
-  close callback, so `close`, `constants_abort`, `discard_loose`,
-  `unbind`, `free`, `index_set`, `remove`, and `clear` withhold it too.
-  `copy`, `list_slice`, and `map_values` also withhold it: ownership
-  cycles are now refused, but an acyclic graph's native recursive depth
-  remains data-dependent and can exhaust the stack.  `map_keys` stays
-  true because map keys are non-owning `long` or `string` values — an
-  enum key is one of them, since it is stored as the integer a `long`
-  key would be (docs/ENUMS.md).  All other services are pinned
-  `willreturn = true`; `nounwind` remains unchanged.
-  Colocated Debug and ReleaseSafe tests pin the exact twenty-three-service
-  false set and every remaining true entry.
-- **Closed before channels:** the real host's growable worker table and
-  both spec hosts' fixed worker tables now own a registry mutex rather
-  than borrowing D9's Effects lock.  A spawn starts outside the lock and
-  publishes under it; join and teardown detach a row under the lock and
-  wait only after releasing it.  Closing refuses later publication and
-  drains one detached thread at a time, so a worker waiting for or
-  spawning a nested worker cannot deadlock the registry.  Production
-  handles remain append-only; the fixed spec tables reuse storage but
-  assign a new monotonic identity before reuse, so a stale task cannot
-  join the row's next worker.  Contention, closing and stable-handle tests
-  run in Debug and ReleaseSafe, and a two-engine program has eight
-  siblings each spawn and join a child.
-- **Closed before channels:** every host open, read, write and flush
-  callback now takes the shared Effects guard, including each callback
-  inside the whole-file text loops.  Allocation, validation and loop
-  bookkeeping remain outside the guard, so workers can progress between
-  callbacks.  The MIR classifies whole-file operations as runtime-mediated,
-  so the oracle does not add a second operation-wide guard which the
-  compiled path lacks.  A concurrent runtime test detects both overlap and
-  a guard held beyond the one callback; a MIR test pins that engine seam.
-- **Closed before channels:** the public oracle now states the allocator
-  contract its real worker threads already require.  A worker-enabled
-  `interpreter.run` shares `Memory.objects` across the root and worker
-  runtimes, so that allocator and any backing allocator shared with
-  `Memory.arena` must support concurrent calls through the structured
-  joins.  The compiled runtime and the executable-spec host already use
-  thread-safe allocators; the contract keeps a caller-supplied allocator
-  from being mistaken for an unchecked private one.
-- **Closed before channels:** a failed cross-runtime re-own now reports a
-  stale handle or forbidden resource on the source runtime that initiated
-  the handoff, clears the target's private pending trap, and leaves every
-  partially copied row rolled back.  Allocation failure remains allocation
-  failure rather than being translated into a language trap.
-- **Closed before channels:** verified MIR no longer admits `heap_new` for
-  `file` or `task`.  Resources enter only through file-open and worker-spawn,
-  so malformed decoded modules are refused before either engine reaches an
-  impossible constructor.
-- **Closed here:** a container or struct that transitively carries
-  `file` or `task` is now refused statically by `copy` and at every
-  worker-runtime boundary.  The runtime's `not_owned` trap remains a
-  defense, not the source-language rule.  Ownership diagnostics are
-  type- and ownership-aware at the same boundary.  They offer `give`
-  only for a live owning name; a borrowed resource parameter names the
-  signature, every caller and the retaining handoff; a known alias names
-  its owner; an ownerless view names an ownership-returning operation or
-  restructuring; and an invalid `copy`/`give` in a borrowing context
-  says to remove the verb.  Active-loop and direct-`free` contexts have
-  their own valid repairs rather than an impossible `copy` or `give`.
-- **Closed here:** the other two deep-copying surfaces share that
-  resource-graph gate.  A list slice whose element type carries `file`
-  or `task` is refused unless both effective bounds are equal
-  compile-time `long` constants, which proves that the runtime copies
-  zero elements; the direct `[0:0]` case and the bound-type diagnostic
-  precedence are pinned.  `map.values()` remains type-driven and is
-  refused whenever its value type carries a resource, even for an empty
-  map.
-- **Closed here:** current reference/highlighter coverage now keeps
-  `task.wait()` in the method roster, so the next receiver surface
-  cannot drift silently.
+`agree.zig:439` (`sameWorld`) compares the file's name and content,
+`keys_read`, `lines_read`, `clock`, `epoch` and the directories made —
+but not `handle_position`, and not which handles remain open.  A
+one-engine file effect can evade the world comparison.  The constant
+`file.read` immutability spec pins `handle_position == 0` explicitly,
+which is the workaround; comparing all file-handle state generically is
+the fix (audit F51).
 
-Two later language-lock repairs are closed too.  Empty constant `[]`
-now checks flatness from its annotated element type before there are
-elements to walk, so `list(task(long))`, nested-container and optional
-empty constants cannot bypass the ordinary boundary.  Shaped returns
-preflight visible ownership roots and explicit `give`, then record each
-owning bare name's replacement revision when that operand is staged.  A
-writer to the left is accepted because a later bare name stages the new
-value; a handoff or writer to the right cannot invalidate an old value
-already staged, and one graph cannot escape through two results.  Ordinary
-resource `x = x` or `x = alias_of_x` reassignment is likewise refused
-directly instead of being told to give a name to itself.
+---
+
+## Tier 2 — the one approved language extension left
+
+**Typed channels between worker runtimes.**  Workers and owned `task`
+joins are built, the two-runtime transfer primitive is transactional,
+and the six channel prerequisites are closed (RESOLVED.md).
+`docs/THREADS.md` D12 reserves typed channels whose `send(give x)`
+transfers ownership between runtimes.
+
+**D12 ratifies the direction and nothing more.**  The channel type,
+buffering and back-pressure, what a receive answers, close behaviour
+and the failure surface all still need an owner decision, and no line
+of it is designed.  Counting this as "next" is honest; counting it as
+"nearly there" is not.
+
+Everything else on the ratified language roadmap is worked down.  Two
+consequences of the features that landed are the live remainders:
+
+- **A fallible function type does not exist.**  `func(T) -> R!` is
+  refused, so a fallible function is not a value and a fallible method
+  does not bind (`docs/BINDING.md` D8, the one outstanding decision in
+  that memo; its third *As built* carries the step-by-step remainder).
+- **The owning bind stays refused.**  `give counter.bump` would make a
+  function value the sole owner of a graph, and a handler-holding
+  struct would become object-carrying, so `let b = a` would silently
+  alias where it copies today.  Per-value tracking (the
+  `nodes.provenance` shape) is the named reopening path if a customer
+  ever bleeds for it.
 
 ---
 
 ## Tier 3 — what a real program actually hits
 
-Read from `examples/` for awkwardness rather than features.
-`editor.luc` was the oldest file in the corpus — written before enums,
-`match`, visibility, std, f-strings and constants — so it was both the
-most workaround-dense and the proof the language moved.  It has now
-been rewritten onto all of them, and §1 is the one item of this list
-it still hits.
+Read from `examples/`, `packages/` and the standard library for
+awkwardness rather than features.
 
-1. ~~**No constant containers.**~~  **Shipped.**  File scope now uses
-   `const` for folded values and flat program-root lists, maps and
-   rank-1 arrays.  The editor's two truth tables are immutable
-   `map(string, bool)` literals with O(1) `has`, and `std.zip`'s six
-   printed tables are built once per runtime rather than once per call.
-   Duplicate constant-map keys are refused.  **There is still no
-   `set(T)`**, deliberately: a constant `map(T, bool)` covers the only
-   two callers, so a fifth heap type and a second brace meaning have no
-   corpus pressure behind them.
-2. **No character classes in std.**  `is_digit`/`is_alpha` re-derived by
-   hand three times.  Trivial — five functions.
-3. ~~**No receivers on user structs.**~~ **Done** (docs/SELF.md,
-   superseding the receiver design in docs/METHODS.md).  Every plain
-   member has implied `self`; a namespace member says `static func`.
-   Whether a method writes the receiver is inferred transitively, and
-   a writer aliases one bare owning `var` binding in place.  Readers
-   accept lets and temporaries; object contents still mutate through
-   an ordinary borrow.  The
-   88 namespaced calls were **not** 88 waiting method calls — they are
-   calls on *folders*, and a folder has no receiver; not one function
-   in the corpus had the enclosing struct as its first parameter.  The
-   harvest was the restructuring the feature permits: `Handle`'s four
-   functions and two of `Draw`'s merged into `struct State`, and
-   `std/math.luc`'s `list(long)`-as-a-cell workaround became
-   `struct Rng`.  **One deliberate boundary remains:** a writing
-   method requires one bare owning `var` binding.  Readers accept
-   nested places, but `holder.counter.grow()` and `items[i].grow()`
-   are refused when `grow` writes `self`.  Supporting those calls
-   needs a real place descriptor that evaluates every base and index
-   once and carries the resulting slot and owner identity through
-   `call_inout`; rebuilding or reevaluating the place would be an
-   incorrect shortcut.
-4. ~~**No multiple returns.**~~ **Done** (docs/RETURNS.md).
-   `-> (A, B)`, `return a, b`, `let low, high = f()`, and the later
-   polish `low, high = f()` into existing mutable bare names, lowered
-   as a compiler-synthesized struct. The assignment prepares the whole
-   answer before replacing any name. `calc.luc`'s `struct Step` is
-   deleted, and with it four more disguises of the same missing
-   sentence: a heap object as a mutable cell, a second value dropped
-   and guessed, a second value thrown away and fetched again, and two
-   traversals for one pass.
-5. ~~**No sort with a comparator.**~~ **Done** (docs/FUNCTIONS.md D6).
-   `std.lists` supplies stable O(n log n) `xs.sort_by(before)` for every
-   list element type, taking a named function or capture-free lambda.
-   It is ordinary Luce behind an import-routed method, not a builtin.
-6. ~~**Host surface gaps**~~ — **mostly closed.**  Nine services
-   shipped at ABI 8: `read_line` (with its prompt),
-   `print_error`, `clock_ms`, `sleep_ms`, `env`, `file_append`,
-   `file_delete`, `file_rename`, `dir_list`, wrapped in `std.files`
-   as `append_text`/`append_lines`/`delete`/`rename`/`list`.  The two
-   defects this item named are gone: **`calc.luc` is a REPL** (a line
-   at a time, a bad expression reported and the loop continuing, a
-   blank line or end of input to quit) and **`life.luc` animates**
-   (each frame measured with `clock_ms` and the remainder of its
-   80 ms waited out, so `sleep_ms` is called with a negative number
-   whenever a frame overruns — which is why it is not a trap).
+1. **A loop never guarantees a return.**
+   `src/luce/04_semantics/helpers.zig:377` (`returnsOnAllPaths`) is
+   conservative by construction — *"Loops never guarantee a return"* —
+   so a function whose every exit is a `return` inside `while true:` is
+   refused:
 
-   What was left out at the time, and what became of it:
+   > `pick must return long on every path, and some path reaches the
+   > end of its body without returning`
 
-   - ~~**`exit`.**~~  **Shipped**, and it is a host builtin like any
-     other.  It waited because it is a fourth way for a run to end and
-     every party needed an answer for it: `luce_main`'s `Status`, the
-     leak census, what the oracle's frame stack does on the way out,
-     and what "scope ownership" means when a scope never closes.  Those
-     answers were written rather than guessed, which is why it is here
-     now and was not then; `main() -> !` remains the way to end a
-     program early *with a reason*.
-   - ~~**Path manipulation.**~~  **Shipped as `std.paths`.**  It was
-     never a host gap — joining and splitting a path is pure text, so
-     it is a std module over `strings` — and it waited to be designed
-     against a program that needed it rather than guessed at.
-   - ~~**A wall clock**~~ — **shipped as `epoch_ms`** (ABI 16),
-     milliseconds since the Unix epoch.  It is a second builtin rather
-     than a mode of `clock_ms` because the two answer different
-     questions and confusing them is the classic bug in both
-     directions: a span measured with a clock an operator can set back
-     comes out negative, and a record stamped with a monotonic reading
-     means nothing off the machine that made it.  The name says what
-     it counts from, so neither can be read as the other.  It takes
-     the machine facts' fallible slot shape — a host with no calendar
-     answers "cannot tell" and the program traps `host_unavailable`
-     — rather than inventing a date.  **The calendar is still not
-     here**: turning milliseconds into a date is a library, not a
-     builtin, and the library does not exist.  This is the number it
-     will be built on.
-   - **Setting an environment variable, and reading the whole
-     environment.**  Process-global mutation with no reader in the
-     corpus.
+   The same refusal catches any function whose last statement is a call
+   to something that never comes back: `leavesByCall` (`helpers.zig:366`)
+   recognises **only** the literal names `trap`, `error` and `exit`, so
+   a user `die(message)` that ends in `trap` does not count.
 
-   Two things this work found, both recorded rather than papered
-   over:
+   Retry loops, REPL loops, event loops and state machines are the
+   common idiom this refuses, and the workaround — a dead `return 0`
+   after the loop — is exactly the misleading dead code the
+   unreachable-code diagnostic was added to refuse in the other
+   direction.  Two
+   independent fixes: recognise `while true:` with no `break` as a
+   non-returning statement, and infer "never returns" for a user
+   function the way "writes its receiver" is already inferred
+   transitively (`04_semantics/receiver.zig` is the precedent).
+   Refused-but-legal, and the most likely of these to be hit by
+   somebody's first real program.
 
-   - ~~**`catch` cannot see the reason.**~~  **Closed** by
-     `catch NAME:` (docs/FAILURE.md).  `calc.luc`'s REPL prints the
-     parser's own words now, and `editor.luc`'s save reads the
-     runtime's rather than writing them a second time.
-   - **`files.append` is unwritable.**  `append` is a reserved name
-     (it is `xs.append(v)`), and the reservation applies to a
-     module-qualified declaration too, so the module reads
-     `files.append_text`.  Item 10's visibility run did **not** close
-     this: `append` is reserved by the method table, and visibility
-     does not unreserve names (docs/VISIBILITY.md §6).
-7. ~~**No default or named arguments.**  `term_style(fg, bg, bold)` is
-   called 15 times across `examples/`; 14 end in the same noise word
-   `false`.~~ — **Closed** (docs/ARGS.md, ratified and built).  Every
-   parameter has a name a call site may write, defaults are trailing
-   folded constants, struct fields take the same clause, and the
-   builtin table carries `term_style(fg, bg = -1, bold = false)` — the
-   fifteen sites now write the argument that varies and nothing else.
-8. ~~**`Bytes` is unconstructible.**~~  Cut (docs/ENGINE.md step 1):
-   `var b: Bytes` compiled, nothing produced one and nothing consumed
-   one, and it was one of the two things keeping stage 10 from being
-   total.  A real `Bytes` would be designed fresh.
-9. ~~**Integer division spelling.**~~  **Closed** by
-   docs/NUMERICS.md.  `//` is floor division and `%` is the modulus
-   that pairs with it, so both workarounds this item named by line are
-   gone: `bf.luc:42` is `(tape[pointer] - 1) % 256`, the spelling its
-   author meant, and `math.luc`'s sign-safe parity is
-   `long(y) % 2 == 1`.  `/` became real division in the same memo.
-10. ~~**No visibility.**  std leaks `is_space_byte` and `fold_case`.
-    Cheap, and matters before userland libraries exist.~~ —
-    **Closed** (docs/VISIBILITY.md, ratified through three rounds and
-    built).  Public by default; `private` in full, per declaration and
-    as struct regions; `luce.sema.private` at every resolution site,
-    both spellings of the strings leak included; six markers and the
-    `math.rng(seed)` factory are the whole migration.
-11. ~~**No bitwise operators, no hex literals, no digit separators.**
-    Refused by name rather than misread, which is right — but it caps
-    what userland can reach.~~ — **Closed** (docs/BITWISE.md, ratified
-    and built).  `& | ^ ~ << >>` on the integers at Go's precedence,
-    shifts as bit transport with the count checked
-    (`shift_out_of_range`), `0xFF`, `0b1010`, `_` separators; octal
-    stays refused by name.  What it unblocks is `std.zip` — CRC-32
-    and Huffman without division-and-modulo soup.
-12. **No codepoint iteration in the language.**  `for c in "abc"` is
-    still refused.  The library half is closed:
-    `strings.characters(s)` hands back the code points and
-    `strings.width`/`strings.take` measure and clip by them
-    (docs/STD.md, docs/TERMUI.md D11), so `for c in s.characters()`
-    is the walk a program writes now.  What is left is the loop form
-    itself — an iteration that allocates no list — and the editor,
-    which still spells the walk out by hand in six functions around
-    `Bytes.continuation` (`editor.luc:67`) because it predates the
-    module.
-13. ~~**`catch` cannot see the reason.**~~  **Closed.**  `CALL catch
-    NAME:` binds the error's message to an immutable `string` scoped
-    to the handler block, and both callers the item named took it:
-    `calc.luc`'s REPL prints what the parser raised instead of the
-    line the user typed, and `editor.luc`'s save shows the runtime's
-    sentence instead of building its own copy of it.  The binding is
-    the message and not the code — a `catch` guards one call and one
-    call raises with one code — and not the raise position, which is
-    what the report for an error nobody caught is for
-    (docs/FAILURE.md's As-shipped note).  The expression form still
-    takes no binding, with reasons.
-14. **Nothing pins the site's explicit `reserved_names` roster.**  The
-    language's list lives in `04_semantics/context.zig`.  Coverage now
-    checks `www/luce/src/highlight.zig`'s composite word tables against
-    that source, but the code block on `/ref/lexical/` remains a hand
-    copy.  It was manually resynchronized during the constants
-    closeout and can drift again.  The generator deliberately imports
-    nothing, not `luce` and so not libLLVM (`build.zig` says why), so
-    the deferred fix is a source-derived generated table checked into
-    the site or an equivalent test that reads the roster from the
-    page (audit F52).
-15. **A field of an element needs a `var` root binding.**  `xs[i] = v`
-    through a `let`-bound list is ordinary content mutation (S38), and
-    `xs[i].field = v` through the same binding is refused — "`xs` is
-    let-bound; use var for reassignment" — because the place rule
-    walks to the root binding and a nested place rebuilds value
-    structs up to it.  Nothing is reassigned: the write lands in the
-    container either way.  `examples/adventure/world.luc` therefore opens five
-    of its methods with `var slots = self.<table>`, an alias declared
-    `var` for no reason a reader can see, and the comment there has to
-    explain it.  The fix is either to stop at the innermost container
-    when the path crosses one (which the assignment rule already
-    describes) or to say the restriction out loud in the message; the
-    diagnostic naming *reassignment* for a write that is not one is
-    the part that misleads.
-16. **`assert(x != none)` does not narrow.**  Five shapes narrow and
-    they are the right five (docs/LANGUAGE.md), but the first thing a
-    person writes above a use is an assertion, and it leaves the name
-    a `T?` — so the next line is `luce.sema.absent` and the fix is to
-    rewrite the assertion as `if x == none: trap("…")`.  The
-    diagnostic names `if` and `else`, which is what saves it; the
-    shape itself is still a papercut, and `assert` of a comparison
-    with `none` is a narrowing form the flow analysis could read
-    exactly as it reads a guard that leaves.
+2. **`\r` and `\u{…}` are refused.**  `src/luce/02_lex/lexer.zig:111`
+   calls both *"defensible additions"* and says why neither is here:
+   the lexer only validates an escape and `03_parse`'s `decodeString`
+   produces the bytes, so adding one on this side alone would silently
+   produce wrong text.  The escape set moves as one change across two
+   stages or not at all.  (`\xNN` is refused permanently and for a
+   different reason: a raw byte escape can build a string that is not
+   UTF-8, and every other layer is allowed to assume it is.)
 
-### Follow-ups found while building constant containers
+3. **No codepoint iteration in the language.**  `for c in "abc"` is
+   refused — *"for iterates a list, a rank-1 array, or a map, not
+   string"*.  The library half is closed: `strings.characters(s)` hands
+   back the code points and `strings.width`/`strings.take` measure and
+   clip by them, so `for c in s.characters()` is the walk a program
+   writes today.  What is left is the loop form itself, an iteration
+   that allocates no list.
 
-These are deliberately not hidden in the feature's implementation
-ledger.  None changes the constant surface, but each is a concrete
-improvement the audit exposed:
+4. **The corpus still carries a workaround the compiler stopped
+   needing.**  `examples/adventure/world.luc:304` explains, in a
+   comment addressed to the reader, why seven of its methods open with
+   `var slots = self.<table>`: *"assigning to a field of an element
+   needs a place whose root binding is a `var` … it is the one place
+   this program has to say something to the compiler rather than to the
+   reader."*  **That restriction is gone** — `self.rooms[at].seen =
+   true` compiles, and so does `xs[0].n = 2` through a `let`-bound list
+   (RESOLVED.md, 2026-08-12).  The seven aliases and the paragraph
+   defending them are now the misleading thing.  A sweep, not a fix.
 
-- **Whitespace immediately inside an f-string hole is rejected**
-  (`f"{ value }"`).  A hole is re-lexed as a standalone buffer, where
-  the leading space is mistaken for indentation.  Nested map braces in
-  a hole now work; trimming or offset-aware hole lexing is the remaining
-  parser improvement (audit F17).
-- **Function pruning can retain an otherwise dead function through an
-  orphan `const_function`.**  It scans a reachable function's raw
-  instruction pool conservatively rather than only surviving block
-  items.  This changes artifact size, not behavior; constant-container
-  rows themselves are compacted after dead instructions (F22).
-- **Interpreter-worker arena exhaustion may be reported as
-  `host_unavailable`.**  The worker can reach trap adoption without a
-  pending runtime trap, and the fallback names the host instead of the
-  allocator.  This affects the differential oracle's failure
-  translation, not compiled program semantics (F30).
-- **The release-mode differential harness strips origins twice.**  The
-  operation is currently idempotent, so this is redundant test work
-  rather than a semantic defect (F35).
-- **LLVM materialization of a constant array of value structs first
-  fills every cell with the zero struct, then replaces every cell with
-  its folded value.**  The stable array API makes this cleanup-safe and
-  correct; a bulk or final-content constructor could remove the duplicate
-  storage work if startup measurements justify one (F40).
-- **Arrays still have no slice expression.**  A constant list may be
-  sliced and the result is a fresh owned list; constant arrays, like
-  ordinary arrays, support indexing, iteration and `copy` only.  Adding
-  array slicing is a future language feature rather than part of
-  constant containers (F49).
-- **The dual-engine world's file-handle state is not compared
-  generically.**  `specs.agree.sameWorld` does not inspect facts such as
-  `handle_position` or which handles remain open, so a one-engine file
-  effect could evade the ordinary world comparison.  The constant
-  `file.read` immutability spec pins `handle_position == 0` explicitly;
-  extending the harness to compare all file-handle state remains the
-  broader test improvement (F51).
-- **The site and generated TextMate highlighters only approximate
-  f-string holes.**  The compiler accepts a nested string or nested map
-  braces inside one, but the TextMate hole region does not recursively
-  enter strings or balance braces, while the site's single-string scan
-  stops at the inner quote.  Highlighting can therefore end early.  The
-  generator, highlighter and extension README no longer misstate that
-  tooling limitation as a language restriction; recursive hole-aware
-  scanning remains editor work (F54).
-- **VS Code's word-free colon indentation is not brace-aware.**  The
-  language suspends layout inside braces, so a map entry may legally
-  put its value on the line after `"key":`.  The extension's
-  `:\s*$` rule treats that colon like a block opener, overindents the
-  value and cannot know to return for the next key.  A real fix needs
-  brace-aware editor state rather than another one-line regex; the
-  extension README now states the approximation (F73).
-- **An unimported loaded namespace has two diagnostics.**  Calling a
-  name through it reports `luce.sema.import` and teaches `import X`,
-  while the same dotted value or constant read falls through to
-  `luce.sema.name` as `unknown name X`.  Constants preflight now keeps
-  that boundary instead of leaking the hidden declaration; unifying
-  field and value namespace diagnostics remains follow-up work (F72).
-- **Verified MIR can carry an empty constant-map pool row.**  Source
-  `{}` is deliberately refused because it supplies neither key nor
-  value type, but a decoded module may name both in its heap row and
-  provide zero entries.  Materializing that row is safe; deciding
-  whether the wire should reject every source-impossible constant
-  shape, or treat typed empty rows as valid MIR, remains a verifier
-  canonicalization question (F75).
-- **The final-MIR program-root proof is conservative beyond
-  `heap_new`.**  Every other heap-producing instruction starts as
-  may-root, so fresh runtime operations such as `copy`, a list slice,
-  or map `keys()`/`values()` can retain an unnecessary inline owner
-  guard after local flow.  The full benchmark A/B is flat.  A future
-  whitelist belongs behind runtime-contract tests and the same
-  hostile-MIR proof, not behind assumptions in lowering (F61).
-- **`CONTRIBUTING.md` contains two incompatible license statements.**
-  One says there is no license and the tree is exclusively copyrighted;
-  the next says submitted contributions are dual MIT/Apache.  The root
-  README and two license files also describe dual-license terms, but
-  choosing which contribution-language section represents owner intent
-  is a governance decision, not a documentation cleanup.  Once decided,
-  remove the contradictory section and keep one policy (F69).
-- **S6's early-release wording is broader than its current surface.**
-  `free(x)` accepts an owned container handle, `file`, or `task`, but a
-  struct that carries one of those is rejected by the builtin's heap
-  type gate even though its binding participates in ownership and dies
-  correctly at scope end.  Decide whether S6 means direct heap/resource
-  handles only or whether explicit early release should walk a carrying
-  struct; do not imply either answer by accident in a diagnostic.
-- **Closed before channels:** an owner cannot be stored into itself or
-  one of its descendants.  Stage 4 rejects the relationship when a
-  visible place chain exposes it.  A store into an existing container
-  walks its exact parent chain before mutation; a fresh deep-copy or
-  derived container or object cannot already be an ancestor, so
-  attachment records its children's exact parent at commit.  Parameters
-  and aliases cannot therefore hide a cycle: those hidden cases trap
-  `ownership_cycle` (“attempted store would create an ownership cycle”).
-  The appended stable trap moves `module.format_version` 33 → 34;
-  `abi.version` stays 13.
-- **Closed before channels:** a successful host open remains locally
-  owned until `Runtime.newFile` attaches its resource row.  Either
-  allocation failure closes that raw handle exactly once under Effects
-  and preserves the original `OutOfMemory`; an open slot without a close
-  slot fails `host_unavailable` before acquiring anything.  Failing-
-  allocator tests cover both allocation points, the handle census, the
-  guard depth and every returned byte.
-- **Closed before channels:** `Runtime.copyFrom` now rolls back every
-  copied child row and owned value run when a later list, map, array or
-  struct allocation fails.  The same rule covers list slices, map
-  `values()`, the other list-building helpers, partially moved worker
-  arguments, and a worker result stranded when its task row cannot be
-  allocated.  Fail-index tests require the target live count and byte
-  census to return to their baseline at every refusal.  Packed-list copy
-  also copies live cells rather than retained spare capacity.
-- **Four stable trap messages retain pre-resource vocabulary.**
-  `use_after_free`, `null_object`, and defense-only `not_owned` use
-  “object” in the runtime's broad heap-handle sense, so they can also
-  describe `file` or `task`; `allocation_failed` says “container” even
-  when allocating a file/task resource row failed.  The current site
-  explains the broad legacy term.  Decide whether to keep that ABI-like
-  diagnostic stability or migrate all four together; do not change one
-  opportunistically.
-- **Flatness is an implementation boundary as well as a language
-  decision.**  If nested constant containers are admitted later, the
-  program-root census and teardown must count and sweep child rows, and
-  `copy` plus mutable-container adoption need the recursive ownership
-  rule.  Relaxing flatness is source-compatible, but it is not merely
-  deleting the front-end refusal.
+5. **`assert(x != none)` does not narrow.**  Five shapes narrow and
+   they are the right five (`docs/LANGUAGE.md`), but the first thing a
+   person writes above a use is an assertion, and it leaves the name a
+   `T?` — the next line is `luce.sema.absent` and the fix is to rewrite
+   the assertion as `if x == none: trap("…")`.  The diagnostic names
+   `if` and `else`, which is what saves it.  `assert` of a comparison
+   with `none` is a narrowing form the flow analysis could read exactly
+   as it reads a guard that leaves.
 
----
+6. **`strings.find` and `strings.count` disagree about an empty
+   needle.**  `find(s, "", start)` answers `start`
+   (`src/luce/std/strings.luc:33`); `count(s, "")` answers `0`
+   (`:67`).  Both are defensible alone and they cannot both be right in
+   one module.
 
-## Resolved since the last edition
+7. **`files.append` is unwritable.**  `append` is reserved by the
+   list-method table, and the reservation applies to a module-qualified
+   declaration too, so `src/luce/std/files.luc` reads `append_text`,
+   `append_lines`, `append_to` and `append_bytes`.  Visibility did not
+   unreserve it (`docs/VISIBILITY.md` §6) and nothing else will.
 
-- **`key_read` can say the keyboard has run dry, and no longer wakes
-  ten times a second doing nothing.**  It answers `string?`: `none` is
-  end of input, the same fact `read_line` answers `none` for off the
-  same descriptor (docs/FAILURE.md).  The two halves were one bug.
-  Raw mode was `VMIN = 0, VTIME = 1`, so a read of zero bytes meant
-  either "the timer expired" or "there will never be another key" and
-  `nextKey` could not tell — it looped.  With `VMIN = 1, VTIME = 0`
-  the read blocks, zero bytes means end of input and nothing else, and
-  the idle wakeups go with it: measured 52 wakeups in five seconds
-  before, 1 after.  On the compiled path the host's `no` was defined
-  and read by nobody, which is where the loop actually lived.
-- **Character literals — decided against; `ord("(")` folding verified
-  working** in expressions and constants.  **But adoption is zero**: a
-  grep for `ord` across every `.luc` returns no matches, and 54 bare
-  character codes remain across four programs.  std's own
-  `is_space_byte` still reads `byte == 32 or byte == 9 or …`.  The
-  remaining work is a corpus sweep, not a language change.
-- **`long.min` writable** — the sign folds before the range check.
-- **`1e400` refused** — non-finite float literals are rejected.
-- **`not a == b` and `a < b < c` are compile errors**, with messages
-  naming both readings.
-- **Four-space indentation enforced**; **CRLF sources compile**;
-  **bidi controls refused everywhere**.
-- **The `std.` namespace** — `import math` binds a sibling, `import
-  std.math` binds the library, both together is a collision.
-- **Trap locations and call traces**; **runaway recursion traps**
-  rather than overflowing the machine's stack.
-- **map is O(1)**, open-addressed over insertion-ordered entries.
-  **Sort is O(n log n) and stable by guarantee.**
-- **Build modes are settled, not pending.**  Luce is always
-  `ReleaseSafe`; `--release` is closer to `-fstrip`.
-- Also shipped: f-strings, compound assignment, nested place
-  assignment, the nine std modules, per-stage fuzzing.
+8. **`var best = ""` as "no answer".**  `examples/wordcount/wordcount.luc:38`
+   still uses the empty string to mean "nothing found yet", which is
+   indistinguishable from an empty key.  `string?` exists; the program
+   predates it.
+
+9. **There is still no `set(T)`,** deliberately.  A constant
+   `map(T, bool)` covers every caller in the corpus — the editor's
+   three highlighting tables (`editor.luc:258`, `:274`, `:281`) — so a
+   fifth heap type and a second brace meaning have no corpus pressure
+   behind them.  Add one when a constant map stops answering, and not
+   before.
+
+10. **Arrays have no slice expression.**  `a[0:2]` on an
+    `array(long, _)` is refused naming `list` and `string` as what
+    slices.  A constant list may be sliced and the result is a fresh
+    owned list; constant arrays, like ordinary arrays, support
+    indexing, iteration and `copy` only (audit F49).
+
+11. **Setting an environment variable, and reading the whole
+    environment.**  `env(name)` reads one; process-global mutation has
+    no reader in the corpus and is not built.
+
+12. **There is no calendar.**  `epoch_ms` is milliseconds since the
+    Unix epoch and is the number a date library will be built on.  The
+    library does not exist.
+
+13. **Whitespace immediately inside an f-string hole is rejected.**
+    `f"{ value }"` is `luce.parse.fstring`, *"malformed expression in
+    f-string"*: a hole is re-lexed as a standalone buffer, where the
+    leading space is mistaken for indentation.  Nested map braces in a
+    hole work.  Trimming, or offset-aware hole lexing, is the parser
+    improvement (audit F17).
 
 ---
 
@@ -762,306 +361,288 @@ improvement the audit exposed:
   than a generic.  `T?` did become a variant of `Type` — one, whose
   payload is a union of its own so `T??` is unrepresentable — and it
   opened no door at all: nothing about it generalizes.  Function values
-  have since shipped, but a callable value is not a type parameter and
-  does not make user code monomorphic at more than one type.  The closed
-  specialization used by `std.lists.sort_by` is compiler-owned std
-  machinery, not a surface generic system.
-- **Closures — absent, and answered.**  Function values and
-  one-expression lambdas shipped on the near side of the capture line,
-  and **bound methods** (docs/BINDING.md, 2026-08-11) made the answer
-  literal: `receiver.method` where a `func` type lands is a function
-  value whose environment is a struct the program declared.  Nothing
-  anonymous entered the language.  A **carrying** receiver now binds by
-  **borrowing** it (D4, as the owner amended it on 2026-08-11): a bound
-  value owns the two-slot run that holds it and never owns the objects
-  inside, so the owning bind — `give counter.bump` — is refused and
-  `carriesObjects(.function)` is exactly false rather than
-  conservatively so.  `==` on a function value is refused with it (D6),
-  because no type can say which of its values carries a receiver, and
-  no function value crosses a worker boundary for the same reason.
-  Union member constructors are function values (D11).  A function
-  value is **storable** (D7, 2026-08-11): `(func(...) -> R)?` is the
-  form a struct field, a list element, an array cell and a union
-  payload field hold one in, absence is the zero, and a map value is
-  written bare because `get` already answers `V?`.  The spelling is
-  the ratified one — a parenthesized type is that type, accepted
-  wherever a type stands and required nowhere — and the invariant is
-  now true in the runtime as well as the type system: a function
-  value's run wears a `Tag` of its own so no ownership walk descends
-  into the receiver it borrows.  **What is still missing of that
-  memo**: `func(T) -> R!` does not exist, so a fallible function is
-  not a value and a fallible method does not bind (D8), and the
-  step-by-step remainder is written down in BINDING.md's third *As
-  built*; and an **owning** bind — a callback that is the
-  sole owner of a graph — stays refused, with per-value tracking (the
-  `nodes.provenance` shape) named as its reopening path if a customer
-  ever bleeds for it.
+  and unions have since shipped, and neither is a type parameter.  The
+  closed specialization used by `std.lists.sort_by` is compiler-owned
+  std machinery, not a surface generic system.
+- **Closures — absent, and answered.**  Function values, one-expression
+  lambdas and bound methods shipped on the near side of the capture
+  line, and `receiver.method` made the answer literal: the environment
+  is a struct the program declared.  Nothing anonymous entered the
+  language, and nothing will (`docs/BINDING.md`).
 - **Iterators.**  What is missing is not a protocol but string
-  codepoints — one loop form.
+  codepoints — one loop form, Tier 3 item 3.
 - **Interfaces, inheritance, operator overloading, async, reflection.**
   No.
 - **`defer`** — superseded by scope ownership.  Zig removed capturing
   `errdefer` in April 2026; Luce needs neither.
+- **Locks, atomics, shared mutable state, thread identifiers,
+  `async`/`await` colouring.**  Permanently absent: the ownership model
+  is the concurrency model (`docs/THREADS.md`).
 
 ---
 
 ## Tier 5 — stage and tooling distance
 
-- ~~**Stage 5 (HIR) is unwritten.**~~ — **landed 2026-08-10**
-  (`src/luce/05_hir/`): stage 4's walk checks and records a typed tree
-  and emits nothing, and `05_hir/lower.zig` is the one emission — a
-  mechanical, diagnostic-free lowering whose error set is
-  `OutOfMemory` alone.  Compound assignment, `for x in xs`, `match`,
-  the short-circuits and the fallible forms all reach it as structured
-  nodes and are desugared there.  **One desugaring is still upstream of
-  the tree**: `03_parse` expands f-strings into `string(x) + ...` and
-  `elif` chains into nested `if`s while it still has nothing but
-  syntax, so those two arrive pre-expanded; moving them down changes
-  stage 3's output and is its own landing.  The warning the stage
-  carries outranks all of that and is unchanged: **whole-array
-  operations must survive as single nodes** — `std.math`'s BLAS-1
-  functions are already scalar loops by the time MIR exists, and LLVM
-  22 fuses adjacent elementwise loops under *no* configuration of
-  `-O3`.  That is a performance item decided in a language stage, and
-  it cannot be taken back.
-- ~~**No `luce test`.**~~ — **landed 2026-08-11** (`docs/TESTING.md`,
-  `src/apps/luce/discover.zig` + `suite.zig`,
-  `src/luce/04_semantics/entry.zig`).  A test is a top-level public
-  zero-parameter `func test_*()` in an ordinary `.luc` file, asserting
-  with the `assert` the language already had; `luce test` sweeps
-  `./tests` or the paths it is given, refuses by name every `test_*`
-  that could never run, compiles each file once with a
-  **compiler-synthesized** `func main(args: list(string)) -> !`, and
-  calls the artifact **once per test** — so per-test isolation is the
-  `Runtime` that already existed and a trap fails one test rather than
-  the run.  A first draft put each test in a worker runtime and was
-  found structurally unable to keep that promise, because a worker's
-  trap is final at the join; the memo records both.  What is *not*
-  built there is named in its "Deliberately absent": no assertion
-  library, no fixtures, no filtering, no mocking, and no parallelism.
+### The pipeline
+
+- **Two desugarings are still upstream of the typed tree.**
+  `03_parse` expands f-strings into `string(x) + …` and `elif` chains
+  into nested `if`s while it still has nothing but syntax
+  (`03_parse/ast.zig:294`, `03_parse/expressions.zig`), so those two
+  arrive at stage 5 pre-expanded.  Moving them down changes stage 3's
+  output and is its own landing.
+- **Whole-array operations must survive stage 5 as single nodes**, and
+  today they do not reach it as such: `std.math`'s BLAS-1 functions are
+  already scalar loops by the time MIR exists, and LLVM 22 fuses
+  adjacent elementwise loops under *no* configuration of `-O3`.  That
+  is a performance item decided in a language stage, and it cannot be
+  taken back.  The warning is written at the top of `05_hir/lower.zig`;
+  what is missing is a customer and a node.
+- **The final-MIR program-root proof is conservative beyond
+  `heap_new`.**  Every other heap-producing instruction starts as
+  may-root, so fresh runtime operations such as `copy`, a list slice,
+  or map `keys()`/`values()` can retain an unnecessary inline owner
+  guard after local flow.  The full benchmark A/B is flat.  A future
+  whitelist belongs behind runtime-contract tests and the same
+  hostile-MIR proof, not behind assumptions in lowering (audit F61).
+- **Function pruning can retain an otherwise dead function through an
+  orphan `const_function`.**  It scans a reachable function's raw
+  instruction pool conservatively rather than only surviving block
+  items.  This changes artifact size, not behavior (audit F22).
+- **Verified MIR can carry an empty constant-map pool row.**  Source
+  `{}` is deliberately refused because it supplies neither key nor
+  value type, but a decoded module may name both in its heap row and
+  provide zero entries.  Materializing that row is safe; whether the
+  wire should reject every source-impossible constant shape is a
+  verifier canonicalization question (audit F75).
+- **LLVM materialization of a constant array of value structs first
+  fills every cell with the zero struct, then replaces every cell with
+  its folded value.**  The stable array API makes this cleanup-safe and
+  correct; a bulk constructor could remove the duplicate storage work
+  if startup measurements justify one (audit F40).
+
+### Code that would answer dishonestly if it were ever reached
+
+- **`src/luce/08_llvm/lower.zig:6235`** lowers `==`/`!=` on a function
+  value by comparing `namedFunction(left)` against
+  `namedFunction(right)` — the *function index only*, ignoring the
+  receiver slot beside it.  That is exactly the dishonest answer
+  `docs/BINDING.md` D6 refuses: two values of one method with different
+  receivers would compare equal.  It is unreachable today because stage
+  4 refuses first, with D6's own sentence.  The comment above it at
+  `:6208` still cites `docs/FUNCTIONS.md` D3, which D6 retired.  Delete
+  the arm and let the operand-type switch reach `.unsupported`, which is
+  what the stage's own rule prescribes for IR that could only arrive
+  damaged.
+
+- **A routed string method's arguments land on nothing.**
+  `04_semantics/calls.zig:2145` says it plainly: *"the batch landed its
+  arguments from the receiver, not from strings' declaration, so a
+  reordered literal would land at the wrong width."*  `s.split(",")`
+  becomes `strings.split(s, ",")` **after** the operand batch has
+  already been typed, so no argument of a routed method takes its type
+  from the target's declaration.  The stage copes by refusing named
+  arguments on the routed spelling and telling the reader to write
+  `strings.split(…)` instead.  Harmless today because every non-receiver
+  parameter in `src/luce/std/strings.luc` is a `string` or a `long`,
+  where the default landing happens to agree.  It goes live the day one
+  takes a `byte`, a `double`, an optional or a function value — which
+  `to_bytes`/`from_bytes` already sit next to.
+
+### Tools
+
+- **`luce ir` prints a constant container's enum members as raw
+  numbers.**  `const table: map(Key, Intent) = {Key.up: Intent.move,
+  Key.down: Intent.quit}` dumps as
+  `constant container#0 table: map(Key, Intent) = {0: 0, 1: 1}`, and a
+  `const kinds: list(Intent)` as `[0, 1]`.  The header names the types
+  and the payload ignores them: `06_mir/print.zig:142`
+  (`printConstantValue`) walks a `ConstantValue` with no type in hand,
+  while the struct printer beside it already resolves field names.
+  Lists, maps and arrays are all affected.  A reader cannot check a
+  constant table by eye, which is the one thing `luce ir` is for.
 - **No `luce fmt`, no LSP, no debugger.**  `fmt` and an LSP both wanted
-  stage 5's faithful tree first and now have it — what is left for them
+  stage 5's faithful tree first and now have it; what is left for them
   is the tooling itself.
-- **Packages: the consuming half is built; producing and fetching are
-  not.**  A program under a `luce.yaml` resolves dotted imports,
-  hand-vendored packages in `.luce/packages/`, `LUCE_LIB` shelves and
-  `path:` overrides at exact versions with content hashes, diamonds
-  refused with `override:` as the remedy, and compiles into
-  `.luce/cache/` (docs/PACKAGES.md, ratified and built).  What remains
+- **Packages: producing and fetching are not built.**  Consuming is
+  (`docs/PACKAGES.md`, ratified and built, five steps).  What remains
   is everything that *makes and moves* a package: `luce install` /
   `luce update` / `luce init`, the registry and its static-file fetch
   protocol, publishing manifests with mandatory hashes, signatures and
   yanking, the package export boundary, and `std.yaml` — each a named
   deferral in that memo, waiting on the publishing memo it says comes
-  next.  Until then a package enters a project by being copied into
-  the store, which is vendoring, and is proven end to end.
-- **Docs to correct:** `tools/vscode-luce/syntaxes/luce.tmLanguage.json`
-  used to be the worst of these — hand-written, highlighting removed v1
-  Fabric builtins, knowing none of `give`, `copy`, `new`, `try`,
-  `catch`, `none` or `import`.  It is now **generated** by
-  `tools/grammar.zig` from the compiler's own keyword, symbol, builtin
-  and method tables, and pinned byte-for-byte by a test in
-  `zig build test`, so the drift that entry described cannot happen
-  again in silence.  The interpolation
-  contradiction in `LANGUAGE.md` and the "future ReleaseFast" in
-  `OWNERSHIP.md` are both fixed.  `STD.md` documents fifteen of the
-  seventeen functions in `strings.luc`, and the two it omits —
-  `fold_case` and `is_space_byte` — are omitted on purpose because
-  they are internals; they were *reachable* anyway until item 10's
-  visibility run marked them `private`, and now the documentation and
-  the compiler say the same thing.
-- **The editor still mirrors the compiler's word vocabulary by hand.**
-  `examples/editor/editor.luc` now carries immutable keyword and builtin maps
-  for syntax highlighting.  They include `const`, and lookup is no
-  longer a fenced string scan, but nothing derives or checks that
-  in-language copy against the compiler tables.  Generating or
-  otherwise deriving the editor vocabulary is the remaining
-  maintenance improvement; the generated VS Code grammar above does
-  not solve it.
+  next.  Until then a package enters a project by being copied into the
+  store, which is vendoring, and is proven end to end by
+  `packages/termui-0.1.0/`.
+- **Cross-compilation.**  No `--target`: a `.lc` runs only on the
+  machine that built it, because cross-compiling needs one
+  `libluce_rt` per target and a linker willing to take it.
+- **`libluce_rt` is copied into every artifact.**  An artifact is
+  mostly the runtime by size, so what a program *says* barely moves the
+  number: in the install tree on 2026-08-12, `hello.lc` is 796 KB and
+  the largest bundled program, `editor.lc`, is 1,008 KB — a 26% spread
+  across every program in the corpus.  Sharing one `libluce_rt` between
+  artifacts is the named future optimization (`docs/ENGINE.md`).
+- **VS Code's word-free colon indentation is not brace-aware.**  The
+  language suspends layout inside braces, so a map entry may legally
+  put its value on the line after `"key":`.  The extension's `:\s*$`
+  rule treats that colon like a block opener, overindents the value and
+  cannot know to return for the next key.  A real fix needs brace-aware
+  editor state rather than another one-line regex; the extension README
+  states the approximation (audit F73).
+- **The site and generated TextMate highlighters only approximate
+  f-string holes.**  The compiler accepts a nested string or nested map
+  braces inside one, but the TextMate hole region does not recursively
+  enter strings or balance braces, while the site's single-string scan
+  stops at the inner quote.  Highlighting can therefore end early.  The
+  generator, highlighter and extension README no longer misstate that
+  tooling limitation as a language restriction; recursive hole-aware
+  scanning remains editor work (audit F54).
+
+### Documentation that is wrong right now
+
+Each of these is a sentence in the tree that a reader would be
+misled by, verified against the code on 2026-08-12.
+
+- **`src/luce/std/os.luc:204` is stale.**  `cpu_count()` carries *"Luce
+  has no threads, so this is a fact to report and not yet a fact to act
+  on."*  Workers shipped (`docs/THREADS.md`), and the processor count is
+  exactly the number to size a pool of them with.  The sentence below it
+  — that the number was added early to avoid an ABI bump later — is
+  still true and should stay.
+- **`src/luce/std/math.luc:164` contradicts its own specs.**  The
+  section comment says *"the operations that have no empty answer
+  (mean, vmin, vmax, variance) trap"*.  They do not: all four answer
+  `double?` and return `none` (`:176`, `:181`, `:189`, `:225`), which
+  the comment eight lines further down (`:172`) says correctly.
+  `src/luce/specs/std_spec.zig:210` and `docs/STD.md:833` both document
+  the `?`.
+- **`docs/STD.md:193` promises what `:233` retracts.**  The API table
+  says `strings.width(s)` answers *"long — display cells"*; the
+  limitation section says *"v0.1 counts code points, not terminal
+  cells"* — `width("日本")` is 2 where a terminal draws 4.  The
+  retraction is documented and pinned by `std_spec`; the table line
+  contradicting it is not.
+- **The reserved-name roster on `/ref/lexical/` has already drifted.**
+  This document warned that it could and it has:
+  `src/luce/04_semantics/context.zig:217` lists **61** reserved names
+  and `www/luce/content/ref/lexical.md:138` lists **60** — the block is
+  missing `term_event_data`.  `www/luce/src/coverage.zig:346` does read
+  the roster from `context.zig`, but for *highlighting* coverage; the
+  page's code block is a hand copy nothing compares.  The generator
+  deliberately imports nothing, not `luce` and so not libLLVM
+  (`build.zig` says why), so the fix is a source-derived generated table
+  checked into the site, or a test that reads the roster back out of the
+  rendered page (audit F52).
+- **The editor mirrors the compiler's word vocabulary by hand, and it
+  has drifted again.**  `examples/editor/editor.luc:258`, `:274` and
+  `:281` are three immutable `map(string, bool)` constants — keywords,
+  type names, builtins — and the comment above them names the ground
+  truth they were copied from: `02_lex/token.zig`'s `keywords` and
+  `04_semantics/builtins.zig`'s `builtins`.  Nothing derives or checks
+  the copy.  **`keyword_words` holds 33 words and `token.zig` holds
+  34**: `union` shipped on 2026-08-10 and the editor does not colour
+  it, and the comment still says "thirty-three words" because that was
+  true when it was written.  The last drift was eight language
+  generations wide; this one is two days.  The generated VS Code
+  grammar does not solve it — that is Zig reading Zig, and this is
+  Luce.  Two hand copies of one roster now disagree with each other as
+  well as with the source: the editor's builtin table carries
+  `term_event_data` and `/ref/lexical/`'s reserved block does not.
+- **Four stable trap messages retain pre-resource vocabulary.**
+  `use_after_free`, `null_object`, and defense-only `not_owned` use
+  "object" in the runtime's broad heap-handle sense, so they can also
+  describe `file` or `task`; `allocation_failed` says "container" even
+  when allocating a file/task resource row failed.  The site explains
+  the broad legacy term.  Decide whether to keep that ABI-like
+  diagnostic stability or migrate all four together; do not change one
+  opportunistically.
+- **S6's early-release wording is broader than its current surface.**
+  `free(x)` accepts an owned container handle, `file`, or `task`, but a
+  struct that carries one of those is rejected by the builtin's heap
+  type gate even though its binding participates in ownership and dies
+  correctly at scope end.  Decide whether S6 means direct heap/resource
+  handles only, or whether explicit early release should walk a carrying
+  struct; do not imply either answer by accident in a diagnostic.
+- **Flatness is an implementation boundary as well as a language
+  decision.**  If nested constant containers are admitted later, the
+  program-root census and teardown must count and sweep child rows, and
+  `copy` plus mutable-container adoption need the recursive ownership
+  rule.  Relaxing flatness is source-compatible, but it is not merely
+  deleting the front-end refusal.
+
+### Test-harness debts smaller than Tier 1's
+
+- **Interpreter-worker arena exhaustion may be reported as
+  `host_unavailable`.**  The worker can reach trap adoption without a
+  pending runtime trap, and the fallback names the host instead of the
+  allocator.  This affects the differential oracle's failure
+  translation, not compiled program semantics (audit F30).
+- **The release-mode differential harness strips origins twice.**  The
+  operation is idempotent, so this is redundant test work rather than a
+  semantic defect (audit F35).
+- **An unimported loaded namespace has two diagnostics.**  Calling a
+  name through it reports `luce.sema.import` and teaches `import X`,
+  while the same dotted value or constant read falls through to
+  `luce.sema.name` as `unknown name X`.  Unifying field and value
+  namespace diagnostics remains follow-up work (audit F72).
 
 ---
 
 ## Tier 5b — diagnostics still below the standard the good ones set
 
-The scorecard above calls this "a front end whose diagnostics name the
-fix".  That is true of most of them and was written from the ownership,
-optional and failure families, which are genuinely excellent — S-numbers,
-carets on the offending name, a fix in the sentence, and the advice
-keyed to whether the expression was a local (which narrows) or a field
-(which does not).  It is not true everywhere, and a hostile-user sweep
-of ~110 wrong programs across the lexer, parser and analyzer found the
-list below.  Ranked by how often a real program hits them.
+The scorecard calls this "a front end whose diagnostics name the fix".
+That is true of most of them and was written from the ownership,
+optional and failure families, which are genuinely excellent —
+S-numbers, carets on the offending name, a fix in the sentence, and the
+advice keyed to whether the expression was a local (which narrows) or a
+field (which does not).
 
-**Where it stands after three rounds of work:** twenty-five items
-closed, four open, and the four left are the ones a sweep has to look
-for rather than trip over.  The families the scorecard was written
-from are still the standard; what has changed is that the lexer and
-parser now meet it.  Two rules came out of the work and are worth
-carrying forward: **one mistake, one report** — which is now a
-mechanism (`Lexed.truncated` per file, statement-scoped suppression
-per construct) and not a habit — and **check in the order the reader
-needs**, after a `try` diagnostic was found giving advice that cost a
-signature edit and a recompile to disprove.
+A hostile-user sweep of ~110 wrong programs across the lexer, parser
+and analyzer produced the ranked list, and three rounds of work closed
+every item on it but three; the ledger and the two rules that came out
+of it are in RESOLVED.md.  The **three left** are below, ranked, each
+re-checked against the installed compiler on 2026-08-12:
 
-**Closed since this list was written.**  The method and built-in
-**argument** diagnostics went first — one sentence used to cover both a
-wrong count and a wrong type, phrased as a count, with the caret on the
-whole call.  Then eleven more, each pinned by a spec asserting code,
-wording and column:
+1. **`"value %d" % a` is answered as a type error.**  The message —
+   *"operands of % are string and long, and there is no conversion
+   between them"* — is true, and a reader arriving from Python or C
+   wrote a format string.  The foreign-operator machinery in
+   `03_parse/expressions.zig:223` is the shape of the answer, but this
+   one is a *type* mistake rather than a parse one, so it belongs at the
+   `%` type check with the f-string named as the fix — and the fix is
+   now a real one to name, since `f"{x:.2f}"` exists
+   (`docs/NUMERICS.md` §8).
 
-- ~~A namespace used without a call denies its own import~~ — and it
-  was wider than reported.  `math.seed`, `P.make` and a bare `helper`
-  all answered "unknown name" about a declaration the compiler had
-  just checked.  Field access on a bare declaration name now resolves
-  as a namespace, exactly as it already did in front of a call, and a
-  name in value position that names a declaration says what it is.
-  Today the diagnostic offers both valid uses: write `helper(...)` to
-  call it, or annotate the place it goes with the function type it
-  should wear.  Suggestions come from that namespace's own members.
-- ~~A mutual struct cycle reports twice, and both messages are
-  false~~ — one message per cycle now, walking the loop that closes
-  it (*struct A contains itself: A.b is B, and B.a is A*), caret on
-  the field rather than the `struct` keyword, and carrying the fix
-  `LANGUAGE.md` only ever spelled in prose: `b: B?`.  A spec compiles
-  that suggestion, because a message whose fix does not work is worse
-  than one that does not help.
-- ~~Only the first missing struct field is reported~~ — all of them,
-  in declaration order, with the conjunction English wants.
-- ~~`script entry must be exactly func main():` is not true~~ — the
-  return-type diagnostic now enumerates all four legal entries: no
-  parameter or one `list(string)` command-line parameter, each with or
-  without `-> !`.  Parameter and return mistakes have separate sentences,
-  with the caret on the return type or parameter rather than `func main`.
-- ~~Over-nested blocks produce 152 diagnostics and 215 KB~~ — one
-  message and 305 bytes.  The bound reports once and stops; `lex()`
-  answers `Lexed{tokens, truncated}` and the parser falls silent on a
-  cut stream, which is what `03_parse.zig`'s stated invariant always
-  claimed.
-- ~~`1.2.3` names the wrong thing and prints harmful advice~~ — it
-  names the second decimal point and says what was read instead, and
-  the extra run is swallowed so the parser adds nothing.  Its mirror
-  `1.` gets `.5`'s model message; `5.foo` is still member access.
-- ~~`and`/`or` will not say which side or what it is~~ — *the left
-  operand of and must be bool, not long*, underlining that operand
-  alone, with the absence advice the right side never had.
-- ~~Duplicate-name diagnostics never point at the first
-  declaration~~ — all four spellings do, naming the file too when the
-  first is in another one.
-- ~~`operands are string and long (conversions are explicit)`~~ — names
-  the operator, and offers a conversion only where one exists
-  (`long()` takes a double and `double()` takes a long, and that is the
-  whole set).  `let` no longer offers a `string(...)` by name.
-- ~~Grammar: "a long", "a long?"~~ — standardised on the variants that
-  sidestep the article.
-- ~~long source lines are never windowed~~ — past 100 characters a
-  line is windowed around the caret with 30 characters of context and
-  `...` for what is cut, measured in characters because the caret pads
-  per character.
+2. **A statement-level `{` is read as a map literal, and the diagnostic
+   lands on the wrong brace.**  A bare C-style block —
 
-**Closed in the round after that**, the six that were ranked here
-plus four found while sweeping:
+   ```text
+   while n < 3:
+       n += 1
+   {
+       print(string(n))
+   }
+   ```
 
-- ~~Foreign operators get "expected an expression, found '+'"~~ —
-  `++` `--` `**` `===` `!==` `<>` `<<` `>>` report once, with the
-  caret across the operator as written and the Luce spelling in the
-  sentence.  The bar for claiming a pair is that it can never be
-  anything else: `a--b` *is* `a - (-b)` and still compiles, so `--`
-  is claimed only where no operand follows, and the halves must
-  touch or nothing is claimed.  `&&` and `||` never become tokens at
-  all and are answered in the lexer, in the same words.
-- ~~Stray-character diagnostics cascade~~ — the `Lexed.truncated`
-  rule, narrowed to one construct: a parse report is suppressed when
-  stage 2 spoke inside the source the current statement consumed.
-  Scoped to the statement, so one bad line does not silence the next.
-  `&&` 2→1, stray `$` 2→1, C braces 3→2.  A matched pair of
-  typographic quotes is now one report across the whole literal,
-  carrying both codepoints, and confined to one line so an unmatched
-  quote cannot swallow a file.
-- ~~No unreachable-code diagnostic~~ — **decided: refuse.**  The
-  compiler has one severity, so warning was never available; the line
-  the language already draws is between *misleading* and *redundant*,
-  and a statement after `return` is the first kind.  It names the
-  terminator and its line, an `if` counts only when every arm leaves,
-  and one terminator is one report.  It found real dead code in two
-  of the tree's own fixtures on its first run.  LANGUAGE.md and
-  /ref/statements carry the reasoning.
-- ~~A diagnostic at end of file prints no snippet~~ — the position
-  was never wrong, so it does not move; the snippet borrows the last
-  line with content and the caret sits one past its end, which is the
-  same byte.  `Rendered.source_line_number` says which line it handed
-  back.  Only at end of file: a blank line in the middle keeps its
-  own emptiness.
-- ~~An optional struct field is counted as one value~~ — **the
-  recorded reasoning was wrong, and so was the guess it rested on.**
-  Both counts are honest.  `valueCount` counts what a value of a type
-  *unconditionally* costs, and `zeroOf` is what it predicts: it
-  recurses through a struct field emitting an instruction per leaf and
-  stops dead at an optional one.  Measured: twelve levels of two
-  struct fields is 12,341 MIR instructions, sixty levels of the
-  optional spelling is 201.  Flattening optionals as well cannot
-  terminate (`next: Node?` has no closing order and would have to be
-  called a cycle, destroying the fix the cycle diagnostic prescribes);
-  flattening *neither* — the alternative this list proposed — disarms
-  the bound, and ninety lines of source then took 2.76 GB to check.
-  What was dishonest was the sentence, which described the data.  It
-  now says the struct *always holds* the values, names the widest
-  field with the caret on it, and offers `?` as well as a container.
-- ~~`expectSayingAt` cannot see a left-operand span widening back~~ —
-  `expectOnlySayingAcross` asserts the column an underline stops at,
-  and both `and`/`or` left-operand cases are pinned by width.
-- ~~A `try` with nothing to try gives wrong advice~~ — the order of
-  two checks was the diagnostic.  Inside a plain `main`, `try
-  plain()` answered "main does not say it can fail; write '-> !'",
-  advice that costs a signature edit and a recompile to reach the
-  truth; the same mistake in a `main() -> !` already got the right
-  sentence.  The operand is asked first now.
-- ~~`let a = risky() catch:`~~ — was "expected end of line after the
-  binding, found the keyword 'catch'".  Now names the binding and
-  both shapes that work.
-- ~~An f-string hole is underlined by underlining the whole
-  literal~~ — the synthesized `string(...)` carried the f-string's span,
-  so four holes on one line were all underlined and one of them was
-  wrong.  It takes the hole's span now.
-- ~~`s[0:4:2]` blames the bracket~~ — says the language has two slice
-  fields, where the third colon is written.
+   — reports at the *closing* brace, *"expected ':' between a map key
+   and value, found '}'"*.  One report, which is the improvement the
+   last round made, but it names maps to a reader who wrote a block.
+   **The "still two reports" half of this entry no longer
+   reproduces**: four shapes were tried on 2026-08-12 (a C-style `func
+   main() { }`, a C-style `if`/`else`, a stray closing brace at file
+   scope, and the block above) and each gave exactly one diagnostic.
+   What is left is the wording, not the count.
 
-**Still open**, ranked:
-
-1. **`"value %d" % a` is answered as a type error.**  "operands of %
-   are string and long, and there is no conversion between them" is
-   true, and a reader arriving from Python or C wrote a format string.
-   The foreign-operator machinery now in `expressions.zig` is the
-   shape of the answer, but this one is a *type* mistake rather than a
-   parse one, so it belongs at the `%` type check with the f-string
-   named as the fix — and the fix is now a real one to name, since
-   `f"{x:.2f}"` exists (docs/NUMERICS.md §8).
-2. **A stray `{`/`}` pair is still two reports.**  The typographic
-   quote fix pairs on one line; C braces open a block and close it
-   several lines later, so the same trick does not reach.  Whether one
-   report is even right here is the question to settle first — they
-   are two characters on two statements, and the statement-scoped
-   cascade rule deliberately lets a second statement speak.
-3. ~~**`str takes long, double, bool, string, or builder` does not say
-   what it got.**~~  **Closed** by docs/NUMERICS.md, which retired
-   `str` for `string(x)`: the constructor's message names the type in
-   hand, and an f-string hole reports it at the hole.  `string(x)` has
-   since grown two named-value cases — enums and function values —
-   without changing where the refusal lands.
-4. **`give b.items` says "give moves a named object; use copy for
-   other expressions".**  A field *is* named, and the real reason is
-   that a nested place cannot be moved out of (S21, S25) — the fix
-   offered is right, the sentence describing why is not.
-5. **Ownership advice is not yet whole-batch-aware at every adopting
-   surface.**  `take(running, running)` where both parameters say
-   `give`, and `[running, running]`, correctly fail on the first bare
-   name and advise `give running`; applying that edit poisons the later
-   occurrence.  Likewise `consume(running, len(running))` for a `give`
-   first parameter advises the locally correct handoff before the later
-   borrow.  The original programs are refused and no invalid ownership
-   reaches MIR: this is diagnostic precision only.  A future pass should
-   inspect the complete operand batch before prescribing a move, across
-   user calls, constructions and retaining literals, and either name the
-   later use or recommend splitting/reordering the operation.
+3. **Ownership advice is not whole-batch-aware at every adopting
+   surface.**  `[running, running]` correctly fails on the first bare
+   name and advises *"write give running to hand it over, or copy
+   running to keep your own"*; applying that edit poisons the later
+   occurrence.  The original programs are refused and no invalid
+   ownership reaches MIR — this is diagnostic precision only.  A future
+   pass should inspect the complete operand batch before prescribing a
+   move, across user calls, constructions and retaining literals, and
+   either name the later use or recommend splitting the operation.
 
 **Swept with nothing to fix**, so the next sweep can start elsewhere:
 the `give`/`copy` family (names the situation, its S-numbers and the
@@ -1071,93 +652,6 @@ family, and `!x`, `//`, `else if`, `def`/`class`/`const`.
 
 ---
 
-## Tier 3b — ~~the binary boundary~~ — **closed**
-
-The `std.zip` run measured it rather than guessing at it: **Luce could
-not read or write an arbitrary binary file in either direction.**
-`src/apps/host.zig` refused anything that was not valid UTF-8 —
-deliberately, because a half-read JPEG handed over as a `string` would
-make every string guarantee a lie — and the writing direction was
-closed by construction, since a `string` *is* valid UTF-8 and nothing
-could build one that is not.  So `std.zip` shipped as a complete
-byte-buffer library that no real archive could reach.
-
-**Closed** (docs/BYTES.md, ratified R1–R5 and built).  Three things
-that were one movement:
-
-- **`list(T)` stores its elements at their real width.**  A
-  `list(byte)` is one byte an element where it was twenty-four; the
-  boxed slot survives for the kinds that need it (strings, structs,
-  objects), and `map` is untouched.  No surface changed, and the
-  interleaved A/B on every benchmark row moved nothing outside noise.
-- **A file is bytes reached through an open handle.**  `file` is a
-  heap type and a **scope-owned resource**: `files.open(path)` answers
-  one, the owning scope's end closes it, `free(f)` closes it early,
-  and a use after close traps `use_after_free` because it is the same
-  mistake.  The primitive is C-shaped — a read fills the caller's
-  buffer and answers the count, a write takes a buffer and a length —
-  which is the shape `std.network`'s sockets are meant to reuse.
-- **Text is a validation the language performs on the bytes.**  The
-  UTF-8 check moved out of the hosts and into `libluce_rt`, so the
-  interpreter, a compiled artifact and every future host agree
-  byte-for-byte on what "not text" means.  `strings.to_bytes` is
-  total and `strings.from_bytes` answers `string?`.
-
-What is left of the item is smaller and named in `docs/BYTES.md`: no
-seek on a handle, and no file metadata.
-
-~~**And no way to ask what is at a path**~~ — **closed** (ABI 17,
-docs/FILESYSTEM.md).  This entry's own sentence above — "no way to
-tell a directory from a file except by trying to read it" — was the
-last thing in it that a program actually hit, and two programs in this
-tree were paying for it.  `path_kind` is the appended slot:
-`yes` with 0 nothing / 1 file / 2 directory / 3 other, links followed,
-and `no` for a world that would not say.  `files.kind(path) -> Kind?!`
-is over it, and `files.exists`, `files.is_file`, `files.is_dir` and
-`files.entries` are over that.  `file_exists` retired in the same bump
-and its bool went with it: it answered `false` both for a name nothing
-holds and for a file under a `chmod 000` parent, which are two facts,
-and a program could not tell them apart.
-
-The two programs are the proof, and neither is hypothetical.
-`examples/editor/editor.luc`'s file pane listed `.` and read whatever
-was selected, so choosing a subdirectory produced *"cannot read src"*
-and nothing to do about it — it now lists `files.entries`, marks
-directories with a trailing `/` and **walks into one**, with a `../`
-row to walk back.  `examples/zipper/zipper.luc:116` wrote `if not
-files.exists(into)` where `into` must be a *directory*, so a file in
-the way sailed through the gate and failed later inside the extraction
-loop; it asks `files.is_dir` now and refuses up front, leaving the
-file untouched.
-
-What remains unasked, deliberately: **`stat`** — size, times, mode,
-owner, inode.  Every field is a promise the ABI must keep on every
-platform and no current customer wants one; the two usual reasons are
-answered elsewhere (the compile cache keys on the program's content
-hash, and "how big is it" is answered by reading it, since a size read
-before a read is the same race an existence check was).  If a customer
-names a field, that field and only it gets designed.
-
-~~**The directory is the one that bites**~~ — **closed** (ABI 16).
-`dir_create(path)` is the slot this entry asked for, beside `dir_list`
-and with `files.make_directory` over it: one optional service,
-fail-closed, answering `yes`/`no`.  Two decisions came with it, and
-they are one decision said twice — the call means *there is a directory
-at this path when I return*.  It makes **every directory leading to
-the one asked for**, because both of its callers want a nested layout
-(a package store writing `.luce/packages/NAME-VERSION/`, an extractor
-writing under a directory the archive named) and the alternative puts
-the same splitting loop in every program; and a directory that was
-**already there is success**, because the alternative makes every
-install path write `if not files.is_dir(p)` in front of the call, which
-is exactly the check-then-act race such a question is documented never
-to be a guard against.  A *file* holding the name is still `io_failed`.
-`examples/zipper/zipper.luc` was the program that proved the ceiling
-and is the program that shows it gone: the pre-pass that named a
-missing directory and refused the archive is now a `make_directory`
-call, so an archive with `papers/note.txt` in it extracts into an empty
-directory the way `unzip` does.
-
 ## Tier 6 — the OS beyond the language
 
 Fabric, persistence, braids and sync, capabilities, the agent,
@@ -1165,57 +659,78 @@ multi-user — all deferred by design in `docs/V2.md`.
 
 ---
 
-## The order to work down
+## Open questions for the owner
 
-Completed chronology lives in the tiers above.  The current queue is:
+Not defects.  Each is a place where the language behaves as designed
+and the design has a live question in it.
 
-1. **Typed channels** — the approved next design-and-implementation run,
-   building on the shipped two-runtime transfer and worker machinery.
-   `docs/THREADS.md` D12 ratifies typed pipes and the ownership-moving
-   `send(give x)` direction only; endpoint construction, capacity,
-   receive and close behavior, and the failure surface remain to be
-   ratified.  The ownership-cycle prerequisite is closed above.
-2. ~~**The cheap library slice**~~ — **landed 2026-08-10, before the
-   first packages could bake the warts in**: the six ASCII character
-   classes in `std.strings`; `m.get(k)` answering `V?`; and
-   `strings.find` and `xs.find` answering `long?`, with
-   `... else -1` as the spelled-out sentinel for callers who want
-   one.  What remains of the entry is only the `set` question: add a
-   dedicated `set` type when a constant map stops answering the
-   corpus, and not before.
-3. **Cross-compilation** — `--target`, and one `libluce_rt` per target.
-4. **Share one `libluce_rt` between artifacts** instead of copying it
-   into each.
-5. ~~**Tagged unions only when scheduled.**~~ — **landed 2026-08-10,
-   the day it was scheduled** (docs/UNION.md, as built): the eighteen
-   decisions as written, the three held questions as their written
-   recommendations, two recorded departures (the padded run and the
-   refused `free(u)`), `format_version` 37 → 38, and `libluce_rt`
-   untouched.  With it the ratified language roadmap is worked down:
-   **typed channels (item 1) are the next queued design run**, and
-   `std.json` — written without unions as a lazy flat document — was
-   **rewritten onto a real `union Json` on 2026-08-12**, which it
-   proved to be the better shape: the navigation type disappeared,
-   `match` became the API, and the module's only new cost is a call
-   frame per level of nesting, which moved its bound from 128 to 64.
-6. ~~**Stage 5 (HIR)**~~ — **landed 2026-08-10**, the seam built and
-   the scaffolding taken down (`src/luce/05_hir/`).  The checker
-   records a typed tree and emits nothing; one pass lowers it.  What
-   `fmt`, an LSP and whole-array operations were waiting on is there.
+- **`string(f)` on a bare function name is refused while `string(f)` on
+  a binding works.**  `let f: func(long) -> long = a` then `string(f)`
+  answers the function's name; `string(a)` on the declaration itself
+  reports *"a is a function; write a(...) to call it, or annotate the
+  place it goes with the function type it should wear"*.  The reason is
+  structural: `string()`'s parameter is polymorphic, so nothing at that
+  call site names a function type for the bare name to land on.  Making
+  it work means typing a function value from its *declaration* rather
+  than from its landing place, which `docs/FUNCTIONS.md` D2 refuses on
+  purpose.  So the choice is: leave it (and the diagnostic is already
+  good), special-case `string()` to accept a declaration name, or
+  reopen D2.  An owner decision, not a bug report.
+- **`sin`/`cos` past 1e4** — Tier 0 item 2 states the defect; which of
+  the three exits to take is a decision nobody has made.
+- **Floating-point floor-mod** — Tier 0 item 3; the semantics are ratified and
+  only the disclosure is missing, but *where* to disclose it is the
+  owner's call.
 
 ---
 
-**The honest summary:** the shipped core is locked and the front end is
-in genuinely good shape.  The ratified language roadmap is worked down
-— tagged unions, its last run, shipped 2026-08-10 (docs/UNION.md, as
-built).  Typed channels are the approved next
-design-and-implementation run, and a short list of library questions
-remains.  The host surface is closed:
-the last two names on its gap list, `exit` and path manipulation, both
-shipped — `exit` as a gated builtin and paths as `std.paths` over
-`strings`.  Three benchmark rows remain behind their C twins for three
-different reasons; `docs/CODEGEN.md` is the one current table and the
-one place their ratios are written.  Small-string optimisation shipped
-and removed roughly three quarters of the string cost rather than the
-“essentially all” predicted; the remaining part of that row is not yet
-accounted for (`docs/STRINGS.md`).
+## The order to work down
+
+1. **The release-path stack overflow** (Tier 0 item 1).  It is on the
+   path every owned thing takes, it is a segfault rather than a trap,
+   and the fix — an explicit worklist in `runtime/heap.zig` — has no
+   language surface and no ABI move.  The same change should take `copy`, `list_slice` and
+   `map_values` off the same recursion.
+2. **The two specification holes** (Tier 1 items 1 and 2).  Cheap, and
+   everything after this is measured by a suite that is currently
+   allowed to miss a leak on the failure path and a trap after correct
+   output.  Landing them will fail some specs; that is the point, and it
+   is better to learn it now than after a channel run.
+3. **The two silently wrong answers** (Tier 0 items 2 and 3).  Item 3
+   is a documentation sentence.  Item 2 is a real decision with three
+   named exits.
+4. **A loop that returns on every path** (Tier 3 item 1).  The most
+   likely refusal for somebody's first real program, and the fix is two
+   contained changes to `04_semantics/helpers.zig` with an existing
+   precedent for the harder half.
+5. **Typed channels** — the approved next design-and-implementation
+   run.  `docs/THREADS.md` D12 ratifies the ownership-moving
+   `send(give x)` direction only; the channel type, capacity, receive
+   and close behaviour and the failure surface all remain to be
+   ratified, so this is a memo before it is a branch.
+6. **Publishing packages** — the memo `docs/PACKAGES.md` says comes
+   next: `luce install`, the registry, manifests with mandatory hashes,
+   signatures, the export boundary, `std.yaml`.  Consuming is built and
+   `termui` 0.1.0 proves it end to end by vendoring; nothing can be
+   moved between machines yet.
+7. **Cross-compilation** — `--target`, and one `libluce_rt` per target.
+8. **Share one `libluce_rt` between artifacts** instead of copying it
+   into each.
+
+---
+
+**The honest summary:** the shipped core is locked, the ratified
+language roadmap is worked down, and the front end is in genuinely good
+shape.  What is left is smaller and sharper than what came before it.
+A segfault on the ordinary release path, in a language that promises a
+native-stack segfault is unrepresentable.  Two silently wrong answers,
+one of them ratified and merely undisclosed.  A specification whose
+failure-path arm does not check the two things it advertises.  Typed
+channels are the approved next design run and are a memo away from
+being one.  Packages can be consumed and not published.  **Four**
+benchmark rows remain behind their C twins — `strings` 2.75x, `lists`
+2.53x, `arrays32` 7.92x and `stats` 1.32x on the floor-subtracted
+compute column — for four different reasons; `docs/CODEGEN.md` is the
+one current table and the one place their ratios are written, and the
+remaining part of the `strings` row is still not accounted for
+(`docs/STRINGS.md`).
