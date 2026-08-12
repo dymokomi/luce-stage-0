@@ -2320,21 +2320,6 @@ pub const FunctionBuilder = struct {
             };
         }
 
-        // Both sides must agree on ownership, for the reason `else`
-        // does: the binding that receives the result either owns an
-        // object or does not, and that is one static fact (S1, S8).
-        if (shapes.carriesObjects(self.analyzer, value.value_type) and
-            !(try self.yieldsOwnership(binary.right)))
-        {
-            try self.fail(
-                "luce.sema.own",
-                binary.span,
-                "the two sides of catch must agree on ownership: the call hands over a fresh object, so the fallback must too [OWNERSHIP.md S1, S8]",
-                .{},
-            );
-            return null;
-        }
-
         // The hidden merge slot both sides store into; the answer is
         // its reload — a view of what the slot holds.
         _ = try recorder.recordLocal(self, null, value.value_type, false, binary.span);
@@ -2352,6 +2337,32 @@ pub const FunctionBuilder = struct {
             fallback = .{ .value = landed.value.node };
         }
         const filed = fallback orelse return null;
+
+        // Both sides must agree on ownership, for the reason `else`
+        // does: the binding that receives the result either owns an
+        // object or does not, and that is one static fact (S1, S8).
+        //
+        // **Asked of the fallback only once it has lowered.**  A
+        // question about what an expression hands over presumes the
+        // expression exists, and `yieldsOwnership` is a reading of the
+        // written tree that answers "no" for a name nobody declared
+        // just as it does for a borrow.  Asked first, `f() catch
+        // Json.null` with no `Json` in scope reported an ownership
+        // disagreement about a thing that is not there; asked here,
+        // the unknown name refuses itself and a type mistake is not
+        // described as an ownership mistake either — the same order
+        // the argument batch keeps (`calls.zig`).
+        if (shapes.carriesObjects(self.analyzer, value.value_type) and
+            !(try self.yieldsOwnership(binary.right)))
+        {
+            try self.fail(
+                "luce.sema.own",
+                binary.span,
+                "the two sides of catch must agree on ownership: the call hands over a fresh object, so the fallback must too [OWNERSHIP.md S1, S8]",
+                .{},
+            );
+            return null;
+        }
         return .{
             .node = try recorder.recordNode(self, .{ .catch_expr = .{
                 .call = value.node,

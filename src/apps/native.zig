@@ -260,7 +260,7 @@ fn runnableIn(
 const path_separator: u8 = if (@import("builtin").os.tag == .windows) ';' else ':';
 
 // ---------------------------------------------------------------------------
-// Naming a temporary
+// Naming a temporary, and owning it
 // ---------------------------------------------------------------------------
 
 /// Room for what `writerTag` writes.
@@ -293,6 +293,92 @@ fn currentProcessId() u64 {
     };
 }
 
+/// A file this build made, and is therefore allowed to remove.
+///
+/// **Nothing the tooling writes or deletes may collide with a file a
+/// person owns**, and a name is not a proof of ownership.  Every
+/// intermediate here is named after the artifact it is built beside —
+/// `sums.lc.4821-3.o`, `sums.lc.4821-3.pending`, `notes.luc.4821-3.lcm`
+/// — because that is the only directory a build is entitled to write
+/// in; but a person may perfectly well have a file of that name, and
+/// the old shape — create with truncate, delete on the way out — would
+/// empty it and then delete it without ever noticing. `writerTag` makes
+/// that collision improbable; it cannot make it impossible, and
+/// "improbable" is not a promise to make about somebody else's files.
+///
+/// So a scratch file is **claimed**: created exclusively, which fails
+/// if anything is already at the name, and released only when the claim
+/// succeeded.  A build that meets an occupied name stops and says so
+/// rather than writing over it.  After this, no path the tooling
+/// deletes is a path it did not create — which is a property of the
+/// code rather than of the odds.
+pub const Scratch = struct {
+    /// The name claimed.  Borrowed from the caller, who must keep it
+    /// alive until `release`.
+    path: []const u8,
+    /// Whether the file is still this build's to remove.  A `rename`
+    /// that succeeds hands the name away, and there is then nothing to
+    /// release.
+    held: bool,
+
+    /// What claiming a name came to.
+    pub const Claim = union(enum) {
+        /// The name was free, and this file is now this build's.
+        made: Scratch,
+        /// Something is already there.  It is not this build's, so the
+        /// build stops rather than writing over it.
+        taken,
+        /// The name could not be created at all — an unwritable
+        /// directory, or a path whose parents are not there.
+        unwritable,
+    };
+
+    /// Claim `path`: create it, empty, and refuse the name if anything
+    /// is already under it.
+    pub fn claim(io: std.Io, path: []const u8) Claim {
+        const file = std.Io.Dir.cwd().createFile(io, path, .{
+            .truncate = true,
+            .exclusive = true,
+        }) catch |refused| return switch (refused) {
+            error.PathAlreadyExists => .taken,
+            else => .unwritable,
+        };
+        file.close(io);
+        return .{ .made = .{ .path = path, .held = true } };
+    }
+
+    /// Put `bytes` in the claimed file: **not atomic and not synced**,
+    /// deliberately.
+    ///
+    /// What is written this way is handed to `cc` a line later and
+    /// deleted before the build returns — it is never published, never
+    /// read by a loader, and never survives a crash worth surviving.
+    /// Anything a caller will *see* goes through `files.writeWhole`,
+    /// which replaces atomically and syncs; the two are two names
+    /// because they are two durability contracts, and the one thing a
+    /// file write must not do is hide which one it is.
+    pub fn fill(self: *const Scratch, io: std.Io, bytes: []const u8) !void {
+        const file = try std.Io.Dir.cwd().openFile(io, self.path, .{ .mode = .write_only });
+        defer file.close(io);
+        try file.writePositionalAll(io, bytes, 0);
+    }
+
+    /// Publish the claimed file as `destination`, which is what makes an
+    /// artifact appear whole or not at all.  The claim ends with the
+    /// name: after this there is nothing left to release.
+    pub fn rename(self: *Scratch, io: std.Io, destination: []const u8) !void {
+        try std.Io.Dir.cwd().rename(self.path, std.Io.Dir.cwd(), destination, io);
+        self.held = false;
+    }
+
+    /// Remove it, if it is still this build's to remove.
+    pub fn release(self: *Scratch, io: std.Io) void {
+        if (!self.held) return;
+        std.Io.Dir.cwd().deleteFile(io, self.path) catch {};
+        self.held = false;
+    }
+};
+
 // ---------------------------------------------------------------------------
 // Linking
 // ---------------------------------------------------------------------------
@@ -312,7 +398,9 @@ pub const LinkError = error{OutOfMemory};
 /// otherwise.
 ///
 /// Everything temporary is written beside `output` and removed, so a
-/// half-built artifact never appears under the name a loader reads.
+/// half-built artifact never appears under the name a loader reads —
+/// and every temporary is *claimed* before it is written, so nothing
+/// removed here was ever a file somebody else's (`Scratch`).
 pub fn write(
     gpa: Allocator,
     io: std.Io,
@@ -332,7 +420,9 @@ pub fn write(
     }
 
     // A distinct name per writer, so two runs warming the same cache
-    // cannot write each other's half-finished object.
+    // cannot write each other's half-finished object — and claimed
+    // rather than truncated, so the one it is not this build's to write
+    // is refused instead (`Scratch`).
     var tag_storage: [writer_tag_bytes]u8 = undefined;
     const object_path = try std.fmt.allocPrint(
         gpa,
@@ -340,8 +430,13 @@ pub fn write(
         .{ output, writerTag(&tag_storage) },
     );
     defer gpa.free(object_path);
-    defer std.Io.Dir.cwd().deleteFile(io, object_path) catch {};
-    writeScratch(io, object_path, object) catch {
+    var scratch = switch (Scratch.claim(io, object_path)) {
+        .made => |claimed| claimed,
+        .taken => return .{ .failed = try occupied(gpa, object_path) },
+        .unwritable => return .{ .failed = try std.fmt.allocPrint(gpa, "cannot write {s}", .{object_path}) },
+    };
+    defer scratch.release(io);
+    scratch.fill(io, object) catch {
         return .{ .failed = try std.fmt.allocPrint(gpa, "cannot write {s}", .{object_path}) };
     };
 
@@ -377,7 +472,16 @@ pub fn link(
         .{ output, writerTag(&tag_storage) },
     );
     defer gpa.free(pending);
-    defer std.Io.Dir.cwd().deleteFile(io, pending) catch {};
+    // Claimed before the driver is told to write it: `cc -o` would
+    // happily replace whatever is at that name, and the rename below
+    // would then carry a stranger's file away under the artifact's
+    // name.  The claim is what says the name was nobody's.
+    var scratch = switch (Scratch.claim(io, pending)) {
+        .made => |claimed| claimed,
+        .taken => return .{ .failed = try occupied(gpa, pending) },
+        .unwritable => return .{ .failed = try std.fmt.allocPrint(gpa, "cannot write {s}", .{pending}) },
+    };
+    defer scratch.release(io);
 
     var arguments: std.ArrayList([]const u8) = .empty;
     defer arguments.deinit(gpa);
@@ -422,25 +526,21 @@ pub fn link(
         ) };
     }
 
-    std.Io.Dir.cwd().rename(pending, std.Io.Dir.cwd(), output, io) catch {
+    scratch.rename(io, output) catch {
         return .{ .failed = try std.fmt.allocPrint(gpa, "cannot write {s}", .{output}) };
     };
     return .written;
 }
 
-/// Write a scratch file: **not atomic and not synced**, deliberately.
-///
-/// The only thing written this way is the object handed to `cc` a line
-/// later and deleted before this function returns — it is never
-/// published, never read by a loader, and never survives a crash worth
-/// surviving.  Anything a caller will *see* goes through
-/// `files.writeWhole`, which replaces atomically and syncs; the two are
-/// two names because they are two durability contracts, and the one
-/// thing a file write must not do is hide which one it is.
-fn writeScratch(io: std.Io, path: []const u8, bytes: []const u8) !void {
-    const file = try std.Io.Dir.cwd().createFile(io, path, .{ .truncate = true });
-    defer file.close(io);
-    try file.writePositionalAll(io, bytes, 0);
+/// The sentence for a scratch name that is already a file.  It names
+/// the file, because the one thing the person can do about it is move
+/// that file out of the way.
+fn occupied(gpa: Allocator, path: []const u8) Allocator.Error![]const u8 {
+    return std.fmt.allocPrint(
+        gpa,
+        "{s} is already there, and a build will not write over a file it did not make; move it aside",
+        .{path},
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -1050,4 +1150,95 @@ test "a temporary is named after the process that writes it, not only its thread
     // Stable within a run: it names the writer, not the moment.
     var again: [writer_tag_bytes]u8 = undefined;
     try testing.expectEqualStrings(tag, writerTag(&again));
+}
+
+test "a scratch name that is already a file is refused, and that file is left alone" {
+    // The whole point of the claim.  The writer tag makes a collision
+    // with somebody's file improbable; this makes the consequence of
+    // one a refusal instead of a silent truncate-and-delete.
+    const gpa = testing.allocator;
+    var scratch_dir = testing.tmpDir(.{});
+    defer scratch_dir.cleanup();
+    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
+    const directory = path_storage[0..try scratch_dir.dir.realPath(testing.io, &path_storage)];
+
+    const theirs = "notes worth keeping\n";
+    try scratch_dir.dir.writeFile(testing.io, .{ .sub_path = "theirs", .data = theirs });
+    const occupied_path = try std.fs.path.join(gpa, &.{ directory, "theirs" });
+    defer gpa.free(occupied_path);
+    try testing.expectEqual(Scratch.Claim.taken, Scratch.claim(testing.io, occupied_path));
+
+    // Refused means untouched: not emptied, and still there.
+    const after = try scratch_dir.dir.readFileAlloc(testing.io, "theirs", gpa, .unlimited);
+    defer gpa.free(after);
+    try testing.expectEqualStrings(theirs, after);
+
+    // A free name is made, filled, and released — and releasing twice,
+    // or releasing a claim a rename has carried away, removes nothing.
+    const ours = try std.fs.path.join(gpa, &.{ directory, "ours" });
+    defer gpa.free(ours);
+    var held = switch (Scratch.claim(testing.io, ours)) {
+        .made => |claimed| claimed,
+        else => return error.ShouldHaveClaimed,
+    };
+    try held.fill(testing.io, "body");
+    const written = try scratch_dir.dir.readFileAlloc(testing.io, "ours", gpa, .unlimited);
+    defer gpa.free(written);
+    try testing.expectEqualStrings("body", written);
+
+    const published = try std.fs.path.join(gpa, &.{ directory, "published" });
+    defer gpa.free(published);
+    try held.rename(testing.io, published);
+    held.release(testing.io);
+    held.release(testing.io);
+    try testing.expect(scratch_dir.dir.statFile(testing.io, "published", .{}) catch null != null);
+
+    // And a name under a directory that is not there is unwritable
+    // rather than taken: two different answers, because a person can do
+    // something about one of them.
+    const nowhere = try std.fs.path.join(gpa, &.{ directory, "absent", "child" });
+    defer gpa.free(nowhere);
+    try testing.expectEqual(Scratch.Claim.unwritable, Scratch.claim(testing.io, nowhere));
+}
+
+test "a build refuses an occupied intermediate rather than writing over it" {
+    // The same rule where it matters: `write` names its object after
+    // the artifact, and a file already wearing that name stops the
+    // build with a sentence naming it.
+    const gpa = testing.allocator;
+    var scratch_dir = testing.tmpDir(.{});
+    defer scratch_dir.cleanup();
+    var path_storage: [std.fs.max_path_bytes]u8 = undefined;
+    const directory = path_storage[0..try scratch_dir.dir.realPath(testing.io, &path_storage)];
+
+    const output = try std.fs.path.join(gpa, &.{ directory, "sums.lc" });
+    defer gpa.free(output);
+    var tag_storage: [writer_tag_bytes]u8 = undefined;
+    const object_name = try std.fmt.allocPrint(gpa, "sums.lc.{s}.o", .{writerTag(&tag_storage)});
+    defer gpa.free(object_name);
+    const theirs = "not an object file\n";
+    try scratch_dir.dir.writeFile(testing.io, .{ .sub_path = object_name, .data = theirs });
+
+    var tools: Tools = .{
+        .driver = try gpa.dupe(u8, "cc"),
+        .runtime = try gpa.dupe(u8, "libluce_rt.a"),
+        .start = try gpa.dupe(u8, ""),
+        .searched = try gpa.dupe(u8, "/nowhere"),
+    };
+    defer tools.deinit(gpa);
+
+    switch (try write(gpa, testing.io, &tools, .library, "irrelevant", output)) {
+        .failed => |why| {
+            defer gpa.free(why);
+            try testing.expect(std.mem.indexOf(u8, why, object_name) != null);
+            try testing.expect(std.mem.indexOf(u8, why, "did not make") != null);
+        },
+        else => return error.ShouldHaveFailed,
+    }
+
+    // Untouched, and no artifact was produced under the output's name.
+    const after = try scratch_dir.dir.readFileAlloc(testing.io, object_name, gpa, .unlimited);
+    defer gpa.free(after);
+    try testing.expectEqualStrings(theirs, after);
+    try testing.expectEqual(@as(?std.Io.File.Stat, null), scratch_dir.dir.statFile(testing.io, "sums.lc", .{}) catch null);
 }

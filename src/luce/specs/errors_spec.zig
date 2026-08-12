@@ -5403,6 +5403,36 @@ test "luce.sema.own: the two sides of catch agree on ownership" {
     , "luce.sema.own");
 }
 
+test "luce.sema.name: a fallback that names nothing is unknown, not disagreeing about ownership" {
+    // A diagnostic about a thing must not fire when the thing does not
+    // exist.  Both operators ask their fallback whether it hands over a
+    // fresh object, and that question is a reading of the written tree:
+    // it answers "no" for a name nobody declared exactly as it does for
+    // a borrow.  Asked before the fallback resolved, an unknown name
+    // came back as an ownership disagreement — a sentence about the
+    // ownership of something that is not there, which sends the reader
+    // looking for a `give` when what they wrote is a typo.  Both are
+    // now asked after the fallback has lowered, so the resolution
+    // failure wins and it is the *only* thing reported.
+    try expectOnlySayingAt(
+        \\func maybe() -> list(long)?:
+        \\    return new list(long)
+        \\
+        \\func main():
+        \\    let xs = maybe() else Nope.empty
+        \\
+    , "luce.sema.name", "unknown name Nope", 5, 27);
+
+    try expectOnlySayingAt(
+        \\func attempt() -> list(long)!:
+        \\    return new list(long)
+        \\
+        \\func main():
+        \\    let xs = attempt() catch Nope.empty
+        \\
+    , "luce.sema.name", "unknown name Nope", 5, 30);
+}
+
 test "luce.parse.expected: catch guards a plain assignment, not a compound one" {
     try expectHostError(
         \\func main():

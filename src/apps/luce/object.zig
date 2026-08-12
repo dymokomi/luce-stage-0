@@ -209,6 +209,10 @@ fn expectWritten(gpa: Allocator, result: Result) !void {
     }
 }
 
+fn lessThan(_: void, left: []const u8, right: []const u8) bool {
+    return std.mem.lessThan(u8, left, right);
+}
+
 fn compileScript(gpa: Allocator, source: []const u8) !luce.mir.Program {
     var result = try luce.compile.compile(gpa, source, .{
         .allow_host = true,
@@ -255,24 +259,48 @@ test "a program links, loads with its tag intact, and runs" {
     const artifact_path = try std.fs.path.joinZ(gpa, &.{ directory, "product.lc" });
     defer gpa.free(artifact_path);
 
+    // Two files of somebody else's, in the directory the build is about
+    // to write in.  A build creates the artifact it was asked for and
+    // destroys nothing — including a source that happens to be named
+    // the way a test harness names its programs.
+    const decoys = [_]struct { name: []const u8, body: []const u8 }{
+        .{ .name = "test.luc", .body = "func main():\n    print(\"mine\")\n" },
+        .{ .name = "notes.txt", .body = "keep me\n" },
+    };
+    for (decoys) |decoy| {
+        try scratch.dir.writeFile(testing.io, .{ .sub_path = decoy.name, .data = decoy.body });
+    }
+
     try expectWritten(gpa, try build(gpa, testing.io, &tools, &program, .{
         .kind = .library,
         .output = artifact_path,
         .source_hash = hash,
     }));
 
-    // The object the link consumed is gone, and nothing half-written
-    // is left under the artifact's name.
-    var left: std.ArrayList(u8) = .empty;
-    defer left.deinit(gpa);
+    // The object the link consumed is gone, nothing half-written is
+    // left under the artifact's name, and the two files that were here
+    // first are here still, byte for byte.
+    var names: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (names.items) |name| gpa.free(name);
+        names.deinit(gpa);
+    }
     var listing = try scratch.dir.openDir(testing.io, ".", .{ .iterate = true });
     defer listing.close(testing.io);
     var walk = listing.iterate();
     while (try walk.next(testing.io)) |entry| {
-        try left.appendSlice(gpa, entry.name);
-        try left.append(gpa, ' ');
+        try names.append(gpa, try gpa.dupe(u8, entry.name));
     }
-    try testing.expectEqualStrings("product.lc ", left.items);
+    std.mem.sort([]const u8, names.items, {}, lessThan);
+    try testing.expectEqual(@as(usize, 3), names.items.len);
+    try testing.expectEqualStrings("notes.txt", names.items[0]);
+    try testing.expectEqualStrings("product.lc", names.items[1]);
+    try testing.expectEqualStrings("test.luc", names.items[2]);
+    for (decoys) |decoy| {
+        const after = try scratch.dir.readFileAlloc(testing.io, decoy.name, gpa, .unlimited);
+        defer gpa.free(after);
+        try testing.expectEqualStrings(decoy.body, after);
+    }
 
     var loaded = switch (native.open(testing.io, artifact_path, hash)) {
         .loaded => |opened| opened,

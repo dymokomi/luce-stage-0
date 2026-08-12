@@ -143,9 +143,11 @@ pub fn run(
 /// test.
 ///
 /// The artifact is written beside the source under a name nothing else
-/// can pick (`native.writerTag`) and removed when the file's tests are
-/// done — so `luce test` leaves a directory exactly as it found it, and
-/// can never delete the `NAME.lc` a `luce build` put there.
+/// can pick (`native.writerTag`), claimed before it is built
+/// (`native.Scratch`) and removed when the file's tests are done — so
+/// `luce test` leaves a directory exactly as it found it, can never
+/// delete the `NAME.lc` a `luce build` put there, and stops rather than
+/// removing any other file that happens to wear the name.
 fn runFile(
     gpa: Allocator,
     io: std.Io,
@@ -184,7 +186,27 @@ fn runFile(
 
     const artifact_path = try artifactFor(gpa, path);
     defer gpa.free(artifact_path);
-    defer std.Io.Dir.cwd().deleteFile(io, artifact_path) catch {};
+    // Claimed before it is built, because this is a file the runner
+    // *removes* when the file's tests are done, and nothing the tooling
+    // removes may be a file a person owns (`native.Scratch`).  The link
+    // renames its own result onto the claim.
+    var scratch = switch (native.Scratch.claim(io, artifact_path)) {
+        .made => |claimed| claimed,
+        .taken => {
+            try out.print(
+                "  luce: {s} is already there, and a test run will not write over a file it did not make\n",
+                .{artifact_path},
+            );
+            tally.unrun += 1;
+            return;
+        },
+        .unwritable => {
+            try out.print("  luce: cannot write {s}\n", .{artifact_path});
+            tally.unrun += 1;
+            return;
+        },
+    };
+    defer scratch.release(io);
 
     switch (try object.build(gpa, io, tools, &program, .{
         .kind = .library,

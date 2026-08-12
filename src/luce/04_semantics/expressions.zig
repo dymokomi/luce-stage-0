@@ -1679,20 +1679,6 @@ fn lowerCoalesce(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
         });
         return null;
     };
-    // Both arms must agree on ownership: the binding that receives
-    // the result either owns an object or does not, and that is
-    // one static fact, not one per branch (S1, S8, S16).
-    if (shapes.carriesObjects(self.analyzer, payload) and
-        (try self.yieldsOwnership(binary.left)) != (try self.yieldsOwnership(binary.right)))
-    {
-        try self.fail(
-            "luce.sema.own",
-            binary.span,
-            "the two sides of else must agree on ownership: either both hand over a fresh object, or neither does [OWNERSHIP.md S1, S8]",
-            .{},
-        );
-        return null;
-    }
     // The hidden merge slot both arms store into; the answer is
     // its reload — a view of what the slot holds.
     _ = try recorder.recordLocal(self, null, payload, false, binary.span);
@@ -1713,6 +1699,32 @@ fn lowerCoalesce(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
         fallback = .{ .value = landed.value.node };
     }
     const filed = fallback orelse return null;
+
+    // Both arms must agree on ownership: the binding that receives
+    // the result either owns an object or does not, and that is
+    // one static fact, not one per branch (S1, S8, S16).
+    //
+    // **Asked of both arms only once both have lowered.**  A question
+    // about what an expression hands over presumes the expression
+    // exists, and `yieldsOwnership` is a reading of the written tree
+    // that answers "no" for a name nobody declared just as it does for
+    // a borrow.  Asked before the fallback lowered, `f() else
+    // Json.null` with no `Json` in scope reported a disagreement about
+    // ownership of a thing that is not there; asked here, the unknown
+    // name refuses itself and a type mistake is not described as an
+    // ownership mistake either — the same order the argument batch
+    // keeps (`calls.zig`).
+    if (shapes.carriesObjects(self.analyzer, payload) and
+        (try self.yieldsOwnership(binary.left)) != (try self.yieldsOwnership(binary.right)))
+    {
+        try self.fail(
+            "luce.sema.own",
+            binary.span,
+            "the two sides of else must agree on ownership: either both hand over a fresh object, or neither does [OWNERSHIP.md S1, S8]",
+            .{},
+        );
+        return null;
+    }
     return .{
         .node = try recorder.recordNode(self, .{ .coalesce = .{
             .value = left.node,

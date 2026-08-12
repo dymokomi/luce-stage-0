@@ -450,9 +450,20 @@ fn compileTo(
         luce.mir.module.extension,
     });
     defer gpa.free(module_path);
-    defer std.Io.Dir.cwd().deleteFile(io, module_path) catch {};
+    // Claimed, not truncated: this is a file loom removes again, and
+    // nothing it removes may be a file a person owns (`native.Scratch`).
+    var scratch = switch (native.Scratch.claim(io, module_path)) {
+        .made => |claimed| claimed,
+        .taken => return .{ .failed = try std.fmt.allocPrint(
+            gpa,
+            "{s} is already there, and loom will not write over a file it did not make; move it aside",
+            .{module_path},
+        ) },
+        .unwritable => return .{ .failed = try std.fmt.allocPrint(gpa, "cannot write {s}", .{module_path}) },
+    };
+    defer scratch.release(io);
 
-    files.writeWhole(io, module_path, encoded) catch {
+    scratch.fill(io, encoded) catch {
         return .{ .failed = try std.fmt.allocPrint(gpa, "cannot write {s}", .{module_path}) };
     };
 

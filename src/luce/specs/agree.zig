@@ -635,3 +635,60 @@ test {
     // names this file, and this file names theirs.
     _ = hosts;
 }
+
+test "a spec run leaves a file of the working directory's alone" {
+    // Every spec compiles under the virtual name `test.luc`
+    // (`hosted`), and a spec run is a real compile, a real link and a
+    // real `dlopen`.  The suite runs in whatever directory a person
+    // typed `zig build test` in — usually the repository root — so if
+    // any of that ever derived a path from the source *name*, or wrote
+    // an intermediate beside a name it does not own, it would land on
+    // a file somebody was working on.  A source name is a label, never
+    // a path, and every intermediate belongs to a temporary directory
+    // of the run's own (`runProgram`).
+    //
+    // The decoy is that very name.  When one is already there it is a
+    // person's, and it is used exactly as it stands — read, never
+    // created and never removed; when the name is free this test
+    // claims it, which is the same rule the tooling itself keeps
+    // (`apps/native.zig`'s `Scratch`) and the reason claiming here can
+    // never destroy anything either.
+    const decoy = "test.luc";
+    const body = "func main():\n    print(\"a file of mine\")\n";
+    const cwd = std.Io.Dir.cwd();
+
+    var ours = true;
+    if (cwd.createFile(io, decoy, .{ .truncate = true, .exclusive = true })) |file| {
+        defer file.close(io);
+        file.writePositionalAll(io, body, 0) catch |refused| {
+            cwd.deleteFile(io, decoy) catch {};
+            return refused;
+        };
+    } else |refused| switch (refused) {
+        // Somebody's file, already here.  Better than a decoy.
+        error.PathAlreadyExists => ours = false,
+        // Nowhere to put one and none to borrow: there is nothing this
+        // can prove here, and inventing a pass would be worse.
+        else => return error.SkipZigTest,
+    }
+    defer if (ours) cwd.deleteFile(io, decoy) catch {};
+
+    const before = try cwd.readFileAlloc(io, decoy, testing.allocator, .unlimited);
+    defer testing.allocator.free(before);
+
+    try ok(
+        \\func main():
+        \\    var total = 0
+        \\    for value in [1, 2, 3]:
+        \\        total = total + value
+        \\    assert(total == 6)
+        \\
+    );
+
+    const after = cwd.readFileAlloc(io, decoy, testing.allocator, .unlimited) catch |gone| {
+        std.debug.print("a spec run removed {s}\n", .{decoy});
+        return gone;
+    };
+    defer testing.allocator.free(after);
+    try testing.expectEqualStrings(before, after);
+}
