@@ -71,10 +71,10 @@ and file-scope constants, but not a local from the function around it;
 behavior plus state is a struct with a method.
 
 Calls through values are positional because a function type has no
-parameter names or defaults. Function values copy freely, compare with
-`==` and `!=`, have no ordering, and `string(f)` gives the function's
-name. There are first-class functions and capture-free lambdas, but no
-closures.
+parameter names or defaults. Function values copy freely, have neither
+equality nor ordering — the reason is below, where a value picks up a
+receiver — and `string(f)` gives the function's name. There are
+first-class functions and capture-free lambdas, but no closures.
 
 ## A method travels with its struct
 

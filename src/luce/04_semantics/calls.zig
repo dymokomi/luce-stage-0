@@ -1234,10 +1234,7 @@ fn lowerValueMethod(
     for (method.arguments, 0..) |argument, index| {
         operand_expressions[index + 1] = argument.value;
     }
-    const run = (try self.lowerOperandsIntoTracking(operand_expressions, .{ .method = .{
-        .name = method.name,
-        .arguments = method.arguments,
-    } }, null)) orelse return null;
+    const run = (try self.lowerOperandsIntoTracking(operand_expressions, .{ .method = method }, null)) orelse return null;
     const values = run.values;
     const receiver = values[0];
     const arguments = values[1..];
@@ -1920,6 +1917,14 @@ fn refuseNamedMethodArguments(self: *FunctionBuilder, method: ast.Method) Error!
 
 const MethodFound = struct { kind: mir.Intrinsic, result: Type };
 
+/// Whether this is a function value, or the slot a stored one lives
+/// in (`(func(...) -> R)?`, docs/BINDING.md D7).  The two are one
+/// answer wherever the question is about what a value *is* rather
+/// than about whether it is there.
+fn holdsFunction(of: Type) bool {
+    return of == .function or (of == .optional and of.optional == .function);
+}
+
 fn methodFail(self: *FunctionBuilder, method: ast.Method, comptime message: []const u8) Error!?MethodFound {
     try self.fail("luce.sema.method", method.span, message, .{});
     return null;
@@ -2076,12 +2081,7 @@ fn methodTakes(
     // so a null here would mean the two had drifted apart.
     const wanted = (try methodParameters(self, receiver, method.name)).?;
     if (arguments.len != wanted.len) {
-        try self.fail("luce.sema.method", method.span, "{s} takes {d} argument{s}, got {d}", .{
-            method.name,
-            wanted.len,
-            helpers.plural(wanted.len),
-            arguments.len,
-        });
+        try failMethodArity(self, method, wanted.len);
         return false;
     }
     for (arguments, wanted, 0..) |*argument, want, index| {
@@ -2110,6 +2110,23 @@ fn methodTakes(
         return false;
     }
     return true;
+}
+
+/// A builtin method handed the wrong number of arguments.
+///
+/// Said from two places and therefore written in one: the **landing**
+/// reaches this conclusion before the extra argument is lowered, so a
+/// bare function name written there is never refused for wanting a
+/// place the method never had; `methodTakes` reaches it after.  Both
+/// count the *written* arguments, which is the one number a reader
+/// can see.
+pub fn failMethodArity(self: *FunctionBuilder, method: ast.Method, wanted: usize) Error!void {
+    try self.fail("luce.sema.method", method.span, "{s} takes {d} argument{s}, got {d}", .{
+        method.name,
+        wanted,
+        helpers.plural(wanted),
+        method.arguments.len,
+    });
 }
 
 /// Route a value method to the std strings module: `s.find(x)` is
@@ -2373,13 +2390,154 @@ fn callUser(
     return .{ .node = node, .value_type = info.return_type };
 }
 
+// Method tables, by receiver shape ----------------------------------------
+
+/// The one sentence for a builtin method name a receiver shape does
+/// not answer to.
+///
+/// Said from two places and therefore written in one: the **landing**
+/// reaches this conclusion with the receiver lowered and nothing else
+/// — which is what keeps `m.put(k, f)` answering *"map has no method
+/// put"* instead of refusing `f` for wanting a place that will never
+/// exist — and the **dispatch** below reaches it after the arguments
+/// are in hand.  Two copies would be two sentences for one fact, and
+/// the one a reader met less often would go stale.
+fn failNoObjectMethod(self: *FunctionBuilder, method: ast.Method, descriptor: types.HeapType) Error!void {
+    const name = method.name;
+    var suggestion = helpers.Suggestion.init(name);
+    switch (descriptor) {
+        .list => {
+            suggestion.offerAll(&list_methods);
+            if (suggestion.best()) |closest| {
+                try self.fail("luce.sema.method", method.span, "list has no method {s}; did you mean {s}?", .{ name, closest });
+                return;
+            }
+            try self.fail("luce.sema.method", method.span, "list has no method {s} (has append insert remove pop sort reverse find contains clear; sort_by lives in lists; join lives in strings)", .{name});
+        },
+        .array => |shape| {
+            // Only a rank-1 array answers to the sequence methods:
+            // a higher rank is indexed down to one first, and that
+            // is the sentence a reader who wrote `grid.sort()`
+            // needs rather than a did-you-mean.
+            if (shape.rank != 1) {
+                try self.fail("luce.sema.method", method.span, "only rank-1 arrays have {s}; index higher ranks", .{name});
+                return;
+            }
+            suggestion.offerAll(&array_methods);
+            if (suggestion.best()) |closest| {
+                try self.fail("luce.sema.method", method.span, "array has no method {s}; did you mean {s}?", .{ name, closest });
+                return;
+            }
+            try self.fail("luce.sema.method", method.span, "array has no method {s} (has dim fill sort reverse find contains)", .{name});
+        },
+        .map => {
+            suggestion.offerAll(&map_methods);
+            if (suggestion.best()) |closest| {
+                try self.fail("luce.sema.method", method.span, "map has no method {s}; did you mean {s}?", .{ name, closest });
+                return;
+            }
+            try self.fail("luce.sema.method", method.span, "map has no method {s} (has get remove keys values clear)", .{name});
+        },
+        .builder => {
+            suggestion.offerAll(&builder_methods);
+            if (suggestion.best()) |closest| {
+                try self.fail("luce.sema.method", method.span, "builder has no method {s}; did you mean {s}?", .{ name, closest });
+                return;
+            }
+            try self.fail("luce.sema.method", method.span, "builder has no method {s} (append append_ascii build clear)", .{name});
+        },
+        .file => {
+            // The one name a Python programmer will certainly type,
+            // answered in full rather than left to a did-you-mean
+            // (docs/FILESYSTEM.md D9).  It is **refused** and not
+            // merely absent: a working `close` would have to poison
+            // the receiver exactly as `free` does, which is `free`
+            // under a second name for one concept, and an idempotent
+            // one would need a "closed but not poisoned" state — the
+            // one state a resource must never hold.  Both halves of
+            // the answer are here, because a reader who wanted
+            // `close` also wanted `with`.
+            if (std.mem.eql(u8, name, "close")) {
+                try self.fail(
+                    "luce.sema.method",
+                    method.span,
+                    "file has no method close: free f closes it, and the end of the owning scope closes it anyway — which is why there is no 'with' either (docs/FILESYSTEM.md)",
+                    .{},
+                );
+                return;
+            }
+            suggestion.offerAll(&file_methods);
+            if (suggestion.best()) |closest| {
+                try self.fail("luce.sema.method", method.span, "file has no method {s}; did you mean {s}?", .{ name, closest });
+                return;
+            }
+            try self.fail(
+                "luce.sema.method",
+                method.span,
+                "file has no method {s} (read write flush; free f closes it, and so does the end of the owning scope)",
+                .{name},
+            );
+        },
+        .task => {
+            suggestion.offerAll(&task_methods);
+            if (suggestion.best()) |closest| {
+                try self.fail("luce.sema.method", method.span, "task has no method {s}; did you mean {s}?", .{ name, closest });
+                return;
+            }
+            try self.fail("luce.sema.method", method.span, "task has no method {s} (wait; free t joins it)", .{name});
+        },
+    }
+}
+
+/// Whether this receiver answers to no method by this name at all —
+/// true when the refusal above has been said.
+///
+/// Asked by the landing, with operand zero lowered and nothing else,
+/// so that a receiver's own answer comes before any sentence about an
+/// argument.  It is deliberately conservative: **routing is not
+/// absence.**  A string's non-primitive methods are `strings`
+/// functions and `parts.join(sep)` is one too, so whether those names
+/// exist is `stringsCall`'s answer, not this one; a `list`'s
+/// `sort_by` is a `lists` function, and it is in `methodParameters`,
+/// so this is never asked about it.
+pub fn failAbsentMethod(self: *FunctionBuilder, receiver: Type, method: ast.Method) Error!bool {
+    if (receiver == .string) return false;
+    const descriptor = self.analyzer.heapOf(receiver) orelse return false;
+    if (descriptor == .list and descriptor.list == .string and
+        std.mem.eql(u8, method.name, "join")) return false;
+    try failNoObjectMethod(self, method, descriptor);
+    return true;
+}
+
+/// The declared receiver's half of the question above: `p.foo(f)`
+/// where `Point` declares no `foo` at all.  True when it reported.
+///
+/// A name that *is* declared and is not a method — a `static func`,
+/// or one this module may not see — is the dispatch's sentence, one
+/// step further on: this one is only about the name being there.
+pub fn failAbsentReceiverMethod(self: *FunctionBuilder, receiver: Type, method: ast.Method) Error!bool {
+    const declared = declaredName(self, receiver) orelse return false;
+    const qualified = try std.fmt.allocPrint(self.temporary(), "{s}.{s}", .{ declared, method.name });
+    defer self.temporary().free(qualified);
+    if (self.analyzer.function_names.contains(qualified)) return false;
+    try failUnknownMethod(self, receiver, declared, method);
+    return true;
+}
+
+/// Whether any argument of a call was written with a name in front
+/// of it (`xs.append(value = 1)`).
+pub fn namesAnyArgument(arguments: []const ast.Argument) bool {
+    for (arguments) |argument| {
+        if (argument.name != null) return true;
+    }
+    return false;
+}
+
 /// `descriptor` is the receiver's *shape*, which is everything the
 /// dispatch below turns on: a `list(long)` and a `list(string)`
 /// answer to the same method names and differ only in what the
 /// element type makes of the arguments, and the descriptor carries
 /// that.  The receiver's `Type` adds nothing on top of it.
-// Method tables, by receiver shape ----------------------------------------
-
 fn objectMethod(
     self: *FunctionBuilder,
     method: ast.Method,
@@ -2411,7 +2569,7 @@ fn objectMethod(
                 return .{ .kind = .array_fill, .result = .none };
             }
             if (shape.rank != 1) {
-                try self.fail("luce.sema.method", method.span, "only rank-1 arrays have {s}; index higher ranks", .{name});
+                try failNoObjectMethod(self, method, descriptor);
                 return null;
             }
             return sequenceMethod(self, method, receiver, shape.element, false, arguments);
@@ -2460,13 +2618,7 @@ fn objectMethod(
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
                 return .{ .kind = .clear_object, .result = .none };
             }
-            var suggestion = helpers.Suggestion.init(name);
-            suggestion.offerAll(&map_methods);
-            if (suggestion.best()) |closest| {
-                try self.fail("luce.sema.method", method.span, "map has no method {s}; did you mean {s}?", .{ name, closest });
-            } else {
-                try self.fail("luce.sema.method", method.span, "map has no method {s} (has get remove keys values clear)", .{name});
-            }
+            try failNoObjectMethod(self, method, descriptor);
             return null;
         },
         .builder => {
@@ -2491,13 +2643,7 @@ fn objectMethod(
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
                 return .{ .kind = .clear_object, .result = .none };
             }
-            var suggestion = helpers.Suggestion.init(name);
-            suggestion.offerAll(&builder_methods);
-            if (suggestion.best()) |closest| {
-                try self.fail("luce.sema.method", method.span, "builder has no method {s}; did you mean {s}?", .{ name, closest });
-            } else {
-                try self.fail("luce.sema.method", method.span, "builder has no method {s} (append append_ascii build clear)", .{name});
-            }
+            try failNoObjectMethod(self, method, descriptor);
             return null;
         },
         // The byte channel (docs/BYTES.md R4).  A read fills the
@@ -2520,37 +2666,7 @@ fn objectMethod(
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
                 return .{ .kind = .handle_flush, .result = .none };
             }
-            // The one name a Python programmer will certainly type,
-            // answered in full rather than left to a did-you-mean
-            // (docs/FILESYSTEM.md D9).  It is **refused** and not
-            // merely absent: a working `close` would have to poison
-            // the receiver exactly as `free` does, which is `free`
-            // under a second name for one concept, and an idempotent
-            // one would need a "closed but not poisoned" state — the
-            // one state a resource must never hold.  Both halves of
-            // the answer are here, because a reader who wanted
-            // `close` also wanted `with`.
-            if (std.mem.eql(u8, name, "close")) {
-                try self.fail(
-                    "luce.sema.method",
-                    method.span,
-                    "file has no method close: free f closes it, and the end of the owning scope closes it anyway — which is why there is no 'with' either (docs/FILESYSTEM.md)",
-                    .{},
-                );
-                return null;
-            }
-            var suggestion = helpers.Suggestion.init(name);
-            suggestion.offerAll(&file_methods);
-            if (suggestion.best()) |closest| {
-                try self.fail("luce.sema.method", method.span, "file has no method {s}; did you mean {s}?", .{ name, closest });
-            } else {
-                try self.fail(
-                    "luce.sema.method",
-                    method.span,
-                    "file has no method {s} (read write flush; free f closes it, and so does the end of the owning scope)",
-                    .{name},
-                );
-            }
+            try failNoObjectMethod(self, method, descriptor);
             return null;
         },
         // A task's one method (docs/THREADS.md D4).  It consumes
@@ -2563,13 +2679,7 @@ fn objectMethod(
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
                 return .{ .kind = .task_wait, .result = work.result };
             }
-            var suggestion = helpers.Suggestion.init(name);
-            suggestion.offerAll(&task_methods);
-            if (suggestion.best()) |closest| {
-                try self.fail("luce.sema.method", method.span, "task has no method {s}; did you mean {s}?", .{ name, closest });
-            } else {
-                try self.fail("luce.sema.method", method.span, "task has no method {s} (wait; free t joins it)", .{name});
-            }
+            try failNoObjectMethod(self, method, descriptor);
             return null;
         },
     }
@@ -2629,6 +2739,23 @@ fn sequenceMethod(
         if (!try methodTakes(self, method, arguments, receiver)) return null;
         return .{ .kind = .list_reverse, .result = .none };
     }
+    if (std.mem.eql(u8, name, "find") or std.mem.eql(u8, name, "contains")) {
+        // **Both look with `==`, and a function value has none**
+        // (docs/BINDING.md D6): its type cannot say which of its
+        // values carries a receiver, so "is this one in here" has no
+        // honest answer, exactly as `f == g` has none.  Refused where
+        // the comparison is asked for rather than left to the
+        // runtime, which has no sentence to say and reaches its
+        // `unreachable` instead.
+        if (holdsFunction(element)) {
+            return methodFail(
+                self,
+                method,
+                "a function value has no equality, so a list or an array of them cannot be searched; " ++
+                    "keep what you meant to look for beside them — a name, an enum — and search that [BINDING.md D6]",
+            );
+        }
+    }
     if (std.mem.eql(u8, name, "find")) {
         if (!try methodTakes(self, method, arguments, receiver)) return null;
         // `xs.find(v)` answers `long?`, not a -1 sentinel: the
@@ -2640,20 +2767,10 @@ fn sequenceMethod(
         if (!try methodTakes(self, method, arguments, receiver)) return null;
         return .{ .kind = .list_contains, .result = .boolean };
     }
-    // "here" was the only word naming the receiver, and it names
-    // nothing: map and builder both say which they are, and a
-    // reader who mistook a list for a map needs exactly that.
-    const shape_word = if (growable) "list" else "array";
-    var suggestion = helpers.Suggestion.init(name);
-    suggestion.offerAll(if (growable) &list_methods else &array_methods);
-    if (suggestion.best()) |closest| {
-        try self.fail("luce.sema.method", method.span, "{s} has no method {s}; did you mean {s}?", .{ shape_word, name, closest });
-        return null;
-    }
-    if (growable) {
-        try self.fail("luce.sema.method", method.span, "list has no method {s} (has append insert remove pop sort reverse find contains clear; sort_by lives in lists; join lives in strings)", .{name});
-        return null;
-    }
-    try self.fail("luce.sema.method", method.span, "array has no method {s} (has dim fill sort reverse find contains)", .{name});
+    // Which shape the reader wrote on is the whole of what is left
+    // to say: map and builder both name themselves, and a reader who
+    // mistook a list for a map needs exactly that.  The sentence is
+    // `failNoObjectMethod`'s, so the landing says the same one.
+    try failNoObjectMethod(self, method, self.analyzer.heapOf(receiver).?);
     return null;
 }

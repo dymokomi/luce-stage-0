@@ -235,9 +235,12 @@ including a function-valued local used as a callee. A lambda carries
 no environment. State that travels with behavior is a struct with a
 method.
 
-Function values copy freely. `==` and `!=` compare which function they
-name, ordering is refused, and `string(f)` gives a declared function's
-qualified name or a lambda's distinct compiler-generated name.
+Function values copy freely. Equality and ordering are both refused —
+a function type cannot say which of its values carries a receiver, so
+`f == g` would call two binds of one method equal whatever they carry
+— and `string(f)` gives a declared function's qualified name or a
+lambda's distinct compiler-generated name, which is how a program asks
+what a value names.
 
 ### Calling a value where it stands {#call-suffix}
 

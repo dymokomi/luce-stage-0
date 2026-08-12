@@ -305,6 +305,18 @@ with the sentence that says so, beside the ordering refusal that was
 already there, and `string(f)` is how a program asks what a value
 names.  D6's naming half is unchanged and shipped in the first run.
 
+**The rule reaches every place the comparison is asked for**
+(2026-08-12).  `xs.find(f)` and `xs.contains(f)` on a list or an array
+of function values are equality under another spelling, and they were
+accepted while `f == g` was refused — the search reached the runtime's
+comparator, which has no sentence to say and answered with its
+`unreachable`.  Both are now refused where the comparison is written,
+naming D6 and the workaround: keep what you meant to look for beside
+the values — a name, an enum — and search that.  Nothing else on a
+container changed, because nothing else compares elements: `append`,
+`insert`, `fill`, `sort_by` and a store all *place* a value, and a
+function value places like any other (D7).
+
 ### D11, as built
 
 **A union member constructor is a function value.**

@@ -715,10 +715,13 @@ func main():
     print(string(actions["double"](21)))
 ```
 
-Function values copy freely and take no ownership verb.  `==` and `!=`
-ask whether two values name the same function; there is no ordering.
-`string(f)` gives a declared function's qualified name and a lambda's
-distinct compiler-generated name.  Visibility gates the reference
+Function values copy freely and take no ownership verb.  There is
+neither ordering nor **equality**: a function type cannot say which of
+its values carries a receiver, so `f == g` would call two binds of one
+method equal whatever they carry, and `==`/`!=` are refused saying so
+(docs/BINDING.md D6).  `string(f)` gives a declared function's
+qualified name and a lambda's distinct compiler-generated name, and is
+how a program asks what a value names.  Visibility gates the reference
 site, and a public signature may not hide a private type inside a
 nested function type.
 

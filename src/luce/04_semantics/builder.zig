@@ -177,15 +177,6 @@ const Fitted = struct { value: Typed, present: bool };
 /// most of the compiler's allocator traffic when it is not one.
 const inline_operands = 8;
 
-/// A method batch's landing needs the written arguments as well as
-/// the name: which slot an argument fills is what says where it
-/// lands, and a named argument may fill a slot its position does
-/// not (docs/ARGS.md D5).
-const MethodLanding = struct {
-    name: []const u8,
-    arguments: []const ast.Argument,
-};
-
 /// A nested store's written path: the root local's type, and the
 /// accessors from it down to the leaf in written order.
 ///
@@ -196,6 +187,23 @@ const MethodLanding = struct {
 const ChainLanding = struct {
     root: Type,
     steps: []const *const ast.Expression,
+};
+
+/// What one operand of a batch lands on, as `landsOn` answers it.
+///
+/// The third answer is the reason this is not a plain `?Type`: a
+/// landing can *fail*, and when it does the receiver's own sentence
+/// has already been said — a method the receiver does not have, or
+/// one handed more arguments than it takes.  The batch stops there
+/// rather than lowering an argument that would be refused for wanting
+/// a place the call never had.
+const Place = union(enum) {
+    /// Nothing names one; the operand takes its own default.
+    unknown,
+    /// The type written down for it.
+    lands: Type,
+    /// The batch cannot go on and the reason is reported.
+    refused,
 };
 
 pub const Landing = union(enum) {
@@ -211,7 +219,13 @@ pub const Landing = union(enum) {
     /// Operand zero is a method receiver and names what the rest
     /// take — through the declaration for a struct receiver,
     /// through `methodParameters` for a builtin one.
-    method: MethodLanding,
+    ///
+    /// The whole written call, because the landing needs all of it:
+    /// which slot an argument fills is what says where it lands and a
+    /// named argument may fill a slot its position does not
+    /// (docs/ARGS.md D5), and a receiver with no such method at all
+    /// is a sentence this batch says for itself.
+    method: ast.Method,
     /// Operand zero is a container, the last operand is a value
     /// going into it, and everything between is an index.
     stored_element,
@@ -1532,63 +1546,97 @@ pub const FunctionBuilder = struct {
         values: []const Typed,
         index: usize,
         count: usize,
-    ) Error!?Type {
+    ) Error!Place {
         switch (landing) {
-            .nothing => return null,
-            .places => |places| return places[index],
-            .maybe_places => |places| return places[index],
+            .nothing => return .unknown,
+            .places => |places| return .{ .lands = places[index] },
+            .maybe_places => |places| return maybePlace(places[index]),
             .method => |method| {
-                if (index == 0) return null;
+                if (index == 0) return .unknown;
+                const receiver = values[0].value_type;
                 // A struct receiver's parameters come from the
                 // declaration, and which slot this argument fills is
                 // what decides its landing — names may reorder
                 // (docs/ARGS.md D5), so the slot is answered silently
                 // by the same rule the checker applies after the
                 // batch, through the one `argumentSlot`.
-                if (calls.declaredName(self, values[0].value_type) != null) {
-                    const function_index = (try calls.structMethod(self, values[0].value_type, method.name)) orelse
-                        return null;
+                if (calls.declaredName(self, receiver) != null) {
+                    const function_index = (try calls.structMethod(self, receiver, method.name)) orelse {
+                        // No declaration of that name at all: what the
+                        // receiver has is the answer, and it has to
+                        // come before an argument is refused for
+                        // wanting a place that will never exist.  A
+                        // name that *is* declared and is not a method
+                        // — a static function — is the dispatch's
+                        // sentence, one step further on.
+                        if (try calls.failAbsentReceiverMethod(self, receiver, method)) return .refused;
+                        return .unknown;
+                    };
                     const info = self.analyzer.functions.items[function_index];
                     const hidden: usize = if (info.receiver == .not) 0 else 1;
-                    if (info.declaration.parameters.len + hidden != info.parameter_types.len) return null;
+                    if (info.declaration.parameters.len + hidden != info.parameter_types.len) return .unknown;
                     const surface = try calls.declarationSlots(self, info);
                     const slot = calls.argumentSlot(surface, 1, method.arguments, index - 1) orelse
-                        return null;
-                    return info.parameter_types[slot];
+                        return .unknown;
+                    return .{ .lands = info.parameter_types[slot] };
                 }
-                const wanted = (try calls.methodParameters(self, values[0].value_type, method.name)) orelse
-                    return null;
+                const wanted = (try calls.methodParameters(self, receiver, method.name)) orelse {
+                    // The same question for a container: a name no
+                    // builtin table has is either a method the
+                    // receiver does not have — said here — or a call
+                    // that routes into the standard library, whose
+                    // own declaration lands its arguments.
+                    if (try calls.failAbsentMethod(self, receiver, method)) return .refused;
+                    return .unknown;
+                };
                 const slot = index - 1;
-                if (slot >= wanted.len) return null;
+                if (slot >= wanted.len) {
+                    // More arguments than the method takes.  The count
+                    // is knowable here, and saying it now is what
+                    // keeps a bare function name in the extra one from
+                    // answering for the call.  A *named* argument is
+                    // refused ahead of the count (D10), so leave one
+                    // to the dispatch.
+                    if (calls.namesAnyArgument(method.arguments)) return .unknown;
+                    try calls.failMethodArity(self, method, wanted.len);
+                    return .refused;
+                }
                 // A builtin method's arguments are positional (D10),
                 // so a named one is refused after the batch.  A bare
                 // function or lambda still needs its positional type
                 // while being lowered, however; without that landing
                 // its "needs a function place" error would hide the
                 // more fundamental named-argument refusal.
-                if (method.arguments[slot].name != null and wanted[slot] != .function) return null;
-                return wanted[slot];
+                if (method.arguments[slot].name != null and wanted[slot] != .function) return .unknown;
+                return .{ .lands = wanted[slot] };
             },
             .stored_element => {
-                if (index == 0) return null;
+                if (index == 0) return .unknown;
                 // The subscripts land where subscripts land; the value
                 // at the end lands on the element type, which the
                 // container named.
-                if (index + 1 < count) return self.subscriptType(values[0].value_type);
-                const descriptor = self.analyzer.heapOf(values[0].value_type) orelse return null;
-                return switch (descriptor) {
+                if (index + 1 < count) return maybePlace(self.subscriptType(values[0].value_type));
+                const descriptor = self.analyzer.heapOf(values[0].value_type) orelse return .unknown;
+                return maybePlace(switch (descriptor) {
                     .list => |element| element,
                     .array => |shape| shape.element,
                     .map => |pair| pair.value,
                     .builder, .file, .task => null,
-                };
+                });
             },
             .subscripts => {
-                if (index == 0) return null;
-                return self.subscriptType(values[0].value_type);
+                if (index == 0) return .unknown;
+                return maybePlace(self.subscriptType(values[0].value_type));
             },
-            .chain => |path| return self.chainPlace(path, index, count),
+            .chain => |path| return maybePlace(self.chainPlace(path, index, count)),
         }
+    }
+
+    /// A landing that may or may not be there, as the `Place` the
+    /// batch reads: the two shapes say the same thing, and this is
+    /// where the older one becomes the newer.
+    fn maybePlace(place: ?Type) Place {
+        return if (place) |landed| .{ .lands = landed } else .unknown;
     }
 
     /// Where operand `index` of a nested store lands: a subscript
@@ -1708,7 +1756,14 @@ pub const FunctionBuilder = struct {
             // *named* `list(int)` is still refused there, because it
             // already has a type and D6 says no list converts to
             // another.
-            const place = try self.landsOn(landing, values, index, operands.len);
+            const place: ?Type = switch (try self.landsOn(landing, values, index, operands.len)) {
+                .unknown => null,
+                .lands => |landed| landed,
+                // The batch's own answer was that it has none, and it
+                // has been said: a second sentence about this operand
+                // would only bury it.
+                .refused => return null,
+            };
             if (place) |landed| self.wantPlace(landed);
             // A bare `none` has no type of its own; the place it lands
             // on supplies one, whichever way the batch knows the place

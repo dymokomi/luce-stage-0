@@ -1348,6 +1348,41 @@ test "luce.sema.type: a bound value has no equality either (BINDING.md D6)" {
     );
 }
 
+test "luce.sema.method: searching a container of function values is equality too (BINDING.md D6)" {
+    // `find` and `contains` are `==` under another spelling, and they
+    // were accepted while `f == g` was refused: the search reached the
+    // runtime's comparator, which has no sentence to say and answered
+    // with its `unreachable` — a program the compiler took, crashing
+    // in both engines.  The refusal is where the comparison is
+    // written, and it names what to search instead.
+    try expectSaying(
+        \\func twice(n: long) -> string:
+        \\    return string(n * 2)
+        \\
+        \\func main():
+        \\    var xs = new list((func(long) -> string)?)
+        \\    xs.append(twice)
+        \\    assert(xs.contains(twice))
+        \\
+    ,
+        "luce.sema.method",
+        "a function value has no equality",
+    );
+    try expectSaying(
+        \\func twice(n: long) -> string:
+        \\    return string(n * 2)
+        \\
+        \\func main():
+        \\    var cells = new array((func(long) -> string)?, 2)
+        \\    cells.fill(twice)
+        \\    let at = cells.find(twice)
+        \\
+    ,
+        "luce.sema.method",
+        "a function value has no equality",
+    );
+}
+
 test "luce.sema.type: a member constructor whose shape does not fit the place is refused (BINDING.md D11)" {
     try expectSaying(
         \\union Msg:
@@ -3732,6 +3767,68 @@ test "luce.sema.method: an unknown method on a list is rejected" {
 
 test "luce.sema.method: a method checks its arity" {
     try expectRejected("func main():\n    var xs = [1]\n    xs.append(1, 2)\n", "luce.sema.method");
+}
+
+test "luce.sema.method: a method the receiver does not have answers before its arguments do" {
+    // **The receiver's answer comes first.**  A bare function name has
+    // no type until it lands (FUNCTIONS.md D2), so an argument written
+    // to a method that does not exist used to be refused for wanting a
+    // place — *"twice is a function; write twice(...) to call it, or
+    // annotate the place it goes"* — which sends the reader to annotate
+    // a place the call never had, and buries the one fact that matters.
+    // The landing reaches "no such method" with the receiver lowered
+    // and nothing else, which is why it can say it first.
+    try expectSayingAt(
+        \\func twice(n: long) -> string:
+        \\    return string(n * 2)
+        \\
+        \\func main():
+        \\    var m = new map(string, func(long) -> string)
+        \\    m.put("a", twice)
+        \\
+    , "luce.sema.method", "map has no method put (has get remove keys values clear)", 6, 5);
+    try expectSayingAt(
+        \\func twice(n: long) -> string:
+        \\    return string(n * 2)
+        \\
+        \\func main():
+        \\    var xs = new list((func(long) -> string)?)
+        \\    xs.push(twice)
+        \\
+    ,
+        "luce.sema.method",
+        "list has no method push (has append insert remove pop sort reverse find contains clear; sort_by lives in lists; join lives in strings)",
+        6,
+        5,
+    );
+    // A declared receiver answers the same way, out of the same place.
+    try expectSayingAt(
+        \\func twice(n: long) -> string:
+        \\    return string(n * 2)
+        \\
+        \\struct Box:
+        \\    v: long
+        \\
+        \\func main():
+        \\    var b = Box(v = 1)
+        \\    b.set(twice)
+        \\
+    , "luce.sema.method", "Box has no method set", 9, 5);
+}
+
+test "luce.sema.method: one argument too many is a count, not a question about the argument" {
+    // The same fact one step along: the method exists, the extra
+    // argument has no slot to land in, and the count is knowable
+    // before it is lowered.
+    try expectSayingAt(
+        \\func twice(n: long) -> string:
+        \\    return string(n * 2)
+        \\
+        \\func main():
+        \\    var xs = new list((func(long) -> string)?)
+        \\    xs.append(twice, twice)
+        \\
+    , "luce.sema.method", "append takes 1 argument, got 2", 6, 5);
 }
 
 test "luce.sema.method: a builtin method's arguments are positional" {

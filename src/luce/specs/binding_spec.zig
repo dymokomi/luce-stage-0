@@ -534,7 +534,7 @@ test "a function value lives in a list element and is called through else" {
 
 test "a map value is written bare, and get carries the absence" {
     // **The one slot no container creates.**  A map value exists
-    // because `put` created it, and `get` already answers `V?` — so the
+    // because a store created it, and `get` already answers `V?` — so the
     // function type is written bare there and the optional D7 asks for
     // is the missing key.  Writing the `?` as well would make `get`
     // answer a `V??`, which has no representation.
@@ -855,6 +855,61 @@ test "a nested place under try lands what the call answers" {
         \\        print(held(5))
         \\
     , "plain 5\n");
+}
+
+test "a builtin method's parameter is a landing place, whatever the receiver named" {
+    // A builtin method's parameter is written down in a table rather
+    // than in source, and it lands its argument exactly as a declared
+    // parameter does: the type comes from the *receiver*, which is
+    // operand zero of the same batch, so `landsOn` answers it after
+    // that one is lowered and before this one is.
+    //
+    // All three spellings of a function value go in through one — a
+    // plain name, a lambda and a bind — and each is called back out,
+    // because typechecking a store proves nothing about what it
+    // stored.  The two other things that have no type until they land
+    // ride along: a bare `none`, and a number at the width the
+    // element names rather than the width it would default to.
+    try agree.prints(
+        \\import std.lists
+        \\
+        \\struct Row:
+        \\    weight: long
+        \\
+        \\    func heavier(a: long, b: long) -> bool:
+        \\        return a * self.weight > b * self.weight
+        \\
+        \\func plain(index: long) -> string:
+        \\    return "plain " + string(index)
+        \\
+        \\func main():
+        \\    var steps = new list((func(long) -> string)?)
+        \\    steps.append(plain)
+        \\    steps.insert(0, (n) -> "lambda " + string(n))
+        \\    steps.append(none)
+        \\    for step in steps:
+        \\        if step != none:
+        \\            print(step(1))
+        \\        else:
+        \\            print("none")
+        \\    var cells = new array((func(long) -> string)?, 2)
+        \\    cells.fill(plain)
+        \\    let filled = cells[1]
+        \\    if filled != none:
+        \\        print(filled(2))
+        \\    let ordering = Row(weight = 1)
+        \\    var numbers = new list(long)
+        \\    numbers.append(1)
+        \\    numbers.append(3)
+        \\    numbers.append(2)
+        \\    numbers.sort_by(ordering.heavier)
+        \\    print(string(numbers[0]) + string(numbers[1]) + string(numbers[2]))
+        \\    var small = new list(byte)
+        \\    small.append(200)
+        \\    small.insert(0, 255)
+        \\    print(string(small[0]) + " " + string(small[1]))
+        \\
+    , "lambda 1\nplain 1\nnone\nplain 2\n321\n255 200\n");
 }
 
 test "the leaf of a nested place names the width its value is read at" {
