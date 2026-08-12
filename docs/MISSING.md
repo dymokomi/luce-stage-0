@@ -306,8 +306,10 @@ a queue can depend on it:
   `copy`, `list_slice`, and `map_values` also withhold it: ownership
   cycles are now refused, but an acyclic graph's native recursive depth
   remains data-dependent and can exhaust the stack.  `map_keys` stays
-  true because map keys are non-owning `long` or `string` values.  All
-  other services are pinned `willreturn = true`; `nounwind` remains unchanged.
+  true because map keys are non-owning `long` or `string` values — an
+  enum key is one of them, since it is stored as the integer a `long`
+  key would be (docs/ENUMS.md).  All other services are pinned
+  `willreturn = true`; `nounwind` remains unchanged.
   Colocated Debug and ReleaseSafe tests pin the exact twenty-three-service
   false set and every remaining true entry.
 - **Closed before channels:** the real host's growable worker table and

@@ -132,22 +132,13 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
                 return null;
             }
             const key = (try resolveType(self, module, written.arguments[0])) orelse return null;
-            if (key != .long and key != .string) {
-                // An enum is a value at a width like any other, and
-                // the width a map may key by is `long` — the same
-                // rule that refuses `map(int, V)`, met by a type
-                // that has a name for its number.  So the sentence
-                // names the number rather than stopping at the
-                // rule (docs/ENUMS.md, As built).
-                if (key == .enumeration) {
-                    try self.fail(
-                        "luce.sema.type",
-                        written.arguments[0].span,
-                        "map keys are long or string; key by long(m) and keep {s} in the value, or use a list indexed by int(m)",
-                        .{try self.typeName(key)},
-                    );
-                    return null;
-                }
+            // **A key is a `long`, a `string`, or an enum**
+            // (docs/ENUMS.md, As built 2026-08-12).  An enum is an
+            // integer at a chosen width whose entire comparison surface
+            // is equality, which is exactly and only what a key needs;
+            // it reaches the runtime as the integer a `long` key would
+            // be, so nothing under the language learned a third payload.
+            if (key != .long and key != .string and key != .enumeration) {
                 // A union has no number and no key form at all
                 // (docs/UNION.md D15): the sentence offers the one
                 // move that exists — keep it in the value.
@@ -155,12 +146,17 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
                     try self.fail(
                         "luce.sema.type",
                         written.arguments[0].span,
-                        "map keys are long or string; a union has no key form — keep {s} in the value and key by what identifies it",
+                        "map keys are long, string or an enum; a union has no key form — keep {s} in the value and key by what identifies it",
                         .{try self.typeName(key)},
                     );
                     return null;
                 }
-                try self.fail("luce.sema.type", written.arguments[0].span, "map keys are long or string", .{});
+                try self.fail(
+                    "luce.sema.type",
+                    written.arguments[0].span,
+                    "map keys are long, string or an enum, got {s}",
+                    .{try self.typeName(key)},
+                );
                 return null;
             }
             const value = (try resolveType(self, module, written.arguments[1])) orelse return null;

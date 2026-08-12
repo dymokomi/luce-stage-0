@@ -43,6 +43,7 @@ const LocalId = mir.LocalId;
 
 const builder = @import("builder.zig");
 const construct = @import("construct.zig");
+const effects = @import("effects.zig");
 const expressions = @import("expressions.zig");
 const flow = @import("flow.zig");
 const ledger = @import("ledger.zig");
@@ -352,8 +353,8 @@ pub fn lowerCall(
     // name means wherever one exists — and no local can be called
     // one of the reserved names the builtins below answer to.
     if (std.mem.indexOfScalar(u8, call.callee, '.') == null) {
-        if (self.findLocal(call.callee)) |found| {
-            return lowerIndirectCall(self, found, call, as_statement);
+        if (self.findLocal(call.callee) != null) {
+            return lowerNamedValueCall(self, call, as_statement);
         }
     }
     // Builtins and conversions are bare names and take priority;
@@ -397,8 +398,10 @@ pub fn lowerCall(
     );
 }
 
-/// `before(a, b)` — a call **through a function value**
-/// (docs/FUNCTIONS.md D2, D5).
+/// `EXPR(a, b)` — a call **through a function value**
+/// (docs/FUNCTIONS.md D2, D5), and the one path every call whose head
+/// does not name a declaration takes: a bare local's name, an element,
+/// a field read through a grouping, the answer of another call.
 ///
 /// The signature is what a direct call's declaration is: it says
 /// the arity, the argument types and the verb each object argument
@@ -407,43 +410,55 @@ pub fn lowerCall(
 /// names and defaults, because a type has neither — so a named
 /// argument is refused where it is written rather than matched
 /// against a parameter name that does not exist.
-fn lowerIndirectCall(
+///
+/// `callee` is already lowered, because the callee is the run's first
+/// operand: what the reader wrote first is checked first, and a
+/// mistake in it is reported before anything is said about arguments
+/// whose types it decides.
+fn lowerValueCall(
     self: *FunctionBuilder,
-    found: context.FoundLocal,
-    call: ast.Call,
+    callee: Typed,
+    written_at: *const ast.Expression,
+    arguments: []const ast.Argument,
+    span: Span,
     as_statement: bool,
 ) Error!?Typed {
-    const declared = recorder.localType(self, found.info.local);
-    // A slot holding the storable form — `(func(...) -> R)?` — is
-    // callable exactly where the flow analysis has proved the value is
-    // there, which is the same narrowing every other `T?` gets
-    // (docs/BINDING.md D7).  Unproved, the sentence below names the
-    // optional the reader wrote, and `absenceAdvice` says what to do.
-    const narrowed = declared == .optional and
-        declared.optional == .function and
-        flow.isNarrowed(self, found.info.local);
-    const local_type = if (narrowed) declared.held().? else declared;
-    if (local_type != .function) {
-        if (local_type == .optional and local_type.optional == .function) {
-            try self.fail(
-                "luce.sema.call",
-                call.span,
-                "{s} is {s} and may hold none; test it first (if {s} != none:) or supply a fallback ({s} else …) [BINDING.md D7]",
-                .{ call.callee, try self.analyzer.typeName(local_type), call.callee, call.callee },
-            );
+    const callee_type = callee.value_type;
+    const written = try calleeSpelling(self, written_at);
+    if (callee_type != .function) {
+        // The storable form — `(func(...) -> R)?` — is callable
+        // exactly where the flow analysis has proved the value is
+        // there, and **only a local or a parameter can be proved**
+        // (docs/LANGUAGE.md: a field or an element can change between
+        // the test and the use).  So the refusal teaches the three
+        // lines that always work rather than the narrowing that
+        // sometimes cannot.
+        if (callee_type == .optional and callee_type.optional == .function) {
+            // A name that could have been narrowed and was not is told
+            // to narrow it, which is the shorter fix and the one it can
+            // take.  Everything else takes the three-line one.
+            if (written_at.* == .name) {
+                try self.fail(
+                    "luce.sema.call",
+                    span,
+                    "{s} is {s} and may hold none; test it first (if {s} != none:) or supply a fallback ({s} else …) [BINDING.md D7]",
+                    .{ written, try self.analyzer.typeName(callee_type), written, written },
+                );
+                return null;
+            }
+            try failAbsentCallee(self, written, bindingName(written_at), callee_type, span);
             return null;
         }
         try self.fail(
             "luce.sema.call",
-            call.span,
+            span,
             "{s} is {s}, which is not a function; only a func(...) value can be called",
-            .{ call.callee, try self.analyzer.typeName(local_type) },
+            .{ written, try self.analyzer.typeName(callee_type) },
         );
         return null;
     }
-    if (try self.checkPoisoned(found.info, call.callee, call.span)) return null;
-    const signature = self.analyzer.signatures.items[local_type.function];
-    for (call.arguments) |argument| {
+    const signature = self.analyzer.signatures.items[callee_type.function];
+    for (arguments) |argument| {
         if (argument.name) |named| {
             try self.fail(
                 "luce.sema.call",
@@ -454,17 +469,17 @@ fn lowerIndirectCall(
             return null;
         }
     }
-    if (call.arguments.len != signature.parameters.len) {
+    if (arguments.len != signature.parameters.len) {
         try self.fail(
             "luce.sema.call",
-            call.span,
+            span,
             "{s} is {s} and takes {d} argument{s}, got {d}",
             .{
-                call.callee,
-                try self.analyzer.typeName(local_type),
+                written,
+                try self.analyzer.typeName(callee_type),
                 signature.parameters.len,
                 if (signature.parameters.len == 1) "" else "s",
-                call.arguments.len,
+                arguments.len,
             },
         );
         return null;
@@ -474,20 +489,37 @@ fn lowerIndirectCall(
     // name before reporting that nobody receives it.  The other
     // half of the verb rule waits until after fitting below, so a
     // type mistake is not described as an ownership mistake.
-    for (call.arguments, signature.parameters) |argument, parameter| {
+    for (arguments, signature.parameters) |argument, parameter| {
         if (!parameter.gives and argument.value.* == .give) {
             try self.fail(
                 "luce.sema.own",
                 argument.span,
                 "{s} only borrows this argument; give needs a give parameter in the signature [OWNERSHIP.md S11, S13]",
-                .{call.callee},
+                .{written},
             );
             return null;
         }
     }
-    const operand_expressions = try self.arena().alloc(*ast.Expression, call.arguments.len);
-    const places = try self.arena().alloc(Type, call.arguments.len);
-    for (call.arguments, operand_expressions, places, signature.parameters) |argument, *expression, *place, parameter| {
+    // The residual hazard copy-on-store leaves open (docs/STRINGS.md),
+    // asked of the **callee**: it may be a borrow of an element's or a
+    // field's two-slot run, and an argument still to come could free
+    // it.  The question is the operand walk's own, asked here because
+    // the callee is lowered before the batch it is not part of; the
+    // decision travels on the resolved callee and lower emits it there.
+    var callee_value = callee;
+    var callee_copy = false;
+    if (shapes.ownsStorage(self.analyzer, callee_type) and callee_value.provenance() == .view) {
+        for (arguments) |argument| {
+            if (!effects.mayMutateContainers(argument.value)) continue;
+            callee_value.rewritten = .fresh;
+            callee_copy = true;
+            try ledger.parkFreshStorage(self, callee_value, written_at.span());
+            break;
+        }
+    }
+    const operand_expressions = try self.arena().alloc(*ast.Expression, arguments.len);
+    const places = try self.arena().alloc(Type, arguments.len);
+    for (arguments, operand_expressions, places, signature.parameters) |argument, *expression, *place, parameter| {
         expression.* = argument.value;
         place.* = parameter.value_type;
     }
@@ -496,9 +528,9 @@ fn lowerIndirectCall(
     const entries = try self.arena().alloc(RecordedOperand, values.len);
     for (values, signature.parameters, 0..) |value, parameter, index| {
         const fitted = (try self.fit(value, parameter.value_type)) orelse {
-            try self.fail("luce.sema.type", call.arguments[index].span, "argument {d} of {s} is {s}, got {s}{s}", .{
+            try self.fail("luce.sema.type", arguments[index].span, "argument {d} of {s} is {s}, got {s}{s}", .{
                 index + 1,
-                call.callee,
+                written,
                 try self.analyzer.typeName(parameter.value_type),
                 try self.analyzer.typeName(value.value_type),
                 try refusals.mismatchAdvice(self, parameter.value_type, value.value_type, operand_expressions[index]),
@@ -508,8 +540,8 @@ fn lowerIndirectCall(
         if (parameter.gives and !(try self.yieldsOwnership(operand_expressions[index]))) {
             try refusals.failNeedsOwnership(
                 self,
-                call.arguments[index].span,
-                try std.fmt.allocPrint(self.arena(), "this argument of {s} takes ownership", .{call.callee}),
+                arguments[index].span,
+                try std.fmt.allocPrint(self.arena(), "this argument of {s} takes ownership", .{written}),
                 operand_expressions[index],
                 value.value_type,
                 "S13, S14",
@@ -525,28 +557,129 @@ fn lowerIndirectCall(
         };
     }
     if (signature.result == .none and !as_statement) {
-        try self.fail("luce.sema.call", call.span, "{s} returns nothing", .{call.callee});
+        try self.fail("luce.sema.call", span, "{s} returns nothing", .{written});
         return null;
     }
-    // The callee is read *after* the arguments, so an argument that
-    // frees or reassigns is already done with when the value is
-    // loaded — the order `nodes.ResolvedCallee.indirect` states.
     return .{
         .node = try recorder.recordCallNode(
             self,
             .{ .indirect = .{
-                .local = found.info.local,
-                .signature = local_type.function,
-                .narrowed = narrowed,
+                .callee = callee_value.node,
+                .signature = callee_type.function,
+                .borrow_copy = callee_copy,
             } },
             entries,
             entries.len,
             false,
             signature.result,
-            call.span,
+            span,
         ),
         .value_type = signature.result,
     };
+}
+
+/// `EXPRESSION(arguments)` — the call suffix (docs/FUNCTIONS.md).
+///
+/// The callee is an ordinary expression, lowered the ordinary way, so
+/// its narrowing, its poison check and the statement temporary a fresh
+/// function value is parked in are all the walk's existing answers
+/// rather than a second set of them.
+pub fn lowerValueCallExpression(
+    self: *FunctionBuilder,
+    written: ast.ValueCall,
+    as_statement: bool,
+) Error!?Typed {
+    const callee = (try self.lowerExpression(written.callee, false)) orelse return null;
+    return lowerValueCall(self, callee, written.callee, written.arguments, written.span, as_statement);
+}
+
+/// `f(a, b)` where `f` is a local holding a function value — the same
+/// call, reached through the name the primary parsed
+/// (docs/FUNCTIONS.md D2).  The name is read as any other read of it
+/// is, which is what keeps the narrowed form (docs/BINDING.md D7) and
+/// the poison check from having a second implementation here.
+fn lowerNamedValueCall(
+    self: *FunctionBuilder,
+    call: ast.Call,
+    as_statement: bool,
+) Error!?Typed {
+    const name = try self.arena().create(ast.Expression);
+    name.* = .{ .name = .{ .text = call.callee, .span = call.span } };
+    const callee = (try self.lowerExpression(name, false)) orelse return null;
+    return lowerValueCall(self, callee, name, call.arguments, call.span, as_statement);
+}
+
+/// What a diagnostic calls the thing in front of a call suffix.
+///
+/// Stage 4 has no source text, so the spelling is rebuilt from what
+/// was written — `rows.render`, `actions[…]`, `chooser(…)` — and a
+/// shape with no readable spelling is "this value" rather than a
+/// phrase nobody typed.  Arena-owned with the walk.
+fn calleeSpelling(self: *FunctionBuilder, callee: *const ast.Expression) Error![]const u8 {
+    return (try placeSpelling(self, callee)) orelse "this value";
+}
+
+/// The written form of a place, or null where there is not one: an
+/// index's subscript is elided and a call's arguments are, because
+/// neither can be read back out of the tree and neither is what the
+/// sentence is about.
+fn placeSpelling(self: *FunctionBuilder, expression: *const ast.Expression) Error!?[]const u8 {
+    return switch (expression.*) {
+        .name => |name| name.text,
+        .field => |field| blk: {
+            const target = (try placeSpelling(self, field.target)) orelse break :blk null;
+            break :blk try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ target, field.name });
+        },
+        .index => |index| blk: {
+            const target = (try placeSpelling(self, index.target)) orelse break :blk null;
+            break :blk try std.fmt.allocPrint(self.arena(), "{s}[…]", .{target});
+        },
+        .call => |call| try std.fmt.allocPrint(self.arena(), "{s}(…)", .{call.callee}),
+        .value_call => |written| blk: {
+            const target = (try placeSpelling(self, written.callee)) orelse break :blk null;
+            break :blk try std.fmt.allocPrint(self.arena(), "{s}(…)", .{target});
+        },
+        .method => |method| blk: {
+            const target = (try placeSpelling(self, method.target)) orelse break :blk null;
+            break :blk try std.fmt.allocPrint(self.arena(), "{s}.{s}(…)", .{ target, method.name });
+        },
+        else => null,
+    };
+}
+
+/// The local a reader would bind the value to, for the fix an absent
+/// callee's refusal shows: the name it already has where it has one.
+fn bindingName(callee: *const ast.Expression) []const u8 {
+    return switch (callee.*) {
+        .name => |name| name.text,
+        .field => |field| field.name,
+        else => "f",
+    };
+}
+
+/// The one sentence a callee that **may hold none** gets, wherever it
+/// was written (docs/BINDING.md D7).
+///
+/// A function value that may be absent is callable exactly where the
+/// flow analysis has proved it is there, and only a local or a
+/// parameter is ever proved: a field or an element can change between
+/// the test and the use, so narrowing them would be a promise the
+/// language cannot keep.  The fix is therefore always the same three
+/// lines, and the refusal writes them out.
+fn failAbsentCallee(
+    self: *FunctionBuilder,
+    written: []const u8,
+    bound: []const u8,
+    held: Type,
+    span: Span,
+) Error!void {
+    try self.fail(
+        "luce.sema.call",
+        span,
+        "{s} is {s} and may hold none; only a local or a parameter narrows, so bind it first " ++
+            "(let {s} = {s}), test it (if {s} != none:), then call {s}(…) [BINDING.md D7]",
+        .{ written, try self.analyzer.typeName(held), bound, written, bound, bound },
+    );
 }
 
 /// `spawn f(args)` — the same call, made on a worker
@@ -1697,6 +1830,7 @@ fn failUnknownMethod(
     written_name: []const u8,
     method: ast.Method,
 ) Error!void {
+    if (try failFieldIsNotAMethod(self, receiver, method)) return;
     var suggestion = helpers.Suggestion.init(method.name);
     for (self.analyzer.functions.items) |candidate| {
         const owner = candidate.enclosing orelse continue;
@@ -1714,6 +1848,45 @@ fn failUnknownMethod(
         return;
     }
     try self.fail("luce.sema.method", method.span, "{s} has no method {s}", .{ written_name, method.name });
+}
+
+/// `r.render(3)` where `render` is a **field** holding a function
+/// value, not a method (docs/BINDING.md D7).
+///
+/// The two read alike, so "Rows has no method render" sends the reader
+/// looking for a declaration that was never the point.  True when it
+/// reported; false leaves the ordinary did-you-mean to answer.
+fn failFieldIsNotAMethod(
+    self: *FunctionBuilder,
+    receiver: Type,
+    method: ast.Method,
+) Error!bool {
+    if (receiver != .strukt) return false;
+    const layout_index = receiver.strukt;
+    const layout = self.analyzer.structs.items[layout_index];
+    const field_index = layout.findField(method.name) orelse return false;
+    const field_type = layout.fields[field_index].field_type;
+    const holds_function = field_type == .function or
+        (field_type == .optional and field_type.optional == .function);
+    if (!holds_function) return false;
+    // A field this module cannot see is answered as private, never as
+    // a fix it could not take (VISIBILITY.md D2).
+    if (!try refusals.fieldReachable(self, layout_index, field_index, method.span)) return true;
+    const written = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{
+        try writtenReceiver(self, method),
+        method.name,
+    });
+    if (field_type == .function) {
+        try self.fail(
+            "luce.sema.call",
+            method.span,
+            "{s} is a field holding {s}, not a method; call the value it holds: ({s})(…) [BINDING.md D7]",
+            .{ written, try self.analyzer.typeName(field_type), written },
+        );
+        return true;
+    }
+    try failAbsentCallee(self, written, method.name, field_type, method.span);
+    return true;
 }
 
 /// Which argument of a method is a *store* into the receiver —

@@ -331,8 +331,9 @@ main.luc:8:12: two Shape values are not compared with ==; match on each and comp
                ^~~~~~
 ```
 
-A union may not be a map *key* either — keys are `long` and `string`,
-as always.
+A union may not be a map *key* either — keys are `long`, `string` and
+enums, and a union has no key form: keep it in the value and key by
+what identifies it.
 
 ## Methods
 

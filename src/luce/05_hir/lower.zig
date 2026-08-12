@@ -1162,23 +1162,31 @@ const Replay = struct {
     ) Error!Register {
         const signature = self.deps.signatures[through.signature];
         const batch = called.operands;
-        const entries = try self.replayWrittenOperands(batch);
+        // **The callee is the run's first operand**
+        // (nodes.ResolvedCallee.Indirect): what the reader wrote first
+        // runs first, and it rides in the same run as the arguments
+        // because `markSpills` is a suffix question that can only be
+        // answered about values it can see — an argument that opens a
+        // block would otherwise strand the callee's register.
+        const entries = try self.scratch().alloc(BatchEntry, batch.operands.len + 1);
         defer self.scratch().free(entries);
-        for (entries) |*entry| try self.applyWrappers(entry);
-        const registers = try self.arena().alloc(Register, entries.len);
-        for (entries, batch.slots) |entry, slot| registers[slot] = entry.register;
-        // The callee is read after the arguments (nodes.ResolvedCallee).
-        var callee = try self.code.load(through.local);
-        if (through.narrowed) {
-            const held = try self.arena().alloc(Register, 1);
-            held[0] = callee;
-            callee = try self.code.emit(
-                .{ .intrinsic = .{ .kind = .optional_unwrap, .arguments = held } },
-                .{ .function = through.signature },
-            );
+        entries[0] = try self.peel(through.callee);
+        for (batch.operands, entries[1..]) |operand, *entry| entry.* = try self.peel(operand);
+        self.markSpills(entries, &.{});
+        for (entries, 0..) |*entry, position| {
+            const opened_in = self.code.current;
+            const copied = if (position == 0) through.borrow_copy else batch.borrow_copy[position - 1];
+            try self.replayBatchOperand(entry, copied);
+            self.assertSplitCarried(entries[0..position], opened_in);
         }
+        try self.reloadSpills(entries);
+        for (entries) |*entry| try self.applyWrappers(entry);
+        // A function type has no names and no defaults, so the written
+        // run is the whole argument list: slot i is operand i.
+        const registers = try self.arena().alloc(Register, batch.operands.len);
+        for (entries[1..], batch.slots) |entry, slot| registers[slot] = entry.register;
         const call = try self.code.emit(.{ .call_indirect = .{
-            .callee = callee,
+            .callee = entries[0].register,
             .signature = through.signature,
             .arguments = registers,
         } }, signature.result);

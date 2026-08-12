@@ -487,6 +487,22 @@ fn postfixExpression(self: *Parser) Error!?*ast.Expression {
             value = (try indexOrSlice(self, value)) orelse return null;
             continue;
         }
+        // A call is one more suffix, on the same footing as the index
+        // and the field: `EXPR(args)` parses wherever `EXPR[i]` does,
+        // and calls the value the expression answers.  The two forms
+        // whose head names a *declaration* never arrive here — the
+        // primary above takes `name(...)` and the dot above takes
+        // `receiver.method(...)`, because only their written text can
+        // resolve a declaration.
+        //
+        // A newline ends the chain here exactly as it ends an index
+        // chain, and for the same reason: the lexer suspends newlines
+        // only inside an open group, so `f` on one line and `(x)` on
+        // the next are two statements and stay two.
+        if (self.peekKind() == .left_paren) {
+            value = (try valueCall(self, value)) orelse return null;
+            continue;
+        }
         return value;
     }
 }
@@ -754,6 +770,19 @@ fn methodCall(self: *Parser, target: *ast.Expression, name: Token) Error!?*ast.E
         .name = self.text(name),
         .arguments = list.arguments,
         .span = .{ .start = target.span().start, .end = list.closing.span.end },
+    } });
+}
+
+/// `EXPR(arguments)` — the call suffix's arguments, which are an
+/// ordinary argument list; the callee is whatever the postfix loop had
+/// in hand when it reached the `(`.
+fn valueCall(self: *Parser, callee: *ast.Expression) Error!?*ast.Expression {
+    const opener = self.advance(); // (
+    const list = (try argumentList(self, opener)) orelse return null;
+    return make(self, .{ .value_call = .{
+        .callee = callee,
+        .arguments = list.arguments,
+        .span = .{ .start = callee.span().start, .end = list.closing.span.end },
     } });
 }
 

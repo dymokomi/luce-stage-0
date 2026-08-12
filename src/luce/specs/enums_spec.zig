@@ -576,6 +576,256 @@ test "containers: a list, a map, an array and a struct field all hold members" {
     );
 }
 
+// ---------------------------------------------------------------------------
+// A map keyed by an enum (D9, As built 2026-08-12)
+// ---------------------------------------------------------------------------
+//
+// An enum is an integer at a chosen width whose entire comparison
+// surface is equality, which is exactly and only what a key needs.  It
+// reaches `libluce_rt` as the integer a `long` key would be
+// (`mir.mapKeyStorage`) and comes back narrowed to its own width, so the
+// runtime hashes and compares the two payloads it always did — and these
+// rows are what prove the round trip on *both* engines, where a widening
+// one engine made and the other did not would show up as a lookup that
+// finds nothing.
+
+test "a map keys by an enum: put, get, has, remove, and absence" {
+    try agree.ok(
+        \\enum Key:
+        \\    left
+        \\    right
+        \\    up
+        \\    down
+        \\
+        \\func main():
+        \\    var counts = new map(Key, long)
+        \\    counts[Key.left] = 3
+        \\    counts[Key.right] = 4
+        \\    counts[Key.left] = counts[Key.left] + 1
+        \\    assert(counts[Key.left] == 4)
+        \\    # A compound store defines the entry it misses, at the
+        \\    # value type's zero, keyed by the member.
+        \\    counts[Key.up] += 7
+        \\    assert(counts[Key.up] == 7)
+        \\    counts[Key.up] += 1
+        \\    assert(counts[Key.up] == 8)
+        \\    counts.remove(Key.up)
+        \\    assert(counts[Key.right] == 4)
+        \\    assert(len(counts) == 2)
+        \\    assert(counts.has(Key.left))
+        \\    assert(not counts.has(Key.down))
+        \\    assert((counts.get(Key.left) else 0) == 4)
+        \\    assert(counts.get(Key.down) == none)
+        \\    counts.remove(Key.right)
+        \\    assert(not counts.has(Key.right))
+        \\    assert(len(counts) == 1)
+        \\
+    );
+}
+
+test "a key comes back out as the enum it went in as" {
+    // The honest half of the feature: a key that went in a `Key` and
+    // came back a `long` would be the representation leaking.  The loop
+    // name and every element of `keys()` land on `Key`-typed places and
+    // are dispatched on with `match`, neither of which a `long` compiles
+    // into — and the order is the insertion order `for` promises.
+    try agree.prints(
+        \\enum Key:
+        \\    left
+        \\    right
+        \\    up
+        \\
+        \\func named(k: Key) -> string:
+        \\    match k:
+        \\        left:
+        \\            return "left"
+        \\        right:
+        \\            return "right"
+        \\        up:
+        \\            return "up"
+        \\
+        \\func main():
+        \\    var counts = new map(Key, long)
+        \\    counts[Key.up] = 1
+        \\    counts[Key.left] = 2
+        \\    counts[Key.right] = 3
+        \\    for k in counts:
+        \\        let held: Key = k
+        \\        print(f"{named(held)}={counts[held]}")
+        \\    let keys: list(Key) = counts.keys()
+        \\    assert(len(keys) == 3)
+        \\    assert(keys[0] == Key.up)
+        \\    assert(keys[2] == Key.right)
+        \\    for k in keys:
+        \\        print(string(k))
+        \\    for k, count in counts:
+        \\        print(f"{string(k)} {count}")
+        \\
+    ,
+        \\up=1
+        \\left=2
+        \\right=3
+        \\up
+        \\left
+        \\right
+        \\up 1
+        \\left 2
+        \\right 3
+        \\
+    );
+}
+
+test "a key round trip survives every backing width, negative members included" {
+    // The widening is a `zext` for `byte` and a `sext` for the other
+    // three (docs/TYPES.md D4), and the narrowing back is a truncation:
+    // a member at -2 that came back as 4294967294 would fail here.
+    try agree.ok(
+        \\enum Small(byte):
+        \\    zero = 0
+        \\    high = 255
+        \\
+        \\enum Signed(short):
+        \\    low = -32768
+        \\    minus = -2
+        \\    top = 32767
+        \\
+        \\enum Wide(long):
+        \\    far = 4294967296
+        \\    near = 1
+        \\
+        \\func main():
+        \\    var small = new map(Small, long)
+        \\    small[Small.high] = 1
+        \\    assert(small.has(Small.high))
+        \\    assert(not small.has(Small.zero))
+        \\    for k in small:
+        \\        assert(k == Small.high)
+        \\
+        \\    var signed = new map(Signed, string)
+        \\    signed[Signed.low] = "low"
+        \\    signed[Signed.minus] = "minus"
+        \\    signed[Signed.top] = "top"
+        \\    assert(signed[Signed.minus] == "minus")
+        \\    assert(len(signed.keys()) == 3)
+        \\    for k in signed.keys():
+        \\        assert(signed.has(k))
+        \\
+        \\    var wide = new map(Wide, long)
+        \\    wide[Wide.far] = 7
+        \\    assert(wide[Wide.far] == 7)
+        \\    assert(not wide.has(Wide.near))
+        \\
+    );
+}
+
+test "a map keyed by one enum holds another" {
+    try agree.prints(
+        \\enum Key:
+        \\    left
+        \\    right
+        \\
+        \\enum Intent:
+        \\    move_left
+        \\    move_right
+        \\    nothing
+        \\
+        \\func main():
+        \\    var bound = new map(Key, Intent)
+        \\    bound[Key.left] = Intent.move_left
+        \\    bound[Key.right] = Intent.move_right
+        \\    for k in bound:
+        \\        let intent = bound[k]
+        \\        print(f"{string(k)} -> {string(intent)}")
+        \\    assert((bound.get(Key.left) else Intent.nothing) == Intent.move_left)
+        \\
+    ,
+        \\left -> move_left
+        \\right -> move_right
+        \\
+    );
+}
+
+test "a const keymap lives in the program root, keyed by the enum" {
+    // The keymap docs/TERMUI.md D10 had to write with `int(...)` at
+    // every row and every lookup, written the way it reads.
+    try agree.prints(
+        \\enum Key:
+        \\    left
+        \\    right
+        \\    up
+        \\    down
+        \\
+        \\enum Intent:
+        \\    move_left
+        \\    move_right
+        \\    nothing
+        \\
+        \\const bindings = {Key.left: Intent.move_left, Key.right: Intent.move_right}
+        \\
+        \\func intent(k: Key) -> Intent:
+        \\    return bindings.get(k) else Intent.nothing
+        \\
+        \\func main():
+        \\    assert(intent(Key.left) == Intent.move_left)
+        \\    assert(intent(Key.up) == Intent.nothing)
+        \\    assert(bindings.has(Key.right))
+        \\    assert(len(bindings) == 2)
+        \\    for k in bindings:
+        \\        let held: Key = k
+        \\        print(f"{string(held)} {string(bindings[held])}")
+        \\
+    ,
+        \\left move_left
+        \\right move_right
+        \\
+    );
+}
+
+test "a runtime map literal keyed by enum members" {
+    try agree.ok(
+        \\enum Key:
+        \\    left
+        \\    right
+        \\
+        \\func main():
+        \\    var counts = {Key.left: 1, Key.right: 2}
+        \\    assert(counts[Key.right] == 2)
+        \\    counts[Key.left] = 9
+        \\    assert(counts[Key.left] == 9)
+        \\
+    );
+}
+
+test "an enum-keyed map of owned lists is built, read and freed clean" {
+    // The leak census row: every list the map owns is released with the
+    // map, on both engines, and the key is a number that owns nothing.
+    try agree.ok(
+        \\enum Key:
+        \\    left
+        \\    right
+        \\    up
+        \\
+        \\func main():
+        \\    var runs = new map(Key, list(long))
+        \\    runs[Key.left] = new list(long)
+        \\    runs[Key.left].append(1)
+        \\    runs[Key.left].append(2)
+        \\    runs[Key.up] = new list(long)
+        \\    runs[Key.up].append(3)
+        \\    assert(len(runs[Key.left]) == 2)
+        \\    assert(runs[Key.left][1] == 2)
+        \\    var total: long = 0
+        \\    for k in runs:
+        \\        for held in runs[k]:
+        \\            total = total + held
+        \\    assert(total == 6)
+        \\    runs.remove(Key.up)
+        \\    assert(len(runs) == 1)
+        \\    free(runs)
+        \\
+    );
+}
+
 test "containers: an array of enums fills with the first member" {
     try agree.ok(
         \\enum Cell(byte):

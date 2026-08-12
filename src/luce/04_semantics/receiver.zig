@@ -143,6 +143,18 @@ fn expressionWritesReceiver(
             }
             break :blk false;
         },
+        // A call through a function value cannot write this frame's
+        // receiver: a function value's parameters are its own, and the
+        // receiver it may carry is a value of its own (BINDING.md D9
+        // refuses binding a writing method).  What it is *handed* still
+        // counts, exactly as a declared call's arguments do.
+        .value_call => |written| blk: {
+            if (expressionWritesReceiver(self, info, written.callee)) break :blk true;
+            for (written.arguments) |argument| {
+                if (expressionWritesReceiver(self, info, argument.value)) break :blk true;
+            }
+            break :blk false;
+        },
         .binary => |binary| expressionWritesReceiver(self, info, binary.left) or
             expressionWritesReceiver(self, info, binary.right),
         .unary => |unary| expressionWritesReceiver(self, info, unary.operand),

@@ -690,6 +690,31 @@ parameter names or defaults, so `f(value = 1)` is refused even when the
 declaration that produced `f` happened to use the name `value`.
 Argument types and `give` are checked exactly as for a direct call.
 
+**A call is a postfix suffix**, beside the index and the field access:
+`EXPR(args)` is written wherever `EXPR[i]` is, and calls the value the
+expression in front of it answers — `chooser()(5)`, `actions["run"](3)`,
+`(f)(x)`.  The forms whose head names a declaration are unchanged and
+resolve through the name that was written, so `f(x)`,
+`module.func(x)`, `Struct.helper(x)`, `receiver.method(x)`, `Enum(n)`
+and every builtin mean exactly what they meant.  A callee that may
+hold none is refused, because narrowing proves a local or a parameter
+and never a field or an element; the value is bound to a local and
+tested there, and the refusal writes those lines out.
+
+```luce
+func twice(n: long) -> long:
+    return n * 2
+
+func chooser() -> func(long) -> long:
+    return twice
+
+func main():
+    var actions = new map(string, func(long) -> long)
+    actions["double"] = twice
+    print(string(chooser()(21)))
+    print(string(actions["double"](21)))
+```
+
 Function values copy freely and take no ownership verb.  `==` and `!=`
 ask whether two values name the same function; there is no ordering.
 `string(f)` gives a declared function's qualified name and a lambda's
@@ -980,7 +1005,8 @@ works everywhere `T?` works.
 `string(u)` answers the member's **name** — never the payload; that
 would be a formatting protocol, which this is not.  `==` on unions is
 refused by a sentence naming `match`, and a union may not be a map
-*key* (keys are `long` and `string`, as always).  A union takes the
+*key* (keys are `long`, `string` and enums; a union has no key form —
+keep it in the value and key by what identifies it).  A union takes the
 methods and static namespace functions a struct takes, under the same
 implied-`self` rules:
 
@@ -1050,7 +1076,11 @@ sugar for a plain function with the receiver first, not dispatch):
   `contains(v)`, `fill(v)` (value elements only — an array of
   container or resource handles stores each slot separately); every
   array has `dim(axis)`.
-- `map(K, V)`: `K` is `long` or `string`.  Index get (traps on a
+- `map(K, V)`: `K` is `long`, `string`, or an **enum** — an enum is an
+  integer at a chosen width whose whole comparison surface is equality,
+  which is exactly what a key needs, and a key that goes in a `Key`
+  comes back out of `for` and `keys()` as a `Key` (docs/ENUMS.md).
+  Index get (traps on a
   missing key), index set (insert or update), `has(k)`, `get(k) -> V?`
   (the value or absence — no trap, and `m.get(k) else d` is the
   fallback form), `remove(k)`

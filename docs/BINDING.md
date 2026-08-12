@@ -535,11 +535,13 @@ the order it has to happen:
 4. `04_semantics/builder.zig` — delete the two refusals (the function
    value's and the bind's), add the comparison to `matchesSignature`
    and the stamp to `writtenSignature`.
-5. `04_semantics/calls.zig`'s `lowerIndirectCall` — consult
+5. `04_semantics/calls.zig`'s `lowerValueCall` — consult
    `signature.fallible`, emit `luce.sema.fallible` when the site is
    not a `try`/`catch`, pass `true` to `recordCallNode`, and call
-   `openFallible`.  Stages 5 and 6 and the interpreter need **no**
-   change: `replayIndirectCall` already ends in `finishFallible`.
+   `openFallible`.  One function serves every spelling of a call
+   through a value, the call suffix included, so this is one edit.
+   Stages 5 and 6 and the interpreter need **no** change:
+   `replayIndirectCall` already ends in `finishFallible`.
 6. `06_mir/verify.zig` — `expectSignature` compares `callee.fallible`
    against the signature's instead of refusing a fallible callee, and
    `raisesError` grows its `.call_indirect` arm.
@@ -549,3 +551,37 @@ the order it has to happen:
 8. `06_mir/module.zig` — one `u8` per signature row, and
    `format_version` **must** bump: the fingerprint hashes
    `types.Signature`'s field names.  `abi.version` still does not move.
+
+## As built, fourth run — the call suffix, 2026-08-12
+
+**D7 was storable but not callable in place.**  A function value could
+live in a field, an element, an array cell, a union payload field and a
+map value, and every call through one had to launder its callee through
+a local, because the grammar accepted a call only on a bare name or on
+`receiver.method`.  `chooser()(5)` and `m["a"](1)` were parse errors.
+A call is now one more **postfix suffix**, beside the index and the
+field access, and `EXPR(args)` parses wherever `EXPR[i]` does
+(docs/FUNCTIONS.md, *As built — the call suffix*).
+
+Three consequences for this memo:
+
+- **A bare map value is now callable where it is read.**  The one slot
+  D7 writes bare is the one the suffix serves without ceremony:
+  `actions["double"](21)` and, for a stored bind, `scales["two"](10)` —
+  the receiver rides in the value, so calling it in place calls it on
+  the state it carries.
+- **The four optional slots are not**, and that is D7's own rule
+  rather than a gap: narrowing is locals-and-parameters-only, so
+  `rows.render(3)` is refused.  What changed is the sentence, which
+  used to be "Rows has no method render" — a lie by omission, since
+  the struct has exactly that field — and now names the field, says it
+  may hold none, and writes out the three lines that work.
+- **D8's step 5 renames.**  `lowerIndirectCall` is `lowerValueCall`,
+  and it is reached by both the named form and the suffix, so making a
+  function type fallible remains one edit there.
+
+`Indirect` carries the callee **node** now rather than a `LocalId` and
+a `narrowed` flag: the storable form reads through the ordinary
+`narrowed_get` a narrowed name always produced, which is one fewer
+thing for the tree to record.  `format_version` did not move, and
+neither did `abi.version`.

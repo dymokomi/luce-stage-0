@@ -1372,7 +1372,14 @@ const Module = struct {
                     for (constant.payload.map) |entry_value| {
                         _ = try wip.store(
                             .normal,
-                            (try self.constantValue(entry_value.key, pair.key)).toValue(),
+                            // A key is stored as the integer a `long`
+                            // key would be, folded or not
+                            // (`mir.mapKeyStorage`): the materializer
+                            // fills the same slot every lookup will.
+                            (try self.constantValue(
+                                entry_value.key,
+                                mir.mapKeyStorage(pair.key),
+                            )).toValue(),
                             subscript,
                             value_alignment,
                         );
@@ -3211,6 +3218,39 @@ const Body = struct {
         return self.boxed(self.function.result_types[register], self.produced[register].value, name);
     }
 
+    /// The value in `register`, boxed **as a map key**: a key reaches
+    /// `libluce_rt` as the integer a `long` key would be, so an enum key
+    /// is widened into the box here (`mir.mapKeyStorage`, docs/ENUMS.md).
+    ///
+    /// **The narrowing back costs nothing**: `unboxed` already truncates
+    /// the payload word to the register's own width, which is exactly
+    /// the inverse of this widening — so a key comes out of `key_at` as
+    /// the enum it went in as with no code of its own.
+    ///
+    /// Every other key type answers itself, so a `long` or `string` key
+    /// takes precisely the path it always took.
+    fn boxedKey(self: *Body, register: mir.Register, name: []const u8) Error!Builder.Value {
+        const written = self.function.result_types[register];
+        const stored = mir.mapKeyStorage(written);
+        if (stored.eql(written)) return self.boxedRegister(register, name);
+        return self.boxed(stored, try self.widenedKey(written, register), name);
+    }
+
+    /// An enum key's register value at `long`: a `byte`'s bits are a
+    /// magnitude and every other backing's carry a sign (docs/TYPES.md
+    /// D4), and a `long` backing is already the word.
+    fn widenedKey(self: *Body, written: types.Type, register: mir.Register) Error!Builder.Value {
+        const held = self.produced[register].value;
+        const backing = written.storage();
+        if (backing == .long) return held;
+        return self.wip.cast(
+            if (backing.isUnsigned()) .zext else .sext,
+            held,
+            .i64,
+            "key.long",
+        );
+    }
+
     /// Element `index` of a run of boxes — a subscript list, a struct's
     /// fields — filled the way `boxed` fills a single slot.  The run
     /// itself is an entry-block `alloca`, so the address and the shape
@@ -3718,6 +3758,11 @@ const Body = struct {
 
     /// The subscripts of one indexing operation, as a run of boxed
     /// values, plus how many there are.
+    ///
+    /// Each is boxed as a map key would be, which is the identity for
+    /// every subscript that is not one: a list index and an array's axes
+    /// are `long`s already, and only an enum key is widened
+    /// (`boxedKey`).
     fn subscripts(self: *Body, of: []const mir.Register) Error!struct { Builder.Value, Builder.Value } {
         const run = try self.scratchRun(
             self.module.value_type,
@@ -3726,11 +3771,16 @@ const Body = struct {
             "indices",
         );
         for (of, 0..) |register, index| {
+            const written = self.function.result_types[register];
+            const stored = mir.mapKeyStorage(written);
             try self.boxAt(
                 run,
                 index,
-                self.function.result_types[register],
-                self.produced[register].value,
+                stored,
+                if (stored.eql(written))
+                    self.produced[register].value
+                else
+                    try self.widenedKey(written, register),
             );
         }
         return .{ run, try self.module.builder.intValue(.i64, of.len) };
@@ -7096,13 +7146,17 @@ const Body = struct {
             .remove_entry => try self.callChecked(.luce_rt_remove, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
-                try self.boxedRegister(of[1], "which"),
+                try self.boxedKey(of[1], "which"),
             }),
             .has_key => try self.callAnswering(register, .luce_rt_has_key, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
-                try self.boxedRegister(of[1], "key"),
+                try self.boxedKey(of[1], "key"),
             }),
+            // The answer is unboxed at the register's own type, which
+            // for an enum-keyed map truncates the stored `long` back to
+            // the enum's width — the inverse of `boxedKey`'s widening,
+            // and the whole of what a key costs on the way out.
             .key_at => try self.callAnswering(register, .luce_rt_key_at, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
@@ -7165,12 +7219,12 @@ const Body = struct {
             .map_get => try self.callAnswering(register, .luce_rt_map_get, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
-                try self.boxedRegister(of[1], "key"),
+                try self.boxedKey(of[1], "key"),
             }),
             .map_place => try self.callAnswering(register, .luce_rt_map_place, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
-                try self.boxedRegister(of[1], "key"),
+                try self.boxedKey(of[1], "key"),
                 try self.boxedRegister(of[2], "zero"),
             }),
             .array_fill => try self.callChecked(.luce_rt_array_fill, &.{

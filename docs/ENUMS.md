@@ -151,16 +151,16 @@ with the reason, and each has a spec.
 | **A5** | **Every numeric constructor takes an enum**, not only `int` and `long`: `byte(m)` traps `conversion_range` exactly where `byte(300)` would, and `double(m)` answers the member's number.  One rule instead of a table of pairs, which is the shape `lowerConvert` already gives the seven numeric types.  The MIR is one `convert` whose operand is enum-typed; the verifier admits same-width only from an enum, where the conversion's whole content is the type it lands in. |
 | **A6** | **An `else` that covers nothing is refused** — the sentence `a else b` already gets when `a` is never absent.  An arm that catches nothing today would quietly catch the member somebody adds tomorrow, which is the exact mistake a checked `match` exists to make impossible. |
 
-**One place D9's letter did not survive contact**: a map may not be
-*keyed* by an enum.  Map keys are `long` or `string` and always have
-been — `map(int, V)` is refused the same way — because `hashOf` and
-`keyEquals` in `libluce_rt` read exactly those two payloads, and
-teaching them a third is the new runtime semantic D10 rules out.  A
-`list(Method)`, a `map(K, Method)`, an `array(Method, n)` and a struct
-field all hold members as D9 says; the key position refuses one by
-name, and the sentence offers `long(m)` and a list indexed by `int(m)`.
-It is the narrower reading of "like any scalar" — no scalar but `long`
-and `string` may be a key either.
+**One place D9's letter did not survive contact** (and was made good on
+2026-08-12, below): a map could not at first be *keyed* by an enum.  Map
+keys were `long` or `string` — `map(int, V)` is refused the same way —
+because `hashOf` and `keyEquals` in `libluce_rt` read exactly those two
+payloads, and teaching them a third is the new runtime semantic D10
+rules out.  A `list(Method)`, a `map(K, Method)`, an `array(Method, n)`
+and a struct field all held members as D9 says; the key position refused
+one by name.  What the refusal missed is that the runtime never had to
+learn a third payload: an enum key can travel as the `long` it already
+is.  See *A map keys by an enum* below.
 
 Two smaller calls: an enum member takes no visibility marker (a member
 is what the type *is*, and a match arm cannot name one the file it
@@ -180,6 +180,39 @@ four-way `elif` chain over BTYPE — whose last arm existed only to say
 "unknown kind" — became three arms and no else.  Both enums are
 private to the module, so zip's published surface did not move and
 every zip spec passed untouched.
+
+## A map keys by an enum — as built 2026-08-12
+
+D9 said containers hold enums "like any scalar", and the As-built note
+above read that narrowly at the key position because a third payload in
+`hashOf` and `keyEquals` would have been the new runtime semantic D10
+forbids.  The owner asked for the refusal to go, and it goes without
+costing D10 anything, because **the third payload was never needed**: an
+enum *is* an integer at a chosen width whose entire comparison surface is
+equality (D6), which is exactly and only what a key is for.
+
+| | as built |
+|---|---|
+| **K1** | **A map may be keyed by an enum wherever a `long` or `string` key stands**: `new map(Key, V)`, the type written anywhere a type stands, a `{Key.left: v}` literal, a file-scope `const` keymap folded into the program root, `m[k]`, `m.get(k) -> V?`, `m.has(k)`, `m.remove(k)`, `m[k] = v` and the compound forms.  Nothing else became a key: `double`, `bool`, a struct, a union and the containers are refused as before, and so is `map(int, V)` — the narrow widths are storage, not key types (docs/TYPES.md D5).  The sentence is now *"map keys are long, string or an enum, got T"*, and the union's keeps its own advice. |
+| **K2** | **A key travels as the integer a `long` key would be.**  `mir.mapKeyStorage` is that sentence, written once beside `boxTag` because both engines widen and both narrow: a `byte` backing zero-extends and the other three sign-extend into the key slot, and the narrowing back is the truncation an unbox already performs.  **`libluce_rt` learned nothing at all** — `heap.Map.hashOf` and `value.keyEquals` read the same two payloads they always did, `Map`, `MapEntry`, `indexGet`, `indexSet`, `hasKey`, `mapGet`, `mapPlace`, `keyAt` and `mapKeys` are unchanged to the byte, and the C ABI did not move. |
+| **K3** | **The key comes back out as the enum it went in as.**  `for k in m` binds `k` at the enum type and `m.keys()` answers `list(Key)`, so a key that went in a `Key` and came back a `long` — the representation leaking into the language — cannot happen.  On the compiled path this costs no instruction: `key_at`'s answer is unboxed at the register's own width, which *is* the narrowing.  `m.keys()` costs nothing either, on either engine: `mapKeys` already packs its list at the kind the element zero names, so an enum key's `.int` cell narrows each stored `long` on the way in — the runtime doing the right thing without knowing why. |
+| **K4** | **Two enum types never collide, and neither do an enum and a `long`.**  `map(Key, V)` accepts a `Key` and nothing else: an enum reaches no number with nothing written down and no number reaches an enum at all (D4, and `Type.widensTo` answers `false` for `.enumeration` in both directions), so `m[0]` and `m[Other.first]` on a `map(Key, V)` are type errors rather than coercions.  Heap types are interned by structure, and a `Type.enumeration` compares by its table index — so `map(Key, V)` and `map(Other, V)` are two rows, exactly as `list(Key)` and `list(Other)` are. |
+| **K5** | **A duplicate key in a `const` literal is refused exactly as a duplicate folded key already was**, because it *is* one: an enum member folds to its number, and both the analyzer's `sameMapKey` and the verifier's `verifyDistinctKeys` compare keys as they are stored.  The diagnostic names the member — *"map key Key.left is duplicated; it was first written on line 5"* — because nobody wrote the number. |
+| **K6** | **Iteration order is untouched.**  A map is entries in insertion order plus a hash index over them (`heap.Map`), and nothing here touches either; `for k in m` walks by position through `key_at` as it always did (docs/LANGUAGE.md). |
+| **K7** | **Maps still do not print.**  `string(x)` takes the scalars, a `builder` and an enum, and no container — so there is no `string(m)` to decide anything about, and none was added.  `string(k)` on a key read out of a map is the member's name (D5), which is what the specs print. |
+| **K8** | **A public `map(Key, V)` publishes `Key`.**  The key is walked by the visibility check beside the value now that it can be a declared type, so a public surface naming a `private enum` in the key position is `luce.sema.private` like every other exposure (docs/VISIBILITY.md D4). |
+
+`format_version` did **not** move, and nothing about the wire did: a
+`Type.enumeration` already serialized (a `list(Key)` has always been
+writable), the instruction set is unchanged, the intrinsics are
+unchanged, and the constant encoding is unchanged.  What moved is one
+verifier rule — a map's key may be a `long`, a `string` or an enum row —
+which is a *widening* of what an existing module may say, so every
+module that verified before verifies now.
+
+The corpus's customer is the keymap: docs/TERMUI.md D10's table was
+written `{int(Key.left): Intent.move_left}` and read back with `int(...)`
+at every lookup.  It is now written the way it reads.
 
 ## SELF syntax update — 2026-08-08
 

@@ -1133,6 +1133,7 @@ fn lowerAssignMany(self: *FunctionBuilder, assigned: ast.AssignMany) Error!void 
 fn calledName(self: *FunctionBuilder, expression: *const ast.Expression) Error![]const u8 {
     return switch (expression.*) {
         .call => |call| call.callee,
+        .value_call => |written| calledName(self, written.callee),
         .method => |method| method.name,
         .try_call => |attempt| calledName(self, attempt.operand),
         .spawn => |worker| calledName(self, worker.call),

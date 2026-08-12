@@ -120,6 +120,18 @@ pub const Call = struct {
     origin: CallOrigin = .written,
 };
 
+/// EXPRESSION(arguments) — **the call suffix**, beside the index and
+/// the field access (docs/FUNCTIONS.md): it calls whatever value the
+/// expression in front of it answers.
+///
+/// The two forms whose head *names a declaration* never reach here,
+/// because only their written text can resolve one: a bare name is
+/// `Call` and `receiver.method(...)` is `Method`.  What is left is
+/// exactly the set the grammar used to have no room for —
+/// `chooser()(5)`, `m["a"](1)`, `(f)(x)` — and every one of them is a
+/// call through a function value.
+pub const ValueCall = struct { callee: *Expression, arguments: []Argument, span: Span };
+
 pub const CallOrigin = enum {
     written,
     /// `f"{x:.2f}"`, lowered to `strings.format_float(x, 2)`.
@@ -171,6 +183,10 @@ pub const Expression = union(enum) {
     name: Name,
     field: FieldAccess,
     call: Call,
+    /// callee(arguments) — a call suffix on an expression that is not
+    /// a bare name and not `receiver.method`, so its head cannot name
+    /// a declaration and the value it answers is what is called.
+    value_call: ValueCall,
     binary: Binary,
     unary: Unary,
     /// new list(long), new map(string, long), new array(long, 5, 5),

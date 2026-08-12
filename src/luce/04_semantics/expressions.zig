@@ -697,8 +697,12 @@ pub fn lowerMapLiteral(self: *FunctionBuilder, literal: ast.MapLiteral, wanted_c
     const key_type: Type = wanted_key orelse inferred: {
         const first = lowered[0].value_type;
         if (first == .string) break :inferred .string;
+        // An enum key keys by *itself*, not by its number: the whole
+        // point is that `{Key.left: …}` stays a `map(Key, V)` and comes
+        // back out as a `Key` (docs/ENUMS.md, As built 2026-08-12).
+        if (first == .enumeration) break :inferred first;
         if (first.isInteger()) break :inferred .long;
-        try self.fail("luce.sema.type", literal.entries[0].key.span(), "map keys are long or string, got {s}", .{
+        try self.fail("luce.sema.type", literal.entries[0].key.span(), "map keys are long, string or an enum, got {s}", .{
             try self.analyzer.typeName(first),
         });
         return null;

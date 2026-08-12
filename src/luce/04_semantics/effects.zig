@@ -40,6 +40,9 @@ pub fn mayMutateContainers(expression: *const ast.Expression) bool {
         // (docs/FUNCTIONS.md D2).
         .lambda => false,
         .try_call => true,
+        // Nothing is known about what a function value does, so a call
+        // through one disturbs everything a declared call could.
+        .value_call => true,
         .call => |call| blk: {
             if (!builtins.isPure(call.callee)) break :blk true;
             for (call.arguments) |argument| {

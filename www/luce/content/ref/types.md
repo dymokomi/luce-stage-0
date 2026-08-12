@@ -441,7 +441,8 @@ carries an owned thing, the list **owns** its elements.
 
 ## map(K, V)
 
-An insertion-ordered dictionary. `K` is `long` or `string`; `V` is any
+An insertion-ordered dictionary. `K` is `long`, `string` or an enum;
+`V` is any
 type other than an optional. Index get, index set, `has` and `get`
 are O(1): the entries stay a dense array in arrival order with a hash
 index over it. Iteration is in insertion order.

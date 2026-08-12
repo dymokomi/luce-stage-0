@@ -129,6 +129,8 @@ pub fn deeperThan(expression: *const ast.Expression, budget: u32) bool {
         .lambda => |written| deeperThan(written.body, left),
         .binary => |binary| deeperThan(binary.left, left) or deeperThan(binary.right, left),
         .call => |call| anyDeeperArgument(call.arguments, left),
+        .value_call => |written| deeperThan(written.callee, left) or
+            anyDeeperArgument(written.arguments, left),
         .method => |method| deeperThan(method.target, left) or
             anyDeeperArgument(method.arguments, left),
         .new_object => |new| anyDeeper(new.dims, left),

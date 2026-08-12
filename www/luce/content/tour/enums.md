@@ -277,6 +277,48 @@ main.luc:8:12: Priority is a set of names and has no order; write int(a) < int(b
                ^~~~~
 ```
 
+## An enum keys a map
+
+A map may be keyed by an enum wherever it may be keyed by a `long` or a
+`string`, and the reason is the one this whole chapter is about: an
+enum is an integer at a chosen width whose entire comparison surface is
+equality, which is exactly what a key is for.
+
+The key stays the enum on the way out, too — `for k in m` binds a
+`Key`, so a `match` on it is checked for exhaustiveness like any other,
+and `m.keys()` answers a `list(Key)`.
+
+```luce run
+enum Key:
+    left
+    right
+    quit
+
+enum Intent:
+    move_left
+    move_right
+    stop
+    nothing
+
+const bindings = {Key.left: Intent.move_left, Key.quit: Intent.stop}
+
+func intent(pressed: Key) -> Intent:
+    return bindings.get(pressed) else Intent.nothing
+
+func main():
+    print(string(intent(Key.left)))
+    print(string(intent(Key.right)))
+    for k in bindings:
+        print(f"{k} -> {bindings[k]}")
+```
+
+```output
+move_left
+nothing
+left -> move_left
+quit -> stop
+```
+
 ## Methods
 
 An enum takes the methods and namespace functions a

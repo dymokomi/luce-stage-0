@@ -132,8 +132,13 @@ pub fn privateMentioned(self: *const Analyzer, of: Type) ?[]const u8 {
             null,
         .heap => |index| switch (self.heap_types.items[index]) {
             .list => |element| privateMentioned(self, element),
-            // A map key is long or string, never a struct.
-            .map => |pair| privateMentioned(self, pair.value),
+            // A map key is a long, a string or an **enum**, and an enum
+            // can be private (docs/ENUMS.md, As built 2026-08-12), so
+            // the key is walked exactly as the value is: a public
+            // `map(Key, long)` publishes `Key` no less than a public
+            // `list(Key)` does.
+            .map => |pair| privateMentioned(self, pair.key) orelse
+                privateMentioned(self, pair.value),
             .array => |shape| privateMentioned(self, shape.element),
             .builder, .file => null,
             .task => |work| privateMentioned(self, work.result),

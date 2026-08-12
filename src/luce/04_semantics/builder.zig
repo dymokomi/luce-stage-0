@@ -742,7 +742,7 @@ pub const FunctionBuilder = struct {
         return switch (expression.*) {
             // A spawn makes a task nobody has named, exactly as `new`
             // makes a list nobody has named (docs/THREADS.md D3).
-            .new_object, .list_literal, .map_literal, .slice_range, .call, .give, .copy, .spawn => true,
+            .new_object, .list_literal, .map_literal, .slice_range, .call, .value_call, .give, .copy, .spawn => true,
             // `try f()` hands over exactly what `f()` does: the value
             // crosses a block boundary through a slot, and a slot
             // carrying an object changes nothing about who owns it.
@@ -2017,6 +2017,7 @@ pub const FunctionBuilder = struct {
                 return expressions.lowerField(self, field);
             },
             .call => |call| return calls.lowerCall(self, call, as_statement, fallible_allowed, shape_position, wanted),
+            .value_call => |written| return calls.lowerValueCallExpression(self, written, as_statement),
             .binary => |binary| {
                 if (binary.op == .catch_error) return self.lowerCatch(binary, as_statement);
                 return expressions.lowerBinary(self, binary, wanted);

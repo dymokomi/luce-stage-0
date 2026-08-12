@@ -95,10 +95,11 @@ pear: 2
 plum: 7
 ```
 
-Map keys are `long` or `string`; an unannotated integer key lands on
-`long`. A constant map rejects a duplicate folded key and points to
-both places it was written. A runtime map keeps ordinary replacement
-semantics because its keys may be computed at runtime.
+Map keys are `long`, `string` or an [enum](../enums/); an unannotated
+integer key lands on `long`. A constant map rejects a duplicate folded
+key and points to both places it was written. A runtime map keeps
+ordinary replacement semantics because its keys may be computed at
+runtime.
 
 Empty `{}` is not a literal: it says neither key nor value type. Write
 `new map(K, V)` for an empty mutable map. The spelling also leaves an

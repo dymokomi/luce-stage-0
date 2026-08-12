@@ -239,6 +239,56 @@ Function values copy freely. `==` and `!=` compare which function they
 name, ordering is refused, and `string(f)` gives a declared function's
 qualified name or a lambda's distinct compiler-generated name.
 
+### Calling a value where it stands {#call-suffix}
+
+A call is a **postfix suffix**, level 8 in the table above, so
+`EXPR(args)` is written wherever `EXPR[i]` is: the answer of a call,
+an element read out of a map, a value in parentheses.
+
+```luce run
+func twice(n: long) -> long:
+    return n * 2
+
+func chooser() -> func(long) -> long:
+    return twice
+
+func main():
+    var actions = new map(string, func(long) -> long)
+    actions["double"] = twice
+    print(string(chooser()(21)))
+    print(string(actions["double"](21)))
+```
+
+```output
+42
+42
+```
+
+A callee that may hold none is refused, because
+[narrowing](#narrowing) proves a local or a parameter and
+never a field or an element — either could change between the test and
+the use. The three lines that always work are the ones the refusal
+writes out.
+
+```luce fail
+struct Rows:
+    render: (func(long) -> string)?
+
+func label(index: long) -> string:
+    return string(index)
+
+func main():
+    let rows = Rows(render = label)
+    print(rows.render(3))
+```
+
+```output
+luce: compile failed
+main.luc:9:11: rows.render is (func(long) -> string)? and may hold none; only a local or a parameter narrows, so bind it first (let render = rows.render), test it (if render != none:), then call render(…) [BINDING.md D7] [luce.sema.call]
+        print(rows.render(3))
+              ^~~~~~~~~~~~~~
+```
+
 ## Calls that answer more than one value
 
 A call whose signature is a [return shape](../types/#return-shapes)

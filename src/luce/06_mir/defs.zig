@@ -56,6 +56,29 @@ pub fn boxTag(of: Type) ?value.Tag {
         .optional => null,
     };
 }
+/// How a **map key** is stored, whatever type the program keys by: a
+/// key reaches `libluce_rt` as the integer a `long` key would be, so an
+/// enum key widens to `long` where it goes in and narrows back where one
+/// comes out (docs/ENUMS.md).  `long` and `string` answer themselves.
+///
+/// **This is why `libluce_rt` learned nothing when enums became keys.**
+/// `heap.Map.hashOf` and `value.keyEquals` read exactly two payloads and
+/// still do; an enum is a set of names at an integer width, and the
+/// width the key slot speaks is `long`.  The narrowing on the way out is
+/// exact because the widening was: `int(-1)` widens to `long(-1)` and
+/// truncates back to `int(-1)`, which is the same round trip a boxed
+/// value already makes between `boxBits` and `asInt`.
+///
+/// Here beside `boxTag` and for its reason — **both engines widen and
+/// both narrow**, and a disagreement would put a key in a map that no
+/// lookup on the other engine could find.
+pub fn mapKeyStorage(key: Type) Type {
+    return switch (key) {
+        .enumeration => .long,
+        else => key,
+    };
+}
+
 /// A function value's field run: how long it is, and which slot holds
 /// what (docs/BINDING.md D12).
 ///

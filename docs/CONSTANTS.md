@@ -204,11 +204,14 @@ sentence naming `new map(K, V)` — an empty *constant* map holds nothing
 and is a mutable map a function should build — which leaves `{}`
 unspoken and free for a set literal if a set ever arrives (§4).
 
-**Keys are `long` or `string`, as they already are.**  ENUMS.md's build
-found this the hard way: `hashOf` and `keyEquals` in `libluce_rt` read
-exactly those two payloads, and a third is a new runtime semantic.  A
-constant map keyed by anything else is refused by the sentence
-`map(int, V)` already gets.
+**Keys are `long`, `string` or an enum, as they already are.**
+ENUMS.md's build first read this narrowly — `hashOf` and `keyEquals` in
+`libluce_rt` read exactly two payloads, and a third would be a new
+runtime semantic — and then found (2026-08-12) that an enum key needs no
+third payload: it travels as the `long` it already is and comes back at
+its own width, so `const bindings = {Key.left: Intent.move_left}` folds
+into the program root like any other constant map.  A constant map keyed
+by anything else is refused by the sentence `map(int, V)` already gets.
 
 **Duplicate keys are refused at compile time**, naming the key and both
 lines.  This is a real win a runtime map cannot give, and it is half of

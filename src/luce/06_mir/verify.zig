@@ -62,8 +62,19 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     }
     for (program.heap_types) |descriptor| switch (descriptor) {
         .list => |element| try verifyType(program, element),
+        // **A key is a `long`, a `string`, or an enum** (docs/ENUMS.md,
+        // As built 2026-08-12).  The enum is admitted here because it
+        // *is* an integer at a chosen width whose whole comparison
+        // surface is equality, which is exactly what a key needs — and
+        // because it reaches the runtime as the integer a `long` key
+        // would be (`mir.mapKeyStorage`), so the two payloads the
+        // runtime hashes and compares are still the only two there are.
+        // Its row and width are checked like any other enum's.
         .map => |pair| {
-            if (pair.key != .long and pair.key != .string) return error.BadStruct;
+            switch (pair.key) {
+                .long, .string, .enumeration => try verifyType(program, pair.key),
+                else => return error.BadStruct,
+            }
             try verifyType(program, pair.value);
         },
         .array => |shape| {
@@ -559,13 +570,17 @@ fn verifyContainerConstant(
 /// A map row preserves written order but may not carry the same key
 /// twice.  String identity is its bytes, not the shared-pool index, so
 /// two separate slots holding equal text are duplicates too.
+///
+/// The keys are compared **as they are stored** (`mir.mapKeyStorage`):
+/// an enum key is a number, so two arms answer for three key types and a
+/// duplicated member is the duplicated `long` it folds to.
 fn verifyDistinctKeys(
     allocator: Allocator,
     program: *const Program,
     entries: []const defs.ContainerConstant.MapEntry,
     key_type: Type,
 ) VerifyError!void {
-    switch (key_type) {
+    switch (defs.mapKeyStorage(key_type)) {
         .long => {
             var seen: std.AutoHashMapUnmanaged(i64, void) = .empty;
             defer seen.deinit(allocator);

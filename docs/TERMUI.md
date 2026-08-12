@@ -339,8 +339,8 @@ and the app writes a table of its own:
 
 ```text
 const KEYS = {
-    int(Key.left): Intent.move_left,
-    int(Key.ctrl_s): Intent.save,
+    Key.left: Intent.move_left,
+    Key.ctrl_s: Intent.save,
 }
 ```
 
@@ -349,16 +349,17 @@ and it replaces the editor's 50-line `Intent.of` if-chain with data.
 The win is the editor's, not termui's, and saying so here is what
 keeps termui from growing a feature it cannot type.
 
-**The `int(...)` on every key is ceremony, and it is the language's,
-not the design's.** `map` keys are `long` or `string` — `{Key.left:
-…}` is refused with *"map keys are long or string, got Key"* — even
-though an enum **is** an integer at a chosen width with equality as its
-whole comparison surface, which is exactly what a map key needs. Both
-shapes were probed and both work (`int(Key.x)` keys, or a const
-`array(Intent, _)` indexed by `int(key)` when the enum is dense), so
-this design is not blocked; it is noted here because a table keyed by
-an enum is the natural spelling of every keymap anyone will ever write,
-and today the reader pays for it at every row. Filed separately.
+**The `int(...)` this paragraph used to require on every key is gone**
+(fixed 2026-08-12, docs/ENUMS.md *As built*). The table above was
+written `int(Key.left): …` and read back with `int(...)` at every
+lookup, because `map` keys were `long` or `string` and `{Key.left: …}`
+was refused — even though an enum **is** an integer at a chosen width
+with equality as its whole comparison surface, which is exactly what a
+map key needs. A map may now be keyed by an enum wherever a `long` or
+`string` key stands, the key comes back out of `for k in m` and
+`m.keys()` as the enum it went in as, and `libluce_rt` learned nothing:
+a key reaches it as the integer a `long` key would be. The keymap is
+now spelled the way it reads.
 
 ### D11. Unicode belongs to std
 

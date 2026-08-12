@@ -2785,3 +2785,64 @@ test "enum declares at file scope, and match is a statement" {
         .contains = "write 'match' over an enum",
     }});
 }
+
+test "a call is a postfix suffix, on the same footing as an index" {
+    // The grammar half of docs/FUNCTIONS.md's *As built — the call
+    // suffix*: `EXPR(args)` parses wherever `EXPR[i]` does.  The two
+    // forms whose head names a declaration keep their own nodes,
+    // because only their written text can resolve one.
+    var parsed = try expectClean(
+        \\func main():
+        \\    print(chooser()(5))
+        \\    print(actions["double"](21))
+        \\    print(rows.render(3))
+        \\    print(pick()()(7))
+        \\
+    );
+    defer parsed.deinit();
+    const body = parsed.program.functions[0].body.statements;
+
+    // `chooser()(5)` — a call suffix whose callee is a named call.
+    const first = body[0].expression.value.call.arguments[0].value;
+    try testing.expect(first.* == .value_call);
+    try testing.expect(first.value_call.callee.* == .call);
+    try testing.expectEqualStrings("chooser", first.value_call.callee.call.callee);
+    try testing.expectEqual(@as(usize, 1), first.value_call.arguments.len);
+
+    // `actions["double"](21)` — a call suffix on an index.
+    const second = body[1].expression.value.call.arguments[0].value;
+    try testing.expect(second.* == .value_call);
+    try testing.expect(second.value_call.callee.* == .index);
+
+    // `rows.render(3)` is still a *method*: the dot takes it before
+    // the suffix can, which is what keeps every declaration form
+    // resolving through the name the reader wrote.
+    const third = body[2].expression.value.call.arguments[0].value;
+    try testing.expect(third.* == .method);
+    try testing.expectEqualStrings("render", third.method.name);
+
+    // The suffix chains, left to right.
+    const fourth = body[3].expression.value.call.arguments[0].value;
+    try testing.expect(fourth.* == .value_call);
+    try testing.expect(fourth.value_call.callee.* == .value_call);
+    try testing.expect(fourth.value_call.callee.value_call.callee.* == .call);
+}
+
+test "a call suffix does not cross a line break" {
+    // The suffix ends at a newline exactly as an index chain does, and
+    // for the same reason: the lexer suspends newlines only inside an
+    // open group, so `f` on one line and `(4)` on the next stay two
+    // statements and keep meaning what they meant.
+    var parsed = try expectClean(
+        \\func main():
+        \\    let f = pick()
+        \\    f
+        \\    (4)
+        \\
+    );
+    defer parsed.deinit();
+    const body = parsed.program.functions[0].body.statements;
+    try testing.expectEqual(@as(usize, 3), body.len);
+    try testing.expect(body[1].expression.value.* == .name);
+    try testing.expect(body[2].expression.value.* == .int_literal);
+}

@@ -373,6 +373,13 @@ pub fn clear(runtime: *Runtime, target: Value) Error!void {
 ///
 /// `zero` is the key type's zero, here for the reason `newList` takes
 /// one: it names the *kind* the elements are stored at (`emptyList`).
+///
+/// **That is also what gives an enum-keyed map its `list(Key)`.**  A key
+/// is stored as the integer a `long` key would be (docs/ENUMS.md), and
+/// the zero of an enum key names `.byte`/`.short`/`.int` cells — so
+/// `put` narrows each key into its own width on the way in, which is the
+/// exact inverse of the widening that stored it, and this function does
+/// not learn that enums exist.
 pub fn mapKeys(runtime: *Runtime, target: Value, zero: Value) Error!Value {
     const entries = (try runtime.resolve(target)).data.map.entries.items;
     var listed = emptyList(zero);

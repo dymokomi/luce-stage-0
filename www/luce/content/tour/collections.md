@@ -9,7 +9,7 @@ non-copyable resource category; this chapter is about containers.
 | Type | Shape |
 |---|---|
 | `list(T)` | A growable sequence. |
-| `map(K, V)` | An insertion-ordered dictionary; `K` is `long` or `string`. |
+| `map(K, V)` | An insertion-ordered dictionary; `K` is `long`, `string` or an enum. |
 | `array(T, ...)` | Fixed shape, up to four dimensions, zero-initialized. |
 | `builder` | Accumulates text and hands back a `string`. |
 
@@ -107,9 +107,9 @@ the end is a trap.
 
 ## map
 
-Keys are `long` or `string`. Iteration is in insertion order, and the
-lookups — index, `has`, `get`, index-set — are O(1) over a dense array
-of entries with a hash index above it.
+Keys are `long`, `string` or an [enum](../enums/). Iteration is in
+insertion order, and the lookups — index, `has`, `get`, index-set — are
+O(1) over a dense array of entries with a hash index above it.
 
 ```luce run
 func main():

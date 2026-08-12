@@ -627,8 +627,10 @@ pub const Object = struct {
 ///
 /// `hashOf` and `value.keyEquals` must agree exactly: equal keys hash
 /// equally, or a lookup walks past its own entry.  They are written
-/// against the same two payloads (long and String — the only key types
-/// the analyzer admits) for that reason.
+/// against the same two payloads (long and String) for that reason — and
+/// two is still all there are now that a program may key by an enum,
+/// because an enum key arrives widened to the integer a `long` key would
+/// be and leaves narrowed back (`mir.mapKeyStorage`, docs/ENUMS.md).
 // ---------------------------------------------------------------------------
 // The map behind a Map
 // ---------------------------------------------------------------------------

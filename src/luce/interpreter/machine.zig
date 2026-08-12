@@ -749,7 +749,10 @@ pub const Machine = struct {
 
     /// A map key is borrowed for `indexSet`, which takes its own copy
     /// only when a new entry keeps it.  Constant keys are exactly long
-    /// or String, as verified by the MIR boundary.
+    /// or String, as verified by the MIR boundary — an enum key folds to
+    /// its member's number and is stored as the `long` every enum key is
+    /// stored as (`mir.mapKeyStorage`), which is the same slot a lookup
+    /// will hash.
     fn constantKey(self: *const Machine, encoded: mir.ConstantValue) RuntimeValue {
         return switch (encoded) {
             .long => |held| .ofLong(held),
@@ -1249,6 +1252,44 @@ pub const Machine = struct {
         }
     }
 
+    /// The `Value` a map key travels as, read out of the register that
+    /// holds it: an enum key widens to the integer a `long` key would be
+    /// (`mir.mapKeyStorage`), and every other key is already it.
+    ///
+    /// This is the whole of what enum keys cost the engines, and it is
+    /// why `libluce_rt` hashes and compares exactly two payloads
+    /// (docs/ENUMS.md, As built 2026-08-12).  The compiled path says
+    /// the same thing as a `sext`/`zext` into the box it fills.
+    ///
+    /// A subscript that is not a key — a list index, an array's axes —
+    /// is a `long` already, so this is the identity there and every
+    /// indexing door can go through it without asking what it indexes.
+    fn storedKey(self: *const Machine, site: Site, held: RuntimeValue, register: Register) RuntimeValue {
+        const written = self.program.functions[site.function].result_types[register];
+        if (written != .enumeration) return held;
+        return .ofLong(switch (written.enumeration.backing) {
+            .byte => held.asByte(),
+            .short => held.asShort(),
+            .int => held.asInt(),
+            .long => held.asLong(),
+        });
+    }
+
+    /// A key read back out of a map, at the type the program keys by:
+    /// the narrowing that undoes `storedKey`, exact because the widening
+    /// was.  The compiled path does the same truncation when it unboxes
+    /// the answer at the register's own width.
+    fn keyOfStored(self: *const Machine, site: Site, held: RuntimeValue) RuntimeValue {
+        const written = self.program.functions[site.function].result_types[site.instruction];
+        if (written != .enumeration) return held;
+        return switch (written.enumeration.backing) {
+            .byte => .ofByte(held.asByte()),
+            .short => .ofShort(held.asShort()),
+            .int => .ofInt(held.asInt()),
+            .long => held,
+        };
+    }
+
     /// The element type of the List an intrinsic answers, read off the
     /// program's type table.
     ///
@@ -1521,11 +1562,11 @@ pub const Machine = struct {
             .index_get => return containers.indexGet(
                 &self.runtime,
                 registers[arguments[0]],
-                try self.subscripts(registers, arguments[1..]),
+                try self.subscripts(site, registers, arguments[1..]),
             ),
             .index_set => {
                 const held = registers[arguments[arguments.len - 1]];
-                const indices = try self.subscripts(registers, arguments[1 .. arguments.len - 1]);
+                const indices = try self.subscripts(site, registers, arguments[1 .. arguments.len - 1]);
                 try containers.indexSet(&self.runtime, registers[arguments[0]], indices, held);
                 return .none;
             },
@@ -1558,19 +1599,23 @@ pub const Machine = struct {
                 return .none;
             },
             .remove_entry => {
-                try containers.remove(&self.runtime, registers[arguments[0]], registers[arguments[1]]);
+                try containers.remove(
+                    &self.runtime,
+                    registers[arguments[0]],
+                    self.storedKey(site, registers[arguments[1]], arguments[1]),
+                );
                 return .none;
             },
             .has_key => return containers.hasKey(
                 &self.runtime,
                 registers[arguments[0]],
-                registers[arguments[1]],
+                self.storedKey(site, registers[arguments[1]], arguments[1]),
             ),
-            .key_at => return containers.keyAt(
+            .key_at => return self.keyOfStored(site, try containers.keyAt(
                 &self.runtime,
                 registers[arguments[0]],
                 registers[arguments[1]].asLong(),
-            ),
+            )),
             .value_at => return containers.valueAt(
                 &self.runtime,
                 registers[arguments[0]],
@@ -1630,12 +1675,12 @@ pub const Machine = struct {
             .map_get => return containers.mapGet(
                 &self.runtime,
                 registers[arguments[0]],
-                registers[arguments[1]],
+                self.storedKey(site, registers[arguments[1]], arguments[1]),
             ),
             .map_place => return containers.mapPlace(
                 &self.runtime,
                 registers[arguments[0]],
-                registers[arguments[1]],
+                self.storedKey(site, registers[arguments[1]], arguments[1]),
                 registers[arguments[2]],
             ),
             .array_fill => {
@@ -2027,14 +2072,20 @@ pub const Machine = struct {
     /// The subscripts of one indexing operation, gathered out of the
     /// registers into reused scratch.  An array carries one per axis;
     /// a list or map carries exactly one.
+    ///
+    /// Each goes through `storedKey`, which is the identity for every
+    /// subscript that is not an enum map key.
     fn subscripts(
         self: *Machine,
+        site: Site,
         registers: []const RuntimeValue,
         of: []const Register,
     ) error{OutOfMemory}![]const RuntimeValue {
         self.index_scratch.clearRetainingCapacity();
         try self.index_scratch.ensureTotalCapacity(self.arena, of.len);
-        for (of) |register| self.index_scratch.appendAssumeCapacity(registers[register]);
+        for (of) |register| self.index_scratch.appendAssumeCapacity(
+            self.storedKey(site, registers[register], register),
+        );
         return self.index_scratch.items;
     }
 };

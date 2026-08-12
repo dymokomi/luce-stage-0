@@ -197,6 +197,67 @@ a spawned function's parameter and as its result.  A call through a
 value still checks argument verbs exactly as a direct call does, which
 is what D5 was really about.
 
+## As built — the call suffix, 2026-08-12
+
+**A call is a postfix operator.**  `EXPR(args)` parses wherever
+`EXPR[i]` does — one more suffix in the postfix loop, beside the index
+and the field access — and calls the value the expression in front of
+it answers.  Until this ran, a call was accepted only on a bare name
+or on `receiver.method`, so `chooser()(5)`, `m["a"](1)` and `(f)(x)`
+were **parse** errors and every call through a stored function value
+had to launder its callee through a local first.  That was an
+unfinished corner of D7's storability, not a decision: no memo ever
+restricted calls to names.
+
+The typing rule is one sentence: **a call suffix applies to any
+expression whose type is a `func(...)`**, and it is checked exactly as
+a call through a named value always was — the interned signature says
+the arity, the argument types and the verb each object argument
+travels by, a function type has no parameter names and no defaults, so
+a named argument is refused where it is written.  `give` and `copy`
+are the signature's business and the callee's spelling changes nothing
+about them (D5): a `give`-taking parameter demands the verb through a
+call suffix exactly as through a name.
+
+**The head-names-a-declaration forms are untouched and still win.**
+`f(x)`, `Struct.helper(x)`, `module.func(x)`, `receiver.method(x)`,
+`Union.member(field = v)`, `Enum(n)` and every builtin resolve through
+the written text they always did, because only the written text can
+name a declaration; the suffix takes what is left over, which is
+exactly the set that had no grammar before.
+
+**An absent callee stays refused.**  A `(func(...) -> R)?` is callable
+where the flow analysis has proved the value is there, and only a
+local or a parameter is ever proved — a field or an element can change
+between the test and the use (docs/LANGUAGE.md), so narrowing one
+would be a promise the language cannot keep.  `rows.render(3)` on a
+field is therefore still an error, but it now teaches the fix instead
+of claiming the struct has no such method:
+
+```text
+rows.render is (func(long) -> string)? and may hold none; only a local
+or a parameter narrows, so bind it first (let render = rows.render),
+test it (if render != none:), then call render(…) [BINDING.md D7]
+```
+
+A call through a value is never **fallible**, because a function type
+carries no `!` (docs/BINDING.md D8 is not built), so `try EXPR(args)`
+is refused by name as `luce.sema.fallible`.  `spawn` still takes a
+declared call and nothing else, and refuses a call suffix in the
+parser.
+
+**It removed a special case rather than adding one.**  The tree keeps
+exactly the two call paths it already had — the declaration's and the
+value's — and the value's stopped being local-only: `05_hir`'s
+`ResolvedCallee.Indirect` now carries the callee **node** instead of a
+`LocalId` plus a `narrowed` flag, so a narrowed name records the same
+`narrowed_get` every other read of it records and the storable form
+needs no bookkeeping of its own.  The callee is the call's **first**
+operand in evaluation order, the way a method's receiver is, and it
+rides the same spill machinery the arguments do.  `format_version` did
+not move: nothing about MIR changed, and `call_indirect` always took a
+register.
+
 ## SELF clarification — 2026-08-08
 
 D1 is unchanged under implied self: methods still cannot be function

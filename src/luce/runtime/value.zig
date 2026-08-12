@@ -437,8 +437,16 @@ pub const View = union(enum) {
     object: Handle,
 };
 
-/// Map keys compare by content: the analyzer admits long and String
-/// keys only.
+/// Map keys compare by content, and a key is one of exactly two
+/// payloads here: a long or a String.
+///
+/// **An enum key is a long.**  A program may key a map by an enum
+/// (docs/ENUMS.md), and an enum is an integer at a chosen width whose
+/// whole comparison surface is equality — so both engines widen one into
+/// the integer a `long` key would be before it ever reaches this side
+/// (`mir.mapKeyStorage`) and narrow it back where a key comes out.  That
+/// is why the runtime learned nothing when enums became keys, and why
+/// this switch has two arms rather than five.
 pub fn keyEquals(left: *const Value, right: *const Value) bool {
     return switch (left.view()) {
         .long => |held| held == right.asLong(),

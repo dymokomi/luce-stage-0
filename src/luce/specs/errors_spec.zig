@@ -416,6 +416,13 @@ test "luce.sema.private: a public surface names public types, refused at the dec
         "private struct Inner:\n    n: long\n\nfunc read() -> list(Inner):\n    return [Inner(n = 1)]\n\nfunc main():\n    return\n",
         "luce.sema.private",
     );
+    // A map's **key** publishes as its value does, now that a key can
+    // be a declared type (docs/ENUMS.md, As built 2026-08-12).
+    try expectSaying(
+        "private enum Key:\n    left\n\nfunc table() -> map(Key, long):\n    return new map(Key, long)\n\nfunc main():\n    return\n",
+        "luce.sema.private",
+        "table is public and answers Key, which is marked private",
+    );
     // A function type publishes its complete nested signature too.
     // The outer `func` tag must not hide a private parameter or result
     // from the same D4 check containers receive above.
@@ -6635,22 +6642,21 @@ test "private on an enum gates nothing inside its own file" {
     );
 }
 
-test "luce.sema.type: a map may hold enums but not be keyed by one" {
-    // Map keys are `long` or `string` and always have been —
-    // `map(int, V)` is refused the same way — so an enum key is
-    // refused by the rule that predates it, with the number named
-    // (docs/ENUMS.md, As built).
-    try expectSaying(
+test "luce.sema.type: a map keys by an enum, and by nothing else new" {
+    // An enum keys a map (docs/ENUMS.md, As built 2026-08-12): it is an
+    // integer at a chosen width whose whole comparison surface is
+    // equality.  What is *not* a key is unchanged, and `map(int, V)` is
+    // still refused — the narrow widths are storage, not a key type.
+    try expectCompiles(
         \\enum Method:
         \\    stored
         \\    deflated
         \\
         \\func main():
         \\    var counts = new map(Method, long)
+        \\    counts[Method.deflated] = 1
+        \\    assert(counts.has(Method.deflated))
         \\
-    ,
-        "luce.sema.type",
-        "map keys are long or string; key by long(m) and keep Method in the value",
     );
     try expectCompiles(
         \\enum Method:
@@ -6662,6 +6668,133 @@ test "luce.sema.type: a map may hold enums but not be keyed by one" {
         \\    chosen["a"] = Method.deflated
         \\    assert(chosen["a"] == Method.deflated)
         \\
+    );
+    try expectSaying(
+        \\func main():
+        \\    var counts = new map(int, long)
+        \\
+    ,
+        "luce.sema.type",
+        "map keys are long, string or an enum, got int",
+    );
+    try expectSaying(
+        \\func main():
+        \\    var counts = new map(double, long)
+        \\
+    ,
+        "luce.sema.type",
+        "map keys are long, string or an enum, got double",
+    );
+    try expectSaying(
+        \\struct Point:
+        \\    x: long
+        \\
+        \\func main():
+        \\    var counts = new map(Point, long)
+        \\
+    ,
+        "luce.sema.type",
+        "map keys are long, string or an enum, got Point",
+    );
+    try expectSaying(
+        \\func main():
+        \\    var counts = new map(list(long), long)
+        \\
+    ,
+        "luce.sema.type",
+        "map keys are long, string or an enum, got list(long)",
+    );
+}
+
+test "luce.sema.type: an enum key is that enum, and no other type reaches it" {
+    // The hole this closes: `map(Key, V)` typed at `Key` accepts a
+    // `Key`, and a number is a type error rather than a coercion — an
+    // enum reaches no number with nothing written down and no number
+    // reaches an enum at all (D4, `Type.widensTo`).
+    try expectSaying(
+        \\enum Key:
+        \\    left
+        \\    right
+        \\
+        \\func main():
+        \\    var counts = new map(Key, long)
+        \\    counts[0] = 1
+        \\
+    ,
+        "luce.sema.index",
+        "this map is keyed by Key",
+    );
+    try expectSaying(
+        \\enum Key:
+        \\    left
+        \\
+        \\enum Other:
+        \\    first
+        \\
+        \\func main():
+        \\    var counts = new map(Key, long)
+        \\    counts[Other.first] = 1
+        \\
+    ,
+        "luce.sema.index",
+        "this map is keyed by Key",
+    );
+    try expectSaying(
+        \\enum Key:
+        \\    left
+        \\
+        \\func main():
+        \\    var counts = new map(long, long)
+        \\    counts[Key.left] = 1
+        \\
+    ,
+        "luce.sema.index",
+        "this map is keyed by long",
+    );
+    try expectSaying(
+        \\enum Key:
+        \\    left
+        \\
+        \\func main():
+        \\    var counts = new map(Key, long)
+        \\    assert(counts.has(0))
+        \\
+    ,
+        "luce.sema.type",
+        "argument 1 of has is Key, got int",
+    );
+    // A union is still refused, with the advice that is its own.
+    try expectSaying(
+        \\union Shape:
+        \\    circle(radius: double)
+        \\    square(side: double)
+        \\
+        \\func main():
+        \\    var counts = new map(Shape, long)
+        \\
+    ,
+        "luce.sema.type",
+        "a union has no key form — keep Shape in the value",
+    );
+}
+
+test "luce.sema.const: a constant keymap refuses a duplicated member" {
+    // Duplicate folded keys are refused whatever the key type is: an
+    // enum key folds to its member's number, and `verifyDistinctKeys`
+    // compares keys as they are stored (docs/CONSTANTS.md).
+    try expectSaying(
+        \\enum Key:
+        \\    left
+        \\    right
+        \\
+        \\const bindings = {Key.left: 1, Key.right: 2, Key.left: 3}
+        \\
+        \\func main():
+        \\    return
+        \\
+    ,
+        "luce.sema.const",
+        "map key Key.left is duplicated; it was first written on line 5",
     );
 }
 
@@ -8231,4 +8364,134 @@ test "luce.sema.const: a top-level const is not a place for a lambda" {
         \\    print("hi")
         \\
     , hosted, "luce.sema.const");
+}
+
+// ---------------------------------------------------------------------------
+// The call suffix's refusals (docs/FUNCTIONS.md, docs/BINDING.md D7)
+// ---------------------------------------------------------------------------
+
+test "luce.sema.call: a field holding a function value is not a method" {
+    try expectHostSaying(
+        \\struct Rows:
+        \\    render: (func(long) -> string)?
+        \\
+        \\func label(index: long) -> string:
+        \\    return string(index)
+        \\
+        \\func main():
+        \\    let rows = Rows(render = label)
+        \\    print(rows.render(3))
+        \\
+    , "luce.sema.call", "bind it first (let render = rows.render)");
+}
+
+test "luce.sema.call: an element that may hold none is not called in place" {
+    try expectHostSaying(
+        \\func label(index: long) -> string:
+        \\    return string(index)
+        \\
+        \\func main():
+        \\    var steps = new list((func(long) -> string)?)
+        \\    steps.append(label)
+        \\    print(steps[0](1))
+        \\
+    , "luce.sema.call", "only a local or a parameter narrows");
+}
+
+test "luce.sema.call: a field read through a grouping is refused the same way" {
+    try expectHostSaying(
+        \\struct Rows:
+        \\    render: (func(long) -> string)?
+        \\
+        \\func label(index: long) -> string:
+        \\    return string(index)
+        \\
+        \\func main():
+        \\    let rows = Rows(render = label)
+        \\    print((rows.render)(3))
+        \\
+    , "luce.sema.call", "bind it first (let render = rows.render)");
+}
+
+test "luce.sema.call: a callee that is not a function says so" {
+    try expectHostSaying(
+        \\func main():
+        \\    var counts = new list(long)
+        \\    counts.append(1)
+        \\    print(string(counts[0](2)))
+        \\
+    , "luce.sema.call", "which is not a function");
+}
+
+test "luce.sema.call: a call suffix with the wrong arity is counted" {
+    try expectHostSaying(
+        \\func plain(n: long) -> string:
+        \\    return string(n)
+        \\
+        \\func chooser() -> func(long) -> string:
+        \\    return plain
+        \\
+        \\func main():
+        \\    print(chooser()(1, 2))
+        \\
+    , "luce.sema.call", "takes 1 argument, got 2");
+}
+
+test "luce.sema.type: a call suffix's argument is typed by the signature" {
+    try expectHostSaying(
+        \\func plain(n: long) -> string:
+        \\    return string(n)
+        \\
+        \\func chooser() -> func(long) -> string:
+        \\    return plain
+        \\
+        \\func main():
+        \\    print(chooser()("two"))
+        \\
+    , "luce.sema.type", "argument 1 of");
+}
+
+test "luce.sema.call: a call suffix has no parameter names either" {
+    try expectHostSaying(
+        \\func plain(n: long) -> string:
+        \\    return string(n)
+        \\
+        \\func chooser() -> func(long) -> string:
+        \\    return plain
+        \\
+        \\func main():
+        \\    print(chooser()(n = 1))
+        \\
+    , "luce.sema.call", "a function type has no parameter names");
+}
+
+test "luce.sema.fallible: a call through a value can never fail, so try is refused" {
+    // A function type carries no `!` (docs/BINDING.md D8), so nothing
+    // reached through one is fallible and `try` has nothing to pass on.
+    try expectHostSaying(
+        \\func plain(n: long) -> string:
+        \\    return string(n)
+        \\
+        \\func chooser() -> func(long) -> string:
+        \\    return plain
+        \\
+        \\func main():
+        \\    print(try chooser()(1))
+        \\
+    , "luce.sema.fallible", "drop the try");
+}
+
+test "luce.parse.spawn: a worker runs a declared call, not a call suffix" {
+    try expectHostSaying(
+        \\func plain(n: long) -> string:
+        \\    return string(n)
+        \\
+        \\func chooser() -> func(long) -> string:
+        \\    return plain
+        \\
+        \\func main():
+        \\    let t = spawn chooser()(1)
+        \\    print(t.wait())
+        \\
+    , "luce.parse.spawn", "spawn runs a call on a worker");
 }

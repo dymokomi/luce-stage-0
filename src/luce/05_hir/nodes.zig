@@ -705,10 +705,9 @@ pub const Expression = union(enum) {
 pub const ResolvedCallee = union(enum) {
     /// A declared function or method, by function table index.
     function: u32,
-    /// A call through a function value held in a local
-    /// (docs/FUNCTIONS.md D2, D5): the slot the callee is read from —
-    /// *after* the operands, the order the emission keeps — and the
-    /// interned signature the call is checked against.
+    /// A call **through a function value** (docs/FUNCTIONS.md D2, D5):
+    /// the expression that answers the value, and the interned
+    /// signature the call was checked against.
     indirect: Indirect,
     /// A builtin that lowers to one MIR intrinsic — the resolved name
     /// of the operation, shared with stage 6 so it cannot drift.
@@ -731,15 +730,27 @@ pub const ResolvedCallee = union(enum) {
     variant_name: u32,
 
     pub const Indirect = struct {
-        local: LocalId,
+        /// The expression the callee value comes out of — a name, an
+        /// element, a field, another call.  **A node rather than a
+        /// slot**, which is what makes the call suffix one more suffix
+        /// instead of a second call form: a narrowed name records the
+        /// `narrowed_get` every other read of it records, so the
+        /// storable form (docs/BINDING.md D7) needs no flag of its own.
+        ///
+        /// It is the run's **first** operand in evaluation order, the
+        /// way a method's receiver is: what a reader wrote first runs
+        /// first, and it rides the same spill machinery the arguments
+        /// do so an argument that opens a block cannot strand it.
+        callee: NodeRef,
         signature: u32,
-        /// The slot holds `(func(...) -> R)?` and the flow analysis has
-        /// proved it is there — the storable form of a function value
-        /// (docs/BINDING.md D7), read through the same unwrap
-        /// `narrowed_get` uses when a narrowed name is read as a value.
-        /// Recorded rather than re-derived, because what the checker
-        /// proved is exactly what the tree is for.
-        narrowed: bool = false,
+        /// The defensive borrow copy `OperandBatch.borrow_copy` records
+        /// for an argument, recorded here for the callee, which is not
+        /// one of the slot-filling operands: a callee read out of a
+        /// container is a *borrow* of that container's run, and an
+        /// argument still to come could free it (docs/STRINGS.md's
+        /// residual hazard).  True means the copy is emitted, and the
+        /// park that rides it stands on the callee's own node.
+        borrow_copy: bool = false,
     };
 };
 
@@ -1260,7 +1271,10 @@ fn splitsCall(called: Expression.Call, declared: Declarations) bool {
         .enum_name => |index| called.result != .string or
             declared.enums[index].members.len > 1,
         .variant_name => |index| declared.variants[index].members.len > 1,
-        .function, .indirect, .intrinsic, .conversion => false,
+        // The callee expression is lowered in this frame beside the
+        // arguments, so a branch inside it is this call's own.
+        .indirect => |through| splitsBlocks(through.callee, declared),
+        .function, .intrinsic, .conversion => false,
     };
 }
 
@@ -1488,7 +1502,7 @@ test "provenance mirrors the storage categories the walk stamps" {
     const batch: OperandBatch = .{ .operands = &.{}, .slots = &.{}, .borrow_copy = &.{} };
     const called = try node(arena, .{ .call = .{ .callee = .{ .function = 0 }, .operands = batch, .fallible = true, .result = .string, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(called));
-    const through = try node(arena, .{ .call = .{ .callee = .{ .indirect = .{ .local = 1, .signature = 0 } }, .operands = batch, .fallible = false, .result = .string, .span = test_span } });
+    const through = try node(arena, .{ .call = .{ .callee = .{ .indirect = .{ .callee = name, .signature = 0 } }, .operands = batch, .fallible = false, .result = .string, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(through));
     const looked_up = try node(arena, .{ .call = .{ .callee = .{ .intrinsic = .map_get }, .operands = batch, .fallible = false, .result = .string, .span = test_span } });
     try testing.expectEqual(Provenance.view, provenance(looked_up));

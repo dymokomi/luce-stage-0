@@ -442,6 +442,18 @@ fn sameMapKey(left: TypedConstant, right: TypedConstant) bool {
 }
 
 fn mapKeyName(analyzer: *Analyzer, key: TypedConstant) Error![]const u8 {
+    // An enum key is a number underneath, but nobody wrote the number:
+    // the duplicate the reader has to find is spelled `Key.left`
+    // (docs/ENUMS.md, As built 2026-08-12).
+    if (key.value_type == .enumeration and key.value == .long) {
+        const declared = analyzer.enums.items[key.value_type.enumeration.index];
+        if (declared.memberOfValue(key.value.long)) |member| {
+            return std.fmt.allocPrint(analyzer.arena, "{s}.{s}", .{
+                declared.name,
+                declared.members[member].name,
+            });
+        }
+    }
     return switch (key.value) {
         .long => |held| std.fmt.allocPrint(analyzer.arena, "{d}", .{held}),
         .string => |held| std.fmt.allocPrint(analyzer.arena, "\"{s}\"", .{held}),
@@ -487,6 +499,12 @@ fn foldMap(
         if (index == 0 and wanted_key == null) {
             if (key.value_type == .string) {
                 wanted_key = .string;
+            } else if (key.value_type == .enumeration) {
+                // An enum member is a constant by construction (D8), so
+                // a keymap folds into the program root like any other
+                // constant map — keyed by the enum, not by its number
+                // (docs/ENUMS.md, As built 2026-08-12).
+                wanted_key = key.value_type;
             } else if (key.value_type.isInteger()) {
                 key = fitElement(key, .long);
                 wanted_key = .long;
@@ -494,8 +512,8 @@ fn foldMap(
         }
         const key_type = wanted_key orelse key.value_type;
         key = fitElement(key, key_type);
-        if (key_type != .long and key_type != .string) {
-            return constantError(analyzer, entry.key.span(), "map keys are long or string, got {s}", .{
+        if (key_type != .long and key_type != .string and key_type != .enumeration) {
+            return constantError(analyzer, entry.key.span(), "map keys are long, string or an enum, got {s}", .{
                 try analyzer.typeName(key_type),
             });
         }
@@ -804,6 +822,13 @@ pub fn fold(
                 return constantError(analyzer, method.span, "{s} is a constant: {s}(…) is a call", .{ subject, method.name });
             }
             return constantError(analyzer, method.span, "constants fold at compile time; calls are not constant", .{});
+        },
+        // A call suffix is a call whatever stands in front of it.
+        .value_call => |written| {
+            if (analyzer.fold_subject) |subject| {
+                return constantError(analyzer, written.span, "{s} is a constant: a call is not", .{subject});
+            }
+            return constantError(analyzer, written.span, "constants fold at compile time; calls are not constant", .{});
         },
         .new_object, .slice_range, .index => {
             if (analyzer.fold_subject) |subject| {

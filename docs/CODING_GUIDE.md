@@ -120,6 +120,8 @@ src/apps/*.zig                shared by both binaries, because a program's behav
                               key, machine, native, report, sanitize, start, streams,
                               files, manifest — plus harness, the install tree both
                               product suites drive
+src/manifest_corpus/          luce.yaml fixtures both parsers are held to: apps/manifest.zig
+                              in Zig and src/luce/std/yaml.luc in Luce (docs/PACKAGES.md)
 examples/                     userland, written in Luce; editor/editor.luc is embedded in loom
 docs/                         V2.md LANGUAGE.md OWNERSHIP.md CODEGEN.md; v1/ is history
 ```

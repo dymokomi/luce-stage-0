@@ -397,6 +397,13 @@ fn parameterRead(declaration: *const ast.FuncDecl, expression: *const ast.Expres
             }
             return null;
         },
+        .value_call => |written| {
+            if (parameterRead(declaration, written.callee)) |read| return read;
+            for (written.arguments) |argument| {
+                if (parameterRead(declaration, argument.value)) |read| return read;
+            }
+            return null;
+        },
         .method => |method| {
             if (parameterRead(declaration, method.target)) |read| return read;
             for (method.arguments) |argument| {
