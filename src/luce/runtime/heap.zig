@@ -2210,6 +2210,10 @@ pub const Runtime = struct {
             // even when the next task allocation fails.
             self.freeObjectsIn(result);
             self.dropStorage(result);
+            // `rollbackCopyTable` restores the logical rows and free list.
+            // A failing allocator may refuse its optional capacity shrink;
+            // that spare buffer remains owned by this runtime and is still
+            // reclaimed by `deinit`.
             self.rollbackCopyTable(initial_table_len, initial_table_capacity);
         }
 
@@ -2224,13 +2228,14 @@ pub const Runtime = struct {
         return result;
     }
 
-    /// Restore the table allocation that preceded a failed copy.  The
+    /// Restore the logical table state that preceded a failed copy.  The
     /// iterative walk publishes shells before it discovers a later bad
     /// child, so a failure may have used free rows and appended new rows.
     /// Releasing the root returns the rows to the free list; this second
-    /// half removes the newly appended rows from that list and gives any
-    /// grown table buffer back.  A failed copy is therefore transactional
-    /// to its destination, including allocator-visible table storage.
+    /// half removes newly appended rows from that list and opportunistically
+    /// shrinks a grown table buffer.  If the allocator refuses that shrink,
+    /// the spare capacity remains owned by the runtime and is reclaimed at
+    /// teardown; it never becomes an untracked object allocation.
     fn rollbackCopyTable(
         self: *Runtime,
         initial_len: usize,
@@ -2409,6 +2414,12 @@ pub const Runtime = struct {
             // A function value copies its run and nothing more.  The
             // run borrows any receiver object graph (BINDING.md D4).
             .function => {
+                // A borrowed receiver graph cannot cross a runtime.  The
+                // source front end refuses function values at a worker
+                // boundary, but decoded MIR and direct runtime callers still
+                // reach copyFrom, so keep a source-table handle from being
+                // installed in the destination table.
+                if (self != source) return self.fail(.not_owned);
                 const duplicate = try self.ownValue(task.source);
                 task.destination.* = duplicate;
                 if (task.parent) |parent| self.adoptInto(parent, duplicate);

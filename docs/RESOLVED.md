@@ -1254,6 +1254,20 @@ wire-format lanes.
 
 Commit: current MIR ownership-signature hardening batch.
 
+## 2026-08-12 — cross-runtime copy rollback closes the receiver-handle hole
+
+The runtime backstop now refuses a function value when `copyFrom` crosses
+runtime tables: its receiver is borrowed, so copying only the function run
+would install a handle that belongs to the source runtime.  A focused matrix
+also injects failure at every destination allocation while moving nested
+lists, maps, arrays, and structs; source graphs and destination rows remain
+usable, and teardown returns every target byte.  An allocator may retain a
+grown table buffer when it refuses the optional shrink, but that capacity
+remains owned and is reclaimed by teardown.  The source-level function-value
+and indirect-call specifications remain a separate focused gate.
+
+Commit: current Tier 0 ownership rollback hardening batch.
+
 ## 2026-08-12 — worker-boundary shapes are defended in MIR
 
 `spawn` now rejects a decoded MIR callee whose parameters or return type

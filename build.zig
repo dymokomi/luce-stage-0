@@ -236,6 +236,20 @@ pub fn build(b: *std.Build) void {
     );
     test_composition_step.dependOn(&b.addRunArtifact(composition_tests).step);
 
+    const function_ownership_tests = b.addTest(.{
+        .root_module = specs,
+        .filters = &.{
+            "a give-taking function is a value, and the call through it needs the verb",
+            "a give-taking function value moves its argument when called through the value",
+            "a function value in a struct field is called through a grouping",
+        },
+    });
+    const test_function_ownership_step = b.step(
+        "test-function-ownership",
+        "Run function-value ownership and indirect-call specifications",
+    );
+    test_function_ownership_step.dependOn(&b.addRunArtifact(function_ownership_tests).step);
+
     const std_trig_tests = b.addTest(.{
         .root_module = specs,
         .filters = &.{"math: trig refuses angles outside its accuracy domain"},
@@ -326,6 +340,19 @@ pub fn build(b: *std.Build) void {
         "Run worker exhaustion propagation regressions",
     );
     test_worker_exhaustion_step.dependOn(&b.addRunArtifact(worker_exhaustion_tests).step);
+
+    const runtime_ownership_tests = b.addTest(.{
+        .root_module = luce,
+        .filters = &.{
+            "cross-runtime moves roll back every nested allocation",
+            "cross-runtime moves reject function receiver handles",
+        },
+    });
+    const test_runtime_ownership_step = b.step(
+        "test-runtime-ownership",
+        "Run cross-runtime ownership rollback regressions",
+    );
+    test_runtime_ownership_step.dependOn(&b.addRunArtifact(runtime_ownership_tests).step);
 
     const optimizer_tests = b.addTest(.{
         .root_module = luce,

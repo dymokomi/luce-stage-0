@@ -105,6 +105,57 @@ fn copyFunctionWithAllocator(allocator: std.mem.Allocator, held: Value) !void {
 
 const CopyShape = enum { list, map, array, strukt };
 
+fn expectNestedListIntact(runtime: *Runtime, held: Value) !void {
+    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, held)).asLong());
+    const word = try containers.indexGet(runtime, held, &.{Value.ofLong(0)});
+    try testing.expectEqualStrings(
+        "a nested object owns bytes that its failed copy must return",
+        word.asString(),
+    );
+}
+
+fn expectNestedSourceIntact(runtime: *Runtime, held: Value, shape: CopyShape) !void {
+    switch (shape) {
+        .list => {
+            try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, held)).asLong());
+            for (0..2) |index| {
+                try expectNestedListIntact(
+                    runtime,
+                    try containers.indexGet(runtime, held, &.{Value.ofLong(@intCast(index))}),
+                );
+            }
+        },
+        .map => {
+            try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, held)).asLong());
+            for (0..2) |index| {
+                try expectNestedListIntact(
+                    runtime,
+                    try containers.valueAt(runtime, held, @intCast(index)),
+                );
+            }
+        },
+        .array => {
+            try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, held)).asLong());
+            for (0..2) |index| {
+                try expectNestedListIntact(
+                    runtime,
+                    try containers.indexGet(runtime, held, &.{Value.ofLong(@intCast(index))}),
+                );
+            }
+        },
+        .strukt => {
+            const fields = held.asStruct();
+            try testing.expectEqual(@as(usize, 3), fields.len);
+            try expectNestedListIntact(runtime, fields[0]);
+            try expectNestedListIntact(runtime, fields[1]);
+            try testing.expectEqualStrings(
+                "the copied struct itself owns outside bytes",
+                fields[2].asString(),
+            );
+        },
+    }
+}
+
 fn nestedList(runtime: *Runtime) !Value {
     const list = try runtime.newList(Value.none);
     errdefer runtime.freeValue(list);
@@ -218,6 +269,76 @@ fn expectDerivedCopyFailures(kind: DerivedCopy) !usize {
         try testing.expect(induced);
     }
     return error.DerivedCopyNeverCompleted;
+}
+
+/// Move a nested owner graph into a second runtime while refusing each
+/// destination allocation in turn.  A failed move must leave the source
+/// graph readable, the destination's pre-existing logical rows unchanged,
+/// and no partial target rows behind for teardown to discover.  A failing
+/// allocator may leave spare table capacity, which remains owned and is
+/// checked for complete reclamation below.
+fn expectNestedMoveFailures(shape: CopyShape) !usize {
+    var failures: usize = 0;
+    for (0..64) |failure_offset| {
+        var source_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var source: Runtime = .init(.{
+            .arena = source_arena.allocator(),
+            .objects = testing.allocator,
+        });
+        const held = try nestedCopySource(&source, shape);
+        const source_live = source.live;
+
+        var target_objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+        var target_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var target: Runtime = .init(.{
+            .arena = target_arena.allocator(),
+            .objects = target_objects.allocator(),
+        });
+        const baseline = try target.newMap();
+        const reusable = try target.newList(Value.none);
+        target.freeObject(reusable.asObject());
+        const baseline_live = target.live;
+        const baseline_table_len = target.table.items.len;
+        const baseline_free_row = target.free_row;
+        const baseline_bytes = target_objects.allocated_bytes - target_objects.freed_bytes;
+        target_objects.fail_index = target_objects.alloc_index + failure_offset;
+
+        const outcome = source.moveInto(&target, held);
+        var completed = false;
+        if (outcome) |carried| {
+            target.freeValue(carried);
+            completed = true;
+        } else |mistake| {
+            failures += 1;
+            try testing.expectEqual(error.OutOfMemory, mistake);
+            try testing.expectEqual(source_live, source.live);
+            try expectNestedSourceIntact(&source, held, shape);
+            try testing.expectEqual(baseline_live, target.live);
+            try testing.expectEqual(baseline_table_len, target.table.items.len);
+            try testing.expectEqual(baseline_free_row, target.free_row);
+            try testing.expectEqual(@as(i64, 0), (try containers.length(&target, baseline)).asLong());
+            // A failing allocator may refuse the shrink performed while
+            // restoring a grown table.  That retains owned spare capacity,
+            // but it is not a leaked row or object and is reclaimed by
+            // target.deinit below.
+            try testing.expect(
+                target_objects.allocated_bytes - target_objects.freed_bytes >= baseline_bytes,
+            );
+            try testing.expect(target.pending == null);
+        }
+
+        source.freeValue(held);
+        target.freeValue(baseline);
+        const induced = target_objects.has_induced_failure;
+        source.deinit();
+        source_arena.deinit();
+        target.deinit();
+        target_arena.deinit();
+        try testing.expectEqual(target_objects.allocated_bytes, target_objects.freed_bytes);
+        if (completed) return failures;
+        try testing.expect(induced);
+    }
+    return error.NestedMoveNeverCompleted;
 }
 
 const BuiltList = enum { map_keys, text_slices, joined_text, arguments };
@@ -1343,6 +1464,49 @@ test "a cross-runtime move preserves target allocation failure" {
     );
     _ = try target.resolve(baseline);
     _ = try source.resolve(carried);
+}
+
+test "cross-runtime moves roll back every nested allocation" {
+    for ([_]CopyShape{ .list, .map, .array, .strukt }) |shape| {
+        try testing.expect((try expectNestedMoveFailures(shape)) >= 4);
+    }
+}
+
+test "cross-runtime moves reject function receiver handles" {
+    var source_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer source_arena.deinit();
+    var source: Runtime = .init(.{
+        .arena = source_arena.allocator(),
+        .objects = testing.allocator,
+    });
+    defer source.deinit();
+
+    var target_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer target_arena.deinit();
+    var target: Runtime = .init(.{
+        .arena = target_arena.allocator(),
+        .objects = testing.allocator,
+    });
+    defer target.deinit();
+
+    const receiver = try source.newList(Value.none);
+    const function = try source.makeFunction(&.{ Value.ofLong(7), receiver });
+    try expectTrap(.not_owned, &source, source.moveInto(&target, function));
+    source.pending = null;
+    try testing.expectEqual(@as(u32, 0), target.live);
+    _ = try source.resolve(receiver);
+    source.freeValue(function);
+    source.freeValue(receiver);
+
+    const nested_receiver = try source.newList(Value.none);
+    const nested_function = try source.makeFunction(&.{ Value.ofLong(9), nested_receiver });
+    const record = try source.makeStruct(&.{nested_function});
+    try expectTrap(.not_owned, &source, source.moveInto(&target, record));
+    source.pending = null;
+    try testing.expectEqual(@as(u32, 0), target.live);
+    _ = try source.resolve(nested_receiver);
+    source.freeValue(record);
+    source.freeValue(nested_receiver);
 }
 
 test "program roots stay rooted, leave the census, and copy into mutable ownership" {
