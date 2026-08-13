@@ -191,6 +191,36 @@ test "a handle returns out of the function that opened it" {
     try testing.expectEqual(@as(u32, 0), session.end.finished);
 }
 
+test "a struct owns an optional file while a callback consumes its result" {
+    try agree.printsGiven(
+        \\import std.files
+        \\
+        \\struct Packet:
+        \\    handle: file?
+        \\    callback: (func(long) -> long)?
+        \\
+        \\func scale(value: long) -> long:
+        \\    return value * 2
+        \\
+        \\func read(packet: Packet) -> long!:
+        \\    let handle = packet.handle
+        \\    if handle == none:
+        \\        return 0
+        \\    var buffer = new array(byte, 8)
+        \\    let count = try handle.read(buffer)
+        \\    let chosen = packet.callback else scale
+        \\    return chosen(count)
+        \\
+        \\func main() -> !:
+        \\    let packet = Packet(
+        \\        handle = try files.open("notes.txt"),
+        \\        callback = scale,
+        \\    )
+        \\    print(string(try read(packet)))
+        \\
+    , .{ .world = .withFile("notes.txt", "abcdef") }, "12\n");
+}
+
 test "give hands a handle to a parameter that owns it" {
     const world: agree.World = .withFile("notes.txt", "abcdef");
 

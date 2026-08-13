@@ -364,6 +364,47 @@ test "a resource-carrying object may be given and returned inside one Runtime" {
     , "7\n");
 }
 
+test "a struct composes a union optional task callback and recursive children" {
+    try agree.prints(
+        \\union Job:
+        \\    idle
+        \\    running(task: task(long)?)
+        \\
+        \\struct Envelope:
+        \\    job: Job
+        \\    callback: (func(long) -> long)?
+        \\    children: list(Envelope)
+        \\
+        \\func work() -> long:
+        \\    return 21
+        \\
+        \\func twice(value: long) -> long:
+        \\    return value * 2
+        \\
+        \\func apply(callback: (func(long) -> long)?, value: long) -> long:
+        \\    let chosen = callback else twice
+        \\    return chosen(value)
+        \\
+        \\func consume(packet: give Envelope) -> long:
+        \\    match packet.job:
+        \\        idle:
+        \\            return 0
+        \\        running(task):
+        \\            if task == none:
+        \\                return apply(packet.callback, 0)
+        \\            return apply(packet.callback, task.wait())
+        \\
+        \\func main():
+        \\    let packet = Envelope(
+        \\        job = Job.running(task = spawn work()),
+        \\        callback = twice,
+        \\        children = new list(Envelope),
+        \\    )
+        \\    print(string(consume(give packet)))
+        \\
+    , "42\n");
+}
+
 test "equal constant slice bounds construct an empty resource list without copying" {
     try agree.prints(
         \\func main():

@@ -318,6 +318,19 @@ pub fn build(b: *std.Build) void {
     );
     test_exceptional_ownership_step.dependOn(&b.addRunArtifact(exceptional_ownership_tests).step);
 
+    const resource_composition_tests = b.addTest(.{
+        .root_module = specs,
+        .filters = &.{
+            "a struct composes a union optional task callback",
+            "a struct owns an optional file while a callback consumes its result",
+        },
+    });
+    const test_resource_composition_step = b.step(
+        "test-resource-composition",
+        "Run resource-bearing struct, union, optional, and callback specifications",
+    );
+    test_resource_composition_step.dependOn(&b.addRunArtifact(resource_composition_tests).step);
+
     const function_ownership_tests = b.addTest(.{
         .root_module = specs,
         .filters = &.{

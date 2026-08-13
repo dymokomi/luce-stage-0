@@ -162,9 +162,12 @@ before slicing, allocation, or output publication; the focused regression
 also proves rejected calls preserve their out/status slots.  The remaining
 C-export matrix still needs every allocating entry point under injected
 failure, plus null-pointer and other malformed pointer cases.
-The next composite slice should put files and tasks inside structs, unions, and
-optionals in one runtime, then exercise present/absent transitions,
-field-replacement, return/give, container storage, and exceptional teardown;
+The differential spec now puts a task inside a union's optional field, that
+union inside a recursive struct with an optional callback and child list, and
+consumes the task through a `give`d helper; a companion file case puts an
+optional file and callback in a struct and reads through the narrowed handle.
+Present/absent transitions, field replacement, return/give across more shapes,
+container storage, and exceptional teardown still need a larger matrix;
 indirect stale task and function-receiver handles remain open.  Finally,
 measure long mixed traces' live rows, retained capacities, peak bytes, and
 post-run bytes, not only the final leak count, following the snapshot-diff

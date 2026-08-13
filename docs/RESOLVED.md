@@ -1539,3 +1539,21 @@ The focused ownership lane passes 28/28, both C and thread sanitizer lanes
 pass 36/36, and the full differential suite passes 517/517.
 
 Commit: current Tier 0 C-boundary hardening batch.
+
+## 2026-08-13 — resource-bearing composite differential cases
+
+The executable specifications now exercise two composition paths across both
+the interpreter and compiled engine.  One owns a task inside a union's
+optional field, places that union in a recursive struct with an optional
+callback and recursive child list, gives the struct to a helper, waits the
+nested task, and invokes the callback.  The other owns an optional file and
+callback in a struct, narrows the file receiver, reads it, and verifies scope
+teardown closes it.  These cases make the source-level type graph and the
+runtime ownership graph meet in one test instead of proving each feature only
+in isolation.
+
+The focused resource-composition differential lane passes 4/4.  The broader
+field-replacement, exceptional, stale-task, and allocator-failure matrices
+remain in MISSING.md.
+
+Commit: current Tier 0 composite-ownership specification batch.
