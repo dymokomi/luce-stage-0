@@ -858,6 +858,55 @@ test "recursive heap and function type tables are rejected before names render" 
     try verify_mod.verify(testing.allocator, &program);
 }
 
+test "bare function fields are rejected while optional function fields remain storable" {
+    var program = try programOf(.{
+        .instructions = &.{.{ .ret = null }},
+        .result_types = &.{.none},
+        .blocks = &.{&.{0}},
+    });
+    defer program.deinit();
+    const arena = program.arena.allocator();
+    program.signatures = try arena.dupe(types.Signature, &.{.{
+        .parameters = &.{},
+        .result = .none,
+    }});
+
+    const struct_fields = try arena.dupe(types.StructField, &.{.{
+        .name = "callback",
+        .field_type = .{ .function = 0 },
+    }});
+    program.structs = try arena.dupe(types.StructLayout, &.{.{
+        .name = "Button",
+        .fields = struct_fields,
+    }});
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
+
+    // The optional wrapper is the ratified stored representation: its
+    // absence is a real zero, and a later narrowing operation obtains the
+    // function value.  It must remain accepted while the bare spelling is
+    // refused.
+    struct_fields[0].field_type = .{ .optional = .{ .function = 0 } };
+    try verify_mod.verify(testing.allocator, &program);
+
+    const member_fields = try arena.dupe(types.StructField, &.{.{
+        .name = "callback",
+        .field_type = .{ .function = 0 },
+    }});
+    const members = try arena.dupe(types.VariantMember, &.{.{
+        .name = "event",
+        .fields = member_fields,
+    }});
+    program.structs = &.{};
+    program.variants = try arena.dupe(types.VariantType, &.{.{
+        .name = "Event",
+        .members = members,
+    }});
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
+
+    member_fields[0].field_type = .{ .optional = .{ .function = 0 } };
+    try verify_mod.verify(testing.allocator, &program);
+}
+
 test "a function's integer storage is not a numeric conversion" {
     var program = try programOf(.{
         .instructions = &.{

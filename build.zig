@@ -325,6 +325,16 @@ pub fn build(b: *std.Build) void {
     );
     test_mir_constants_step.dependOn(&b.addRunArtifact(mir_constant_tests).step);
 
+    const mir_function_shape_tests = b.addTest(.{
+        .root_module = luce,
+        .filters = &.{"bare function fields are rejected while optional function fields remain storable"},
+    });
+    const test_mir_function_shapes_step = b.step(
+        "test-mir-function-shapes",
+        "Run hostile function-field verifier regressions",
+    );
+    test_mir_function_shapes_step.dependOn(&b.addRunArtifact(mir_function_shape_tests).step);
+
     // The documentation site's generator (`www/luce/src/`).  Its tests
     // are what keep the word tables it highlights with, its link
     // resolver and its Markdown honest, and they belong in `zig build

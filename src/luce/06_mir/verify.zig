@@ -98,14 +98,14 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
         .task => |work| try verifyType(program, work.result),
     };
     for (program.structs) |layout| {
-        for (layout.fields) |field| try verifyType(program, field.field_type);
+        for (layout.fields) |field| try verifyFieldType(program, field.field_type);
     }
     for (program.variants) |declared| {
         // A union with no members has no zero and no tag to dispatch
         // on; stage 4 cannot write one, so this is decode defense.
         if (declared.members.len == 0) return error.BadStruct;
         for (declared.members) |member| {
-            for (member.fields) |field| try verifyType(program, field.field_type);
+            for (member.fields) |field| try verifyFieldType(program, field.field_type);
         }
     }
     if (try typeTableCycle(allocator, program)) |cycle| return switch (cycle) {
@@ -202,6 +202,19 @@ fn verifyType(program: *const Program, of: Type) VerifyError!void {
         .string,
         => {},
     }
+}
+
+/// A bare function value has no zero, so it cannot be a stored field.  The
+/// storable form is `(func(...) -> R)?`: absence supplies the field's zero and
+/// narrowing supplies the function at a call site (docs/BINDING.md D7).
+///
+/// Heap rows already apply this rule while checking their element shapes.  A
+/// struct or union field is the other storage boundary, and keeping the check
+/// here makes every backend zero/field walk rely on the same invariant rather
+/// than on an `unreachable` that a decoded module could reach.
+fn verifyFieldType(program: *const Program, of: Type) VerifyError!void {
+    if (of == .function) return error.BadStruct;
+    try verifyType(program, of);
 }
 
 // ---------------------------------------------------------------------------

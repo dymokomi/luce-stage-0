@@ -1151,4 +1151,15 @@ second partial implementation, and the living function-value decision record
 no longer teaches equality.  A focused hostile-MIR test proves the LLVM
 boundary refuses the instruction rather than lowering it.
 
-Commit: this hardening batch is recorded in git history.
+Commit: `53e4657`.
+
+## 2026-08-12 — verifier closes bare function storage fields
+
+The MIR verifier already refused bare function types in list and array cells,
+but it allowed them in struct fields and union payloads even though those
+shapes have no zero and the LLVM zero constructors marked them unreachable.
+Struct and union field validation now shares one boundary check: bare function
+fields are rejected, while the optional function-field representation remains
+valid.  The focused verifier lane covers both storage forms.
+
+Commit: current verifier hardening batch.
