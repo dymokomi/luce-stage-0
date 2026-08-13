@@ -5473,7 +5473,75 @@ extern fn luce_rt_constant_load(
 extern fn luce_rt_constants_finish(runtime: *Runtime) callconv(.c) void;
 extern fn luce_rt_constants_abort(runtime: *Runtime) callconv(.c) void;
 extern fn luce_rt_discard_loose(runtime: *Runtime, held: *const Value) callconv(.c) void;
+extern fn luce_rt_raise(
+    runtime: *Runtime,
+    code: i32,
+    message: [*]const u8,
+    length: i64,
+) callconv(.c) void;
+extern fn luce_rt_raise_error(
+    runtime: *Runtime,
+    code: i32,
+    message: [*]const u8,
+    length: i64,
+    function: u32,
+    instruction: u32,
+) callconv(.c) void;
+extern fn luce_rt_raise_io(
+    runtime: *Runtime,
+    act: i32,
+    path: [*]const u8,
+    length: i64,
+    function: u32,
+    instruction: u32,
+) callconv(.c) void;
+extern fn luce_rt_intern_text(
+    runtime: *Runtime,
+    bytes: [*]const u8,
+    length: i64,
+    out: *Value,
+) callconv(.c) i32;
+extern fn luce_rt_maybe_text(
+    runtime: *Runtime,
+    present: i32,
+    bytes: [*]const u8,
+    length: i64,
+    out: *Value,
+) callconv(.c) i32;
+extern fn luce_rt_names_list(
+    runtime: *Runtime,
+    bytes: [*]const u8,
+    length: i64,
+    out: *Value,
+) callconv(.c) i32;
+extern fn luce_rt_set_key_text(runtime: *Runtime, bytes: [*]const u8, length: i64) callconv(.c) i32;
+extern fn luce_rt_args_list(
+    runtime: *Runtime,
+    context: ?*anyopaque,
+    count: ?*const fn (context: ?*anyopaque) callconv(.c) i64,
+    get: ?containers.ArgumentFn,
+    out: *Value,
+) callconv(.c) i32;
 extern fn luce_rt_new_list(runtime: *Runtime, zero: *const Value, out: *Value) callconv(.c) i32;
+extern fn luce_rt_new_array(
+    runtime: *Runtime,
+    dims: [*]const i64,
+    rank: i64,
+    zero: *const Value,
+    out: *Value,
+) callconv(.c) i32;
+extern fn luce_rt_struct_make(
+    runtime: *Runtime,
+    fields: [*]const Value,
+    count: i64,
+    out: *Value,
+) callconv(.c) i32;
+extern fn luce_rt_function_make(
+    runtime: *Runtime,
+    slots: [*]const Value,
+    count: i64,
+    out: *Value,
+) callconv(.c) i32;
 extern fn luce_rt_append(runtime: *Runtime, target: *const Value, held: *const Value) callconv(.c) i32;
 extern fn luce_rt_index_get(
     runtime: *Runtime,
@@ -5481,6 +5549,50 @@ extern fn luce_rt_index_get(
     indices: [*]const Value,
     rank: i64,
     out: *Value,
+) callconv(.c) i32;
+extern fn luce_rt_index_set(
+    runtime: *Runtime,
+    target: *const Value,
+    indices: [*]const Value,
+    rank: i64,
+    held: *const Value,
+) callconv(.c) i32;
+extern fn luce_rt_spawn(
+    runtime: *Runtime,
+    function: i64,
+    arguments: [*]const Value,
+    count: i64,
+    out: *Value,
+) callconv(.c) i32;
+extern fn luce_rt_file_open(
+    runtime: *Runtime,
+    path: [*]const u8,
+    length: i64,
+    mode: i64,
+    out: *Value,
+    opened: *i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32;
+extern fn luce_rt_file_read_text(
+    runtime: *Runtime,
+    path: [*]const u8,
+    length: i64,
+    out: *Value,
+    ok: *i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32;
+extern fn luce_rt_file_write_text(
+    runtime: *Runtime,
+    path: [*]const u8,
+    path_length: i64,
+    content: [*]const u8,
+    content_length: i64,
+    mode: i64,
+    ok: *i32,
+    function: u32,
+    instruction: u32,
 ) callconv(.c) i32;
 extern fn luce_rt_str(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32;
 extern fn luce_rt_struct_set(
@@ -5490,6 +5602,8 @@ extern fn luce_rt_struct_set(
     to: *const Value,
     out: *Value,
 ) callconv(.c) i32;
+extern fn luce_rt_compare(op: i32, left: *const Value, right: *const Value) callconv(.c) i32;
+extern fn luce_rt_compare_long_double(op: i32, left: i64, right: f64) callconv(.c) i32;
 
 /// What a host learns from the trap callback, without allocating: these
 /// are entered from C and must stay simple.
@@ -5585,6 +5699,137 @@ test "the C surface opens a run, carries values, and reports its own traps" {
 
     // The census sees the one list nobody freed.
     try testing.expectEqual(@as(i64, 1), luce_rt_leaked(runtime));
+}
+
+test "C scalar lengths counts and tags fail closed without writing outputs" {
+    try testing.expect(luce_rt_open(null, -1) == null);
+    try testing.expect(luce_rt_open(null, 1) == null);
+
+    const Host = struct {
+        fn negativeCount(_: ?*anyopaque) callconv(.c) i64 {
+            return -1;
+        }
+    };
+
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+    const bytes = "x";
+
+    var out = Value.ofLong(99);
+    try testing.expectEqual(@as(i32, 1), luce_rt_intern_text(runtime, bytes, -1, &out));
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    runtime.pending = null;
+
+    try testing.expectEqual(@as(i32, 1), luce_rt_maybe_text(runtime, 1, bytes, -1, &out));
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    runtime.pending = null;
+
+    try testing.expectEqual(@as(i32, 1), luce_rt_names_list(runtime, bytes, -1, &out));
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    runtime.pending = null;
+
+    try testing.expectEqual(@as(i32, 1), luce_rt_set_key_text(runtime, bytes, -1));
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    runtime.pending = null;
+
+    try testing.expectEqual(@as(i32, 1), luce_rt_args_list(runtime, null, Host.negativeCount, null, &out));
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    runtime.pending = null;
+
+    const dims = [_]i64{1};
+    try testing.expectEqual(@as(i32, 1), luce_rt_new_array(runtime, &dims, -1, &Value.none, &out));
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    runtime.pending = null;
+
+    const fields = [_]Value{Value.ofLong(1)};
+    try testing.expectEqual(@as(i32, 1), luce_rt_struct_make(runtime, &fields, -1, &out));
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    runtime.pending = null;
+
+    try testing.expectEqual(@as(i32, 1), luce_rt_function_make(runtime, &fields, -1, &out));
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    runtime.pending = null;
+
+    const indices = [_]Value{Value.ofLong(0)};
+    try testing.expectEqual(@as(i32, 1), luce_rt_index_get(runtime, &Value.none, &indices, -1, &out));
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    runtime.pending = null;
+
+    try testing.expectEqual(@as(i32, 1), luce_rt_index_set(runtime, &Value.none, &indices, -1, &Value.none));
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    runtime.pending = null;
+
+    const arguments = [_]Value{Value.ofLong(1)};
+    try testing.expectEqual(@as(i32, 1), luce_rt_spawn(runtime, 0, &arguments, -1, &out));
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    runtime.pending = null;
+
+    var opened: i32 = 17;
+    try testing.expectEqual(
+        @as(i32, 1),
+        luce_rt_file_open(runtime, bytes, -1, @intFromEnum(files.Mode.read), &out, &opened, 0, 0),
+    );
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i32, 17), opened);
+    runtime.pending = null;
+
+    var ok: i32 = 23;
+    try testing.expectEqual(
+        @as(i32, 1),
+        luce_rt_file_read_text(runtime, bytes, -1, &out, &ok, 0, 0),
+    );
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i32, 23), ok);
+    runtime.pending = null;
+
+    try testing.expectEqual(
+        @as(i32, 1),
+        luce_rt_file_write_text(runtime, bytes, 1, bytes, -1, @intFromEnum(files.Mode.write), &ok, 0, 0),
+    );
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i32, 23), ok);
+    runtime.pending = null;
+
+    out = Value.ofLong(99);
+    try testing.expectEqual(@as(i32, 0), luce_rt_maybe_text(runtime, 0, bytes, -1, &out));
+    try testing.expect(out.isNone());
+
+    luce_rt_raise(runtime, std.math.maxInt(i32), bytes, 1);
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    runtime.pending = null;
+    luce_rt_raise_error(runtime, std.math.maxInt(i32), bytes, 1, 0, 0);
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    runtime.pending = null;
+    luce_rt_raise_io(runtime, std.math.maxInt(i32), bytes, 1, 0, 0);
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    runtime.pending = null;
+
+    try testing.expectEqual(
+        @as(i32, 1),
+        luce_rt_file_write_text(runtime, bytes, 1, bytes, 1, 99, &ok, 0, 0),
+    );
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i32, 23), ok);
+    runtime.pending = null;
+
+    try testing.expectEqual(@as(i32, 0), luce_rt_compare(999, &Value.ofLong(1), &Value.ofLong(1)));
+    try testing.expectEqual(
+        @as(i32, 0),
+        luce_rt_compare_long_double(999, 1, 1.0),
+    );
 }
 
 test "the C materialization surface roots, loads, freezes, and excludes a constant" {

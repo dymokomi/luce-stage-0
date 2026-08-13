@@ -150,14 +150,18 @@ incoming graph has passed its ownership proof.  The runtime consumes the
   accepted graph on that failure, while rejected aliases still release only
   their value storage and preserve the object owner; the full differential
   suite caught and fixed that distinction.  Broader failure injection for
-  compound stores, C exports, and all early refusal boundaries remains open.
+  compound stores, C-export allocation points, and all early refusal boundaries remains open.
 The independent ownership audit also found a distinct host-boundary slice:
 callbacks that return negative or oversized byte counts must be rejected
 before any runtime slice or progress update; zero-progress writes must
 terminate fail-closed rather than spin, and repeated
 close/report calls must remain fail-closed.  The runtime now bounds `read` and
-`write` counts and whole-file convenience loops; the remaining C-export matrix
-still needs every allocating entry point and malformed pointer/length case.
+`write` counts and whole-file convenience loops.  Public C scalar lengths,
+counts, file modes, enum tags, and callback argument counts now fail closed
+before slicing, allocation, or output publication; the focused regression
+also proves rejected calls preserve their out/status slots.  The remaining
+C-export matrix still needs every allocating entry point under injected
+failure, plus null-pointer and other malformed pointer cases.
 The next composite slice should put files and tasks inside structs, unions, and
 optionals in one runtime, then exercise present/absent transitions,
 field-replacement, return/give, container storage, and exceptional teardown;

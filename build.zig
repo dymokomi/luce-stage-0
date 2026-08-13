@@ -177,6 +177,7 @@ pub fn build(b: *std.Build) void {
         "failed struct replacement consumes",
         "struct replacement rejects",
         "host byte counts are bounded",
+        "C scalar lengths counts and tags",
     };
     const c_sanitize_luce = b.createModule(.{
         .root_source_file = b.path("src/luce/luce.zig"),
@@ -454,6 +455,7 @@ pub fn build(b: *std.Build) void {
             "failed struct replacement consumes",
             "struct replacement rejects",
             "runtime index and struct doors",
+            "C scalar lengths counts and tags",
         },
     });
     const test_runtime_ownership_step = b.step(

@@ -531,6 +531,7 @@ pub fn listOfArguments(
     context: ?*anyopaque,
     get: ?ArgumentFn,
 ) Error!Value {
+    if (count < 0) return runtime.fail(.host_unavailable);
     var listed = text_list;
     errdefer dropBuilt(runtime, &listed);
     if (get) |callback| {
@@ -541,7 +542,9 @@ pub fn listOfArguments(
             // A host that says no about an index it counted itself has
             // nothing left to say about the ones after it.
             if (callback(context, index, &text, &size) == 0) break;
-            const borrowed = text[0..@intCast(size)];
+            const text_length = std.math.cast(usize, size) orelse
+                return runtime.fail(.host_unavailable);
+            const borrowed = text[0..text_length];
             const held = try runtime.ownValue(Value.ofString(borrowed));
             errdefer runtime.dropStorage(held);
             try listed.append(runtime.objects, held);

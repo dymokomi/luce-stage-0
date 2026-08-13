@@ -1523,3 +1523,19 @@ The focused ownership and C/thread sanitizer lanes pass; the full
 differential suite passes 516/516.
 
 Commit: current Tier 0 hostile-boundary hardening batch.
+
+## 2026-08-13 — public scalar boundaries fail closed
+
+Signed lengths and counts crossing the C runtime surface are now converted
+through checked helpers before they can become slice bounds: text and argument
+materialization, arrays, structs, function values, indexing, spawning, and
+whole-file conveniences all reject negative or overflowing values as
+`host_unavailable`.  File modes and comparison/raise enum tags are validated
+too, and invalid calls leave result/status out-slots untouched.  The direct C
+regression covers the refusal matrix, while the sanitizer lanes exercise the
+same path.
+
+The focused ownership lane passes 28/28, both C and thread sanitizer lanes
+pass 36/36, and the full differential suite passes 517/517.
+
+Commit: current Tier 0 C-boundary hardening batch.

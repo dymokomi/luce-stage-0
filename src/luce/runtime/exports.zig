@@ -149,13 +149,15 @@ pub export fn luce_rt_open(
     functions: ?[*]const trace.FunctionInfo,
     count: i64,
 ) callconv(.c) ?*Runtime {
+    const function_count = std.math.cast(usize, count) orelse return null;
+    if (functions == null and function_count != 0) return null;
     const owned = object_allocator.create(Owned) catch return null;
     owned.arena = .init(value_pages);
     owned.runtime = .init(.{
         .arena = owned.arena.allocator(),
         .objects = object_allocator,
     });
-    if (functions) |described| owned.runtime.functions = described[0..@intCast(count)];
+    if (functions) |described| owned.runtime.functions = described[0..function_count];
     return &owned.runtime;
 }
 
@@ -215,8 +217,12 @@ pub export fn luce_rt_raise(
     message: [*]const u8,
     length: i64,
 ) callconv(.c) void {
-    const raised: vocabulary.TrapCode = @enumFromInt(code);
-    runtime.failMessage(raised, message[0..@intCast(length)]) catch {};
+    const words = checkedBytes(runtime, message, length) catch return;
+    const raised: vocabulary.TrapCode = std.enums.fromInt(vocabulary.TrapCode, code) orelse {
+        _ = runtime.fail(.host_unavailable) catch {};
+        return;
+    };
+    runtime.failMessage(raised, words) catch {};
 }
 
 /// One frame of the unwinding stack, recorded on the way out: the
@@ -269,8 +275,12 @@ pub export fn luce_rt_raise_error(
     function: u32,
     instruction: u32,
 ) callconv(.c) void {
-    const raised: vocabulary.ErrorCode = @enumFromInt(code);
-    runtime.raise(raised, message[0..@intCast(length)], runtime.frameAt(function, instruction));
+    const words = checkedBytes(runtime, message, length) catch return;
+    const raised: vocabulary.ErrorCode = std.enums.fromInt(vocabulary.ErrorCode, code) orelse {
+        _ = runtime.fail(.host_unavailable) catch {};
+        return;
+    };
+    runtime.raise(raised, words, runtime.frameAt(function, instruction));
 }
 
 /// A host file service answered `no`.  The words that names the path
@@ -283,9 +293,14 @@ pub export fn luce_rt_raise_io(
     function: u32,
     instruction: u32,
 ) callconv(.c) void {
+    const named = checkedBytes(runtime, path, length) catch return;
+    const action: vocabulary.FileAct = std.enums.fromInt(vocabulary.FileAct, act) orelse {
+        _ = runtime.fail(.host_unavailable) catch {};
+        return;
+    };
     runtime.raiseIo(
-        @enumFromInt(act),
-        path[0..@intCast(length)],
+        action,
+        named,
         runtime.frameAt(function, instruction),
     );
 }
@@ -356,7 +371,9 @@ pub export fn luce_rt_intern_text(
     length: i64,
     out: *Value,
 ) callconv(.c) i32 {
-    out.* = runtime.ownValue(Value.ofString(bytes[0..@intCast(length)])) catch |mistake|
+    const borrowed = checkedBytes(runtime, bytes, length) catch |mistake|
+        return failed(runtime, mistake);
+    out.* = runtime.ownValue(Value.ofString(borrowed)) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -377,7 +394,9 @@ pub export fn luce_rt_maybe_text(
         out.* = Value.none;
         return survived;
     }
-    out.* = runtime.ownValue(Value.ofString(bytes[0..@intCast(length)])) catch |mistake|
+    const borrowed = checkedBytes(runtime, bytes, length) catch |mistake|
+        return failed(runtime, mistake);
+    out.* = runtime.ownValue(Value.ofString(borrowed)) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -395,7 +414,9 @@ pub export fn luce_rt_names_list(
     length: i64,
     out: *Value,
 ) callconv(.c) i32 {
-    out.* = containers.listOfJoinedText(runtime, bytes[0..@intCast(length)]) catch |mistake|
+    const joined = checkedBytes(runtime, bytes, length) catch |mistake|
+        return failed(runtime, mistake);
+    out.* = containers.listOfJoinedText(runtime, joined) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -430,7 +451,9 @@ pub export fn luce_rt_set_key_text(
     bytes: [*]const u8,
     length: i64,
 ) callconv(.c) i32 {
-    runtime.setKeyText(bytes[0..@intCast(length)]) catch |mistake|
+    const borrowed = checkedBytes(runtime, bytes, length) catch |mistake|
+        return failed(runtime, mistake);
+    runtime.setKeyText(borrowed) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -562,7 +585,9 @@ pub export fn luce_rt_spawn(
     count: i64,
     out: *Value,
 ) callconv(.c) i32 {
-    workers.spawn(runtime, function, arguments[0..@intCast(count)], out) catch |mistake|
+    const argument_count = checkedCount(runtime, count) catch |mistake|
+        return failed(runtime, mistake);
+    workers.spawn(runtime, function, arguments[0..argument_count], out) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -625,8 +650,11 @@ pub export fn luce_rt_file_open(
     function: u32,
     instruction: u32,
 ) callconv(.c) i32 {
-    const named = path[0..@intCast(length)];
-    const answer = files.open(runtime, named, mode) catch |mistake|
+    const named = checkedBytes(runtime, path, length) catch |mistake|
+        return failed(runtime, mistake);
+    const selected_mode = checkedFileMode(runtime, mode) catch |mistake|
+        return failed(runtime, mistake);
+    const answer = files.open(runtime, named, selected_mode) catch |mistake|
         return failed(runtime, mistake);
     opened.* = @intFromBool(answer != null);
     if (answer) |made| {
@@ -709,7 +737,8 @@ pub export fn luce_rt_file_read_text(
     function: u32,
     instruction: u32,
 ) callconv(.c) i32 {
-    const named = path[0..@intCast(length)];
+    const named = checkedBytes(runtime, path, length) catch |mistake|
+        return failed(runtime, mistake);
     const answer = files.readText(runtime, named) catch |mistake|
         return failed(runtime, mistake);
     ok.* = @intFromBool(answer != null);
@@ -735,16 +764,21 @@ pub export fn luce_rt_file_write_text(
     function: u32,
     instruction: u32,
 ) callconv(.c) i32 {
-    const named = path[0..@intCast(path_length)];
+    const named = checkedBytes(runtime, path, path_length) catch |mistake|
+        return failed(runtime, mistake);
+    const body = checkedBytes(runtime, content, content_length) catch |mistake|
+        return failed(runtime, mistake);
+    const selected_mode = checkedFileMode(runtime, mode) catch |mistake|
+        return failed(runtime, mistake);
     const answered = files.writeText(
         runtime,
         named,
-        content[0..@intCast(content_length)],
-        @enumFromInt(mode),
+        body,
+        @enumFromInt(selected_mode),
     ) catch |mistake| return failed(runtime, mistake);
     ok.* = @intFromBool(answered);
     if (!answered) runtime.raiseIo(
-        if (mode == @intFromEnum(files.Mode.append)) .append else .write,
+        if (selected_mode == @intFromEnum(files.Mode.append)) .append else .write,
         named,
         runtime.frameAt(function, instruction),
     );
@@ -769,6 +803,25 @@ fn failed(runtime: *Runtime, mistake: heap.Error) i32 {
         error.Trap => {},
     }
     return raised_trap;
+}
+
+/// Convert a signed scalar supplied by C into a safe slice length.  Generated
+/// code emits non-negative values, but this public boundary also has to be
+/// total for a damaged artifact or an embedding host that passes nonsense.
+fn checkedCount(runtime: *Runtime, raw: i64) heap.Error!usize {
+    return std.math.cast(usize, raw) orelse runtime.fail(.host_unavailable);
+}
+
+fn checkedFileMode(runtime: *Runtime, raw: i64) heap.Error!i64 {
+    if (raw < @intFromEnum(files.Mode.read) or raw > @intFromEnum(files.Mode.append)) {
+        return runtime.fail(.host_unavailable);
+    }
+    return raw;
+}
+
+fn checkedBytes(runtime: *Runtime, bytes: [*]const u8, raw: i64) heap.Error![]const u8 {
+    const length = try checkedCount(runtime, raw);
+    return bytes[0..length];
 }
 
 // ---------------------------------------------------------------------------
@@ -906,7 +959,9 @@ pub export fn luce_rt_new_array(
     zero: *const Value,
     out: *Value,
 ) callconv(.c) i32 {
-    out.* = runtime.newArray(dims[0..@intCast(rank)], zero.*) catch |mistake|
+    const dimension_count = checkedCount(runtime, rank) catch |mistake|
+        return failed(runtime, mistake);
+    out.* = runtime.newArray(dims[0..dimension_count], zero.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -991,7 +1046,9 @@ pub export fn luce_rt_struct_make(
     count: i64,
     out: *Value,
 ) callconv(.c) i32 {
-    out.* = runtime.makeStruct(fields[0..@intCast(count)]) catch |mistake|
+    const field_count = checkedCount(runtime, count) catch |mistake|
+        return failed(runtime, mistake);
+    out.* = runtime.makeStruct(fields[0..field_count]) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -1007,7 +1064,9 @@ pub export fn luce_rt_function_make(
     count: i64,
     out: *Value,
 ) callconv(.c) i32 {
-    out.* = runtime.makeFunction(slots[0..@intCast(count)]) catch |mistake|
+    const slot_count = checkedCount(runtime, count) catch |mistake|
+        return failed(runtime, mistake);
+    out.* = runtime.makeFunction(slots[0..slot_count]) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -1064,7 +1123,9 @@ pub export fn luce_rt_index_get(
     rank: i64,
     out: *Value,
 ) callconv(.c) i32 {
-    out.* = containers.indexGet(runtime, target.*, indices[0..@intCast(rank)]) catch |mistake|
+    const index_count = checkedCount(runtime, rank) catch |mistake|
+        return failed(runtime, mistake);
+    out.* = containers.indexGet(runtime, target.*, indices[0..index_count]) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -1078,7 +1139,9 @@ pub export fn luce_rt_index_set(
     rank: i64,
     held: *const Value,
 ) callconv(.c) i32 {
-    containers.indexSet(runtime, target.*, indices[0..@intCast(rank)], held.*) catch |mistake|
+    const index_count = checkedCount(runtime, rank) catch |mistake|
+        return failed(runtime, mistake);
+    containers.indexSet(runtime, target.*, indices[0..index_count], held.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
@@ -1387,7 +1450,8 @@ pub export fn luce_rt_compare(
     left: *const Value,
     right: *const Value,
 ) callconv(.c) i32 {
-    return @intFromBool(operators.compare(@enumFromInt(op), left.*, right.*));
+    const operation = std.enums.fromInt(vocabulary.BinaryOp, op) orelse return 0;
+    return @intFromBool(operators.compare(operation, left.*, right.*));
 }
 
 /// `%` on doubles: the floor modulus (docs/NUMERICS.md §3).  Two scalars
@@ -1421,5 +1485,6 @@ pub export fn luce_rt_compare_long_double(
     left: i64,
     right: f64,
 ) callconv(.c) i32 {
-    return @intFromBool(operators.compareLongDouble(@enumFromInt(op), left, right));
+    const operation = std.enums.fromInt(vocabulary.BinaryOp, op) orelse return 0;
+    return @intFromBool(operators.compareLongDouble(operation, left, right));
 }
