@@ -278,6 +278,19 @@ pub fn build(b: *std.Build) void {
     );
     test_namespace_diagnostics_step.dependOn(&b.addRunArtifact(namespace_diagnostic_tests).step);
 
+    const worker_exhaustion_tests = b.addTest(.{
+        .root_module = luce,
+        .filters = &.{
+            "worker arena exhaustion crosses the join as out of memory",
+            "an interpreter worker marks arena exhaustion before it returns",
+        },
+    });
+    const test_worker_exhaustion_step = b.step(
+        "test-worker-exhaustion",
+        "Run worker exhaustion propagation regressions",
+    );
+    test_worker_exhaustion_step.dependOn(&b.addRunArtifact(worker_exhaustion_tests).step);
+
     // The documentation site's generator (`www/luce/src/`).  Its tests
     // are what keep the word tables it highlights with, its link
     // resolver and its Markdown honest, and they belong in `zig build

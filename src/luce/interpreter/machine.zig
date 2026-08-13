@@ -246,8 +246,10 @@ const Nursery = struct {
         const outcome = if (machine.materializeConstants()) |failed|
             failed
         else
-            machine.call(function, arguments) catch
+            machine.call(function, arguments) catch |mistake| {
+                if (mistake == error.OutOfMemory) machine.runtime.exhausted = true;
                 return runtime.workers.raised_trap;
+            };
         switch (outcome) {
             .value => |answered| {
                 out.* = answered;
@@ -2354,6 +2356,42 @@ test "each interpreter worker materializes constants in its own runtime" {
     try testing.expect(
         (try first.resolve(first.constant(0))) != (try second.resolve(second.constant(0))),
     );
+}
+
+test "an interpreter worker marks arena exhaustion before it returns" {
+    const testing = std.testing;
+    var instructions = [_]mir.Instruction{
+        .{ .const_long = 7 },
+        .{ .ret = 0 },
+    };
+    var result_types = [_]types.Type{ .long, .long };
+    var items = [_]Register{ 0, 1 };
+    var blocks = [_]mir.Block{.{ .items = &items }};
+    var functions = [_]mir.Function{.{
+        .name = "worker",
+        .parameter_count = 0,
+        .return_type = .long,
+        .locals = &.{},
+        .instructions = &instructions,
+        .result_types = &result_types,
+        .blocks = &blocks,
+    }};
+
+    var program: mir.Program = .{ .arena = .init(testing.allocator) };
+    defer program.deinit();
+    program.functions = &functions;
+
+    var objects: std.testing.FailingAllocator = .init(testing.allocator, .{ .fail_index = 1 });
+    var nursery: Nursery = .{ .program = &program, .host = null, .base = objects.allocator() };
+    const worker = Nursery.open(&nursery) orelse return error.OutOfMemory;
+    var answer: RuntimeValue = .none;
+    try testing.expectEqual(
+        runtime.workers.raised_trap,
+        Nursery.runWorker(&nursery, worker, 0, &.{}, 0, &answer, 8),
+    );
+    try testing.expect(worker.exhausted);
+    Nursery.close(&nursery, worker);
+    try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
 }
 
 test "a failed constant prologue cleans partial roots and reports the declaration" {

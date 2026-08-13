@@ -305,6 +305,7 @@ fn expectBuiltListFailures(kind: BuiltList) !usize {
 const WorkerFailureState = struct {
     child: *Runtime,
     produce_result: bool = false,
+    exhausted: bool = false,
     closes: usize = 0,
     child_live_at_close: u32 = 0,
     spawns: usize = 0,
@@ -333,6 +334,10 @@ const WorkerFailureState = struct {
         _: i64,
     ) callconv(.c) i32 {
         const self: *@This() = @ptrCast(@alignCast(context.?));
+        if (self.exhausted) {
+            runtime.exhausted = true;
+            return workers.raised_trap;
+        }
         if (!self.produce_result) return workers.survived;
         const words = runtime.ownValue(Value.ofString(
             "the unclaimed worker result owns outside bytes",
@@ -1178,6 +1183,39 @@ test "failed task allocation discards the worker result before close" {
     try testing.expectEqual(@as(u32, 0), parent_live);
     try testing.expectEqual(parent_objects.allocated_bytes, parent_objects.freed_bytes);
     try testing.expectEqual(child_objects.allocated_bytes, child_objects.freed_bytes);
+}
+
+test "worker arena exhaustion crosses the join as out of memory" {
+    var parent_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer parent_arena.deinit();
+    var parent: Runtime = .init(.{
+        .arena = parent_arena.allocator(),
+        .objects = testing.allocator,
+    });
+    defer parent.deinit();
+
+    var child_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer child_arena.deinit();
+    var child: Runtime = .init(.{
+        .arena = child_arena.allocator(),
+        .objects = testing.allocator,
+    });
+    var state: WorkerFailureState = .{
+        .child = &child,
+        .exhausted = true,
+    };
+    state.install(&parent);
+
+    var task: Value = .none;
+    try workers.spawn(&parent, 0, &.{}, &task);
+    var answer: Value = .none;
+    try testing.expectError(error.OutOfMemory, workers.wait(&parent, task, &answer));
+    try testing.expectEqual(@as(usize, 1), state.joins);
+    try testing.expectEqual(@as(usize, 1), state.closes);
+    try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
+    try testing.expect(parent.pending == null);
+    parent.freeValue(task);
+    try testing.expectEqual(@as(u32, 0), parent.live);
 }
 
 test "a cross-runtime move attributes a nested stale-handle trap to its source" {

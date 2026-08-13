@@ -1110,3 +1110,12 @@ it`.  Modules that were never loaded still use the ordinary unknown-name
 diagnostic, and the compiler test pins both cases.
 
 Commit: `947b5ac`.
+
+Worker arena exhaustion now crosses a join as `error.OutOfMemory` instead of
+being fabricated as `host_unavailable`: the interpreter marks its worker
+runtime when a call allocation fails, and the shared runtime checks that
+out-of-band marker before adopting a Luce trap.  Runtime cleanup, the shared
+join, and a forced interpreter worker allocation failure are covered by a
+focused `test-worker-exhaustion` lane.
+
+Commit: pending.

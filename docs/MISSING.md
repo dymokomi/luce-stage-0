@@ -151,8 +151,8 @@ smuggle one in as a convenience feature.
 
 ## Tier 5b — diagnostic precision
 
-Smaller harness follow-ups remain: worker arena exhaustion can be translated
-as `host_unavailable`, and release-mode origin stripping is redundant.
+The remaining smaller harness follow-up is redundant release-mode origin
+stripping.
 
 ## Order of work
 

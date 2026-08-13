@@ -116,6 +116,9 @@ pub const CloseFn = *const fn (context: ?*anyopaque, worker: *Runtime) callconv(
 /// `survived`, `raised_trap` or `raised_error`; a trap's words and
 /// frames, an error's words and origin, and a chosen exit status are
 /// all left in the worker's own `Runtime`, where the join reads them.
+/// If the worker exhausts its arena, it answers `raised_trap` with
+/// `Runtime.exhausted` set; the join turns that marker back into
+/// `error.OutOfMemory` rather than inventing a Luce trap.
 ///
 /// `depth` is a **fresh** budget, not what is left of the spawner's
 /// (D1): a worker's frames are its own thread's, so the number it
@@ -521,6 +524,11 @@ fn finish(owner: *Runtime, worker: *Worker) void {
 /// names a function and a file out of the *program*, which outlives
 /// every runtime in it.
 fn adoptTrap(joiner: *Runtime, child: *Runtime) heap.Error {
+    // Exhaustion is carried out-of-band because there is no Luce trap to
+    // adopt.  It must be checked before `pending`: an allocator failure
+    // while a worker is unwinding is still an exhausted run, not a
+    // host-unavailable trap fabricated by the join.
+    if (child.exhausted) return error.OutOfMemory;
     const pending = child.pending orelse
         return joiner.fail(.host_unavailable); // a trapped worker with no trap
     joiner.unwound.appendSlice(joiner.objects, child.unwound.items) catch {
