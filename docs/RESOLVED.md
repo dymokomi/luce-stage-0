@@ -1704,3 +1704,20 @@ ownership lanes pass 48/48 each.  Resource/worker graphs and cross-stage
 differential generation remain open in MISSING.md.
 
 Commit: current Tier 0 mixed owner-graph hardening batch.
+
+## 2026-08-13 — resource graphs through unions, optionals, and give/return
+
+The differential thread specifications now exercise a larger ownership graph
+in both engines: a union owns a list of tasks and an optional task; an
+enclosing struct owns that union, an optional callback, a map, and an array.
+The graph moves through `give`-taking helpers and a return, has both absent
+and present optional-task variants, consumes all tasks, and invokes the
+callback.  Both successful graphs and graphs discarded by a fallible helper
+are checked for matching output and cleanup.  A separate one-shot case proves
+that the ownership diagnostic still rejects a second wait reached through a
+union match binding.
+
+The focused resource-composition lane passes 7/7, and the full differential
+Luce suite passes 529/529.
+
+Commit: current Tier 0 resource-composition hardening batch.

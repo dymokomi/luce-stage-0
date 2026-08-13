@@ -405,6 +405,101 @@ test "a struct composes a union optional task callback and recursive children" {
     , "42\n");
 }
 
+test "a resource graph survives union optional container give return and failure" {
+    try agree.prints(
+        \\union Parcel:
+        \\    loaded(tasks: list(task(long)), extra: task(long)?)
+        \\
+        \\struct Crate:
+        \\    parcel: Parcel
+        \\    callback: (func(long) -> long)?
+        \\    contents: map(string, long)
+        \\    grid: array(long, _)
+        \\
+        \\func work(value: long) -> long:
+        \\    return value
+        \\
+        \\func identity(value: long) -> long:
+        \\    return value
+        \\
+        \\func bump(value: long) -> long:
+        \\    return value + 1
+        \\
+        \\func route(crate: give Crate) -> Crate:
+        \\    return crate
+        \\
+        \\func finish(parcel: give Parcel, callback: (func(long) -> long)?, fail: bool) -> Crate!:
+        \\    var contents = new map(string, long)
+        \\    contents["kind"] = 1
+        \\    var grid = new array(long, 2)
+        \\    grid.fill(7)
+        \\    let crate = Crate(
+        \\        parcel = give parcel,
+        \\        callback = callback,
+        \\        contents = give contents,
+        \\        grid = give grid,
+        \\    )
+        \\    if fail:
+        \\        error("discarded crate")
+        \\    return route(give crate)
+        \\
+        \\func absent(fail: bool) -> Crate!:
+        \\    var tasks = new list(task(long))
+        \\    tasks.append(spawn work(2))
+        \\    let parcel = Parcel.loaded(tasks = give tasks, extra = none)
+        \\    return try finish(give parcel, none, fail)
+        \\
+        \\func present(fail: bool) -> Crate!:
+        \\    var tasks = new list(task(long))
+        \\    tasks.append(spawn work(2))
+        \\    let parcel = Parcel.loaded(tasks = give tasks, extra = spawn work(3))
+        \\    return try finish(give parcel, bump, fail)
+        \\
+        \\func consume(crate: give Crate) -> long:
+        \\    let chosen = crate.callback else identity
+        \\    var total = crate.contents["kind"] + crate.grid[0]
+        \\    match crate.parcel:
+        \\        loaded(tasks, extra):
+        \\            for running in tasks:
+        \\                total = total + running.wait()
+        \\            if extra != none:
+        \\                total = total + extra.wait()
+        \\    return chosen(total)
+        \\
+        \\func main() -> !:
+        \\    let without_extra = try absent(false)
+        \\    print(string(consume(give without_extra)))
+        \\    let with_extra = try present(false)
+        \\    print(string(consume(give with_extra)))
+        \\    var failed_absent: Crate? = none
+        \\    failed_absent = absent(true) catch reason:
+        \\        print("caught: " + reason)
+        \\    var failed_present: Crate? = none
+        \\    failed_present = present(true) catch reason:
+        \\        print("caught: " + reason)
+        \\
+    , "10\n14\ncaught: discarded crate\ncaught: discarded crate\n");
+}
+
+test "a task is consumed exactly once through a union optional field" {
+    try agree.prints(
+        \\union Slot:
+        \\    running(task: task(long)?)
+        \\
+        \\func work() -> long:
+        \\    return 4
+        \\
+        \\func main():
+        \\    var running = spawn work()
+        \\    let slot = Slot.running(task = give running)
+        \\    match slot:
+        \\        running(task):
+        \\            if task != none:
+        \\                print(string(task.wait()))
+        \\
+    , "4\n");
+}
+
 test "equal constant slice bounds construct an empty resource list without copying" {
     try agree.prints(
         \\func main():

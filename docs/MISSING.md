@@ -37,8 +37,10 @@ runtime/verifier boundary.
   allocator bytes at every observed failure point.  A second C matrix now
   covers exported inline text, deep copy, list slices, map keys and values,
   `str`, and transactional `key_text` replacement, including nested source
-  graphs.  The remaining matrix is union/optional copies, `inout` receiver
-  replacement, and the allocating C exports not yet in these direct corpora.
+  graphs.  Raw file/task acquisition and task-result transfer now have their
+  own rollback matrices too.  The remaining matrix is union/optional copies,
+  allocation failure during `inout` receiver replacement, and allocating C
+  exports not yet in these direct corpora.
 - **T0-OWN-3 — Randomized owner-graph state machine.**  Generate valid
   operation sequences and hostile mutations against a reference model that
   requires exactly one owner, forbids illegal cycles, makes stale handles
@@ -186,15 +188,21 @@ source/borrow/consumption contracts.  C string slicing now covers outside
 views, inline copies, UTF-8 boundary refusal, bounds refusal, and out-slot
 preservation.  Null-pointer and other malformed pointer cases, plus any
 allocating C door not yet in these direct corpora, remain open.
-The differential spec now puts a task inside a union's optional field, that
+The differential specs now put a task inside a union's optional field, that
 union inside a recursive struct with an optional callback and child list, and
-consumes the task through a `give`d helper; a companion file case puts an
-optional file and callback in a struct and reads through the narrowed handle.
-An inout writer now also replaces a union carrying an optional list and a
-separate optional list field after a deep copy, then clears both; the copied
-graph remains independent.  Present/absent transitions beyond those cases,
-return/give across more shapes, container storage, and exceptional teardown
-still need a larger matrix; indirect stale task and function-receiver handles
+consume the task through a `give`d helper; a companion file case puts an
+optional file and callback in a struct, narrows the file receiver, reads it,
+and verifies scope teardown closes it.  A second resource matrix builds both
+absent and present optional-task variants inside a union, adds a map and array
+to the enclosing struct, moves it through a `give`/return helper, invokes an
+optional callback, consumes every task, and tears down both success and
+failure paths.  The compiler also pins one-shot wait rejection after a
+`match` binding.  An inout writer now also replaces a union carrying an
+optional list and a separate optional list field after a deep copy, then
+clears both; the copied graph remains independent.  Present/absent
+transitions beyond these task/callback cases, return/give across more shapes,
+generated cross-engine traces, allocation failure during those source-level
+operations, and an exhaustive indirect stale task/function-receiver matrix
 remain open.  Finally,
 measure long mixed traces' live rows, retained capacities, peak bytes, and
 post-run bytes, not only the final leak count, following the snapshot-diff

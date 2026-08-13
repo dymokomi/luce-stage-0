@@ -8267,6 +8267,27 @@ test "luce.sema.own: a task is consumed by its wait" {
         \\    assert(t.wait() == 1)
         \\
     , "luce.sema.own");
+
+    // The same one-shot rule must survive a match binding and an optional
+    // union payload; otherwise the first wait could leave a stale handle
+    // reachable through the pattern variable.
+    try expectSaying(
+        \\union Slot:
+        \\    running(task: task(long)?)
+        \\
+        \\func work() -> long:
+        \\    return 4
+        \\
+        \\func main():
+        \\    var running = spawn work()
+        \\    let slot = Slot.running(task = give running)
+        \\    match slot:
+        \\        running(task):
+        \\            if task != none:
+        \\                task.wait()
+        \\                task.wait()
+        \\
+    , "luce.sema.own", "task was given away and cannot be touched again in this scope");
 }
 
 test "luce.sema.new: a task is spawned, not made" {

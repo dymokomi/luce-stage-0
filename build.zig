@@ -334,6 +334,8 @@ pub fn build(b: *std.Build) void {
         .root_module = specs,
         .filters = &.{
             "a struct composes a union optional task callback",
+            "a resource graph survives union optional container give return",
+            "a task is consumed exactly once through a union optional field",
             "a struct owns an optional file while a callback consumes its result",
             "self: inout replaces union and optional object fields",
         },
