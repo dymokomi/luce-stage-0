@@ -1471,6 +1471,117 @@ fn nestedCopySource(runtime: *Runtime, shape: CopyShape) !Value {
     };
 }
 
+fn nestedUnionOptionalSource(runtime: *Runtime, optional_present: bool) !Value {
+    const union_payload = try nestedList(runtime);
+    var union_payload_loose = true;
+    errdefer if (union_payload_loose) runtime.freeValue(union_payload);
+
+    // The runtime representation of a union is a value run containing its
+    // discriminant and payload.  makeStruct consumes the payload even when
+    // allocating the run fails, so close that ownership boundary before
+    // returning from the failure arm.
+    const union_value = runtime.makeStruct(&.{ Value.ofLong(7), union_payload }) catch |mistake| {
+        union_payload_loose = false;
+        return mistake;
+    };
+    union_payload_loose = false;
+    var union_loose = true;
+    errdefer if (union_loose) runtime.freeValue(union_value);
+
+    const optional_value = if (optional_present) try nestedList(runtime) else Value.none;
+    var optional_loose = optional_present;
+    errdefer if (optional_loose) runtime.freeValue(optional_value);
+
+    const map_value = try nestedCopySource(runtime, .map);
+    var map_loose = true;
+    errdefer if (map_loose) runtime.freeValue(map_value);
+    const array_value = try nestedCopySource(runtime, .array);
+    var array_loose = true;
+    errdefer if (array_loose) runtime.freeValue(array_value);
+    const note = try runtime.ownValue(Value.ofString(
+        "a union and optional record owns outside bytes during its failed copy",
+    ));
+    var note_owned = true;
+    errdefer if (note_owned) runtime.dropStorage(note);
+
+    var fields = [_]Value{ union_value, optional_value, map_value, array_value, note };
+    // makeStruct consumes every field on both success and allocation
+    // failure.  The flags above therefore become false before either
+    // result leaves this helper.
+    const record = runtime.makeStruct(&fields) catch |mistake| {
+        union_loose = false;
+        optional_loose = false;
+        map_loose = false;
+        array_loose = false;
+        note_owned = false;
+        return mistake;
+    };
+    union_loose = false;
+    optional_loose = false;
+    map_loose = false;
+    array_loose = false;
+    note_owned = false;
+    return record;
+}
+
+fn expectUnionOptionalSourceIntact(
+    runtime: *Runtime,
+    held: Value,
+    optional_present: bool,
+) !void {
+    const fields = held.asStruct();
+    try testing.expectEqual(@as(usize, 5), fields.len);
+
+    const union_fields = fields[0].asStruct();
+    try testing.expectEqual(@as(usize, 2), union_fields.len);
+    try testing.expectEqual(@as(i64, 7), union_fields[0].asLong());
+    try expectNestedListIntact(runtime, union_fields[1]);
+
+    if (optional_present) {
+        try expectNestedListIntact(runtime, fields[1]);
+    } else {
+        try testing.expect(fields[1].isNone());
+    }
+    try expectNestedSourceIntact(runtime, fields[2], .map);
+    try expectNestedSourceIntact(runtime, fields[3], .array);
+    try testing.expectEqualStrings(
+        "a union and optional record owns outside bytes during its failed copy",
+        fields[4].asString(),
+    );
+}
+
+/// Copy a value-shaped union/optional graph through every destination
+/// allocation failure.  The source is checked semantically on each failure,
+/// not only after the allocator sweep, so a temporary source mutation cannot
+/// hide behind a later cleanup path.
+fn copyUnionOptionalWithAllocator(
+    allocator: std.mem.Allocator,
+    source: *Runtime,
+    held: Value,
+    optional_present: bool,
+) !void {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var target: Runtime = .init(.{ .arena = arena.allocator(), .objects = allocator });
+    defer {
+        target.deinit();
+        arena.deinit();
+    }
+
+    const duplicate = target.copyFrom(source, held) catch |mistake| {
+        target.debugAssertInvariants();
+        source.debugAssertInvariants();
+        try expectUnionOptionalSourceIntact(source, held, optional_present);
+        try testing.expectEqual(@as(u32, 0), target.live);
+        return mistake;
+    };
+    target.debugAssertInvariants();
+    source.debugAssertInvariants();
+    try expectUnionOptionalSourceIntact(source, held, optional_present);
+    target.freeValue(duplicate);
+    target.debugAssertInvariants();
+    try testing.expectEqual(@as(u32, 0), target.live);
+}
+
 const DerivedCopy = enum { list_slice, map_values };
 
 fn expectDerivedCopyFailures(kind: DerivedCopy) !usize {
@@ -3861,6 +3972,24 @@ test "failed nested list, map, array, and struct copies leave no target" {
             copyWithAllocator,
             .{ &bench.runtime, source },
         );
+    }
+}
+
+test "failed union and optional-shaped copies preserve every source field" {
+    for ([_]bool{ false, true }) |optional_present| {
+        var bench: Bench = undefined;
+        bench.setup();
+        defer bench.deinit();
+        const source = try nestedUnionOptionalSource(&bench.runtime, optional_present);
+        defer bench.runtime.freeValue(source);
+
+        try testing.checkAllAllocationFailures(
+            testing.allocator,
+            copyUnionOptionalWithAllocator,
+            .{ &bench.runtime, source, optional_present },
+        );
+        bench.runtime.debugAssertInvariants();
+        try expectUnionOptionalSourceIntact(&bench.runtime, source, optional_present);
     }
 }
 

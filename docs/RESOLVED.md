@@ -1735,3 +1735,16 @@ the moment rollback has to be correct.
 The focused runtime ownership lane passes 40/40.
 
 Commit: current Tier 0 invariant/rollback hardening batch.
+
+## 2026-08-13 — value-shaped union and optional copy rollback
+
+The runtime allocation-failure corpus now checks value-shaped union and
+optional records through nested discriminant/payload fields, both absent and
+present optional payloads, map and array siblings, and outside text.  Every
+destination allocation refusal asserts the source fields are still readable,
+the partial target has no live rows, and the checked owner graph remains
+consistent while rollback is in flight.
+
+The focused runtime ownership lane covers both optional states in this matrix.
+
+Commit: current Tier 0 union/optional copy hardening batch.

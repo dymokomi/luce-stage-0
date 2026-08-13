@@ -38,9 +38,12 @@ runtime/verifier boundary.
   covers exported inline text, deep copy, list slices, map keys and values,
   `str`, and transactional `key_text` replacement, including nested source
   graphs.  Raw file/task acquisition and task-result transfer now have their
-  own rollback matrices too.  The remaining matrix is union/optional copies,
-  allocation failure during `inout` receiver replacement, and allocating C
-  exports not yet in these direct corpora.
+  own rollback matrices too.  Value-shaped union/optional copies now cover
+  nested discriminant/payload records, present and absent optional fields,
+  map and array siblings, long text, source-field inspection on every
+  failure, and checked owner invariants while the destination is partial.
+  The remaining matrix is allocation failure during `inout` receiver
+  replacement and allocating C exports not yet in these direct corpora.
 - **T0-OWN-3 — Randomized owner-graph state machine.**  Generate valid
   operation sequences and hostile mutations against a reference model that
   requires exactly one owner, forbids illegal cycles, makes stale handles
@@ -134,8 +137,7 @@ allocator baseline.  The allocator-failure lanes now invoke that assertion
 while partial nested copies, array fills, C value/compound doors, file/task
 acquisition, spawn, and task-result transfer are still live, catching owner
 metadata damage before teardown.  Concurrent inspection of a still-running
-child and the remaining union/optional and source-level failure matrix stay
-open.  A new format/spec regression now encodes
+child and source-level failure injection remain open.  A new format/spec regression now encodes
 the already optimized ownership graph, decodes it, and runs the decoded
 program through both engines; it covers the union/list/struct/bound-method
 composition, a give parameter, and an inout receiver that shape-only round

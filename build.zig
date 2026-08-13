@@ -471,6 +471,7 @@ pub fn build(b: *std.Build) void {
         .filters = &.{
             "cross-runtime moves roll back every nested allocation",
             "cross-runtime moves reject function receiver handles",
+            "failed union and optional-shaped copies preserve every source field",
             "a failed struct store consumes only its replacement",
             "failed struct construction releases objects",
             "nested resource graphs close once",
