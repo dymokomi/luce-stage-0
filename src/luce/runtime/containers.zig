@@ -723,6 +723,11 @@ fn carriesObject(held: Value) bool {
 /// `free(x)`.  Only the named owner frees (S6, S23): `expected` carries
 /// the binding to verify against when the verb named one.
 pub fn freeVerb(runtime: *Runtime, held: Value, expected: ?OwnedBy) Error!void {
+    // The semantic stage only emits this verb for a direct object handle.
+    // Keep that fact at the runtime boundary too: `resolve` reads the
+    // payload as a Handle, so allowing a scalar through would let a forged
+    // scalar whose bits match a live row release somebody else's object.
+    if (held.tag != .object) return runtime.fail(.not_owned);
     _ = try runtime.resolve(held);
     try runtime.checkGivable(held, expected);
     runtime.freeObject(held.asObject());
@@ -739,7 +744,10 @@ pub fn giveVerb(runtime: *Runtime, held: Value, expected: ?OwnedBy) Error!Value 
             try runtime.checkGivable(held, expected);
         },
         .strukt => try runtime.checkGivable(held, expected),
-        else => unreachable,
+        // `give` is an ownership verb, not a truthy conversion.  A
+        // malformed artifact must trap rather than reach an unreachable
+        // arm (or accidentally treat a scalar as a handle).
+        else => return runtime.fail(.not_owned),
     }
     return held;
 }
@@ -747,8 +755,14 @@ pub fn giveVerb(runtime: *Runtime, held: Value, expected: ?OwnedBy) Error!Value 
 /// `copy x`.  Verbs demand an object (S42): copying an unfilled or
 /// freed slot traps.
 pub fn copyVerb(runtime: *Runtime, held: Value) Error!Value {
-    if (held.tag == .object) {
-        _ = try runtime.resolve(held);
+    // Values copy as ordinary values; the explicit verb is reserved for a
+    // resource-free object or carrying struct.  The analyzer normally
+    // enforces this, but the C/MIR door must not silently accept a forged
+    // scalar or function value.
+    switch (held.tag) {
+        .object => _ = try runtime.resolve(held),
+        .strukt => {},
+        else => return runtime.fail(.not_owned),
     }
     return runtime.deepCopy(held);
 }

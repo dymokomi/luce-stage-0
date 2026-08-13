@@ -8818,6 +8818,59 @@ fn expectCNullValueTrap(runtime: *Runtime, status: i32) !void {
     runtime.pending = null;
 }
 
+test "C ownership verbs reject forged value tags without releasing a live row" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    var live: Value = .none;
+    try testing.expectEqual(@as(i32, 0), luce_rt_new_list(runtime, &Value.none, &live));
+    try testing.expectEqual(@as(u32, 1), runtime.live);
+
+    // The first object row is index zero with generation zero.  A scalar
+    // carrying zero therefore looks like a tempting forged object handle
+    // to code that forgets to check the tag before resolving it.
+    const forged = Value.ofLong(0);
+    var out = Value.ofLong(99);
+
+    try testing.expectEqual(@as(i32, 1), luce_rt_free(runtime, &forged, 0, 0, 0));
+    try testing.expectEqual(vocabulary.TrapCode.not_owned, runtime.pending.?.code);
+    try testing.expectEqual(@as(u32, 1), runtime.live);
+    runtime.pending = null;
+
+    try testing.expectEqual(@as(i32, 1), luce_rt_give(runtime, &forged, 0, 0, 0, &out));
+    try testing.expectEqual(vocabulary.TrapCode.not_owned, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(u32, 1), runtime.live);
+    runtime.pending = null;
+
+    try testing.expectEqual(@as(i32, 1), luce_rt_copy(runtime, &forged, &out));
+    try testing.expectEqual(vocabulary.TrapCode.not_owned, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(u32, 1), runtime.live);
+    runtime.pending = null;
+
+    const bogus_fields = [_]Value{Value.ofLong(1)};
+    const malformed_record = Value{
+        .tag = .long,
+        .bits = @intFromPtr(&bogus_fields),
+        .length = 1,
+    };
+    try testing.expectEqual(@as(i32, 1), luce_rt_struct_set(runtime, &malformed_record, 0, &forged, &out));
+    try testing.expectEqual(vocabulary.TrapCode.not_owned, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(u32, 1), runtime.live);
+    runtime.pending = null;
+
+    // An invalid Boolean is rejected before the ownership verb can even
+    // inspect its binding identity.
+    try testing.expectEqual(@as(i32, 1), luce_rt_free(runtime, &live, 2, 0, 0));
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(u32, 1), runtime.live);
+    runtime.pending = null;
+}
+
 fn expectCNullValueVoid(runtime: *Runtime) !void {
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
     runtime.pending = null;

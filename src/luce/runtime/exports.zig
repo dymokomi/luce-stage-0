@@ -1072,7 +1072,9 @@ pub export fn luce_rt_free(
     local: u32,
 ) callconv(.c) i32 {
     if (!requireValueInput(runtime, held)) return raised_trap;
-    const expected: ?heap.OwnedBy = if (owned != 0) .{ .serial = serial, .local = local } else null;
+    const names_owner = checkedPresence(runtime, owned) catch |mistake|
+        return failed(runtime, mistake);
+    const expected: ?heap.OwnedBy = if (names_owner) .{ .serial = serial, .local = local } else null;
     containers.freeVerb(runtime, held.*, expected) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1088,7 +1090,9 @@ pub export fn luce_rt_give(
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireValueInput(runtime, held)) return raised_trap;
-    const expected: ?heap.OwnedBy = if (owned != 0) .{ .serial = serial, .local = local } else null;
+    const names_owner = checkedPresence(runtime, owned) catch |mistake|
+        return failed(runtime, mistake);
+    const expected: ?heap.OwnedBy = if (names_owner) .{ .serial = serial, .local = local } else null;
     out.* = containers.giveVerb(runtime, held.*, expected) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1161,6 +1165,7 @@ pub export fn luce_rt_struct_set(
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireValueInput(runtime, held) or !requireValueInput(runtime, to)) return raised_trap;
+    if (held.*.tag != .strukt) return rejected(runtime, .not_owned);
     const index = std.math.cast(usize, field) orelse return rejected(runtime, .index_bounds);
     out.* = runtime.setField(held.*, index, to.*) catch |mistake|
         return failed(runtime, mistake);

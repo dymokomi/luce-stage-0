@@ -382,6 +382,14 @@ text and a borrowed receiver through every observed replacement allocation
 failure, preserving empty destination cells and the receiver graph while
 reclaiming partial runs; other function-valued retaining doors remain open.
 
+The C/MIR ownership doors now validate their value tags before resolving
+payloads: a forged scalar cannot be reinterpreted as a live object handle by
+`free`, `give`, or `copy`, malformed `give` values fail instead of reaching an
+unreachable branch, and `struct_set` refuses a non-struct source before it
+reads forged field-run metadata.  The ownership flag is also restricted to
+exact `0`/`1`; broader malformed value-tag coverage for every container and
+resource export remains part of T0-OWN-4 and T0-OWN-15.
+
 ## Tier 1 — design gaps before implementation
 
 ### Typed worker channels
