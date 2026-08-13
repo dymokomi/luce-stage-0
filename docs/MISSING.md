@@ -208,9 +208,14 @@ deep copy/give, task/file results, constants, container queries, and string
 conversions, including void readers.  All C status slots for raw file
 read/write/flush, whole-file open/read/write, and their success/count answers
 now use C-nullable pointers and reject null before byte slicing or host work;
-the regression checks every slot and preserves the other sentinels.  The
-remaining C pointer matrix is borrowed `Value` arguments, dimensions,
-indices, fields, task handles, and callbacks.
+the regression checks every slot and preserves the other sentinels.  All
+borrowed `Value` inputs and value arrays, plus dimension arrays, now use
+C-nullable pointers and reject null before slicing, callbacks, host I/O, or
+ownership work; the regression covers ownership verbs, constructors,
+struct/function runs, workers, files, every container door, strings, and
+comparison.  The remaining C pointer matrix is callback function slots and
+callback-produced buffers, plus the documented runtime/host installation
+contracts.
 The differential specs now put a task inside a union's optional field, that
 union inside a recursive struct with an optional callback and child list, and
 consume the task through a `give`d helper; a companion file case puts an

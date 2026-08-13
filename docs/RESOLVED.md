@@ -1540,6 +1540,20 @@ pass 36/36, and the full differential suite passes 517/517.
 
 Commit: current Tier 0 C-boundary hardening batch.
 
+## 2026-08-13 — C borrowed-value and array-pointer null refusal
+
+Borrowed `Value` inputs, value arrays, and dimension arrays on the exported
+runtime surface now use C-nullable pointer representations and reject null
+before slicing, host access, allocation, or ownership mutation.  The
+regression exercises ownership verbs, constructors, struct/function runs,
+worker/file paths, every container door, string conversions, and comparison;
+it caught and fixed a missing guard in `own_storage`.
+
+Callback function slots and callback-produced buffers remain listed in
+MISSING.md for a separate contract audit.
+
+Commit: current Tier 0 C-boundary hardening batch.
+
 ## 2026-08-13 — C status-output pointer null refusal
 
 The status and count outputs of raw file read/write/flush and whole-file
