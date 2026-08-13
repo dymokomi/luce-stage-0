@@ -8504,6 +8504,17 @@ test "C scalar lengths counts and tags fail closed without writing outputs" {
     try testing.expectEqual(@as(i64, 99), out.asLong());
     runtime.pending = null;
 
+    // `present` is a Boolean produced by the compiler, not a general
+    // truthy flag.  A damaged artifact must be rejected before the runtime
+    // looks at the borrowed bytes or writes the result slot.
+    for ([_]i32{ -1, 2 }) |raw| {
+        out = Value.ofLong(99);
+        try testing.expectEqual(@as(i32, 1), luce_rt_maybe_text(runtime, raw, null, 1, &out));
+        try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+        try testing.expectEqual(@as(i64, 99), out.asLong());
+        runtime.pending = null;
+    }
+
     try testing.expectEqual(@as(i32, 1), luce_rt_names_list(runtime, bytes, -1, &out));
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
     try testing.expectEqual(@as(i64, 99), out.asLong());

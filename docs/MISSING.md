@@ -345,6 +345,11 @@ handle exactly once before returning `host_unavailable`; otherwise a published
 file would bypass scope teardown.  Other resource callback and handle-domain
 permutations remain part of T0-OWN-15.
 
+The optional-text runtime door now accepts only the compiler’s exact `0`/`1`
+presence flag, rejecting malformed values before it reads the borrowed buffer
+or writes the result slot.  Other callback payload and ownership-event parity
+cases remain part of T0-OWN-13 and T0-OWN-15.
+
 The array-fill failure lane now also copies a function run containing outside
 text and a borrowed receiver through every observed replacement allocation
 failure, preserving empty destination cells and the receiver graph while

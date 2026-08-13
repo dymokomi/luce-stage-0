@@ -395,7 +395,9 @@ pub export fn luce_rt_maybe_text(
     out: [*c]Value,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (present == 0) {
+    const is_present = checkedPresence(runtime, present) catch |mistake|
+        return failed(runtime, mistake);
+    if (!is_present) {
         out.* = Value.none;
         return survived;
     }
@@ -859,6 +861,17 @@ fn checkedFileMode(runtime: *Runtime, raw: i64) heap.Error!i64 {
         return runtime.fail(.host_unavailable);
     }
     return raw;
+}
+
+/// The generated path supplies a zero-extended Boolean here.  Keep the C
+/// door just as strict: treating every nonzero integer as present would make
+/// a malformed artifact read a buffer that the producer did not authorize.
+fn checkedPresence(runtime: *Runtime, raw: i32) heap.Error!bool {
+    return switch (raw) {
+        0 => false,
+        1 => true,
+        else => runtime.fail(.host_unavailable),
+    };
 }
 
 fn checkedBytes(runtime: *Runtime, bytes: [*c]const u8, raw: i64) heap.Error![]const u8 {
