@@ -1226,3 +1226,14 @@ uses the same direct nested-place spelling already exercised by the editor,
 and the multi-module adventure differential spec has a focused build step.
 
 Commit: current example cleanup batch.
+
+## 2026-08-12 — MIR ownership instructions cannot invent values
+
+The verifier now requires `object_bind` and `object_unbind` to walk an
+object-carrying value into an object-carrying owner slot.  It also rejects a
+forged result type on every instruction that produces no value, so malformed
+MIR cannot use a register an engine never wrote.  Focused tests cover both
+ownership operations and every no-result instruction shape, and the consumer
+lanes keep the optimizer, interpreter and LLVM paths behind the same check.
+
+Commit: current MIR hardening batch.

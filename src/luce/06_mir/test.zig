@@ -157,6 +157,119 @@ test "the verifier rejects structural damage a decoder could admit" {
     try verify_mod.verify(testing.allocator, &program);
 }
 
+test "ownership instructions cannot fabricate values or bind non-carrying shapes" {
+    var program = try programOf(.{
+        .instructions = &.{
+            .{ .heap_new = .{ .heap = 0, .dims = &.{} } },
+            .{ .object_bind = .{ .local = 0, .value = 0 } },
+            .{ .ret = null },
+        },
+        .result_types = &.{ .{ .heap = 0 }, .none, .none },
+        .blocks = &.{&.{ 0, 1, 2 }},
+        .locals = &.{.{ .name = "number", .local_type = .long }},
+    });
+    defer program.deinit();
+    const arena = program.arena.allocator();
+    program.heap_types = try arena.dupe(types.HeapType, &.{.{ .list = .long }});
+
+    // The owner id names a local whose slot can actually own the graph.
+    // Binding a list to a scalar local is not a harmless no-op: a later
+    // release would have no matching ownership class.
+    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &program));
+
+    program.functions[0].locals[0].local_type = .{ .heap = 0 };
+    // `object_bind` has no value of its own.  A forged result type would
+    // make the following instruction consume a register no engine wrote.
+    program.functions[0].result_types[1] = .long;
+    try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &program));
+
+    program.functions[0].result_types[1] = .none;
+    program.functions[0].instructions[0] = .{ .const_long = 1 };
+    program.functions[0].result_types[0] = .long;
+    // The inverse mismatch is just as damaging: a scalar cannot enter an
+    // ownership walk merely because the instruction says `bind`.
+    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &program));
+
+    program.functions[0].instructions[0] = .{ .heap_new = .{ .heap = 0, .dims = &.{} } };
+    program.functions[0].result_types[0] = .{ .heap = 0 };
+    try verify_mod.verify(testing.allocator, &program);
+
+    program.functions[0].instructions[1] = .{ .object_unbind = .{ .local = 0, .value = 0 } };
+    try verify_mod.verify(testing.allocator, &program);
+}
+
+fn expectForgedResult(program: *Program, register: Register) !void {
+    program.functions[0].result_types[register] = .long;
+    try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, program));
+}
+
+test "every no-result MIR instruction rejects a fabricated result type" {
+    var local_set = try programOf(.{
+        .instructions = &.{
+            .{ .const_long = 1 },
+            .{ .local_set = .{ .local = 0, .value = 0 } },
+            .{ .ret = null },
+        },
+        .result_types = &.{ .long, .none, .none },
+        .blocks = &.{&.{ 0, 1, 2 }},
+        .locals = &.{.{ .name = "slot", .local_type = .long }},
+    });
+    defer local_set.deinit();
+    try verify_mod.verify(testing.allocator, &local_set);
+    try expectForgedResult(&local_set, 1);
+
+    var jump = try programOf(.{
+        .instructions = &.{.{ .jump = 0 }},
+        .result_types = &.{.none},
+        .blocks = &.{&.{0}},
+    });
+    defer jump.deinit();
+    try verify_mod.verify(testing.allocator, &jump);
+    try expectForgedResult(&jump, 0);
+
+    var branch = try programOf(.{
+        .instructions = &.{
+            .{ .const_boolean = true },
+            .{ .branch = .{ .condition = 0, .then_block = 1, .else_block = 2 } },
+            .{ .ret = null },
+            .{ .ret = null },
+        },
+        .result_types = &.{ .boolean, .none, .none, .none },
+        .blocks = &.{ &.{ 0, 1 }, &.{2}, &.{3} },
+    });
+    defer branch.deinit();
+    try verify_mod.verify(testing.allocator, &branch);
+    try expectForgedResult(&branch, 1);
+
+    var returned = try programOf(.{
+        .instructions = &.{.{ .ret = null }},
+        .result_types = &.{.none},
+        .blocks = &.{&.{0}},
+    });
+    defer returned.deinit();
+    try verify_mod.verify(testing.allocator, &returned);
+    try expectForgedResult(&returned, 0);
+
+    var trap = try programOf(.{
+        .instructions = &.{.{ .trap = .missing_return }},
+        .result_types = &.{.none},
+        .blocks = &.{&.{0}},
+    });
+    defer trap.deinit();
+    try verify_mod.verify(testing.allocator, &trap);
+    try expectForgedResult(&trap, 0);
+
+    var unwind = try programOf(.{
+        .instructions = &.{.{ .unwind = {} }},
+        .result_types = &.{.none},
+        .blocks = &.{&.{0}},
+        .fallible = true,
+    });
+    defer unwind.deinit();
+    try verify_mod.verify(testing.allocator, &unwind);
+    try expectForgedResult(&unwind, 0);
+}
+
 // ---------------------------------------------------------------------------
 // Many blocks
 // ---------------------------------------------------------------------------

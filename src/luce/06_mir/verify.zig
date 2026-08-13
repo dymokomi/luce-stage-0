@@ -810,6 +810,7 @@ fn verifyInstruction(
             try expectType(result, function.locals[local].local_type);
         },
         .local_set => |set| {
+            try expectType(result, .none);
             if (set.local >= function.locals.len) return error.BadLocal;
             const value = try operandType(function, defined, set.value);
             try expectType(value, function.locals[set.local].local_type);
@@ -1046,12 +1047,24 @@ fn verifyInstruction(
         },
         .intrinsic => |intrinsic| try verifyIntrinsic(program, function, defined, register, intrinsic),
         .object_bind => |bind| {
+            try expectType(result, .none);
             if (bind.local >= function.locals.len) return error.BadLocal;
-            _ = try operandType(function, defined, bind.value);
+            const value = try operandType(function, defined, bind.value);
+            if (!try typeCarriesObjects(allocator, program, function.locals[bind.local].local_type) or
+                !try typeCarriesObjects(allocator, program, value))
+            {
+                return error.BadLocal;
+            }
         },
         .object_unbind => |unbind| {
+            try expectType(result, .none);
             if (unbind.local >= function.locals.len) return error.BadLocal;
-            _ = try operandType(function, defined, unbind.value);
+            const value = try operandType(function, defined, unbind.value);
+            if (!try typeCarriesObjects(allocator, program, function.locals[unbind.local].local_type) or
+                !try typeCarriesObjects(allocator, program, value))
+            {
+                return error.BadLocal;
+            }
         },
         .heap_new => |new| {
             if (new.heap >= program.heap_types.len) return error.BadStruct;
@@ -1072,15 +1085,18 @@ fn verifyInstruction(
             try expectType(result, .{ .heap = new.heap });
         },
         .jump => |target| {
+            try expectType(result, .none);
             if (target >= function.blocks.len) return error.BadBlock;
         },
         .branch => |branch| {
+            try expectType(result, .none);
             const condition = try operandType(function, defined, branch.condition);
             try expectType(condition, .boolean);
             if (branch.then_block >= function.blocks.len) return error.BadBlock;
             if (branch.else_block >= function.blocks.len) return error.BadBlock;
         },
         .ret => |value| {
+            try expectType(result, .none);
             if (value) |returned| {
                 const actual = try operandType(function, defined, returned);
                 try expectType(actual, function.return_type);
@@ -1088,8 +1104,9 @@ fn verifyInstruction(
                 try expectType(function.return_type, .none);
             }
         },
-        .trap => {},
+        .trap => try expectType(result, .none),
         .unwind => {
+            try expectType(result, .none);
             if (!function.fallible) return error.NotFallible;
         },
     }
@@ -1801,6 +1818,69 @@ fn comparisonIsRefused(allocator: Allocator, program: *const Program, of: Type) 
                 }
             },
             else => {},
+        }
+    }
+    return false;
+}
+
+/// Whether a value's static shape contains an object that an ownership
+/// instruction can bind or release.
+///
+/// A heap type is itself an object; its element graph is already behind the
+/// handle and must not be expanded here.  Structs and unions are the only
+/// shapes whose fields are walked, and the optional wrapper contributes no
+/// new representation.  Keeping this answer at the verifier boundary stops
+/// forged `object_bind`/`object_unbind` instructions from assigning an object
+/// to a scalar owner, or from making a scalar look like an ownership walk.
+fn typeCarriesObjects(allocator: Allocator, program: *const Program, of: Type) VerifyError!bool {
+    const seen_structs = try allocator.alloc(bool, program.structs.len);
+    defer allocator.free(seen_structs);
+    @memset(seen_structs, false);
+
+    const seen_variants = try allocator.alloc(bool, program.variants.len);
+    defer allocator.free(seen_variants);
+    @memset(seen_variants, false);
+
+    var pending: std.ArrayList(Type) = .empty;
+    defer pending.deinit(allocator);
+    try pending.append(allocator, of);
+
+    while (pending.items.len != 0) {
+        const current = pending.pop().?;
+        switch (current) {
+            .heap => return true,
+            .optional => |payload| try pending.append(allocator, payload.asType()),
+            .strukt => |index| {
+                if (index >= program.structs.len) return error.BadStruct;
+                if (seen_structs[index]) continue;
+                seen_structs[index] = true;
+                for (program.structs[index].fields) |field| {
+                    try pending.append(allocator, field.field_type);
+                }
+            },
+            .variant => |index| {
+                if (index >= program.variants.len) return error.BadStruct;
+                if (seen_variants[index]) continue;
+                seen_variants[index] = true;
+                for (program.variants[index].members) |member| {
+                    for (member.fields) |field| {
+                        try pending.append(allocator, field.field_type);
+                    }
+                }
+            },
+            .none,
+            .boolean,
+            .byte,
+            .short,
+            .int,
+            .long,
+            .half,
+            .float,
+            .double,
+            .string,
+            .enumeration,
+            .function,
+            => {},
         }
     }
     return false;
