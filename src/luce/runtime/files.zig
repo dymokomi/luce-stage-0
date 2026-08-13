@@ -187,7 +187,13 @@ pub fn open(runtime: *Runtime, path: []const u8, mode: i64) Error!?Value {
     // before the host acquires anything.
     const closer = runtime.files.close orelse return runtime.fail(.host_unavailable);
     var handle: i64 = -1;
-    if (!try hostAnswer(runtime, callOpen(runtime, service, path, mode, &handle))) return null;
+    const answer = callOpen(runtime, service, path, mode, &handle);
+    // A well-behaved non-yes callback leaves the output untouched.  If a
+    // hostile callback nevertheless publishes a raw handle, close it before
+    // interpreting the answer so no external resource can escape through a
+    // malformed or exhausted branch.
+    if (answer != yes and handle != heap.no_file) closeFailedOpen(runtime, closer, handle);
+    if (!try hostAnswer(runtime, answer)) return null;
     // The raw handle belongs here until the object row takes it.  Either
     // allocation in `newFile` may fail; neither may leave the host handle
     // behind.

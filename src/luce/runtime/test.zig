@@ -6710,25 +6710,34 @@ test "file callbacks reject unknown answers before using their outputs" {
 
     // Neither an arbitrary positive value nor an arbitrary negative value is
     // an answer in the file protocol.  In particular, -2 must not inherit
-    // the old "any negative means exhausted" behavior.
-    for ([_]i32{ 2, -2 }) |malformed| {
+    // the old "any negative means exhausted" behavior.  A callback that
+    // writes a raw handle on any non-yes answer is malformed too, but the
+    // runtime still closes the handle before returning the refusal.
+    for ([_]i32{ files.no, 2, -2 }) |answer| {
         var bench: Bench = undefined;
         bench.setup();
         const runtime = &bench.runtime;
-        var host: Host = .{ .open_answer = malformed };
+        var host: Host = .{ .open_answer = answer };
         runtime.files = .{
             .context = &host,
             .open = Host.open,
             .close = Host.close,
         };
-        try expectTrap(
-            .host_unavailable,
-            runtime,
-            files.open(runtime, "malformed-open.txt", @intFromEnum(files.Mode.read)),
-        );
+        if (answer == files.no) {
+            try testing.expectEqual(
+                @as(?Value, null),
+                try files.open(runtime, "malformed-open.txt", @intFromEnum(files.Mode.read)),
+            );
+        } else {
+            try expectTrap(
+                .host_unavailable,
+                runtime,
+                files.open(runtime, "malformed-open.txt", @intFromEnum(files.Mode.read)),
+            );
+        }
         try testing.expectEqual(@as(u32, 0), runtime.live);
         try testing.expectEqual(@as(usize, 1), host.opened);
-        try testing.expectEqual(@as(usize, 0), host.closed);
+        try testing.expectEqual(@as(usize, 1), host.closed);
         bench.deinit();
     }
 
@@ -6747,6 +6756,7 @@ test "file callbacks reject unknown answers before using their outputs" {
     );
     try testing.expect(exhausted_runtime.exhausted);
     try testing.expectEqual(@as(u32, 0), exhausted_runtime.live);
+    try testing.expectEqual(@as(usize, 1), exhausted_host.closed);
     exhausted_bench.deinit();
 
     for ([_]i32{ 2, -2 }) |malformed| {

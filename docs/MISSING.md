@@ -345,6 +345,11 @@ handle exactly once before returning `host_unavailable`; otherwise a published
 file would bypass scope teardown.  Other resource callback and handle-domain
 permutations remain part of T0-OWN-15.
 
+The open door now also closes any non-sentinel raw handle a callback publishes
+alongside `no`, exhaustion, or a malformed answer, so a bad answer cannot leak
+an external resource before a Luce file row exists.  The broader callback
+protocol and handle-domain matrix remains open.
+
 The shared worker effect lock now treats unmatched releases as inert and
 rejects releases from non-owners before touching recursion state, so malformed
 boundary calls cannot underflow or unlock a platform mutex.  Barrier-driven
