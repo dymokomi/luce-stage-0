@@ -64,6 +64,11 @@ fn expectTrap(code: vocabulary.TrapCode, runtime: *Runtime, mistake: anytype) !v
     try testing.expectEqualStrings(code.message(), runtime.pending.?.message);
 }
 
+fn expectStale(runtime: *Runtime, mistake: anytype) !void {
+    try expectTrap(.use_after_free, runtime, mistake);
+    runtime.pending = null;
+}
+
 fn expectContainerParent(runtime: *Runtime, child: Value, parent: Value) !void {
     const owner = (try runtime.resolve(child)).owner;
     try testing.expectEqual(heap.Owner.Kind.container, owner.kind);
@@ -2109,6 +2114,169 @@ test "a stale handle to a reused row names nobody, not the newcomer" {
     try testing.expectEqual(@as(u32, 1), runtime.live);
 
     runtime.freeObject(second.asObject());
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
+test "stale handles reject every container operation after row reuse" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const stale_list = try runtime.newList(Value.none);
+    runtime.freeObject(stale_list.asObject());
+    const live_list = try runtime.newList(Value.none);
+    try expectStale(runtime, containers.length(runtime, stale_list));
+    try expectStale(runtime, containers.indexGet(runtime, stale_list, &.{Value.ofLong(0)}));
+    try expectStale(
+        runtime,
+        containers.indexSet(runtime, stale_list, &.{Value.ofLong(0)}, Value.none),
+    );
+    try expectStale(runtime, containers.append(runtime, stale_list, Value.none));
+    try expectStale(runtime, containers.insert(runtime, stale_list, 0, Value.none));
+    try expectStale(runtime, containers.pop(runtime, stale_list));
+    try expectStale(runtime, containers.remove(runtime, stale_list, Value.ofLong(0)));
+    try expectStale(runtime, containers.clear(runtime, stale_list));
+    try expectStale(runtime, containers.sort(runtime, stale_list));
+    try expectStale(runtime, containers.reverse(runtime, stale_list));
+    try expectStale(runtime, containers.listSlice(runtime, stale_list, 0, 0));
+    try expectStale(runtime, runtime.deepCopy(stale_list));
+    try expectStale(runtime, runtime.checkGivable(stale_list, null));
+    runtime.freeValue(stale_list);
+    runtime.freeValue(live_list);
+
+    const stale_map = try runtime.newMap();
+    runtime.freeObject(stale_map.asObject());
+    const live_map = try runtime.newMap();
+    try expectStale(runtime, containers.length(runtime, stale_map));
+    try expectStale(runtime, containers.indexGet(runtime, stale_map, &.{Value.ofString("k")}));
+    try expectStale(
+        runtime,
+        containers.indexSet(runtime, stale_map, &.{Value.ofString("k")}, Value.ofLong(1)),
+    );
+    try expectStale(runtime, containers.remove(runtime, stale_map, Value.ofString("k")));
+    try expectStale(runtime, containers.clear(runtime, stale_map));
+    try expectStale(runtime, containers.mapKeys(runtime, stale_map, Value.ofString("")));
+    try expectStale(runtime, containers.mapValues(runtime, stale_map, Value.none));
+    try expectStale(
+        runtime,
+        containers.mapPlace(runtime, stale_map, Value.ofString("k"), Value.ofLong(0)),
+    );
+    try expectStale(runtime, runtime.deepCopy(stale_map));
+    try expectStale(runtime, runtime.checkGivable(stale_map, null));
+    runtime.freeValue(stale_map);
+    runtime.freeValue(live_map);
+
+    const stale_array = try runtime.newArray(&.{2}, Value.none);
+    runtime.freeObject(stale_array.asObject());
+    const live_array = try runtime.newArray(&.{2}, Value.none);
+    try expectStale(runtime, containers.length(runtime, stale_array));
+    try expectStale(runtime, containers.dimSize(runtime, stale_array, 0));
+    try expectStale(runtime, containers.indexGet(runtime, stale_array, &.{Value.ofLong(0)}));
+    try expectStale(
+        runtime,
+        containers.indexSet(runtime, stale_array, &.{Value.ofLong(0)}, Value.none),
+    );
+    try expectStale(runtime, containers.arrayFill(runtime, stale_array, Value.none));
+    try expectStale(runtime, containers.listSlice(runtime, stale_array, 0, 0));
+    try expectStale(runtime, runtime.deepCopy(stale_array));
+    try expectStale(runtime, runtime.checkGivable(stale_array, null));
+    runtime.freeValue(stale_array);
+    runtime.freeValue(live_array);
+
+    const stale_builder = try runtime.newBuilder();
+    runtime.freeObject(stale_builder.asObject());
+    const live_builder = try runtime.newBuilder();
+    try expectStale(runtime, containers.length(runtime, stale_builder));
+    try expectStale(runtime, containers.append(runtime, stale_builder, Value.ofString("x")));
+    try expectStale(runtime, containers.appendAscii(runtime, stale_builder, 'x'));
+    try expectStale(runtime, containers.clear(runtime, stale_builder));
+    try expectStale(runtime, runtime.deepCopy(stale_builder));
+    try expectStale(runtime, runtime.checkGivable(stale_builder, null));
+    runtime.freeValue(stale_builder);
+    runtime.freeValue(live_builder);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
+test "stale file operations trap before touching the host" {
+    const Host = struct {
+        reads: usize = 0,
+        writes: usize = 0,
+        flushes: usize = 0,
+        closes: usize = 0,
+
+        fn read(
+            context: ?*anyopaque,
+            _: i64,
+            _: [*]u8,
+            _: i64,
+            filled: *i64,
+        ) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.reads += 1;
+            filled.* = 0;
+            return files.yes;
+        }
+
+        fn write(
+            context: ?*anyopaque,
+            _: i64,
+            _: [*]const u8,
+            _: i64,
+            written: *i64,
+        ) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.writes += 1;
+            written.* = 0;
+            return files.yes;
+        }
+
+        fn flush(context: ?*anyopaque, _: i64) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.flushes += 1;
+            return files.yes;
+        }
+
+        fn close(context: ?*anyopaque, _: i64) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.closes += 1;
+            return files.yes;
+        }
+    };
+
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+    var host: Host = .{};
+    runtime.files = .{
+        .context = &host,
+        .read = Host.read,
+        .write = Host.write,
+        .flush = Host.flush,
+        .close = Host.close,
+    };
+
+    const stale = try runtime.newFile(17, "stale.bin");
+    const bytes = try runtime.newArray(&.{4}, Value.ofByte(0));
+    runtime.freeObject(stale.asObject());
+    const replacement = try runtime.newFile(29, "replacement.bin");
+    try testing.expect(!stale.asObject().same(replacement.asObject()));
+
+    try expectStale(runtime, files.read(runtime, stale, bytes));
+    try expectStale(runtime, files.write(runtime, stale, bytes, 0));
+    try expectStale(runtime, files.flush(runtime, stale));
+    try expectStale(runtime, runtime.deepCopy(stale));
+    try expectStale(runtime, runtime.checkGivable(stale, null));
+    try testing.expectEqualStrings("", files.pathOf(runtime, stale));
+    runtime.freeValue(stale);
+    runtime.freeValue(replacement);
+    runtime.freeValue(bytes);
+
+    try testing.expectEqual(@as(usize, 0), host.reads);
+    try testing.expectEqual(@as(usize, 0), host.writes);
+    try testing.expectEqual(@as(usize, 0), host.flushes);
+    try testing.expectEqual(@as(usize, 2), host.closes);
     try testing.expectEqual(@as(u32, 0), runtime.live);
 }
 

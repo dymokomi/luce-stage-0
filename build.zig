@@ -171,6 +171,8 @@ pub fn build(b: *std.Build) void {
         "list growth keeps every raw capacity",
         "worker acquisition failures",
         "nested resource graph failures",
+        "stale handles reject every container",
+        "stale file operations trap",
     };
     const c_sanitize_luce = b.createModule(.{
         .root_source_file = b.path("src/luce/luce.zig"),
@@ -442,6 +444,8 @@ pub fn build(b: *std.Build) void {
             "failed worker error adoption still closes the child runtime",
             "worker acquisition failures",
             "nested resource graph failures",
+            "stale handles reject every container",
+            "stale file operations trap",
         },
     });
     const test_runtime_ownership_step = b.step(

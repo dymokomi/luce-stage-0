@@ -1406,6 +1406,18 @@ runtime ownership lane passes 21/21.
 
 Commit: current Tier 0 allocator-failure hardening batch.
 
+## 2026-08-12 — stale generations are defended across container and file doors
+
+The stale-handle regression now frees and reuses rows for lists, maps,
+arrays, and builders, then drives every corresponding length, index, mutate,
+copy, ownership, and release door through the stale handle.  A resource
+variant repeats the check for file read, write, flush, copy, and give, and
+asserts that no stale operation reaches the host.  Releasing stale values and
+rows twice remains inert; task one-shot waits and nested worker resources are
+covered by the lifecycle lanes.
+
+Commit: current Tier 0 stale-handle hardening batch.
+
 ## 2026-08-12 — array fills cannot strand old cells or partial copies
 
 `array_fill` now releases object ownership as well as value storage when a
