@@ -495,10 +495,12 @@ test "ownership facts do not cross basic blocks" {
     program.heap_types = try arena.dupe(types.HeapType, &.{.{ .list = .long }});
     const instructions = try arena.dupe(Instruction, &.{
         .{ .heap_new = .{ .heap = 0, .dims = &.{} } },
+        .{ .local_set = .{ .local = 0, .value = 0 } },
         .{ .object_bind = .{ .local = 0, .value = 0 } },
         .{ .jump = 1 },
-        .{ .object_bind = .{ .local = 1, .value = 0 } },
-        .{ .object_unbind = .{ .local = 1, .value = 0 } },
+        .{ .local_get = 0 },
+        .{ .object_bind = .{ .local = 1, .value = 4 } },
+        .{ .object_unbind = .{ .local = 1, .value = 4 } },
         .{ .ret = null },
     });
     const result_types = try arena.dupe(types.Type, &.{
@@ -506,12 +508,14 @@ test "ownership facts do not cross basic blocks" {
         .none,
         .none,
         .none,
+        .{ .heap = 0 },
+        .none,
         .none,
         .none,
     });
     const blocks = try arena.alloc(Block, 2);
-    blocks[0] = .{ .items = try arena.dupe(Register, &.{ 0, 1, 2 }) };
-    blocks[1] = .{ .items = try arena.dupe(Register, &.{ 3, 4, 5 }) };
+    blocks[0] = .{ .items = try arena.dupe(Register, &.{ 0, 1, 2, 3 }) };
+    blocks[1] = .{ .items = try arena.dupe(Register, &.{ 4, 5, 6, 7 }) };
     program.functions = try arena.dupe(defs.Function, &.{.{
         .name = "main",
         .parameter_count = 0,
@@ -530,8 +534,8 @@ test "ownership facts do not cross basic blocks" {
     try mir.verify(testing.allocator, &program);
     try testing.expectEqual(@as(usize, 2), countTag(&program, .object_bind));
     try testing.expectEqual(@as(usize, 1), countTag(&program, .object_unbind));
-    try testing.expectEqual(@as(usize, 3), program.functions[0].blocks[0].items.len);
-    try testing.expectEqual(@as(usize, 3), program.functions[0].blocks[1].items.len);
+    try testing.expectEqual(@as(usize, 4), program.functions[0].blocks[0].items.len);
+    try testing.expectEqual(@as(usize, 4), program.functions[0].blocks[1].items.len);
 }
 
 test "ownership never forwards a load out of a slot that owns its storage" {

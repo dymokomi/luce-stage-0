@@ -1356,6 +1356,10 @@ optimizer matrix remains in MISSING.md.  The optimizer's direct shape suite
 also pins call_indirect as an ownership barrier, so a future pass cannot elide
 a prior bind based on a callee it cannot inspect.
 
+The module verifier also rejects both directions of a forged serialized
+give mismatch between a function signature and the named callee, while the
+optimizer shape suite proves ownership facts do not cross basic blocks.
+
 Commit: current Tier 0 cross-stage ownership hardening batch.
 
 ## 2026-08-12 — array fills cannot strand old cells or partial copies

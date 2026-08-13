@@ -105,8 +105,10 @@ the already optimized ownership graph, decodes it, and runs the decoded
 program through both engines; it covers the union/list/struct/bound-method
 composition, a give parameter, and an inout receiver that shape-only round
 trips could miss.  The wider optimizer, forged indirect-signature, and
-allocator/invariant matrix remains open.  A direct optimizer regression also
-pins call_indirect as an ownership barrier.  The repository now exposes
+allocator/invariant matrix remains open.  Direct verifier coverage now flips
+both sides of a serialized indirect-call ownership verb and proves the
+mismatch is rejected; the optimizer suite also pins owner facts to a basic
+block and treats indirect calls as barriers.  The repository now exposes
 repeatable
 `test-sanitize-c` and `test-sanitize-thread` ownership lanes; the current
 Zig/macOS arm64 toolchain does not provide a usable address/leak sanitizer or

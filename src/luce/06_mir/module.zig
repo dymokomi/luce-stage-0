@@ -1229,6 +1229,80 @@ test "function value give modes round-trip with the callee" {
     }
 }
 
+test "decoded indirect calls reject mismatched ownership verbs" {
+    const source =
+        \\func consume(values: give list(long)) -> long:
+        \\    var total: long = 0
+        \\    for value in values:
+        \\        total = total + value
+        \\    return total
+        \\
+        \\func main():
+        \\    var values: list(long) = [1, 2, 3]
+        \\    let consume_values: func(give list(long)) -> long = consume
+        \\    print(string(consume_values(give values)))
+        \\
+    ;
+    var program = try compileScript(source);
+    defer program.deinit();
+
+    const SignatureSite = struct { signature: usize, parameter: usize };
+    var signature_site: ?SignatureSite = null;
+    for (program.signatures, 0..) |signature, signature_index| {
+        for (signature.parameters, 0..) |parameter, parameter_index| {
+            if (!parameter.gives) continue;
+            signature_site = .{
+                .signature = signature_index,
+                .parameter = parameter_index,
+            };
+            break;
+        }
+        if (signature_site != null) break;
+    }
+    try testing.expect(signature_site != null);
+
+    const FunctionSite = struct { function: usize, parameter: usize };
+    var function_site: ?FunctionSite = null;
+    for (program.functions, 0..) |function, function_index| {
+        for (function.parameter_gives, 0..) |gives, parameter_index| {
+            if (!gives) continue;
+            function_site = .{
+                .function = function_index,
+                .parameter = parameter_index,
+            };
+            break;
+        }
+        if (function_site != null) break;
+    }
+    try testing.expect(function_site != null);
+
+    // A function value carries the signature's ownership verb.  Flipping
+    // only that side must be refused before an indirect call can hand a
+    // borrowed list to a callee that binds it.
+    const signature = signature_site.?;
+    program.signatures[signature.signature].parameters[signature.parameter].gives = false;
+    {
+        const encoded = try encode(testing.allocator, &program);
+        defer testing.allocator.free(encoded);
+        try testing.expectError(error.InvalidModule, decode(testing.allocator, encoded));
+    }
+    program.signatures[signature.signature].parameters[signature.parameter].gives = true;
+
+    // The converse is equally dangerous: a stale function row that says
+    // the parameter is borrowed would skip the callee's ownership handoff.
+    const function = function_site.?;
+    const original_gives = program.functions[function.function].parameter_gives;
+    const forged_gives = try program.arena.allocator().dupe(bool, original_gives);
+    program.functions[function.function].parameter_gives = forged_gives;
+    forged_gives[function.parameter] = false;
+    {
+        const encoded = try encode(testing.allocator, &program);
+        defer testing.allocator.free(encoded);
+        try testing.expectError(error.InvalidModule, decode(testing.allocator, encoded));
+    }
+    program.functions[function.function].parameter_gives = original_gives;
+}
+
 test "an inout receiver and call round-trip through the current format" {
     var program = try compileScript(
         \\struct Counter:
