@@ -1643,3 +1643,18 @@ ownership lanes pass 43/43 each.  Task result transfer/wait and the remaining
 C allocation doors stay listed in MISSING.md.
 
 Commit: current Tier 0 resource-acquisition hardening batch.
+
+## 2026-08-13 — C task result transfer and one-shot wait
+
+The C task-wait boundary now transfers a nested worker struct/list graph under
+failure injection at every parent allocation point.  A failed transfer leaves
+the output sentinel and the task row intact for release, while the detached
+worker is joined and its child runtime is closed exactly once.  Successful
+transfers are inspected and released as an independent graph.  A second wait
+after either outcome traps without joining or closing again.
+
+The focused runtime ownership lane passes 36/36; the C- and thread-sanitized
+ownership lanes pass 44/44 each.  The remaining C allocation doors stay listed
+in MISSING.md.
+
+Commit: current Tier 0 task-transfer hardening batch.

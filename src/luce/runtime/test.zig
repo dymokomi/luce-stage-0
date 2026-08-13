@@ -663,6 +663,8 @@ const CValueAllocationDoor = enum {
 
 const CFileAllocationDoor = enum { open, read_text, write_text };
 
+const CTaskAllocationDoor = enum { wait_result };
+
 const CFileState = struct {
     const handle: i64 = 7_401;
 
@@ -6039,6 +6041,7 @@ extern fn luce_rt_spawn(
     count: i64,
     out: *Value,
 ) callconv(.c) i32;
+extern fn luce_rt_task_wait(runtime: *Runtime, task: *const Value, out: *Value) callconv(.c) i32;
 extern fn luce_rt_file_open(
     runtime: *Runtime,
     path: [*]const u8,
@@ -6680,6 +6683,109 @@ test "the C spawn door rolls worker acquisition back before publishing a task" {
     }
     try testing.expect(completed);
     try testing.expect(failures >= 1);
+}
+
+test "C task wait rolls nested result transfer back and detaches exactly once" {
+    const doors = [_]CTaskAllocationDoor{.wait_result};
+    for (doors) |door| {
+        var failures: usize = 0;
+        var completed = false;
+        for (0..64) |failure_offset| {
+            var parent_objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+            var parent_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+            var parent: Runtime = .init(.{
+                .arena = parent_arena.allocator(),
+                .objects = parent_objects.allocator(),
+            });
+            var child_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+            var child: Runtime = .init(.{
+                .arena = child_arena.allocator(),
+                .objects = testing.allocator,
+            });
+            var state: WorkerFailureState = .{
+                .child = &child,
+                .produce_graph = true,
+                .child_live_at_close = std.math.maxInt(u32),
+            };
+            state.install(&parent);
+            var cleaned = false;
+            defer if (!cleaned) {
+                parent.deinit();
+                parent_arena.deinit();
+                child_arena.deinit();
+            };
+
+            var task: Value = .none;
+            try testing.expectEqual(@as(i32, 0), luce_rt_spawn(&parent, 0, &.{}, 0, &task));
+            try testing.expect(task.tag == .object);
+            const task_live = parent.live;
+
+            var answer = Value.ofLong(99);
+            parent_objects.fail_index = parent_objects.alloc_index + failure_offset;
+            const status = switch (door) {
+                .wait_result => luce_rt_task_wait(&parent, &task, &answer),
+            };
+            parent_objects.fail_index = std.math.maxInt(usize);
+
+            if (status == 0) {
+                try testing.expectEqual(workers.survived, status);
+                try testing.expect(state.ran);
+                try testing.expectEqual(@as(usize, 1), state.joins);
+                try testing.expectEqual(@as(usize, 1), state.closes);
+                try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
+                try testing.expect(answer.tag == .strukt);
+                const fields = answer.asStruct();
+                try testing.expectEqual(@as(usize, 2), fields.len);
+                try testing.expectEqualStrings(
+                    "worker graph result has outside storage",
+                    fields[1].asString(),
+                );
+                const branch = fields[0];
+                try testing.expectEqual(@as(i64, 1), (try containers.length(&parent, branch)).asLong());
+                const leaf = try containers.indexGet(&parent, branch, &.{Value.ofLong(0)});
+                try testing.expectEqual(@as(i64, 11), (try containers.indexGet(
+                    &parent,
+                    leaf,
+                    &.{Value.ofLong(0)},
+                )).asLong());
+                parent.freeValue(answer);
+                completed = true;
+            } else {
+                try testing.expectEqual(@as(i32, 1), status);
+                try testing.expectEqual(@as(i64, 99), answer.asLong());
+                try testing.expect(state.ran);
+                try testing.expect(parent.exhausted);
+                try testing.expect(parent.pending == null);
+                try testing.expect(parent.live == task_live);
+                try testing.expect(state.joins == 1);
+                try testing.expect(state.closes == 1);
+                try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
+                failures += 1;
+            }
+
+            // `wait` detaches before copying.  A second C wait must trap
+            // without joining or touching the sentinel result, regardless
+            // of whether the first wait copied or failed.
+            var second = Value.ofLong(77);
+            try testing.expectEqual(@as(i32, 1), luce_rt_task_wait(&parent, &task, &second));
+            try testing.expectEqual(@as(i64, 77), second.asLong());
+            try testing.expectEqual(vocabulary.TrapCode.use_after_free, parent.pending.?.code);
+            try testing.expectEqual(@as(usize, 1), state.joins);
+            try testing.expectEqual(@as(usize, 1), state.closes);
+            parent.pending = null;
+
+            parent.freeValue(task);
+            try testing.expectEqual(@as(u32, 0), parent.live);
+            parent.deinit();
+            parent_arena.deinit();
+            child_arena.deinit();
+            cleaned = true;
+            try testing.expectEqual(parent_objects.allocated_bytes, parent_objects.freed_bytes);
+            if (completed) break;
+        }
+        try testing.expect(completed);
+        try testing.expect(failures >= 1);
+    }
 }
 
 test "the C materialization surface roots, loads, freezes, and excludes a constant" {
