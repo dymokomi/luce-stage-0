@@ -2064,3 +2064,24 @@ The Luce package suite passes 559/559; the C and thread sanitizer lanes each
 pass 68/68.
 
 Commit: `66c81a3` — Reject malformed composite value runs.
+
+## 2026-08-13 — byte runs and host teardown fail closed
+
+Outside strings now validate their checked address range as well as their
+pointer and length before a byte is read.  A forged run whose address plus
+length wraps the host address space is rejected without entering native
+memory.  Boundary regressions cover wrapping strings, aligned composite runs
+whose ranges overflow, and malformed function values with the wrong arity.
+
+The production host's argument callback now matches the ABI's nullable C
+pointer contract, while directory listing retains its non-null output
+contract.  The worker teardown regression publishes a nested worker before
+closing the table, then proves teardown can join the parent without holding
+the registry lock while the parent joins its child.
+
+The focused host-worker lane passes 2/2, the Luce package suite passes
+559/559, and both C and thread sanitizer lanes pass 68/68.  The repository
+gate reaches 29/29 example tests before the known editor subprocess failures;
+those unrelated example-tooling failures remain outside this batch.
+
+Commit: current Tier 0 runtime/host hardening batch.

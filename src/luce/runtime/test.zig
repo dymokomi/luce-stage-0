@@ -8996,6 +8996,30 @@ test "C container doors reject wrong tags and object shapes before mutation" {
     };
     try expectCTrapCode(runtime, luce_rt_string_byte(runtime, &malformed_outside, 0, &out), .not_owned);
 
+    const wrapping_string: Value = .{
+        .tag = .string,
+        .inline_length = value.text_outside,
+        .bits = std.math.maxInt(u64) - 3,
+        .length = 8,
+    };
+    try expectCTrapCode(runtime, luce_rt_string_byte(runtime, &wrapping_string, 0, &out), .not_owned);
+
+    const aligned_wrapping_run: Value = .{
+        .tag = .strukt,
+        .bits = @intCast(std.math.maxInt(usize) - (@alignOf(Value) - 1)),
+        .length = 1,
+    };
+    try expectCTrapCode(runtime, luce_rt_copy(runtime, &aligned_wrapping_run, &out), .not_owned);
+
+    var invalid_function_slots = [_]Value{ Value.ofLong(1), Value.none, Value.none };
+    const invalid_function = Value.ofFunction(&invalid_function_slots);
+    try expectCTrapCode(runtime, luce_rt_copy(runtime, &invalid_function, &out), .not_owned);
+    try expectCTrapCode(
+        runtime,
+        luce_rt_function_make(runtime, &invalid_function_slots, invalid_function_slots.len, &out),
+        .not_owned,
+    );
+
     out = Value.ofLong(99);
     // Composite values carry a pointer/length run too.  A null run with a
     // nonzero length must be rejected before give/copy or any ownership walk

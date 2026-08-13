@@ -1230,7 +1230,7 @@ pub const Host = struct {
     fn cArg(
         context: ?*anyopaque,
         index: i64,
-        text: *[*]const u8,
+        text: *[*c]const u8,
         length: *i64,
     ) callconv(.c) abi.Answer {
         const self = of(context);
@@ -1673,6 +1673,8 @@ test "worker teardown closes publication and never joins under its registry lock
         channel: luce.runtime.workers.Channel,
         entered: std.atomic.Value(bool) = .init(false),
         go: std.atomic.Value(bool) = .init(false),
+        nested_published: std.atomic.Value(bool) = .init(false),
+        finish: std.atomic.Value(bool) = .init(false),
         nested_answer: std.atomic.Value(i32) = .init(luce.runtime.workers.exhausted),
         probe_entered: std.atomic.Value(bool) = .init(false),
 
@@ -1688,6 +1690,7 @@ test "worker teardown closes publication and never joins under its registry lock
             if (self.channel.join.?(self.channel.context, 0) == luce.runtime.workers.no) {
                 self.probe_entered.store(true, .release);
             }
+            while (!self.finish.load(.acquire)) pause();
         }
 
         fn parent(argument: ?*anyopaque) callconv(.c) void {
@@ -1704,6 +1707,8 @@ test "worker teardown closes publication and never joins under its registry lock
             );
             self.nested_answer.store(answer, .release);
             if (answer == luce.runtime.workers.yes) {
+                self.nested_published.store(true, .release);
+                while (!self.finish.load(.acquire)) pause();
                 _ = self.channel.join.?(self.channel.context, nested);
             }
         }
@@ -1722,15 +1727,22 @@ test "worker teardown closes publication and never joins under its registry lock
     defer host.deinit();
 
     var closing: Closing = .{ .channel = host.workerChannel() };
-    // An OS refusal while starting the teardown probe must not leave
-    // the parent parked when the deferred Host.deinit drains it.
-    defer closing.go.store(true, .release);
+    // If an assertion fails, release both gates before deferred teardown
+    // joins the workers; a failing test must not strand a native thread.
+    defer {
+        closing.go.store(true, .release);
+        closing.finish.store(true, .release);
+    }
     var parent: i64 = 0;
     try testing.expectEqual(
         luce.runtime.workers.yes,
         closing.channel.spawn.?(closing.channel.context, Closing.parent, &closing, &parent),
     );
     while (!closing.entered.load(.acquire)) Closing.pause();
+
+    closing.go.store(true, .release);
+    while (!closing.nested_published.load(.acquire)) Closing.pause();
+    while (!closing.probe_entered.load(.acquire)) Closing.pause();
 
     const teardown = try std.Thread.spawn(.{}, Closing.close, .{&host});
     while (true) {
@@ -1740,10 +1752,10 @@ test "worker teardown closes publication and never joins under its registry lock
         if (started) break;
         Closing.pause();
     }
-    closing.go.store(true, .release);
+    closing.finish.store(true, .release);
     teardown.join();
 
-    try testing.expectEqual(luce.runtime.workers.no, closing.nested_answer.load(.acquire));
+    try testing.expectEqual(luce.runtime.workers.yes, closing.nested_answer.load(.acquire));
     try testing.expect(closing.probe_entered.load(.acquire));
     try testing.expectEqual(@as(usize, 0), host.threads.items.len);
     // Teardown retains the old behavior of clearing the table: a
@@ -2150,11 +2162,11 @@ test "the C table offers every service, over the same implementation" {
     }
 
     try testing.expectEqual(@as(i64, 2), table.arg_count.?(table.context));
-    var text: [*]const u8 = undefined;
+    var arg_text: [*c]const u8 = undefined;
     var length: i64 = undefined;
-    try testing.expectEqual(abi.Answer.yes, table.arg.?(table.context, 1, &text, &length));
-    try testing.expectEqualStrings("beta", text[0..@intCast(length)]);
-    try testing.expectEqual(abi.Answer.no, table.arg.?(table.context, 2, &text, &length));
+    try testing.expectEqual(abi.Answer.yes, table.arg.?(table.context, 1, &arg_text, &length));
+    try testing.expectEqualStrings("beta", arg_text[0..@intCast(length)]);
+    try testing.expectEqual(abi.Answer.no, table.arg.?(table.context, 2, &arg_text, &length));
 
     var found_kind: i64 = -1;
     try testing.expectEqual(
@@ -2164,6 +2176,7 @@ test "the C table offers every service, over the same implementation" {
     // Nothing there yet: an *answer*, not a refusal.  The two used to
     // be one `false` (docs/FILESYSTEM.md D16).
     try testing.expectEqual(@as(i64, 0), found_kind);
+    var text: [*]const u8 = undefined;
     // Writing and reading go through the byte channel now, which is
     // the whole of ABI version 12: the retired whole-file slots are
     // null above, and this is what stands in their place.

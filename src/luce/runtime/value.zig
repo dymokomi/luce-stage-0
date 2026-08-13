@@ -325,9 +325,18 @@ pub const Value = extern struct {
     pub fn hasValidStringRepresentation(self: Value) bool {
         if (self.tag != .string) return false;
         if (self.inline_length == text_outside) {
-            return self.length == 0 or self.bits != 0;
+            return self.hasValidByteRun();
         }
         return self.inline_length <= inline_capacity;
+    }
+
+    fn hasValidByteRun(self: Value) bool {
+        const length = std.math.cast(usize, self.length) orelse return false;
+        if (length == 0) return true;
+        const address = std.math.cast(usize, self.bits) orelse return false;
+        if (address == 0) return false;
+        _ = std.math.add(usize, address, length) catch return false;
+        return true;
     }
 
     /// Whether a value's tagged storage can be walked without turning a
