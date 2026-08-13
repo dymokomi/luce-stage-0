@@ -71,6 +71,14 @@ then sanitizer and invariant lanes.  The research basis includes the
 [Swift ownership parameters](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/declarations/)
 and [parameterized testing](https://developer.apple.com/documentation/testing/parameterizedtesting).
 
+The first T0-OWN-3 corpus slice is now checked in as a four-seed, 2,800-step
+list-forest state machine with a reference owner model.  It covers legal
+append/pop/insert/remove/overwrite/clear transitions, binding and return,
+cycle and second-owner rejection, stale handles, double release, row reuse,
+and explicit zero-live teardown.  The item remains open until the same
+approach reaches maps, arrays, structs/unions, resources, worker graphs, and
+the cross-stage/invariant lanes named above.
+
 ## Tier 1 — design gaps before implementation
 
 ### Typed worker channels

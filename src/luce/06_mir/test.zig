@@ -610,8 +610,32 @@ test "errored asks about a call that can fail, and must stand in its block" {
     try testing.expectError(error.BadIntrinsic, verify_mod.verify(testing.allocator, &asking));
 
     // `file_read` can fail, so the same question is well formed.
-    asking.functions[0].instructions[1] = .{ .intrinsic = .{ .kind = .file_read, .arguments = &path } };
-    asking.functions[0].result_types[1] = .string;
+    // A value-bearing fallible producer also has to park its answer before
+    // branching.  That is the shape the verifier protects, so this fixture
+    // supplies the smallest valid two-arm continuation.
+    const valid_arena = asking.arena.allocator();
+    asking.functions[0].instructions = try valid_arena.dupe(Instruction, &.{
+        .{ .const_string = 0 }, // r0
+        .{ .intrinsic = .{ .kind = .file_read, .arguments = &path } }, // r1
+        .{ .intrinsic = .{ .kind = .errored, .arguments = &outcome } }, // r2
+        .{ .local_set = .{ .local = 0, .value = 1 } }, // r3
+        .{ .branch = .{ .condition = 2, .then_block = 1, .else_block = 2 } }, // r4
+        .{ .ret = null }, // r5
+        .{ .ret = null }, // r6
+    });
+    asking.functions[0].result_types = try valid_arena.dupe(
+        types.Type,
+        &.{ .string, .string, .boolean, .none, .none, .none, .none },
+    );
+    asking.functions[0].locals = try valid_arena.dupe(
+        Local,
+        &.{.{ .name = "answer", .local_type = .string }},
+    );
+    asking.functions[0].blocks = try valid_arena.dupe(Block, &.{
+        .{ .items = try valid_arena.dupe(Register, &.{ 0, 1, 2, 3, 4 }) },
+        .{ .items = try valid_arena.dupe(Register, &.{5}) },
+        .{ .items = try valid_arena.dupe(Register, &.{6}) },
+    });
     try verify_mod.verify(testing.allocator, &asking);
 
     // `errored` names exactly one instruction.

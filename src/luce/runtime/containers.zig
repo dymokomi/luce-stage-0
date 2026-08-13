@@ -82,6 +82,10 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
     const stored = held;
     errdefer runtime.dropStorage(stored);
     const object = try runtime.resolveMutable(target);
+    // Validate the incoming ownership before releasing the old cell.  On
+    // a forged store this preserves both the destination and the graph it
+    // tried to alias.
+    try runtime.checkGivable(stored, null);
     switch (object.data) {
         .list => {
             const index = indices[0].asLong();
@@ -165,6 +169,12 @@ pub fn append(runtime: *Runtime, target: Value, held: Value) Error!void {
         .list => {
             errdefer runtime.dropStorage(held);
             try runtime.requireMutable(object);
+            // A retaining store consumes an owned value.  The semantic
+            // stage normally proves this before lowering, but the runtime
+            // is also the backstop for decoded or hostile MIR: accepting a
+            // child that another container already owns would leave the
+            // graph with two edges and only one owner field.
+            try runtime.checkGivable(held, null);
             // String and scalar appends cannot add an ownership edge.
             // Keep their hot runtime path to the one growth/store call
             // they had before cycle validation; only an object handle or
@@ -209,6 +219,10 @@ pub fn insert(runtime: *Runtime, target: Value, index: i64, held: Value) Error!v
     errdefer runtime.dropStorage(held);
     const object = try runtime.resolveMutable(target);
     if (index < 0 or index > object.elements.count) return runtime.fail(.index_bounds);
+    // Keep the runtime boundary honest for hand-built MIR.  A container
+    // element cannot be inserted into a second owner without first being
+    // popped or copied.
+    try runtime.checkGivable(held, null);
     try runtime.ensureAcyclicAdoption(target.asObject(), held);
     try object.elements.insert(runtime.objects, @intCast(index), held);
     runtime.adoptInto(target.asObject(), held);
@@ -570,6 +584,10 @@ pub fn mapPlace(runtime: *Runtime, target: Value, key: Value, zero: Value) Error
     switch (object.data) {
         .map => |*map| {
             if (map.find(&key)) |at| return map.entries.items[at].value;
+            // `zero` becomes the map's owned value on this path.  Refuse a
+            // value already owned by another container before allocating a
+            // key or publishing the entry.
+            try runtime.checkGivable(zero, null);
             try runtime.ensureAcyclicAdoption(target.asObject(), zero);
             const owned_key = try runtime.ownValue(key);
             errdefer runtime.dropStorage(owned_key);

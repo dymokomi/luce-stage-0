@@ -371,6 +371,16 @@ pub fn build(b: *std.Build) void {
     );
     test_runtime_ownership_step.dependOn(&b.addRunArtifact(runtime_ownership_tests).step);
 
+    const owner_graph_tests = b.addTest(.{
+        .root_module = luce,
+        .filters = &.{"fixed owner-graph seeds keep one owner"},
+    });
+    const test_owner_graph_step = b.step(
+        "test-owner-graph",
+        "Run deterministic ownership graph state-machine tests",
+    );
+    test_owner_graph_step.dependOn(&b.addRunArtifact(owner_graph_tests).step);
+
     const optimizer_tests = b.addTest(.{
         .root_module = luce,
         .filters = &.{"function pruning does not retain an orphaned function reference"},

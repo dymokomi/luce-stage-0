@@ -1305,3 +1305,16 @@ break/continue, exit through union-owned graphs, and discarded
 nested-union worker results.
 
 Commit: current Tier 0 exceptional-control-flow hardening batch.
+
+## 2026-08-12 — retaining stores reject a second container owner
+
+The runtime container API now checks that an object-carrying value is loose
+before `append`, `insert`, indexed replacement, or a new `map_place` entry
+can publish it.  The compiler normally proves this earlier, but decoded or
+hostile MIR must not be able to overwrite the child's owner field and leave
+two containers claiming one object.  The check runs before an indexed
+overwrite releases its old value, so a rejected store preserves both sides.
+A four-seed owner-graph state machine covers the legal transitions, cycle
+rejections, stale handles, double release, binding/return, and teardown.
+
+Commit: current Tier 0 owner-graph hardening batch.

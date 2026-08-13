@@ -70,6 +70,505 @@ fn expectContainerParent(runtime: *Runtime, child: Value, parent: Value) !void {
     try testing.expect(owner.details.parent.same(parent.asObject()));
 }
 
+/// A tiny deterministic generator for the ownership state machine.  The
+/// seed and the transition count are part of the test contract: when a
+/// sequence finds a bad edge, the same trace can be replayed without a
+/// process-global random source changing the failure.
+const OwnerGraphRng = struct {
+    state: u64,
+
+    fn init(seed: u64) @This() {
+        return .{ .state = seed };
+    }
+
+    fn next(self: *@This()) u64 {
+        self.state = self.state *% 6_364_136_223_846_793_005 +% 1_442_695_040_888_963_407;
+        return self.state;
+    }
+
+    fn below(self: *@This(), upper: usize) usize {
+        std.debug.assert(upper != 0);
+        return @intCast(self.next() % upper);
+    }
+};
+
+/// The reference side of the randomized ownership proof.  It deliberately
+/// models only object identity and parent edges; list contents remain in the
+/// runtime and are audited after every transition, so the model cannot agree
+/// with a bug merely because it repeated the implementation's storage walk.
+const OwnerGraph = struct {
+    const capacity = 96;
+
+    const Node = struct {
+        handle: Value,
+        parent: ?usize = null,
+        live: bool = true,
+    };
+
+    nodes: [capacity]Node = undefined,
+    count: usize = 0,
+
+    fn add(self: *@This(), handle: Value) !usize {
+        if (self.count == capacity) return error.TestExpected;
+        const index = self.count;
+        self.nodes[index] = .{ .handle = handle };
+        self.count += 1;
+        return index;
+    }
+
+    fn findLive(self: *const @This(), handle: Value) ?usize {
+        if (handle.tag != .object) return null;
+        const wanted = handle.asObject();
+        for (self.nodes[0..self.count], 0..) |node, index| {
+            if (node.live and node.handle.asObject().same(wanted)) return index;
+        }
+        return null;
+    }
+
+    fn chooseLive(self: *const @This(), random: *OwnerGraphRng) ?usize {
+        var choices: usize = 0;
+        for (self.nodes[0..self.count]) |node| {
+            if (node.live) choices += 1;
+        }
+        if (choices == 0) return null;
+        var wanted = random.below(choices);
+        for (self.nodes[0..self.count], 0..) |node, index| {
+            if (!node.live) continue;
+            if (wanted == 0) return index;
+            wanted -= 1;
+        }
+        unreachable;
+    }
+
+    fn chooseLoose(self: *const @This(), random: *OwnerGraphRng) ?usize {
+        var choices: usize = 0;
+        for (self.nodes[0..self.count]) |node| {
+            if (node.live and node.parent == null) choices += 1;
+        }
+        if (choices == 0) return null;
+        var wanted = random.below(choices);
+        for (self.nodes[0..self.count], 0..) |node, index| {
+            if (!node.live or node.parent != null) continue;
+            if (wanted == 0) return index;
+            wanted -= 1;
+        }
+        unreachable;
+    }
+
+    fn chooseContained(self: *const @This(), random: *OwnerGraphRng) ?usize {
+        var choices: usize = 0;
+        for (self.nodes[0..self.count]) |node| {
+            if (node.live and node.parent != null) choices += 1;
+        }
+        if (choices == 0) return null;
+        var wanted = random.below(choices);
+        for (self.nodes[0..self.count], 0..) |node, index| {
+            if (!node.live or node.parent == null) continue;
+            if (wanted == 0) return index;
+            wanted -= 1;
+        }
+        unreachable;
+    }
+
+    /// Whether `node` is at or below `ancestor` in the reference tree.
+    fn descendsFrom(self: *const @This(), node: usize, ancestor: usize) bool {
+        var current: ?usize = node;
+        var remaining = self.count + 1;
+        while (current) |at| {
+            if (at == ancestor) return true;
+            if (remaining == 0) return true;
+            remaining -= 1;
+            current = self.nodes[at].parent;
+        }
+        return false;
+    }
+
+    fn wouldCycle(self: *const @This(), parent: usize, child: usize) bool {
+        return parent == child or self.descendsFrom(parent, child);
+    }
+
+    fn retireSubtree(self: *@This(), root: usize) void {
+        for (self.nodes[0..self.count], 0..) |*node, index| {
+            if (node.live and self.descendsFrom(index, root)) node.live = false;
+        }
+    }
+
+    fn retireChildren(self: *@This(), parent: usize) void {
+        for (self.nodes[0..self.count], 0..) |node, index| {
+            if (node.live and node.parent == parent) self.retireSubtree(index);
+        }
+    }
+
+    fn liveCount(self: *const @This()) u32 {
+        var count: u32 = 0;
+        for (self.nodes[0..self.count]) |node| {
+            if (node.live) count += 1;
+        }
+        return count;
+    }
+};
+
+fn ownerGraphExpect(condition: bool, seed: u64, step: usize, fact: []const u8) !void {
+    if (condition) return;
+    std.debug.print("owner graph seed 0x{x}, step {d}: {s}\n", .{ seed, step, fact });
+    return error.TestExpected;
+}
+
+fn ownerGraphLength(runtime: *Runtime, held: Value) !usize {
+    const measured = (try containers.length(runtime, held)).asLong();
+    if (measured < 0) return error.TestExpected;
+    return @intCast(measured);
+}
+
+fn chooseNonemptyOwnerGraph(
+    runtime: *Runtime,
+    graph: *const OwnerGraph,
+    random: *OwnerGraphRng,
+) !?usize {
+    var choices: [OwnerGraph.capacity]usize = undefined;
+    var count: usize = 0;
+    for (graph.nodes[0..graph.count], 0..) |node, index| {
+        if (!node.live) continue;
+        if (try ownerGraphLength(runtime, node.handle) == 0) continue;
+        choices[count] = index;
+        count += 1;
+    }
+    if (count == 0) return null;
+    return choices[random.below(count)];
+}
+
+/// Check both halves of the invariant after every state-machine operation:
+/// the runtime's census and owner metadata, then every object edge as seen
+/// through the public container API.  This catches a wrong owner field even
+/// when the list still appears to contain the expected handle, and catches a
+/// duplicate edge even when the table's live count happens to match.
+fn auditOwnerGraph(
+    runtime: *Runtime,
+    graph: *const OwnerGraph,
+    seed: u64,
+    step: usize,
+) !void {
+    try ownerGraphExpect(runtime.live == graph.liveCount(), seed, step, "live census");
+
+    for (graph.nodes[0..graph.count], 0..) |node, index| {
+        if (!node.live) continue;
+        const object = try runtime.resolve(node.handle);
+        if (node.parent) |parent| {
+            try ownerGraphExpect(graph.nodes[parent].live, seed, step, "live parent");
+            try ownerGraphExpect(object.owner.kind == .container, seed, step, "container owner kind");
+            try ownerGraphExpect(
+                object.owner.details.parent.same(graph.nodes[parent].handle.asObject()),
+                seed,
+                step,
+                "exact container parent",
+            );
+        } else {
+            try ownerGraphExpect(object.owner.kind == .loose, seed, step, "loose root owner kind");
+        }
+
+        const length = try ownerGraphLength(runtime, node.handle);
+        for (0..length) |at| {
+            const item = try containers.indexGet(runtime, node.handle, &.{Value.ofLong(@intCast(at))});
+            if (item.tag != .object) continue;
+            const child = graph.findLive(item) orelse {
+                std.debug.print("owner graph seed 0x{x}, step {d}: unknown child in node {d}\n", .{ seed, step, index });
+                return error.TestExpected;
+            };
+            try ownerGraphExpect(
+                graph.nodes[child].parent == index,
+                seed,
+                step,
+                "edge agrees with child parent",
+            );
+        }
+    }
+
+    // Every model edge must occur exactly once in its parent's list.  The
+    // first loop checks that every runtime edge points into the model; this
+    // reverse check catches a missing edge and a duplicate edge as well.
+    for (graph.nodes[0..graph.count]) |node| {
+        if (!node.live) continue;
+        const child = graph.findLive(node.handle) orelse unreachable;
+        const parent = node.parent orelse continue;
+        var occurrences: usize = 0;
+        const length = try ownerGraphLength(runtime, graph.nodes[parent].handle);
+        for (0..length) |at| {
+            const item = try containers.indexGet(
+                runtime,
+                graph.nodes[parent].handle,
+                &.{Value.ofLong(@intCast(at))},
+            );
+            if (item.tag == .object and item.asObject().same(node.handle.asObject())) {
+                occurrences += 1;
+            }
+        }
+        _ = child;
+        try ownerGraphExpect(occurrences == 1, seed, step, "one edge per owned child");
+    }
+}
+
+fn runOwnerGraphSeed(runtime: *Runtime, seed: u64) !void {
+    var graph: OwnerGraph = .{};
+    var random = OwnerGraphRng.init(seed);
+
+    // Start with several independent roots so the first transitions can
+    // build both shallow and deep forests without depending on allocation
+    // order or one particular row index.
+    for (0..8) |_| {
+        _ = try graph.add(try runtime.newList(Value.none));
+    }
+
+    const transitions = 700;
+    var step: usize = 0;
+    while (step < transitions) : (step += 1) {
+        runtime.pending = null;
+        switch (random.below(100)) {
+            // New loose roots exercise row reuse after the release cases
+            // below, and eventually hit the fixed model capacity harmlessly.
+            0...13 => if (graph.count < OwnerGraph.capacity) {
+                _ = try graph.add(try runtime.newList(Value.none));
+            },
+
+            // Append and insert are the two growing ownership doors.
+            14...27 => {
+                const parent = graph.chooseLive(&random) orelse continue;
+                const child = graph.chooseLoose(&random) orelse continue;
+                if (graph.wouldCycle(parent, child)) {
+                    try expectTrap(
+                        .ownership_cycle,
+                        runtime,
+                        containers.append(runtime, graph.nodes[parent].handle, graph.nodes[child].handle),
+                    );
+                    runtime.pending = null;
+                } else {
+                    try containers.append(runtime, graph.nodes[parent].handle, graph.nodes[child].handle);
+                    graph.nodes[child].parent = parent;
+                }
+            },
+            28...39 => {
+                const parent = graph.chooseLive(&random) orelse continue;
+                const child = graph.chooseLoose(&random) orelse continue;
+                const length = try ownerGraphLength(runtime, graph.nodes[parent].handle);
+                const at = random.below(length + 1);
+                if (graph.wouldCycle(parent, child)) {
+                    try expectTrap(
+                        .ownership_cycle,
+                        runtime,
+                        containers.insert(runtime, graph.nodes[parent].handle, @intCast(at), graph.nodes[child].handle),
+                    );
+                    runtime.pending = null;
+                } else {
+                    try containers.insert(
+                        runtime,
+                        graph.nodes[parent].handle,
+                        @intCast(at),
+                        graph.nodes[child].handle,
+                    );
+                    graph.nodes[child].parent = parent;
+                }
+            },
+
+            // Pop detaches one direct child and leaves its own subtree
+            // intact, which is the transition most likely to expose a
+            // forgotten loosen step.
+            40...49 => {
+                const parent = try chooseNonemptyOwnerGraph(runtime, &graph, &random) orelse continue;
+                const length = try ownerGraphLength(runtime, graph.nodes[parent].handle);
+                const item = try containers.indexGet(
+                    runtime,
+                    graph.nodes[parent].handle,
+                    &.{Value.ofLong(@intCast(length - 1))},
+                );
+                const taken = try containers.pop(runtime, graph.nodes[parent].handle);
+                try ownerGraphExpect(
+                    std.meta.eql(item, taken),
+                    seed,
+                    step,
+                    "pop returns the stored value",
+                );
+                if (taken.tag == .object) {
+                    const child = graph.findLive(taken) orelse return error.TestExpected;
+                    try ownerGraphExpect(graph.nodes[child].parent == parent, seed, step, "pop child parent");
+                    graph.nodes[child].parent = null;
+                }
+            },
+            50...58 => {
+                const parent = try chooseNonemptyOwnerGraph(runtime, &graph, &random) orelse continue;
+                const length = try ownerGraphLength(runtime, graph.nodes[parent].handle);
+                const at = random.below(length);
+                const item = try containers.indexGet(
+                    runtime,
+                    graph.nodes[parent].handle,
+                    &.{Value.ofLong(@intCast(at))},
+                );
+                try containers.remove(runtime, graph.nodes[parent].handle, Value.ofLong(@intCast(at)));
+                if (item.tag == .object) {
+                    const child = graph.findLive(item) orelse return error.TestExpected;
+                    try ownerGraphExpect(graph.nodes[child].parent == parent, seed, step, "removed child parent");
+                    graph.retireSubtree(child);
+                }
+            },
+
+            // Replace an element with either a scalar, absence, or a loose
+            // subtree.  The old object dies at the overwrite point.
+            59...70 => {
+                const parent = try chooseNonemptyOwnerGraph(runtime, &graph, &random) orelse continue;
+                const length = try ownerGraphLength(runtime, graph.nodes[parent].handle);
+                const at = random.below(length);
+                const old = try containers.indexGet(
+                    runtime,
+                    graph.nodes[parent].handle,
+                    &.{Value.ofLong(@intCast(at))},
+                );
+                var incoming = Value.none;
+                var incoming_node: ?usize = null;
+                if (random.below(3) == 0) {
+                    incoming = Value.ofLong(@intCast(random.next() & 0x7f));
+                } else if (random.below(3) == 0) {
+                    if (graph.chooseLoose(&random)) |candidate| {
+                        incoming = graph.nodes[candidate].handle;
+                        incoming_node = candidate;
+                    }
+                }
+                if (incoming_node) |child| {
+                    if (graph.wouldCycle(parent, child)) {
+                        try expectTrap(
+                            .ownership_cycle,
+                            runtime,
+                            containers.indexSet(
+                                runtime,
+                                graph.nodes[parent].handle,
+                                &.{Value.ofLong(@intCast(at))},
+                                incoming,
+                            ),
+                        );
+                        runtime.pending = null;
+                        continue;
+                    }
+                }
+                try containers.indexSet(
+                    runtime,
+                    graph.nodes[parent].handle,
+                    &.{Value.ofLong(@intCast(at))},
+                    incoming,
+                );
+                if (old.tag == .object) {
+                    const replaced = graph.findLive(old) orelse return error.TestExpected;
+                    graph.retireSubtree(replaced);
+                }
+                if (incoming_node) |child| graph.nodes[child].parent = parent;
+            },
+
+            // Clear is a bulk subtree release and is deliberately separate
+            // from remove so the model checks both iteration shapes.
+            71...76 => {
+                const parent = graph.chooseLive(&random) orelse continue;
+                graph.retireChildren(parent);
+                try containers.clear(runtime, graph.nodes[parent].handle);
+            },
+
+            // A contained child is a hostile second-owner attempt.  Probe
+            // all three retaining list doors; none may mutate the target or
+            // move the child's owner field.
+            77...82 => if (graph.chooseContained(&random)) |child| {
+                const parent = graph.chooseLive(&random) orelse continue;
+                switch (random.below(3)) {
+                    0 => try expectTrap(
+                        .not_owned,
+                        runtime,
+                        containers.append(runtime, graph.nodes[parent].handle, graph.nodes[child].handle),
+                    ),
+                    1 => try expectTrap(
+                        .not_owned,
+                        runtime,
+                        containers.insert(runtime, graph.nodes[parent].handle, 0, graph.nodes[child].handle),
+                    ),
+                    2 => {
+                        const target = try chooseNonemptyOwnerGraph(runtime, &graph, &random) orelse continue;
+                        const length = try ownerGraphLength(runtime, graph.nodes[target].handle);
+                        try expectTrap(
+                            .not_owned,
+                            runtime,
+                            containers.indexSet(
+                                runtime,
+                                graph.nodes[target].handle,
+                                &.{Value.ofLong(@intCast(random.below(length)))},
+                                graph.nodes[child].handle,
+                            ),
+                        );
+                    },
+                    else => unreachable,
+                }
+                runtime.pending = null;
+            },
+
+            // Free a loose root, then immediately exercise double release
+            // and later generation reuse through the stale-handle lane.
+            83...88 => if (graph.chooseLoose(&random)) |root| {
+                const held = graph.nodes[root].handle;
+                runtime.freeValue(held);
+                runtime.freeObject(held.asObject());
+                runtime.freeValue(held);
+                graph.retireSubtree(root);
+            },
+
+            // Bind/return/unbind a loose subtree.  Both paths must preserve
+            // all descendants and only the matching binding may destroy it.
+            89...94 => if (graph.chooseLoose(&random)) |root| {
+                const held = graph.nodes[root].handle;
+                const serial = runtime.takeSerial();
+                const local: u32 = @intCast(random.below(16));
+                runtime.bind(held, serial, local);
+                const owner = (try runtime.resolve(held)).owner;
+                try ownerGraphExpect(owner.kind == .binding, seed, step, "binding transition");
+                runtime.unbind(held, serial + 1, local);
+                try ownerGraphExpect(runtime.live == graph.liveCount(), seed, step, "wrong binding leaves graph");
+                if (random.below(2) == 0) {
+                    runtime.loosenFromFrame(held, serial);
+                } else {
+                    runtime.unbind(held, serial, local);
+                    graph.retireSubtree(root);
+                }
+            },
+
+            // Stale handles must remain stale through resolution, copying,
+            // ownership checks, and a mutating receiver path.
+            else => if (graph.count != 0) {
+                var dead: [OwnerGraph.capacity]usize = undefined;
+                var count: usize = 0;
+                for (graph.nodes[0..graph.count], 0..) |node, index| {
+                    if (!node.live) {
+                        dead[count] = index;
+                        count += 1;
+                    }
+                }
+                if (count != 0) {
+                    const stale = graph.nodes[dead[random.below(count)]].handle;
+                    try expectTrap(.use_after_free, runtime, runtime.resolve(stale));
+                    runtime.pending = null;
+                    try expectTrap(.use_after_free, runtime, runtime.deepCopy(stale));
+                    runtime.pending = null;
+                    try expectTrap(.use_after_free, runtime, runtime.checkGivable(stale, null));
+                    runtime.pending = null;
+                }
+            },
+        }
+        try auditOwnerGraph(runtime, &graph, seed, step);
+    }
+
+    // Teardown is part of the state-machine contract, not merely a defer in
+    // the test harness: every graph root must be explicitly released before
+    // the runtime itself closes.
+    for (graph.nodes[0..graph.count], 0..) |node, index| {
+        if (node.live and node.parent == null) {
+            runtime.freeValue(node.handle);
+            graph.retireSubtree(index);
+        }
+    }
+    try auditOwnerGraph(runtime, &graph, seed, transitions);
+    try ownerGraphExpect(runtime.live == 0, seed, transitions, "zero live objects after graph teardown");
+}
+
 /// One run for `checkAllAllocationFailures`: rollback must be visible
 /// before teardown, and teardown must return every target byte.
 fn copyWithAllocator(allocator: std.mem.Allocator, source: *Runtime, held: Value) !void {
@@ -1006,6 +1505,26 @@ test "pop, bind, and reinsertion keep one exact acyclic owner tree" {
     try expectContainerParent(runtime, twig, leaf);
 }
 
+test "fixed owner-graph seeds keep one owner through hostile transitions" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+
+    // These seeds are intentionally stable corpus entries rather than a
+    // time-based fuzz source.  Each run builds and tears down a fresh forest
+    // on the same runtime, so row generations are exercised across seeds as
+    // well as within each sequence.
+    for ([_]u64{
+        0x0A_0300_0001,
+        0x0A_0300_0002,
+        0x0A_0300_00A5,
+        0x0A_0300_F00D,
+    }) |seed| {
+        try runOwnerGraphSeed(&bench.runtime, seed);
+        try testing.expectEqual(@as(u32, 0), bench.runtime.live);
+    }
+}
+
 test "give demands the binding it names still owns the object (S23)" {
     var bench: Bench = undefined;
     bench.setup();
@@ -1455,7 +1974,12 @@ test "a cross-runtime move attributes a nested stale-handle trap to its source" 
     try containers.append(&source, middle, good);
     const stale = try source.newList(Value.none);
     source.freeObject(stale.asObject());
-    try containers.append(&source, middle, stale);
+    // This is deliberately malformed input for the cross-runtime copy
+    // backstop.  The public retaining door now rejects a stale handle, so
+    // forge the damaged source row directly inside this runtime test rather
+    // than weakening that boundary just to construct the hostile fixture.
+    const middle_object = try source.resolve(middle);
+    try middle_object.elements.append(source.objects, stale);
     try containers.append(&source, outer, middle);
 
     try expectTrap(.use_after_free, &source, source.moveInto(&target, outer));
