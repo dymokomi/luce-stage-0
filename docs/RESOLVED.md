@@ -1368,3 +1368,15 @@ parameter, optional, and function cases; the full Luce suite passes through
 both consumers.
 
 Commit: current MIR cross-stage ownership hardening batch.
+
+## 2026-08-12 — borrowed parameter ownership walks are rejected at MIR
+
+The MIR verifier now refuses `object_bind` and `object_unbind` targeting a
+borrowed object parameter.  Without that check, a forged module could let a
+callee overwrite the caller's binding owner or free the caller's graph at
+scope exit, violating S12.  `give` parameters, inout receivers, and the
+runtime-owned entry argument remain valid ownership targets.  The focused
+hostile-MIR lane covers both bind and unbind forms and confirms that a give
+parameter still verifies.
+
+Commit: current MIR cross-stage ownership hardening batch.

@@ -4,6 +4,7 @@ const std = @import("std");
 const defs = @import("defs.zig");
 const types = @import("../support/types.zig");
 const verify_mod = @import("verify.zig");
+const module_mod = @import("module.zig");
 
 const testing = std.testing;
 const Program = defs.Program;
@@ -197,6 +198,58 @@ test "ownership instructions cannot fabricate values or bind non-carrying shapes
     try verify_mod.verify(testing.allocator, &program);
 
     program.functions[0].instructions[1] = .{ .object_unbind = .{ .local = 0, .value = 0 } };
+    try verify_mod.verify(testing.allocator, &program);
+}
+
+test "borrowed parameters cannot become object owners in decoded MIR" {
+    var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    defer program.deinit();
+    const arena = program.arena.allocator();
+    program.heap_types = try arena.dupe(types.HeapType, &.{.{ .list = .long }});
+
+    const functions = try arena.alloc(Function, 2);
+    functions[0] = .{
+        .name = "main",
+        .parameter_count = 0,
+        .return_type = .none,
+        .locals = try arena.dupe(Local, &.{.{ .name = "value", .local_type = .{ .heap = 0 } }}),
+        .instructions = try arena.dupe(Instruction, &.{.{ .ret = null }}),
+        .result_types = try arena.dupe(types.Type, &.{.none}),
+        .blocks = try arena.dupe(Block, &.{.{ .items = try arena.dupe(Register, &.{0}) }}),
+    };
+    functions[1] = .{
+        .name = "borrowed",
+        .parameter_count = 1,
+        .parameter_gives = &.{false},
+        .return_type = .none,
+        .locals = try arena.dupe(Local, &.{.{ .name = "borrowed", .local_type = .{ .heap = 0 } }}),
+        .instructions = try arena.dupe(Instruction, &.{
+            .{ .local_get = 0 },
+            .{ .object_bind = .{ .local = 0, .value = 0 } },
+            .{ .ret = null },
+        }),
+        .result_types = try arena.dupe(types.Type, &.{ .{ .heap = 0 }, .none, .none }),
+        .blocks = try arena.dupe(Block, &.{.{ .items = try arena.dupe(Register, &.{ 0, 1, 2 }) }}),
+    };
+    program.functions = functions;
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    {
+        const encoded = try module_mod.encode(testing.allocator, &program);
+        defer testing.allocator.free(encoded);
+        try testing.expectError(error.InvalidModule, module_mod.decode(testing.allocator, encoded));
+    }
+
+    functions[1].instructions[1] = .{ .object_unbind = .{ .local = 0, .value = 0 } };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    {
+        const encoded = try module_mod.encode(testing.allocator, &program);
+        defer testing.allocator.free(encoded);
+        try testing.expectError(error.InvalidModule, module_mod.decode(testing.allocator, encoded));
+    }
+
+    // A give parameter is an owned binding and may be installed and
+    // released by the callee's prologue/scope cleanup.
+    functions[1].parameter_gives = &.{true};
     try verify_mod.verify(testing.allocator, &program);
 }
 

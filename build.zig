@@ -441,6 +441,7 @@ pub fn build(b: *std.Build) void {
             "bare function fields are rejected while optional function fields remain storable",
             "map values cannot be optional while bare function values remain legal",
             "ownership instructions cannot fabricate values or bind non-carrying shapes",
+            "borrowed parameters cannot become object owners in decoded MIR",
             "every no-result MIR instruction rejects a fabricated result type",
             "spawn rejects worker parameters carrying functions or resources",
             "spawn rejects worker results carrying functions or resources",

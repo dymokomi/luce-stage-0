@@ -153,8 +153,8 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
             if (index != 0 or function.parameter_count == 0) return error.BadLocal;
         }
     }
-    for (program.functions) |*function| {
-        try verifyFunction(allocator, program, function);
+    for (program.functions, 0..) |*function, function_index| {
+        try verifyFunction(allocator, program, function, @intCast(function_index));
     }
     if (program.entry_function >= program.functions.len) return error.BadFunction;
     const entry = &program.functions[program.entry_function];
@@ -483,7 +483,12 @@ fn graphNode(program: *const Program, of: Type) ?u32 {
 // One function: its blocks, its registers, its terminators
 // ---------------------------------------------------------------------------
 
-fn verifyFunction(allocator: Allocator, program: *const Program, function: *const Function) VerifyError!void {
+fn verifyFunction(
+    allocator: Allocator,
+    program: *const Program,
+    function: *const Function,
+    function_index: u32,
+) VerifyError!void {
     if (function.blocks.len == 0) return error.EmptyFunction;
     if (function.parameter_count > function.locals.len) return error.BadLocal;
     if (function.parameter_gives.len != function.parameter_count) return error.BadFunction;
@@ -532,7 +537,7 @@ fn verifyFunction(allocator: Allocator, program: *const Program, function: *cons
             if (instruction.isTerminator() != last) {
                 return if (last) error.UnterminatedBlock else error.MisplacedTerminator;
             }
-            try verifyInstruction(allocator, program, function, &defined, item, instruction);
+            try verifyInstruction(allocator, program, function, function_index, &defined, item, instruction);
             try verifyErrorHandling(program, function, block.items, position, item);
             try defined.put(allocator, item, {});
         }
@@ -795,6 +800,7 @@ fn verifyInstruction(
     allocator: Allocator,
     program: *const Program,
     function: *const Function,
+    function_index: u32,
     defined: *const std.AutoHashMapUnmanaged(Register, void),
     register: Register,
     instruction: Instruction,
@@ -1102,6 +1108,9 @@ fn verifyInstruction(
         .object_bind => |bind| {
             try expectType(result, .none);
             if (bind.local >= function.locals.len) return error.BadLocal;
+            if (!localMayOwnObjects(program, function, function_index, bind.local)) {
+                return error.BadFunction;
+            }
             const value = try operandType(function, defined, bind.value);
             if (!try typeCarriesObjects(allocator, program, function.locals[bind.local].local_type) or
                 !try typeCarriesObjects(allocator, program, value))
@@ -1112,6 +1121,9 @@ fn verifyInstruction(
         .object_unbind => |unbind| {
             try expectType(result, .none);
             if (unbind.local >= function.locals.len) return error.BadLocal;
+            if (!localMayOwnObjects(program, function, function_index, unbind.local)) {
+                return error.BadFunction;
+            }
             const value = try operandType(function, defined, unbind.value);
             if (!try typeCarriesObjects(allocator, program, function.locals[unbind.local].local_type) or
                 !try typeCarriesObjects(allocator, program, value))
@@ -1163,6 +1175,26 @@ fn verifyInstruction(
             if (!function.fallible) return error.NotFallible;
         },
     }
+}
+
+/// Whether an ownership walk may name `local` as its binding owner.
+/// Ordinary locals remain conservative: stage 4's ownership class is
+/// intentionally not duplicated in MIR, so a local may become an owner
+/// after a fresh/give result is stored.  Parameters are different: their
+/// ownership class is part of the function contract and is already on the
+/// wire.  A borrowed parameter cannot bind or unbind the caller's graph;
+/// only a `give` parameter, an inout receiver, or the runtime-owned entry
+/// argument may do so.
+fn localMayOwnObjects(
+    program: *const Program,
+    function: *const Function,
+    function_index: u32,
+    local: defs.LocalId,
+) bool {
+    if (local >= function.parameter_count) return true;
+    if (function.locals[local].inout) return true;
+    if (function_index == program.entry_function) return true;
+    return function.parameter_gives[local];
 }
 
 /// Can the instruction in `register` come back errored rather than
