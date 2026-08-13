@@ -2008,12 +2008,11 @@ Commit: current Tier 0 function-value ownership hardening batch.
 
 ## 2026-08-13 — function-valued array fills roll back transactionally
 
-`arrayFill` now has a direct failure corpus for function values whose owned
-run contains outside text and whose receiver names a nested object graph.  It
-arms the allocator after setup, refuses each observed replacement allocation,
-checks that every destination cell remains empty, retires the borrowed
-receiver, and releases the partial runs without a leak before also proving the
-successful fill.
+`arrayFill` now has a direct failure corpus for function values whose receiver
+names a nested object graph containing outside text.  It arms the allocator
+after setup, refuses each observed replacement allocation, checks that every
+destination cell remains empty, retires the borrowed receiver, and releases
+the partial runs without a leak before also proving the successful fill.
 
 The focused runtime ownership lane, both sanitizer lanes, and the full Luce
 suite include this matrix.  Other function-valued retaining doors and the
@@ -2049,3 +2048,19 @@ suite include the bounded-reader regression.  Long-trace retention and peak
 telemetry remain listed in MISSING.md.
 
 Commit: current Tier 0 file-memory hardening batch.
+
+## 2026-08-13 — malformed composite value runs fail closed
+
+The runtime now validates the pointer, alignment, length, and checked address
+range of struct and function field runs before any ownership or value walk.
+Function values are also required to retain their documented two-slot shape.
+The C value boundary, copy/give, storage ownership, adoption, comparison,
+text conversion, and cross-runtime copy paths all fail closed on malformed
+composite payloads.  The regression keeps output and container state
+unchanged, and aligns the allocation-failure function fixture with the
+two-slot ABI.
+
+The Luce package suite passes 559/559; the C and thread sanitizer lanes each
+pass 68/68.
+
+Commit: `66c81a3` — Reject malformed composite value runs.

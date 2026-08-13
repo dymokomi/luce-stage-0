@@ -13,11 +13,11 @@ executable proof of that claim.
 
 ## Tier 0 — ownership and memory hardening
 
-Ownership is the load-bearing language invariant.  These are executable
-hardening tasks, not new language designs: each remains open until it has
-positive and rejection coverage, allocator-failure coverage, and a
+Ownership is the load-bearing language invariant.  These remain open until
+they have positive and rejection coverage, allocator-failure coverage, and a
 differential or structural backstop at the earliest useful stage and at the
-runtime/verifier boundary.
+runtime/verifier boundary.  Completed slices are recorded in
+[RESOLVED.md](RESOLVED.md), not repeated here.
 
 - **T0-OWN-1 — Exhaustive ownership-operation matrix.**  Exercise create,
   alias, borrow, `give`, copy, return, reassign, field/index store, overwrite,
@@ -25,28 +25,10 @@ runtime/verifier boundary.
   scalars, strings, lists, maps, arrays, structs, unions, optionals, function
   values, files, and tasks.  Include every legal composition and the illegal
   moved/borrowed/aliased form.
-- **T0-OWN-2 — Allocation-failure rollback matrix.**  Inject failure at every
-  allocation point in nested copies, strings, map keys and values, function
-  receivers, slices, worker transfers, task/file acquisition, constants, and
-  C exports.  Prove destination preservation, rollback, no leak, no
-  double-free, and a stable error/trap.  The fresh-key `mapPlace` path now
-  proves key-copy, zero-copy, hash-index, and entry-run rollback; Builder
-  growth and `str(builder)` snapshots prove their destination stays
-  unchanged; and the common C constructor, owned-storage, and host
-  string/list materialization doors now preserve out slots, live rows, and
-  allocator bytes at every observed failure point.  A second C matrix now
-  covers exported inline text, deep copy, list slices, map keys and values,
-  `str`, and transactional `key_text` replacement, including nested source
-  graphs.  Raw file/task acquisition and task-result transfer now have their
-  own rollback matrices too.  Value-shaped union/optional copies now cover
-  nested discriminant/payload records, present and absent optional fields,
-  map and array siblings, long text, source-field inspection on every
-  failure, and checked owner invariants while the destination is partial.
-  The inout receiver lane now builds that same graph as a replacement while
-  the old receiver is bound, refuses every replacement allocation in turn,
-  and proves the old graph's fields, binding owner, rows, and bytes survive;
-  the successful edge performs the release/bind handoff.  The remaining
-  matrix is allocating C exports not yet in these direct corpora.
+- **T0-OWN-2 — Allocation-failure rollback matrix.**  Cover every remaining
+  allocation door, especially exported operations, diagnostics, table growth,
+  worker/resource finalization, and row reuse; prove destination preservation,
+  rollback, no leak, and stable failure codes.
 - **T0-OWN-3 — Randomized owner-graph state machine.**  Generate valid
   operation sequences and hostile mutations against a reference model that
   requires exactly one owner, forbids illegal cycles, makes stale handles
@@ -75,9 +57,9 @@ runtime/verifier boundary.
   controlled tests where children are blocked or completing while the parent
   waits, releases, traps, exits, or tears down, including sibling/nested
   workers and spawn/join-table exhaustion.
-- **T0-OWN-8 — Sanitizer execution lane.**  Run generated artifacts and the
-  runtime under supported address, leak, and thread sanitizers, with the
-  ownership specs and allocator-failure corpus as inputs.
+- **T0-OWN-8 — Sanitizer execution lane.**  Extend the supported address,
+  leak, and thread sanitizer lanes to generated artifacts and the full
+  ownership and allocator-failure corpus.
 - **T0-OWN-9 — Debug ownership invariants.**  Add checked-mode assertions for
   owner-tree validity, live rows, generation monotonicity, root/worker
   isolation, and allocator bytes returning to baseline after generated
@@ -96,11 +78,9 @@ runtime/verifier boundary.
   exhaustion followed by reuse.  Prove at-most-once joins, child finalization
   before worker destruction, exact inherited-leak transfer, allocator
   baselines, and a bounded no-deadlock teardown.
-- **T0-OWN-12 — Allocation-door inventory.**  Replace the remaining fixed
-  failure offsets with counting/failing-allocator coverage for key-text
-  replacement, every exported constructor and derived container, map slot and
-  entry growth, joined text, argument lists, file text, worker error messages,
-  trace/diagnostic storage, table growth, and row reuse.  Each refusal must
+- **T0-OWN-12 — Allocation-door inventory.**  Replace fixed failure offsets
+  with counting/failing-allocator coverage for remaining host, table,
+  diagnostic, worker, resource, and row-reuse doors.  Each refusal must
   preserve destinations and sources, leave no partial child reachable, and
   clean host resources.
 - **T0-OWN-13 — Ownership-event parity.**  Add a test-only event trace beside
@@ -108,11 +88,10 @@ runtime/verifier boundary.
   give/adopt/borrow, stale-handle refusal, file-close, worker-join,
   child-finalization, and allocator-failure events between the interpreter and
   LLVM paths.
-- **T0-OWN-14 — Function-value receiver lifetime.**  Exercise function values
-  and bound receivers inside every value-shaped container, across copy/give,
-  return, reassignment, worker arguments/results, stale receiver use, receiver
-  destruction, and function-storage allocation failure.  A function copy or
-  release must never implicitly own or release a borrowed receiver.
+- **T0-OWN-14 — Function-value receiver lifetime.**  Extend the direct
+  receiver corpus to generated traces, all transfer/return/worker paths,
+  stale receiver use, and every function-storage failure point.  A function
+  copy or release must never implicitly own or release a borrowed receiver.
 - **T0-OWN-15 — Resource callback protocol.**  Specify and test exact behavior
   for `0`, `1`, `-1`, other positive/negative answers, null outputs, zero
   progress, oversized counts, close/flush/read/write failure, and repeated
