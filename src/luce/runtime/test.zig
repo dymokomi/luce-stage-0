@@ -661,6 +661,108 @@ const CValueAllocationDoor = enum {
     set_key_text,
 };
 
+const CFileAllocationDoor = enum { open, read_text, write_text };
+
+const CFileState = struct {
+    const handle: i64 = 7_401;
+
+    payload: []const u8,
+    opens: usize = 0,
+    closes: usize = 0,
+    reads: usize = 0,
+    writes: usize = 0,
+    flushes: usize = 0,
+    closed: bool = false,
+    duplicate_close: bool = false,
+    unknown_close: bool = false,
+    read_at: usize = 0,
+    written: usize = 0,
+
+    fn init(payload: []const u8) @This() {
+        return .{ .payload = payload };
+    }
+
+    fn open(
+        context: ?*anyopaque,
+        _: [*]const u8,
+        _: i64,
+        _: i64,
+        out: *i64,
+    ) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        self.opens += 1;
+        self.closed = false;
+        self.read_at = 0;
+        self.written = 0;
+        out.* = handle;
+        return files.yes;
+    }
+
+    fn read(
+        context: ?*anyopaque,
+        held: i64,
+        into: [*]u8,
+        capacity: i64,
+        filled: *i64,
+    ) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        if (held != handle or self.closed) return files.no;
+        const room = std.math.cast(usize, capacity) orelse return files.no;
+        const amount = @min(room, self.payload.len - self.read_at);
+        @memcpy(into[0..amount], self.payload[self.read_at..][0..amount]);
+        self.read_at += amount;
+        self.reads += 1;
+        filled.* = @intCast(amount);
+        return files.yes;
+    }
+
+    fn write(
+        context: ?*anyopaque,
+        held: i64,
+        _: [*]const u8,
+        length: i64,
+        written: *i64,
+    ) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        if (held != handle or self.closed) return files.no;
+        const amount = std.math.cast(usize, length) orelse return files.no;
+        self.written += amount;
+        self.writes += 1;
+        written.* = length;
+        return files.yes;
+    }
+
+    fn flush(context: ?*anyopaque, held: i64) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        if (held != handle or self.closed) return files.no;
+        self.flushes += 1;
+        return files.yes;
+    }
+
+    fn close(context: ?*anyopaque, held: i64) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        if (held != handle) {
+            self.unknown_close = true;
+            return files.yes;
+        }
+        if (self.closed) self.duplicate_close = true;
+        self.closed = true;
+        self.closes += 1;
+        return files.yes;
+    }
+
+    fn install(self: *@This(), runtime: *Runtime) void {
+        runtime.files = .{
+            .context = self,
+            .open = open,
+            .read = read,
+            .write = write,
+            .flush = flush,
+            .close = close,
+        };
+    }
+};
+
 fn expectRetainingDoorFailure(door: RetainingDoor) !void {
     var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -6405,6 +6507,179 @@ test "allocating C value doors preserve graphs and slots at every failure point"
         try testing.expect(completed);
         try testing.expect(failures >= 1);
     }
+}
+
+test "C file acquisition closes raw handles through every allocation failure" {
+    const path = "a file path long enough to require owned resource storage";
+    const payload = "file text long enough to require an owned returned String";
+    const content = "content written through the whole-file C door";
+    const doors = [_]CFileAllocationDoor{ .open, .read_text, .write_text };
+
+    for (doors) |door| {
+        var failures: usize = 0;
+        var completed = false;
+        for (0..32) |failure_offset| {
+            var state = CFileState.init(payload);
+            var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+            var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+            var runtime: Runtime = .init(.{
+                .arena = arena.allocator(),
+                .objects = objects.allocator(),
+            });
+            var cleaned = false;
+            defer if (!cleaned) {
+                runtime.deinit();
+                arena.deinit();
+            };
+            state.install(&runtime);
+
+            var out = Value.ofLong(99);
+            var opened: i32 = 17;
+            var ok: i32 = 23;
+            objects.fail_index = objects.alloc_index + failure_offset;
+            const status = switch (door) {
+                .open => luce_rt_file_open(
+                    &runtime,
+                    path,
+                    path.len,
+                    @intFromEnum(files.Mode.read),
+                    &out,
+                    &opened,
+                    0,
+                    0,
+                ),
+                .read_text => luce_rt_file_read_text(
+                    &runtime,
+                    path,
+                    path.len,
+                    &out,
+                    &ok,
+                    0,
+                    0,
+                ),
+                .write_text => luce_rt_file_write_text(
+                    &runtime,
+                    path,
+                    path.len,
+                    content,
+                    content.len,
+                    @intFromEnum(files.Mode.write),
+                    &ok,
+                    0,
+                    0,
+                ),
+            };
+            objects.fail_index = std.math.maxInt(usize);
+
+            if (status == 0) {
+                switch (door) {
+                    .open => {
+                        try testing.expectEqual(@as(i32, 1), opened);
+                        try testing.expectEqual(@as(usize, 1), state.opens);
+                        runtime.freeValue(out);
+                    },
+                    .read_text => {
+                        try testing.expectEqual(@as(i32, 1), ok);
+                        try testing.expectEqualStrings(payload, out.asString());
+                        runtime.dropStorage(out);
+                    },
+                    .write_text => {
+                        try testing.expectEqual(@as(i32, 1), ok);
+                        try testing.expectEqual(content.len, state.written);
+                        try testing.expectEqual(@as(usize, 1), state.writes);
+                        try testing.expectEqual(@as(usize, 1), state.flushes);
+                    },
+                }
+                completed = true;
+            } else {
+                try testing.expectEqual(@as(i32, 1), status);
+                try testing.expectEqual(@as(i64, 99), out.asLong());
+                try testing.expectEqual(@as(i32, 17), opened);
+                try testing.expectEqual(@as(i32, 23), ok);
+                try testing.expect(runtime.pending == null);
+                try testing.expect(runtime.exhausted);
+                try testing.expect(objects.has_induced_failure);
+                failures += 1;
+            }
+
+            try testing.expectEqual(@as(usize, 1), state.opens);
+            try testing.expectEqual(state.opens, state.closes);
+            try testing.expect(!state.duplicate_close);
+            try testing.expect(!state.unknown_close);
+            try testing.expectEqual(@as(u32, 0), runtime.live);
+            runtime.deinit();
+            arena.deinit();
+            cleaned = true;
+            try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
+            if (completed) break;
+        }
+        try testing.expect(completed);
+        try testing.expect(failures >= 1);
+    }
+}
+
+test "the C spawn door rolls worker acquisition back before publishing a task" {
+    var failures: usize = 0;
+    var completed = false;
+    for (0..32) |failure_offset| {
+        var parent_objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+        var parent_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var parent: Runtime = .init(.{
+            .arena = parent_arena.allocator(),
+            .objects = parent_objects.allocator(),
+        });
+        var child_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var child: Runtime = .init(.{
+            .arena = child_arena.allocator(),
+            .objects = testing.allocator,
+        });
+        var state: WorkerFailureState = .{
+            .child = &child,
+            .child_live_at_close = std.math.maxInt(u32),
+        };
+        state.install(&parent);
+        var cleaned = false;
+        defer if (!cleaned) {
+            if (state.closes == 0) child.deinit();
+            parent.deinit();
+            parent_arena.deinit();
+            child_arena.deinit();
+        };
+
+        var out = Value.ofLong(99);
+        parent_objects.fail_index = parent_objects.alloc_index + failure_offset;
+        const status = luce_rt_spawn(&parent, 0, &.{}, 0, &out);
+        parent_objects.fail_index = std.math.maxInt(usize);
+
+        if (status == 0) {
+            try testing.expect(out.tag == .object);
+            parent.freeValue(out);
+            try testing.expectEqual(@as(usize, 1), state.spawns);
+            try testing.expectEqual(@as(usize, 1), state.joins);
+            completed = true;
+        } else {
+            try testing.expectEqual(@as(i32, 1), status);
+            try testing.expectEqual(@as(i64, 99), out.asLong());
+            try testing.expect(parent.pending == null);
+            try testing.expect(parent.exhausted);
+            try testing.expect(parent_objects.has_induced_failure);
+            try testing.expectEqual(@as(u32, 0), parent.live);
+            failures += 1;
+        }
+
+        try testing.expectEqual(state.spawns, state.joins);
+        try testing.expectEqual(state.joins, state.closes);
+        if (state.closes != 0) try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
+        try testing.expectEqual(@as(u32, 0), parent.live);
+        parent.deinit();
+        parent_arena.deinit();
+        child_arena.deinit();
+        cleaned = true;
+        try testing.expectEqual(parent_objects.allocated_bytes, parent_objects.freed_bytes);
+        if (completed) break;
+    }
+    try testing.expect(completed);
+    try testing.expect(failures >= 1);
 }
 
 test "the C materialization surface roots, loads, freezes, and excludes a constant" {

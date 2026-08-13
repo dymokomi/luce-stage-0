@@ -1627,3 +1627,19 @@ ownership lanes pass 41/41 each.  The remaining C allocation doors stay listed
 in MISSING.md rather than being treated as complete.
 
 Commit: current Tier 0 C value-door hardening batch.
+
+## 2026-08-13 — C resource acquisition rollback
+
+The C boundary now injects failure through file acquisition and worker-task
+creation.  `file_open`, `file_read_text`, and `file_write_text` prove that a
+raw host handle is closed exactly once when path, object-table, whole-file
+buffer, or returned-text allocation fails; successful outputs are released
+through their normal ownership paths.  The C `spawn` door proves that parent
+allocation failure leaves its sentinel result unpublished and still joins and
+closes any child that was already started.
+
+The focused runtime ownership lane passes 35/35; the C- and thread-sanitized
+ownership lanes pass 43/43 each.  Task result transfer/wait and the remaining
+C allocation doors stay listed in MISSING.md.
+
+Commit: current Tier 0 resource-acquisition hardening batch.
