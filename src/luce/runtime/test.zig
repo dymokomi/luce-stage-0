@@ -2897,6 +2897,7 @@ const LifecycleState = struct {
     file_closes: usize = 0,
     spawns: usize = 0,
     joins: usize = 0,
+    child_live_at_close: u32 = 0,
     expected_leaks: i64 = 0,
     duplicate_close: bool = false,
     unknown_close: bool = false,
@@ -2911,6 +2912,7 @@ const LifecycleState = struct {
         state.file_closes = 0;
         state.spawns = 0;
         state.joins = 0;
+        state.child_live_at_close = 0;
         state.expected_leaks = 0;
         state.duplicate_close = false;
         state.unknown_close = false;
@@ -2939,6 +2941,7 @@ const LifecycleState = struct {
         for (&self.slots) |*slot| {
             if (!slot.active or runtime != &slot.runtime) continue;
             runtime.debugAssertInvariants();
+            self.child_live_at_close = runtime.live;
             runtime.deinit();
             slot.arena.deinit();
             slot.active = false;
@@ -3039,6 +3042,7 @@ const LifecycleAction = enum(u8) {
     trap,
     exit,
     result,
+    result_resource,
     nested_wait,
     nested_release,
 };
@@ -3064,7 +3068,7 @@ const LifecycleResource = struct {
 };
 
 fn lifecycleAction(function: i64) LifecycleAction {
-    return @enumFromInt(@as(u8, @intCast(@mod(function, 8))));
+    return @enumFromInt(@as(u8, @intCast(@mod(function, 9))));
 }
 
 fn lifecycleFailure(runtime: *Runtime, mistake: heap.Error) i32 {
@@ -3196,6 +3200,12 @@ fn lifecycleRun(
             out.* = graph.root;
             return workers.survived;
         },
+        .result_resource => {
+            const graph = lifecycleGraph(runtime, true, function) catch |mistake|
+                return lifecycleFailure(runtime, mistake);
+            out.* = graph.root;
+            return workers.survived;
+        },
         .clean => {
             const graph = lifecycleGraph(runtime, true, function) catch |mistake|
                 return lifecycleFailure(runtime, mistake);
@@ -3309,6 +3319,7 @@ fn lifecycleWaitTask(
                     @as(i64, 700) + @as(i64, @intFromEnum(task.action)),
                     runtime.exit_status.?,
                 ),
+                .result_resource => try testing.expectEqual(.not_owned, runtime.pending.?.code),
                 else => return mistake,
             }
             break :blk workers.raised_trap;
@@ -3322,7 +3333,7 @@ fn lifecycleWaitTask(
             try testing.expectEqual(vocabulary.ErrorCode.user_error, runtime.raised.?.code);
             runtime.forget();
         },
-        .trap, .exit => try testing.expectEqual(workers.raised_trap, status),
+        .trap, .exit, .result_resource => try testing.expectEqual(workers.raised_trap, status),
         else => try testing.expectEqual(workers.survived, status),
     }
     runtime.pending = null;
@@ -3423,7 +3434,7 @@ fn runLifecycleSeed(seed: u64) !void {
         runtime.pending = null;
         switch (random.below(100)) {
             0...25 => if (task_used < lifecycle_record_capacity) {
-                const action: LifecycleAction = @enumFromInt(@as(u8, @intCast(random.below(8))));
+                const action: LifecycleAction = @enumFromInt(@as(u8, @intCast(random.below(9))));
                 var task: Value = .none;
                 try workers.spawn(&runtime, @intFromEnum(action), &.{}, &task);
                 try containers.append(&runtime, tasks, task);
@@ -3431,7 +3442,7 @@ fn runLifecycleSeed(seed: u64) !void {
                     .handle = task,
                     .action = action,
                     .open_files = switch (action) {
-                        .leak, .raise_error, .trap, .exit => 1,
+                        .leak, .raise_error, .trap, .exit, .result_resource => 1,
                         else => 0,
                     },
                     .leaked_objects = switch (action) {
@@ -5398,6 +5409,115 @@ test "a worker result copies and releases a nested object graph" {
     parent.freeValue(answer);
     parent.freeValue(task);
     try testing.expectEqual(@as(u32, 0), parent.live);
+}
+
+test "nested tasks wait and release through value-shaped containers" {
+    var state = LifecycleState.init();
+    var parent_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer parent_arena.deinit();
+    var parent: Runtime = .init(.{
+        .arena = parent_arena.allocator(),
+        .objects = testing.allocator,
+    });
+    defer parent.deinit();
+    state.install(&parent);
+
+    const map = try parent.newMap();
+    const list = try parent.newList(Value.none);
+    const array = try parent.newArray(&.{1}, Value.none);
+
+    var rejected_task: Value = .none;
+    try workers.spawn(
+        &parent,
+        @intFromEnum(LifecycleAction.result_resource),
+        &.{},
+        &rejected_task,
+    );
+    const rejected_packet = try parent.makeStruct(&.{ rejected_task, Value.none });
+    try containers.indexSet(
+        &parent,
+        map,
+        &.{Value.ofInlineText(.string, "resource-result")},
+        rejected_packet,
+    );
+
+    var released_task: Value = .none;
+    try workers.spawn(
+        &parent,
+        @intFromEnum(LifecycleAction.clean),
+        &.{},
+        &released_task,
+    );
+    const released_packet = try parent.makeStruct(&.{ released_task, Value.none });
+    try containers.append(&parent, list, released_packet);
+
+    var waited_task: Value = .none;
+    try workers.spawn(
+        &parent,
+        @intFromEnum(LifecycleAction.clean),
+        &.{},
+        &waited_task,
+    );
+    const waited_packet = try parent.makeStruct(&.{ waited_task, Value.none });
+    try containers.indexSet(&parent, array, &.{Value.ofLong(0)}, waited_packet);
+
+    const map_packet = try containers.mapGet(
+        &parent,
+        map,
+        Value.ofInlineText(.string, "resource-result"),
+    );
+    try expectContainerParent(&parent, map_packet.asStruct()[0], map);
+    const list_packet = try containers.indexGet(&parent, list, &.{Value.ofLong(0)});
+    try expectContainerParent(&parent, list_packet.asStruct()[0], list);
+    const array_packet = try containers.indexGet(&parent, array, &.{Value.ofLong(0)});
+    try expectContainerParent(&parent, array_packet.asStruct()[0], array);
+    try testing.expectEqual(@as(usize, 3), state.spawns);
+    try testing.expectEqual(@as(usize, 3), state.opens);
+    parent.debugAssertInvariants();
+
+    // A resource-bearing child result cannot cross into the parent runtime.
+    // The task is already detached, so the failed copy must still close its
+    // file and child exactly once while leaving the nested task row for the
+    // enclosing map to release later.
+    var answer = Value.ofLong(99);
+    try expectTrap(
+        .not_owned,
+        &parent,
+        workers.wait(&parent, map_packet.asStruct()[0], &answer),
+    );
+    try testing.expectEqual(@as(i64, 99), answer.asLong());
+    parent.pending = null;
+    try testing.expectEqual(@as(usize, 1), state.joins);
+    try testing.expectEqual(@as(usize, 1), state.closes);
+    try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
+    parent.debugAssertInvariants();
+
+    // Releasing the list joins its nested task without observing its result;
+    // waiting the array's task does the observing path.  All three task rows
+    // remain in their value-shaped holders until those holders are freed.
+    parent.freeValue(list);
+    try testing.expectEqual(@as(usize, 2), state.joins);
+    try testing.expectEqual(@as(usize, 2), state.closes);
+
+    var second_answer = Value.ofLong(98);
+    try testing.expectEqual(
+        workers.survived,
+        try workers.wait(&parent, array_packet.asStruct()[0], &second_answer),
+    );
+    try testing.expect(second_answer.isNone());
+    try testing.expectEqual(@as(usize, 3), state.joins);
+    try testing.expectEqual(@as(usize, 3), state.closes);
+    parent.pending = null;
+
+    parent.freeValue(array);
+    parent.freeValue(map);
+    try testing.expectEqual(@as(usize, 3), state.file_opens);
+    try testing.expectEqual(@as(usize, 3), state.file_closes);
+    try testing.expectEqual(@as(usize, 0), state.activeChildren());
+    try testing.expect(!state.duplicate_close);
+    try testing.expect(!state.unknown_close);
+    try testing.expectEqual(@as(u32, 0), parent.live);
+    try testing.expectEqual(@as(i64, 0), parent.leaked());
 }
 
 test "failed worker graph construction closes every partial child allocation" {

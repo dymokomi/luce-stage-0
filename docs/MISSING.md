@@ -228,6 +228,12 @@ preserves the output handle, and leaves no provisional row to drain.  The
 remaining worker lifecycle permutations are tracked by T0-OWN-11; the
 join callback's exact-answer contract is covered by the focused runtime
 lane below.
+The direct lifecycle regression now also places task rows inside struct-shaped
+values held by a map, list, and array: a resource-bearing child result is
+rejected before cross-runtime publication, nested wait consumes its worker,
+and scope release joins the remaining tasks with exact child/file cleanup.
+Arbitrary holder graphs, repeated row reuse, and allocator-failure lifecycle
+permutations remain open.
 The stale-handle slice now probes every list, map, array, and builder door
 after row generation reuse, plus file read/write/flush/copy/give operations;
 it checks that double release is inert and that stale file operations do not

@@ -2020,3 +2020,18 @@ suite include this matrix.  Other function-valued retaining doors and the
 broader generated failure matrix remain listed in MISSING.md.
 
 Commit: current Tier 0 function-value allocation hardening batch.
+
+## 2026-08-13 — nested task holders close resource-bearing children
+
+The lifecycle oracle now stores task rows inside struct-shaped values held by
+a map, list, and array.  A child returning a resource-bearing graph is
+rejected at the cross-runtime copy boundary, while its detached task still
+closes the child and file exactly once; sibling nested tasks cover both
+scope-release join and observing wait, with zero live rows at teardown.
+
+The focused worker-ownership lane, runtime ownership lane, both sanitizer
+lanes, and the full Luce suite include this matrix.  Arbitrary nested holder
+graphs, row reuse, and allocator-failure worker/resource permutations remain
+listed in MISSING.md.
+
+Commit: current Tier 0 nested worker/resource hardening batch.
