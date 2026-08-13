@@ -880,6 +880,12 @@ fn checkedPresence(runtime: *Runtime, raw: i32) heap.Error!bool {
 fn checkedBytes(runtime: *Runtime, bytes: [*c]const u8, raw: i64) heap.Error![]const u8 {
     if (bytes == null) return runtime.fail(.host_unavailable);
     const length = try checkedCount(runtime, raw);
+    // A non-null C pointer is not enough to make an arbitrary byte run
+    // safe.  A damaged artifact can place it near the end of the address
+    // space and make the slice endpoint wrap before any host or allocator
+    // code gets a chance to reject it.
+    _ = std.math.add(usize, @intFromPtr(bytes), length) catch
+        return runtime.fail(.host_unavailable);
     return bytes[0..length];
 }
 

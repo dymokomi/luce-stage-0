@@ -2101,3 +2101,19 @@ pass 68/68.  The repository gate reaches 29/29 example tests before the
 known editor subprocess failures; those remain outside this runtime fix.
 
 Commit: current Tier 0 string hardening batch.
+
+## 2026-08-13 — C byte runs fail closed at the shared boundary
+
+The shared C byte validator now checks the entire `pointer + length` range
+before constructing a slice.  Non-null forged pointers near the end of the
+address space are rejected as `host_unavailable` without reaching host I/O,
+allocation, UTF-8 validation, or message construction.  The regression covers
+interned text, directory lists, key text, optional text, and all three report
+message doors while preserving output sentinels and pending-trap behavior.
+
+The Luce package suite passes 559/559 and both C and thread sanitizer lanes
+pass 68/68.  The repository gate reaches 29/29 example tests before the
+known editor subprocess failures; those unrelated example-tooling failures
+remain outside this batch.
+
+Commit: current Tier 0 C-boundary hardening batch.

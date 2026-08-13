@@ -8858,6 +8858,41 @@ test "C byte pointers reject null before slicing or host access" {
     out = Value.ofLong(99);
     try testing.expectEqual(@as(i32, 0), luce_rt_maybe_text(runtime, 0, null_bytes, 1, &out));
     try testing.expect(out.isNone());
+
+    // A non-null pointer can still describe a byte run whose endpoint wraps
+    // the host address space.  Every C text/path/message door shares
+    // checkedBytes, so exercise several consumers without ever dereferencing
+    // the forged pointer.
+    const wrapping_bytes: [*c]const u8 = @ptrFromInt(std.math.maxInt(usize) - 3);
+    out = Value.ofLong(99);
+    try testing.expectEqual(@as(i32, 1), luce_rt_intern_text(runtime, wrapping_bytes, 8, &out));
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    runtime.pending = null;
+
+    try testing.expectEqual(@as(i32, 1), luce_rt_names_list(runtime, wrapping_bytes, 8, &out));
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    runtime.pending = null;
+
+    try testing.expectEqual(@as(i32, 1), luce_rt_set_key_text(runtime, wrapping_bytes, 8));
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    runtime.pending = null;
+
+    try testing.expectEqual(@as(i32, 1), luce_rt_maybe_text(runtime, 1, wrapping_bytes, 8, &out));
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    runtime.pending = null;
+
+    luce_rt_raise(runtime, 0, wrapping_bytes, 8);
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    runtime.pending = null;
+    luce_rt_raise_error(runtime, 0, wrapping_bytes, 8, 0, 0);
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    runtime.pending = null;
+    luce_rt_raise_io(runtime, 0, wrapping_bytes, 8, 0, 0);
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    runtime.pending = null;
 }
 
 fn expectCNullValueTrap(runtime: *Runtime, status: i32) !void {
