@@ -1540,6 +1540,19 @@ pass 36/36, and the full differential suite passes 517/517.
 
 Commit: current Tier 0 C-boundary hardening batch.
 
+## 2026-08-13 — blocked-worker parent-stop and channel exhaustion
+
+The real-thread worker lane now covers children blocked after spawn while the
+parent already carries a trap or exit status; releasing the task-list root
+joins every child, closes each runtime once, and preserves the parent's stop
+state.  It also frees one child slot, exhausts the host thread channel, and
+proves the rejected spawn closes its provisional child without publishing an
+orphaned task.
+
+Sibling/nested races and blocked resource-host cases remain in MISSING.md.
+
+Commit: current Tier 0 worker lifecycle hardening batch.
+
 ## 2026-08-13 — C callback buffer and report-pointer refusal
 
 Argument callbacks now expose their returned byte pointer as C-nullable and

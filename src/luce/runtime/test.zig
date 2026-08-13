@@ -2153,6 +2153,115 @@ test "blocked worker teardown joins and closes every nested child" {
     cleaned = true;
 }
 
+const ParentStop = enum { trap, exit };
+
+fn runBlockedParentStop(stop: ParentStop) !void {
+    var state: ConcurrentTeardown = .{};
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{
+        .arena = arena.allocator(),
+        .objects = testing.allocator,
+    });
+    var cleaned = false;
+    defer if (!cleaned) {
+        state.gate.store(true, .release);
+        for (&state.threads) |*thread| if (thread.*) |running| running.join();
+        runtime.deinit();
+        arena.deinit();
+    };
+    state.install(&runtime);
+
+    const tasks = try runtime.newList(Value.none);
+    for (0..ConcurrentTeardown.capacity) |_| {
+        var task: Value = .none;
+        try workers.spawn(&runtime, 0, &.{}, &task);
+        try containers.append(&runtime, tasks, task);
+    }
+    while (state.started.load(.acquire) != ConcurrentTeardown.capacity) {
+        std.Thread.yield() catch {};
+    }
+    try testing.expectEqual(@as(u32, 0), state.finished.load(.acquire));
+
+    switch (stop) {
+        .trap => _ = runtime.fail(.host_unavailable) catch {},
+        .exit => runtime.exit_status = 77,
+    }
+    runtime.freeValue(tasks);
+
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+    try testing.expectEqual(ConcurrentTeardown.capacity, state.joins);
+    try testing.expectEqual(ConcurrentTeardown.capacity, state.closes);
+    for (state.child_live_at_close) |live| try testing.expectEqual(@as(u32, 0), live);
+    switch (stop) {
+        .trap => try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code),
+        .exit => try testing.expectEqual(@as(i64, 77), runtime.exit_status.?),
+    }
+    runtime.debugAssertInvariants();
+
+    runtime.deinit();
+    arena.deinit();
+    cleaned = true;
+}
+
+test "blocked workers join while the parent is trapping or exiting" {
+    try runBlockedParentStop(.trap);
+    try runBlockedParentStop(.exit);
+}
+
+test "worker channel exhaustion rejects without orphaning a child" {
+    var state: ConcurrentTeardown = .{};
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{
+        .arena = arena.allocator(),
+        .objects = testing.allocator,
+    });
+    var cleaned = false;
+    defer if (!cleaned) {
+        state.gate.store(true, .release);
+        for (&state.threads) |*thread| if (thread.*) |running| {
+            running.join();
+            thread.* = null;
+        };
+        runtime.deinit();
+        arena.deinit();
+    };
+    state.install(&runtime);
+
+    const tasks = try runtime.newList(Value.none);
+    for (0..ConcurrentTeardown.capacity) |_| {
+        var task: Value = .none;
+        try workers.spawn(&runtime, 0, &.{}, &task);
+        try containers.append(&runtime, tasks, task);
+    }
+    while (state.started.load(.acquire) != ConcurrentTeardown.capacity) {
+        std.Thread.yield() catch {};
+    }
+
+    const popped = try containers.pop(&runtime, tasks);
+    runtime.freeValue(popped);
+    try testing.expectEqual(@as(usize, 1), state.joins);
+    try testing.expectEqual(@as(usize, 1), state.closes);
+
+    var rejected: Value = Value.ofLong(99);
+    try testing.expectError(error.Trap, workers.spawn(&runtime, 0, &.{}, &rejected));
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), rejected.asLong());
+    runtime.pending = null;
+    try testing.expectEqual(ConcurrentTeardown.capacity, state.spawn_count);
+    try testing.expectEqual(@as(usize, 2), state.closes);
+
+    runtime.freeValue(tasks);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+    try testing.expectEqual(ConcurrentTeardown.capacity, state.joins);
+    try testing.expectEqual(ConcurrentTeardown.capacity + 1, state.closes);
+    for (state.children) |child| try testing.expect(!child.active);
+    runtime.debugAssertInvariants();
+
+    runtime.deinit();
+    arena.deinit();
+    cleaned = true;
+}
+
 // ---------------------------------------------------------------------------
 // Mixed worker/resource lifecycle model
 // ---------------------------------------------------------------------------
