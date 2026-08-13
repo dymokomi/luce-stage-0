@@ -166,6 +166,9 @@ pub fn build(b: *std.Build) void {
         "a worker result copies",
         "waiting a task is one-shot",
         "cross-runtime moves",
+        "fixed worker and resource lifecycle",
+        "fuzz: worker and resource lifecycles",
+        "list growth keeps every raw capacity",
     };
     const c_sanitize_luce = b.createModule(.{
         .root_source_file = b.path("src/luce/luce.zig"),
@@ -442,6 +445,21 @@ pub fn build(b: *std.Build) void {
         "Run cross-runtime ownership rollback regressions",
     );
     test_runtime_ownership_step.dependOn(&b.addRunArtifact(runtime_ownership_tests).step);
+
+    const worker_resource_lifecycle_tests = b.addTest(.{
+        .root_module = luce,
+        .filters = &.{
+            "fixed worker and resource lifecycle",
+            "fuzz: worker and resource lifecycles",
+        },
+    });
+    const test_worker_resource_lifecycle_step = b.step(
+        "test-worker-resource-lifecycle",
+        "Run randomized worker and resource ownership lifecycles",
+    );
+    test_worker_resource_lifecycle_step.dependOn(
+        &b.addRunArtifact(worker_resource_lifecycle_tests).step,
+    );
 
     const owner_graph_tests = b.addTest(.{
         .root_module = luce,

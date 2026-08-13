@@ -87,7 +87,12 @@ optimizer/encode/decode contract coverage remains open.
 The runtime corpus now also has direct lanes for a
 union-shaped optional callback whose receiver is borrowed, and for a worker
 result that copies a nested object graph and closes the child runtime; broad
-randomized worker/resource generation remains open.  The allocator-failure
+cross-engine randomized worker/resource generation remains open.  A new deterministic
+worker/resource lifecycle lane now interleaves task-list wait, one-shot
+re-wait, pop, remove, clear, nested worker, error/trap/exit, intentional
+worker-leak, and parent-owned file-graph transitions across four fixed seeds
+and a fuzz target; it checks child joins, host close-once behavior, exact
+leak-census roll-up, and allocator bytes at teardown.  The allocator-failure
 matrix now drives every child allocation in a nested worker result, the
 parent-side result copy, and struct construction with an object field; the
 runtime also proves nested file close-once behavior, stale resource handles
@@ -99,8 +104,10 @@ The runtime also has a checked-mode, allocation-free invariant assertion for
 live-row census, free-row generations, program roots, exact container parent
 edges, duplicate edges, acyclic ancestry, and borrowed function receivers;
 its direct composite regression covers map, array, and nested struct doors.
-Extending that assertion through live worker/resource graphs and allocator
-baseline snapshots remains open.  A new format/spec regression now encodes
+The assertion now also checks live file handles, live task-to-child links,
+child-runtime invariants at the post-join close seam, and a parent object
+allocator baseline; concurrent inspection of a still-running child and a
+full failure-injection invariant matrix remain open.  A new format/spec regression now encodes
 the already optimized ownership graph, decodes it, and runs the decoded
 program through both engines; it covers the union/list/struct/bound-method
 composition, a give parameter, and an inout receiver that shape-only round
@@ -116,7 +123,9 @@ Valgrind mode, so those remain environment-dependent rather than claimed
 green here.  The focused exceptional lane now also drives nested worker error
 propagation through two joins, worker trap and exit unwinds with union-owned
 lists, and an unobserved worker error whose task is released at scope end.
-Broader randomized worker/resource lifecycle coverage remains open.
+The mixed worker/resource lifecycle corpus now supplies the randomized
+runtime-side slice; differential specs for every generated lifecycle trace
+and the remaining allocator-invariant combinations remain open.
 
 ## Tier 1 — design gaps before implementation
 

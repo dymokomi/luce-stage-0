@@ -420,10 +420,22 @@ pub const Object = struct {
             const width = self.kind.width();
             const needed = std.math.mul(usize, wanted, width) catch
                 return error.OutOfMemory;
-            if (needed <= self.bytes.len) return;
+            if (needed <= self.bytes.len and self.bytes.len % width == 0) return;
             var grown = self.bytes.len;
+            if (grown % width != 0) {
+                grown = std.math.add(usize, grown, width - grown % width) catch
+                    return error.OutOfMemory;
+            }
             if (grown < 8 * width) grown = 8 * width;
-            while (grown < needed) grown = grown +| grown / 2 +| width;
+            while (grown < needed) {
+                grown = grown +| grown / 2 +| width;
+                // The geometric term is in bytes, so it is not
+                // necessarily a multiple of the cell width.  Keeping
+                // the spare room integral is part of the storage
+                // representation, not just a debug assertion: capacity()
+                // and every typed cell walk rely on it.
+                if (grown % width != 0) grown = grown +| width - grown % width;
+            }
             const bytes = try allocator.alignedAlloc(u8, .of(Value), grown);
             @memcpy(bytes[0 .. self.count * width], self.bytes[0 .. self.count * width]);
             allocator.free(self.bytes);
@@ -1225,7 +1237,28 @@ pub const Runtime = struct {
                         .generation = object.generation,
                     }, 0);
                 },
-                .builder, .file, .task => {},
+                .builder => {},
+                .file => |open| {
+                    // A live file row always names an acquired host
+                    // handle.  `Object.release` writes `no_file` only
+                    // after the row has been marked dead, so observing it
+                    // here means a close happened without the ownership
+                    // walk retiring the row as one operation.
+                    std.debug.assert(open.handle != no_file);
+                },
+                .task => |held| if (held) |worker| {
+                    // A live task row is the sole owning edge to a Worker
+                    // until `wait`/release detaches it.  The child runtime
+                    // may still be running, so its graph is checked by
+                    // the nursery close hook after the join; the link
+                    // itself must nevertheless be valid while the task is
+                    // live and must never point back at this runtime.
+                    const child = worker.runtime orelse {
+                        std.debug.assert(false);
+                        return;
+                    };
+                    std.debug.assert(child != self);
+                },
             }
         }
 

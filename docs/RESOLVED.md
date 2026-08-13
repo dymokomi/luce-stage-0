@@ -1373,6 +1373,25 @@ MISSING.md.
 
 Commit: current Tier 0 exceptional-cleanup hardening batch.
 
+## 2026-08-12 — mixed worker and resource lifecycles are state-machine tested
+
+The runtime now has a reproducible lifecycle model that interleaves parent
+file graphs and task lists across wait, one-shot re-wait, pop, remove, clear,
+nested workers, worker error/trap/exit, discarded results, and intentional
+worker leaks.  Four fixed 180-transition seeds and a fuzz target check the
+reference model after every operation: child joins equal spawns, every host
+handle closes exactly once, the worker leak census rolls into its parent, and
+the parent object allocator returns to baseline.  The child close seam also
+runs the checked owner invariant assertion, including live file rows and
+task-to-child links.  The focused lane passes 15/15.
+
+The model exposed a real storage invariant: geometric list growth could leave
+raw byte capacity not divisible by its element width.  Growth now rounds every
+capacity to a whole element, and a direct regression covers packed long,
+short, byte, and boxed value lists.
+
+Commit: current Tier 0 worker/resource hardening batch.
+
 ## 2026-08-12 — array fills cannot strand old cells or partial copies
 
 `array_fill` now releases object ownership as well as value storage when a

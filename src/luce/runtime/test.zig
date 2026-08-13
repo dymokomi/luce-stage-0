@@ -1099,6 +1099,732 @@ const WorkerFailureState = struct {
     }
 };
 
+// ---------------------------------------------------------------------------
+// Mixed worker/resource lifecycle model
+// ---------------------------------------------------------------------------
+
+/// A synchronous nursery for the randomized lifecycle proof.  It still
+/// exercises the complete Worker implementation — argument transfer, body,
+/// result ownership, join, finish, and child close — while making the
+/// generated transition trace deterministic.  The real threaded channel is
+/// covered by `specs/threads_spec.zig`; this model is for hundreds of
+/// ownership transitions where scheduling noise would hide the state
+/// machine's contract.
+const lifecycle_child_capacity = 64;
+const lifecycle_record_capacity = 48;
+const lifecycle_file_capacity = 256;
+
+const LifecycleChild = struct {
+    arena: std.heap.ArenaAllocator = undefined,
+    runtime: Runtime = undefined,
+    active: bool = false,
+};
+
+const LifecycleState = struct {
+    slots: [lifecycle_child_capacity]LifecycleChild = undefined,
+    opened_handles: [lifecycle_file_capacity]i64 = undefined,
+    closed_handles: [lifecycle_file_capacity]bool = undefined,
+    opens: usize = 0,
+    closes: usize = 0,
+    file_opens: usize = 0,
+    file_closes: usize = 0,
+    spawns: usize = 0,
+    joins: usize = 0,
+    expected_leaks: i64 = 0,
+    duplicate_close: bool = false,
+    unknown_close: bool = false,
+    file_overflow: bool = false,
+
+    fn init() @This() {
+        var state: @This() = undefined;
+        for (&state.slots) |*slot| slot.* = .{};
+        state.opens = 0;
+        state.closes = 0;
+        state.file_opens = 0;
+        state.file_closes = 0;
+        state.spawns = 0;
+        state.joins = 0;
+        state.expected_leaks = 0;
+        state.duplicate_close = false;
+        state.unknown_close = false;
+        state.file_overflow = false;
+        return state;
+    }
+
+    fn open(context: ?*anyopaque) callconv(.c) ?*Runtime {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        for (&self.slots) |*slot| {
+            if (slot.active) continue;
+            slot.arena = .init(testing.allocator);
+            slot.runtime = Runtime.init(.{
+                .arena = slot.arena.allocator(),
+                .objects = testing.allocator,
+            });
+            slot.active = true;
+            self.opens += 1;
+            return &slot.runtime;
+        }
+        return null;
+    }
+
+    fn close(context: ?*anyopaque, runtime: *Runtime) callconv(.c) void {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        for (&self.slots) |*slot| {
+            if (!slot.active or runtime != &slot.runtime) continue;
+            runtime.debugAssertInvariants();
+            runtime.deinit();
+            slot.arena.deinit();
+            slot.active = false;
+            self.closes += 1;
+            return;
+        }
+        // An unknown child is already a broken nursery contract.  Still
+        // close the passed runtime so the test reports the identity error
+        // rather than turning it into an allocator leak during cleanup.
+        self.unknown_close = true;
+        runtime.deinit();
+    }
+
+    fn spawn(
+        context: ?*anyopaque,
+        body: workers.Body,
+        argument: ?*anyopaque,
+        thread: *i64,
+    ) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        self.spawns += 1;
+        body(argument);
+        thread.* = @intCast(self.spawns);
+        return workers.yes;
+    }
+
+    fn join(context: ?*anyopaque, _: i64) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        self.joins += 1;
+        return workers.yes;
+    }
+
+    fn fileOpen(
+        context: ?*anyopaque,
+        _: [*]const u8,
+        _: i64,
+        _: i64,
+        handle: *i64,
+    ) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        if (self.file_opens == lifecycle_file_capacity) {
+            self.file_overflow = true;
+            return files.exhausted;
+        }
+        const next: i64 = @intCast(10_000 + self.file_opens);
+        self.opened_handles[self.file_opens] = next;
+        self.closed_handles[self.file_opens] = false;
+        self.file_opens += 1;
+        handle.* = next;
+        return files.yes;
+    }
+
+    fn fileClose(context: ?*anyopaque, handle: i64) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        self.file_closes += 1;
+        for (self.opened_handles[0..self.file_opens], 0..) |opened, index| {
+            if (opened != handle) continue;
+            if (self.closed_handles[index]) self.duplicate_close = true;
+            self.closed_handles[index] = true;
+            return files.yes;
+        }
+        self.unknown_close = true;
+        return files.yes;
+    }
+
+    fn install(self: *@This(), parent: *Runtime) void {
+        parent.files = .{
+            .context = self,
+            .open = fileOpen,
+            .close = fileClose,
+        };
+        parent.workers = .{
+            .context = self,
+            .spawn = spawn,
+            .join = join,
+        };
+        parent.nursery = .{
+            .context = self,
+            .open = open,
+            .close = close,
+            .run = lifecycleRun,
+        };
+    }
+
+    fn activeChildren(self: *const @This()) usize {
+        var count: usize = 0;
+        for (self.slots) |slot| {
+            if (slot.active) count += 1;
+        }
+        return count;
+    }
+};
+
+const LifecycleAction = enum(u8) {
+    clean,
+    leak,
+    raise_error,
+    trap,
+    exit,
+    result,
+    nested_wait,
+    nested_release,
+};
+
+const LifecycleGraph = struct {
+    root: Value,
+    file: Value = .none,
+};
+
+const LifecycleTask = struct {
+    handle: Value,
+    action: LifecycleAction,
+    active: bool = true,
+    joined: bool = false,
+    open_files: usize = 0,
+    leaked_objects: i64 = 0,
+};
+
+const LifecycleResource = struct {
+    root: Value,
+    file: Value,
+    active: bool = true,
+};
+
+fn lifecycleAction(function: i64) LifecycleAction {
+    return @enumFromInt(@as(u8, @intCast(@mod(function, 8))));
+}
+
+fn lifecycleFailure(runtime: *Runtime, mistake: heap.Error) i32 {
+    if (mistake == error.OutOfMemory) runtime.exhausted = true;
+    return workers.raised_trap;
+}
+
+/// Construct array -> map -> list -> file, with a struct value above the
+/// graph.  The graph is deliberately the same shape for parent resources and
+/// worker-owned resources so a single lifecycle trace covers both ordinary
+/// close and child-runtime close.
+fn lifecycleGraph(runtime: *Runtime, with_file: bool, stamp: i64) heap.Error!LifecycleGraph {
+    const leaf = try runtime.newList(Value.none);
+    var leaf_owned = true;
+    errdefer if (leaf_owned) runtime.freeValue(leaf);
+
+    try containers.append(runtime, leaf, Value.ofLong(stamp));
+
+    var file: Value = .none;
+    var file_owned = false;
+    errdefer if (file_owned) runtime.freeValue(file);
+    if (with_file) {
+        file = (try files.open(
+            runtime,
+            "lifecycle-resource.bin",
+            @intFromEnum(files.Mode.read),
+        )) orelse return runtime.fail(.host_unavailable);
+        file_owned = true;
+        try containers.append(runtime, leaf, file);
+        file_owned = false;
+    }
+
+    const branch = try runtime.newMap();
+    var branch_owned = true;
+    errdefer if (branch_owned) runtime.freeValue(branch);
+    try containers.indexSet(
+        runtime,
+        branch,
+        &.{Value.ofString("payload")},
+        leaf,
+    );
+    leaf_owned = false;
+
+    const array = try runtime.newArray(&.{1}, Value.none);
+    var array_owned = true;
+    errdefer if (array_owned) runtime.freeValue(array);
+    try containers.indexSet(
+        runtime,
+        array,
+        &.{Value.ofLong(0)},
+        branch,
+    );
+    branch_owned = false;
+
+    var fields = [_]Value{ array, Value.ofLong(stamp) };
+    const root = runtime.makeStruct(&fields) catch |mistake| {
+        // `makeStruct` consumes all fields even on allocation failure.
+        array_owned = false;
+        return mistake;
+    };
+    array_owned = false;
+    return .{ .root = root, .file = file };
+}
+
+fn lifecycleNested(runtime: *Runtime, wait_for_result: bool, out: *Value) i32 {
+    var task: Value = .none;
+    workers.spawn(
+        runtime,
+        @intFromEnum(LifecycleAction.result),
+        &.{},
+        &task,
+    ) catch |mistake| return lifecycleFailure(runtime, mistake);
+
+    if (!wait_for_result) {
+        runtime.freeValue(task);
+        return workers.survived;
+    }
+
+    var answer: Value = .none;
+    const status = workers.wait(runtime, task, &answer) catch |mistake| {
+        runtime.freeValue(task);
+        return lifecycleFailure(runtime, mistake);
+    };
+    runtime.freeValue(task);
+    if (status == workers.survived) {
+        out.* = answer;
+    } else {
+        runtime.freeValue(answer);
+    }
+    return status;
+}
+
+/// Keep a struct value in a real object root when a worker is intentionally
+/// left leaky.  A discarded struct would leak only its field-run bytes — the
+/// runtime cannot census a value that no object or result retains — whereas
+/// this anchor makes the whole graph visible to child.deinit and proves that
+/// resource closure and value-storage cleanup happen together.
+fn lifecycleRetainGraph(runtime: *Runtime, root: Value) heap.Error!void {
+    const anchor = runtime.newList(Value.none) catch |mistake| {
+        runtime.freeValue(root);
+        return mistake;
+    };
+    containers.append(runtime, anchor, root) catch |mistake| {
+        // A failed retaining append has already returned the struct's
+        // value-storage bytes through its consuming errdefer.  The object
+        // handles are still loose, so release only that half here.
+        runtime.freeObjectsIn(root);
+        runtime.freeObject(anchor.asObject());
+        return mistake;
+    };
+}
+
+fn lifecycleRun(
+    _: ?*anyopaque,
+    runtime: *Runtime,
+    function: i64,
+    _: [*]const Value,
+    _: i64,
+    out: *Value,
+    _: i64,
+) callconv(.c) i32 {
+    const action = lifecycleAction(function);
+    switch (action) {
+        .nested_wait => return lifecycleNested(runtime, true, out),
+        .nested_release => return lifecycleNested(runtime, false, out),
+        .result => {
+            const graph = lifecycleGraph(runtime, false, function) catch |mistake|
+                return lifecycleFailure(runtime, mistake);
+            out.* = graph.root;
+            return workers.survived;
+        },
+        .clean => {
+            const graph = lifecycleGraph(runtime, true, function) catch |mistake|
+                return lifecycleFailure(runtime, mistake);
+            runtime.freeValue(graph.root);
+            return workers.survived;
+        },
+        .leak => {
+            const graph = lifecycleGraph(runtime, true, function) catch |mistake|
+                return lifecycleFailure(runtime, mistake);
+            lifecycleRetainGraph(runtime, graph.root) catch |mistake|
+                return lifecycleFailure(runtime, mistake);
+            return workers.survived;
+        },
+        .raise_error => {
+            const graph = lifecycleGraph(runtime, true, function) catch |mistake|
+                return lifecycleFailure(runtime, mistake);
+            lifecycleRetainGraph(runtime, graph.root) catch |mistake|
+                return lifecycleFailure(runtime, mistake);
+            const name = "lifecycle_worker";
+            const source = "lifecycle.test";
+            runtime.raise(.user_error, "lifecycle worker error", .{
+                .function = name.ptr,
+                .function_length = name.len,
+                .source = source.ptr,
+                .source_length = source.len,
+                .line = 1,
+                .column = 1,
+            });
+            return workers.raised_error;
+        },
+        .trap => {
+            const graph = lifecycleGraph(runtime, true, function) catch |mistake|
+                return lifecycleFailure(runtime, mistake);
+            lifecycleRetainGraph(runtime, graph.root) catch |mistake|
+                return lifecycleFailure(runtime, mistake);
+            runtime.fail(.index_bounds) catch {};
+            return workers.raised_trap;
+        },
+        .exit => {
+            const graph = lifecycleGraph(runtime, true, function) catch |mistake|
+                return lifecycleFailure(runtime, mistake);
+            lifecycleRetainGraph(runtime, graph.root) catch |mistake|
+                return lifecycleFailure(runtime, mistake);
+            runtime.exit_status = 700 + function;
+            return workers.raised_trap;
+        },
+    }
+}
+
+fn lifecycleActiveTasks(records: []const LifecycleTask) usize {
+    var count: usize = 0;
+    for (records) |record| {
+        if (record.active) count += 1;
+    }
+    return count;
+}
+
+fn lifecycleActiveResources(records: []const LifecycleResource) usize {
+    var count: usize = 0;
+    for (records) |record| {
+        if (record.active) count += 1;
+    }
+    return count;
+}
+
+fn lifecycleTaskAt(records: []LifecycleTask, ordinal: usize) *LifecycleTask {
+    var seen: usize = 0;
+    for (records) |*record| {
+        if (!record.active) continue;
+        if (seen == ordinal) return record;
+        seen += 1;
+    }
+    unreachable;
+}
+
+fn lifecycleResourceAt(records: []LifecycleResource, ordinal: usize) *LifecycleResource {
+    var seen: usize = 0;
+    for (records) |*record| {
+        if (!record.active) continue;
+        if (seen == ordinal) return record;
+        seen += 1;
+    }
+    unreachable;
+}
+
+fn lifecycleMarkJoined(state: *LifecycleState, task: *LifecycleTask) void {
+    if (task.joined) return;
+    task.joined = true;
+    state.expected_leaks += task.leaked_objects;
+}
+
+fn lifecycleWaitTask(
+    runtime: *Runtime,
+    state: *LifecycleState,
+    task: *LifecycleTask,
+) !void {
+    if (task.joined) {
+        var second: Value = Value.ofLong(99);
+        try expectTrap(.use_after_free, runtime, workers.wait(runtime, task.handle, &second));
+        try testing.expectEqual(@as(i64, 99), second.asLong());
+        runtime.pending = null;
+        return;
+    }
+
+    var answer: Value = .none;
+    const status = workers.wait(runtime, task.handle, &answer) catch |mistake| switch (mistake) {
+        error.Trap => blk: {
+            switch (task.action) {
+                .trap => try testing.expectEqual(.index_bounds, runtime.pending.?.code),
+                .exit => try testing.expectEqual(
+                    @as(i64, 700) + @as(i64, @intFromEnum(task.action)),
+                    runtime.exit_status.?,
+                ),
+                else => return mistake,
+            }
+            break :blk workers.raised_trap;
+        },
+        else => return mistake,
+    };
+
+    switch (task.action) {
+        .raise_error => {
+            try testing.expectEqual(workers.raised_error, status);
+            try testing.expectEqual(vocabulary.ErrorCode.user_error, runtime.raised.?.code);
+            runtime.forget();
+        },
+        .trap, .exit => try testing.expectEqual(workers.raised_trap, status),
+        else => try testing.expectEqual(workers.survived, status),
+    }
+    runtime.pending = null;
+    runtime.exit_status = null;
+    if (status == workers.survived) runtime.freeValue(answer);
+    lifecycleMarkJoined(state, task);
+}
+
+fn lifecycleAudit(
+    runtime: *Runtime,
+    state: *const LifecycleState,
+    tasks: Value,
+    task_records: []const LifecycleTask,
+    resources: Value,
+    resource_records: []const LifecycleResource,
+) !void {
+    runtime.debugAssertInvariants();
+
+    const active_tasks = lifecycleActiveTasks(task_records);
+    const active_resources = lifecycleActiveResources(resource_records);
+    try testing.expectEqual(@as(i64, @intCast(active_tasks)), (try containers.length(runtime, tasks)).asLong());
+    try testing.expectEqual(@as(i64, @intCast(active_resources)), (try containers.length(runtime, resources)).asLong());
+
+    var live_task_rows: usize = 0;
+    var joined_task_rows: usize = 0;
+    var expected_files = active_resources;
+    for (task_records) |task| {
+        if (!task.active) continue;
+        const object = try runtime.resolve(task.handle);
+        switch (object.data) {
+            .task => |worker| {
+                if (task.joined) {
+                    try testing.expect(worker == null);
+                    joined_task_rows += 1;
+                } else {
+                    try testing.expect(worker != null);
+                    live_task_rows += 1;
+                    expected_files += task.open_files;
+                }
+            },
+            else => return error.TestExpected,
+        }
+    }
+    for (resource_records) |resource| {
+        if (!resource.active) continue;
+        _ = try runtime.resolve(resource.file);
+        try testing.expectEqual(value.Tag.strukt, resource.root.tag);
+        try testing.expect(resource.root.asStruct().len != 0);
+    }
+
+    try testing.expectEqual(active_tasks, live_task_rows + joined_task_rows);
+    try testing.expectEqual(state.spawns - state.joins, state.activeChildren());
+    try testing.expectEqual(state.opens - state.closes, state.activeChildren());
+    try testing.expectEqual(expected_files, state.file_opens - state.file_closes);
+    try testing.expect(!state.duplicate_close);
+    try testing.expect(!state.unknown_close);
+    try testing.expect(!state.file_overflow);
+    try testing.expectEqual(state.expected_leaks, runtime.inherited_leaks);
+
+    // The parent has exactly two bucket rows, one row per live task, and
+    // four rows per nested resource graph (array/map/list/file).
+    try testing.expectEqual(
+        @as(u32, @intCast(2 + active_tasks + active_resources * 4)),
+        runtime.live,
+    );
+}
+
+fn runLifecycleSeed(seed: u64) !void {
+    var state = LifecycleState.init();
+    var parent_objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+    var parent_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{
+        .arena = parent_arena.allocator(),
+        .objects = parent_objects.allocator(),
+    });
+    state.install(&runtime);
+
+    var tasks: Value = .none;
+    var resources: Value = .none;
+    var deinitialized = false;
+    defer {
+        if (!tasks.isNone()) runtime.freeValue(tasks);
+        if (!resources.isNone()) runtime.freeValue(resources);
+        if (!deinitialized) runtime.deinit();
+        parent_arena.deinit();
+    }
+
+    tasks = try runtime.newList(Value.none);
+    resources = try runtime.newList(Value.none);
+    var task_records: [lifecycle_record_capacity]LifecycleTask = undefined;
+    var resource_records: [lifecycle_record_capacity]LifecycleResource = undefined;
+    var task_used: usize = 0;
+    var resource_used: usize = 0;
+    var random = OwnerGraphRng.init(seed);
+
+    const transitions = 180;
+    for (0..transitions) |_| {
+        runtime.pending = null;
+        switch (random.below(100)) {
+            0...25 => if (task_used < lifecycle_record_capacity) {
+                const action: LifecycleAction = @enumFromInt(@as(u8, @intCast(random.below(8))));
+                var task: Value = .none;
+                try workers.spawn(&runtime, @intFromEnum(action), &.{}, &task);
+                try containers.append(&runtime, tasks, task);
+                task_records[task_used] = .{
+                    .handle = task,
+                    .action = action,
+                    .open_files = switch (action) {
+                        .leak, .raise_error, .trap, .exit => 1,
+                        else => 0,
+                    },
+                    .leaked_objects = switch (action) {
+                        .leak, .raise_error, .trap, .exit => 5,
+                        else => 0,
+                    },
+                };
+                task_used += 1;
+            },
+            26...42 => if (resource_used < lifecycle_record_capacity) {
+                const graph = try lifecycleGraph(&runtime, true, @intCast(resource_used));
+                try containers.append(&runtime, resources, graph.root);
+                resource_records[resource_used] = .{
+                    .root = graph.root,
+                    .file = graph.file,
+                };
+                resource_used += 1;
+            },
+            43...58 => if (lifecycleActiveTasks(task_records[0..task_used]) != 0) {
+                const task = lifecycleTaskAt(
+                    task_records[0..task_used],
+                    random.below(lifecycleActiveTasks(task_records[0..task_used])),
+                );
+                try lifecycleWaitTask(&runtime, &state, task);
+            },
+            59...65 => if (lifecycleActiveTasks(task_records[0..task_used]) != 0) {
+                const task = lifecycleTaskAt(
+                    task_records[0..task_used],
+                    lifecycleActiveTasks(task_records[0..task_used]) - 1,
+                );
+                const popped = try containers.pop(&runtime, tasks);
+                try testing.expect(std.meta.eql(task.handle, popped));
+                runtime.freeValue(popped);
+                task.active = false;
+                lifecycleMarkJoined(&state, task);
+            },
+            66...71 => if (lifecycleActiveTasks(task_records[0..task_used]) != 0) {
+                const ordinal = random.below(lifecycleActiveTasks(task_records[0..task_used]));
+                const task = lifecycleTaskAt(task_records[0..task_used], ordinal);
+                try containers.remove(&runtime, tasks, Value.ofLong(@intCast(ordinal)));
+                task.active = false;
+                lifecycleMarkJoined(&state, task);
+            },
+            72...75 => {
+                try containers.clear(&runtime, tasks);
+                for (task_records[0..task_used]) |*task| {
+                    if (!task.active) continue;
+                    task.active = false;
+                    lifecycleMarkJoined(&state, task);
+                }
+            },
+            76...83 => if (lifecycleActiveResources(resource_records[0..resource_used]) != 0) {
+                const resource = lifecycleResourceAt(
+                    resource_records[0..resource_used],
+                    lifecycleActiveResources(resource_records[0..resource_used]) - 1,
+                );
+                const popped = try containers.pop(&runtime, resources);
+                try testing.expect(std.meta.eql(resource.root, popped));
+                runtime.freeValue(popped);
+                resource.active = false;
+                try expectTrap(.use_after_free, &runtime, runtime.resolve(resource.file));
+                runtime.pending = null;
+            },
+            84...89 => if (lifecycleActiveResources(resource_records[0..resource_used]) != 0) {
+                const ordinal = random.below(lifecycleActiveResources(resource_records[0..resource_used]));
+                const resource = lifecycleResourceAt(resource_records[0..resource_used], ordinal);
+                try containers.remove(&runtime, resources, Value.ofLong(@intCast(ordinal)));
+                resource.active = false;
+                try expectTrap(.use_after_free, &runtime, runtime.resolve(resource.file));
+                runtime.pending = null;
+            },
+            else => {
+                try containers.clear(&runtime, resources);
+                for (resource_records[0..resource_used]) |*resource| resource.active = false;
+            },
+        }
+
+        try lifecycleAudit(
+            &runtime,
+            &state,
+            tasks,
+            task_records[0..task_used],
+            resources,
+            resource_records[0..resource_used],
+        );
+    }
+
+    // Closing the two buckets exercises the same release path as scope
+    // exit, including joins for every task not explicitly waited above.
+    try containers.clear(&runtime, tasks);
+    for (task_records[0..task_used]) |*task| {
+        if (!task.active) continue;
+        task.active = false;
+        lifecycleMarkJoined(&state, task);
+    }
+    try containers.clear(&runtime, resources);
+    for (resource_records[0..resource_used]) |*resource| resource.active = false;
+    try lifecycleAudit(
+        &runtime,
+        &state,
+        tasks,
+        task_records[0..task_used],
+        resources,
+        resource_records[0..resource_used],
+    );
+
+    runtime.freeValue(tasks);
+    tasks = .none;
+    runtime.freeValue(resources);
+    resources = .none;
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+    try testing.expectEqual(runtime.inherited_leaks, runtime.leaked());
+    try testing.expectEqual(@as(usize, 0), state.activeChildren());
+    try testing.expectEqual(state.spawns, state.joins);
+    try testing.expectEqual(state.opens, state.closes);
+    try testing.expectEqual(state.file_opens, state.file_closes);
+    try testing.expect(!state.duplicate_close);
+    try testing.expect(!state.unknown_close);
+    try testing.expect(!state.file_overflow);
+
+    runtime.deinit();
+    deinitialized = true;
+    try testing.expectEqual(parent_objects.allocated_bytes, parent_objects.freed_bytes);
+}
+
+test "fixed worker and resource lifecycle seeds preserve joins and closes" {
+    for ([_]u64{
+        0x0B_0700_0001,
+        0x0B_0700_0021,
+        0x0B_0700_00A5,
+        0x0B_0700_F00D,
+    }) |seed| try runLifecycleSeed(seed);
+}
+
+test "fuzz: worker and resource lifecycles preserve ownership" {
+    try testing.fuzz({}, fuzzLifecycle, .{ .corpus = &.{
+        "worker resource lifecycle seed",
+        "\x00\x01\x02\x03\x04\x05",
+        "\xff\x00\x13\x37\xa5\x5a",
+    } });
+}
+
+fn fuzzLifecycle(_: void, smith: *testing.Smith) !void {
+    var bytes: [24]u8 = undefined;
+    const length = smith.sliceWeightedBytes(&bytes, &.{
+        .rangeAtMost(u8, 0x00, 0xff, 1),
+        .value(u8, 0x00, 3),
+        .value(u8, 0xff, 3),
+        .value(u8, '\n', 2),
+    });
+
+    var seed: u64 = 0xD1CE_BAAD_51A7_0001;
+    for (bytes[0..length], 0..) |byte, at| {
+        seed = seed *% 6_364_136_223_846_793_005 +%
+            (@as(u64, byte) +% @as(u64, at) +% 1);
+        seed ^= seed >> 31;
+    }
+    try runLifecycleSeed(seed);
+}
+
 fn expectWorkerGraphFailures() !usize {
     var failures: usize = 0;
     for (0..32) |failure_offset| {
@@ -1913,6 +2639,32 @@ test "a packed list copy ignores retained spare capacity" {
         @as(i64, 29),
         (try containers.indexGet(runtime, duplicate, &.{Value.ofLong(1)})).asLong(),
     );
+}
+
+test "list growth keeps every raw capacity on an element boundary" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    // The geometric step used to add `grown / 2` before the element
+    // width, which can make a later capacity (for example 164 bytes for
+    // an eight-byte cell) impossible to divide into cells.  Exercise
+    // packed and boxed widths through several such steps and inspect the
+    // storage contract directly.
+    for ([_]Value{
+        Value.ofLong(0),
+        Value.ofShort(0),
+        Value.ofByte(0),
+        Value.none,
+    }) |zero| {
+        const list = try runtime.newList(zero);
+        for (0..96) |_| try containers.append(runtime, list, zero);
+        const object = try runtime.resolve(list);
+        try testing.expectEqual(@as(usize, 0), object.elements.bytes.len % object.elements.kind.width());
+        try testing.expectEqual(@as(usize, 96), object.elements.count);
+        runtime.freeValue(list);
+    }
 }
 
 test "failed nested list, map, array, and struct copies leave no target" {
