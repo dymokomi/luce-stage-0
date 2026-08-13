@@ -1081,10 +1081,12 @@ fn copyWithAllocator(allocator: std.mem.Allocator, source: *Runtime, held: Value
         arena.deinit();
     }
     const duplicate = target.copyFrom(source, held) catch |mistake| {
+        target.debugAssertInvariants();
         try testing.expectEqual(@as(u32, 0), target.live);
         return mistake;
     };
     target.freeValue(duplicate);
+    target.debugAssertInvariants();
     try testing.expectEqual(@as(u32, 0), target.live);
 }
 
@@ -1100,8 +1102,12 @@ fn copyFunctionWithAllocator(allocator: std.mem.Allocator, held: Value) !void {
         target.deinit();
         arena.deinit();
     }
-    const duplicate = target.ownValue(held) catch |mistake| return mistake;
+    const duplicate = target.ownValue(held) catch |mistake| {
+        target.debugAssertInvariants();
+        return mistake;
+    };
     target.dropStorage(duplicate);
+    target.debugAssertInvariants();
 }
 
 fn newArrayWithOwnedFill(allocator: std.mem.Allocator) !void {
@@ -1123,11 +1129,14 @@ fn newArrayWithOwnedFill(allocator: std.mem.Allocator) !void {
             runtime.pending != null and
             runtime.pending.?.code == .allocation_failed)
         {
+            runtime.debugAssertInvariants();
             return error.OutOfMemory;
         }
+        runtime.debugAssertInvariants();
         return mistake;
     };
     runtime.freeValue(array);
+    runtime.debugAssertInvariants();
 }
 
 const CopyShape = enum { list, map, array, strukt };
@@ -5811,7 +5820,9 @@ test "array fill keeps its old values through every copy allocation failure" {
                 );
             }
         }
+        runtime.debugAssertInvariants();
         runtime.freeValue(array);
+        runtime.debugAssertInvariants();
         try testing.expectEqual(@as(u32, 0), runtime.live);
         runtime.deinit();
         arena.deinit();
@@ -6912,6 +6923,7 @@ test "allocating C doors preserve outputs and rows at every failure point" {
             }
 
             try testing.expectEqual(@as(u32, 0), runtime.live);
+            runtime.debugAssertInvariants();
             runtime.deinit();
             arena.deinit();
             try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
@@ -7030,7 +7042,9 @@ test "allocating C value doors preserve graphs and slots at every failure point"
                 failures += 1;
             }
 
+            runtime.debugAssertInvariants();
             if (source.tag == .object) runtime.freeValue(source);
+            runtime.debugAssertInvariants();
             try testing.expectEqual(@as(u32, 0), runtime.live);
             runtime.deinit();
             arena.deinit();
@@ -7141,6 +7155,7 @@ test "C file acquisition closes raw handles through every allocation failure" {
             try testing.expect(!state.duplicate_close);
             try testing.expect(!state.unknown_close);
             try testing.expectEqual(@as(u32, 0), runtime.live);
+            runtime.debugAssertInvariants();
             runtime.deinit();
             arena.deinit();
             cleaned = true;
@@ -7205,6 +7220,7 @@ test "the C spawn door rolls worker acquisition back before publishing a task" {
         try testing.expectEqual(state.joins, state.closes);
         if (state.closes != 0) try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
         try testing.expectEqual(@as(u32, 0), parent.live);
+        parent.debugAssertInvariants();
         parent.deinit();
         parent_arena.deinit();
         child_arena.deinit();
@@ -7306,6 +7322,7 @@ test "C task wait rolls nested result transfer back and detaches exactly once" {
             parent.pending = null;
 
             parent.freeValue(task);
+            parent.debugAssertInvariants();
             try testing.expectEqual(@as(u32, 0), parent.live);
             parent.deinit();
             parent_arena.deinit();
@@ -7504,11 +7521,13 @@ test "C compound value doors preserve destinations through every allocation fail
                 failures += 1;
             }
 
+            runtime.debugAssertInvariants();
             if (source_owned) switch (source.tag) {
                 .object => runtime.freeValue(source),
                 else => runtime.dropStorage(source),
             };
             source_owned = false;
+            runtime.debugAssertInvariants();
             try testing.expectEqual(@as(u32, 0), runtime.live);
             runtime.deinit();
             arena.deinit();

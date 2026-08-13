@@ -1721,3 +1721,17 @@ The focused resource-composition lane passes 7/7, and the full differential
 Luce suite passes 529/529.
 
 Commit: current Tier 0 resource-composition hardening batch.
+
+## 2026-08-13 — allocator rollback checks the owner graph in flight
+
+The checked runtime invariant walk is now part of the allocator-failure
+corpus, not only the final zero-live assertion.  Nested copies and array
+fills, all direct C value and compound doors, raw file/task acquisition,
+spawn, and task-result transfer assert owner metadata while partial graphs
+are still present, then assert again after cleanup.  This checks parent edges,
+generation/free-list state, resource rows, and borrowed function receivers at
+the moment rollback has to be correct.
+
+The focused runtime ownership lane passes 40/40.
+
+Commit: current Tier 0 invariant/rollback hardening batch.

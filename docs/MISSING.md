@@ -130,8 +130,12 @@ edges, duplicate edges, acyclic ancestry, and borrowed function receivers;
 its direct composite regression covers map, array, and nested struct doors.
 The assertion now also checks live file handles, live task-to-child links,
 child-runtime invariants at the post-join close seam, and a parent object
-allocator baseline; concurrent inspection of a still-running child and a
-full failure-injection invariant matrix remain open.  A new format/spec regression now encodes
+allocator baseline.  The allocator-failure lanes now invoke that assertion
+while partial nested copies, array fills, C value/compound doors, file/task
+acquisition, spawn, and task-result transfer are still live, catching owner
+metadata damage before teardown.  Concurrent inspection of a still-running
+child and the remaining union/optional and source-level failure matrix stay
+open.  A new format/spec regression now encodes
 the already optimized ownership graph, decodes it, and runs the decoded
 program through both engines; it covers the union/list/struct/bound-method
 composition, a give parameter, and an inout receiver that shape-only round
