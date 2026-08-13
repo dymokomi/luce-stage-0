@@ -152,9 +152,7 @@ smuggle one in as a convenience feature.
 ## Tier 5b — diagnostic precision
 
 Smaller harness follow-ups remain: worker arena exhaustion can be translated
-as `host_unavailable`, release-mode origin stripping is redundant, and an
-unimported namespace has inconsistent diagnostics depending on whether the
-use is a call or a value read.
+as `host_unavailable`, and release-mode origin stripping is redundant.
 
 ## Order of work
 

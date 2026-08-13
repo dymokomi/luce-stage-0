@@ -1103,3 +1103,10 @@ braces/maps, and whitespace around format specs are covered on both execution
 paths; tabs remain invalid source characters.
 
 Commit: `c1815e5`.
+
+Loaded-but-unimported namespaces now use one diagnostic in call position,
+dotted value reads, and indexed writes: `unknown namespace …; import … to use
+it`.  Modules that were never loaded still use the ordinary unknown-name
+diagnostic, and the compiler test pins both cases.
+
+Commit: `947b5ac`.
