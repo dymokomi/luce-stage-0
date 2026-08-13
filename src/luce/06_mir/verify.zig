@@ -569,6 +569,11 @@ fn verifyContainerConstant(
         .map => |pair| switch (constant.payload) {
             .sequence => return error.BadConstant,
             .map => |entries| {
+                // `{}` has no source-level type to land on and is
+                // deliberately refused in favor of `new map(K, V)`.
+                // A forged or stale module must not smuggle that
+                // impossible constant shape past the same boundary.
+                if (entries.len == 0) return error.BadConstant;
                 for (entries) |entry| {
                     try verifyConstantValue(program, entry.key, pair.key, false, 0);
                     try verifyConstantValue(program, entry.value, pair.value, false, 0);

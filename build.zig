@@ -301,6 +301,16 @@ pub fn build(b: *std.Build) void {
     );
     test_optimizer_step.dependOn(&b.addRunArtifact(optimizer_tests).step);
 
+    const mir_constant_tests = b.addTest(.{
+        .root_module = luce,
+        .filters = &.{"constant container rows are exhaustively verified after decode"},
+    });
+    const test_mir_constants_step = b.step(
+        "test-mir-constants",
+        "Run hostile constant-container verifier regressions",
+    );
+    test_mir_constants_step.dependOn(&b.addRunArtifact(mir_constant_tests).step);
+
     // The documentation site's generator (`www/luce/src/`).  Its tests
     // are what keep the word tables it highlights with, its link
     // resolver and its Markdown honest, and they belong in `zig build

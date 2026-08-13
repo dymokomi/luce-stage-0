@@ -98,7 +98,7 @@ proposal text disagrees with it.
 | F72 | Constant-place preflight could recognize a constant in a transitively loaded but unimported module before ordinary name resolution, leaking the declaration through an immutability diagnostic. | Fixed with the import gate and a multi-module regression.  The existing call-versus-dotted-value diagnostic difference is deferred in `docs/MISSING.md`. |
 | F73 | VS Code's word-free `:\\s*$` indentation rule treats a split map entry as a block opener even though braces suspend language layout. | Retained editor approximation; the README says so and `docs/MISSING.md` records the brace-aware follow-up. |
 | F74 | Current site pages still said Luce had no braces, taught only one of four legal `main` shapes, and used retired top-level `let` for function and enum constants. | Fixed in the tour and type/statement references. |
-| F75 | Verified MIR accepts a zero-entry constant-map pool row although source `{}` is deliberately refused; materialization is safe, but the wire admits a source-impossible constant shape. | Deferred verifier/canonicalization question; recorded in `docs/MISSING.md`. |
+| F75 | Verified MIR accepts a zero-entry constant-map pool row although source `{}` is deliberately refused; materialization is safe, but the wire admits a source-impossible constant shape. | Fixed: MIR verification rejects zero-entry map rows, and the module boundary test confirms an encoded forged row is rejected as `InvalidModule`; source parsing already rejects `{}` with the explicit constructor advice. |
 
 ## Verification record
 

@@ -1074,6 +1074,14 @@ test "constant container rows are exhaustively verified after decode" {
     try testing.expectError(error.BadConstant, mir.verify(testing.allocator, &program));
     program.container_constants[1].payload.map[1].key = .{ .string = 2 };
 
+    const saved_entries = program.container_constants[1].payload.map;
+    program.container_constants[1].payload = .{ .map = &.{} };
+    try testing.expectError(error.BadConstant, mir.verify(testing.allocator, &program));
+    const empty_map_module = try encode(testing.allocator, &program);
+    defer testing.allocator.free(empty_map_module);
+    try testing.expectError(error.InvalidModule, decode(testing.allocator, empty_map_module));
+    program.container_constants[1].payload = .{ .map = saved_entries };
+
     const saved_origin = program.container_constants[0].origin;
     program.container_constants[0].origin.line = 0;
     try testing.expectError(error.BadConstant, mir.verify(testing.allocator, &program));

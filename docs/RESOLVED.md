@@ -1133,3 +1133,10 @@ the prepared MIR and does not strip it again.  There is no duplicate
 `mir.strip` call on the current dual-engine path.
 
 Commit: current-tree audit.
+
+The module verifier now rejects zero-entry constant-map rows.  Source already
+refused `{}` because it cannot infer key and value types; decoded MIR now
+honors that same boundary, and the round-trip test proves the forged row is
+rejected as `InvalidModule` rather than materialized.
+
+Commit: pending.

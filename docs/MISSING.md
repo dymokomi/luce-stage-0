@@ -118,8 +118,6 @@ smuggle one in as a convenience feature.
   stages cannot recover them for vectorization.
 - The LLVM program-root proof is conservative beyond fresh `heap_new` rows;
   widening it requires a runtime-contract test and hostile-MIR proof.
-- A decoded module can carry an empty constant-map row that source syntax
-  cannot produce; decide whether verifier canonicalization should reject it.
 - Constant arrays of value structs currently zero-fill then replace cells;
   optimize only if startup measurements justify a new constructor seam.
 - The unreachable LLVM equality arm for function values compares only the
