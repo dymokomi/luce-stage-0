@@ -1118,4 +1118,4 @@ out-of-band marker before adopting a Luce trap.  Runtime cleanup, the shared
 join, and a forced interpreter worker allocation failure are covered by a
 focused `test-worker-exhaustion` lane.
 
-Commit: pending.
+Commit: `7662ead`.
