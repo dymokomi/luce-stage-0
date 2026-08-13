@@ -2017,8 +2017,13 @@ pub const Runtime = struct {
     /// **Consumes `to`**, like every other store site.
     pub fn setField(self: *Runtime, held: Value, index: usize, to: Value) Error!Value {
         const source = held.asStruct();
+        // The caller normally proves this at the semantic stage.  Keep the
+        // runtime door transactional as well: a hostile module must not
+        // smuggle a container-owned or stale object into the fresh run,
+        // and a rejected value must remain the caller's to clean up.
+        try self.checkGivable(to, null);
         const stored = self.objects.alloc(Value, source.len) catch |mistake| {
-            self.dropStorage(to);
+            self.freeValue(to);
             return mistake;
         };
         // The unwind releases the copies it made and `to` once each:
@@ -2029,7 +2034,7 @@ pub const Runtime = struct {
             for (stored[0..filled], 0..) |field, at| {
                 if (at != index) self.dropStorage(field);
             }
-            self.dropStorage(to);
+            self.freeValue(to);
             self.objects.free(stored);
         }
         for (source, stored, 0..) |field, *slot, at| {

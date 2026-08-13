@@ -636,6 +636,79 @@ fn newArrayWithOwnedFill(allocator: std.mem.Allocator) !void {
 
 const CopyShape = enum { list, map, array, strukt };
 
+const RetainingDoor = enum { append, insert, map_index_set };
+
+fn expectRetainingDoorFailure(door: RetainingDoor) !void {
+    var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{
+        .arena = arena.allocator(),
+        .objects = objects.allocator(),
+    });
+    var cleaned = false;
+    defer if (!cleaned) {
+        runtime.deinit();
+        arena.deinit();
+    };
+
+    const target = switch (door) {
+        .append, .insert => blk: {
+            const list = try runtime.newList(Value.none);
+            // The first eight values establish the initial capacity.  The
+            // failing operation is therefore forced to allocate its next
+            // element run rather than merely exercising a no-grow write.
+            for (0..8) |number| {
+                try containers.append(&runtime, list, Value.ofLong(@intCast(number)));
+            }
+            break :blk list;
+        },
+        .map_index_set => try runtime.newMap(),
+    };
+    const held = try runtime.newList(Value.none);
+    const baseline_live = runtime.live;
+    try testing.expectEqual(@as(u32, 2), baseline_live);
+
+    // `held` has passed through construction as a loose object.  Once the
+    // retaining door has accepted its ownership proof, a later allocation
+    // failure must consume it as well as a string or struct run.  Otherwise
+    // the object becomes a live row with no owner and the next generation
+    // audit reports a leak that ordinary scope cleanup cannot explain.
+    objects.fail_index = objects.alloc_index;
+    const outcome = switch (door) {
+        .append => containers.append(&runtime, target, held),
+        .insert => containers.insert(&runtime, target, 4, held),
+        .map_index_set => containers.indexSet(
+            &runtime,
+            target,
+            &.{Value.ofString("new key")},
+            held,
+        ),
+    };
+    try testing.expectError(error.OutOfMemory, outcome);
+    try testing.expect(objects.has_induced_failure);
+    try testing.expectEqual(baseline_live - 1, runtime.live);
+    try expectTrap(.use_after_free, &runtime, runtime.resolve(held));
+    runtime.pending = null;
+
+    switch (door) {
+        .append, .insert => try testing.expectEqual(
+            @as(i64, 8),
+            (try containers.length(&runtime, target)).asLong(),
+        ),
+        .map_index_set => try testing.expectEqual(
+            @as(i64, 0),
+            (try containers.length(&runtime, target)).asLong(),
+        ),
+    }
+
+    runtime.freeValue(target);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+    runtime.deinit();
+    arena.deinit();
+    cleaned = true;
+    try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
+}
+
 fn expectNestedListIntact(runtime: *Runtime, held: Value) !void {
     try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, held)).asLong());
     const word = try containers.indexGet(runtime, held, &.{Value.ofLong(0)});
@@ -2959,6 +3032,35 @@ test "failed nested list, map, array, and struct copies leave no target" {
     }
 }
 
+test "failed retaining stores consume accepted objects without damaging rejected aliases" {
+    for ([_]RetainingDoor{ .append, .insert, .map_index_set }) |door| {
+        try expectRetainingDoorFailure(door);
+    }
+
+    // The ownership proof is deliberately before the release arm: a
+    // container-owned alias must remain attached when the backstop refuses
+    // it, and a self-adoption must leave its target untouched.  These are
+    // the two failures that make an unconditional `freeValue(held)` just as
+    // wrong as the old storage-only cleanup.
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const target = try runtime.newList(Value.none);
+    const child = try runtime.newList(Value.none);
+    try containers.append(runtime, target, child);
+    try expectTrap(.not_owned, runtime, containers.append(runtime, target, child));
+    runtime.pending = null;
+    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, target)).asLong());
+    _ = try runtime.resolve(child);
+
+    try expectTrap(.ownership_cycle, runtime, containers.append(runtime, target, target));
+    runtime.pending = null;
+    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, target)).asLong());
+    _ = try runtime.resolve(target);
+}
+
 test "failed function-value copies return every nested storage allocation" {
     var bench: Bench = undefined;
     bench.setup();
@@ -3085,6 +3187,59 @@ test "failed struct construction releases objects but function runs keep receive
     function_runtime.deinit();
     function_arena.deinit();
     try testing.expectEqual(function_objects.allocated_bytes, function_objects.freed_bytes);
+}
+
+test "failed struct replacement consumes an object field without freeing the old source" {
+    var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{
+        .arena = arena.allocator(),
+        .objects = objects.allocator(),
+    });
+    var cleaned = false;
+    defer if (!cleaned) {
+        runtime.deinit();
+        arena.deinit();
+    };
+
+    const old_child = try runtime.newList(Value.none);
+    const record = try runtime.makeStruct(&.{old_child});
+    const replacement = try runtime.newList(Value.none);
+    const baseline_live = runtime.live;
+    objects.fail_index = objects.alloc_index;
+
+    try testing.expectError(error.OutOfMemory, runtime.setField(record, 0, replacement));
+    try testing.expect(objects.has_induced_failure);
+    try testing.expectEqual(baseline_live - 1, runtime.live);
+    try expectTrap(.use_after_free, &runtime, runtime.resolve(replacement));
+    runtime.pending = null;
+    try testing.expectEqual(@as(i64, 0), (try containers.length(&runtime, old_child)).asLong());
+
+    runtime.freeValue(record);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+    runtime.deinit();
+    arena.deinit();
+    cleaned = true;
+    try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
+}
+
+test "struct replacement rejects a container-owned alias before allocating" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const child = try runtime.newList(Value.none);
+    const record = try runtime.makeStruct(&.{child});
+    const holder = try runtime.newList(Value.none);
+    try containers.append(runtime, holder, record);
+    const baseline_live = runtime.live;
+
+    try expectTrap(.not_owned, runtime, runtime.setField(record, 0, child));
+    runtime.pending = null;
+    try testing.expectEqual(baseline_live, runtime.live);
+    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, holder)).asLong());
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, child)).asLong());
 }
 
 test "failed task allocation discards the worker result before close" {

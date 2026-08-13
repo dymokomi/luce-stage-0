@@ -80,7 +80,10 @@ pub fn indexGet(runtime: *Runtime, target: Value, indices: []const Value) Error!
 /// already exists must not pay for a copy of a key it will not keep.
 pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: Value) Error!void {
     const stored = held;
-    errdefer runtime.dropStorage(stored);
+    var consume_on_failure = false;
+    errdefer {
+        if (consume_on_failure) runtime.freeValue(stored) else runtime.dropStorage(stored);
+    }
     const object = try runtime.resolveMutable(target);
     // Validate the incoming ownership before releasing the old cell.  On
     // a forged store this preserves both the destination and the graph it
@@ -93,6 +96,7 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
                 return runtime.fail(.index_bounds);
             }
             try runtime.ensureAcyclicAdoption(target.asObject(), stored);
+            consume_on_failure = true;
             // An element overwrite frees the old owned element (S22);
             // only a `Value` cell can be holding one.
             if (object.elements.kind == .value) {
@@ -104,10 +108,12 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
             const key = indices[0];
             if (map.find(&key)) |at| {
                 try runtime.ensureAcyclicAdoption(target.asObject(), stored);
+                consume_on_failure = true;
                 runtime.freeValue(map.entries.items[at].value);
                 map.entries.items[at].value = stored;
             } else {
                 try runtime.ensureAcyclicAdoption(target.asObject(), stored);
+                consume_on_failure = true;
                 // A fresh entry owns its key too, and frees it with
                 // itself.
                 const owned_key = try runtime.ownValue(key);
@@ -119,6 +125,7 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
             const flat = heap.flattenIndex(object.dims, indices) orelse
                 return runtime.fail(.index_bounds);
             try runtime.ensureAcyclicAdoption(target.asObject(), stored);
+            consume_on_failure = true;
             // An element overwrite frees the old owned element (S22);
             // only a `Value` cell can be holding one.
             if (object.elements.kind == .value) {
@@ -167,7 +174,10 @@ pub fn append(runtime: *Runtime, target: Value, held: Value) Error!void {
     const object = try runtime.resolve(target);
     switch (object.data) {
         .list => {
-            errdefer runtime.dropStorage(held);
+            var consume_on_failure = false;
+            errdefer {
+                if (consume_on_failure) runtime.freeValue(held) else runtime.dropStorage(held);
+            }
             try runtime.requireMutable(object);
             // A retaining store consumes an owned value.  The semantic
             // stage normally proves this before lowering, but the runtime
@@ -183,6 +193,7 @@ pub fn append(runtime: *Runtime, target: Value, held: Value) Error!void {
             if (may_carry_objects) {
                 try runtime.ensureAcyclicAdoption(target.asObject(), held);
             }
+            consume_on_failure = true;
             try object.elements.append(runtime.objects, held);
             if (may_carry_objects) runtime.adoptInto(target.asObject(), held);
         },
@@ -216,7 +227,10 @@ pub fn pop(runtime: *Runtime, target: Value) Error!Value {
 /// on the out-of-range trap: nothing the caller handed over is left
 /// without an owner.
 pub fn insert(runtime: *Runtime, target: Value, index: i64, held: Value) Error!void {
-    errdefer runtime.dropStorage(held);
+    var consume_on_failure = false;
+    errdefer {
+        if (consume_on_failure) runtime.freeValue(held) else runtime.dropStorage(held);
+    }
     const object = try runtime.resolveMutable(target);
     if (index < 0 or index > object.elements.count) return runtime.fail(.index_bounds);
     // Keep the runtime boundary honest for hand-built MIR.  A container
@@ -224,6 +238,7 @@ pub fn insert(runtime: *Runtime, target: Value, index: i64, held: Value) Error!v
     // popped or copied.
     try runtime.checkGivable(held, null);
     try runtime.ensureAcyclicAdoption(target.asObject(), held);
+    consume_on_failure = true;
     try object.elements.insert(runtime.objects, @intCast(index), held);
     runtime.adoptInto(target.asObject(), held);
 }

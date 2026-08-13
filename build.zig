@@ -173,6 +173,9 @@ pub fn build(b: *std.Build) void {
         "nested resource graph failures",
         "stale handles reject every container",
         "stale file operations trap",
+        "failed retaining stores",
+        "failed struct replacement consumes",
+        "struct replacement rejects",
     };
     const c_sanitize_luce = b.createModule(.{
         .root_source_file = b.path("src/luce/luce.zig"),
@@ -446,6 +449,9 @@ pub fn build(b: *std.Build) void {
             "nested resource graph failures",
             "stale handles reject every container",
             "stale file operations trap",
+            "failed retaining stores",
+            "failed struct replacement consumes",
+            "struct replacement rejects",
         },
     });
     const test_runtime_ownership_step = b.step(

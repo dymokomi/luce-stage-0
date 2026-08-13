@@ -134,6 +134,13 @@ after row generation reuse, plus file read/write/flush/copy/give operations;
 it checks that double release is inert and that stale file operations do not
 reach the host.  Nested function-receiver and task-resource combinations
 still need their own exhaustive matrix.
+The retaining-store rollback slice now drives append, insert, map index-set,
+and struct field replacement through an induced allocation failure after the
+incoming graph has passed its ownership proof.  The runtime consumes the
+accepted graph on that failure, while rejected aliases still release only
+their value storage and preserve the object owner; the full differential
+suite caught and fixed that distinction.  Broader failure injection for
+compound stores, C exports, and all early refusal boundaries remains open.
 
 ## Tier 1 — design gaps before implementation
 

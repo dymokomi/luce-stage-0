@@ -1468,6 +1468,21 @@ both consumers.
 
 Commit: current MIR cross-stage ownership hardening batch.
 
+## 2026-08-12 — retaining stores are transactional across allocation failure
+
+The runtime now distinguishes the two halves of an incoming store.  After
+append, insert, map index-set, or struct field replacement has accepted the
+incoming ownership proof, a later allocation failure consumes the complete
+object graph; before that point, a rejected alias, cycle, immutable target,
+or stale handle gives back only temporary value storage and leaves the
+original object owner untouched.  This prevents both stranded loose rows and
+double-freeing a graph that a container still owns.  The focused runtime
+ownership lane covers the three allocating container doors, struct-run
+allocation, alias/cycle rejection, row census, and allocator-byte balance;
+the full differential suite passes 514/514.
+
+Commit: current Tier 0 retaining-store hardening batch.
+
 ## 2026-08-12 — the owner-graph proof is coverage-guided
 
 The deterministic owner-graph reference model is now also registered as a
