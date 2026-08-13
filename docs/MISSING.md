@@ -149,8 +149,7 @@ smuggle one in as a convenience feature.
 
 ## Tier 5b — diagnostic precision
 
-The remaining smaller harness follow-up is redundant release-mode origin
-stripping.
+No known diagnostic-harness follow-up remains in this tier.
 
 ## Order of work
 

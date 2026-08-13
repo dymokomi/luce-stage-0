@@ -1126,3 +1126,10 @@ otherwise unreachable function in the serialized artifact; the regression
 injects that verified-MIR shape and checks the final function table.
 
 Commit: `802b183`.
+
+The release-mode harness audit is now closed.  `renderBuilt` and `runBuilt`
+each strip the fresh program they own once; `runProgram` deliberately accepts
+the prepared MIR and does not strip it again.  There is no duplicate
+`mir.strip` call on the current dual-engine path.
+
+Commit: current-tree audit.
