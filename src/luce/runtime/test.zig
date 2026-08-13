@@ -3061,6 +3061,103 @@ test "failed retaining stores consume accepted objects without damaging rejected
     _ = try runtime.resolve(target);
 }
 
+test "runtime index and struct doors reject malformed rank without touching ownership" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const list = try runtime.newList(Value.none);
+    try containers.append(runtime, list, Value.ofLong(7));
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, list, &.{}));
+    runtime.pending = null;
+    try expectTrap(
+        .index_bounds,
+        runtime,
+        containers.indexGet(runtime, list, &.{ Value.ofLong(0), Value.ofLong(1) }),
+    );
+    runtime.pending = null;
+    try expectTrap(
+        .index_bounds,
+        runtime,
+        containers.indexSet(runtime, list, &.{}, Value.ofLong(8)),
+    );
+    runtime.pending = null;
+    try testing.expectEqual(@as(i64, 7), (try containers.indexGet(
+        runtime,
+        list,
+        &.{Value.ofLong(0)},
+    )).asLong());
+
+    const map = try runtime.newMap();
+    try expectTrap(.index_bounds, runtime, containers.indexGet(runtime, map, &.{}));
+    runtime.pending = null;
+    try expectTrap(
+        .index_bounds,
+        runtime,
+        containers.indexSet(
+            runtime,
+            map,
+            &.{ Value.ofString("a"), Value.ofString("b") },
+            Value.ofLong(1),
+        ),
+    );
+    runtime.pending = null;
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, map)).asLong());
+
+    const grid = try runtime.newArray(&.{ 2, 2 }, Value.ofLong(0));
+    try expectTrap(
+        .index_bounds,
+        runtime,
+        containers.indexGet(runtime, grid, &.{Value.ofLong(0)}),
+    );
+    runtime.pending = null;
+    try expectTrap(
+        .index_bounds,
+        runtime,
+        containers.indexSet(
+            runtime,
+            grid,
+            &.{ Value.ofLong(0), Value.ofLong(0), Value.ofLong(0) },
+            Value.ofLong(1),
+        ),
+    );
+    runtime.pending = null;
+    try testing.expectEqual(
+        @as(i64, 0),
+        (try containers.indexGet(runtime, grid, &.{ Value.ofLong(0), Value.ofLong(0) })).asLong(),
+    );
+
+    const child = try runtime.newList(Value.none);
+    const record = try runtime.makeStruct(&.{child});
+    const replacement = try runtime.newList(Value.none);
+    const baseline_live = runtime.live;
+    try expectTrap(.index_bounds, runtime, runtime.setField(record, 1, replacement));
+    runtime.pending = null;
+    try testing.expectEqual(baseline_live, runtime.live);
+    try testing.expectEqual(@as(usize, 1), record.asStruct().len);
+    try testing.expect(record.asStruct()[0].asObject().same(child.asObject()));
+    _ = try runtime.resolve(replacement);
+
+    // The C door must reject a negative field before converting it to usize,
+    // and must leave its out slot untouched on the trapped call.
+    var out = Value.ofLong(99);
+    try testing.expectEqual(
+        @as(i32, 1),
+        luce_rt_struct_set(runtime, &record, -1, &Value.ofLong(3), &out),
+    );
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(vocabulary.TrapCode.index_bounds, runtime.pending.?.code);
+    runtime.pending = null;
+
+    runtime.freeValue(replacement);
+    runtime.freeValue(record);
+    runtime.freeValue(map);
+    runtime.freeValue(grid);
+    runtime.freeValue(list);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
 test "failed function-value copies return every nested storage allocation" {
     var bench: Bench = undefined;
     bench.setup();
@@ -4145,6 +4242,159 @@ test "file open fails closed before acquisition when the host cannot close" {
     );
     try testing.expectEqual(@as(usize, 0), host.opened);
     try testing.expectEqual(@as(u32, 0), bench.runtime.live);
+}
+
+test "host byte counts are bounded before runtime slices or advances" {
+    const Host = struct {
+        const Mode = enum { negative, oversized, zero };
+
+        mode: Mode,
+        opened: usize = 0,
+        closed: usize = 0,
+        flushes: usize = 0,
+
+        fn open(
+            context: ?*anyopaque,
+            _: [*]const u8,
+            _: i64,
+            _: i64,
+            handle: *i64,
+        ) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.opened += 1;
+            handle.* = 41;
+            return files.yes;
+        }
+
+        fn read(
+            context: ?*anyopaque,
+            _: i64,
+            _: [*]u8,
+            capacity: i64,
+            filled: *i64,
+        ) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            filled.* = switch (self.mode) {
+                .negative => -1,
+                .oversized => capacity + 1,
+                .zero => 0,
+            };
+            return files.yes;
+        }
+
+        fn write(
+            context: ?*anyopaque,
+            _: i64,
+            _: [*]const u8,
+            length: i64,
+            written: *i64,
+        ) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            written.* = switch (self.mode) {
+                .negative => -1,
+                .oversized => length + 1,
+                .zero => 0,
+            };
+            return files.yes;
+        }
+
+        fn flush(context: ?*anyopaque, _: i64) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.flushes += 1;
+            return files.yes;
+        }
+
+        fn close(context: ?*anyopaque, _: i64) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.closed += 1;
+            return files.yes;
+        }
+    };
+
+    // The primitive doors validate both directions before returning a count
+    // to their caller.  A malformed answer must not become a negative slice
+    // bound or an oversized progress increment.
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+    var host: Host = .{ .mode = .negative };
+    runtime.files = .{
+        .context = &host,
+        .read = Host.read,
+        .write = Host.write,
+        .close = Host.close,
+    };
+    const file = try runtime.newFile(41, "counts.bin");
+    const buffer = try runtime.newArray(&.{8}, Value.ofByte(0));
+
+    try expectTrap(.host_unavailable, runtime, files.read(runtime, file, buffer));
+    runtime.pending = null;
+    host.mode = .oversized;
+    try expectTrap(.host_unavailable, runtime, files.read(runtime, file, buffer));
+    runtime.pending = null;
+    try expectTrap(.host_unavailable, runtime, files.write(runtime, file, buffer, 8));
+    runtime.pending = null;
+    host.mode = .zero;
+    try testing.expectEqual(@as(?i64, 0), try files.read(runtime, file, buffer));
+    try testing.expectEqual(@as(?i64, 0), try files.write(runtime, file, buffer, 8));
+    try testing.expectEqual(@as(usize, 0), host.flushes);
+    runtime.freeValue(buffer);
+    runtime.freeValue(file);
+    try testing.expectEqual(@as(usize, 1), host.closed);
+
+    // Whole-file conveniences use the same count wall and still close a
+    // successfully opened resource when the callback violates the protocol.
+    for ([_]Host.Mode{ .negative, .oversized }) |mode| {
+        var convenience: Bench = undefined;
+        convenience.setup();
+        const convenience_runtime = &convenience.runtime;
+        var convenience_host: Host = .{ .mode = mode };
+        convenience_runtime.files = .{
+            .context = &convenience_host,
+            .open = Host.open,
+            .read = Host.read,
+            .write = Host.write,
+            .flush = Host.flush,
+            .close = Host.close,
+        };
+        try expectTrap(
+            .host_unavailable,
+            convenience_runtime,
+            files.readText(convenience_runtime, "read.bin"),
+        );
+        convenience_runtime.pending = null;
+        try expectTrap(
+            .host_unavailable,
+            convenience_runtime,
+            files.writeText(convenience_runtime, "write.bin", "payload", .write),
+        );
+        try testing.expectEqual(@as(usize, 2), convenience_host.opened);
+        try testing.expectEqual(@as(usize, 2), convenience_host.closed);
+        try testing.expectEqual(@as(usize, 0), convenience_host.flushes);
+        convenience.deinit();
+    }
+
+    var zero_progress: Bench = undefined;
+    zero_progress.setup();
+    var zero_host: Host = .{ .mode = .zero };
+    zero_progress.runtime.files = .{
+        .context = &zero_host,
+        .open = Host.open,
+        .write = Host.write,
+        .flush = Host.flush,
+        .close = Host.close,
+    };
+    try testing.expect(!try files.writeText(
+        &zero_progress.runtime,
+        "zero.bin",
+        "payload",
+        .write,
+    ));
+    try testing.expectEqual(@as(usize, 1), zero_host.opened);
+    try testing.expectEqual(@as(usize, 1), zero_host.closed);
+    try testing.expectEqual(@as(usize, 0), zero_host.flushes);
+    zero_progress.deinit();
 }
 
 test "failed materialization discards its partial object and every published root" {
@@ -5233,6 +5483,13 @@ extern fn luce_rt_index_get(
     out: *Value,
 ) callconv(.c) i32;
 extern fn luce_rt_str(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32;
+extern fn luce_rt_struct_set(
+    runtime: *Runtime,
+    held: *const Value,
+    field: i64,
+    to: *const Value,
+    out: *Value,
+) callconv(.c) i32;
 
 /// What a host learns from the trap callback, without allocating: these
 /// are entered from C and must stay simple.

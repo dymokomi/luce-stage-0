@@ -1506,3 +1506,20 @@ hostile-MIR lane covers both bind and unbind forms and confirms that a give
 parameter still verifies.
 
 Commit: current MIR cross-stage ownership hardening batch.
+
+## 2026-08-13 — hostile index and host-count boundaries fail closed
+
+Runtime container doors now require the exact index rank before reading an
+index slot, and array flattening refuses dimension/rank mismatches.  Forged
+struct-field replacement checks its field index before ownership or slice
+operations, while the C export rejects negative fields without writing its
+out slot.  File callbacks' negative and oversized `filled`/`written` counts
+are rejected as `host_unavailable` before whole-file reads shrink a buffer or
+writes advance a progress cursor; malformed callbacks therefore cannot cause
+native bounds failures or spin, and successfully opened convenience resources
+still close on the error path.
+
+The focused ownership and C/thread sanitizer lanes pass; the full
+differential suite passes 516/516.
+
+Commit: current Tier 0 hostile-boundary hardening batch.

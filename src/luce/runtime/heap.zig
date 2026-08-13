@@ -2017,6 +2017,14 @@ pub const Runtime = struct {
     /// **Consumes `to`**, like every other store site.
     pub fn setField(self: *Runtime, held: Value, index: usize, to: Value) Error!Value {
         const source = held.asStruct();
+        // A forged struct-set must be a trap, not a native slice panic.  The
+        // incoming value has not passed its ownership proof on this refusal
+        // path, so release only its own value storage and leave any object
+        // graph available to its existing owner.
+        if (index >= source.len) {
+            self.dropStorage(to);
+            return self.fail(.index_bounds);
+        }
         // The caller normally proves this at the semantic stage.  Keep the
         // runtime door transactional as well: a hostile module must not
         // smuggle a container-owned or stale object into the fresh run,
@@ -2677,6 +2685,7 @@ pub const Runtime = struct {
 /// Flatten a multi-dimensional index against the array's dims;
 /// null when any index is out of range.
 pub fn flattenIndex(dims: []const i64, indices: []const Value) ?usize {
+    if (dims.len != indices.len) return null;
     var flat: usize = 0;
     for (dims, indices) |size, held| {
         const index = held.asLong();

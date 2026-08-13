@@ -29,12 +29,19 @@ runtime/verifier boundary.
   allocation point in nested copies, strings, map keys and values, function
   receivers, slices, worker transfers, task/file acquisition, constants, and
   C exports.  Prove destination preservation, rollback, no leak, no
-  double-free, and a stable error/trap.
+  double-free, and a stable error/trap.  The remaining slice is compound
+  stores (`mapPlace`, builder growth/snapshots, union/optional copies, and
+  `inout` receiver replacement), host string/list materialization, and a
+  failure point for every C export that can allocate.
 - **T0-OWN-3 — Randomized owner-graph state machine.**  Generate valid
   operation sequences and hostile mutations against a reference model that
   requires exactly one owner, forbids illegal cycles, makes stale handles
   stale, and reaches zero live objects after teardown.  Keep reproducible
-  seeds and minimized failing traces.
+  seeds and minimized failing traces.  The current runtime corpus is
+  synchronous; the differential version still needs mixed generated
+  programs containing structs, unions, optionals, files, tasks, `give`,
+  `copy`, returns, nested calls, joins, and exceptional exits, compared with
+  the same shadow ownership model on both engines.
 - **T0-OWN-4 — Cross-stage ownership contracts.**  Run ownership cases through
   semantics, HIR, MIR encode/decode, verification, optimization, the
   interpreter, and LLVM.  Forge MIR for mismatched `give`, owner locals,
@@ -50,7 +57,10 @@ runtime/verifier boundary.
 - **T0-OWN-7 — Worker ownership lifecycle.**  Test transfer, copy, failure,
   discard/free, scope join, worker trap/error/exit, nested workers, and
   values containing nested structs, unions, optionals, function values, and
-  resources.  Check both engines and every join outcome.
+  resources.  Check both engines and every join outcome.  Add barrier-
+  controlled tests where children are blocked or completing while the parent
+  waits, releases, traps, exits, or tears down, including sibling/nested
+  workers and spawn/join-table exhaustion.
 - **T0-OWN-8 — Sanitizer execution lane.**  Run generated artifacts and the
   runtime under supported address, leak, and thread sanitizers, with the
   ownership specs and allocator-failure corpus as inputs.
@@ -137,10 +147,24 @@ still need their own exhaustive matrix.
 The retaining-store rollback slice now drives append, insert, map index-set,
 and struct field replacement through an induced allocation failure after the
 incoming graph has passed its ownership proof.  The runtime consumes the
-accepted graph on that failure, while rejected aliases still release only
-their value storage and preserve the object owner; the full differential
-suite caught and fixed that distinction.  Broader failure injection for
-compound stores, C exports, and all early refusal boundaries remains open.
+  accepted graph on that failure, while rejected aliases still release only
+  their value storage and preserve the object owner; the full differential
+  suite caught and fixed that distinction.  Broader failure injection for
+  compound stores, C exports, and all early refusal boundaries remains open.
+The independent ownership audit also found a distinct host-boundary slice:
+callbacks that return negative or oversized byte counts must be rejected
+before any runtime slice or progress update; zero-progress writes must
+terminate fail-closed rather than spin, and repeated
+close/report calls must remain fail-closed.  The runtime now bounds `read` and
+`write` counts and whole-file convenience loops; the remaining C-export matrix
+still needs every allocating entry point and malformed pointer/length case.
+The next composite slice should put files and tasks inside structs, unions, and
+optionals in one runtime, then exercise present/absent transitions,
+field-replacement, return/give, container storage, and exceptional teardown;
+indirect stale task and function-receiver handles remain open.  Finally,
+measure long mixed traces' live rows, retained capacities, peak bytes, and
+post-run bytes, not only the final leak count, following the snapshot-diff
+style of Python's `tracemalloc`.
 
 ## Tier 1 — design gaps before implementation
 

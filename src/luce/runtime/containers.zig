@@ -46,6 +46,7 @@ pub fn length(runtime: *Runtime, target: Value) Error!Value {
 /// instead — a read that defines, because it is half of a write).
 pub fn indexGet(runtime: *Runtime, target: Value, indices: []const Value) Error!Value {
     const object = try runtime.resolve(target);
+    try requireIndexRank(runtime, object, indices);
     switch (object.data) {
         .list => {
             const index = indices[0].asLong();
@@ -85,6 +86,7 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
         if (consume_on_failure) runtime.freeValue(stored) else runtime.dropStorage(stored);
     }
     const object = try runtime.resolveMutable(target);
+    try requireIndexRank(runtime, object, indices);
     // Validate the incoming ownership before releasing the old cell.  On
     // a forged store this preserves both the destination and the graph it
     // tried to alias.
@@ -136,6 +138,19 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
         .builder, .file, .task => unreachable,
     }
     runtime.adoptInto(target.asObject(), stored);
+}
+
+/// The verifier normally makes rank a type fact, but this is also the
+/// runtime's last wall against decoded or hand-written MIR.  In particular,
+/// checking before the list/map arms read `indices[0]` turns a malformed
+/// call into a normal Luce trap instead of a host-language bounds panic.
+fn requireIndexRank(runtime: *Runtime, object: *const heap.Object, indices: []const Value) Error!void {
+    const wanted = switch (object.data) {
+        .list, .map => 1,
+        .array => object.dims.len,
+        .builder, .file, .task => unreachable,
+    };
+    if (indices.len != wanted) return runtime.fail(.index_bounds);
 }
 
 /// `xs[a:b]` on a list.  Slices copy — including deep copies of object

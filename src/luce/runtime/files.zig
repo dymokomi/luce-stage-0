@@ -214,7 +214,7 @@ pub fn read(runtime: *Runtime, held: Value, buffer: Value) Error!?i64 {
     var filled: i64 = 0;
     const cells = into.cells(u8);
     switch (callRead(runtime, service, handle, cells, &filled)) {
-        yes => return filled,
+        yes => return try hostCount(runtime, filled, cells.len),
         no => return null,
         else => {
             runtime.exhausted = true;
@@ -233,13 +233,25 @@ pub fn write(runtime: *Runtime, held: Value, buffer: Value, count: i64) Error!?i
     if (count < 0 or count > cells.len) return runtime.fail(.index_bounds);
     var written: i64 = 0;
     switch (callWrite(runtime, service, handle, cells[0..@intCast(count)], &written)) {
-        yes => return written,
+        yes => return try hostCount(runtime, written, @intCast(count)),
         no => return null,
         else => {
             runtime.exhausted = true;
             return error.OutOfMemory;
         },
     }
+}
+
+/// Validate a byte count returned by an untrusted host callback before it can
+/// become a slice bound or a progress increment.  The callback receives the
+/// capacity, so a negative or oversized answer is a protocol violation, not
+/// an ordinary I/O refusal; fail closed before the runtime performs any
+/// arithmetic with it.
+fn hostCount(runtime: *Runtime, count: i64, capacity: usize) Error!i64 {
+    const measured = std.math.cast(usize, count) orelse
+        return runtime.fail(.host_unavailable);
+    if (measured > capacity) return runtime.fail(.host_unavailable);
+    return count;
 }
 
 /// `f.flush()` — everything written so far is on the device.
@@ -347,8 +359,9 @@ pub fn readText(runtime: *Runtime, path: []const u8) Error!?Value {
             return error.OutOfMemory;
         }
         if (answered != yes) return null;
-        loaded.shrinkRetainingCapacity(before + @as(usize, @intCast(filled)));
-        if (filled == 0) break;
+        const taken = try hostCount(runtime, filled, loaded.items.len - before);
+        loaded.shrinkRetainingCapacity(before + @as(usize, @intCast(taken)));
+        if (taken == 0) break;
     }
     if (loaded.items.len > max_text_file) return null;
     if (!isText(loaded.items)) return null;
@@ -378,10 +391,11 @@ pub fn writeText(runtime: *Runtime, path: []const u8, text: []const u8, mode: Mo
             return error.OutOfMemory;
         }
         if (answered != yes) return false;
+        const moved = try hostCount(runtime, written, text.len - sent);
         // A host that accepts nothing forever is a host that has
         // stopped writing; say so rather than spin.
-        if (written <= 0) return false;
-        sent += @intCast(written);
+        if (moved == 0) return false;
+        sent += @intCast(moved);
     }
     return callFlush(runtime, flusher, try handleOf(runtime, handle)) == yes;
 }

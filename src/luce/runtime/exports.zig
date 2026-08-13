@@ -1019,9 +1019,19 @@ pub export fn luce_rt_struct_set(
     to: *const Value,
     out: *Value,
 ) callconv(.c) i32 {
-    out.* = runtime.setField(held.*, @intCast(field), to.*) catch |mistake|
+    const index = std.math.cast(usize, field) orelse return rejected(runtime, .index_bounds);
+    out.* = runtime.setField(held.*, index, to.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
+}
+
+/// Turn an invalid scalar supplied across the C boundary into the same
+/// ordinary trap the checked runtime door would have raised.  Generated code
+/// never takes this path; it exists so a damaged artifact cannot make a
+/// negative index reach a Zig `@intCast` or slice operation.
+fn rejected(runtime: *Runtime, code: vocabulary.TrapCode) i32 {
+    _ = runtime.fail(code) catch {};
+    return raised_trap;
 }
 
 // ---------------------------------------------------------------------------
