@@ -1854,6 +1854,7 @@ const WorkerFailureState = struct {
     spawns: usize = 0,
     joins: usize = 0,
     join_answer: i32 = workers.yes,
+    spawn_answer: i32 = workers.yes,
     ran: bool = false,
 
     fn open(context: ?*anyopaque) callconv(.c) ?*Runtime {
@@ -1971,7 +1972,7 @@ const WorkerFailureState = struct {
         self.spawns += 1;
         body(argument);
         thread.* = 9;
-        return workers.yes;
+        return self.spawn_answer;
     }
 
     fn join(context: ?*anyopaque, _: i64) callconv(.c) i32 {
@@ -5397,6 +5398,41 @@ test "worker inputs fail closed before allocation or start" {
     try testing.expectEqual(@as(u32, 0), parent.live);
     parent.debugAssertInvariants();
     child.debugAssertInvariants();
+}
+
+test "a failed spawn joins a callback-published thread before child close" {
+    for ([_]i32{ workers.no, -1, 2 }) |spawn_answer| {
+        var parent_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var parent: Runtime = .init(.{
+            .arena = parent_arena.allocator(),
+            .objects = testing.allocator,
+        });
+        var child_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var child: Runtime = .init(.{
+            .arena = child_arena.allocator(),
+            .objects = testing.allocator,
+        });
+        var state: WorkerFailureState = .{
+            .child = &child,
+            .spawn_answer = spawn_answer,
+            .produce_result = true,
+            .child_live_at_close = std.math.maxInt(u32),
+        };
+        state.install(&parent);
+
+        var task = Value.ofLong(99);
+        try expectTrap(.host_unavailable, &parent, workers.spawn(&parent, 0, &.{}, &task));
+        try testing.expectEqual(@as(i64, 99), task.asLong());
+        try testing.expectEqual(@as(usize, 1), state.spawns);
+        try testing.expectEqual(@as(usize, 1), state.joins);
+        try testing.expectEqual(@as(usize, 1), state.closes);
+        try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
+        try testing.expectEqual(@as(u32, 0), parent.live);
+        parent.pending = null;
+        parent.deinit();
+        parent_arena.deinit();
+        child_arena.deinit();
+    }
 }
 
 test "worker arena exhaustion crosses the join as out of memory" {

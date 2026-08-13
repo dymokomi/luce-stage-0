@@ -350,6 +350,12 @@ alongside `no`, exhaustion, or a malformed answer, so a bad answer cannot leak
 an external resource before a Luce file row exists.  The broader callback
 protocol and handle-domain matrix remains open.
 
+Worker spawn rollback now also joins a callback-published thread before
+closing its child runtime when the callback answers `no` or another malformed
+value; a well-behaved failure still leaves the sentinel untouched.  Broader
+host/engine worker-channel permutations remain part of T0-OWN-11 and
+T0-OWN-15.
+
 The shared worker effect lock now treats unmatched releases as inert and
 rejects releases from non-owners before touching recursion state, so malformed
 boundary calls cannot underflow or unlock a platform mutex.  Barrier-driven

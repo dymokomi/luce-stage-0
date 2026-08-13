@@ -135,6 +135,12 @@ pub const RunFn = *const fn (
     depth: i64,
 ) callconv(.c) i32;
 
+/// The value a spawn callback must replace when it answers `yes`.  Keeping a
+/// sentinel in the output slot also lets rollback detect a malformed callback
+/// that published a thread handle while answering `no` or another invalid
+/// value, so it can join that thread before closing the child runtime.
+const no_thread = std.math.minInt(i64);
+
 /// The engine's half: a runtime, and what to run in one.
 pub const Nursery = struct {
     context: ?*anyopaque = null,
@@ -259,7 +265,7 @@ pub const Worker = struct {
     nursery: Nursery,
     channel: Channel,
     /// What the host calls the thread; meaningless unless `running`.
-    thread: i64 = 0,
+    thread: i64 = no_thread,
     running: bool = false,
     function: i64,
     depth: i64,
@@ -404,7 +410,28 @@ pub fn spawn(
         .arguments = moved,
     };
 
-    if (channel.spawn.?(channel.context, body, worker, &worker.thread) != yes) {
+    const spawn_answer = channel.spawn.?(channel.context, body, worker, &worker.thread);
+    if (spawn_answer != yes) {
+        // A well-behaved failed callback leaves the handle at `no_thread`.
+        // If it nevertheless published one, it has handed us evidence that
+        // a thread exists; join it before the child runtime is closed.  This
+        // keeps malformed host behavior from turning the child into a
+        // use-after-close race.
+        if (worker.thread != no_thread) {
+            worker.running = true;
+            _ = joinThread(worker);
+        }
+        // A malformed callback may have run the body synchronously before
+        // answering failure.  The result is not rooted in the child heap,
+        // so child.deinit() cannot discover its standalone storage; discard
+        // it explicitly before the errdefer closes that runtime.
+        child.freeValue(worker.result);
+        worker.result = .none;
+        return parent.fail(.host_unavailable);
+    }
+    if (worker.thread == no_thread) {
+        child.freeValue(worker.result);
+        worker.result = .none;
         return parent.fail(.host_unavailable);
     }
     worker.running = true;
