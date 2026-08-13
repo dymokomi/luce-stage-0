@@ -132,7 +132,7 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
             }
         },
         .array => {
-            try requireLongIndex(runtime, indices[0]);
+            for (indices) |index| try requireLongIndex(runtime, index);
             const flat = heap.flattenIndex(object.dims, indices) orelse
                 return runtime.fail(.index_bounds);
             try runtime.ensureAcyclicAdoption(target.asObject(), stored);

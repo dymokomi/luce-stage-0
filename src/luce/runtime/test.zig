@@ -5106,6 +5106,24 @@ test "runtime index and struct doors reject malformed rank without touching owne
         @as(i64, 0),
         (try containers.indexGet(runtime, grid, &.{ Value.ofLong(0), Value.ofLong(0) })).asLong(),
     );
+    // Every axis of a multidimensional store is a long.  The runtime must
+    // reject a forged later index before flattenIndex reads its payload, and
+    // the rejected store must leave the destination untouched.
+    try expectTrap(
+        .not_owned,
+        runtime,
+        containers.indexSet(
+            runtime,
+            grid,
+            &.{ Value.ofLong(0), Value.ofBoolean(true) },
+            Value.ofLong(9),
+        ),
+    );
+    runtime.pending = null;
+    try testing.expectEqual(
+        @as(i64, 0),
+        (try containers.indexGet(runtime, grid, &.{ Value.ofLong(0), Value.ofLong(0) })).asLong(),
+    );
 
     const child = try runtime.newList(Value.none);
     const record = try runtime.makeStruct(&.{child});
