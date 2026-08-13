@@ -333,6 +333,12 @@ cell whose `len` is zero; the regression also preserves the C output slot and
 proves that no object row is published.  The wider decoded-shape and
 allocation-door matrix remains open.
 
+Worker function, argument-count, and depth values now fail closed before the
+interpreter narrows or indexes them, and the shared spawn seam rejects negative
+function IDs and unrepresentable depth budgets before allocating or moving
+ownership.  The malformed-entry regression preserves its output and proves no
+worker starts; broader generated worker-channel fuzzing remains open.
+
 The array-fill failure lane now also copies a function run containing outside
 text and a borrowed receiver through every observed replacement allocation
 failure, preserving empty destination cells and the receiver graph while

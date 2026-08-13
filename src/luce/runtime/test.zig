@@ -5362,6 +5362,43 @@ test "failed task allocation discards the worker result before close" {
     try testing.expectEqual(child_objects.allocated_bytes, child_objects.freed_bytes);
 }
 
+test "worker inputs fail closed before allocation or start" {
+    var parent_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer parent_arena.deinit();
+    var parent: Runtime = .init(.{
+        .arena = parent_arena.allocator(),
+        .objects = testing.allocator,
+    });
+    var child_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer child_arena.deinit();
+    var child: Runtime = .init(.{
+        .arena = child_arena.allocator(),
+        .objects = testing.allocator,
+    });
+    var state: WorkerFailureState = .{ .child = &child };
+    state.install(&parent);
+
+    var out = Value.ofLong(99);
+    try expectTrap(.host_unavailable, &parent, workers.spawn(&parent, -1, &.{}, &out));
+    parent.pending = null;
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(usize, 0), state.spawns);
+    try testing.expectEqual(@as(u32, 0), parent.live);
+
+    parent.depth_budget = -1;
+    try expectTrap(.host_unavailable, &parent, workers.spawn(&parent, 0, &.{}, &out));
+    parent.pending = null;
+    parent.depth_budget = std.math.maxInt(i64);
+    try expectTrap(.host_unavailable, &parent, workers.spawn(&parent, 0, &.{}, &out));
+    parent.pending = null;
+    try testing.expectEqual(@as(usize, 0), state.spawns);
+    try testing.expectEqual(@as(usize, 0), state.joins);
+    try testing.expectEqual(@as(usize, 0), state.closes);
+    try testing.expectEqual(@as(u32, 0), parent.live);
+    parent.debugAssertInvariants();
+    child.debugAssertInvariants();
+}
+
 test "worker arena exhaustion crosses the join as out of memory" {
     var parent_arena: std.heap.ArenaAllocator = .init(testing.allocator);
     defer parent_arena.deinit();

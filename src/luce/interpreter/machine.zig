@@ -209,17 +209,33 @@ const Nursery = struct {
     ) callconv(.c) i32 {
         const self: *Nursery = @ptrCast(@alignCast(context.?));
         const owned: *Owned = @fieldParentPtr("runtime", worker);
+        const function_index = std.math.cast(u32, function) orelse {
+            _ = worker.fail(.host_unavailable) catch {};
+            return runtime.workers.raised_trap;
+        };
+        if (function_index >= self.program.functions.len) {
+            _ = worker.fail(.host_unavailable) catch {};
+            return runtime.workers.raised_trap;
+        }
+        const argument_count = std.math.cast(usize, count) orelse {
+            _ = worker.fail(.host_unavailable) catch {};
+            return runtime.workers.raised_trap;
+        };
+        const max_depth = std.math.cast(u32, depth) orelse {
+            _ = worker.fail(.host_unavailable) catch {};
+            return runtime.workers.raised_trap;
+        };
         var machine: Machine = .{
             .arena = owned.arena.allocator(),
             .runtime = undefined,
             .program = self.program,
-            .max_depth = @intCast(depth),
+            .max_depth = max_depth,
             .host = self.host,
         };
         // The runtime is the one `open` made and `workers.spawn` filled
         // in: it already holds the channels, the shared lock and the
         // arguments.  The machine borrows it rather than making one.
-        const outcome = self.execute(&machine, worker, @intCast(function), arguments[0..@intCast(count)], out);
+        const outcome = self.execute(&machine, worker, function_index, arguments[0..argument_count], out);
         return outcome;
     }
 
@@ -2374,6 +2390,61 @@ test "an interpreter worker marks arena exhaustion before it returns" {
     try testing.expect(worker.exhausted);
     Nursery.close(&nursery, worker);
     try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
+}
+
+test "an interpreter worker rejects malformed entry inputs" {
+    const testing = std.testing;
+    var instructions = [_]mir.Instruction{
+        .{ .const_long = 7 },
+        .{ .ret = 0 },
+    };
+    var result_types = [_]types.Type{ .long, .long };
+    var items = [_]Register{ 0, 1 };
+    var blocks = [_]mir.Block{.{ .items = &items }};
+    var functions = [_]mir.Function{.{
+        .name = "worker",
+        .parameter_count = 0,
+        .return_type = .long,
+        .locals = &.{},
+        .instructions = &instructions,
+        .result_types = &result_types,
+        .blocks = &blocks,
+    }};
+
+    var program: mir.Program = .{ .arena = .init(testing.allocator) };
+    defer program.deinit();
+    program.functions = &functions;
+
+    var nursery: Nursery = .{ .program = &program, .host = null, .base = testing.allocator };
+    const worker = Nursery.open(&nursery).?;
+    defer Nursery.close(&nursery, worker);
+    var answer: RuntimeValue = RuntimeValue.none;
+
+    try testing.expectEqual(
+        runtime.workers.raised_trap,
+        Nursery.runWorker(&nursery, worker, -1, &.{}, 0, &answer, 8),
+    );
+    try testing.expectEqual(mir.TrapCode.host_unavailable, worker.pending.?.code);
+    worker.pending = null;
+    try testing.expectEqual(
+        runtime.workers.raised_trap,
+        Nursery.runWorker(&nursery, worker, 99, &.{}, 0, &answer, 8),
+    );
+    try testing.expectEqual(mir.TrapCode.host_unavailable, worker.pending.?.code);
+    worker.pending = null;
+    try testing.expectEqual(
+        runtime.workers.raised_trap,
+        Nursery.runWorker(&nursery, worker, 0, &.{}, -1, &answer, 8),
+    );
+    try testing.expectEqual(mir.TrapCode.host_unavailable, worker.pending.?.code);
+    worker.pending = null;
+    try testing.expectEqual(
+        runtime.workers.raised_trap,
+        Nursery.runWorker(&nursery, worker, 0, &.{}, 0, &answer, -1),
+    );
+    try testing.expectEqual(mir.TrapCode.host_unavailable, worker.pending.?.code);
+    worker.pending = null;
+    try testing.expectEqual(@as(i64, 0), worker.leaked());
 }
 
 test "a failed constant prologue cleans partial roots and reports the declaration" {

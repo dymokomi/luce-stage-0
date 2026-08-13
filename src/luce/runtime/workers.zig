@@ -346,6 +346,13 @@ pub fn spawn(
     const channel = parent.workers;
     const nursery = parent.nursery;
     if (!channel.available() or !nursery.available()) return parent.fail(.host_unavailable);
+    // These values cross the public C door as signed integers.  A negative
+    // function would reach an engine-specific cast, and an invalid depth
+    // would do the same in the interpreter; reject both before allocating a
+    // worker or moving an argument.
+    if (function < 0 or std.math.cast(u32, parent.depth_budget) == null) {
+        return parent.fail(.host_unavailable);
+    }
 
     const effects = try parent.sharedEffects();
 
