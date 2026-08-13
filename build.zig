@@ -185,6 +185,7 @@ pub fn build(b: *std.Build) void {
         "C file acquisition closes raw handles",
         "the C spawn door rolls worker acquisition",
         "C task wait rolls nested result transfer",
+        "C compound value doors preserve destinations",
         "blocked worker teardown joins",
     };
     const c_sanitize_luce = b.createModule(.{
@@ -485,6 +486,7 @@ pub fn build(b: *std.Build) void {
             "C file acquisition closes raw handles",
             "the C spawn door rolls worker acquisition",
             "C task wait rolls nested result transfer",
+            "C compound value doors preserve destinations",
             "blocked worker teardown joins",
         },
     });

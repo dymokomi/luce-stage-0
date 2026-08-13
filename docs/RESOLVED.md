@@ -1658,3 +1658,19 @@ ownership lanes pass 44/44 each.  The remaining C allocation doors stay listed
 in MISSING.md.
 
 Commit: current Tier 0 task-transfer hardening batch.
+
+## 2026-08-13 — compound C value mutation doors
+
+The C allocation-failure corpus now covers optional text materialization,
+struct replacement, fresh map placement, array fill, long concatenation, and
+`parse_string`.  It verifies each operation's different ownership contract:
+source structs and byte arrays remain readable on failure, incoming struct
+storage is consumed exactly once, map placement returns a borrow owned by the
+map, array replacement is all-or-nothing, and successful strings are released
+as owned outputs.
+
+The focused runtime ownership lane passes 37/37; the C- and thread-sanitized
+ownership lanes pass 45/45 each.  C string slicing and malformed pointer
+cases remain open in MISSING.md.
+
+Commit: current Tier 0 compound C-door hardening batch.

@@ -176,10 +176,12 @@ C-export matrix now also proves raw file handles close exactly once through
 `file_open`, `file_read_text`, and `file_write_text`, and that C `spawn` does
 not publish a task when parent acquisition fails.  C `task_wait` now proves
 nested result transfer is transactional, detaches before copying, closes the
-child on failure, and rejects a second wait without a second join.  It still
-needs optional-text materialization, struct-field replacement, map placement,
-array fill, string concatenation/slicing, and parse-string under injected
-failure, plus null-pointer and other malformed pointer cases.
+child on failure, and rejects a second wait without a second join.  The same
+failure corpus now covers optional text, struct replacement, map placement,
+array fill, long concatenation, and `parse_string`, including their distinct
+source/borrow/consumption contracts.  It still needs string slicing,
+null-pointer and other malformed pointer cases, plus any allocating C door not
+yet in these direct corpora.
 The differential spec now puts a task inside a union's optional field, that
 union inside a recursive struct with an optional callback and child list, and
 consumes the task through a `give`d helper; a companion file case puts an

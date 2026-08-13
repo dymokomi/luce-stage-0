@@ -665,6 +665,15 @@ const CFileAllocationDoor = enum { open, read_text, write_text };
 
 const CTaskAllocationDoor = enum { wait_result };
 
+const CCompoundAllocationDoor = enum {
+    maybe_text,
+    struct_set,
+    map_place,
+    array_fill,
+    concat,
+    parse_string,
+};
+
 const CFileState = struct {
     const handle: i64 = 7_401;
 
@@ -6034,6 +6043,25 @@ extern fn luce_rt_map_values(
     zero: *const Value,
     out: *Value,
 ) callconv(.c) i32;
+extern fn luce_rt_map_place(
+    runtime: *Runtime,
+    target: *const Value,
+    key: *const Value,
+    zero: *const Value,
+    out: *Value,
+) callconv(.c) i32;
+extern fn luce_rt_array_fill(
+    runtime: *Runtime,
+    target: *const Value,
+    held: *const Value,
+) callconv(.c) i32;
+extern fn luce_rt_concat(
+    runtime: *Runtime,
+    left: *const Value,
+    right: *const Value,
+    out: *Value,
+) callconv(.c) i32;
+extern fn luce_rt_parse_string(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32;
 extern fn luce_rt_spawn(
     runtime: *Runtime,
     function: i64,
@@ -6781,6 +6809,208 @@ test "C task wait rolls nested result transfer back and detaches exactly once" {
             child_arena.deinit();
             cleaned = true;
             try testing.expectEqual(parent_objects.allocated_bytes, parent_objects.freed_bytes);
+            if (completed) break;
+        }
+        try testing.expect(completed);
+        try testing.expect(failures >= 1);
+    }
+}
+
+test "C compound value doors preserve destinations through every allocation failure" {
+    const old_field = "the old struct field remains after replacement refuses";
+    const other_field = "the untouched struct field keeps its owned bytes";
+    const new_field = "the replacement struct field owns a separate long string";
+    const map_key = "the fresh map key is copied before the zero value";
+    const map_zero = "the fresh map zero is copied and returned as a borrow";
+    const fill_text = "the array fill value is copied into every destination cell";
+    const left_text = "the left side of a long concatenation owns no borrowed result";
+    const right_text = "the right side of a long concatenation becomes owned output";
+    const parse_text = "parse_string copies a packed byte array into owned text";
+    const doors = [_]CCompoundAllocationDoor{
+        .maybe_text,
+        .struct_set,
+        .map_place,
+        .array_fill,
+        .concat,
+        .parse_string,
+    };
+
+    for (doors) |door| {
+        var failures: usize = 0;
+        var completed = false;
+        for (0..64) |failure_offset| {
+            var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+            var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+            var runtime: Runtime = .init(.{
+                .arena = arena.allocator(),
+                .objects = objects.allocator(),
+            });
+            var source = Value.none;
+            var source_owned = false;
+            var replacement = Value.none;
+            var replacement_owned = false;
+            var cleaned = false;
+            defer if (!cleaned) {
+                if (replacement_owned) runtime.dropStorage(replacement);
+                if (source_owned) switch (source.tag) {
+                    .object => runtime.freeValue(source),
+                    else => runtime.dropStorage(source),
+                };
+                runtime.deinit();
+                arena.deinit();
+            };
+
+            switch (door) {
+                .struct_set => {
+                    const first = try runtime.ownValue(Value.ofString(old_field));
+                    const second = try runtime.ownValue(Value.ofString(other_field));
+                    source = try runtime.makeStruct(&.{ first, second });
+                    source_owned = true;
+                    replacement = try runtime.ownValue(Value.ofString(new_field));
+                    replacement_owned = true;
+                },
+                .map_place => {
+                    source = try runtime.newMap();
+                    source_owned = true;
+                },
+                .array_fill => {
+                    source = try runtime.newArray(&.{3}, Value.ofInlineText(.string, "old"));
+                    source_owned = true;
+                },
+                .parse_string => {
+                    const dims = [_]i64{@intCast(parse_text.len)};
+                    source = try runtime.newArray(&dims, Value.ofByte(0));
+                    source_owned = true;
+                    const bytes = (try runtime.resolve(source)).elements.cells(u8);
+                    @memcpy(bytes, parse_text);
+                },
+                .maybe_text, .concat => {},
+            }
+            const baseline_live = runtime.live;
+
+            var out = Value.ofLong(99);
+            objects.fail_index = objects.alloc_index + failure_offset;
+            const status = switch (door) {
+                .maybe_text => luce_rt_maybe_text(&runtime, 1, parse_text, parse_text.len, &out),
+                .struct_set => blk: {
+                    const answered = luce_rt_struct_set(&runtime, &source, 0, &replacement, &out);
+                    // `setField` consumes the incoming value on both
+                    // success and allocation failure.
+                    replacement_owned = false;
+                    break :blk answered;
+                },
+                .map_place => luce_rt_map_place(
+                    &runtime,
+                    &source,
+                    &Value.ofString(map_key),
+                    &Value.ofString(map_zero),
+                    &out,
+                ),
+                .array_fill => luce_rt_array_fill(
+                    &runtime,
+                    &source,
+                    &Value.ofString(fill_text),
+                ),
+                .concat => luce_rt_concat(
+                    &runtime,
+                    &Value.ofString(left_text),
+                    &Value.ofString(right_text),
+                    &out,
+                ),
+                .parse_string => luce_rt_parse_string(&runtime, &source, &out),
+            };
+            objects.fail_index = std.math.maxInt(usize);
+
+            if (status == 0) {
+                switch (door) {
+                    .maybe_text => {
+                        try testing.expectEqualStrings(parse_text, out.asString());
+                        try testing.expect(out.ownsStorage());
+                        runtime.dropStorage(out);
+                    },
+                    .struct_set => {
+                        const fields = out.asStruct();
+                        try testing.expectEqual(@as(usize, 2), fields.len);
+                        try testing.expectEqualStrings(new_field, fields[0].asString());
+                        try testing.expectEqualStrings(other_field, fields[1].asString());
+                        runtime.dropStorage(out);
+                        try testing.expectEqualStrings(old_field, source.asStruct()[0].asString());
+                        try testing.expectEqualStrings(other_field, source.asStruct()[1].asString());
+                    },
+                    .map_place => {
+                        try testing.expectEqual(@as(i64, 1), (try containers.length(&runtime, source)).asLong());
+                        try testing.expectEqualStrings(map_zero, out.asString());
+                        try testing.expectEqualStrings(
+                            map_key,
+                            (try containers.keyAt(&runtime, source, 0)).asString(),
+                        );
+                    },
+                    .array_fill => {
+                        for (0..3) |index| try testing.expectEqualStrings(
+                            fill_text,
+                            (try containers.indexGet(
+                                &runtime,
+                                source,
+                                &.{Value.ofLong(@intCast(index))},
+                            )).asString(),
+                        );
+                    },
+                    .concat => {
+                        try testing.expectEqualStrings(left_text ++ right_text, out.asString());
+                        try testing.expect(out.ownsStorage());
+                        runtime.dropStorage(out);
+                    },
+                    .parse_string => {
+                        try testing.expectEqualStrings(parse_text, out.asString());
+                        try testing.expect(out.ownsStorage());
+                        runtime.dropStorage(out);
+                    },
+                }
+                completed = true;
+            } else {
+                try testing.expectEqual(@as(i32, 1), status);
+                if (door != .array_fill) try testing.expectEqual(@as(i64, 99), out.asLong());
+                try testing.expect(runtime.pending == null);
+                try testing.expect(runtime.exhausted);
+                try testing.expect(objects.has_induced_failure);
+                try testing.expectEqual(baseline_live, runtime.live);
+                switch (door) {
+                    .struct_set => {
+                        try testing.expectEqualStrings(old_field, source.asStruct()[0].asString());
+                        try testing.expectEqualStrings(other_field, source.asStruct()[1].asString());
+                    },
+                    .map_place => try testing.expectEqual(
+                        @as(i64, 0),
+                        (try containers.length(&runtime, source)).asLong(),
+                    ),
+                    .array_fill => for (0..3) |index| try testing.expectEqualStrings(
+                        "old",
+                        (try containers.indexGet(
+                            &runtime,
+                            source,
+                            &.{Value.ofLong(@intCast(index))},
+                        )).asString(),
+                    ),
+                    .parse_string => try testing.expectEqualSlices(
+                        u8,
+                        parse_text,
+                        (try runtime.resolve(source)).elements.cells(u8),
+                    ),
+                    .maybe_text, .concat => {},
+                }
+                failures += 1;
+            }
+
+            if (source_owned) switch (source.tag) {
+                .object => runtime.freeValue(source),
+                else => runtime.dropStorage(source),
+            };
+            source_owned = false;
+            try testing.expectEqual(@as(u32, 0), runtime.live);
+            runtime.deinit();
+            arena.deinit();
+            cleaned = true;
+            try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
             if (completed) break;
         }
         try testing.expect(completed);
