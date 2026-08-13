@@ -166,6 +166,7 @@ pub fn build(b: *std.Build) void {
         "a worker result copies",
         "waiting a task is one-shot",
         "waiting a task fails closed",
+        "malformed worker outcomes fail closed",
         "cross-runtime moves",
         "fixed worker and resource lifecycle",
         "fuzz: worker and resource lifecycles",
@@ -484,6 +485,7 @@ pub fn build(b: *std.Build) void {
             "failed worker graph result copy closes the child",
             "waiting a task is one-shot",
             "waiting a task fails closed",
+            "malformed worker outcomes fail closed",
         },
     });
     const test_worker_ownership_step = b.step(
@@ -526,6 +528,7 @@ pub fn build(b: *std.Build) void {
             "allocating C value doors preserve graphs",
             "a function value allocation failure preserves its borrowed receiver graph",
             "waiting a task fails closed",
+            "malformed worker outcomes fail closed",
             "C file acquisition closes raw handles",
             "the C spawn door rolls worker acquisition",
             "C task wait rolls nested result transfer",

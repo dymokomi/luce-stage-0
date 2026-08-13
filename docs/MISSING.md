@@ -288,7 +288,9 @@ channel now treats only `yes` as a successful join; `wait` reports
 `host_unavailable` for `no` and malformed answers while still consuming and
 closing the child exactly once.  The remaining callback work is the
 documented runtime/host installation contract and domain checks for other
-plain-number services.
+plain-number services; the worker run callback now likewise rejects any
+answer outside `survived`, `raised_trap`, and `raised_error` before result
+adoption.
 The differential specs now put a task inside a union's optional field, that
 union inside a recursive struct with an optional callback and child list, and
 consume the task through a `give`d helper; a companion file case puts an

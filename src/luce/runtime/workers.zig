@@ -276,6 +276,20 @@ fn body(argument: ?*anyopaque) callconv(.c) void {
         &worker.result,
         worker.depth,
     );
+    if (worker.outcome != survived and
+        worker.outcome != raised_trap and
+        worker.outcome != raised_error)
+    {
+        // A nursery is an engine-owned callback, but decoded or hostile
+        // callers can still violate its plain-number contract.  Do not let
+        // an unknown answer fall through to `wait` as a successful result;
+        // release any provisional answer under the child runtime and carry
+        // one ordinary host-boundary trap instead.
+        child.freeValue(worker.result);
+        worker.result = .none;
+        worker.outcome = raised_trap;
+        _ = child.fail(.host_unavailable) catch {};
+    }
     if (worker.outcome != survived) return;
     // **The join is the caller, and this is the caller's first step.**
     //

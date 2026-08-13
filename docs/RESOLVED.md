@@ -1974,3 +1974,19 @@ passes 54/54.  The broader worker/resource permutation matrix remains open in
 MISSING.md.
 
 Commit: current Tier 0 worker hardening batch.
+
+## 2026-08-13 — malformed worker outcomes fail closed
+
+The engine-owned worker run callback now accepts only the three documented
+outcomes: survived, raised trap, and raised error.  An arbitrary status is
+converted to `host_unavailable` before `wait` can copy a forged result; any
+provisional result is released in the child runtime, and the child still
+joins and closes exactly once.  The regression covers negative and arbitrary
+positive statuses, preserves the wait destination, and checks the child
+census at close.
+
+The focused worker-ownership lane passes 19/19 and the runtime ownership lane
+passes 55/55.  The broader worker/resource permutation matrix remains open in
+MISSING.md.
+
+Commit: current Tier 0 worker callback hardening batch.

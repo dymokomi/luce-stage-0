@@ -1840,6 +1840,7 @@ const WorkerFailureState = struct {
     produce_graph: bool = false,
     exhausted: bool = false,
     raise_error: bool = false,
+    run_answer: ?i32 = null,
     closes: usize = 0,
     child_live_at_close: u32 = 0,
     spawns: usize = 0,
@@ -1921,6 +1922,7 @@ const WorkerFailureState = struct {
         _: i64,
     ) callconv(.c) i32 {
         const self: *@This() = @ptrCast(@alignCast(context.?));
+        if (self.run_answer) |answer| return answer;
         if (self.exhausted) {
             runtime.exhausted = true;
             return workers.raised_trap;
@@ -5501,6 +5503,45 @@ test "waiting a task fails closed when the host rejects the join" {
 
         // `wait` consumes the worker but leaves the task row as caller
         // storage, even when the host rejected the join.
+        parent.pending = null;
+        parent.freeValue(task);
+        try testing.expectEqual(@as(u32, 0), parent.live);
+        parent.deinit();
+        parent_arena.deinit();
+        child_arena.deinit();
+    }
+}
+
+test "malformed worker outcomes fail closed before wait copies a result" {
+    for ([_]i32{ -1, 3 }) |run_answer| {
+        var parent_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var parent: Runtime = .init(.{
+            .arena = parent_arena.allocator(),
+            .objects = testing.allocator,
+        });
+        var child_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var child: Runtime = .init(.{
+            .arena = child_arena.allocator(),
+            .objects = testing.allocator,
+        });
+        var state: WorkerFailureState = .{
+            .child = &child,
+            .child_live_at_close = std.math.maxInt(u32),
+            .run_answer = run_answer,
+        };
+        state.install(&parent);
+
+        var task: Value = .none;
+        try workers.spawn(&parent, 0, &.{}, &task);
+        var answer = Value.ofLong(99);
+        try testing.expectError(error.Trap, workers.wait(&parent, task, &answer));
+        try testing.expectEqual(vocabulary.TrapCode.host_unavailable, parent.pending.?.code);
+        try testing.expectEqual(@as(i64, 99), answer.asLong());
+        try testing.expectEqual(@as(usize, 1), state.spawns);
+        try testing.expectEqual(@as(usize, 1), state.joins);
+        try testing.expectEqual(@as(usize, 1), state.closes);
+        try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
+
         parent.pending = null;
         parent.freeValue(task);
         try testing.expectEqual(@as(u32, 0), parent.live);
