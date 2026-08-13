@@ -972,6 +972,58 @@ const WorkerFailureState = struct {
         runtime.deinit();
     }
 
+    fn failed(self: *@This(), runtime: *Runtime, mistake: heap.Error) i32 {
+        _ = self;
+        if (mistake == error.OutOfMemory) runtime.exhausted = true;
+        return workers.raised_trap;
+    }
+
+    fn graphResult(self: *@This(), runtime: *Runtime, out: *Value) i32 {
+        var leaf: Value = .none;
+        var leaf_owned = false;
+        var branch: Value = .none;
+        var branch_owned = false;
+        var words: Value = .none;
+        var words_owned = false;
+        defer {
+            if (words_owned) runtime.freeValue(words);
+            if (branch_owned) runtime.freeValue(branch);
+            if (leaf_owned) runtime.freeValue(leaf);
+        }
+
+        leaf = runtime.newList(Value.none) catch |mistake| return self.failed(runtime, mistake);
+        leaf_owned = true;
+        containers.append(runtime, leaf, Value.ofLong(11)) catch |mistake|
+            return self.failed(runtime, mistake);
+
+        branch = runtime.newList(Value.none) catch |mistake| return self.failed(runtime, mistake);
+        branch_owned = true;
+        containers.append(runtime, branch, leaf) catch |mistake|
+            return self.failed(runtime, mistake);
+        // The successful append moved the leaf's object edge into branch.
+        leaf_owned = false;
+
+        words = runtime.ownValue(Value.ofString(
+            "worker graph result has outside storage",
+        )) catch |mistake| return self.failed(runtime, mistake);
+        words_owned = true;
+        var fields = [_]Value{
+            branch,
+            words,
+        };
+        const result = runtime.makeStruct(&fields) catch |mistake| {
+            // makeStruct consumes all fields on allocation failure.  Do
+            // not let the local cleanup release the same graph twice.
+            branch_owned = false;
+            words_owned = false;
+            return self.failed(runtime, mistake);
+        };
+        branch_owned = false;
+        words_owned = false;
+        out.* = result;
+        return workers.survived;
+    }
+
     fn run(
         context: ?*anyopaque,
         runtime: *Runtime,
@@ -998,26 +1050,16 @@ const WorkerFailureState = struct {
             return workers.raised_error;
         }
         if (self.produce_graph) {
-            const leaf = runtime.newList(Value.none) catch return workers.raised_trap;
-            containers.append(runtime, leaf, Value.ofLong(11)) catch return workers.raised_trap;
-            const branch = runtime.newList(Value.none) catch return workers.raised_trap;
-            containers.append(runtime, branch, leaf) catch return workers.raised_trap;
-            const words = runtime.ownValue(Value.ofString(
-                "worker graph result has outside storage",
-            )) catch return workers.raised_trap;
-            var fields = [_]Value{
-                branch,
-                words,
-            };
-            out.* = runtime.makeStruct(&fields) catch return workers.raised_trap;
+            const outcome = self.graphResult(runtime, out);
+            if (outcome != workers.survived) return outcome;
             self.ran = true;
             return workers.survived;
         }
         if (!self.produce_result) return workers.survived;
         const words = runtime.ownValue(Value.ofString(
             "the unclaimed worker result owns outside bytes",
-        )) catch return workers.raised_trap;
-        out.* = runtime.makeStruct(&.{words}) catch return workers.raised_trap;
+        )) catch |mistake| return self.failed(runtime, mistake);
+        out.* = runtime.makeStruct(&.{words}) catch |mistake| return self.failed(runtime, mistake);
         self.ran = true;
         return workers.survived;
     }
@@ -1055,6 +1097,61 @@ const WorkerFailureState = struct {
         };
     }
 };
+
+fn expectWorkerGraphFailures() !usize {
+    var failures: usize = 0;
+    for (0..32) |failure_offset| {
+        var parent_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var parent: Runtime = .init(.{
+            .arena = parent_arena.allocator(),
+            .objects = testing.allocator,
+        });
+        var child_objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+        var child_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var child: Runtime = .init(.{
+            .arena = child_arena.allocator(),
+            .objects = child_objects.allocator(),
+        });
+        var state: WorkerFailureState = .{
+            .child = &child,
+            .produce_graph = true,
+            .child_live_at_close = std.math.maxInt(u32),
+        };
+        state.install(&parent);
+        child_objects.fail_index = child_objects.alloc_index + failure_offset;
+
+        var task: Value = .none;
+        try workers.spawn(&parent, 0, &.{}, &task);
+        var answer: Value = .none;
+        const outcome = workers.wait(&parent, task, &answer);
+        var completed = false;
+        if (outcome) |status| {
+            try testing.expectEqual(workers.survived, status);
+            try testing.expect(state.ran);
+            parent.freeValue(answer);
+            completed = true;
+        } else |mistake| {
+            failures += 1;
+            try testing.expectEqual(error.OutOfMemory, mistake);
+            try testing.expect(answer.isNone());
+        }
+        try testing.expectEqual(@as(usize, 1), state.joins);
+        try testing.expectEqual(@as(usize, 1), state.closes);
+        try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
+
+        // wait consumes the worker but leaves the task row for its owner.
+        parent.freeValue(task);
+        try testing.expectEqual(@as(u32, 0), parent.live);
+        const induced = child_objects.has_induced_failure;
+        parent.deinit();
+        parent_arena.deinit();
+        child_arena.deinit();
+        try testing.expectEqual(child_objects.allocated_bytes, child_objects.freed_bytes);
+        if (completed) return failures;
+        try testing.expect(induced);
+    }
+    return error.WorkerGraphNeverCompleted;
+}
 
 // ---------------------------------------------------------------------------
 // The object heap and the census
@@ -1194,6 +1291,53 @@ test "the runtime copy backstop refuses a resource handle" {
     const file = try runtime.newFile(17, "input.bin");
     try expectTrap(.not_owned, runtime, runtime.deepCopy(file));
     runtime.freeObject(file.asObject());
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
+test "nested resource graphs close once and stale handles stay stale" {
+    const Host = struct {
+        closed: [3]i64 = undefined,
+        count: usize = 0,
+
+        fn close(context: ?*anyopaque, handle: i64) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.closed[self.count] = handle;
+            self.count += 1;
+            return files.yes;
+        }
+    };
+
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+    var host: Host = .{};
+    runtime.files = .{ .context = &host, .close = Host.close };
+
+    const file = try runtime.newFile(17, "nested-input.bin");
+    const record = try runtime.makeStruct(&.{file});
+    const packet = try runtime.newList(Value.none);
+    try containers.append(runtime, packet, record);
+
+    // A copy would create a second owner of the host handle.  Rejection
+    // must leave the original graph and its one close edge untouched.
+    try expectTrap(.not_owned, runtime, runtime.deepCopy(packet));
+    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, packet)).asLong());
+    try testing.expectEqual(@as(u32, 2), runtime.live);
+
+    runtime.freeValue(packet);
+    try testing.expectEqual(@as(usize, 1), host.count);
+    try testing.expectEqual(@as(i64, 17), host.closed[0]);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+    try expectTrap(.use_after_free, runtime, runtime.resolve(file));
+
+    // Reusing the row must not make the old file handle name the new one.
+    const replacement = try runtime.newFile(29, "replacement.bin");
+    try testing.expect(!file.asObject().same(replacement.asObject()));
+    try expectTrap(.use_after_free, runtime, runtime.resolve(file));
+    runtime.freeValue(replacement);
+    try testing.expectEqual(@as(usize, 2), host.count);
+    try testing.expectEqual(@as(i64, 29), host.closed[1]);
     try testing.expectEqual(@as(u32, 0), runtime.live);
 }
 
@@ -1836,6 +1980,47 @@ test "failed worker argument transfer returns carried struct storage" {
     try testing.expectEqual(child_objects.allocated_bytes, child_objects.freed_bytes);
 }
 
+test "failed struct construction releases objects but function runs keep receivers borrowed" {
+    var struct_objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+    var struct_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var struct_runtime: Runtime = .init(.{
+        .arena = struct_arena.allocator(),
+        .objects = struct_objects.allocator(),
+    });
+    const child = try struct_runtime.newList(Value.none);
+    struct_objects.fail_index = struct_objects.alloc_index;
+
+    try testing.expectError(
+        error.OutOfMemory,
+        struct_runtime.makeStruct(&.{child}),
+    );
+    try testing.expectEqual(@as(u32, 0), struct_runtime.live);
+    struct_runtime.deinit();
+    struct_arena.deinit();
+    try testing.expectEqual(struct_objects.allocated_bytes, struct_objects.freed_bytes);
+
+    var function_objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+    var function_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var function_runtime: Runtime = .init(.{
+        .arena = function_arena.allocator(),
+        .objects = function_objects.allocator(),
+    });
+    const receiver = try function_runtime.newList(Value.none);
+    function_objects.fail_index = function_objects.alloc_index;
+
+    try testing.expectError(
+        error.OutOfMemory,
+        function_runtime.makeFunction(&.{ Value.ofLong(0), receiver }),
+    );
+    try testing.expectEqual(@as(u32, 1), function_runtime.live);
+    try testing.expectEqual(@as(i64, 0), (try containers.length(&function_runtime, receiver)).asLong());
+    function_runtime.freeValue(receiver);
+    try testing.expectEqual(@as(u32, 0), function_runtime.live);
+    function_runtime.deinit();
+    function_arena.deinit();
+    try testing.expectEqual(function_objects.allocated_bytes, function_objects.freed_bytes);
+}
+
 test "failed task allocation discards the worker result before close" {
     var parent_objects: std.testing.FailingAllocator = .init(testing.allocator, .{
         // Effects and Worker succeed; the task table's first row does
@@ -1954,6 +2139,85 @@ test "a worker result copies and releases a nested object graph" {
     try testing.expectEqual(heap.Owner.Kind.loose, (try parent.resolve(branch)).owner.kind);
 
     parent.freeValue(answer);
+    parent.freeValue(task);
+    try testing.expectEqual(@as(u32, 0), parent.live);
+}
+
+test "failed worker graph construction closes every partial child allocation" {
+    try testing.expect((try expectWorkerGraphFailures()) >= 7);
+}
+
+test "failed worker graph result copy closes the child before returning" {
+    var parent_objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+    var parent_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var parent: Runtime = .init(.{
+        .arena = parent_arena.allocator(),
+        .objects = parent_objects.allocator(),
+    });
+
+    var child_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var child: Runtime = .init(.{
+        .arena = child_arena.allocator(),
+        .objects = testing.allocator,
+    });
+    var state: WorkerFailureState = .{
+        .child = &child,
+        .produce_graph = true,
+        .child_live_at_close = std.math.maxInt(u32),
+    };
+    state.install(&parent);
+
+    var task: Value = .none;
+    try workers.spawn(&parent, 0, &.{}, &task);
+    // Leave spawn's parent allocations available, then refuse the first
+    // destination allocation in wait's cross-runtime copy.
+    parent_objects.fail_index = parent_objects.alloc_index;
+    var answer: Value = .none;
+    try testing.expectError(error.OutOfMemory, workers.wait(&parent, task, &answer));
+    try testing.expect(answer.isNone());
+    try testing.expect(state.ran);
+    try testing.expectEqual(@as(usize, 1), state.joins);
+    try testing.expectEqual(@as(usize, 1), state.closes);
+    try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
+
+    parent.freeValue(task);
+    try testing.expectEqual(@as(u32, 0), parent.live);
+    parent.deinit();
+    parent_arena.deinit();
+    child_arena.deinit();
+    try testing.expectEqual(parent_objects.allocated_bytes, parent_objects.freed_bytes);
+}
+
+test "waiting a task is one-shot and releasing its row never joins twice" {
+    var parent_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer parent_arena.deinit();
+    var parent: Runtime = .init(.{
+        .arena = parent_arena.allocator(),
+        .objects = testing.allocator,
+    });
+    defer parent.deinit();
+
+    var child_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer child_arena.deinit();
+    var child: Runtime = .init(.{
+        .arena = child_arena.allocator(),
+        .objects = testing.allocator,
+    });
+    var state: WorkerFailureState = .{ .child = &child };
+    state.install(&parent);
+
+    var task: Value = .none;
+    try workers.spawn(&parent, 0, &.{}, &task);
+    var answer: Value = .none;
+    try testing.expectEqual(workers.survived, try workers.wait(&parent, task, &answer));
+    try testing.expect(answer.isNone());
+    try testing.expectEqual(@as(usize, 1), state.joins);
+    try testing.expectEqual(@as(usize, 1), state.closes);
+
+    var second: Value = .ofLong(99);
+    try expectTrap(.use_after_free, &parent, workers.wait(&parent, task, &second));
+    try testing.expectEqual(@as(i64, 99), second.asLong());
+    parent.freeValue(task);
     parent.freeValue(task);
     try testing.expectEqual(@as(u32, 0), parent.live);
 }

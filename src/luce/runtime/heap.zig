@@ -1777,7 +1777,15 @@ pub const Runtime = struct {
             return if (tag == .function) Value.ofFunction(&.{}) else Value.ofStruct(&.{});
         }
         const stored = self.objects.alloc(Value, fields.len) catch |mistake| {
-            for (fields) |field| self.dropStorage(field);
+            // A struct constructor consumes its fields, including object
+            // ownership.  A function run is different: its receiver is a
+            // borrow (BINDING.md D4), so an allocation failure must release
+            // only run/storage bytes and leave that receiver live.
+            for (fields) |field| switch (tag) {
+                .strukt => self.freeValue(field),
+                .function => self.dropStorage(field),
+                else => unreachable,
+            };
             return mistake;
         };
         @memcpy(stored, fields);

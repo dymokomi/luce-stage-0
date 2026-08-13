@@ -82,7 +82,11 @@ unions, optionals, resources, worker graphs, and the cross-stage/invariant
 lanes named above.  The runtime corpus now also has direct lanes for a
 union-shaped optional callback whose receiver is borrowed, and for a worker
 result that copies a nested object graph and closes the child runtime; broad
-randomized worker/resource generation remains open.
+randomized worker/resource generation remains open.  The allocator-failure
+matrix now drives every child allocation in a nested worker result, the
+parent-side result copy, and struct construction with an object field; the
+runtime also proves nested file close-once behavior, stale resource handles
+after row reuse, and one-shot task waits.
 
 ## Tier 1 — design gaps before implementation
 

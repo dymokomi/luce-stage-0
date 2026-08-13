@@ -1331,3 +1331,26 @@ The owner-graph lane covers forged object cells, every replacement allocation
 failure, and nested map/array/struct ownership edges.
 
 Commit: current Tier 0 container rollback hardening batch.
+
+## 2026-08-12 — struct construction rolls back consumed object fields
+
+`makeStruct` now releases the complete object graph it consumed when its
+field-run allocation fails.  Function-value construction keeps its distinct
+contract: the receiver is borrowed, so a failed function run releases only
+its own storage and never frees the receiver.  Focused allocator tests cover
+both paths, including the live-row and allocator-byte census.
+
+Commit: current Tier 0 ownership rollback hardening batch.
+
+## 2026-08-12 — worker result exhaustion releases the returned graph
+
+A worker that cannot make the ownership copy of its return value now reports
+ordinary run exhaustion and frees the complete returned value, including
+nested object rows.  The worker corpus injects failure into every child-side
+construction allocation, the return-value copy, and the parent-side join
+copy; each path closes the child and returns all object storage.
+
+The same lane covers nested file graphs, stale resource generations after row
+reuse, and the one-shot task wait/release edge.
+
+Commit: current Tier 0 worker lifecycle hardening batch.

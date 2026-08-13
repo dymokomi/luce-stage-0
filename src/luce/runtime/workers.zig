@@ -291,14 +291,22 @@ fn body(argument: ?*anyopaque) callconv(.c) void {
     // either of them having to know where the bytes came from.
     const answered = worker.result;
     worker.result = child.ownValue(answered) catch |mistake| taken: {
-        // No memory to take the copy with: the worker itself did not
-        // fail, the run did, and the join reports it the way it
-        // reports any other trap the worker raised.
-        _ = child.failMessage(.allocation_failed, @errorName(mistake)) catch {};
+        // No memory to take the copy with: this is ordinary run
+        // exhaustion, not a located Luce allocation trap.  The copy may
+        // have been a struct whose fields include object rows, so release
+        // the complete answer rather than only its value-storage bytes.
+        switch (mistake) {
+            error.OutOfMemory => child.exhausted = true,
+            error.Trap => {},
+        }
         worker.outcome = raised_trap;
         break :taken .none;
     };
-    child.dropStorage(answered);
+    if (worker.result.isNone()) {
+        child.freeValue(answered);
+    } else {
+        child.dropStorage(answered);
+    }
 }
 
 // ---------------------------------------------------------------------------

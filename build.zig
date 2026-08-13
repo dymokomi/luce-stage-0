@@ -358,7 +358,12 @@ pub fn build(b: *std.Build) void {
 
     const worker_ownership_tests = b.addTest(.{
         .root_module = luce,
-        .filters = &.{"a worker result copies and releases a nested object graph"},
+        .filters = &.{
+            "a worker result copies and releases a nested object graph",
+            "failed worker graph construction closes every partial child",
+            "failed worker graph result copy closes the child",
+            "waiting a task is one-shot",
+        },
     });
     const test_worker_ownership_step = b.step(
         "test-worker-ownership",
@@ -372,6 +377,8 @@ pub fn build(b: *std.Build) void {
             "cross-runtime moves roll back every nested allocation",
             "cross-runtime moves reject function receiver handles",
             "a failed struct store consumes only its replacement",
+            "failed struct construction releases objects",
+            "nested resource graphs close once",
             "failed worker error adoption still closes the child runtime",
         },
     });
