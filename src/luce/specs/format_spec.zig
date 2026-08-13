@@ -85,6 +85,17 @@ test "optimized ownership graphs execute after module round-trip" {
         \\func suffix(value: long) -> string:
         \\    return "!" + string(value)
         \\
+        \\func consume(values: give list(long)) -> long:
+        \\    var total: long = 0
+        \\    for value in values:
+        \\        total = total + value
+        \\    return total
+        \\
+        \\struct Counter:
+        \\    value: long
+        \\    func add(amount: long):
+        \\        self.value = self.value + amount
+        \\
         \\func evaluate(plan: Plan) -> string:
         \\    let finish = plan.finish
         \\    match plan.work:
@@ -97,6 +108,12 @@ test "optimized ownership graphs execute after module round-trip" {
         \\            return render(4)
         \\
         \\func main():
+        \\    var values: list(long) = [1, 2, 3]
+        \\    assert(consume(give values) == 6)
+        \\    var counter = Counter(value = 1)
+        \\    counter.add(2)
+        \\    assert(counter.value == 3)
+        \\
         \\    var items = new list(Item)
         \\    items.append(Item(prefix = "item", scale = 2))
         \\    let plan = Plan(work = Work.batch(items = give items), finish = suffix)

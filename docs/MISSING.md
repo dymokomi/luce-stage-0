@@ -103,9 +103,10 @@ Extending that assertion through live worker/resource graphs and allocator
 baseline snapshots remains open.  A new format/spec regression now encodes
 the already optimized ownership graph, decodes it, and runs the decoded
 program through both engines; it covers the union/list/struct/bound-method
-composition that shape-only round trips could miss.  The wider optimizer,
-forged indirect-signature, and allocator/invariant matrix remains open.  The
-repository now exposes repeatable
+composition, a give parameter, and an inout receiver that shape-only round
+trips could miss.  The wider optimizer, forged indirect-signature, and
+allocator/invariant matrix remains open.  The repository now exposes
+repeatable
 `test-sanitize-c` and `test-sanitize-thread` ownership lanes; the current
 Zig/macOS arm64 toolchain does not provide a usable address/leak sanitizer or
 Valgrind mode, so those remain environment-dependent rather than claimed

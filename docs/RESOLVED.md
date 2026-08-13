@@ -1348,10 +1348,11 @@ Commit: current Tier 0 sanitizer hardening batch.
 
 The module/spec lane now serializes an already optimized program whose
 ownership graph combines a union carrying a list of structs, a borrowed bound
-method, and a second callback stored in an enclosing struct.  It decodes that
-program and runs it through both the interpreter and LLVM paths, comparing the
-output and end state.  This closes the previously untested execution boundary;
-the broader forged-signature and optimizer matrix remains in MISSING.md.
+method, a second callback stored in an enclosing struct, a give parameter,
+and an inout receiver.  It decodes that program and runs it through both the
+interpreter and LLVM paths, comparing the output and end state.  This closes
+the previously untested execution boundary; the broader forged-signature and
+optimizer matrix remains in MISSING.md.
 
 Commit: current Tier 0 cross-stage ownership hardening batch.
 
