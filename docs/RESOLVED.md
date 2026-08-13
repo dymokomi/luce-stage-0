@@ -1090,3 +1090,9 @@ ownership-diagnostic, hardening, and fuzz lanes all pass; the full repository
 suite passes with 2,022 tests.
 
 Commits: `53a5e74`, `79c488f`.
+
+The same diagnostic pass now recognizes a string operand on `%` as a
+Python-style formatting mistake and points to f-string interpolation. Numeric
+modulo keeps its existing arithmetic semantics.
+
+Commit: `a992d41`.

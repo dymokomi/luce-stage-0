@@ -34,10 +34,11 @@ boundary visible:
 The deep graph tests intentionally exceed ordinary native stack depth.  The
 copy rollback test also checks allocator-visible state, not just `live` rows.
 
-- a statement-level { now gets block-oriented guidance without
+- a statement-level `{` now gets block-oriented guidance without
   changing the parser's one-diagnostic recovery rule;
 - ownership advice inspects the complete source-order operand batch before
-  suggesting give, so a repair cannot poison a later occurrence.
+  suggesting `give`, so a repair cannot poison a later occurrence;
+- a Python-style string `%` mistake now points to f-string interpolation.
 
 ## Tier 0 — decisions that can make a total function lie
 
@@ -155,7 +156,6 @@ smuggle one in as a convenience feature.
 
 ## Tier 5b — diagnostic precision
 
-- A string-formatting `%` mistake should name f-strings as the Luce fix.
 
 Smaller harness follow-ups remain: worker arena exhaustion can be translated
 as `host_unavailable`, release-mode origin stripping is redundant, and an
