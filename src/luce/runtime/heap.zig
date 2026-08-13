@@ -2712,14 +2712,19 @@ pub const Runtime = struct {
 };
 
 /// Flatten a multi-dimensional index against the array's dims;
-/// null when any index is out of range.
+/// null when any index is malformed, out of range, or the flattened
+/// position cannot be represented.  The runtime constructor already
+/// validates ordinary shapes, but decoded or hand-built objects can still
+/// reach this helper, so it must not trust either payload tags or dimensions.
 pub fn flattenIndex(dims: []const i64, indices: []const Value) ?usize {
     if (dims.len != indices.len) return null;
     var flat: usize = 0;
     for (dims, indices) |size, held| {
+        if (held.tag != .long or size < 0) return null;
         const index = held.asLong();
         if (index < 0 or index >= size) return null;
-        flat = flat * @as(usize, @intCast(size)) + @as(usize, @intCast(index));
+        const scaled = std.math.mul(usize, flat, @intCast(size)) catch return null;
+        flat = std.math.add(usize, scaled, @intCast(index)) catch return null;
     }
     return flat;
 }

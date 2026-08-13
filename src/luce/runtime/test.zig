@@ -5106,6 +5106,17 @@ test "runtime index and struct doors reject malformed rank without touching owne
         @as(i64, 0),
         (try containers.indexGet(runtime, grid, &.{ Value.ofLong(0), Value.ofLong(0) })).asLong(),
     );
+    try testing.expectEqual(
+        @as(?usize, null),
+        heap.flattenIndex(
+            &.{ std.math.maxInt(i64), std.math.maxInt(i64), std.math.maxInt(i64) },
+            &.{ Value.ofLong(1), Value.ofLong(1), Value.ofLong(1) },
+        ),
+    );
+    try testing.expectEqual(
+        @as(?usize, null),
+        heap.flattenIndex(&.{-1}, &.{Value.ofLong(0)}),
+    );
     // Every axis of a multidimensional store is a long.  The runtime must
     // reject a forged later index before flattenIndex reads its payload, and
     // the rejected store must leave the destination untouched.
