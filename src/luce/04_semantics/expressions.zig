@@ -1129,6 +1129,7 @@ pub fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Typed {
             try refusals.failNamespaceMember(self, base, field.name, joined, field.span);
             return null;
         }
+        if (try refusals.failUnimportedNamespace(self, base, field.span)) return null;
     }
     const target = (try self.lowerExpression(field.target, false)) orelse return null;
     if (target.value_type != .strukt) {

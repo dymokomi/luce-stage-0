@@ -183,6 +183,24 @@ pub fn failUnknownName(self: *FunctionBuilder, name: []const u8, span: Span) Err
     try self.fail("luce.sema.name", span, "unknown name {s}", .{name});
 }
 
+/// A module that is present in the project but not imported by this
+/// file is neither an unknown name nor a value receiver.  Calls and
+/// dotted value reads share this sentence, so a repair cannot depend
+/// on whether the member happened to be followed by parentheses.
+pub fn failUnimportedNamespace(self: *FunctionBuilder, name: []const u8, span: Span) Error!bool {
+    for (self.analyzer.modules) |module| {
+        if (module.binding.len == 0 or !std.mem.eql(u8, module.binding, name)) continue;
+        try self.fail(
+            "luce.sema.import",
+            span,
+            "unknown namespace {s}; import {s} to use it",
+            .{ name, try naming.importSpelling(self.analyzer, name) },
+        );
+        return true;
+    }
+    return false;
+}
+
 /// **A lambda carries no environment** (docs/FUNCTIONS.md S3).
 /// Inside the function a lambda became, a name that was a local
 /// where the lambda was written is not unknown — it is out of

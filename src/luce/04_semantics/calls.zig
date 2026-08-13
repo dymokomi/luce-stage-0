@@ -1213,13 +1213,9 @@ fn methodNamespace(self: *FunctionBuilder, method: ast.Method) Error!NamespaceRe
         return .reported;
     }
     // The head names a module elsewhere in this program: point at
-    // the missing import instead of "unknown name".
-    for (self.analyzer.modules) |module| {
-        if (module.binding.len != 0 and std.mem.eql(u8, module.binding, head)) {
-            try self.fail("luce.sema.import", method.span, "unknown namespace {s}; import {s} to use it", .{ head, try naming.importSpelling(self.analyzer, head) });
-            return .reported;
-        }
-    }
+    // the missing import instead of "unknown name".  Value reads use
+    // the same refusal in expressions.zig.
+    if (try refusals.failUnimportedNamespace(self, head, method.span)) return .reported;
     return .value;
 }
 

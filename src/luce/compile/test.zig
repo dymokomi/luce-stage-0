@@ -2178,8 +2178,9 @@ test "imports are explicit, checked, and reported per file" {
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{ geo_module, util_module } };
 
-    // Reaching a loaded-but-unimported namespace names the fix; a
-    // namespace nothing loaded is an ordinary unknown name.
+    // Reaching a loaded-but-unimported namespace names the fix in a
+    // call, and the same sentence must survive when the member is a
+    // value rather than a callable.
     var unimported = try compile_mod.compileProject(testing.allocator,
         \\import geo
         \\
@@ -2201,12 +2202,25 @@ test "imports are explicit, checked, and reported per file" {
         unimported.failure.at(0).?.message,
     );
 
-    // The constant-place preflight must not look through a loaded but
-    // unimported namespace either.  It runs before ordinary target
-    // lowering so, without the import gate, this spelling leaked the
-    // declaration and reported immutable storage instead of the
-    // ordinary unknown-name result for a dotted value.  (Calls have a
-    // separate namespace resolver that can teach the missing import.)
+    var unimported_value = try compile_mod.compileProject(testing.allocator,
+        \\import geo
+        \\
+        \\func main():
+        \\    let bad = util.TABLE
+        \\
+    , files.loader(), script);
+    defer unimported_value.deinit();
+    try testing.expect(unimported_value == .failure);
+    try testing.expectEqualStrings("luce.sema.import", unimported_value.failure.at(0).?.code);
+    try testing.expectEqualStrings(
+        "unknown namespace util; import util to use it",
+        unimported_value.failure.at(0).?.message,
+    );
+
+    // An indexed write goes through the same dotted value base.  The
+    // constant-place preflight must not look through a loaded but
+    // unimported namespace and leak the declaration as a const/type
+    // error before the namespace gate gets to speak.
     var unimported_store = try compile_mod.compileProject(testing.allocator,
         \\import geo
         \\
@@ -2216,9 +2230,9 @@ test "imports are explicit, checked, and reported per file" {
     , files.loader(), script);
     defer unimported_store.deinit();
     try testing.expect(unimported_store == .failure);
-    try testing.expectEqualStrings("luce.sema.name", unimported_store.failure.at(0).?.code);
+    try testing.expectEqualStrings("luce.sema.import", unimported_store.failure.at(0).?.code);
     try testing.expectEqualStrings(
-        "unknown name util",
+        "unknown namespace util; import util to use it",
         unimported_store.failure.at(0).?.message,
     );
 

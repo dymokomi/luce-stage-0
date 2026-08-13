@@ -268,6 +268,16 @@ pub fn build(b: *std.Build) void {
     );
     test_fstrings_step.dependOn(&b.addRunArtifact(fstring_tests).step);
 
+    const namespace_diagnostic_tests = b.addTest(.{
+        .root_module = luce,
+        .filters = &.{"imports are explicit, checked, and reported per file"},
+    });
+    const test_namespace_diagnostics_step = b.step(
+        "test-namespace-diagnostics",
+        "Run consistent diagnostics for unimported namespaces",
+    );
+    test_namespace_diagnostics_step.dependOn(&b.addRunArtifact(namespace_diagnostic_tests).step);
+
     // The documentation site's generator (`www/luce/src/`).  Its tests
     // are what keep the word tables it highlights with, its link
     // resolver and its Markdown honest, and they belong in `zig build
