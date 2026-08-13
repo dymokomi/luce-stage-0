@@ -1707,15 +1707,20 @@ test "f-strings interpolate names, expressions, and every scalar" {
 
 test "f-strings: empty, no holes, escapes, literal braces, nested strings" {
     try agreeOk(
+        \\import std.strings
+        \\
         \\func main():
         \\    assert(f"" == "")
         \\    assert(f"plain" == "plain")
         \\    assert(f"tab\tend" == "tab\tend")
         \\    assert(f"braces: {{ }}" == "braces: { }")
         \\    let name = "x"
+        \\    assert(f"hello { name }" == "hello x")
         \\    assert(f"{name + "!"}" == "x!")
         \\    let n = 5
         \\    assert(f"{n * n} squared" == "25 squared")
+        \\    assert(f"{ len({ "key": name }) }" == "1")
+        \\    assert(f"{ 2.5 : .1f }" == "2.5")
         \\
     );
 }

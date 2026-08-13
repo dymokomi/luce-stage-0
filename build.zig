@@ -258,6 +258,16 @@ pub fn build(b: *std.Build) void {
     );
     test_format_diagnostics_step.dependOn(&b.addRunArtifact(format_diagnostic_tests).step);
 
+    const fstring_tests = b.addTest(.{
+        .root_module = specs,
+        .filters = &.{"f-strings: empty, no holes, escapes, literal braces"},
+    });
+    const test_fstrings_step = b.step(
+        "test-fstrings",
+        "Run f-string whitespace and nested-expression specifications",
+    );
+    test_fstrings_step.dependOn(&b.addRunArtifact(fstring_tests).step);
+
     // The documentation site's generator (`www/luce/src/`).  Its tests
     // are what keep the word tables it highlights with, its link
     // resolver and its Markdown honest, and they belong in `zig build

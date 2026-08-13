@@ -1055,9 +1055,14 @@ fn expandFString(self: *Parser, item: Token) Error!?*ast.Expression {
             // `{x:.2f}` — the value, then how to write it.
             const split = topLevelColon(whole_hole);
             const hole = if (split) |at| whole_hole[0..at] else whole_hole;
-            const hole_expr = (try subExpression(self, hole, hole_start)) orelse return null;
+            const trimmed_hole = trimHoleSpaces(hole);
+            const hole_expr = (try subExpression(
+                self,
+                trimmed_hole.bytes,
+                hole_start + trimmed_hole.leading,
+            )) orelse return null;
             const wrapped = if (split) |at| blk: {
-                const spec = whole_hole[at + 1 ..];
+                const spec = trimHoleSpaces(whole_hole[at + 1 ..]).bytes;
                 const digits = decimalsOf(spec) orelse {
                     try self.report(
                         "luce.parse.fstring",
@@ -1109,6 +1114,27 @@ fn expandFString(self: *Parser, item: Token) Error!?*ast.Expression {
     // An empty f-string, or one that is all interpolation, still
     // yields a string.
     return result orelse try make(self, .{ .string_literal = .{ .decoded = "", .span = item.span } });
+}
+
+const TrimmedHole = struct {
+    bytes: []const u8,
+    leading: usize,
+};
+
+/// Spaces immediately inside an interpolation belong to the f-string
+/// syntax, not to the expression.  The hole is lexed as a standalone
+/// line, so leaving its leading space in place makes the lexer mistake
+/// it for indentation.  Trim only ordinary spaces: tabs remain an
+/// invalid source character everywhere in Luce.
+fn trimHoleSpaces(bytes: []const u8) TrimmedHole {
+    var leading: usize = 0;
+    while (leading < bytes.len and bytes[leading] == ' ') : (leading += 1) {}
+    var trailing = bytes.len;
+    while (trailing > leading and bytes[trailing - 1] == ' ') : (trailing -= 1) {}
+    return .{
+        .bytes = bytes[leading..trailing],
+        .leading = leading,
+    };
 }
 
 /// Fold a non-empty literal chunk into the running concatenation.

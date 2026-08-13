@@ -1188,6 +1188,8 @@ test "f-strings expand to string()-wrapped concatenation" {
         \\    let d = f"{a + b}"
         \\    let e = f"{m["key"]}"
         \\    let f = f"{copy {"a": 1}}"
+        \\    let g = f"{ a + "!" }"
+        \\    let h = f"{ len({ "key": a }) }"
         \\
     );
     defer parsed.deinit();
@@ -1206,6 +1208,9 @@ test "f-strings expand to string()-wrapped concatenation" {
     // A map's colon is nested syntax, not an f-string format specifier.
     const copied_map = body.statements[5].let.value.call.arguments[0].value.copy.operand;
     try testing.expect(copied_map.* == .map_literal);
+    try testing.expect(body.statements[6].let.value.call.arguments[0].value.* == .binary);
+    try testing.expect(body.statements[7].let.value.call.arguments[0].value.* == .call);
+    try testing.expect(body.statements[7].let.value.call.arguments[0].value.call.arguments[0].value.* == .map_literal);
 }
 
 test "spans point at the source the node came from" {
