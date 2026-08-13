@@ -575,6 +575,502 @@ fn runOwnerGraphSeed(runtime: *Runtime, seed: u64) !void {
     try ownerGraphExpect(runtime.live == 0, seed, transitions, "zero live objects after graph teardown");
 }
 
+const MixedKind = enum { list, map, array };
+
+const MixedNode = struct {
+    handle: Value,
+    kind: MixedKind,
+    parent: ?usize = null,
+    live: bool = true,
+};
+
+const MixedOwnerGraph = struct {
+    const capacity = 64;
+
+    nodes: [capacity]MixedNode = undefined,
+    count: usize = 0,
+
+    fn add(self: *@This(), handle: Value, kind: MixedKind) !usize {
+        if (self.count == capacity) return error.TestExpected;
+        const index = self.count;
+        self.nodes[index] = .{ .handle = handle, .kind = kind };
+        self.count += 1;
+        return index;
+    }
+
+    fn findLive(self: *const @This(), handle: Value) ?usize {
+        if (handle.tag != .object) return null;
+        for (self.nodes[0..self.count], 0..) |node, index| {
+            if (node.live and node.handle.asObject().same(handle.asObject())) return index;
+        }
+        return null;
+    }
+
+    fn chooseLive(self: *const @This(), random: *OwnerGraphRng) ?usize {
+        var choices: usize = 0;
+        for (self.nodes[0..self.count]) |node| {
+            if (node.live) choices += 1;
+        }
+        if (choices == 0) return null;
+        var wanted = random.below(choices);
+        for (self.nodes[0..self.count], 0..) |node, index| {
+            if (!node.live) continue;
+            if (wanted == 0) return index;
+            wanted -= 1;
+        }
+        unreachable;
+    }
+
+    fn chooseLoose(self: *const @This(), random: *OwnerGraphRng) ?usize {
+        var choices: usize = 0;
+        for (self.nodes[0..self.count]) |node| {
+            if (node.live and node.parent == null) choices += 1;
+        }
+        if (choices == 0) return null;
+        var wanted = random.below(choices);
+        for (self.nodes[0..self.count], 0..) |node, index| {
+            if (!node.live or node.parent != null) continue;
+            if (wanted == 0) return index;
+            wanted -= 1;
+        }
+        unreachable;
+    }
+
+    fn chooseContained(self: *const @This(), random: *OwnerGraphRng) ?usize {
+        var choices: usize = 0;
+        for (self.nodes[0..self.count]) |node| {
+            if (node.live and node.parent != null) choices += 1;
+        }
+        if (choices == 0) return null;
+        var wanted = random.below(choices);
+        for (self.nodes[0..self.count], 0..) |node, index| {
+            if (!node.live or node.parent == null) continue;
+            if (wanted == 0) return index;
+            wanted -= 1;
+        }
+        unreachable;
+    }
+
+    fn descendsFrom(self: *const @This(), node: usize, ancestor: usize) bool {
+        var current: ?usize = node;
+        var remaining = self.count + 1;
+        while (current) |at| {
+            if (at == ancestor) return true;
+            if (remaining == 0) return true;
+            remaining -= 1;
+            current = self.nodes[at].parent;
+        }
+        return false;
+    }
+
+    fn wouldCycle(self: *const @This(), parent: usize, child: usize) bool {
+        return parent == child or self.descendsFrom(parent, child);
+    }
+
+    fn retireSubtree(self: *@This(), root: usize) void {
+        for (self.nodes[0..self.count], 0..) |*node, index| {
+            if (node.live and self.descendsFrom(index, root)) node.live = false;
+        }
+    }
+
+    fn retireChildren(self: *@This(), parent: usize) void {
+        for (self.nodes[0..self.count], 0..) |node, index| {
+            if (node.live and node.parent == parent) self.retireSubtree(index);
+        }
+    }
+
+    fn liveCount(self: *const @This()) u32 {
+        var count: u32 = 0;
+        for (self.nodes[0..self.count]) |node| {
+            if (node.live) count += 1;
+        }
+        return count;
+    }
+};
+
+fn mixedLength(runtime: *Runtime, graph: *const MixedOwnerGraph, index: usize) !usize {
+    return ownerGraphLength(runtime, graph.nodes[index].handle);
+}
+
+fn mixedItem(runtime: *Runtime, graph: *const MixedOwnerGraph, index: usize, at: usize) !Value {
+    const node = graph.nodes[index];
+    return switch (node.kind) {
+        .map => containers.valueAt(runtime, node.handle, @intCast(at)),
+        .list, .array => containers.indexGet(runtime, node.handle, &.{Value.ofLong(@intCast(at))}),
+    };
+}
+
+fn mixedAudit(runtime: *Runtime, graph: *const MixedOwnerGraph, seed: u64, step: usize) !void {
+    runtime.debugAssertInvariants();
+    try ownerGraphExpect(runtime.live == graph.liveCount(), seed, step, "mixed live census");
+
+    for (graph.nodes[0..graph.count], 0..) |node, index| {
+        if (!node.live) continue;
+        const object = try runtime.resolve(node.handle);
+        if (node.parent) |parent| {
+            try ownerGraphExpect(graph.nodes[parent].live, seed, step, "mixed live parent");
+            try ownerGraphExpect(object.owner.kind == .container, seed, step, "mixed container owner kind");
+            try ownerGraphExpect(
+                object.owner.details.parent.same(graph.nodes[parent].handle.asObject()),
+                seed,
+                step,
+                "mixed exact container parent",
+            );
+        } else {
+            try ownerGraphExpect(object.owner.kind == .loose, seed, step, "mixed loose root owner kind");
+        }
+
+        const length = try mixedLength(runtime, graph, index);
+        for (0..length) |at| {
+            const item = try mixedItem(runtime, graph, index, at);
+            if (item.tag != .object) continue;
+            const child = graph.findLive(item) orelse return error.TestExpected;
+            try ownerGraphExpect(graph.nodes[child].parent == index, seed, step, "mixed edge parent");
+        }
+    }
+
+    for (graph.nodes[0..graph.count], 0..) |node, child| {
+        if (!node.live) continue;
+        const parent = node.parent orelse continue;
+        var occurrences: usize = 0;
+        const length = try mixedLength(runtime, graph, parent);
+        for (0..length) |at| {
+            const item = try mixedItem(runtime, graph, parent, at);
+            if (item.tag == .object and item.asObject().same(node.handle.asObject())) occurrences += 1;
+        }
+        try ownerGraphExpect(occurrences == 1, seed, step, "mixed one edge per child");
+        _ = child;
+    }
+}
+
+fn mixedNew(runtime: *Runtime, kind: MixedKind) !Value {
+    return switch (kind) {
+        .list => runtime.newList(Value.none),
+        .map => runtime.newMap(),
+        .array => runtime.newArray(&.{4}, Value.none),
+    };
+}
+
+fn mixedEmptyArraySlot(runtime: *Runtime, graph: *const MixedOwnerGraph, index: usize) !?usize {
+    const length = try mixedLength(runtime, graph, index);
+    for (0..length) |at| {
+        if ((try mixedItem(runtime, graph, index, at)).tag != .object) return at;
+    }
+    return null;
+}
+
+fn runMixedOwnerGraphSeed(runtime: *Runtime, seed: u64) !void {
+    var graph: MixedOwnerGraph = .{};
+    var random = OwnerGraphRng.init(seed);
+    for ([_]MixedKind{ .list, .map, .array, .list, .map }) |kind| {
+        _ = try graph.add(try mixedNew(runtime, kind), kind);
+    }
+
+    const transitions = 1_200;
+    var step: usize = 0;
+    while (step < transitions) : (step += 1) {
+        runtime.pending = null;
+        switch (random.below(100)) {
+            0...11 => if (graph.count < MixedOwnerGraph.capacity) {
+                const kind: MixedKind = @enumFromInt(random.below(3));
+                _ = try graph.add(try mixedNew(runtime, kind), kind);
+            },
+
+            // Every container kind gets a retaining door: append/insert for
+            // lists, map_place for maps, and an indexed store for arrays.
+            12...36 => {
+                const parent = graph.chooseLive(&random) orelse continue;
+                const child = graph.chooseLoose(&random) orelse continue;
+                if (parent == child) continue;
+                if (graph.wouldCycle(parent, child)) {
+                    switch (graph.nodes[parent].kind) {
+                        .list => try expectTrap(
+                            .ownership_cycle,
+                            runtime,
+                            containers.append(runtime, graph.nodes[parent].handle, graph.nodes[child].handle),
+                        ),
+                        .map => _ = try expectTrap(
+                            .ownership_cycle,
+                            runtime,
+                            containers.mapPlace(
+                                runtime,
+                                graph.nodes[parent].handle,
+                                Value.ofLong(@intCast(10_000 + step * 100 + child)),
+                                graph.nodes[child].handle,
+                            ),
+                        ),
+                        .array => {
+                            const at = try mixedEmptyArraySlot(runtime, &graph, parent) orelse continue;
+                            try expectTrap(
+                                .ownership_cycle,
+                                runtime,
+                                containers.indexSet(
+                                    runtime,
+                                    graph.nodes[parent].handle,
+                                    &.{Value.ofLong(@intCast(at))},
+                                    graph.nodes[child].handle,
+                                ),
+                            );
+                        },
+                    }
+                    runtime.pending = null;
+                    continue;
+                }
+                switch (graph.nodes[parent].kind) {
+                    .list => {
+                        if (random.below(2) == 0) {
+                            try containers.append(runtime, graph.nodes[parent].handle, graph.nodes[child].handle);
+                        } else {
+                            const length = try mixedLength(runtime, &graph, parent);
+                            try containers.insert(
+                                runtime,
+                                graph.nodes[parent].handle,
+                                @intCast(random.below(length + 1)),
+                                graph.nodes[child].handle,
+                            );
+                        }
+                    },
+                    .map => {
+                        _ = try containers.mapPlace(
+                            runtime,
+                            graph.nodes[parent].handle,
+                            Value.ofLong(@intCast(10_000 + step * 100 + child)),
+                            graph.nodes[child].handle,
+                        );
+                    },
+                    .array => {
+                        const at = try mixedEmptyArraySlot(runtime, &graph, parent) orelse continue;
+                        try containers.indexSet(
+                            runtime,
+                            graph.nodes[parent].handle,
+                            &.{Value.ofLong(@intCast(at))},
+                            graph.nodes[child].handle,
+                        );
+                    },
+                }
+                graph.nodes[child].parent = parent;
+            },
+
+            // Replace a direct value with a scalar or a loose child.  The
+            // old subtree must die exactly at the overwrite, while a new
+            // child must acquire precisely this parent.
+            37...59 => {
+                const parent = graph.chooseLive(&random) orelse continue;
+                const length = try mixedLength(runtime, &graph, parent);
+                if (length == 0) continue;
+                const at = random.below(length);
+                const old = try mixedItem(runtime, &graph, parent, at);
+                var incoming = if (random.below(2) == 0) Value.none else Value.ofLong(@intCast(random.next() & 0x7f));
+                var incoming_node: ?usize = null;
+                if (random.below(3) == 0) if (graph.chooseLoose(&random)) |candidate| {
+                    incoming = graph.nodes[candidate].handle;
+                    incoming_node = candidate;
+                };
+                if (incoming_node) |child| if (graph.wouldCycle(parent, child)) {
+                    try expectTrap(
+                        .ownership_cycle,
+                        runtime,
+                        switch (graph.nodes[parent].kind) {
+                            .map => containers.indexSet(
+                                runtime,
+                                graph.nodes[parent].handle,
+                                &.{Value.ofLong(@intCast(at))},
+                                incoming,
+                            ),
+                            .list, .array => containers.indexSet(
+                                runtime,
+                                graph.nodes[parent].handle,
+                                &.{Value.ofLong(@intCast(at))},
+                                incoming,
+                            ),
+                        },
+                    );
+                    runtime.pending = null;
+                    continue;
+                };
+
+                switch (graph.nodes[parent].kind) {
+                    .map => try containers.indexSet(
+                        runtime,
+                        graph.nodes[parent].handle,
+                        &.{try containers.keyAt(runtime, graph.nodes[parent].handle, @intCast(at))},
+                        incoming,
+                    ),
+                    .list, .array => try containers.indexSet(
+                        runtime,
+                        graph.nodes[parent].handle,
+                        &.{Value.ofLong(@intCast(at))},
+                        incoming,
+                    ),
+                }
+                if (old.tag == .object) graph.retireSubtree(graph.findLive(old) orelse return error.TestExpected);
+                if (incoming_node) |child| graph.nodes[child].parent = parent;
+            },
+
+            // Detach a list value, remove a map value, or bulk-fill an array
+            // with a scalar.  These are intentionally different lifetime
+            // transitions for the same owner graph.
+            60...74 => {
+                const parent = graph.chooseLive(&random) orelse continue;
+                const length = try mixedLength(runtime, &graph, parent);
+                if (length == 0) continue;
+                switch (graph.nodes[parent].kind) {
+                    .list => {
+                        const at = length - 1;
+                        const taken = try containers.pop(runtime, graph.nodes[parent].handle);
+                        if (taken.tag == .object) {
+                            const child = graph.findLive(taken) orelse return error.TestExpected;
+                            graph.nodes[child].parent = null;
+                        }
+                        _ = at;
+                    },
+                    .map => {
+                        const key = try containers.keyAt(runtime, graph.nodes[parent].handle, @intCast(random.below(length)));
+                        const old = try containers.mapGet(runtime, graph.nodes[parent].handle, key);
+                        try containers.remove(runtime, graph.nodes[parent].handle, key);
+                        if (old.tag == .object) graph.retireSubtree(graph.findLive(old) orelse return error.TestExpected);
+                    },
+                    .array => {
+                        for (0..length) |at| {
+                            const old = try mixedItem(runtime, &graph, parent, at);
+                            if (old.tag == .object) graph.retireSubtree(graph.findLive(old) orelse return error.TestExpected);
+                        }
+                        try containers.arrayFill(runtime, graph.nodes[parent].handle, Value.none);
+                    },
+                }
+            },
+
+            75...82 => {
+                const parent = graph.chooseLive(&random) orelse continue;
+                if (graph.nodes[parent].kind == .array) continue;
+                graph.retireChildren(parent);
+                try containers.clear(runtime, graph.nodes[parent].handle);
+            },
+
+            // A contained alias must be rejected before a new edge is
+            // published; using a root as its own child must reach the cycle
+            // wall after the ownership proof.
+            83...89 => {
+                const parent = graph.chooseLive(&random) orelse continue;
+                const child = if (random.below(2) == 0)
+                    graph.chooseContained(&random) orelse parent
+                else
+                    parent;
+                const expected: vocabulary.TrapCode = if (graph.nodes[child].parent != null)
+                    .not_owned
+                else
+                    .ownership_cycle;
+                switch (graph.nodes[parent].kind) {
+                    .list => try expectTrap(
+                        expected,
+                        runtime,
+                        containers.append(runtime, graph.nodes[parent].handle, graph.nodes[child].handle),
+                    ),
+                    .map => _ = try expectTrap(
+                        expected,
+                        runtime,
+                        containers.mapPlace(
+                            runtime,
+                            graph.nodes[parent].handle,
+                            Value.ofLong(@intCast(80_000 + step)),
+                            graph.nodes[child].handle,
+                        ),
+                    ),
+                    .array => {
+                        const at = try mixedEmptyArraySlot(runtime, &graph, parent) orelse continue;
+                        try expectTrap(
+                            expected,
+                            runtime,
+                            containers.indexSet(
+                                runtime,
+                                graph.nodes[parent].handle,
+                                &.{Value.ofLong(@intCast(at))},
+                                graph.nodes[child].handle,
+                            ),
+                        );
+                    },
+                }
+                runtime.pending = null;
+            },
+
+            90...94 => if (graph.chooseLive(&random)) |root| {
+                const duplicate = try runtime.deepCopy(graph.nodes[root].handle);
+                runtime.freeValue(duplicate);
+            },
+
+            else => if (graph.count != 0) {
+                var dead: [MixedOwnerGraph.capacity]usize = undefined;
+                var count: usize = 0;
+                for (graph.nodes[0..graph.count], 0..) |node, index| {
+                    if (!node.live) {
+                        dead[count] = index;
+                        count += 1;
+                    }
+                }
+                if (count != 0) {
+                    const stale = graph.nodes[dead[random.below(count)]].handle;
+                    try expectTrap(.use_after_free, runtime, runtime.resolve(stale));
+                    runtime.pending = null;
+                    try expectTrap(.use_after_free, runtime, runtime.deepCopy(stale));
+                    runtime.pending = null;
+                }
+            },
+        }
+        try mixedAudit(runtime, &graph, seed, step);
+    }
+
+    for (graph.nodes[0..graph.count], 0..) |node, index| {
+        if (node.live and node.parent == null) {
+            runtime.freeValue(node.handle);
+            graph.retireSubtree(index);
+        }
+    }
+    try mixedAudit(runtime, &graph, seed, transitions);
+    try ownerGraphExpect(runtime.live == 0, seed, transitions, "mixed zero live objects after teardown");
+}
+
+test "fixed mixed owner-graph seeds keep lists maps and arrays coherent" {
+    for ([_]u64{
+        0xA11CE_0001,
+        0xA11CE_0021,
+        0xA11CE_00A5,
+        0xA11CE_F00D,
+    }) |seed| {
+        var bench: Bench = undefined;
+        bench.setup();
+        defer bench.deinit();
+        try runMixedOwnerGraphSeed(&bench.runtime, seed);
+    }
+}
+
+test "fuzz: mixed owner graphs preserve one owner across container kinds" {
+    try testing.fuzz({}, fuzzMixedOwnerGraph, .{ .corpus = &.{
+        "mixed list map array owner graph",
+        "map replacement and array fill",
+        "nested mixed owner row reuse",
+    } });
+}
+
+fn fuzzMixedOwnerGraph(_: void, smith: *testing.Smith) !void {
+    var bytes: [24]u8 = undefined;
+    const length = smith.sliceWeightedBytes(&bytes, &.{
+        .rangeAtMost(u8, 0x00, 0xff, 1),
+        .value(u8, 0x00, 3),
+        .value(u8, 0xff, 3),
+        .value(u8, '\n', 2),
+    });
+    var seed: u64 = 0xC0DE_5EED_0011_0001;
+    for (bytes[0..length], 0..) |byte, at| {
+        seed = seed *% 6_364_136_223_846_793_005 +%
+            (@as(u64, byte) +% @as(u64, at) +% 1);
+        seed ^= seed >> 31;
+    }
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    try runMixedOwnerGraphSeed(&bench.runtime, seed);
+}
+
 /// One run for `checkAllAllocationFailures`: rollback must be visible
 /// before teardown, and teardown must return every target byte.
 fn copyWithAllocator(allocator: std.mem.Allocator, source: *Runtime, held: Value) !void {

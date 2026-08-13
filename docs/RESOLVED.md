@@ -1688,3 +1688,19 @@ ownership lanes pass 46/46 each.  Null-pointer and other malformed pointer
 cases remain listed in MISSING.md.
 
 Commit: current Tier 0 C string-boundary hardening batch.
+
+## 2026-08-13 — mixed list/map/array owner-graph state machine
+
+The runtime ownership model now has a second randomized corpus beyond the
+list-forest machine: four fixed seeds and a fuzz target each drive 1,200
+transitions across direct list, map, and array edges.  A reference graph audits
+exact parent metadata and one-edge cardinality after every operation while the
+runtime exercises creation, nested adoption, replacement, detach/remove,
+clear, array fill, cycle and second-owner refusal, deep-copy probes, stale
+handles, row reuse, and explicit teardown to zero live rows.
+
+The focused runtime ownership lane passes 40/40; the C- and thread-sanitized
+ownership lanes pass 48/48 each.  Resource/worker graphs and cross-stage
+differential generation remain open in MISSING.md.
+
+Commit: current Tier 0 mixed owner-graph hardening batch.

@@ -187,6 +187,8 @@ pub fn build(b: *std.Build) void {
         "C task wait rolls nested result transfer",
         "C compound value doors preserve destinations",
         "C string slices preserve views",
+        "fixed mixed owner-graph seeds",
+        "fuzz: mixed owner graphs",
         "blocked worker teardown joins",
     };
     const c_sanitize_luce = b.createModule(.{
@@ -489,6 +491,8 @@ pub fn build(b: *std.Build) void {
             "C task wait rolls nested result transfer",
             "C compound value doors preserve destinations",
             "C string slices preserve views",
+            "fixed mixed owner-graph seeds",
+            "fuzz: mixed owner graphs",
             "blocked worker teardown joins",
         },
     });

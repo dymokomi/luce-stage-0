@@ -93,9 +93,12 @@ append/pop/insert/remove/overwrite/clear transitions, binding and return,
 cycle and second-owner rejection, stale handles, double release, row reuse,
 and explicit zero-live teardown.  A companion matrix now covers map value
 replacement, array object-cell cleanup, transactional array fills, and
-nested struct fields; the item remains open until the same approach reaches
-unions, optionals, resources, worker graphs, and the cross-stage/invariant
-lanes named above.  The MIR verifier now also rejects forged owner locals
+nested struct fields.  A second four-seed plus fuzzed, 1,200-step mixed graph
+now drives direct list, map, and array edges through the same reference audit,
+including cycle/second-owner rejection, detach/remove/clear, deep-copy probes,
+stale handles, and zero-live teardown.  The item remains open until the same
+approach reaches unions, optionals, resources, worker graphs, and the
+cross-stage/invariant lanes named above.  The MIR verifier now also rejects forged owner locals
 whose `owns_storage` bit selects a physical representation incompatible
 with their type, covering scalar, heap, optional, struct, and function
 shapes, and refuses ownership walks on borrowed object parameters; broader
