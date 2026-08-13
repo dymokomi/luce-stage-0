@@ -5108,6 +5108,35 @@ test "runtime index and struct doors reject malformed rank without touching owne
     try testing.expectEqual(@as(u32, 0), runtime.live);
 }
 
+test "rank-zero arrays are rejected before allocation" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    // A source array always has at least one axis.  The direct runtime door
+    // must reject a forged zero-rank shape before it allocates the one
+    // otherwise-unreachable element cell.
+    try expectTrap(.index_bounds, runtime, runtime.newArray(&.{}, Value.none));
+    runtime.pending = null;
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+
+    // The exported C constructor has to preserve its destination too.  The
+    // dimension pointer is deliberately non-null here so this isolates the
+    // malformed rank from the separate null-pointer contract.
+    const dimensions = [_]i64{7};
+    var out = Value.ofLong(99);
+    try testing.expectEqual(
+        @as(i32, 1),
+        luce_rt_new_array(runtime, &dimensions, 0, &Value.none, &out),
+    );
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(vocabulary.TrapCode.index_bounds, runtime.pending.?.code);
+    runtime.pending = null;
+    runtime.debugAssertInvariants();
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
 test "failed function-value copies return every nested storage allocation" {
     var bench: Bench = undefined;
     bench.setup();

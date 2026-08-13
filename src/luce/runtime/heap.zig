@@ -1720,6 +1720,12 @@ pub const Runtime = struct {
     /// comes from the caller because it depends on the program's type
     /// table, which the runtime deliberately does not know.
     pub fn newArray(self: *Runtime, dims: []const i64, zero: Value) Error!Value {
+        // The language has no rank-zero arrays.  Letting one through would
+        // allocate a single cell that no index can ever reach: `len` would
+        // answer zero while `flattenIndex` accepts only an empty index list.
+        // The verifier rejects this shape earlier, but the runtime and its C
+        // door must keep the same wall for decoded or hand-written callers.
+        if (dims.len == 0) return self.fail(.index_bounds);
         const kind: Object.ElementKind = .of(zero);
         const ceiling = maxElements(kind);
         const shape = try self.objects.alloc(i64, dims.len);

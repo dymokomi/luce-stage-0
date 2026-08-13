@@ -326,6 +326,13 @@ content limit and uses a one-byte EOF probe instead of allocating an extra
 read chunk; a fixed-buffer regression covers both exact-limit and oversized
 files with close-once cleanup.  Longer-run peak telemetry remains open.
 
+The runtime now rejects rank-zero arrays before allocating their element
+buffer.  The language verifier already refuses the shape, but the direct
+runtime and C constructors must not let a forged module create one inaccessible
+cell whose `len` is zero; the regression also preserves the C output slot and
+proves that no object row is published.  The wider decoded-shape and
+allocation-door matrix remains open.
+
 The array-fill failure lane now also copies a function run containing outside
 text and a borrowed receiver through every observed replacement allocation
 failure, preserving empty destination cells and the receiver graph while
