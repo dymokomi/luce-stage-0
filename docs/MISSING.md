@@ -142,7 +142,13 @@ propagation through two joins, worker trap and exit unwinds with union-owned
 lists, and an unobserved worker error whose task is released at scope end.
 The mixed worker/resource lifecycle corpus now supplies the randomized
 runtime-side slice; differential specs for every generated lifecycle trace
-and the remaining allocator-invariant combinations remain open.
+and the remaining allocator-invariant combinations remain open.  A direct
+barrier-controlled thread lane now holds four real children blocked after
+spawn, releases the parent task-list root, and proves join-on-release while
+each child builds a nested struct/list graph; child close sees zero live rows
+and happens exactly once.  Parent trap/exit while children are blocked,
+sibling and nested worker races, blocked resource hosts, and join-table
+exhaustion still need explicit concurrent cases.
 The stale-handle slice now probes every list, map, array, and builder door
 after row generation reuse, plus file read/write/flush/copy/give operations;
 it checks that double release is inert and that stale file operations do not

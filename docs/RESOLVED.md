@@ -1594,3 +1594,20 @@ resource, and exceptional combinations remain in MISSING.md.
 The focused resource-composition differential lane passes 5/5.
 
 Commit: current Tier 0 inout composition specification batch.
+
+## 2026-08-13 — barrier-controlled concurrent worker teardown
+
+The runtime ownership corpus now includes a real-thread barrier test with
+four children.  Each child blocks after spawn, then builds a nested
+struct/list result when the first parent-side join opens the gate.  Releasing
+the parent task-list root therefore exercises `Runtime.deinit`'s worker
+release path while children are still blocked, and the test proves every
+thread joins, every child closes once with zero live rows, every child
+finishes its graph, and the parent census reaches zero.  The broader
+parent-trap/exit, sibling/nested, blocked-resource, and table-exhaustion race
+matrix remains in MISSING.md.
+
+The focused runtime ownership lane passes 32/32; the C- and
+thread-sanitized ownership lanes pass 40/40 each.
+
+Commit: current Tier 0 concurrent-worker hardening batch.

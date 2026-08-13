@@ -181,6 +181,7 @@ pub fn build(b: *std.Build) void {
         "map place rolls every key value",
         "builder growth and snapshots",
         "allocating C doors preserve outputs",
+        "blocked worker teardown joins",
     };
     const c_sanitize_luce = b.createModule(.{
         .root_source_file = b.path("src/luce/luce.zig"),
@@ -476,6 +477,7 @@ pub fn build(b: *std.Build) void {
             "map place rolls every key value",
             "builder growth and snapshots",
             "allocating C doors preserve outputs",
+            "blocked worker teardown joins",
         },
     });
     const test_runtime_ownership_step = b.step(

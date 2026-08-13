@@ -1194,6 +1194,193 @@ const WorkerFailureState = struct {
     }
 };
 
+const ConcurrentTeardown = struct {
+    const capacity = 4;
+
+    const Child = struct {
+        arena: std.heap.ArenaAllocator = undefined,
+        runtime: Runtime = undefined,
+        active: bool = false,
+    };
+
+    const Launch = struct {
+        body: workers.Body,
+        argument: ?*anyopaque,
+    };
+
+    gate: std.atomic.Value(bool) = .init(false),
+    started: std.atomic.Value(u32) = .init(0),
+    finished: std.atomic.Value(u32) = .init(0),
+    children: [capacity]Child = undefined,
+    threads: [capacity]?std.Thread = [_]?std.Thread{null} ** capacity,
+    spawn_count: usize = 0,
+    joins: usize = 0,
+    closes: usize = 0,
+    child_live_at_close: [capacity]u32 = [_]u32{std.math.maxInt(u32)} ** capacity,
+
+    fn open(context: ?*anyopaque) callconv(.c) ?*Runtime {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        for (&self.children) |*child| {
+            if (child.active) continue;
+            child.arena = .init(testing.allocator);
+            child.runtime = .init(.{
+                .arena = child.arena.allocator(),
+                .objects = testing.allocator,
+            });
+            child.active = true;
+            return &child.runtime;
+        }
+        return null;
+    }
+
+    fn close(context: ?*anyopaque, runtime: *Runtime) callconv(.c) void {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        for (&self.children, 0..) |*child, index| {
+            if (!child.active or runtime != &child.runtime) continue;
+            self.child_live_at_close[index] = runtime.live;
+            runtime.deinit();
+            child.arena.deinit();
+            child.active = false;
+            self.closes += 1;
+            return;
+        }
+        @panic("concurrent teardown closed an unknown child");
+    }
+
+    fn threadMain(launch: Launch) void {
+        launch.body(launch.argument);
+    }
+
+    fn spawn(
+        context: ?*anyopaque,
+        body: workers.Body,
+        argument: ?*anyopaque,
+        thread: *i64,
+    ) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        if (self.spawn_count == capacity) return workers.no;
+        const index = self.spawn_count;
+        const made = std.Thread.spawn(.{}, threadMain, .{Launch{
+            .body = body,
+            .argument = argument,
+        }}) catch return workers.no;
+        self.threads[index] = made;
+        self.spawn_count += 1;
+        thread.* = @intCast(index);
+        return workers.yes;
+    }
+
+    fn join(context: ?*anyopaque, thread: i64) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        const index: usize = @intCast(thread);
+        if (index >= capacity) return workers.no;
+        const running = self.threads[index] orelse return workers.no;
+        // `Runtime.deinit` reaches this callback while the child is still
+        // deliberately blocked.  Opening the gate here proves that the
+        // release path, not test setup, is what makes teardown progress.
+        self.gate.store(true, .release);
+        running.join();
+        self.threads[index] = null;
+        self.joins += 1;
+        return workers.yes;
+    }
+
+    fn run(
+        context: ?*anyopaque,
+        runtime: *Runtime,
+        _: i64,
+        _: [*]const Value,
+        _: i64,
+        out: *Value,
+        _: i64,
+    ) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        _ = self.started.fetchAdd(1, .acq_rel);
+        while (!self.gate.load(.acquire)) std.Thread.yield() catch {};
+
+        const leaf = runtime.newList(Value.none) catch {
+            runtime.exhausted = true;
+            return workers.raised_trap;
+        };
+        containers.append(runtime, leaf, Value.ofLong(7)) catch {
+            runtime.freeValue(leaf);
+            runtime.exhausted = true;
+            return workers.raised_trap;
+        };
+        var fields = [_]Value{ leaf, Value.ofLong(11) };
+        const result = runtime.makeStruct(&fields) catch {
+            // `makeStruct` consumes the fields on this failure path.
+            runtime.exhausted = true;
+            return workers.raised_trap;
+        };
+        out.* = result;
+        _ = self.finished.fetchAdd(1, .acq_rel);
+        return workers.survived;
+    }
+
+    fn install(self: *@This(), parent: *Runtime) void {
+        parent.workers = .{
+            .context = self,
+            .spawn = spawn,
+            .join = join,
+        };
+        parent.nursery = .{
+            .context = self,
+            .open = open,
+            .close = close,
+            .run = run,
+        };
+    }
+};
+
+test "blocked worker teardown joins and closes every nested child" {
+    var state: ConcurrentTeardown = .{};
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{
+        .arena = arena.allocator(),
+        .objects = testing.allocator,
+    });
+    var cleaned = false;
+    defer if (!cleaned) {
+        state.gate.store(true, .release);
+        for (&state.threads) |*thread| if (thread.*) |running| running.join();
+        runtime.deinit();
+        arena.deinit();
+    };
+    state.install(&runtime);
+
+    const tasks = try runtime.newList(Value.none);
+    for (0..ConcurrentTeardown.capacity) |_| {
+        var task: Value = .none;
+        try workers.spawn(&runtime, 0, &.{}, &task);
+        try containers.append(&runtime, tasks, task);
+    }
+
+    while (state.started.load(.acquire) != ConcurrentTeardown.capacity) {
+        std.Thread.yield() catch {};
+    }
+    try testing.expectEqual(@as(u32, 0), state.finished.load(.acquire));
+    try testing.expectEqual(@as(usize, ConcurrentTeardown.capacity), state.spawn_count);
+
+    // Releasing the only parent root is the teardown under test.  Each
+    // task is still blocked here; the first join opens the gate and every
+    // subsequent join waits for a child that is now building its graph.
+    runtime.freeValue(tasks);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+    try testing.expectEqual(
+        @as(u32, ConcurrentTeardown.capacity),
+        state.finished.load(.acquire),
+    );
+    try testing.expectEqual(ConcurrentTeardown.capacity, state.joins);
+    try testing.expectEqual(ConcurrentTeardown.capacity, state.closes);
+    for (state.child_live_at_close) |live| try testing.expectEqual(@as(u32, 0), live);
+    for (state.children) |child| try testing.expect(!child.active);
+
+    runtime.deinit();
+    arena.deinit();
+    cleaned = true;
+}
+
 // ---------------------------------------------------------------------------
 // Mixed worker/resource lifecycle model
 // ---------------------------------------------------------------------------
