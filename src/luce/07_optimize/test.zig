@@ -484,6 +484,56 @@ test "ownership keeps a bind across an indirect call" {
     try testing.expectEqual(@as(usize, 1), countTag(&program, .object_unbind));
 }
 
+test "ownership facts do not cross basic blocks" {
+    // A claim is path-local.  The second block may be entered from a
+    // different predecessor in a real function, so a bind in the first
+    // block cannot justify deleting anything in the second one.
+    var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    defer program.deinit();
+    const arena = program.arena.allocator();
+
+    program.heap_types = try arena.dupe(types.HeapType, &.{.{ .list = .long }});
+    const instructions = try arena.dupe(Instruction, &.{
+        .{ .heap_new = .{ .heap = 0, .dims = &.{} } },
+        .{ .object_bind = .{ .local = 0, .value = 0 } },
+        .{ .jump = 1 },
+        .{ .object_bind = .{ .local = 1, .value = 0 } },
+        .{ .object_unbind = .{ .local = 1, .value = 0 } },
+        .{ .ret = null },
+    });
+    const result_types = try arena.dupe(types.Type, &.{
+        .{ .heap = 0 },
+        .none,
+        .none,
+        .none,
+        .none,
+        .none,
+    });
+    const blocks = try arena.alloc(Block, 2);
+    blocks[0] = .{ .items = try arena.dupe(Register, &.{ 0, 1, 2 }) };
+    blocks[1] = .{ .items = try arena.dupe(Register, &.{ 3, 4, 5 }) };
+    program.functions = try arena.dupe(defs.Function, &.{.{
+        .name = "main",
+        .parameter_count = 0,
+        .return_type = .none,
+        .locals = try arena.dupe(Local, &.{
+            .{ .name = "first", .local_type = .{ .heap = 0 } },
+            .{ .name = "second", .local_type = .{ .heap = 0 } },
+        }),
+        .instructions = instructions,
+        .result_types = result_types,
+        .blocks = blocks,
+    }});
+    try mir.verify(testing.allocator, &program);
+
+    try optimize.ownership(arena, &program);
+    try mir.verify(testing.allocator, &program);
+    try testing.expectEqual(@as(usize, 2), countTag(&program, .object_bind));
+    try testing.expectEqual(@as(usize, 1), countTag(&program, .object_unbind));
+    try testing.expectEqual(@as(usize, 3), program.functions[0].blocks[0].items.len);
+    try testing.expectEqual(@as(usize, 3), program.functions[0].blocks[1].items.len);
+}
+
 test "ownership never forwards a load out of a slot that owns its storage" {
     // A slot that owns its storage holds a copy the runtime made, not
     // the register that was stored into it (docs/STRINGS.md), so the
