@@ -1097,6 +1097,13 @@ pub const ContainerConstant = struct {
 pub const Function = struct {
     name: []const u8,
     parameter_count: u32,
+    /// Whether each logical parameter takes ownership of the object graph
+    /// it receives.  Storage ownership is deliberately separate and stays
+    /// on `Local.owns_storage`: a `give` parameter borrows its caller's
+    /// bytes while taking its object handles.  Keeping the verb here makes
+    /// a function value's `Signature.Parameter.gives` checkable after the
+    /// semantic analyzer is gone (docs/FUNCTIONS.md D5).
+    parameter_gives: []const bool = &.{},
     return_type: Type,
     /// Written `-> T!` or `-> !`: this function may come back errored
     /// instead of returning, and every caller has to say which of

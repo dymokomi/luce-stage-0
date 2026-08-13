@@ -372,6 +372,7 @@ test "parameters and unknown heap results stay guarded" {
     const function: mir.Function = .{
         .name = "mutate",
         .parameter_count = 1,
+        .parameter_gives = &.{false},
         .return_type = .none,
         .locals = @constCast(&locals),
         .instructions = @constCast(&instructions),

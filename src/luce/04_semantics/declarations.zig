@@ -510,6 +510,10 @@ pub const Analyzer = struct {
             // could only mean the walk was diagnosed, and the caller
             // gates on that before coming here.
             const body = &(recorded orelse unreachable);
+            const parameter_gives = try self.arena.alloc(bool, info.parameter_modes.len);
+            for (info.parameter_modes, parameter_gives) |mode, *gives| {
+                gives.* = mode == .give;
+            }
             var code: mir.build.Lowering = .{
                 .arena = self.arena,
                 .pool = self.pool,
@@ -518,6 +522,7 @@ pub const Analyzer = struct {
                 .variants = self.variants.items,
                 .name = info.name,
                 .parameter_count = @intCast(info.parameter_types.len),
+                .parameter_gives = parameter_gives,
                 .return_type = info.return_type,
                 .fallible = info.fallible,
                 .file = self.modules[info.module].file,

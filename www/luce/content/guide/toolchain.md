@@ -23,7 +23,7 @@ front end's hand-over to the back end, not something to ship; that is
 how `loom` gets a program compiled without carrying a code generator,
 by running this binary over the module it already has.
 
-The current `.lcm` format is **42**. Format 33 introduced the
+The current `.lcm` format is **43**. Format 33 introduced the
 program-root constant-container pool, its load instruction and
 `immutable_object`; 34 appends `ownership_cycle`; 35 appends the
 `shell_run` intrinsic behind `std.os.shell.run`; 36 appends
@@ -47,8 +47,11 @@ deliberately is not — and version 17 appends `path_kind` and retires
 there" from "I was not allowed to look". Neither enums nor unions moved it — no union
 crosses the host boundary.
 
+43 records each function parameter's object-ownership verb in MIR, so a
+function-value signature cannot disagree with the callee's `give` handoff.
+
 Current release label: `0.18` (`luce --version`, `loom --version`). The
-release label is intentionally separate from `format_version = 42` and
+release label is intentionally separate from `format_version = 43` and
 `abi.version = 18`: the latter two describe artifact compatibility, while
 the former names the user-facing toolchain release.
 

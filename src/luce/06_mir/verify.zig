@@ -57,7 +57,17 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     // module may carry an unused row, and a later type-name or lowering
     // walk is still allowed to read it.
     for (program.signatures) |signature| {
-        for (signature.parameters) |parameter| try verifyType(program, parameter.value_type);
+        for (signature.parameters) |parameter| {
+            try verifyType(program, parameter.value_type);
+            // `give` is an ownership operation, never a decorative bit on
+            // a scalar or a function value.  Stage 4 refuses that spelling;
+            // keep unused decoded signatures under the same rule.
+            if (parameter.gives and
+                !try typeCarriesObjects(allocator, program, parameter.value_type))
+            {
+                return error.BadFunction;
+            }
+        }
         try verifyType(program, signature.result);
     }
     for (program.heap_types) |descriptor| switch (descriptor) {
@@ -137,6 +147,7 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     // what `decode` exists to refuse.
     for (program.functions) |*function| {
         if (function.parameter_count > function.locals.len) return error.BadLocal;
+        if (function.parameter_gives.len != function.parameter_count) return error.BadFunction;
         for (function.locals, 0..) |local, index| {
             if (!local.inout) continue;
             if (index != 0 or function.parameter_count == 0) return error.BadLocal;
@@ -475,12 +486,18 @@ fn graphNode(program: *const Program, of: Type) ?u32 {
 fn verifyFunction(allocator: Allocator, program: *const Program, function: *const Function) VerifyError!void {
     if (function.blocks.len == 0) return error.EmptyFunction;
     if (function.parameter_count > function.locals.len) return error.BadLocal;
+    if (function.parameter_gives.len != function.parameter_count) return error.BadFunction;
     if (function.instructions.len != function.result_types.len) return error.BadFunction;
     if (function.origins.len != 0 and function.origins.len != function.instructions.len)
         return error.BadFunction;
     try verifyType(program, function.return_type);
     for (function.locals) |local| try verifyType(program, local.local_type);
     for (function.result_types) |result_type| try verifyType(program, result_type);
+    for (function.locals[0..function.parameter_count], function.parameter_gives) |local, gives| {
+        if (gives and !try typeCarriesObjects(allocator, program, local.local_type)) {
+            return error.BadFunction;
+        }
+    }
 
     var defined = std.AutoHashMapUnmanaged(Register, void){};
     defer defined.deinit(allocator);
@@ -712,11 +729,9 @@ fn isMember(program: *const Program, held: i64, of: Type) bool {
 }
 
 /// Whether the function `named` really has the shape `signature`
-/// claims: the same parameter types in the same order, and the same
-/// answer.  The *verbs* are not checked here — a verb is a rule about
-/// call sites, which stage 4 enforces and MIR does not carry — but a
-/// mismatched type or arity is a module that would call one function
-/// through another's spelling.
+/// claims: the same parameter types and ownership verbs in the same
+/// order, and the same answer.  A mismatched type, verb or arity is a
+/// module that would call one function through another's spelling.
 ///
 /// A fallible function is never a value (docs/FUNCTIONS.md, As built),
 /// so one arriving here is a module stage 4 could not have written.
@@ -746,7 +761,9 @@ fn expectSignature(
         try expectType(try operandType(caller, defined, register), callee.locals[0].local_type);
     }
     for (signature.parameters, 0..) |parameter, index| {
-        try expectType(callee.locals[bound + index].local_type, parameter.value_type);
+        const callee_index = bound + index;
+        try expectType(callee.locals[callee_index].local_type, parameter.value_type);
+        if (callee.parameter_gives[callee_index] != parameter.gives) return error.BadFunction;
     }
     try expectType(callee.return_type, signature.result);
 }

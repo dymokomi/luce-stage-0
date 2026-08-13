@@ -94,7 +94,12 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
             const parameter_type_name = try typeName(allocator, program, local.local_type);
             defer allocator.free(parameter_type_name);
             try appendPrint(&text, allocator, "{s}{s}: {s}", .{
-                if (local.inout) "inout " else "",
+                if (local.inout)
+                    "inout "
+                else if (index < function.parameter_gives.len and function.parameter_gives[index])
+                    "give "
+                else
+                    "",
                 local.name,
                 parameter_type_name,
             });

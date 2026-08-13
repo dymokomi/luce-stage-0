@@ -197,6 +197,7 @@ test "inout stores and the receiver value reaching a call survive dead-code elim
     functions[1] = .{
         .name = "writer",
         .parameter_count = 1,
+        .parameter_gives = &.{false},
         .return_type = .none,
         .locals = try arena.dupe(defs.Local, &.{.{
             .name = "self",

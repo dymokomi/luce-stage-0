@@ -154,6 +154,10 @@ pub const Lowering = struct {
 
     name: []const u8,
     parameter_count: u32 = 0,
+    /// The object-ownership verb on each logical parameter.  This is
+    /// separate from `Local.owns_storage`: a `give` parameter takes its
+    /// object graph but still borrows the caller's storage.
+    parameter_gives: []const bool = &.{},
     return_type: Type,
     /// Written `-> T!` or `-> !` (docs/FAILURE.md).
     fallible: bool = false,
@@ -822,6 +826,7 @@ pub fn build(
         function.* = .{
             .name = lowering.name,
             .parameter_count = lowering.parameter_count,
+            .parameter_gives = try arena.dupe(bool, lowering.parameter_gives),
             .return_type = lowering.return_type,
             .fallible = lowering.fallible,
             .locals = try lowering.locals.toOwnedSlice(arena),

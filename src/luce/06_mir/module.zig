@@ -148,7 +148,12 @@ pub const magic = "LUCE";
 /// of decoded against the wrong tags.  Not a rename: the answer
 /// changed shape as well as spelling, from a bool that could not tell
 /// absence from refusal to a `long` beside the error channel.
-pub const format_version: u32 = 42;
+///
+/// 43 — function parameter ownership verbs join `mir.Function` so the
+/// verifier can tie a function value's `Signature.Parameter.gives` to the
+/// function it names.  A stale module otherwise lets an indirect call omit
+/// the `give_object` handoff while the callee still binds the incoming graph.
+pub const format_version: u32 = 43;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -339,6 +344,8 @@ const Writer = struct {
     fn function(self: *Writer, of: *const mir.Function) error{OutOfMemory}!void {
         try self.blob(of.name);
         try self.int(u32, of.parameter_count);
+        try self.int(u32, @intCast(of.parameter_gives.len));
+        for (of.parameter_gives) |gives| try self.int(u8, @intFromBool(gives));
         try self.valueType(of.return_type);
         try self.int(u8, @intFromBool(of.fallible));
 
@@ -746,6 +753,9 @@ const Reader = struct {
     fn function(self: *Reader, arena: Allocator, out: *mir.Function) DecodeError!void {
         out.name = try arena.dupe(u8, try self.blob());
         out.parameter_count = try self.int(u32);
+        const parameter_gives = try arena.alloc(bool, try self.count());
+        for (parameter_gives) |*gives| gives.* = (try self.int(u8)) != 0;
+        out.parameter_gives = parameter_gives;
         out.return_type = try self.valueType();
         out.fallible = (try self.int(u8)) != 0;
 
@@ -1182,6 +1192,41 @@ test "a compiled program round-trips through the module format" {
     const again = try encode(testing.allocator, &loaded);
     defer testing.allocator.free(again);
     try testing.expectEqualSlices(u8, encoded, again);
+}
+
+test "function value give modes round-trip with the callee" {
+    const source =
+        \\func consume(values: give list(long)) -> long:
+        \\    var total: long = 0
+        \\    for value in values:
+        \\        total = total + value
+        \\    return total
+        \\
+        \\func main():
+        \\    var values: list(long) = [1, 2, 3]
+        \\    let consume_values: func(give list(long)) -> long = consume
+        \\    print(string(consume_values(give values)))
+        \\
+    ;
+    var program = try compileScript(source);
+    defer program.deinit();
+
+    var saw_give = false;
+    for (program.functions) |function| {
+        if (function.parameter_gives.len != function.parameter_count) return error.TestUnexpectedResult;
+        for (function.parameter_gives) |gives| saw_give = saw_give or gives;
+    }
+    try testing.expect(saw_give);
+
+    const encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+    var loaded = try decode(testing.allocator, encoded);
+    defer loaded.deinit();
+
+    try testing.expectEqual(program.functions.len, loaded.functions.len);
+    for (program.functions, loaded.functions) |original, decoded| {
+        try testing.expectEqualSlices(bool, original.parameter_gives, decoded.parameter_gives);
+    }
 }
 
 test "an inout receiver and call round-trip through the current format" {
@@ -1810,6 +1855,7 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // Local flags are wire surface too: `inout` changes how both
     // engines interpret local zero without changing its type.
     inline for (comptime std.meta.fieldNames(mir.Local)) |name| hasher.update(name);
+    inline for (comptime std.meta.fieldNames(mir.Function)) |name| hasher.update(name);
     // A constant row has two wire-tagged unions of its own and three
     // nested record shapes.  Fingerprint every name rather than only
     // the instruction that indexes the table, or a payload edit could
@@ -1855,8 +1901,11 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // joins it after `dir_create` (docs/FILESYSTEM.md D17), so the
     // hash moves with both names *and* every tag between `file_write`
     // and the end of the union renumbers.
-    try testing.expectEqual(@as(u32, 42), format_version);
-    try testing.expectEqual(@as(u64, 2423410591163910601), hasher.final());
+    // 42 -> 43: `mir.Function` records the `give` bit for each parameter,
+    // so an indirect function-value call cannot disagree with the callee's
+    // ownership handoff.
+    try testing.expectEqual(@as(u32, 43), format_version);
+    try testing.expectEqual(@as(u64, 15759308545664136256), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

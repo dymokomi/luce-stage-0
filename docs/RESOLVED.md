@@ -1240,6 +1240,20 @@ value-bearing calls, while existing cross-block diagnostics remain covered.
 
 Commit: current MIR hardening batch.
 
+## 2026-08-12 — function values preserve parameter ownership verbs
+
+MIR function rows now carry one ownership bit for every logical parameter.
+Semantic lowering records `give`, module format 43 serializes it, `luce ir`
+prints it, and the verifier requires an indirect function signature to agree
+with the named callee.  It also rejects `give` on scalar or function values,
+including in unused decoded signatures.  This closes the stale-module path
+where an indirect call could omit `give_object` while the callee still took
+the incoming graph, risking double ownership or double release.  The
+round-trip and forged-MIR tests are in the focused MIR function-shape and
+wire-format lanes.
+
+Commit: current MIR ownership-signature hardening batch.
+
 ## 2026-08-12 — worker-boundary shapes are defended in MIR
 
 `spawn` now rejects a decoded MIR callee whose parameters or return type

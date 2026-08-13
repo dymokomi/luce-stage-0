@@ -145,9 +145,11 @@ test "the verifier rejects structural damage a decoder could admit" {
     try verify_mod.verify(testing.allocator, &program);
 
     functions[0].parameter_count = 1;
+    functions[0].parameter_gives = &.{false};
     functions[0].locals = try arena.dupe(Local, &.{.{ .name = "arg", .local_type = .long }});
     try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
     functions[0].parameter_count = 0;
+    functions[0].parameter_gives = &.{};
     functions[0].locals = &.{};
 
     const duplicate = try arena.dupe(Register, &.{ 0, 0, 1 });
@@ -297,6 +299,7 @@ const Shape = struct {
     blocks: []const []const Register,
     locals: []const Local = &.{},
     parameter_count: u32 = 0,
+    parameter_gives: []const bool = &.{},
     return_type: types.Type = .none,
     fallible: bool = false,
 };
@@ -315,6 +318,7 @@ fn programOf(shape: Shape) !Program {
     functions[0] = .{
         .name = "main",
         .parameter_count = shape.parameter_count,
+        .parameter_gives = try arena.dupe(bool, shape.parameter_gives),
         .return_type = shape.return_type,
         .fallible = shape.fallible,
         .locals = try arena.dupe(Local, shape.locals),
@@ -761,6 +765,7 @@ test "a call agrees with the callee it names, argument for argument" {
     functions[1] = .{
         .name = "twice",
         .parameter_count = 1,
+        .parameter_gives = &.{false},
         .return_type = .long,
         .locals = try arena.dupe(Local, &.{.{ .name = "value", .local_type = .long }}),
         .instructions = try arena.dupe(Instruction, &.{
@@ -805,9 +810,11 @@ test "a call agrees with the callee it names, argument for argument" {
     // any body is walked — otherwise the read runs off the end.
     functions[0].instructions[1].call.arguments = try arena.dupe(Register, &.{ 0, 0 });
     functions[1].parameter_count = 2;
+    functions[1].parameter_gives = &.{ false, false };
     try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &program));
     functions[0].instructions[1].call.arguments = arguments;
     functions[1].parameter_count = 1;
+    functions[1].parameter_gives = &.{false};
 
     // What a function returns is checked against what it says it
     // returns, in the callee as well as at the call.
@@ -841,6 +848,7 @@ test "an inout call aliases exactly local zero and cannot use another call lane"
     functions[1] = .{
         .name = "bump",
         .parameter_count = 1,
+        .parameter_gives = &.{false},
         .return_type = .none,
         .locals = try arena.dupe(Local, &.{.{
             .name = "self",
@@ -919,6 +927,64 @@ test "an inout call aliases exactly local zero and cannot use another call lane"
     try verify_mod.verify(testing.allocator, &program);
 }
 
+test "function values preserve give parameter modes" {
+    var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    defer program.deinit();
+    const arena = program.arena.allocator();
+
+    const functions = try arena.alloc(Function, 2);
+    functions[0] = .{
+        .name = "main",
+        .parameter_count = 0,
+        .return_type = .none,
+        .locals = &.{},
+        .instructions = try arena.dupe(Instruction, &.{
+            .{ .const_function = .{ .function = 1 } },
+            .{ .ret = null },
+        }),
+        .result_types = try arena.dupe(types.Type, &.{ .{ .function = 0 }, .none }),
+        .blocks = try arena.dupe(Block, &.{.{
+            .items = try arena.dupe(Register, &.{ 0, 1 }),
+        }}),
+    };
+    functions[1] = .{
+        .name = "consume",
+        .parameter_count = 1,
+        .parameter_gives = &.{true},
+        .return_type = .none,
+        .locals = try arena.dupe(Local, &.{.{
+            .name = "values",
+            .local_type = .{ .heap = 0 },
+        }}),
+        .instructions = try arena.dupe(Instruction, &.{.{ .trap = .missing_return }}),
+        .result_types = try arena.dupe(types.Type, &.{.none}),
+        .blocks = try arena.dupe(Block, &.{.{
+            .items = try arena.dupe(Register, &.{0}),
+        }}),
+    };
+    program.functions = functions;
+    program.heap_types = try arena.dupe(types.HeapType, &.{.{ .list = .long }});
+    program.signatures = try arena.dupe(types.Signature, &.{.{
+        .parameters = try arena.dupe(types.Signature.Parameter, &.{.{
+            .value_type = .{ .heap = 0 },
+            .gives = false,
+        }}),
+        .result = .none,
+    }});
+
+    // The value's signature cannot silently turn an ownership-taking
+    // function into a borrowing callback: that would leave two owners or
+    // free the caller's graph twice.
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+
+    program.signatures[0].parameters[0].gives = true;
+    try verify_mod.verify(testing.allocator, &program);
+
+    // The reverse mismatch is equally invalid.
+    functions[1].parameter_gives = &.{false};
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+}
+
 test "spawn rejects worker parameters carrying functions or resources" {
     var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
     defer program.deinit();
@@ -944,6 +1010,7 @@ test "spawn rejects worker parameters carrying functions or resources" {
     functions[1] = .{
         .name = "worker",
         .parameter_count = 1,
+        .parameter_gives = &.{false},
         .return_type = .none,
         .locals = try arena.dupe(Local, &.{.{
             .name = "value",
@@ -1347,11 +1414,13 @@ test "the entry is a function that exists and takes nothing" {
     // A host calls the entry with nothing to give it, so an entry that
     // declares a parameter could never be started.
     program.functions[0].parameter_count = 1;
+    program.functions[0].parameter_gives = &.{false};
     program.functions[0].locals = try program.arena.allocator().dupe(
         Local,
         &.{.{ .name = "argument", .local_type = .long }},
     );
     try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    program.functions[0].parameter_gives = &.{};
 }
 
 test "the side tables are exactly as long as the instruction pool" {

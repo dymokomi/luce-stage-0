@@ -5,11 +5,71 @@ living work list, not a history: resolved items belong in
 [RESOLVED.md](RESOLVED.md), and the feature-by-feature review method lives
 in [LANGUAGE_AUDIT.md](LANGUAGE_AUDIT.md).
 
-The current tree has serialized module format 42 and host ABI 18.  The
+The current tree has serialized module format 43 and host ABI 18.  The
 interpreter and compiled path share `src/luce/runtime/` for dynamic
 semantics, and `src/luce/specs/agree.zig` compares both engines on output,
 ending, trace, leak census, and host world.  The repository suite is the
 executable proof of that claim.
+
+## Tier 0 — ownership and memory hardening
+
+Ownership is the load-bearing language invariant.  These are executable
+hardening tasks, not new language designs: each remains open until it has
+positive and rejection coverage, allocator-failure coverage, and a
+differential or structural backstop at the earliest useful stage and at the
+runtime/verifier boundary.
+
+- **T0-OWN-1 — Exhaustive ownership-operation matrix.**  Exercise create,
+  alias, borrow, `give`, copy, return, reassign, field/index store, overwrite,
+  pop/remove/clear, slice, free, loop-carried values, and nested calls across
+  scalars, strings, lists, maps, arrays, structs, unions, optionals, function
+  values, files, and tasks.  Include every legal composition and the illegal
+  moved/borrowed/aliased form.
+- **T0-OWN-2 — Allocation-failure rollback matrix.**  Inject failure at every
+  allocation point in nested copies, strings, map keys and values, function
+  receivers, slices, worker transfers, task/file acquisition, constants, and
+  C exports.  Prove destination preservation, rollback, no leak, no
+  double-free, and a stable error/trap.
+- **T0-OWN-3 — Randomized owner-graph state machine.**  Generate valid
+  operation sequences and hostile mutations against a reference model that
+  requires exactly one owner, forbids illegal cycles, makes stale handles
+  stale, and reaches zero live objects after teardown.  Keep reproducible
+  seeds and minimized failing traces.
+- **T0-OWN-4 — Cross-stage ownership contracts.**  Run ownership cases through
+  semantics, HIR, MIR encode/decode, verification, optimization, the
+  interpreter, and LLVM.  Forge MIR for mismatched `give`, owner locals,
+  `inout`, and indirect signatures and prove every consumer refuses or agrees.
+- **T0-OWN-5 — Exceptional-control-flow cleanup.**  Cover normal and early
+  return, `break`/`continue`, `try`/`catch`, uncaught error, trap, exit,
+  failed call/store/join, and discarded results.  Assert release order,
+  ownership census, and host-world cleanup on every path.
+- **T0-OWN-6 — Stale-handle and double-release matrix.**  Probe indexing,
+  length, mutation, copy, comparison, `give`, free, nested fields, function
+  receivers, task waits, and file operations after move/free, including row
+  reuse and generation-boundary behavior.
+- **T0-OWN-7 — Worker ownership lifecycle.**  Test transfer, copy, failure,
+  discard/free, scope join, worker trap/error/exit, nested workers, and
+  values containing nested structs, unions, optionals, function values, and
+  resources.  Check both engines and every join outcome.
+- **T0-OWN-8 — Sanitizer execution lane.**  Run generated artifacts and the
+  runtime under supported address, leak, and thread sanitizers, with the
+  ownership specs and allocator-failure corpus as inputs.
+- **T0-OWN-9 — Debug ownership invariants.**  Add checked-mode assertions for
+  owner-tree validity, live rows, generation monotonicity, root/worker
+  isolation, and allocator bytes returning to baseline after generated
+  sequences.
+
+The implementation order for this tier is allocator rollback, the randomized
+owner graph, exceptional cleanup, cross-stage contracts, worker lifecycle,
+then sanitizer and invariant lanes.  The research basis includes the
+[Zig testing and allocator documentation](https://ziglang.org/documentation/master/),
+[Go fuzzing](https://go.dev/doc/security/fuzz/) and its
+[race detector](https://go.dev/doc/articles/race_detector), Python's
+[test support](https://docs.python.org/3.11/library/test.html),
+[tracemalloc](https://docs.python.org/3/library/tracemalloc.html), and
+[unittest cleanup](https://docs.python.org/3/library/unittest.html), plus
+[Swift ownership parameters](https://docs.swift.org/swift-book/documentation/the-swift-programming-language/declarations/)
+and [parameterized testing](https://developer.apple.com/documentation/testing/parameterizedtesting).
 
 ## Tier 1 — design gaps before implementation
 

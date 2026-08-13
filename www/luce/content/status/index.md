@@ -64,7 +64,7 @@ ratified language roadmap — shipped on 2026-08-10.
 | Two build modes that differ only in what a trap can say | shipped |
 | map lookups O(1); sort O(n log n) and stable by guarantee | shipped |
 
-The compiler-internal serialized module is format **42**. Program-root
+The compiler-internal serialized module is format **43**. Program-root
 containers moved it to 33 by adding a pool, instruction and trap code;
 the later `ownership_cycle` trap, `shell_run` service and `term_event_data`
 intrinsic moved it again, unions moved it to 38 by adding the
@@ -73,7 +73,8 @@ qualifying module names with their package root, so two packages'
 same-named files can never merge in a serialized module, and
 `dir_create` and `epoch_ms` moved it to 40, bound methods to 41, and
 the filesystem surface to 42 by retiring `file_exists` and adding
-`path_kind`.
+`path_kind`. Function parameter ownership verbs then moved it to 43, so an
+indirect function-value call cannot omit the callee's `give` handoff.
 The published host ABI is **18**: version 18 made the finished census
 cover every non-exhaustion ending; neither unions nor packages cross the
 host boundary, so neither moved it.

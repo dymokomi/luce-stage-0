@@ -592,7 +592,8 @@ earlier examples or mechanisms disagree with it.
   serialized module was `format_version = 33`; the published host table
   did not change at that point; the current `abi.version` is 16 after
   the later `shell_run`, `term_event_data`, `dir_create` and `epoch_ms`
-  host services, and the current module format is 42.
+  host services, and the current module format is 43 after MIR began
+  carrying function parameter ownership verbs.
 - **Customers and proof.**  `std.zip` now holds the CRC table, four
   length/distance base and extra tables, and the code-length order as
   six file-scope constants.  The editor's keyword and builtin sets are

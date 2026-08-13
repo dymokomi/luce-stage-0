@@ -120,6 +120,8 @@ pub fn build(b: *std.Build) void {
     const run_luce_tests = b.addRunArtifact(luce_tests);
     const test_step = b.step("test", "Run the Luce and loom test suites");
     test_step.dependOn(&run_luce_tests.step);
+    const test_luce_step = b.step("test-luce", "Run the Luce package and runtime tests");
+    test_luce_step.dependOn(&run_luce_tests.step);
 
     // Keep the property corpus addressable on its own.  The ordinary test
     // step runs the checked-in corpus; this lane is where a developer turns
@@ -345,6 +347,16 @@ pub fn build(b: *std.Build) void {
     );
     test_mir_constants_step.dependOn(&b.addRunArtifact(mir_constant_tests).step);
 
+    const mir_wire_tests = b.addTest(.{
+        .root_module = luce,
+        .filters = &.{"the wire surface is fingerprinted: change it, bump format_version"},
+    });
+    const test_mir_wire_step = b.step(
+        "test-mir-wire",
+        "Run the serialized MIR wire-surface fingerprint guard",
+    );
+    test_mir_wire_step.dependOn(&b.addRunArtifact(mir_wire_tests).step);
+
     const mir_function_shape_tests = b.addTest(.{
         .root_module = luce,
         .filters = &.{
@@ -354,6 +366,7 @@ pub fn build(b: *std.Build) void {
             "every no-result MIR instruction rejects a fabricated result type",
             "spawn rejects worker parameters carrying functions or resources",
             "spawn rejects worker results carrying functions or resources",
+            "function values preserve give parameter modes",
             "a fallible producer must be observed before control continues",
         },
     });
