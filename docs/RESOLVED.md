@@ -2005,3 +2005,18 @@ suite include this matrix.  Exhaustive generated receiver traces and
 allocator-failure permutations remain listed in MISSING.md.
 
 Commit: current Tier 0 function-value ownership hardening batch.
+
+## 2026-08-13 — function-valued array fills roll back transactionally
+
+`arrayFill` now has a direct failure corpus for function values whose owned
+run contains outside text and whose receiver names a nested object graph.  It
+arms the allocator after setup, refuses each observed replacement allocation,
+checks that every destination cell remains empty, retires the borrowed
+receiver, and releases the partial runs without a leak before also proving the
+successful fill.
+
+The focused runtime ownership lane, both sanitizer lanes, and the full Luce
+suite include this matrix.  Other function-valued retaining doors and the
+broader generated failure matrix remain listed in MISSING.md.
+
+Commit: current Tier 0 function-value allocation hardening batch.

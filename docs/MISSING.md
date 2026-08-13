@@ -315,6 +315,11 @@ through a list element, map value, array fill, struct field, deep copies, and
 stale-receiver teardown; the exhaustive generated receiver matrix and
 allocation-failure permutations remain open.
 
+The array-fill failure lane now also copies a function run containing outside
+text and a borrowed receiver through every observed replacement allocation
+failure, preserving empty destination cells and the receiver graph while
+reclaiming partial runs; other function-valued retaining doors remain open.
+
 ## Tier 1 — design gaps before implementation
 
 ### Typed worker channels

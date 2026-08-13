@@ -7132,6 +7132,92 @@ test "array fill keeps its old values through every copy allocation failure" {
     }
 }
 
+test "array fill rolls borrowed function runs back at every allocation failure" {
+    const label_text = "function storage copied into every array cell";
+    var failures: usize = 0;
+    var completed = false;
+
+    // The setup is complete before the failing allocator is armed.  Every
+    // refusal below is therefore inside the replacement buffer or one of
+    // the function runs copied into it, not a construction failure that
+    // would leave the test unable to inspect the old array.
+    for (0..24) |offset| {
+        var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+        var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var runtime: Runtime = .init(.{
+            .arena = arena.allocator(),
+            .objects = objects.allocator(),
+        });
+
+        const receiver = try runtime.newList(Value.none);
+        const nested = try runtime.newList(Value.none);
+        try containers.append(&runtime, nested, try runtime.ownValue(Value.ofString(
+            "borrowed receiver graph remains outside function storage",
+        )));
+        try containers.append(&runtime, receiver, nested);
+        const array = try runtime.newArray(&.{3}, Value.none);
+        const label = try runtime.ownValue(Value.ofString(label_text));
+        const function = try runtime.makeFunction(&.{ Value.ofLong(9), receiver, label });
+
+        objects.fail_index = objects.alloc_index + offset;
+        const outcome = containers.arrayFill(&runtime, array, function);
+        objects.fail_index = std.math.maxInt(usize);
+
+        // arrayFill borrows the source function.  Its storage is released
+        // here on both paths; any successful cell owns an independent copy.
+        runtime.dropStorage(function);
+        if (outcome) |_| {
+            for (0..3) |index| {
+                const cell = try containers.indexGet(
+                    &runtime,
+                    array,
+                    &.{Value.ofLong(@intCast(index))},
+                );
+                try testing.expectEqual(value.Tag.function, cell.tag);
+                try testing.expectEqualStrings(label_text, cell.asStruct()[2].asString());
+                try testing.expect(cell.asStruct()[1].asObject().same(receiver.asObject()));
+            }
+            completed = true;
+        } else |mistake| {
+            try testing.expectEqual(error.OutOfMemory, mistake);
+            try testing.expect(objects.has_induced_failure);
+            try testing.expect(runtime.pending == null);
+            try testing.expectEqual(@as(u32, 3), runtime.live);
+            for (0..3) |index| {
+                try testing.expect(
+                    (try containers.indexGet(
+                        &runtime,
+                        array,
+                        &.{Value.ofLong(@intCast(index))},
+                    )).isNone(),
+                );
+            }
+            try testing.expectEqual(
+                @as(i64, 1),
+                (try containers.length(&runtime, receiver)).asLong(),
+            );
+            failures += 1;
+        }
+
+        runtime.debugAssertInvariants();
+        // The receiver is never adopted by a function run.  Retire it before
+        // releasing the array so stale borrowed handles exercise the same
+        // no-object-walk rule on both successful and rollback paths.
+        runtime.freeValue(receiver);
+        try expectStale(&runtime, runtime.resolve(receiver));
+        runtime.freeValue(array);
+        runtime.debugAssertInvariants();
+        try testing.expectEqual(@as(u32, 0), runtime.live);
+        runtime.deinit();
+        arena.deinit();
+        try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
+        if (completed) break;
+    }
+
+    try testing.expect(completed);
+    try testing.expect(failures >= 1);
+}
+
 test "new arrays roll every owned cell back when construction allocation fails" {
     try testing.checkAllAllocationFailures(
         testing.allocator,
