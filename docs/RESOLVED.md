@@ -1319,6 +1319,18 @@ rejections, stale handles, double release, binding/return, and teardown.
 
 Commit: current Tier 0 owner-graph hardening batch.
 
+## 2026-08-12 — checked owner invariants cover the live graph
+
+Debug runtimes now expose an allocation-free owner-table assertion.  It
+checks the live census, free-row and retired-generation separation, program
+roots, exact parent edges, duplicate retaining edges, acyclic ancestry, and
+the rule that function-value receivers remain borrowed.  The owner-graph
+state machine invokes it after every transition, and a composite regression
+drives map values, object arrays, nested structs, and a stored callback through
+the same check before and after teardown.
+
+Commit: current Tier 0 checked-invariant hardening batch.
+
 ## 2026-08-12 — array fills cannot strand old cells or partial copies
 
 `array_fill` now releases object ownership as well as value storage when a

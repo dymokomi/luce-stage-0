@@ -248,6 +248,7 @@ fn auditOwnerGraph(
     seed: u64,
     step: usize,
 ) !void {
+    runtime.debugAssertInvariants();
     try ownerGraphExpect(runtime.live == graph.liveCount(), seed, step, "live census");
 
     for (graph.nodes[0..graph.count], 0..) |node, index| {
@@ -3239,6 +3240,38 @@ test "maps and struct values preserve one owner across retaining doors" {
     runtime.freeValue(second);
     runtime.freeValue(other);
     runtime.freeValue(outer);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
+test "checked owner invariants cover maps arrays structs and borrowed functions" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const mapped = try runtime.newMap();
+    const map_child = try runtime.newList(Value.none);
+    const map_record = try runtime.makeStruct(&.{map_child});
+    try containers.indexSet(runtime, mapped, &.{Value.ofString("record")}, map_record);
+
+    const array = try runtime.newArray(&.{1}, Value.none);
+    const array_child = try runtime.newList(Value.none);
+    const array_record = try runtime.makeStruct(&.{array_child});
+    try containers.indexSet(runtime, array, &.{Value.ofLong(0)}, array_record);
+
+    // A function run owns its field storage but borrows the receiver graph.
+    // The checked walk must follow the struct wrapper and stop at the
+    // function value rather than inventing a second edge to `receiver`.
+    const receiver = try runtime.newList(Value.none);
+    const callback = try runtime.makeFunction(&.{ Value.ofLong(0), receiver });
+    const callback_record = try runtime.makeStruct(&.{callback});
+    try containers.indexSet(runtime, mapped, &.{Value.ofString("callback")}, callback_record);
+
+    runtime.debugAssertInvariants();
+    runtime.freeValue(mapped);
+    runtime.freeValue(array);
+    runtime.freeValue(receiver);
+    runtime.debugAssertInvariants();
     try testing.expectEqual(@as(u32, 0), runtime.live);
 }
 

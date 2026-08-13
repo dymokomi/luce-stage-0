@@ -95,6 +95,12 @@ after row reuse, and one-shot task waits.  The owner-graph reference model is
 also a coverage-guided fuzz target now: mutated byte traces become
 reproducible seeds for the same 700-step cycle, stale-handle, binding, and
 teardown proof.  Randomized mixed resource and worker graphs remain open.
+The runtime also has a checked-mode, allocation-free invariant assertion for
+live-row census, free-row generations, program roots, exact container parent
+edges, duplicate edges, acyclic ancestry, and borrowed function receivers;
+its direct composite regression covers map, array, and nested struct doors.
+Extending that assertion through live worker/resource graphs and allocator
+baseline snapshots remains open.
 
 ## Tier 1 — design gaps before implementation
 

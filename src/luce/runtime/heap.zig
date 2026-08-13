@@ -14,6 +14,7 @@
 //! table handles index, the frame-serial counter, and the trap channel.
 //! It is what a compiled artifact holds a pointer to for its whole run.
 
+const builtin = @import("builtin");
 const std = @import("std");
 const vocabulary = @import("../support/vocabulary.zig");
 const files = @import("files.zig");
@@ -1114,6 +1115,190 @@ pub const Runtime = struct {
     pub fn leaked(self: *const Runtime) i64 {
         return @as(i64, self.live) - @as(i64, self.program_root_count) +
             self.inherited_leaks;
+    }
+
+    /// Check the runtime's ownership-table invariants in checked builds.
+    ///
+    /// This is deliberately an assertion rather than a recoverable runtime
+    /// error: reaching a disagreement between a row's owner field and the
+    /// retaining edge that names it means the implementation has already
+    /// lost the one fact that makes release safe.  It allocates nothing and
+    /// is not called on production hot paths; the runtime owner-graph corpus
+    /// calls it after every transition while running in Debug mode.
+    pub fn debugAssertInvariants(self: *const Runtime) void {
+        if (builtin.mode != .Debug) return;
+
+        var live: u32 = 0;
+        var program_roots: u32 = 0;
+        var retired_rows: usize = 0;
+        for (self.table.items, 0..) |*object, index| {
+            if (object.generation == retired) {
+                retired_rows += 1;
+                std.debug.assert(!self.debugOnFreeList(@intCast(index)));
+                continue;
+            }
+            if (self.debugOnFreeList(@intCast(index))) {
+                std.debug.assert(object.next_free == value.null_index or
+                    object.next_free < self.table.items.len);
+                continue;
+            }
+
+            live += 1;
+            switch (object.owner.kind) {
+                .loose, .binding => {},
+                .program => program_roots += 1,
+                .container => {
+                    const parent = object.owner.details.parent;
+                    const parent_object = self.debugLiveObject(parent) orelse {
+                        std.debug.assert(false);
+                        continue;
+                    };
+                    var occurrences: usize = 0;
+                    switch (parent_object.data) {
+                        .list, .array => if (parent_object.elements.kind == .value) {
+                            for (parent_object.elements.cells(Value)) |item| {
+                                occurrences += self.debugValueEdgeCount(
+                                    item,
+                                    .{ .index = @intCast(index), .generation = object.generation },
+                                    0,
+                                );
+                            }
+                        },
+                        .map => |map| for (map.entries.items) |entry| {
+                            occurrences += self.debugValueEdgeCount(
+                                entry.key,
+                                .{ .index = @intCast(index), .generation = object.generation },
+                                0,
+                            );
+                            occurrences += self.debugValueEdgeCount(
+                                entry.value,
+                                .{ .index = @intCast(index), .generation = object.generation },
+                                0,
+                            );
+                        },
+                        .builder, .file, .task => std.debug.assert(false),
+                    }
+                    std.debug.assert(occurrences == 1);
+
+                    // The exact-parent check above catches a wrong edge;
+                    // this bounded walk catches a cycle in otherwise
+                    // self-consistent owner metadata.
+                    var ancestor = parent;
+                    var steps: usize = 0;
+                    while (true) : (steps += 1) {
+                        std.debug.assert(steps <= self.table.items.len);
+                        const ancestor_object = self.debugLiveObject(ancestor) orelse {
+                            std.debug.assert(false);
+                            break;
+                        };
+                        const owner = ancestor_object.owner;
+                        if (owner.kind != .container) break;
+                        ancestor = owner.details.parent;
+                        std.debug.assert(!ancestor.same(.{
+                            .index = @intCast(index),
+                            .generation = object.generation,
+                        }));
+                    }
+                },
+            }
+
+            switch (object.data) {
+                .list, .array => {
+                    std.debug.assert(object.elements.count <= object.elements.capacity());
+                    std.debug.assert(object.elements.bytes.len % object.elements.kind.width() == 0);
+                    if (object.elements.kind == .value) {
+                        for (object.elements.cells(Value)) |item| {
+                            self.debugAssertValueEdge(item, .{
+                                .index = @intCast(index),
+                                .generation = object.generation,
+                            }, 0);
+                        }
+                    }
+                },
+                .map => |map| for (map.entries.items) |entry| {
+                    self.debugAssertValueEdge(entry.key, .{
+                        .index = @intCast(index),
+                        .generation = object.generation,
+                    }, 0);
+                    self.debugAssertValueEdge(entry.value, .{
+                        .index = @intCast(index),
+                        .generation = object.generation,
+                    }, 0);
+                },
+                .builder, .file, .task => {},
+            }
+        }
+
+        std.debug.assert(live == self.live);
+        std.debug.assert(program_roots == self.program_root_count);
+        std.debug.assert(live + @as(u32, @intCast(retired_rows)) <= self.table.items.len);
+        if (!self.materializing_constants) {
+            for (self.constant_roots) |root| {
+                std.debug.assert(root.tag == .object);
+                const object = self.debugLiveObject(root.asObject()) orelse {
+                    std.debug.assert(false);
+                    continue;
+                };
+                std.debug.assert(object.owner.kind == .program);
+            }
+        }
+    }
+
+    fn debugOnFreeList(self: *const Runtime, wanted: u32) bool {
+        var row = self.free_row;
+        var steps: usize = 0;
+        while (row != value.null_index) : (steps += 1) {
+            std.debug.assert(steps < self.table.items.len);
+            std.debug.assert(row < self.table.items.len);
+            if (row == wanted) return true;
+            row = self.table.items[row].next_free;
+        }
+        return false;
+    }
+
+    fn debugLiveObject(self: *const Runtime, handle: Handle) ?*const Object {
+        if (handle.index >= self.table.items.len or handle.index == value.null_index) return null;
+        const object = &self.table.items[handle.index];
+        if (object.generation != handle.generation or
+            object.generation == retired or
+            self.debugOnFreeList(handle.index)) return null;
+        return object;
+    }
+
+    fn debugAssertValueEdge(self: *const Runtime, held: Value, parent: Handle, depth: usize) void {
+        std.debug.assert(depth < 4096);
+        switch (held.view()) {
+            .object => |child| {
+                if (child.index == value.null_index) return;
+                const object = self.debugLiveObject(child) orelse {
+                    std.debug.assert(false);
+                    return;
+                };
+                std.debug.assert(object.owner.kind == .container);
+                if (object.owner.kind == .container) {
+                    std.debug.assert(object.owner.details.parent.same(parent));
+                }
+            },
+            .strukt => |fields| for (fields) |field| {
+                self.debugAssertValueEdge(field, parent, depth + 1);
+            },
+            .function => {},
+            else => {},
+        }
+    }
+
+    fn debugValueEdgeCount(self: *const Runtime, held: Value, wanted: Handle, depth: usize) usize {
+        std.debug.assert(depth < 4096);
+        return switch (held.view()) {
+            .object => |child| if (child.index != value.null_index and child.same(wanted)) 1 else 0,
+            .strukt => |fields| blk: {
+                var count: usize = 0;
+                for (fields) |field| count += self.debugValueEdgeCount(field, wanted, depth + 1);
+                break :blk count;
+            },
+            .function => 0,
+            else => 0,
+        };
     }
 
     /// Release one row during the final sweep.  The caller decides the
