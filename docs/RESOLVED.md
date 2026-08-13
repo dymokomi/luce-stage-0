@@ -1540,6 +1540,22 @@ pass 36/36, and the full differential suite passes 517/517.
 
 Commit: current Tier 0 C-boundary hardening batch.
 
+## 2026-08-13 — blocked worker resource cleanup
+
+A barrier-controlled two-child runtime test now holds one worker inside a
+host file-read callback while the sibling waits for the shared effect lock
+and the parent releases its task root.  The join path and child-runtime close
+path are checked together: one child explicitly closes its file, while a
+trapped sibling leaves its file live until runtime sweep.  The test proves
+both resources close once, no callback runs outside the effect guard, no
+worker remains joined or active, and the inherited leak census accounts for
+the intentionally abandoned file.
+
+Sibling/nested worker races and broader join-table exhaustion remain in
+MISSING.md.
+
+Commit: current Tier 0 blocked-resource worker hardening batch.
+
 ## 2026-08-13 — blocked-worker parent-stop and channel exhaustion
 
 The real-thread worker lane now covers children blocked after spawn while the

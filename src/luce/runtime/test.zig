@@ -2153,6 +2153,329 @@ test "blocked worker teardown joins and closes every nested child" {
     cleaned = true;
 }
 
+const BlockedResourceTeardown = struct {
+    const capacity = 2;
+
+    const Child = struct {
+        arena: std.heap.ArenaAllocator = undefined,
+        runtime: Runtime = undefined,
+        active: bool = false,
+    };
+
+    const Launch = struct {
+        body: workers.Body,
+        argument: ?*anyopaque,
+    };
+
+    effects: *workers.Effects,
+    gate: std.atomic.Value(bool) = .init(false),
+    read_started: std.atomic.Value(u32) = .init(0),
+    read_returned: std.atomic.Value(u32) = .init(0),
+    bad_lock: std.atomic.Value(bool) = .init(false),
+    children: [capacity]Child = undefined,
+    threads: [capacity]?std.Thread = [_]?std.Thread{null} ** capacity,
+    spawn_count: usize = 0,
+    joins: std.atomic.Value(usize) = .init(0),
+    closes: usize = 0,
+    file_opens: usize = 0,
+    file_closes: usize = 0,
+    close_before_join: usize = 0,
+    close_after_join: usize = 0,
+    opened_handles: [capacity]i64 = undefined,
+    closed_handles: [capacity]bool = [_]bool{false} ** capacity,
+    duplicate_close: bool = false,
+    unknown_close: bool = false,
+    child_live_at_close: [capacity]u32 = [_]u32{std.math.maxInt(u32)} ** capacity,
+
+    fn observe(self: *@This()) void {
+        const this_thread: usize = @intCast(std.Thread.getCurrentId());
+        if (self.effects.owner.load(.acquire) != this_thread or self.effects.depth != 1) {
+            self.bad_lock.store(true, .release);
+        }
+    }
+
+    fn open(context: ?*anyopaque) callconv(.c) ?*Runtime {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        for (&self.children) |*child| {
+            if (child.active) continue;
+            child.arena = .init(testing.allocator);
+            child.runtime = .init(.{
+                .arena = child.arena.allocator(),
+                .objects = testing.allocator,
+            });
+            child.active = true;
+            return &child.runtime;
+        }
+        return null;
+    }
+
+    fn close(context: ?*anyopaque, runtime: *Runtime) callconv(.c) void {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        for (&self.children, 0..) |*child, index| {
+            if (!child.active or runtime != &child.runtime) continue;
+            self.child_live_at_close[index] = runtime.live;
+            runtime.debugAssertInvariants();
+            runtime.deinit();
+            child.arena.deinit();
+            child.active = false;
+            self.closes += 1;
+            return;
+        }
+        @panic("blocked resource teardown closed an unknown child");
+    }
+
+    fn threadMain(launch: Launch) void {
+        launch.body(launch.argument);
+    }
+
+    fn spawn(
+        context: ?*anyopaque,
+        body: workers.Body,
+        argument: ?*anyopaque,
+        thread: *i64,
+    ) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        if (self.spawn_count == capacity) return workers.no;
+        const index = self.spawn_count;
+        const made = std.Thread.spawn(.{}, threadMain, .{Launch{
+            .body = body,
+            .argument = argument,
+        }}) catch return workers.no;
+        self.threads[index] = made;
+        self.spawn_count += 1;
+        thread.* = @intCast(index);
+        return workers.yes;
+    }
+
+    fn join(context: ?*anyopaque, thread: i64) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        const index: usize = @intCast(thread);
+        if (index >= capacity) return workers.no;
+        const running = self.threads[index] orelse return workers.no;
+        // The child is intentionally blocked while holding the effects
+        // mutex in `fileRead`.  The parent never needs that mutex to join;
+        // opening this gate here proves teardown can release the blocked
+        // resource call and then wait for its owner to finish.
+        self.gate.store(true, .release);
+        running.join();
+        self.threads[index] = null;
+        _ = self.joins.fetchAdd(1, .acq_rel);
+        return workers.yes;
+    }
+
+    fn fileOpen(
+        context: ?*anyopaque,
+        _: [*]const u8,
+        _: i64,
+        _: i64,
+        handle: *i64,
+    ) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        self.observe();
+        if (self.file_opens == capacity) return files.exhausted;
+        const next: i64 = @intCast(20_000 + self.file_opens);
+        self.opened_handles[self.file_opens] = next;
+        self.closed_handles[self.file_opens] = false;
+        self.file_opens += 1;
+        handle.* = next;
+        return files.yes;
+    }
+
+    fn fileRead(
+        context: ?*anyopaque,
+        handle: i64,
+        _: [*]u8,
+        _: i64,
+        filled: *i64,
+    ) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        self.observe();
+        var known = false;
+        for (self.opened_handles[0..self.file_opens]) |opened| {
+            if (opened == handle) known = true;
+        }
+        if (!known) return files.no;
+        _ = self.read_started.fetchAdd(1, .acq_rel);
+        while (!self.gate.load(.acquire)) std.Thread.yield() catch {};
+        filled.* = 0;
+        _ = self.read_returned.fetchAdd(1, .acq_rel);
+        return files.yes;
+    }
+
+    fn fileClose(context: ?*anyopaque, handle: i64) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        self.observe();
+        self.file_closes += 1;
+        if (self.joins.load(.acquire) == 0) self.close_before_join += 1 else self.close_after_join += 1;
+        for (self.opened_handles[0..self.file_opens], 0..) |opened, index| {
+            if (opened != handle) continue;
+            if (self.closed_handles[index]) self.duplicate_close = true;
+            self.closed_handles[index] = true;
+            return files.yes;
+        }
+        self.unknown_close = true;
+        return files.yes;
+    }
+
+    fn failed(runtime: *Runtime, mistake: heap.Error) i32 {
+        if (mistake == error.OutOfMemory) runtime.exhausted = true;
+        return workers.raised_trap;
+    }
+
+    fn run(
+        _: ?*anyopaque,
+        runtime: *Runtime,
+        function: i64,
+        _: [*]const Value,
+        _: i64,
+        out: *Value,
+        _: i64,
+    ) callconv(.c) i32 {
+        const held = files.open(
+            runtime,
+            "blocked-worker-resource.bin",
+            @intFromEnum(files.Mode.read),
+        ) catch |mistake| return failed(runtime, mistake);
+        const file = held orelse {
+            _ = runtime.fail(.host_unavailable) catch {};
+            return workers.raised_trap;
+        };
+        const buffer = runtime.newArray(&.{1}, Value.ofByte(0)) catch |mistake| {
+            runtime.freeValue(file);
+            return failed(runtime, mistake);
+        };
+        defer runtime.freeValue(buffer);
+
+        const answered = files.read(runtime, file, buffer) catch |mistake| {
+            return failed(runtime, mistake);
+        };
+        if (answered == null) {
+            _ = runtime.fail(.host_unavailable) catch {};
+            return workers.raised_trap;
+        }
+
+        if (function == 0) {
+            // This child closes its resource while still running.  The
+            // sibling below deliberately leaves its resource live so the
+            // child-runtime sweep must close it after the parent joins.
+            runtime.freeValue(file);
+            out.* = .none;
+            return workers.survived;
+        }
+        _ = runtime.fail(.host_unavailable) catch {};
+        return workers.raised_trap;
+    }
+
+    fn install(self: *@This(), parent: *Runtime) void {
+        parent.files = .{
+            .context = self,
+            .open = fileOpen,
+            .read = fileRead,
+            .close = fileClose,
+        };
+        parent.workers = .{
+            .context = self,
+            .spawn = spawn,
+            .join = join,
+        };
+        parent.nursery = .{
+            .context = self,
+            .open = open,
+            .close = close,
+            .run = run,
+        };
+    }
+};
+
+test "blocked worker resource calls unwind through normal and exceptional cleanup" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{
+        .arena = arena.allocator(),
+        .objects = testing.allocator,
+    });
+    var cleaned = false;
+    defer if (!cleaned) {
+        runtime.deinit();
+        arena.deinit();
+    };
+
+    const effects = try runtime.sharedEffects();
+    var state: BlockedResourceTeardown = .{ .effects = effects };
+    state.install(&runtime);
+
+    var tasks = try runtime.newList(Value.none);
+    defer if (!cleaned) {
+        state.gate.store(true, .release);
+        runtime.freeValue(tasks);
+    };
+    for (0..BlockedResourceTeardown.capacity) |function| {
+        var task: Value = .none;
+        try workers.spawn(&runtime, @intCast(function), &.{}, &task);
+        containers.append(&runtime, tasks, task) catch |mistake| {
+            runtime.freeValue(task);
+            return mistake;
+        };
+    }
+
+    // The first child is inside the host callback.  The effect lock makes
+    // the sibling wait before its own callback, which is the serialization
+    // contract this test also protects.
+    while (state.read_started.load(.acquire) != 1) {
+        std.Thread.yield() catch {};
+    }
+    try testing.expectEqual(@as(u32, 0), state.read_returned.load(.acquire));
+
+    // Releasing the parent root is the operation under test.  It must join
+    // both children even though one is inside a blocked host callback and
+    // the other is waiting for the effects lock; the first join opens the
+    // gate, and each child then owns its own close path before its runtime
+    // is returned.
+    runtime.freeValue(tasks);
+    tasks = .none;
+    try testing.expectEqual(
+        @as(u32, BlockedResourceTeardown.capacity),
+        state.read_returned.load(.acquire),
+    );
+    try testing.expectEqual(
+        @as(u32, BlockedResourceTeardown.capacity),
+        state.read_started.load(.acquire),
+    );
+    try testing.expectEqual(
+        BlockedResourceTeardown.capacity,
+        state.joins.load(.acquire),
+    );
+    try testing.expectEqual(BlockedResourceTeardown.capacity, state.closes);
+    try testing.expectEqual(BlockedResourceTeardown.capacity, state.file_opens);
+    try testing.expectEqual(BlockedResourceTeardown.capacity, state.file_closes);
+    try testing.expect(state.close_before_join >= 1);
+    try testing.expect(state.close_after_join >= 1);
+    try testing.expect(!state.bad_lock.load(.acquire));
+    try testing.expect(!state.duplicate_close);
+    try testing.expect(!state.unknown_close);
+    try testing.expectEqual(
+        @as(usize, 0),
+        state.spawn_count - state.joins.load(.acquire),
+    );
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+    try testing.expectEqual(@as(i64, 1), runtime.inherited_leaks);
+    try testing.expectEqual(@as(i64, 1), runtime.leaked());
+
+    var live_at_close: u32 = 0;
+    for (state.child_live_at_close) |live| {
+        try testing.expect(live <= 1);
+        live_at_close += live;
+    }
+    // One file was explicitly released by its body; the trapped sibling
+    // remained owned by its child runtime and was swept exactly once.
+    try testing.expectEqual(@as(u32, 1), live_at_close);
+    for (state.children) |child| try testing.expect(!child.active);
+    runtime.debugAssertInvariants();
+
+    runtime.deinit();
+    arena.deinit();
+    cleaned = true;
+}
+
 const ParentStop = enum { trap, exit };
 
 fn runBlockedParentStop(stop: ParentStop) !void {

@@ -167,9 +167,13 @@ and happens exactly once.  A companion concurrent matrix now leaves the same
 children blocked while the parent has a pending trap or exit, and proves the
 stop state survives every join.  It also frees one child slot, exhausts the
 host thread channel, and proves the rejected spawn closes its provisional
-child without an orphan.  Sibling and nested worker races, blocked resource
-hosts, and broader join-table exhaustion still need explicit concurrent
-cases.
+child without an orphan.  A new barrier-controlled two-child case holds one
+worker inside a blocked file read while its sibling waits for the effect lock,
+releases the parent task root, and proves teardown does not deadlock: one file
+closes in the normal body, the trapped sibling's file closes during
+child-runtime sweep, and join/close/leak counts remain exact.  Sibling and
+nested worker races and broader join-table exhaustion still need explicit
+concurrent cases.
 The stale-handle slice now probes every list, map, array, and builder door
 after row generation reuse, plus file read/write/flush/copy/give operations;
 it checks that double release is inert and that stale file operations do not

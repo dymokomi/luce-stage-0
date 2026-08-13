@@ -197,6 +197,7 @@ pub fn build(b: *std.Build) void {
         "fixed mixed owner-graph seeds",
         "fuzz: mixed owner graphs",
         "blocked worker teardown joins",
+        "blocked worker resource calls unwind",
     };
     const c_sanitize_luce = b.createModule(.{
         .root_source_file = b.path("src/luce/luce.zig"),
@@ -512,6 +513,7 @@ pub fn build(b: *std.Build) void {
             "fixed mixed owner-graph seeds",
             "fuzz: mixed owner graphs",
             "blocked worker teardown joins",
+            "blocked worker resource calls unwind",
         },
     });
     const test_runtime_ownership_step = b.step(
