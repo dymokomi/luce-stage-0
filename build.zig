@@ -234,6 +234,20 @@ pub fn build(b: *std.Build) void {
     );
     test_composition_step.dependOn(&b.addRunArtifact(composition_tests).step);
 
+    // The ownership diagnostic has a source-order contract of its own:
+    // advice for one argument may not make a later argument unusable.
+    // Keep that regression independently runnable while the full
+    // executable specification remains the final gate.
+    const ownership_diagnostic_tests = b.addTest(.{
+        .root_module = specs,
+        .filters = &.{"batch advice does not poison a later occurrence"},
+    });
+    const test_ownership_diagnostics_step = b.step(
+        "test-ownership-diagnostics",
+        "Run ownership diagnostics that inspect whole operand batches",
+    );
+    test_ownership_diagnostics_step.dependOn(&b.addRunArtifact(ownership_diagnostic_tests).step);
+
     // The documentation site's generator (`www/luce/src/`).  Its tests
     // are what keep the word tables it highlights with, its link
     // resolver and its Markdown honest, and they belong in `zig build

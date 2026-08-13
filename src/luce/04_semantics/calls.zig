@@ -538,13 +538,15 @@ fn lowerValueCall(
             return null;
         };
         if (parameter.gives and !(try self.yieldsOwnership(operand_expressions[index]))) {
-            try refusals.failNeedsOwnership(
+            try refusals.failNeedsOwnershipBatch(
                 self,
                 arguments[index].span,
                 try std.fmt.allocPrint(self.arena(), "this argument of {s} takes ownership", .{written}),
                 operand_expressions[index],
                 value.value_type,
                 "S13, S14",
+                operand_expressions,
+                index,
             );
             return null;
         }
@@ -976,13 +978,15 @@ fn lowerUserCall(
         if (info.parameter_modes[slot] == .give and
             !(try self.yieldsOwnership(operand_expressions[index])))
         {
-            try refusals.failNeedsOwnership(
+            try refusals.failNeedsOwnershipBatch(
                 self,
                 call_arguments[index].span,
                 try std.fmt.allocPrint(self.arena(), "argument {d} of {s} takes ownership", .{ slot + 1, name }),
                 operand_expressions[index],
                 value.value_type,
                 "S13, S14",
+                operand_expressions,
+                index,
             );
             return null;
         }
@@ -1291,7 +1295,15 @@ fn lowerValueMethod(
         // `m.compressed()` resolves its non-static member by the
         // same lookup (docs/ENUMS.md D7, docs/SELF.md D1-D2).
         if (declaredName(self, receiver.value_type) != null) {
-            return lowerReceiverCall(self, method, run, as_statement, fallible_allowed, shape_position);
+            return lowerReceiverCall(
+                self,
+                method,
+                run,
+                operand_expressions,
+                as_statement,
+                fallible_allowed,
+                shape_position,
+            );
         }
         try self.fail("luce.sema.method", method.span, "{s} has no methods", .{
             try self.analyzer.typeName(receiver.value_type),
@@ -1320,13 +1332,15 @@ fn lowerValueMethod(
                     "a container store",
                 )) return null;
                 if (!(try self.yieldsOwnership(method.arguments[value_index].value))) {
-                    try refusals.failNeedsOwnership(
+                    try refusals.failNeedsOwnershipBatch(
                         self,
                         method.arguments[value_index].span,
                         "a container keeps its owned elements",
                         method.arguments[value_index].value,
                         arguments[value_index].value_type,
                         "S21",
+                        operand_expressions[1..],
+                        value_index,
                     );
                     return null;
                 }
@@ -1494,6 +1508,7 @@ fn lowerReceiverCall(
     self: *FunctionBuilder,
     method: ast.Method,
     run: OperandRun,
+    operand_expressions: []const *ast.Expression,
     as_statement: bool,
     fallible_allowed: bool,
     shape_position: ShapePosition,
@@ -1614,7 +1629,7 @@ fn lowerReceiverCall(
         if (info.parameter_modes[slot] == .give and
             !(try self.yieldsOwnership(argument.value)))
         {
-            try refusals.failNeedsOwnership(
+            try refusals.failNeedsOwnershipBatch(
                 self,
                 argument.span,
                 try std.fmt.allocPrint(
@@ -1625,6 +1640,8 @@ fn lowerReceiverCall(
                 argument.value,
                 value.value_type,
                 "S13, S14",
+                operand_expressions[1..],
+                index,
             );
             return null;
         }

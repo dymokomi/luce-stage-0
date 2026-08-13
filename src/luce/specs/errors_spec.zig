@@ -1079,6 +1079,79 @@ test "luce.sema.own: one object cannot be owned twice, and only a comma can writ
     , "luce.sema.own", "borrowed is a borrowed parameter; return copy borrowed, or take the parameter as give [OWNERSHIP.md S17]");
 }
 
+test "luce.sema.own: batch advice does not poison a later occurrence" {
+    // A give would be the right repair for one argument in
+    // isolation, but not for the first of two arguments that spell
+    // the same owner.  The diagnostic must understand the whole
+    // source-order batch before suggesting a move.
+    try expectSaying(
+        \\func take(first: give list(long), second: give list(long)) -> long:
+        \\    return 1
+        \\
+        \\func main():
+        \\    var mine = new list(long)
+        \\    let answer = take(mine, mine)
+        \\    print(string(answer))
+        \\
+    , "luce.sema.own", "mine is used again later in this operand batch, so writing give mine here would poison that use");
+
+    try expectSaying(
+        \\struct Holder:
+        \\    marker: long
+        \\
+        \\    func take(first: give list(long), second: give list(long)) -> long:
+        \\        return self.marker
+        \\
+        \\func main():
+        \\    let holder = Holder(marker = 1)
+        \\    var mine = new list(long)
+        \\    let answer = holder.take(mine, mine)
+        \\    print(string(answer))
+        \\
+    , "luce.sema.own", "mine is used again later in this operand batch, so writing give mine here would poison that use");
+
+    try expectSaying(
+        \\struct Pair:
+        \\    first: list(long)
+        \\    second: list(long)
+        \\
+        \\func main():
+        \\    var mine = new list(long)
+        \\    let pair = Pair(first = mine, second = mine)
+        \\    print(string(len(pair.first)))
+        \\
+    , "luce.sema.own", "mine is used again later in this operand batch, so writing give mine here would poison that use");
+
+    try expectSaying(
+        \\union Choice:
+        \\    pair(first: list(long), second: list(long))
+        \\
+        \\func main():
+        \\    var mine = new list(long)
+        \\    let choice = Choice.pair(first = mine, second = mine)
+        \\    match choice:
+        \\        pair(left, right):
+        \\            print(string(len(left) + len(right)))
+        \\
+    , "luce.sema.own", "mine is used again later in this operand batch, so writing give mine here would poison that use");
+
+    try expectSaying(
+        \\func main():
+        \\    var mine = new list(long)
+        \\    let values = [mine, mine]
+        \\    print(string(len(values)))
+        \\
+    , "luce.sema.own", "mine is used again later in this operand batch, so writing give mine here would poison that use");
+
+    try expectSaying(
+        \\func main():
+        \\    var mine = new list(long)
+        \\    let values = {"first": mine, "second": mine}
+        \\    print(string(len(values)))
+        \\
+    , "luce.sema.own", "mine is used again later in this operand batch, so writing give mine here would poison that use");
+}
+
 // ---------------------------------------------------------------------------
 // Methods: implied `self`
 // ---------------------------------------------------------------------------

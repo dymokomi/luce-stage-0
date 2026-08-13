@@ -616,7 +616,7 @@ pub fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted
         }
         break :unified meeting;
     };
-    for (elements, literal.elements) |*element, expression| {
+    for (elements, literal.elements, 0..) |*element, expression, index| {
         // A `list(double)` takes narrower elements by widening
         // them, and so does a list the fold above landed on
         // (docs/TYPES.md §2): `[1.5, 2]` is a `list(double)`.
@@ -635,13 +635,15 @@ pub fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted
         if (shapes.carriesObjects(self.analyzer, element.value_type) and
             try flow.refuseConstantEscape(self, element.root, expression.span(), "a container store")) return null;
         if (shapes.carriesObjects(self.analyzer, element.value_type) and !(try self.yieldsOwnership(expression))) {
-            try refusals.failNeedsOwnership(
+            try refusals.failNeedsOwnershipBatch(
                 self,
                 expression.span(),
                 "a container literal keeps its owned elements",
                 expression,
                 element.value_type,
                 "S21",
+                literal.elements,
+                index,
             );
             return null;
         }
@@ -738,13 +740,15 @@ pub fn lowerMapLiteral(self: *FunctionBuilder, literal: ast.MapLiteral, wanted_c
         }
         if (shapes.carriesObjects(self.analyzer, value_type) and !(try self.yieldsOwnership(entry.value))) {
             if (try flow.refuseConstantEscape(self, value.root, entry.value.span(), "a map store")) return null;
-            try refusals.failNeedsOwnership(
+            try refusals.failNeedsOwnershipBatch(
                 self,
                 entry.value.span(),
                 "a map literal keeps its owned values",
                 entry.value,
                 value.value_type,
                 "S21",
+                expressions,
+                index * 2 + 1,
             );
             return null;
         }

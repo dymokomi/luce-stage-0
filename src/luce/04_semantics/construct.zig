@@ -135,13 +135,15 @@ pub fn lowerConstruct(
             argument.value.* != .none_literal and
             !(try self.yieldsOwnership(argument.value)))
         {
-            try refusals.failNeedsOwnership(
+            try refusals.failNeedsOwnershipBatch(
                 self,
                 argument.span,
                 try std.fmt.allocPrint(self.arena(), "{s}.{s} keeps its owned value", .{ layout.name, name }),
                 argument.value,
                 expected,
                 "S21, S24",
+                operand_expressions,
+                index,
             );
             return null;
         }
@@ -359,7 +361,7 @@ pub fn lowerVariantConstruct(
             argument.value.* != .none_literal and
             !(try self.yieldsOwnership(argument.value)))
         {
-            try refusals.failNeedsOwnership(
+            try refusals.failNeedsOwnershipBatch(
                 self,
                 argument.span,
                 try std.fmt.allocPrint(self.arena(), "{s}.{s}.{s} keeps its owned value", .{
@@ -370,6 +372,8 @@ pub fn lowerVariantConstruct(
                 argument.value,
                 expected,
                 "S21, S24",
+                operand_expressions,
+                index,
             );
             return null;
         }

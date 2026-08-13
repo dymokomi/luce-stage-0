@@ -36,6 +36,14 @@ const shapes = @import("shapes.zig");
 const FunctionBuilder = builder.FunctionBuilder;
 const Typed = builder.Typed;
 
+/// The source-order operand batch around an ownership refusal.  A
+/// move suggested for one operand must not make a later operand in
+/// the same call unreadable (S10, S29).
+pub const OwnershipBatch = struct {
+    expressions: []const *ast.Expression,
+    position: usize,
+};
+
 /// The name a declaration key is written as inside this module, or
 /// null when it belongs to a module this one cannot see unqualified.
 fn visibleName(self: *const FunctionBuilder, key: []const u8) ?[]const u8 {
@@ -412,6 +420,62 @@ pub fn failNeedsOwnership(
     value_type: Type,
     situations: []const u8,
 ) Error!void {
+    return failNeedsOwnershipIn(
+        self,
+        span,
+        subject,
+        value,
+        value_type,
+        situations,
+        null,
+    );
+}
+
+/// The batch-aware form of the ownership refusal.  All other
+/// ownership advice remains identical; only the case where
+/// give NAME would poison a later occurrence gets a different
+/// sentence.
+pub fn failNeedsOwnershipBatch(
+    self: *FunctionBuilder,
+    span: Span,
+    subject: []const u8,
+    value: *const ast.Expression,
+    value_type: Type,
+    situations: []const u8,
+    expressions: []const *ast.Expression,
+    position: usize,
+) Error!void {
+    return failNeedsOwnershipIn(
+        self,
+        span,
+        subject,
+        value,
+        value_type,
+        situations,
+        .{ .expressions = expressions, .position = position },
+    );
+}
+
+fn failNeedsOwnershipIn(
+    self: *FunctionBuilder,
+    span: Span,
+    subject: []const u8,
+    value: *const ast.Expression,
+    value_type: Type,
+    situations: []const u8,
+    batch: ?OwnershipBatch,
+) Error!void {
+    if (batch) |whole| {
+        if (laterBatchName(whole, value)) |name| {
+            try self.fail(
+                "luce.sema.own",
+                span,
+                "{s}; {s} is used again later in this operand batch, so writing give {s} here would poison that use — pass distinct owned values instead [OWNERSHIP.md S13, S14, {s}]",
+                .{ subject, name, name, situations },
+            );
+            return;
+        }
+    }
     const carries_resource = try shapes.carries(self.analyzer, value_type, .resource);
     if (value_type == .optional) {
         if (carries_resource) {
@@ -590,6 +654,30 @@ pub fn failNeedsOwnership(
         "{s}; store something fresh, give NAME, or copy NAME [OWNERSHIP.md {s}]",
         .{ subject, situations },
     );
+}
+
+/// Return the name of a direct binding occurrence in the source-level
+/// wrappers that can still be repaired as one move.  Calls and
+/// containers are intentionally not searched through: their ownership
+/// effects are not known from syntax alone.
+fn directBatchName(expression: *const ast.Expression) ?[]const u8 {
+    return switch (expression.*) {
+        .name => |name| name.text,
+        .give => |given| if (given.operand.* == .name) given.operand.name.text else null,
+        .copy => |copied| if (copied.operand.* == .name) copied.operand.name.text else null,
+        else => null,
+    };
+}
+
+fn laterBatchName(batch: OwnershipBatch, value: *const ast.Expression) ?[]const u8 {
+    const current = directBatchName(value) orelse return null;
+    if (batch.position + 1 >= batch.expressions.len) return null;
+    for (batch.expressions[batch.position + 1 ..]) |later| {
+        if (directBatchName(later)) |name| {
+            if (std.mem.eql(u8, current, name)) return current;
+        }
+    }
+    return null;
 }
 
 /// A move spelling that is actually available for a resource graph.
