@@ -42,8 +42,11 @@ runtime/verifier boundary.
   nested discriminant/payload records, present and absent optional fields,
   map and array siblings, long text, source-field inspection on every
   failure, and checked owner invariants while the destination is partial.
-  The remaining matrix is allocation failure during `inout` receiver
-  replacement and allocating C exports not yet in these direct corpora.
+  The inout receiver lane now builds that same graph as a replacement while
+  the old receiver is bound, refuses every replacement allocation in turn,
+  and proves the old graph's fields, binding owner, rows, and bytes survive;
+  the successful edge performs the release/bind handoff.  The remaining
+  matrix is allocating C exports not yet in these direct corpora.
 - **T0-OWN-3 — Randomized owner-graph state machine.**  Generate valid
   operation sequences and hostile mutations against a reference model that
   requires exactly one owner, forbids illegal cycles, makes stale handles
@@ -137,7 +140,8 @@ allocator baseline.  The allocator-failure lanes now invoke that assertion
 while partial nested copies, array fills, C value/compound doors, file/task
 acquisition, spawn, and task-result transfer are still live, catching owner
 metadata damage before teardown.  Concurrent inspection of a still-running
-child and source-level failure injection remain open.  A new format/spec regression now encodes
+child and source-level failure injection outside the direct runtime lanes
+remain open.  A new format/spec regression now encodes
 the already optimized ownership graph, decodes it, and runs the decoded
 program through both engines; it covers the union/list/struct/bound-method
 composition, a give parameter, and an inout receiver that shape-only round
@@ -207,9 +211,8 @@ failure paths.  The compiler also pins one-shot wait rejection after a
 optional list and a separate optional list field after a deep copy, then
 clears both; the copied graph remains independent.  Present/absent
 transitions beyond these task/callback cases, return/give across more shapes,
-generated cross-engine traces, allocation failure during those source-level
-operations, and an exhaustive indirect stale task/function-receiver matrix
-remain open.  Finally,
+generated cross-engine traces, and an exhaustive indirect stale
+task/function-receiver matrix remain open.  Finally,
 measure long mixed traces' live rows, retained capacities, peak bytes, and
 post-run bytes, not only the final leak count, following the snapshot-diff
 style of Python's `tracemalloc`.

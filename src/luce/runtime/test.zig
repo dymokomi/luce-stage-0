@@ -1550,6 +1550,22 @@ fn expectUnionOptionalSourceIntact(
     );
 }
 
+fn expectBindingRoots(runtime: *Runtime, held: Value, serial: u64, local: u32) !void {
+    switch (held.view()) {
+        .object => {
+            const owner = (try runtime.resolve(held)).owner;
+            try testing.expectEqual(heap.Owner.Kind.binding, owner.kind);
+            try testing.expectEqual(serial, owner.details.binding.serial);
+            try testing.expectEqual(local, owner.details.binding.local);
+        },
+        .strukt => |fields| for (fields) |field| {
+            try expectBindingRoots(runtime, field, serial, local);
+        },
+        .function => {},
+        else => {},
+    }
+}
+
 /// Copy a value-shaped union/optional graph through every destination
 /// allocation failure.  The source is checked semantically on each failure,
 /// not only after the allocator sweep, so a temporary source mutation cannot
@@ -3990,6 +4006,103 @@ test "failed union and optional-shaped copies preserve every source field" {
         );
         bench.runtime.debugAssertInvariants();
         try expectUnionOptionalSourceIntact(&bench.runtime, source, optional_present);
+    }
+}
+
+test "inout replacement failures preserve the bound union and optional receiver" {
+    for ([_]bool{ false, true }) |optional_present| {
+        var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+        var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var runtime: Runtime = .init(.{
+            .arena = arena.allocator(),
+            .objects = objects.allocator(),
+        });
+        var receiver: Value = .none;
+        var serial: u64 = 0;
+        const local: u32 = 0;
+        var receiver_owned = false;
+        var cleaned = false;
+        defer {
+            if (!cleaned) {
+                if (receiver_owned) {
+                    runtime.unbind(receiver, serial, local);
+                    runtime.dropStorage(receiver);
+                }
+                runtime.deinit();
+                arena.deinit();
+            }
+        }
+
+        receiver = try nestedUnionOptionalSource(&runtime, optional_present);
+        receiver_owned = true;
+        serial = runtime.takeSerial();
+        runtime.bind(receiver, serial, local);
+        const baseline_live = runtime.live;
+        const baseline_bytes = objects.allocated_bytes - objects.freed_bytes;
+        runtime.debugAssertInvariants();
+        try expectUnionOptionalSourceIntact(&runtime, receiver, optional_present);
+        try expectBindingRoots(&runtime, receiver, serial, local);
+
+        var failures: usize = 0;
+        var completed = false;
+        for (0..128) |failure_offset| {
+            objects.fail_index = objects.alloc_index + failure_offset;
+            const replacement = nestedUnionOptionalSource(&runtime, optional_present);
+            objects.fail_index = std.math.maxInt(usize);
+
+            if (replacement) |fresh| {
+                // This is the inout write-back sequence: only after the
+                // replacement exists may the caller's old receiver be
+                // released and the new graph be bound to that same slot.
+                runtime.unbind(receiver, serial, local);
+                runtime.dropStorage(receiver);
+                receiver_owned = false;
+                receiver = fresh;
+                receiver_owned = true;
+                runtime.bind(fresh, serial, local);
+                try expectUnionOptionalSourceIntact(&runtime, fresh, optional_present);
+                try expectBindingRoots(&runtime, fresh, serial, local);
+                runtime.debugAssertInvariants();
+                runtime.unbind(fresh, serial, local);
+                runtime.dropStorage(fresh);
+                receiver_owned = false;
+                runtime.debugAssertInvariants();
+                try testing.expectEqual(@as(u32, 0), runtime.live);
+                completed = true;
+                break;
+            } else |mistake| {
+                failures += 1;
+                if (mistake == error.Trap) {
+                    try testing.expect(runtime.pending != null);
+                    try testing.expectEqual(
+                        vocabulary.TrapCode.allocation_failed,
+                        runtime.pending.?.code,
+                    );
+                    runtime.pending = null;
+                } else {
+                    try testing.expectEqual(error.OutOfMemory, mistake);
+                }
+                try testing.expect(objects.has_induced_failure);
+                try testing.expectEqual(baseline_live, runtime.live);
+                // A failed nested construction may retain a larger
+                // reusable table capacity; it must never give back bytes
+                // that belong to the still-bound receiver.  Full teardown
+                // below checks that the retained capacity is reclaimable.
+                try testing.expect(
+                    objects.allocated_bytes - objects.freed_bytes >= baseline_bytes,
+                );
+                try testing.expect(runtime.pending == null);
+                runtime.debugAssertInvariants();
+                try expectUnionOptionalSourceIntact(&runtime, receiver, optional_present);
+                try expectBindingRoots(&runtime, receiver, serial, local);
+            }
+        }
+        try testing.expect(completed);
+        try testing.expect(failures >= 4);
+        runtime.deinit();
+        arena.deinit();
+        cleaned = true;
+        try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
     }
 }
 

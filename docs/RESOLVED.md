@@ -1748,3 +1748,18 @@ consistent while rollback is in flight.
 The focused runtime ownership lane covers both optional states in this matrix.
 
 Commit: current Tier 0 union/optional copy hardening batch.
+
+## 2026-08-13 — inout replacement rollback with a bound resource-shaped graph
+
+The allocator-failure corpus now constructs a union/optional/map/array
+replacement while the old receiver remains bound to its caller.  Every
+replacement allocation is refused in turn and checks that the old fields,
+binding metadata, live rows, owner invariants, and allocator bytes remain
+unchanged.  The first successful construction then performs the actual
+release-then-bind handoff and tears the replacement down through the same
+owner slot.
+
+This closes the direct runtime `inout` replacement failure matrix; generated
+cross-engine failure traces remain a separate open item in MISSING.md.
+
+Commit: current Tier 0 inout rollback hardening batch.
