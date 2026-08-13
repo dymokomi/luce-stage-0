@@ -329,6 +329,10 @@ pub fn parseString(runtime: *Runtime, held: Value) Error!Value {
 /// A program that reads a CSV and writes it again gets the same bytes
 /// out.
 pub fn readText(runtime: *Runtime, path: []const u8) Error!?Value {
+    return readTextLimited(runtime, path, max_text_file);
+}
+
+fn readTextLimited(runtime: *Runtime, path: []const u8, limit: usize) Error!?Value {
     const handle = (try open(runtime, path, @intFromEnum(Mode.read))) orelse return null;
     defer runtime.freeObject(handle.asObject());
 
@@ -336,23 +340,38 @@ pub fn readText(runtime: *Runtime, path: []const u8) Error!?Value {
     defer loaded.deinit(runtime.objects);
     while (true) {
         const before = loaded.items.len;
-        if (before > max_text_file) return null;
-        try loaded.resize(runtime.objects, before + read_chunk);
         var filled: i64 = 0;
         const service = runtime.files.read orelse return runtime.fail(.host_unavailable);
+        const handle_id = try handleOf(runtime, handle);
+
+        if (before >= limit) {
+            // Do not grow the accumulation buffer past the documented cap
+            // merely to discover whether the file has one more byte.  A
+            // one-byte probe distinguishes an exact-limit file from an
+            // oversized one without raising the peak allocation.
+            var probe: [1]u8 = undefined;
+            const answered = callRead(runtime, service, handle_id, &probe, &filled);
+            if (!try hostAnswer(runtime, answered)) return null;
+            const taken = try hostCount(runtime, filled, probe.len);
+            if (taken != 0) return null;
+            break;
+        }
+
+        const capacity = @min(read_chunk, limit - before);
+        try loaded.resize(runtime.objects, before + capacity);
         const answered = callRead(
             runtime,
             service,
-            try handleOf(runtime, handle),
+            handle_id,
             loaded.items[before..],
             &filled,
         );
         if (!try hostAnswer(runtime, answered)) return null;
-        const taken = try hostCount(runtime, filled, loaded.items.len - before);
+        const taken = try hostCount(runtime, filled, capacity);
         loaded.shrinkRetainingCapacity(before + @as(usize, @intCast(taken)));
         if (taken == 0) break;
     }
-    if (loaded.items.len > max_text_file) return null;
+    if (loaded.items.len > limit) return null;
     if (!isText(loaded.items)) return null;
     return try runtime.ownValue(Value.ofString(loaded.items));
 }
@@ -383,4 +402,83 @@ pub fn writeText(runtime: *Runtime, path: []const u8, text: []const u8, mode: Mo
         sent += @intCast(moved);
     }
     return try hostAnswer(runtime, callFlush(runtime, flusher, try handleOf(runtime, handle)));
+}
+
+test "whole-file reads stay within their content limit" {
+    const Host = struct {
+        oversized: bool,
+        reads: usize = 0,
+        opened: usize = 0,
+        closed: usize = 0,
+
+        fn open(
+            context: ?*anyopaque,
+            _: [*]const u8,
+            _: i64,
+            _: i64,
+            handle: *i64,
+        ) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.opened += 1;
+            handle.* = 41;
+            return yes;
+        }
+
+        fn read(
+            context: ?*anyopaque,
+            _: i64,
+            into: [*]u8,
+            capacity: i64,
+            filled: *i64,
+        ) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            if (self.reads == 0) {
+                const amount: usize = @intCast(capacity);
+                for (0..amount) |index| into[index] = 'a';
+                filled.* = capacity;
+                self.reads += 1;
+                return yes;
+            }
+            self.reads += 1;
+            filled.* = if (self.oversized) 1 else 0;
+            return yes;
+        }
+
+        fn close(context: ?*anyopaque, _: i64) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.closed += 1;
+            return yes;
+        }
+    };
+
+    for ([_]bool{ false, true }) |oversized| {
+        var backing: [4096]u8 = undefined;
+        var fixed = std.heap.FixedBufferAllocator.init(&backing);
+        var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+        var runtime: Runtime = .init(.{
+            .arena = arena.allocator(),
+            .objects = fixed.allocator(),
+        });
+        var host: Host = .{ .oversized = oversized };
+        runtime.files = .{
+            .context = &host,
+            .open = Host.open,
+            .read = Host.read,
+            .close = Host.close,
+        };
+
+        const answer = try readTextLimited(&runtime, "bounded.txt", 5);
+        if (oversized) {
+            try std.testing.expect(answer == null);
+        } else {
+            const held = answer orelse return error.TestExpected;
+            try std.testing.expectEqualStrings("aaaaa", held.asString());
+            runtime.dropStorage(held);
+        }
+        try std.testing.expectEqual(@as(usize, 1), host.opened);
+        try std.testing.expectEqual(@as(usize, 1), host.closed);
+        try std.testing.expectEqual(@as(u32, 0), runtime.live);
+        runtime.deinit();
+        arena.deinit();
+    }
 }

@@ -2035,3 +2035,17 @@ graphs, row reuse, and allocator-failure worker/resource permutations remain
 listed in MISSING.md.
 
 Commit: current Tier 0 nested worker/resource hardening batch.
+
+## 2026-08-13 — whole-file reads keep the cap as a peak bound
+
+The whole-file text reader now grows only up to the configured content limit.
+When the accumulated bytes reach that limit it probes one stack byte to
+distinguish an exact-limit file from an oversized file, so rejecting the
+latter no longer allocates an additional read chunk.  A fixed-buffer test
+proves both outcomes, UTF-8 materialization, and close-once cleanup.
+
+The focused runtime ownership lane, both sanitizer lanes, and the full Luce
+suite include the bounded-reader regression.  Long-trace retention and peak
+telemetry remain listed in MISSING.md.
+
+Commit: current Tier 0 file-memory hardening batch.

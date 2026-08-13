@@ -321,6 +321,11 @@ through a list element, map value, array fill, struct field, deep copies, and
 stale-receiver teardown; the exhaustive generated receiver matrix and
 allocation-failure permutations remain open.
 
+The whole-file reader now caps its accumulation buffer at the documented
+content limit and uses a one-byte EOF probe instead of allocating an extra
+read chunk; a fixed-buffer regression covers both exact-limit and oversized
+files with close-once cleanup.  Longer-run peak telemetry remains open.
+
 The array-fill failure lane now also copies a function run containing outside
 text and a borrowed receiver through every observed replacement allocation
 failure, preserving empty destination cells and the receiver graph while
