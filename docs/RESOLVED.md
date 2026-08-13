@@ -1139,4 +1139,4 @@ refused `{}` because it cannot infer key and value types; decoded MIR now
 honors that same boundary, and the round-trip test proves the forged row is
 rejected as `InvalidModule` rather than materialized.
 
-Commit: pending.
+Commit: `a04fa78`.
