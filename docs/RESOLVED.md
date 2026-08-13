@@ -1162,4 +1162,41 @@ Struct and union field validation now shares one boundary check: bare function
 fields are rejected, while the optional function-field representation remains
 valid.  The focused verifier lane covers both storage forms.
 
-Commit: current verifier hardening batch.
+Commit: `878c2dd`.
+
+## 2026-08-12 — audit closeout: resolved pipeline and diagnostic gaps
+
+The current language and pipeline audit closed the following items:
+
+- scope-end release of arbitrarily deep owned graphs uses an explicit
+  worklist;
+- deep copy, cross-runtime move, list slices, and map values use the same
+  iterative copy path, with transactional rollback of rows, free-list state,
+  and table allocation on failure;
+- the dual-engine census is compared on normal completion, exit, traps, and
+  uncaught errors, and `prints` requires normal completion;
+- file handle position, writes, and open-handle state participate in the
+  world comparison;
+- literal `while true` without a break is recognized as non-falling-through;
+- floating `%`'s boundary behavior is disclosed in the language and standard
+  library documentation;
+- empty string needles have one documented rule: `find` matches at the
+  requested boundary and `count` counts all `len(s) + 1` boundaries;
+- a statement-level `{` gets block-oriented guidance without changing the
+  parser's one-diagnostic recovery rule;
+- ownership advice inspects the complete source-order operand batch before
+  suggesting `give`, so a repair cannot poison a later occurrence; and
+- a Python-style string `%` mistake points to f-string interpolation.
+
+The deep graph tests intentionally exceed ordinary native stack depth.  The
+copy rollback test also checks allocator-visible state, not just `live` rows.
+
+## 2026-08-12 — verifier closes optional map values
+
+Stage 4 refuses `map(K, V?)` because `get` already answers `V?`; the MIR
+verifier now enforces that same boundary for decoded or hand-built programs.
+The regression rejects optional scalar and optional function map values while
+keeping bare function map values legal, preserving the deliberate function
+value exception.
+
+Commit: `95c2a5d`.

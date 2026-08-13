@@ -11,35 +11,6 @@ semantics, and `src/luce/specs/agree.zig` compares both engines on output,
 ending, trace, leak census, and host world.  The repository suite is the
 executable proof of that claim.
 
-## Closed in the current pass
-
-These are no longer missing, so they are listed only to make the audit
-boundary visible:
-
-- scope-end release of arbitrarily deep owned graphs uses an explicit
-  worklist;
-- deep copy, cross-runtime move, list slices, and map values use the same
-  iterative copy path, with transactional rollback of rows, free-list state,
-  and table allocation on failure;
-- the dual-engine census is compared on normal completion, exit, traps, and
-  uncaught errors, and `prints` requires normal completion;
-- file handle position, writes, and open-handle state participate in the
-  world comparison;
-- literal `while true` without a break is recognized as non-falling-through;
-- floating `%`'s boundary behavior is disclosed in the language and standard
-  library documentation;
-- empty string needles have one documented rule: `find` matches at the
-  requested boundary and `count` counts all `len(s) + 1` boundaries.
-
-The deep graph tests intentionally exceed ordinary native stack depth.  The
-copy rollback test also checks allocator-visible state, not just `live` rows.
-
-- a statement-level `{` now gets block-oriented guidance without
-  changing the parser's one-diagnostic recovery rule;
-- ownership advice inspects the complete source-order operand batch before
-  suggesting `give`, so a repair cannot poison a later occurrence;
-- a Python-style string `%` mistake now points to f-string interpolation.
-
 ## Tier 0 — decisions that can make a total function lie
 
 ### Large-angle `sin` and `cos`
