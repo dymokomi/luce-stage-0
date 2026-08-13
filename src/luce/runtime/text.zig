@@ -119,11 +119,11 @@ pub fn str(runtime: *Runtime, held: Value) Error!Value {
             Value.ofString(if (held_bool) "true" else "false"),
         ),
         .string => return runtime.ownValue(held),
-        .object => {
-            const object = try runtime.resolve(held);
-            return runtime.ownValue(Value.ofString(object.data.builder.items));
+        .object => switch ((try runtime.resolve(held)).data) {
+            .builder => |builder| return runtime.ownValue(Value.ofString(builder.items)),
+            .list, .map, .array, .file, .task => return runtime.fail(.not_owned),
         },
-        else => unreachable,
+        else => return runtime.fail(.not_owned),
     }
 }
 

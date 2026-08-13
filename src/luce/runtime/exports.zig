@@ -540,7 +540,7 @@ pub export fn luce_rt_parse_string(
     out: [*c]Value,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireValueInput(runtime, held)) return raised_trap;
+    if (!requireObjectInput(runtime, held)) return raised_trap;
     out.* = files.parseString(runtime, held.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -633,7 +633,7 @@ pub export fn luce_rt_task_wait(
     out: [*c]Value,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireValueInput(runtime, task)) return raised_trap;
+    if (!requireObjectInput(runtime, task)) return raised_trap;
     return workers.wait(runtime, task.*, out) catch |mistake| failed(runtime, mistake);
 }
 
@@ -707,9 +707,10 @@ pub export fn luce_rt_file_read(
     function: u32,
     instruction: u32,
 ) callconv(.c) i32 {
-    if (!requireValueInput(runtime, held) or !requireValueInput(runtime, buffer)) return raised_trap;
     if (!requireScalarOut(i64, runtime, filled) or
         !requireScalarOut(i32, runtime, ok)) return raised_trap;
+    if (!requireValueInput(runtime, held) or !requireValueInput(runtime, buffer)) return raised_trap;
+    if (!requireObjectInput(runtime, held) or !requireObjectInput(runtime, buffer)) return raised_trap;
     const answer = files.read(runtime, held.*, buffer.*) catch |mistake|
         return failed(runtime, mistake);
     ok.* = @intFromBool(answer != null);
@@ -732,9 +733,10 @@ pub export fn luce_rt_file_write(
     function: u32,
     instruction: u32,
 ) callconv(.c) i32 {
-    if (!requireValueInput(runtime, held) or !requireValueInput(runtime, buffer)) return raised_trap;
     if (!requireScalarOut(i64, runtime, written) or
         !requireScalarOut(i32, runtime, ok)) return raised_trap;
+    if (!requireValueInput(runtime, held) or !requireValueInput(runtime, buffer)) return raised_trap;
+    if (!requireObjectInput(runtime, held) or !requireObjectInput(runtime, buffer)) return raised_trap;
     const answer = files.write(runtime, held.*, buffer.*, count) catch |mistake|
         return failed(runtime, mistake);
     ok.* = @intFromBool(answer != null);
@@ -754,8 +756,9 @@ pub export fn luce_rt_file_flush(
     function: u32,
     instruction: u32,
 ) callconv(.c) i32 {
-    if (!requireValueInput(runtime, held)) return raised_trap;
     if (!requireScalarOut(i32, runtime, ok)) return raised_trap;
+    if (!requireValueInput(runtime, held)) return raised_trap;
+    if (!requireObjectInput(runtime, held)) return raised_trap;
     const answered = files.flush(runtime, held.*) catch |mistake|
         return failed(runtime, mistake);
     ok.* = @intFromBool(answered);
@@ -1202,6 +1205,26 @@ fn requireValueInput(runtime: *Runtime, held: [*c]const Value) bool {
     return false;
 }
 
+/// Container and resource doors resolve an object-table handle.  Checking
+/// only for a non-null pointer is not enough: a forged scalar with the same
+/// bits as a live object would otherwise be reinterpreted as that handle.
+fn requireObjectInput(runtime: *Runtime, held: [*c]const Value) bool {
+    if (!requireValueInput(runtime, held)) return false;
+    if (held.*.tag == .object) return true;
+    _ = runtime.fail(.not_owned) catch {};
+    return false;
+}
+
+/// Text primitives read the pointer/length representation directly.  A
+/// malformed artifact must not make a scalar payload serve as an arbitrary
+/// byte slice.
+fn requireStringInput(runtime: *Runtime, held: [*c]const Value) bool {
+    if (!requireValueInput(runtime, held)) return false;
+    if (held.*.tag == .string) return true;
+    _ = runtime.fail(.not_owned) catch {};
+    return false;
+}
+
 fn requireI64Input(runtime: *Runtime, values: [*c]const i64) bool {
     if (values != null) return true;
     _ = runtime.fail(.host_unavailable) catch {};
@@ -1250,6 +1273,7 @@ pub export fn luce_rt_index_get(
     if (!requireValueInput(runtime, target) or !requireValueInput(runtime, indices)) return raised_trap;
     const index_count = checkedCount(runtime, rank) catch |mistake|
         return failed(runtime, mistake);
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.indexGet(runtime, target.*, indices[0..index_count]) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1268,6 +1292,7 @@ pub export fn luce_rt_index_set(
         !requireValueInput(runtime, held)) return raised_trap;
     const index_count = checkedCount(runtime, rank) catch |mistake|
         return failed(runtime, mistake);
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     containers.indexSet(runtime, target.*, indices[0..index_count], held.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1281,7 +1306,7 @@ pub export fn luce_rt_list_slice(
     out: [*c]Value,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireValueInput(runtime, target)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.listSlice(runtime, target.*, start, end) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1295,6 +1320,7 @@ pub export fn luce_rt_append(
     held: [*c]const Value,
 ) callconv(.c) i32 {
     if (!requireValueInput(runtime, target) or !requireValueInput(runtime, held)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     containers.append(runtime, target.*, held.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1305,7 +1331,7 @@ pub export fn luce_rt_append_ascii(
     target: [*c]const Value,
     code: i64,
 ) callconv(.c) i32 {
-    if (!requireValueInput(runtime, target)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     containers.appendAscii(runtime, target.*, code) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1313,7 +1339,7 @@ pub export fn luce_rt_append_ascii(
 
 pub export fn luce_rt_pop(runtime: *Runtime, target: [*c]const Value, out: [*c]Value) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireValueInput(runtime, target)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.pop(runtime, target.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1327,6 +1353,7 @@ pub export fn luce_rt_insert(
     held: [*c]const Value,
 ) callconv(.c) i32 {
     if (!requireValueInput(runtime, target) or !requireValueInput(runtime, held)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     containers.insert(runtime, target.*, index, held.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1338,6 +1365,7 @@ pub export fn luce_rt_remove(
     which: [*c]const Value,
 ) callconv(.c) i32 {
     if (!requireValueInput(runtime, target) or !requireValueInput(runtime, which)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     containers.remove(runtime, target.*, which.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1351,6 +1379,7 @@ pub export fn luce_rt_has_key(
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireValueInput(runtime, target) or !requireValueInput(runtime, key)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.hasKey(runtime, target.*, key.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1363,7 +1392,7 @@ pub export fn luce_rt_key_at(
     out: [*c]Value,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireValueInput(runtime, target)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.keyAt(runtime, target.*, index) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1376,7 +1405,7 @@ pub export fn luce_rt_value_at(
     out: [*c]Value,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireValueInput(runtime, target)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.valueAt(runtime, target.*, index) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1389,20 +1418,20 @@ pub export fn luce_rt_dim_size(
     out: [*c]Value,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireValueInput(runtime, target)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.dimSize(runtime, target.*, axis) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
 
 pub export fn luce_rt_sort(runtime: *Runtime, target: [*c]const Value) callconv(.c) i32 {
-    if (!requireValueInput(runtime, target)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     containers.sort(runtime, target.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
 
 pub export fn luce_rt_reverse(runtime: *Runtime, target: [*c]const Value) callconv(.c) i32 {
-    if (!requireValueInput(runtime, target)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     containers.reverse(runtime, target.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
@@ -1415,6 +1444,7 @@ pub export fn luce_rt_find(
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireValueInput(runtime, target) or !requireValueInput(runtime, wanted)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.find(runtime, target.*, wanted.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1428,6 +1458,7 @@ pub export fn luce_rt_contains(
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireValueInput(runtime, target) or !requireValueInput(runtime, wanted)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     const at = containers.find(runtime, target.*, wanted.*) catch |mistake|
         return failed(runtime, mistake);
     out.* = Value.ofBoolean(!at.isNone());
@@ -1436,6 +1467,7 @@ pub export fn luce_rt_contains(
 
 pub export fn luce_rt_clear(runtime: *Runtime, target: [*c]const Value) callconv(.c) i32 {
     if (!requireValueInput(runtime, target)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     containers.clear(runtime, target.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
@@ -1452,6 +1484,7 @@ pub export fn luce_rt_map_keys(
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireValueInput(runtime, target) or !requireValueInput(runtime, zero)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.mapKeys(runtime, target.*, zero.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1465,6 +1498,7 @@ pub export fn luce_rt_map_values(
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireValueInput(runtime, target) or !requireValueInput(runtime, zero)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.mapValues(runtime, target.*, zero.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1478,6 +1512,7 @@ pub export fn luce_rt_map_get(
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireValueInput(runtime, target) or !requireValueInput(runtime, key)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.mapGet(runtime, target.*, key.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1495,6 +1530,7 @@ pub export fn luce_rt_map_place(
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireValueInput(runtime, target) or !requireValueInput(runtime, key) or
         !requireValueInput(runtime, zero)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.mapPlace(runtime, target.*, key.*, zero.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1506,6 +1542,7 @@ pub export fn luce_rt_array_fill(
     held: [*c]const Value,
 ) callconv(.c) i32 {
     if (!requireValueInput(runtime, target) or !requireValueInput(runtime, held)) return raised_trap;
+    if (!requireObjectInput(runtime, target)) return raised_trap;
     containers.arrayFill(runtime, target.*, held.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1533,7 +1570,7 @@ pub export fn luce_rt_concat(
     out: [*c]Value,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireValueInput(runtime, left) or !requireValueInput(runtime, right)) return raised_trap;
+    if (!requireStringInput(runtime, left) or !requireStringInput(runtime, right)) return raised_trap;
     out.* = text.concat(runtime, left.*.asString(), right.*.asString()) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1547,7 +1584,7 @@ pub export fn luce_rt_string_slice(
     out: [*c]Value,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireValueInput(runtime, held)) return raised_trap;
+    if (!requireStringInput(runtime, held)) return raised_trap;
     out.* = text.slice(runtime, held.*, start, end) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1560,7 +1597,7 @@ pub export fn luce_rt_string_byte(
     out: [*c]Value,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireValueInput(runtime, held)) return raised_trap;
+    if (!requireStringInput(runtime, held)) return raised_trap;
     out.* = text.byteAt(runtime, held.*, index) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1574,7 +1611,7 @@ pub export fn luce_rt_string_find_byte(
     out: [*c]Value,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireValueInput(runtime, held)) return raised_trap;
+    if (!requireStringInput(runtime, held)) return raised_trap;
     out.* = text.findByte(runtime, held.*, byte, start) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1589,14 +1626,14 @@ pub export fn luce_rt_str(runtime: *Runtime, held: [*c]const Value, out: [*c]Val
 
 pub export fn luce_rt_parse_int(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireValueInput(runtime, held)) return raised_trap;
+    if (!requireStringInput(runtime, held)) return raised_trap;
     out.* = text.parseInt(runtime, held.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
 
 pub export fn luce_rt_parse_float(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireValueInput(runtime, held)) return raised_trap;
+    if (!requireStringInput(runtime, held)) return raised_trap;
     out.* = text.parseFloat(runtime, held.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
@@ -1609,7 +1646,7 @@ pub export fn luce_rt_chr(runtime: *Runtime, code: i64, out: [*c]Value) callconv
 
 pub export fn luce_rt_ord(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireValueInput(runtime, held)) return raised_trap;
+    if (!requireStringInput(runtime, held)) return raised_trap;
     out.* = text.ord(runtime, held.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }

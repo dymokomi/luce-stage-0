@@ -8876,6 +8876,59 @@ fn expectCNullValueVoid(runtime: *Runtime) !void {
     runtime.pending = null;
 }
 
+fn expectCTrapCode(runtime: *Runtime, status: i32, code: vocabulary.TrapCode) !void {
+    try testing.expectEqual(@as(i32, 1), status);
+    try testing.expectEqual(code, runtime.pending.?.code);
+    runtime.pending = null;
+}
+
+test "C container doors reject wrong tags and object shapes before mutation" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    var list: Value = .none;
+    try testing.expectEqual(@as(i32, 0), luce_rt_new_list(runtime, &Value.none, &list));
+    const forged_scalar = Value.ofLong(0);
+    const index = [_]Value{Value.ofLong(0)};
+    var out = Value.ofLong(99);
+
+    // A scalar with object-like bits is rejected before any resolver sees it.
+    try expectCTrapCode(runtime, luce_rt_len(runtime, &forged_scalar, &out), .not_owned);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try expectCTrapCode(runtime, luce_rt_index_get(runtime, &forged_scalar, &index, 1, &out), .not_owned);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try expectCTrapCode(runtime, luce_rt_append_ascii(runtime, &forged_scalar, 'x'), .not_owned);
+    try expectCTrapCode(runtime, luce_rt_parse_string(runtime, &forged_scalar, &out), .not_owned);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try expectCTrapCode(runtime, luce_rt_string_slice(runtime, &forged_scalar, 0, 1, &out), .not_owned);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+
+    // An object tag alone is not enough: map-only doors must also validate
+    // the row's data variant before reading union fields.
+    try expectCTrapCode(runtime, luce_rt_map_get(runtime, &list, &Value.ofLong(0), &out), .not_owned);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try expectCTrapCode(runtime, luce_rt_key_at(runtime, &list, 0, &out), .not_owned);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try expectCTrapCode(runtime, luce_rt_value_at(runtime, &list, 0, &out), .not_owned);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try expectCTrapCode(runtime, luce_rt_map_keys(runtime, &list, &Value.none, &out), .not_owned);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try expectCTrapCode(runtime, luce_rt_map_values(runtime, &list, &Value.none, &out), .not_owned);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try expectCTrapCode(runtime, luce_rt_map_place(runtime, &list, &Value.ofLong(0), &Value.none, &out), .not_owned);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try expectCTrapCode(runtime, luce_rt_array_fill(runtime, &list, &Value.none), .not_owned);
+    try testing.expectEqual(@as(u32, 1), runtime.live);
+
+    // `string(builder)` accepts only a Builder object.  A list must not be
+    // interpreted through the builder arm of the same union.
+    try expectCTrapCode(runtime, luce_rt_str(runtime, &list, &out), .not_owned);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i64, 1), luce_rt_leaked(runtime));
+}
+
 test "C Value output pointers reject null before work" {
     var bench: Bench = undefined;
     bench.setup();
@@ -9831,11 +9884,11 @@ test "C compound value doors preserve destinations through every allocation fail
                     source_owned = true;
                 },
                 .parse_string => {
-                    const dims = [_]i64{@intCast(parse_text.len)};
-                    source = try runtime.newArray(&dims, Value.ofByte(0));
+                    source = try runtime.newList(Value.ofByte(0));
                     source_owned = true;
-                    const bytes = (try runtime.resolve(source)).elements.cells(u8);
-                    @memcpy(bytes, parse_text);
+                    for (parse_text) |byte| {
+                        try containers.append(&runtime, source, Value.ofByte(byte));
+                    }
                 },
                 .maybe_text, .concat => {},
             }

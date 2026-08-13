@@ -212,7 +212,14 @@ pub fn read(runtime: *Runtime, held: Value, buffer: Value) Error!?i64 {
     const handle = try handleOf(runtime, held);
     // Re-resolved after the handle, because both resolves can trap and
     // neither allocates: the pointer stays good across the pair.
-    const into = (try runtime.resolveMutable(buffer)).elements;
+    const into_object = try runtime.resolveMutable(buffer);
+    const into = switch (into_object.data) {
+        .array => if (into_object.elements.kind == .byte)
+            into_object.elements
+        else
+            return runtime.fail(.not_owned),
+        .list, .map, .builder, .file, .task => return runtime.fail(.not_owned),
+    };
     var filled: i64 = 0;
     const cells = into.cells(u8);
     if (!try hostAnswer(runtime, callRead(runtime, service, handle, cells, &filled))) return null;
@@ -224,7 +231,14 @@ pub fn read(runtime: *Runtime, held: Value, buffer: Value) Error!?i64 {
 pub fn write(runtime: *Runtime, held: Value, buffer: Value, count: i64) Error!?i64 {
     const service = runtime.files.write orelse return runtime.fail(.host_unavailable);
     const handle = try handleOf(runtime, held);
-    const from = (try runtime.resolve(buffer)).elements;
+    const from_object = try runtime.resolve(buffer);
+    const from = switch (from_object.data) {
+        .array => if (from_object.elements.kind == .byte)
+            from_object.elements
+        else
+            return runtime.fail(.not_owned),
+        .list, .map, .builder, .file, .task => return runtime.fail(.not_owned),
+    };
     const cells = from.cells(u8);
     if (count < 0 or count > cells.len) return runtime.fail(.index_bounds);
     var written: i64 = 0;
@@ -279,7 +293,7 @@ fn handleOf(runtime: *Runtime, held: Value) Error!i64 {
     return switch (object.data) {
         .file => |held_file| held_file.handle,
         // The verifier admits only a `file` here.
-        .list, .map, .array, .builder, .task => unreachable,
+        .list, .map, .array, .builder, .task => return runtime.fail(.not_owned),
     };
 }
 
@@ -322,7 +336,13 @@ pub fn isText(bytes: []const u8) bool {
 /// container.
 pub fn parseString(runtime: *Runtime, held: Value) Error!Value {
     const object = try runtime.resolve(held);
-    const stored = object.elements;
+    const stored = switch (object.data) {
+        .list => if (object.elements.kind == .byte)
+            object.elements
+        else
+            return runtime.fail(.not_owned),
+        .map, .array, .builder, .file, .task => return runtime.fail(.not_owned),
+    };
     // A packed `list(byte)` *is* its bytes, which is the whole point
     // of R1: the validator reads the run in place and nothing is
     // gathered first.  The verifier admits nothing else here.

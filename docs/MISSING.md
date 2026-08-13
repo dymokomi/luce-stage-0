@@ -390,6 +390,15 @@ reads forged field-run metadata.  The ownership flag is also restricted to
 exact `0`/`1`; broader malformed value-tag coverage for every container and
 resource export remains part of T0-OWN-4 and T0-OWN-15.
 
+The shared container, text, and resource doors now fail closed on wrong object
+variants instead of reading an unrelated union arm: map-only operations reject
+lists and arrays, Builder text conversion rejects every non-Builder object,
+and file reads/writes/`parse_string` require their documented byte shapes.
+Nullable C pointers and malformed counts retain their established validation
+precedence, and the ownership regression lane covers these shape refusals
+without mutation; generated cross-feature shape matrices and broader hostile
+value representations remain part of T0-OWN-4 and T0-OWN-15.
+
 ## Tier 1 — design gaps before implementation
 
 ### Typed worker channels
