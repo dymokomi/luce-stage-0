@@ -1200,9 +1200,15 @@ fn requireValueOut(runtime: *Runtime, out: [*c]Value) bool {
 /// embedding hosts, and it leaves the runtime in the same fail-closed state
 /// as the other malformed scalar boundaries.
 fn requireValueInput(runtime: *Runtime, held: [*c]const Value) bool {
-    if (held != null) return true;
-    _ = runtime.fail(.host_unavailable) catch {};
-    return false;
+    if (held == null) {
+        _ = runtime.fail(.host_unavailable) catch {};
+        return false;
+    }
+    if (held.*.tag == .string and !held.*.hasValidStringRepresentation()) {
+        _ = runtime.fail(.not_owned) catch {};
+        return false;
+    }
+    return true;
 }
 
 /// Container and resource doors resolve an object-table handle.  Checking
@@ -1220,7 +1226,7 @@ fn requireObjectInput(runtime: *Runtime, held: [*c]const Value) bool {
 /// byte slice.
 fn requireStringInput(runtime: *Runtime, held: [*c]const Value) bool {
     if (!requireValueInput(runtime, held)) return false;
-    if (held.*.tag == .string) return true;
+    if (held.*.hasValidStringRepresentation()) return true;
     _ = runtime.fail(.not_owned) catch {};
     return false;
 }

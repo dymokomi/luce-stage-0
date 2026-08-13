@@ -8008,6 +8008,27 @@ test "string slicing is checked twice: in range, and on a UTF-8 boundary" {
     try testing.expectEqual(@as(i64, -1), (try text.findByte(runtime, held, 'z', 0)).asLong());
 }
 
+test "direct text primitives reject non-string values before decoding payloads" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+    const forged = Value.ofLong(0);
+
+    try expectTrap(.not_owned, runtime, text.slice(runtime, forged, 0, 1));
+    runtime.pending = null;
+    try expectTrap(.not_owned, runtime, text.byteAt(runtime, forged, 0));
+    runtime.pending = null;
+    try expectTrap(.not_owned, runtime, text.findByte(runtime, forged, 'x', 0));
+    runtime.pending = null;
+    try expectTrap(.not_owned, runtime, text.parseInt(runtime, forged));
+    runtime.pending = null;
+    try expectTrap(.not_owned, runtime, text.parseFloat(runtime, forged));
+    runtime.pending = null;
+    try expectTrap(.not_owned, runtime, text.ord(runtime, forged));
+    runtime.pending = null;
+}
+
 test "the conversions round trip and refuse what they cannot represent" {
     var bench: Bench = undefined;
     bench.setup();
@@ -8926,7 +8947,30 @@ test "C container doors reject wrong tags and object shapes before mutation" {
     // interpreted through the builder arm of the same union.
     try expectCTrapCode(runtime, luce_rt_str(runtime, &list, &out), .not_owned);
     try testing.expectEqual(@as(i64, 99), out.asLong());
-    try testing.expectEqual(@as(i64, 1), luce_rt_leaked(runtime));
+    var map: Value = .none;
+    try testing.expectEqual(@as(i32, 0), luce_rt_new_map(runtime, &map));
+    const map_key = Value.ofString("stored key");
+    const map_zero = Value.ofLong(17);
+    try testing.expectEqual(@as(i32, 0), luce_rt_map_place(runtime, &map, &map_key, &map_zero, &out));
+    const forged_key = Value.ofBoolean(true);
+    try expectCTrapCode(runtime, luce_rt_map_get(runtime, &map, &forged_key, &out), .not_owned);
+    try expectCTrapCode(runtime, luce_rt_index_get(runtime, &map, &forged_key, 1, &out), .not_owned);
+    try expectCTrapCode(runtime, luce_rt_map_place(runtime, &map, &forged_key, &map_zero, &out), .not_owned);
+    try testing.expectEqual(@as(i64, 17), (try containers.mapGet(runtime, map, map_key)).asLong());
+
+    var malformed_inline = Value.ofInlineText(.string, "x");
+    malformed_inline.inline_length = value.inline_capacity + 1;
+    try expectCTrapCode(runtime, luce_rt_string_slice(runtime, &malformed_inline, 0, 1, &out), .not_owned);
+    var malformed_outside: Value = .{
+        .tag = .string,
+        .inline_length = value.text_outside,
+        .bits = 0,
+        .length = 1,
+    };
+    try expectCTrapCode(runtime, luce_rt_string_byte(runtime, &malformed_outside, 0, &out), .not_owned);
+
+    try testing.expectEqual(@as(i64, 17), (try containers.mapGet(runtime, map, map_key)).asLong());
+    try testing.expectEqual(@as(i64, 2), luce_rt_leaked(runtime));
 }
 
 test "C Value output pointers reject null before work" {

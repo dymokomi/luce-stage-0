@@ -317,6 +317,19 @@ pub const Value = extern struct {
         return self.textOf();
     }
 
+    /// Whether the String representation can be read without leaving the
+    /// value's declared storage.  The tag is not enough at the C/MIR seam:
+    /// an invalid inline length would slice past the value, and a non-empty
+    /// outside String with a null pointer would turn a borrowed payload into
+    /// a native memory fault.
+    pub fn hasValidStringRepresentation(self: Value) bool {
+        if (self.tag != .string) return false;
+        if (self.inline_length == text_outside) {
+            return self.length == 0 or self.bits != 0;
+        }
+        return self.inline_length <= inline_capacity;
+    }
+
     /// True when the text is in the value rather than behind `bits`.
     pub fn textIsInline(self: Value) bool {
         return self.inline_length != text_outside;
@@ -448,10 +461,14 @@ pub const View = union(enum) {
 /// is why the runtime learned nothing when enums became keys, and why
 /// this switch has two arms rather than five.
 pub fn keyEquals(left: *const Value, right: *const Value) bool {
-    return switch (left.view()) {
-        .long => |held| held == right.asLong(),
-        .string => |held| std.mem.eql(u8, held, right.asString()),
-        else => unreachable, // the analyzer keys maps by long or String
+    if (left.tag != right.tag) return false;
+    return switch (left.tag) {
+        .long => left.asLong() == right.asLong(),
+        .string => if (left.hasValidStringRepresentation() and right.hasValidStringRepresentation())
+            std.mem.eql(u8, left.asString(), right.asString())
+        else
+            false,
+        else => false,
     };
 }
 

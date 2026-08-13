@@ -21,8 +21,11 @@ const Value = value.Value;
 /// `len(x)`: bytes for a String, elements for a list, entries for a
 /// map, the first axis for an array, bytes for a Builder.
 pub fn length(runtime: *Runtime, target: Value) Error!Value {
-    const measured: usize = switch (target.view()) {
-        .string => |text| text.len,
+    const measured: usize = switch (target.tag) {
+        .string => if (target.hasValidStringRepresentation())
+            target.asString().len
+        else
+            return runtime.fail(.not_owned),
         .object => blk: {
             const object = try runtime.resolve(target);
             break :blk switch (object.data) {
@@ -49,6 +52,7 @@ pub fn indexGet(runtime: *Runtime, target: Value, indices: []const Value) Error!
     try requireIndexRank(runtime, object, indices);
     switch (object.data) {
         .list => {
+            try requireLongIndex(runtime, indices[0]);
             const index = indices[0].asLong();
             if (index < 0 or index >= object.elements.count) {
                 return runtime.fail(.index_bounds);
@@ -56,10 +60,12 @@ pub fn indexGet(runtime: *Runtime, target: Value, indices: []const Value) Error!
             return object.elements.at(@intCast(index));
         },
         .map => |map| {
+            try requireMapKey(runtime, indices[0]);
             const at = map.find(&indices[0]) orelse return runtime.fail(.key_missing);
             return map.entries.items[at].value;
         },
         .array => {
+            for (indices) |index| try requireLongIndex(runtime, index);
             const flat = heap.flattenIndex(object.dims, indices) orelse
                 return runtime.fail(.index_bounds);
             return object.elements.at(flat);
@@ -93,6 +99,7 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
     try runtime.checkGivable(stored, null);
     switch (object.data) {
         .list => {
+            try requireLongIndex(runtime, indices[0]);
             const index = indices[0].asLong();
             if (index < 0 or index >= object.elements.count) {
                 return runtime.fail(.index_bounds);
@@ -108,6 +115,7 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
         },
         .map => |*map| {
             const key = indices[0];
+            try requireMapKey(runtime, key);
             if (map.find(&key)) |at| {
                 try runtime.ensureAcyclicAdoption(target.asObject(), stored);
                 consume_on_failure = true;
@@ -124,6 +132,7 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
             }
         },
         .array => {
+            try requireLongIndex(runtime, indices[0]);
             const flat = heap.flattenIndex(object.dims, indices) orelse
                 return runtime.fail(.index_bounds);
             try runtime.ensureAcyclicAdoption(target.asObject(), stored);
@@ -151,6 +160,18 @@ fn requireIndexRank(runtime: *Runtime, object: *const heap.Object, indices: []co
         .builder, .file, .task => return runtime.fail(.not_owned),
     };
     if (indices.len != wanted) return runtime.fail(.index_bounds);
+}
+
+fn requireLongIndex(runtime: *Runtime, index: Value) Error!void {
+    if (index.tag != .long) return runtime.fail(.not_owned);
+}
+
+fn requireMapKey(runtime: *Runtime, key: Value) Error!void {
+    switch (key.tag) {
+        .long => {},
+        .string => if (!key.hasValidStringRepresentation()) return runtime.fail(.not_owned),
+        else => return runtime.fail(.not_owned),
+    }
 }
 
 /// `xs[a:b]` on a list.  Slices copy — including deep copies of object
@@ -218,7 +239,7 @@ pub fn append(runtime: *Runtime, target: Value, held: Value) Error!void {
         },
         .builder => {
             try runtime.requireMutable(object);
-            if (held.tag != .string) return runtime.fail(.not_owned);
+            if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
             try object.data.builder.appendSlice(runtime.objects, held.asString());
         },
         .map, .array, .file, .task => return runtime.fail(.not_owned),
@@ -280,6 +301,7 @@ pub fn remove(runtime: *Runtime, target: Value, which: Value) Error!void {
     const object = try runtime.resolveMutable(target);
     switch (object.data) {
         .list => {
+            try requireLongIndex(runtime, which);
             const index = which.asLong();
             if (index < 0 or index >= object.elements.count) {
                 return runtime.fail(.index_bounds);
@@ -287,6 +309,7 @@ pub fn remove(runtime: *Runtime, target: Value, which: Value) Error!void {
             runtime.freeValue(object.elements.orderedRemove(@intCast(index)));
         },
         .map => |*map| {
+            try requireMapKey(runtime, which);
             if (map.find(&which)) |at| {
                 const removed = map.removeAt(at);
                 runtime.dropStorage(removed.key);
@@ -300,7 +323,10 @@ pub fn remove(runtime: *Runtime, target: Value, which: Value) Error!void {
 pub fn hasKey(runtime: *Runtime, target: Value, key: Value) Error!Value {
     const object = try runtime.resolve(target);
     return switch (object.data) {
-        .map => |map| Value.ofBoolean(map.find(&key) != null),
+        .map => |map| blk: {
+            try requireMapKey(runtime, key);
+            break :blk Value.ofBoolean(map.find(&key) != null);
+        },
         .list, .array, .builder, .file, .task => runtime.fail(.not_owned),
     };
 }
@@ -628,10 +654,13 @@ pub fn mapValues(runtime: *Runtime, target: Value, zero: Value) Error!Value {
 pub fn mapGet(runtime: *Runtime, target: Value, key: Value) Error!Value {
     const object = try runtime.resolve(target);
     return switch (object.data) {
-        .map => |map| if (map.find(&key)) |at|
-            map.entries.items[at].value
-        else
-            Value.none,
+        .map => |map| blk: {
+            try requireMapKey(runtime, key);
+            break :blk if (map.find(&key)) |at|
+                map.entries.items[at].value
+            else
+                Value.none;
+        },
         .list, .array, .builder, .file, .task => runtime.fail(.not_owned),
     };
 }
@@ -665,6 +694,7 @@ pub fn mapPlace(runtime: *Runtime, target: Value, key: Value, zero: Value) Error
     const object = try runtime.resolveMutable(target);
     switch (object.data) {
         .map => |*map| {
+            try requireMapKey(runtime, key);
             if (map.find(&key)) |at| return map.entries.items[at].value;
             // `zero` becomes the map's owned value on this path.  Refuse a
             // value already owned by another container before allocating a
@@ -737,9 +767,10 @@ pub fn arrayFill(runtime: *Runtime, target: Value, held: Value) Error!void {
 }
 
 fn carriesObject(held: Value) bool {
-    return switch (held.view()) {
+    return switch (held.tag) {
         .object => true,
-        .strukt => |fields| blk: {
+        .strukt => blk: {
+            const fields = held.asStruct();
             for (fields) |field| {
                 if (carriesObject(field)) break :blk true;
             }

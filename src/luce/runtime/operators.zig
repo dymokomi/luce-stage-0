@@ -184,15 +184,21 @@ pub fn compare(op: vocabulary.BinaryOp, left: Value, right: Value) bool {
         const same = left.isNone() and right.isNone();
         return if (op == .equal) same else !same;
     }
+    // Comparison is also exposed through a C entry point with no trap
+    // channel.  Make malformed or mixed representations a false answer
+    // instead of letting a payload accessor reinterpret unrelated bits.
+    if (left.tag == .string and !left.hasValidStringRepresentation()) return false;
+    if (right.tag == .string and !right.hasValidStringRepresentation()) return false;
     switch (left.view()) {
-        .byte => |held| return ordered(op, held, right.asByte()),
-        .short => |held| return ordered(op, held, right.asShort()),
-        .int => |held| return ordered(op, held, right.asInt()),
-        .long => |held| return ordered(op, held, right.asLong()),
-        .half => |held| return ordered(op, held, right.asHalf()),
-        .float => |held| return ordered(op, held, right.asFloat()),
-        .double => |held| return ordered(op, held, right.asDouble()),
+        .byte => |held| return if (right.tag == .byte) ordered(op, held, right.asByte()) else false,
+        .short => |held| return if (right.tag == .short) ordered(op, held, right.asShort()) else false,
+        .int => |held| return if (right.tag == .int) ordered(op, held, right.asInt()) else false,
+        .long => |held| return if (right.tag == .long) ordered(op, held, right.asLong()) else false,
+        .half => |held| return if (right.tag == .half) ordered(op, held, right.asHalf()) else false,
+        .float => |held| return if (right.tag == .float) ordered(op, held, right.asFloat()) else false,
+        .double => |held| return if (right.tag == .double) ordered(op, held, right.asDouble()) else false,
         .string => |held| {
+            if (right.tag != .string) return false;
             const order = std.mem.order(u8, held, right.asString());
             return switch (op) {
                 .equal => order == .eq,
@@ -205,10 +211,12 @@ pub fn compare(op: vocabulary.BinaryOp, left: Value, right: Value) bool {
             };
         },
         .boolean => |held| {
+            if (right.tag != .boolean) return false;
             const same = held == right.asBoolean();
             return if (op == .equal) same else !same;
         },
         .strukt => |held| {
+            if (right.tag != .strukt) return false;
             const other = right.asStruct();
             // **Two runs of different lengths are different values**,
             // and saying so is what keeps this loop total.  A struct's
@@ -232,6 +240,7 @@ pub fn compare(op: vocabulary.BinaryOp, left: Value, right: Value) bool {
             return if (op == .equal) same else !same;
         },
         .object => |held| {
+            if (right.tag != .object) return false;
             // Object equality is identity: same object, not same
             // contents — and the same *object*, not merely the same
             // table row, so a stale handle never equals the handle of
@@ -248,7 +257,7 @@ pub fn compare(op: vocabulary.BinaryOp, left: Value, right: Value) bool {
         // and `contains`.  `06_mir/verify.zig` refuses the same shape in
         // a decoded module, which is what makes this arm unreachable
         // rather than merely unreached.
-        .function => unreachable,
+        .function => return false,
         // Handled above, before the payload dispatch.
         .none => unreachable,
     }
@@ -285,6 +294,18 @@ test "two runs of different lengths are different, instead of walking off one" {
     try std.testing.expect(!compare(.equal, Value.ofStruct(&long), Value.ofStruct(&short)));
     try std.testing.expect(compare(.not_equal, Value.ofStruct(&short), Value.ofStruct(&long)));
     try std.testing.expect(compare(.not_equal, Value.ofStruct(&long), Value.ofStruct(&short)));
+}
+
+test "comparison rejects mixed and malformed payloads without access faults" {
+    var malformed = Value.ofInlineText(.string, "x");
+    malformed.inline_length = value.inline_capacity + 1;
+    try std.testing.expect(!compare(.equal, Value.ofString("x"), Value.ofLong(0)));
+    try std.testing.expect(!compare(.equal, Value.ofLong(0), Value.ofString("x")));
+    try std.testing.expect(!compare(.equal, malformed, Value.ofString("x")));
+
+    var function_slots = [_]Value{ Value.ofLong(1), Value.none };
+    const function = Value.ofFunction(&function_slots);
+    try std.testing.expect(!compare(.equal, function, function));
 }
 
 /// `%` on doubles: the floor modulus, pairing with `//` exactly as the

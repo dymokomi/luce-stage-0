@@ -2400,6 +2400,9 @@ pub const Runtime = struct {
     /// Struct values check every filled field; unfilled fields are
     /// simply carried along.
     pub fn checkGivable(self: *Runtime, held: Value, expected: ?OwnedBy) Error!void {
+        if (held.tag == .string and !held.hasValidStringRepresentation()) {
+            return self.fail(.not_owned);
+        }
         switch (held.view()) {
             .object => |handle| {
                 if (handle.index == value.null_index) return;

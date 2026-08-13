@@ -399,6 +399,13 @@ precedence, and the ownership regression lane covers these shape refusals
 without mutation; generated cross-feature shape matrices and broader hostile
 value representations remain part of T0-OWN-4 and T0-OWN-15.
 
+String payload validation now also rejects impossible inline lengths and
+non-empty outside strings with null pointers before any accessor runs.  List
+and array indices require their long storage form, map lookup doors reject
+non-key tags, and comparison treats mixed or malformed representations as a
+safe non-match; the broader hostile struct/function payload matrix remains
+open under T0-OWN-4, T0-OWN-12, and T0-OWN-15.
+
 ## Tier 1 — design gaps before implementation
 
 ### Typed worker channels

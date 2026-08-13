@@ -55,6 +55,7 @@ pub fn concat(runtime: *Runtime, left: []const u8, right: []const u8) Error!Valu
 /// `held` is a copy of the caller's, so a view of it would be a view of
 /// something about to go (docs/STRINGS.md).
 pub fn slice(runtime: *Runtime, held: Value, start: i64, end: i64) Error!Value {
+    if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
     const text = held.asString();
     if (start < 0 or end < start or end > text.len) return runtime.fail(.string_bounds);
     const start_index: usize = @intCast(start);
@@ -69,6 +70,7 @@ pub fn slice(runtime: *Runtime, held: Value, start: i64, end: i64) Error!Value {
 
 /// `s.byte_at(i)` — one raw byte, below the UTF-8 layer on purpose.
 pub fn byteAt(runtime: *Runtime, held: Value, index: i64) Error!Value {
+    if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
     const text = held.asString();
     if (index < 0 or index >= text.len) return runtime.fail(.string_bounds);
     return Value.ofByte(text[@intCast(index)]);
@@ -78,6 +80,7 @@ pub fn byteAt(runtime: *Runtime, held: Value, index: i64) Error!Value {
 /// search is built on, and the seam SIMD would enter through.  Answers
 /// -1 when the byte is not there.
 pub fn findByte(runtime: *Runtime, held: Value, byte: i64, start: i64) Error!Value {
+    if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
     const text = held.asString();
     if (byte < 0 or byte > 0xFF) return runtime.fail(.bad_codepoint);
     if (start < 0 or start > text.len) return runtime.fail(.string_bounds);
@@ -118,7 +121,10 @@ pub fn str(runtime: *Runtime, held: Value) Error!Value {
         .boolean => |held_bool| return runtime.ownValue(
             Value.ofString(if (held_bool) "true" else "false"),
         ),
-        .string => return runtime.ownValue(held),
+        .string => {
+            if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
+            return runtime.ownValue(held);
+        },
         .object => switch ((try runtime.resolve(held)).data) {
             .builder => |builder| return runtime.ownValue(Value.ofString(builder.items)),
             .list, .map, .array, .file, .task => return runtime.fail(.not_owned),
@@ -164,7 +170,7 @@ fn floatText(runtime: *Runtime, number: anytype) Error!Value {
 /// time and the function's name already implies it, so the answer is
 /// absence rather than a trap or an error (docs/FAILURE.md).
 pub fn parseInt(runtime: *Runtime, held: Value) Error!Value {
-    _ = runtime;
+    if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
     const parsed = std.fmt.parseInt(i64, held.asString(), 10) catch return Value.none;
     return Value.ofLong(parsed);
 }
@@ -173,7 +179,7 @@ pub fn parseInt(runtime: *Runtime, held: Value) Error!Value {
 /// as a number: NaN and the infinities parse, and are answered absent
 /// here so a double that came from text is always finite.
 pub fn parseFloat(runtime: *Runtime, held: Value) Error!Value {
-    _ = runtime;
+    if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
     const parsed = std.fmt.parseFloat(f64, held.asString()) catch return Value.none;
     if (std.math.isNan(parsed) or std.math.isInf(parsed)) return Value.none;
     return Value.ofDouble(parsed);
@@ -195,6 +201,7 @@ pub fn chr(runtime: *Runtime, code: i64) Error!Value {
 /// `ord(s)` — the first codepoint of `s`, or a trap when there is none
 /// or the bytes are not a whole sequence.
 pub fn ord(runtime: *Runtime, held: Value) Error!Value {
+    if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
     const text = held.asString();
     if (text.len == 0) return runtime.fail(.bad_codepoint);
     const length = std.unicode.utf8ByteSequenceLength(text[0]) catch
