@@ -1844,6 +1844,7 @@ const WorkerFailureState = struct {
     child_live_at_close: u32 = 0,
     spawns: usize = 0,
     joins: usize = 0,
+    join_answer: i32 = workers.yes,
     ran: bool = false,
 
     fn open(context: ?*anyopaque) callconv(.c) ?*Runtime {
@@ -1966,7 +1967,7 @@ const WorkerFailureState = struct {
     fn join(context: ?*anyopaque, _: i64) callconv(.c) i32 {
         const self: *@This() = @ptrCast(@alignCast(context.?));
         self.joins += 1;
-        return workers.yes;
+        return self.join_answer;
     }
 
     fn install(self: *@This(), parent: *Runtime) void {
@@ -5468,6 +5469,47 @@ test "waiting a task is one-shot and releasing its row never joins twice" {
     try testing.expectEqual(@as(u32, 0), parent.live);
 }
 
+test "waiting a task fails closed when the host rejects the join" {
+    for ([_]i32{ workers.no, 2, -7 }) |join_answer| {
+        var parent_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var parent: Runtime = .init(.{
+            .arena = parent_arena.allocator(),
+            .objects = testing.allocator,
+        });
+        var child_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var child: Runtime = .init(.{
+            .arena = child_arena.allocator(),
+            .objects = testing.allocator,
+        });
+        var state: WorkerFailureState = .{
+            .child = &child,
+            .child_live_at_close = std.math.maxInt(u32),
+            .join_answer = join_answer,
+        };
+        state.install(&parent);
+
+        var task: Value = .none;
+        try workers.spawn(&parent, 0, &.{}, &task);
+        var answer = Value.ofLong(99);
+        try testing.expectError(error.Trap, workers.wait(&parent, task, &answer));
+        try testing.expectEqual(vocabulary.TrapCode.host_unavailable, parent.pending.?.code);
+        try testing.expectEqual(@as(i64, 99), answer.asLong());
+        try testing.expectEqual(@as(usize, 1), state.spawns);
+        try testing.expectEqual(@as(usize, 1), state.joins);
+        try testing.expectEqual(@as(usize, 1), state.closes);
+        try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
+
+        // `wait` consumes the worker but leaves the task row as caller
+        // storage, even when the host rejected the join.
+        parent.pending = null;
+        parent.freeValue(task);
+        try testing.expectEqual(@as(u32, 0), parent.live);
+        parent.deinit();
+        parent_arena.deinit();
+        child_arena.deinit();
+    }
+}
+
 test "a failed struct store consumes only its replacement and preserves the source" {
     var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -8650,6 +8692,68 @@ test "allocating C doors preserve outputs and rows at every failure point" {
         try testing.expect(completed);
         try testing.expect(failures >= 1);
     }
+}
+
+test "a function value allocation failure preserves its borrowed receiver graph" {
+    const long_text = "receiver storage that needs its own allocation";
+    var failures: usize = 0;
+    var completed = false;
+
+    // The receiver is a struct with both an object edge and outside text.
+    // The function run receives a storage copy of that struct, but its
+    // object edge remains borrowed from the original receiver.
+    for (0..4) |failure_offset| {
+        var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+        var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var runtime: Runtime = .init(.{
+            .arena = arena.allocator(),
+            .objects = objects.allocator(),
+        });
+        var cleaned = false;
+        defer if (!cleaned) {
+            runtime.deinit();
+            arena.deinit();
+        };
+
+        const list = try runtime.newList(Value.none);
+        try containers.append(&runtime, list, Value.ofLong(7));
+        const owned_text = try runtime.ownValue(Value.ofString(long_text));
+        const receiver = try runtime.makeStruct(&.{ list, owned_text });
+        const copied_receiver = try runtime.ownValue(receiver);
+        var slots = [_]Value{ Value.ofInt(3), copied_receiver };
+        var out = Value.ofLong(99);
+
+        objects.fail_index = objects.alloc_index + failure_offset;
+        const status = luce_rt_function_make(&runtime, &slots, slots.len, &out);
+        objects.fail_index = std.math.maxInt(usize);
+
+        if (status == 0) {
+            try testing.expect(out.tag == .function);
+            runtime.dropStorage(out);
+            runtime.freeValue(receiver);
+            completed = true;
+        } else {
+            try testing.expectEqual(@as(i32, 1), status);
+            try testing.expectEqual(@as(i64, 99), out.asLong());
+            try testing.expect(runtime.exhausted);
+            const fields = receiver.asStruct();
+            try testing.expectEqual(@as(i64, 1), (try containers.length(&runtime, fields[0])).asLong());
+            try testing.expectEqualStrings(long_text, fields[1].asString());
+            runtime.freeValue(receiver);
+            failures += 1;
+        }
+
+        try testing.expectEqual(@as(u32, 0), runtime.live);
+        runtime.debugAssertInvariants();
+        runtime.deinit();
+        arena.deinit();
+        cleaned = true;
+        try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
+        if (completed) break;
+    }
+
+    try testing.expect(completed);
+    try testing.expect(failures >= 1);
 }
 
 test "allocating C value doors preserve graphs and slots at every failure point" {

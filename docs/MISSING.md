@@ -225,8 +225,9 @@ allocation-failure behavior remains a separate contract to audit.
 The production `loom` registry now follows the same publication order under
 dynamic table growth: a failing allocator rejects before starting user code,
 preserves the output handle, and leaves no provisional row to drain.  The
-remaining worker lifecycle and join-status permutations are tracked by
-T0-OWN-11 and T0-OWN-15.
+remaining worker lifecycle permutations are tracked by T0-OWN-11; the
+join callback's exact-answer contract is covered by the focused runtime
+lane below.
 The stale-handle slice now probes every list, map, array, and builder door
 after row generation reuse, plus file read/write/flush/copy/give operations;
 it checks that double release is inert and that stale file operations do not
@@ -282,9 +283,12 @@ original diagnosis.  The lower-level tables now also reject unknown
 negative values, reject unknown argument-callback answers, and bound
 `path_kind`'s payload to its documented 0..3 domain.  The file channel now
 applies the same exact-answer rule across raw and whole-file open, read,
-write, and flush paths, while preserving `-1` as exhaustion.  The remaining
-callback work is the documented runtime/host installation contract, join
-failure semantics, and domain checks for other plain-number services.
+write, and flush paths, while preserving `-1` as exhaustion.  The worker
+channel now treats only `yes` as a successful join; `wait` reports
+`host_unavailable` for `no` and malformed answers while still consuming and
+closing the child exactly once.  The remaining callback work is the
+documented runtime/host installation contract and domain checks for other
+plain-number services.
 The differential specs now put a task inside a union's optional field, that
 union inside a recursive struct with an optional callback and child list, and
 consume the task through a `give`d helper; a companion file case puts an

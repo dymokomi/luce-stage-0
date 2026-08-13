@@ -1958,3 +1958,19 @@ generated ownership traces and worker/resource lifecycle permutations remain
 listed in MISSING.md.
 
 Commit: current Tier 0 ownership-composition hardening batch.
+
+## 2026-08-13 — worker join answers fail closed
+
+Worker joins now require the exact `yes` callback answer.  An observing
+`wait` reports `host_unavailable` for `no` or malformed answers instead of
+silently returning a result, while still consuming the task and closing the
+child exactly once.  Non-observing release and spawn rollback keep their
+cleanup-only behavior.  The regression covers ordinary rejection, arbitrary
+positive answers, and negative answers, and preserves the output sentinel and
+post-close census.
+
+The focused worker-ownership lane passes 18/18 and the runtime ownership lane
+passes 54/54.  The broader worker/resource permutation matrix remains open in
+MISSING.md.
+
+Commit: current Tier 0 worker hardening batch.

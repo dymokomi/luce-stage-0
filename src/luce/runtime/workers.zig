@@ -84,9 +84,11 @@ pub const SpawnFn = *const fn (
     thread: *i64,
 ) callconv(.c) i32;
 
-/// Wait for a thread to end.  Answers `no` if the host cannot; the
-/// caller does not read it, because a host that cannot join has
-/// already lost the thread and there is nobody to tell.
+/// Wait for a thread to end.  Only `yes` means that the thread was joined;
+/// every other answer means that the host cannot complete the join.  The
+/// runtime turns that answer into `host_unavailable` for an observing
+/// `wait`.  A non-observing release still has to finish the worker under the
+/// host contract that a failed join has already lost the thread.
 pub const JoinFn = *const fn (context: ?*anyopaque, thread: i64) callconv(.c) i32;
 
 /// The host's half: threads, and nothing else (D8).
@@ -382,7 +384,7 @@ pub fn spawn(
     // happens, so the one remaining failure joins it by hand rather
     // than leaving an orphan the errdefers above cannot reach.
     const task = parent.newTask(worker) catch |mistake| {
-        joinThread(worker);
+        _ = joinThread(worker);
         // `body` made a successful result this runtime's own.  The task
         // row could not be allocated, so no later `wait`/`release` can
         // perform `finish` and this is its only remaining death point.
@@ -409,7 +411,6 @@ pub fn spawn(
 /// wait the way it refuses a second `give`; this is the wall behind it.
 pub fn wait(joiner: *Runtime, task: Value, out: *Value) heap.Error!i32 {
     const worker = try take(joiner, task);
-    joinThread(worker);
     const child = worker.runtime.?;
     // The task is detached before any result, trap, or error is adopted.
     // Adoption can allocate in the joiner's arena (notably for a worker
@@ -417,6 +418,12 @@ pub fn wait(joiner: *Runtime, task: Value, out: *Value) heap.Error!i32 {
     // succeeding.  A failed adoption still owns the child runtime, the
     // argument block, and the worker record until this scope ends.
     defer finish(joiner, worker);
+
+    // A task cannot be reported as successfully waited when the host did
+    // not answer the join with the one success code.  The task was already
+    // consumed by `take`, and `finish` below still closes the child under
+    // the host callback's lost-thread contract.
+    if (!joinThread(worker)) return joiner.fail(.host_unavailable);
 
     if (child.exit_status) |chosen| {
         // The program chose to stop, in a thread that is not the one
@@ -454,7 +461,7 @@ pub fn wait(joiner: *Runtime, task: Value, out: *Value) heap.Error!i32 {
 /// one: **only a `wait` observes**.  A program that wants a worker's
 /// trap to stop it waits for the worker.
 pub fn release(owner: *Runtime, worker: *Worker) void {
-    joinThread(worker);
+    _ = joinThread(worker);
     finish(owner, worker);
 }
 
@@ -473,11 +480,11 @@ fn take(joiner: *Runtime, task: Value) heap.Error!*Worker {
     }
 }
 
-fn joinThread(worker: *Worker) void {
-    if (!worker.running) return;
+fn joinThread(worker: *Worker) bool {
+    if (!worker.running) return true;
     worker.running = false;
-    const join = worker.channel.join orelse return;
-    _ = join(worker.channel.context, worker.thread);
+    const join = worker.channel.join orelse return false;
+    return join(worker.channel.context, worker.thread) == yes;
 }
 
 /// Give the worker's runtime and its own block back.  The caller has
