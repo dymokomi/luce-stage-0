@@ -339,6 +339,12 @@ function IDs and unrepresentable depth budgets before allocating or moving
 ownership.  The malformed-entry regression preserves its output and proves no
 worker starts; broader generated worker-channel fuzzing remains open.
 
+File acquisition now rejects the runtime’s post-close `-1` sentinel even when
+an open callback incorrectly reports success, and closes that malformed raw
+handle exactly once before returning `host_unavailable`; otherwise a published
+file would bypass scope teardown.  Other resource callback and handle-domain
+permutations remain part of T0-OWN-15.
+
 The array-fill failure lane now also copies a function run containing outside
 text and a borrowed receiver through every observed replacement allocation
 failure, preserving empty destination cells and the receiver graph while

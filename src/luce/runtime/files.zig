@@ -192,6 +192,10 @@ pub fn open(runtime: *Runtime, path: []const u8, mode: i64) Error!?Value {
     // allocation in `newFile` may fail; neither may leave the host handle
     // behind.
     errdefer closeFailedOpen(runtime, closer, handle);
+    // `-1` is the runtime's post-close sentinel.  Publishing it as a live
+    // file would make scope teardown skip the host callback entirely, so a
+    // malformed successful open is rejected before a resource row exists.
+    if (handle == heap.no_file) return runtime.fail(.host_unavailable);
     return try runtime.newFile(handle, path);
 }
 

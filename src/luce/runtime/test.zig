@@ -6449,6 +6449,56 @@ test "file open fails closed before acquisition when the host cannot close" {
     try testing.expectEqual(@as(u32, 0), bench.runtime.live);
 }
 
+test "file open rejects the post-close handle sentinel" {
+    const Host = struct {
+        opened: usize = 0,
+        closed: usize = 0,
+        closed_handle: i64 = 0,
+
+        fn open(
+            context: ?*anyopaque,
+            _: [*]const u8,
+            _: i64,
+            _: i64,
+            _: *i64,
+        ) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.opened += 1;
+            // The caller initializes the output to `heap.no_file`; leave it
+            // untouched while claiming success to model a malformed host.
+            return files.yes;
+        }
+
+        fn close(context: ?*anyopaque, handle: i64) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.closed += 1;
+            self.closed_handle = handle;
+            return files.yes;
+        }
+    };
+
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    var host: Host = .{};
+    bench.runtime.files = .{
+        .context = &host,
+        .open = Host.open,
+        .close = Host.close,
+    };
+
+    try expectTrap(
+        .host_unavailable,
+        &bench.runtime,
+        files.open(&bench.runtime, "sentinel.bin", @intFromEnum(files.Mode.read)),
+    );
+    try testing.expectEqual(@as(usize, 1), host.opened);
+    try testing.expectEqual(@as(usize, 1), host.closed);
+    try testing.expectEqual(heap.no_file, host.closed_handle);
+    try testing.expectEqual(@as(u32, 0), bench.runtime.live);
+    bench.runtime.pending = null;
+}
+
 test "host byte counts are bounded before runtime slices or advances" {
     const Host = struct {
         const Mode = enum { negative, oversized, zero };
