@@ -1763,3 +1763,17 @@ This closes the direct runtime `inout` replacement failure matrix; generated
 cross-engine failure traces remain a separate open item in MISSING.md.
 
 Commit: current Tier 0 inout rollback hardening batch.
+
+## 2026-08-13 — C byte-pointer null refusal
+
+The byte-taking C exports now accept C-nullable pointer representations and
+reject null input before forming a slice.  The regression covers text
+materialization, directory names, key text, whole-file paths and content,
+and all three raise helpers; it checks trap state and preserves output/status
+sentinels.  An absent optional result also proves that an ignored byte input
+is not read.
+
+Null Value/out pointers and the remaining malformed C pointer classes stay
+listed in MISSING.md.
+
+Commit: current Tier 0 C-boundary hardening batch.

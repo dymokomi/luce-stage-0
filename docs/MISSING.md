@@ -196,8 +196,13 @@ failure corpus now covers optional text, struct replacement, map placement,
 array fill, long concatenation, and `parse_string`, including their distinct
 source/borrow/consumption contracts.  C string slicing now covers outside
 views, inline copies, UTF-8 boundary refusal, bounds refusal, and out-slot
-preservation.  Null-pointer and other malformed pointer cases, plus any
-allocating C door not yet in these direct corpora, remain open.
+preservation.  The byte-taking C exports now use null-tolerant C pointer
+types and reject a null input before slicing, allocation, or host access;
+the regression covers text materialization, directory names, key text,
+whole-file paths/content, and all three raise helpers, while an absent
+optional result proves an unused null buffer is not read.  Null pointers for
+Value/out slots, dimensions, indices, fields, task handles, and callbacks,
+plus any allocating C door not yet in these direct corpora, remain open.
 The differential specs now put a task inside a union's optional field, that
 union inside a recursive struct with an optional callback and child list, and
 consume the task through a `give`d helper; a companion file case puts an

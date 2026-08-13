@@ -6687,13 +6687,13 @@ extern fn luce_rt_discard_loose(runtime: *Runtime, held: *const Value) callconv(
 extern fn luce_rt_raise(
     runtime: *Runtime,
     code: i32,
-    message: [*]const u8,
+    message: [*c]const u8,
     length: i64,
 ) callconv(.c) void;
 extern fn luce_rt_raise_error(
     runtime: *Runtime,
     code: i32,
-    message: [*]const u8,
+    message: [*c]const u8,
     length: i64,
     function: u32,
     instruction: u32,
@@ -6701,31 +6701,31 @@ extern fn luce_rt_raise_error(
 extern fn luce_rt_raise_io(
     runtime: *Runtime,
     act: i32,
-    path: [*]const u8,
+    path: [*c]const u8,
     length: i64,
     function: u32,
     instruction: u32,
 ) callconv(.c) void;
 extern fn luce_rt_intern_text(
     runtime: *Runtime,
-    bytes: [*]const u8,
+    bytes: [*c]const u8,
     length: i64,
     out: *Value,
 ) callconv(.c) i32;
 extern fn luce_rt_maybe_text(
     runtime: *Runtime,
     present: i32,
-    bytes: [*]const u8,
+    bytes: [*c]const u8,
     length: i64,
     out: *Value,
 ) callconv(.c) i32;
 extern fn luce_rt_names_list(
     runtime: *Runtime,
-    bytes: [*]const u8,
+    bytes: [*c]const u8,
     length: i64,
     out: *Value,
 ) callconv(.c) i32;
-extern fn luce_rt_set_key_text(runtime: *Runtime, bytes: [*]const u8, length: i64) callconv(.c) i32;
+extern fn luce_rt_set_key_text(runtime: *Runtime, bytes: [*c]const u8, length: i64) callconv(.c) i32;
 extern fn luce_rt_args_list(
     runtime: *Runtime,
     context: ?*anyopaque,
@@ -6828,7 +6828,7 @@ extern fn luce_rt_spawn(
 extern fn luce_rt_task_wait(runtime: *Runtime, task: *const Value, out: *Value) callconv(.c) i32;
 extern fn luce_rt_file_open(
     runtime: *Runtime,
-    path: [*]const u8,
+    path: [*c]const u8,
     length: i64,
     mode: i64,
     out: *Value,
@@ -6838,7 +6838,7 @@ extern fn luce_rt_file_open(
 ) callconv(.c) i32;
 extern fn luce_rt_file_read_text(
     runtime: *Runtime,
-    path: [*]const u8,
+    path: [*c]const u8,
     length: i64,
     out: *Value,
     ok: *i32,
@@ -6847,9 +6847,9 @@ extern fn luce_rt_file_read_text(
 ) callconv(.c) i32;
 extern fn luce_rt_file_write_text(
     runtime: *Runtime,
-    path: [*]const u8,
+    path: [*c]const u8,
     path_length: i64,
-    content: [*]const u8,
+    content: [*c]const u8,
     content_length: i64,
     mode: i64,
     ok: *i32,
@@ -7092,6 +7092,125 @@ test "C scalar lengths counts and tags fail closed without writing outputs" {
         @as(i32, 0),
         luce_rt_compare_long_double(999, 1, 1.0),
     );
+}
+
+test "C byte pointers reject null before slicing or host access" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+    const null_bytes: [*c]const u8 = null;
+    const bytes = "path";
+    var out = Value.ofLong(99);
+
+    try testing.expectEqual(
+        @as(i32, 1),
+        luce_rt_intern_text(runtime, null_bytes, 1, &out),
+    );
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    runtime.pending = null;
+
+    try testing.expectEqual(
+        @as(i32, 1),
+        luce_rt_maybe_text(runtime, 1, null_bytes, 1, &out),
+    );
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    runtime.pending = null;
+
+    try testing.expectEqual(
+        @as(i32, 1),
+        luce_rt_names_list(runtime, null_bytes, 1, &out),
+    );
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    runtime.pending = null;
+
+    try testing.expectEqual(@as(i32, 1), luce_rt_set_key_text(runtime, null_bytes, 1));
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    runtime.pending = null;
+
+    var opened: i32 = 17;
+    try testing.expectEqual(
+        @as(i32, 1),
+        luce_rt_file_open(
+            runtime,
+            null_bytes,
+            1,
+            @intFromEnum(files.Mode.read),
+            &out,
+            &opened,
+            0,
+            0,
+        ),
+    );
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i32, 17), opened);
+    runtime.pending = null;
+
+    var ok: i32 = 23;
+    try testing.expectEqual(
+        @as(i32, 1),
+        luce_rt_file_read_text(runtime, null_bytes, 1, &out, &ok, 0, 0),
+    );
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i32, 23), ok);
+    runtime.pending = null;
+
+    try testing.expectEqual(
+        @as(i32, 1),
+        luce_rt_file_write_text(
+            runtime,
+            null_bytes,
+            1,
+            bytes,
+            bytes.len,
+            @intFromEnum(files.Mode.write),
+            &ok,
+            0,
+            0,
+        ),
+    );
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i32, 23), ok);
+    runtime.pending = null;
+
+    try testing.expectEqual(
+        @as(i32, 1),
+        luce_rt_file_write_text(
+            runtime,
+            bytes,
+            bytes.len,
+            null_bytes,
+            1,
+            @intFromEnum(files.Mode.write),
+            &ok,
+            0,
+            0,
+        ),
+    );
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(i32, 23), ok);
+    runtime.pending = null;
+
+    luce_rt_raise(runtime, 0, null_bytes, 1);
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    runtime.pending = null;
+    luce_rt_raise_error(runtime, 0, null_bytes, 1, 0, 0);
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    runtime.pending = null;
+    luce_rt_raise_io(runtime, 0, null_bytes, 1, 0, 0);
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    runtime.pending = null;
+
+    // An absent optional result does not read the byte pointer at all;
+    // the null buffer is therefore irrelevant and the call succeeds.
+    out = Value.ofLong(99);
+    try testing.expectEqual(@as(i32, 0), luce_rt_maybe_text(runtime, 0, null_bytes, 1, &out));
+    try testing.expect(out.isNone());
 }
 
 test "allocating C doors preserve outputs and rows at every failure point" {

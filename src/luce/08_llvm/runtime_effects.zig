@@ -1094,7 +1094,11 @@ fn describes(comptime shape: Parameter, comptime T: type) bool {
         .value_out => at.size == .one and !at.is_const and at.child == runtime.Value,
         .values_in => at.size == .many and at.is_const and at.child == runtime.Value,
         .numbers_in => at.size == .many and at.is_const and at.child == i64,
-        .bytes_in => at.size == .many and at.is_const and at.child == u8,
+        // C-facing byte inputs may be declared as a Zig many-pointer or
+        // as a C-nullable pointer.  Both lower to the same LLVM `ptr`; the
+        // latter is what lets the export guard null before slicing.
+        .bytes_in => (at.size == .many or at.size == .c) and
+            at.is_const and at.child == u8,
         .bytes_kept, .unknown => true,
     };
 }

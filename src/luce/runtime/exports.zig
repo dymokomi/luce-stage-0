@@ -214,7 +214,7 @@ pub export fn luce_rt_exit(runtime: *Runtime, status: i64) callconv(.c) void {
 pub export fn luce_rt_raise(
     runtime: *Runtime,
     code: i32,
-    message: [*]const u8,
+    message: [*c]const u8,
     length: i64,
 ) callconv(.c) void {
     const words = checkedBytes(runtime, message, length) catch return;
@@ -270,7 +270,7 @@ pub export fn luce_rt_report(
 pub export fn luce_rt_raise_error(
     runtime: *Runtime,
     code: i32,
-    message: [*]const u8,
+    message: [*c]const u8,
     length: i64,
     function: u32,
     instruction: u32,
@@ -288,7 +288,7 @@ pub export fn luce_rt_raise_error(
 pub export fn luce_rt_raise_io(
     runtime: *Runtime,
     act: i32,
-    path: [*]const u8,
+    path: [*c]const u8,
     length: i64,
     function: u32,
     instruction: u32,
@@ -367,7 +367,7 @@ pub export fn luce_rt_exhaust(runtime: *Runtime) callconv(.c) void {
 /// stores it (docs/STRINGS.md).
 pub export fn luce_rt_intern_text(
     runtime: *Runtime,
-    bytes: [*]const u8,
+    bytes: [*c]const u8,
     length: i64,
     out: *Value,
 ) callconv(.c) i32 {
@@ -386,7 +386,7 @@ pub export fn luce_rt_intern_text(
 pub export fn luce_rt_maybe_text(
     runtime: *Runtime,
     present: i32,
-    bytes: [*]const u8,
+    bytes: [*c]const u8,
     length: i64,
     out: *Value,
 ) callconv(.c) i32 {
@@ -410,7 +410,7 @@ pub export fn luce_rt_maybe_text(
 /// An empty buffer is an empty directory and not one empty name.
 pub export fn luce_rt_names_list(
     runtime: *Runtime,
-    bytes: [*]const u8,
+    bytes: [*c]const u8,
     length: i64,
     out: *Value,
 ) callconv(.c) i32 {
@@ -448,7 +448,7 @@ pub export fn luce_rt_args_list(
 /// One owned slot: the previous payload goes back as this one arrives.
 pub export fn luce_rt_set_key_text(
     runtime: *Runtime,
-    bytes: [*]const u8,
+    bytes: [*c]const u8,
     length: i64,
 ) callconv(.c) i32 {
     const borrowed = checkedBytes(runtime, bytes, length) catch |mistake|
@@ -642,7 +642,7 @@ pub export fn luce_rt_files_install(
 
 pub export fn luce_rt_file_open(
     runtime: *Runtime,
-    path: [*]const u8,
+    path: [*c]const u8,
     length: i64,
     mode: i64,
     out: *Value,
@@ -730,7 +730,7 @@ pub export fn luce_rt_file_flush(
 /// over the byte channel with this library's own UTF-8 validation.
 pub export fn luce_rt_file_read_text(
     runtime: *Runtime,
-    path: [*]const u8,
+    path: [*c]const u8,
     length: i64,
     out: *Value,
     ok: *i32,
@@ -755,9 +755,9 @@ pub export fn luce_rt_file_read_text(
 /// starts.
 pub export fn luce_rt_file_write_text(
     runtime: *Runtime,
-    path: [*]const u8,
+    path: [*c]const u8,
     path_length: i64,
-    content: [*]const u8,
+    content: [*c]const u8,
     content_length: i64,
     mode: i64,
     ok: *i32,
@@ -819,7 +819,8 @@ fn checkedFileMode(runtime: *Runtime, raw: i64) heap.Error!i64 {
     return raw;
 }
 
-fn checkedBytes(runtime: *Runtime, bytes: [*]const u8, raw: i64) heap.Error![]const u8 {
+fn checkedBytes(runtime: *Runtime, bytes: [*c]const u8, raw: i64) heap.Error![]const u8 {
+    if (bytes == null) return runtime.fail(.host_unavailable);
     const length = try checkedCount(runtime, raw);
     return bytes[0..length];
 }
