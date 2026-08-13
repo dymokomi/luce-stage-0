@@ -82,6 +82,48 @@ runtime/verifier boundary.
   owner-tree validity, live rows, generation monotonicity, root/worker
   isolation, and allocator bytes returning to baseline after generated
   sequences.
+- **T0-OWN-10 — Typed cross-feature ownership traces.**  Generate valid and
+  hostile traces that combine lists, maps, arrays, structs, unions, optionals,
+  strings, function values, bound receivers, `give`, borrow, copy, return,
+  reassignment, field/index stores, worker spawn/wait/release, files, traps,
+  errors, exit, and allocation failure.  The shadow model must track owner
+  edges, generations, value-storage runs, task/file ownership, and host events,
+  with the same result, trap, trace, census, and cleanup on both engines.
+- **T0-OWN-11 — Worker/resource lifecycle permutations.**  Extend the current
+  real-thread cases to arbitrary worker counts, repeated wait/release/discard
+  orders, stale task handles, row reuse, resource-bearing child results,
+  child OOM during result/error finalization, join failure, and channel
+  exhaustion followed by reuse.  Prove at-most-once joins, child finalization
+  before worker destruction, exact inherited-leak transfer, allocator
+  baselines, and a bounded no-deadlock teardown.
+- **T0-OWN-12 — Allocation-door inventory.**  Replace the remaining fixed
+  failure offsets with counting/failing-allocator coverage for key-text
+  replacement, every exported constructor and derived container, map slot and
+  entry growth, joined text, argument lists, file text, worker error messages,
+  trace/diagnostic storage, table growth, and row reuse.  Each refusal must
+  preserve destinations and sources, leave no partial child reachable, and
+  clean host resources.
+- **T0-OWN-13 — Ownership-event parity.**  Add a test-only event trace beside
+  the existing outcome/census comparison and compare allocation/destruction,
+  give/adopt/borrow, stale-handle refusal, file-close, worker-join,
+  child-finalization, and allocator-failure events between the interpreter and
+  LLVM paths.
+- **T0-OWN-14 — Function-value receiver lifetime.**  Exercise function values
+  and bound receivers inside every value-shaped container, across copy/give,
+  return, reassignment, worker arguments/results, stale receiver use, receiver
+  destruction, and function-storage allocation failure.  A function copy or
+  release must never implicitly own or release a borrowed receiver.
+- **T0-OWN-15 — Resource callback protocol.**  Specify and test exact behavior
+  for `0`, `1`, `-1`, other positive/negative answers, null outputs, zero
+  progress, oversized counts, close/flush/read/write failure, and repeated
+  join.  The lower-level callback paths must distinguish host unavailability,
+  exhaustion, and ordinary absence consistently rather than relying on
+  truthiness.
+- **T0-OWN-16 — Retention and peak-memory telemetry.**  Measure live rows,
+  table capacity, free rows, retained container capacity, current/peak bytes,
+  open files, active workers, and inherited leaks throughout long generated
+  traces, not only at teardown; prove documented retention bounds and return
+  to baseline.
 
 The implementation order for this tier is allocator rollback, the randomized
 owner graph, exceptional cleanup, cross-stage contracts, worker lifecycle,
@@ -180,6 +222,11 @@ zero inherited leaks.  The shared fixed-capacity host registry now also
 reserves a row before starting user code, and a full 16-row table rejects
 the next spawn without running a speculative body; larger production-host
 allocation-failure behavior remains a separate contract to audit.
+The production `loom` registry now follows the same publication order under
+dynamic table growth: a failing allocator rejects before starting user code,
+preserves the output handle, and leaves no provisional row to drain.  The
+remaining worker lifecycle and join-status permutations are tracked by
+T0-OWN-11 and T0-OWN-15.
 The stale-handle slice now probes every list, map, array, and builder door
 after row generation reuse, plus file read/write/flush/copy/give operations;
 it checks that double release is inert and that stale file operations do not
@@ -188,7 +235,7 @@ still need their own exhaustive matrix.
 The retaining-store rollback slice now drives append, insert, map index-set,
 and struct field replacement through an induced allocation failure after the
 incoming graph has passed its ownership proof.  The runtime consumes the
-  accepted graph on that failure, while rejected aliases still release only
+accepted graph on that failure, while rejected aliases still release only
   their value storage and preserve the object owner; the full differential
   suite caught and fixed that distinction.  Broader failure injection for
   compound stores, C-export allocation points, and all early refusal boundaries remains open.

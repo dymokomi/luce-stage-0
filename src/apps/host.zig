@@ -305,26 +305,35 @@ pub const Host = struct {
                 run(given);
             }
         };
-        const started = std.Thread.spawn(.{}, Runner.go, .{ body, argument }) catch return null;
 
-        // Start outside the registry lock.  The new thread may
-        // immediately spawn a nested worker and must be able to take
-        // this same lock before its parent has been published.
+        // Reserve the registry row before starting user code.  Starting
+        // first and discovering that the table cannot grow is not a
+        // harmless allocation failure: the speculative body may block,
+        // while this caller is synchronously joining it and therefore
+        // cannot open its gate.  Holding the lock across the short thread
+        // creation/publication step is safe — the new thread cannot enter
+        // the registry until this lock is released, and nested workers see
+        // their parent's row already installed.
         self.thread_mutex.lockUncancelable(self.io);
         if (self.threads_closing) {
             self.thread_mutex.unlock(self.io);
-            started.join();
             return null;
         }
-        self.threads.append(self.gpa, started) catch {
+
+        // A null row is a reservation while the OS thread is being
+        // created.  No join or teardown can inspect it until publication,
+        // because both paths take this same lock.
+        self.threads.append(self.gpa, null) catch {
             self.thread_mutex.unlock(self.io);
-            // Nothing owns the thread now, so it must not be left
-            // running with nobody able to wait for it.  Joining outside
-            // the lock lets that thread enter this registry itself.
-            started.join();
             return null;
         };
         const handle: i64 = @intCast(self.threads.items.len);
+        const started = std.Thread.spawn(.{}, Runner.go, .{ body, argument }) catch {
+            self.threads.items.len -= 1;
+            self.thread_mutex.unlock(self.io);
+            return null;
+        };
+        self.threads.items[self.threads.items.len - 1] = started;
         self.thread_mutex.unlock(self.io);
         return handle;
     }
@@ -1775,6 +1784,45 @@ test "worker handles are append-only and a repeated join is harmless" {
     try testing.expect(second > first);
     try testing.expectEqual(luce.runtime.workers.yes, channel.join.?(channel.context, second));
     try testing.expectEqual(luce.runtime.workers.no, channel.join.?(channel.context, 0));
+}
+
+test "worker table allocation failure rejects before starting user code" {
+    const Probe = struct {
+        started: std.atomic.Value(bool) = .init(false),
+        gate: std.atomic.Value(bool) = .init(false),
+
+        fn run(argument: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(argument.?));
+            self.started.store(true, .release);
+            while (!self.gate.load(.acquire)) std.Thread.yield() catch {};
+        }
+    };
+
+    var failing: std.testing.FailingAllocator = .init(testing.allocator, .{});
+    failing.fail_index = failing.alloc_index;
+    var written: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer written.deinit();
+    var reported: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer reported.deinit();
+    var host: Host = undefined;
+    host.setup(failing.allocator(), testing.io, &written.writer, &reported.writer, &.{});
+    defer host.deinit();
+
+    var probe: Probe = .{};
+    var handle: i64 = 77;
+    try testing.expectEqual(
+        luce.runtime.workers.no,
+        host.workerChannel().spawn.?(
+            host.workerChannel().context,
+            Probe.run,
+            &probe,
+            &handle,
+        ),
+    );
+    try testing.expectEqual(@as(i64, 77), handle);
+    try testing.expect(!probe.started.load(.acquire));
+    try testing.expectEqual(@as(usize, 0), host.threads.items.len);
+    probe.gate.store(true, .release);
 }
 
 test "styles render 256-color SGR runs and clamp to defaults" {

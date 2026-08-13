@@ -1904,3 +1904,18 @@ The focused thread-registry lane passes 3/3 and the full Luce suite passes
 MISSING.md.
 
 Commit: current Tier 0 worker-registry hardening batch.
+
+## 2026-08-13 — production worker-table allocation failure
+
+The shipping `loom` host now reserves a dynamic worker-table row before it
+starts user code.  If `ArrayList` growth or OS thread creation fails, the
+spawn returns `no` without a speculative worker, preserves the caller's
+thread-handle slot, and leaves no row for teardown to join.  Publication still
+happens under the registry lock, so nested workers see their parent before
+they re-enter the table.
+
+The focused production-host worker lane passes 2/2; the full differential
+Luce suite remains 540/540.  Broader worker lifecycle and join-status
+permutations remain listed in MISSING.md.
+
+Commit: current Tier 0 production-host worker hardening batch.

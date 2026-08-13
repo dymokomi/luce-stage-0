@@ -817,6 +817,15 @@ pub fn build(b: *std.Build) void {
         },
     });
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app_host })).step);
+    const host_worker_tests = b.addTest(.{
+        .root_module = app_host,
+        .filters = &.{"worker table"},
+    });
+    const test_host_workers_step = b.step(
+        "test-host-workers",
+        "Run production host worker-registry hardening tests",
+    );
+    test_host_workers_step.dependOn(&b.addRunArtifact(host_worker_tests).step);
 
     // libluce_start: `main` for a compiled program, so `luce build
     // --emit=exe` is one `cc` invocation over three files (the
