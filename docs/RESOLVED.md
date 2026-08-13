@@ -1392,6 +1392,20 @@ short, byte, and boxed value lists.
 
 Commit: current Tier 0 worker/resource hardening batch.
 
+## 2026-08-12 — acquisition failures are matrix-tested at both resource boundaries
+
+The rollback corpus now refuses every parent allocation point during task
+acquisition and every object allocation point while constructing a nested
+array/map/list/file graph.  Failed task creation leaves no parent row or
+child runtime; failed resource construction closes every host handle exactly
+once and leaves no partial graph.  The assertions accept the two intentional
+runtime boundaries — ordinary `OutOfMemory` and the located
+`allocation_failed` trap used by raw array storage — and require balanced
+allocator bytes before advancing to the next failure offset.  The focused
+runtime ownership lane passes 21/21.
+
+Commit: current Tier 0 allocator-failure hardening batch.
+
 ## 2026-08-12 — array fills cannot strand old cells or partial copies
 
 `array_fill` now releases object ownership as well as value storage when a

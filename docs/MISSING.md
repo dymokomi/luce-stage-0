@@ -93,10 +93,13 @@ re-wait, pop, remove, clear, nested worker, error/trap/exit, intentional
 worker-leak, and parent-owned file-graph transitions across four fixed seeds
 and a fuzz target; it checks child joins, host close-once behavior, exact
 leak-census roll-up, and allocator bytes at teardown.  The allocator-failure
-matrix now drives every child allocation in a nested worker result, the
-parent-side result copy, and struct construction with an object field; the
-runtime also proves nested file close-once behavior, stale resource handles
-after row reuse, and one-shot task waits.  The owner-graph reference model is
+matrix now drives every parent allocation during task acquisition and every
+object allocation while building a nested array/map/list/file resource graph,
+in addition to nested worker results, parent-side result copies, and struct
+construction with an object field.  It accepts the runtime's documented
+`OutOfMemory` and located `allocation_failed` boundaries and checks the same
+rollback contract at both.  The runtime also proves nested file close-once
+behavior, stale resource handles after row reuse, and one-shot task waits.  The owner-graph reference model is
 also a coverage-guided fuzz target now: mutated byte traces become
 reproducible seeds for the same 700-step cycle, stale-handle, binding, and
 teardown proof.  Randomized mixed resource and worker graphs remain open.

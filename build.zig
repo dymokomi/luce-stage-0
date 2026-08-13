@@ -169,6 +169,8 @@ pub fn build(b: *std.Build) void {
         "fixed worker and resource lifecycle",
         "fuzz: worker and resource lifecycles",
         "list growth keeps every raw capacity",
+        "worker acquisition failures",
+        "nested resource graph failures",
     };
     const c_sanitize_luce = b.createModule(.{
         .root_source_file = b.path("src/luce/luce.zig"),
@@ -438,6 +440,8 @@ pub fn build(b: *std.Build) void {
             "failed struct construction releases objects",
             "nested resource graphs close once",
             "failed worker error adoption still closes the child runtime",
+            "worker acquisition failures",
+            "nested resource graph failures",
         },
     });
     const test_runtime_ownership_step = b.step(

@@ -1790,6 +1790,112 @@ fn runLifecycleSeed(seed: u64) !void {
     try testing.expectEqual(parent_objects.allocated_bytes, parent_objects.freed_bytes);
 }
 
+fn expectWorkerAcquisitionFailures() !usize {
+    var failures: usize = 0;
+    for (0..32) |failure_offset| {
+        var parent_objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+        var parent_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var parent: Runtime = .init(.{
+            .arena = parent_arena.allocator(),
+            .objects = parent_objects.allocator(),
+        });
+
+        var child_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var child: Runtime = .init(.{
+            .arena = child_arena.allocator(),
+            .objects = testing.allocator,
+        });
+        var state: WorkerFailureState = .{
+            .child = &child,
+            .child_live_at_close = std.math.maxInt(u32),
+        };
+        state.install(&parent);
+        parent_objects.fail_index = parent_objects.alloc_index + failure_offset;
+
+        var task: Value = .none;
+        const outcome = workers.spawn(&parent, 0, &.{}, &task);
+        var completed = false;
+        if (outcome) |_| {
+            completed = true;
+            try testing.expect(!task.isNone());
+            parent.freeValue(task);
+        } else |mistake| {
+            failures += 1;
+            try testing.expectEqual(error.OutOfMemory, mistake);
+            try testing.expect(task.isNone());
+            try testing.expect(state.spawns == 0 or state.spawns == 1);
+        }
+
+        try testing.expectEqual(@as(u32, 0), parent.live);
+        if (state.closes == 0) child.deinit();
+        const induced = parent_objects.has_induced_failure;
+        parent.deinit();
+        parent_arena.deinit();
+        child_arena.deinit();
+
+        try testing.expectEqual(parent_objects.allocated_bytes, parent_objects.freed_bytes);
+        try testing.expectEqual(@as(usize, state.closes), state.joins);
+        if (state.closes != 0) try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
+        if (completed) return failures;
+        try testing.expect(induced);
+    }
+    return error.WorkerAcquisitionNeverCompleted;
+}
+
+fn expectLifecycleResourceFailures() !usize {
+    var failures: usize = 0;
+    for (0..64) |failure_offset| {
+        var state = LifecycleState.init();
+        var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+        var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var runtime: Runtime = .init(.{
+            .arena = arena.allocator(),
+            .objects = objects.allocator(),
+        });
+        state.install(&runtime);
+        objects.fail_index = objects.alloc_index + failure_offset;
+
+        const outcome = lifecycleGraph(&runtime, true, @intCast(failure_offset));
+        var completed = false;
+        if (outcome) |graph| {
+            runtime.freeValue(graph.root);
+            completed = true;
+        } else |mistake| {
+            failures += 1;
+            if (mistake == error.Trap) {
+                try testing.expectEqual(
+                    vocabulary.TrapCode.allocation_failed,
+                    runtime.pending.?.code,
+                );
+                runtime.pending = null;
+            } else {
+                try testing.expectEqual(error.OutOfMemory, mistake);
+                try testing.expect(runtime.pending == null);
+            }
+        }
+
+        try testing.expectEqual(@as(u32, 0), runtime.live);
+        try testing.expectEqual(state.file_opens, state.file_closes);
+        try testing.expect(!state.duplicate_close);
+        try testing.expect(!state.unknown_close);
+        const induced = objects.has_induced_failure;
+        runtime.deinit();
+        arena.deinit();
+        try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
+        if (completed) return failures;
+        try testing.expect(induced);
+    }
+    return error.LifecycleResourceNeverCompleted;
+}
+
+test "worker acquisition failures roll every parent allocation back" {
+    try testing.expect((try expectWorkerAcquisitionFailures()) >= 2);
+}
+
+test "nested resource graph failures close every acquired file" {
+    try testing.expect((try expectLifecycleResourceFailures()) >= 5);
+}
+
 test "fixed worker and resource lifecycle seeds preserve joins and closes" {
     for ([_]u64{
         0x0B_0700_0001,
