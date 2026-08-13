@@ -106,6 +106,17 @@ const ConstantInfo = context.ConstantInfo;
 const OwnershipClass = context.OwnershipClass;
 const isReserved = context.isReserved;
 
+/// A `give` written inside a function type can be resolved while a
+/// struct field is still being collected.  Its ownership legality is
+/// intentionally checked after the complete containment graph has
+/// settled, so declaration order cannot turn a real object-carrying
+/// type into an empty, half-collected layout (OWNERSHIP.md S32).
+const DeferredGiveCheck = struct {
+    module: usize,
+    span: Span,
+    value_type: Type,
+};
+
 /// Reporting cap, matching stages 2 and 3.  One broken declaration
 /// can make every line after it wrong; a reader wants the first
 /// hundred, and an untrusted file must not be able to spend the
@@ -196,6 +207,11 @@ pub const Analyzer = struct {
     /// unconditional expansion — one for the tag plus the largest
     /// member's (D12).
     variant_shapes: std.ArrayList(StructShape) = .empty,
+    /// Function-type parameters are resolved while layouts are still
+    /// being collected.  Keep their source sites until the shape pass
+    /// has made `carriesObjects` a settled table lookup.
+    deferred_give_checks: std.ArrayList(DeferredGiveCheck) = .empty,
+    shapes_settled: bool = false,
     functions: std.ArrayList(FunctionDeclInfo) = .empty,
     function_names: std.StringHashMapUnmanaged(u32) = .empty,
     /// Which row the runtime starts, once `entry.settle` has decided:
@@ -241,6 +257,7 @@ pub const Analyzer = struct {
         self.variant_decls.deinit(self.temporary);
         self.variant_names.deinit(self.temporary);
         self.variant_shapes.deinit(self.temporary);
+        self.deferred_give_checks.deinit(self.temporary);
         self.function_names.deinit(self.temporary);
         self.pool.deinit();
         self.constant_infos.deinit(self.temporary);
@@ -281,6 +298,8 @@ pub const Analyzer = struct {
         try layouts.collectStructs(self);
         try layouts.settleVariantMembers(self);
         try shapes.settleTypeShapes(self);
+        self.shapes_settled = true;
+        try resolve.settleDeferredGiveChecks(self);
         try self.registerConstants();
         try layouts.settleEnumMembers(self);
         try constants.foldAll(self);

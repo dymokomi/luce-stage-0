@@ -1935,3 +1935,26 @@ The focused runtime ownership lane passes 52/52, both sanitizer lanes pass
 other plain-number callback domains remain listed in MISSING.md.
 
 Commit: current Tier 0 file-protocol hardening batch.
+
+## 2026-08-13 — ownership composition and empty worker arguments
+
+The differential composition corpus now carries a task-bearing union,
+optional callback, list, bound value-only receiver, and an owning `give`
+argument through another struct.  A declaration-order regression also keeps
+a function field's `give` parameter valid when its resource-bearing struct is
+declared later, while an invalid scalar `give` remains a stable semantic
+diagnostic.  Function-type ownership checks now wait for the settled shape
+graph instead of reading partial layouts during collection.
+
+The compiled C spawn door now accepts the ABI's null argument pointer for an
+empty call, while still rejecting null for non-empty calls.  The allocator
+rollback sweep exercises that exact zero-argument boundary and proves task
+publication, child close, joins, and output preservation across every failure
+point.
+
+The focused composition lane passes 5/5, the runtime ownership lane 52/52,
+both sanitizer lanes 58/58, and the full Luce suite 541/541.  Broader
+generated ownership traces and worker/resource lifecycle permutations remain
+listed in MISSING.md.
+
+Commit: current Tier 0 ownership-composition hardening batch.

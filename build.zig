@@ -308,16 +308,20 @@ pub fn build(b: *std.Build) void {
     specs.addOptions("build_options", runtime_path);
     test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = specs })).step);
 
-    // Keep the highest-risk function/union composition seam addressable
+    // Keep the highest-risk function/union ownership composition seams addressable
     // without waiting for the bundled applications.  This is a focused
     // differential specification, not a replacement for the full suite.
     const composition_tests = b.addTest(.{
         .root_module = specs,
-        .filters = &.{"a bound method carries a union callback"},
+        .filters = &.{
+            "a bound method carries a union callback",
+            "a bound method takes a union task and callback graph",
+            "a function field resolves give through a later resource-bearing struct",
+        },
     });
     const test_composition_step = b.step(
         "test-composition",
-        "Run the bound-method and union-callback composition spec",
+        "Run the function, bound-method, and union ownership composition specs",
     );
     test_composition_step.dependOn(&b.addRunArtifact(composition_tests).step);
 

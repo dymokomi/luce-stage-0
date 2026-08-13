@@ -1347,6 +1347,31 @@ test "luce.sema.own: a receiver carrying a resource does not bind (BINDING.md D4
     );
 }
 
+test "luce.sema.own: a task-bearing receiver does not bind (BINDING.md D4)" {
+    try expectHostSaying(
+        \\union Job:
+        \\    running(task: task(long))
+        \\
+        \\struct Reader:
+        \\    job: Job
+        \\
+        \\    func ready() -> bool:
+        \\        return true
+        \\
+        \\func work() -> long:
+        \\    return 1
+        \\
+        \\func main():
+        \\    let reader = Reader(job = Job.running(task = spawn work()))
+        \\    let check: func() -> bool = reader.ready
+        \\    print(string(check()))
+        \\
+    ,
+        "luce.sema.own",
+        "carries a file or task, and a bound value borrows its receiver",
+    );
+}
+
 test "luce.sema.own: a function value does not cross a worker boundary (BINDING.md D4)" {
     try expectSaying(
         \\func twice(n: long) -> long:
@@ -7319,6 +7344,17 @@ test "luce.sema.own: give applies diagnostic names resources at all three sites"
         \\    let moved = give value
         \\
     , "luce.sema.own", wording);
+}
+
+test "luce.sema.own: a function field checks give after shapes settle" {
+    try expectSaying(
+        \\struct Holder:
+        \\    callback: (func(give long) -> long)?
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.own", "give applies to containers and resources (list, map, array, builder, file, task) and structs that carry them, not values");
 }
 
 test "luce.sema.own: copy's value-domain diagnostic distinguishes resources" {

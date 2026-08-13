@@ -8915,7 +8915,10 @@ test "the C spawn door rolls worker acquisition back before publishing a task" {
 
         var out = Value.ofLong(99);
         parent_objects.fail_index = parent_objects.alloc_index + failure_offset;
-        const status = luce_rt_spawn(&parent, 0, &.{}, 0, &out);
+        // The generated ABI passes a null argument pointer for an empty
+        // call.  It is valid at count zero, including on every rollback
+        // point exercised by this failing allocator sweep.
+        const status = luce_rt_spawn(&parent, 0, null, 0, &out);
         parent_objects.fail_index = std.math.maxInt(usize);
 
         if (status == 0) {

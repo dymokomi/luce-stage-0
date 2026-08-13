@@ -48,7 +48,9 @@ const Analyzer = @import("declarations.zig").Analyzer;
 /// predicate, not a list/map/array/builder-only test.
 /// An array read: `collectStructs` settles every struct's shape
 /// once the layouts are known, and struct cycles are rejected
-/// before that.
+/// before that.  Written function signatures are validated after
+/// this pass; they must not make this settled query during layout
+/// collection.
 pub fn carriesObjects(self: *const Analyzer, of: Type) bool {
     return switch (of) {
         .heap => true,

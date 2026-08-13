@@ -355,6 +355,89 @@ test "a bind of a borrowed parameter is answered out of the function that made i
     , "7\n8\n");
 }
 
+test "a bound method takes a union task and callback graph through another struct" {
+    // The value-only receiver is safe to store in Runner.  The resource
+    // graph instead crosses the function-value boundary as an explicit
+    // `give` argument, so the bound value never becomes a second owner.
+    try agree.prints(
+        \\union Job:
+        \\    idle
+        \\    running(task: task(long))
+        \\
+        \\struct Packet:
+        \\    job: Job
+        \\    values: list(long)
+        \\    callback: (func(long) -> long)?
+        \\
+        \\struct Scorer:
+        \\    factor: long
+        \\
+        \\    func score(packet: give Packet, value: long) -> long:
+        \\        var answer: long = 0
+        \\        match packet.job:
+        \\            idle:
+        \\                answer = 0
+        \\            running(task):
+        \\                answer = task.wait()
+        \\        let chosen = packet.callback else identity
+        \\        return chosen((answer + value + len(packet.values)) * self.factor)
+        \\
+        \\struct Runner:
+        \\    operation: (func(give Packet, long) -> long)?
+        \\
+        \\    func execute(packet: give Packet, value: long) -> long:
+        \\        let chosen = self.operation else fallback
+        \\        return chosen(give packet, value)
+        \\
+        \\func identity(value: long) -> long:
+        \\    return value
+        \\
+        \\func produce() -> long:
+        \\    return 7
+        \\
+        \\func triple(value: long) -> long:
+        \\    return value * 3
+        \\
+        \\func fallback(packet: give Packet, value: long) -> long:
+        \\    return value
+        \\
+        \\func main():
+        \\    let scorer = Scorer(factor = 1)
+        \\    let runner = Runner(operation = scorer.score)
+        \\    let packet = Packet(
+        \\        job = Job.running(task = spawn produce()),
+        \\        values = [10, 20, 30],
+        \\        callback = triple,
+        \\    )
+        \\    print(string(runner.execute(give packet, 0)))
+        \\
+    , "30\n");
+}
+
+test "a function field resolves give through a later resource-bearing struct" {
+    // Runner is deliberately declared before Packet.  The function type
+    // in its field is resolved while Packet still has no collected fields;
+    // ownership must wait for the shape pass rather than inspecting a
+    // declaration-order-dependent partial layout.
+    try agree.prints(
+        \\struct Runner:
+        \\    operation: (func(give Packet) -> long)?
+        \\
+        \\struct Packet:
+        \\    values: list(long)
+        \\
+        \\func count(packet: give Packet) -> long:
+        \\    return len(packet.values)
+        \\
+        \\func main():
+        \\    let runner = Runner(operation = count)
+        \\    let packet = Packet(values = [1, 2, 3])
+        \\    let chosen = runner.operation else count
+        \\    print(string(chosen(give packet)))
+        \\
+    , "3\n");
+}
+
 test "a bound value whose receiver's owner is gone traps at the call" {
     try agree.trap(
         \\struct Bag:

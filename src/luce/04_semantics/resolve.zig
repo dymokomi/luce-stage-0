@@ -321,14 +321,16 @@ fn resolveSignature(self: *Analyzer, module: usize, written: ast.TypeName) Error
     const parameters = try self.arena.alloc(types.Signature.Parameter, written.arguments.len);
     for (written.arguments, parameters) |part, *parameter| {
         const resolved = (try resolveType(self, module, part)) orelse return null;
-        if (part.gives and !shapes.carriesObjects(self, resolved)) {
-            try self.fail(
-                "luce.sema.own",
-                part.span,
-                "give applies to containers and resources (list, map, array, builder, file, task) and structs that carry them, not values [OWNERSHIP.md S32]",
-                .{},
-            );
-            return null;
+        if (part.gives) {
+            if (self.shapes_settled) {
+                if (!try validateGiveParameter(self, part.span, resolved)) return null;
+            } else {
+                try self.deferred_give_checks.append(self.temporary, .{
+                    .module = module,
+                    .span = part.span,
+                    .value_type = resolved,
+                });
+            }
         }
         parameter.* = .{ .value_type = resolved, .gives = part.gives };
     }
@@ -337,6 +339,35 @@ fn resolveSignature(self: *Analyzer, module: usize, written: ast.TypeName) Error
         result = (try resolveType(self, module, answered.*)) orelse return null;
     }
     return try internSignature(self, .{ .parameters = parameters, .result = result });
+}
+
+/// Validate the ownership verb on a written function type.  Layout
+/// collection may resolve the type before the containment graph is
+/// settled, so those sites queue the check; body-time annotations and
+/// ordinary declarations arrive after the pass and can answer it
+/// immediately.
+fn validateGiveParameter(self: *Analyzer, span: Span, value_type: Type) Error!bool {
+    if (shapes.carriesObjects(self, value_type)) return true;
+    try self.fail(
+        "luce.sema.own",
+        span,
+        "give applies to containers and resources (list, map, array, builder, file, task) and structs that carry them, not values [OWNERSHIP.md S32]",
+        .{},
+    );
+    return false;
+}
+
+/// Finish the ownership checks queued while struct and union fields were
+/// being collected.  The shape pass has populated every layout table by
+/// this point, making this a single, deterministic validation seam rather
+/// than a second approximate containment walk.
+pub fn settleDeferredGiveChecks(self: *Analyzer) Error!void {
+    for (self.deferred_give_checks.items) |check| {
+        self.diagnostics.scope = self.modules[check.module].file;
+        _ = try validateGiveParameter(self, check.span, check.value_type);
+    }
+    self.deferred_give_checks.clearRetainingCapacity();
+    self.diagnostics.scope = source_mod.root_file;
 }
 
 /// The `?` a function type is told to wear where it stands in a slot.

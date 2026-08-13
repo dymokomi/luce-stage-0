@@ -602,10 +602,19 @@ pub export fn luce_rt_spawn(
     out: [*c]Value,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireValueInput(runtime, arguments)) return raised_trap;
     const argument_count = checkedCount(runtime, count) catch |mistake|
         return failed(runtime, mistake);
-    workers.spawn(runtime, function, arguments[0..argument_count], out) catch |mistake|
+    // LLVM deliberately passes a null pointer for the empty argument
+    // run.  A null pointer is therefore valid exactly when `count` is
+    // zero; every non-empty run still has to cross the borrowed C
+    // pointer boundary with a real input buffer.
+    if (argument_count != 0 and !requireValueInput(runtime, arguments)) return raised_trap;
+    const empty: [0]Value = .{};
+    const passed: []const Value = if (argument_count == 0)
+        &empty
+    else
+        arguments[0..argument_count];
+    workers.spawn(runtime, function, passed, out) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
