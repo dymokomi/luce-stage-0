@@ -264,6 +264,11 @@ pub const Entry = *const fn (host: *const Host) callconv(.c) Status;
 /// borrowed for the duration of the call only: the generated code
 /// copies them into the run's arena before the host can reuse the
 /// storage.
+///
+/// A callback must return exactly `exhausted`, `no`, or `yes`.  The C ABI
+/// cannot prevent a function from returning another integer, but generated
+/// code treats such a value as a malformed host and traps `host_unavailable`
+/// before it reads any output parameter.
 pub const Answer = enum(i32) {
     /// The host could not get memory.  Nothing about the program was
     /// wrong, so this is not a trap: the run ends `exhausted`, the same

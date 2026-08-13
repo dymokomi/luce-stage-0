@@ -1759,6 +1759,24 @@ const NullArgument = struct {
     }
 };
 
+const InvalidArgumentAnswer = struct {
+    fn count(_: ?*anyopaque) callconv(.c) i64 {
+        return 1;
+    }
+
+    fn get(
+        _: ?*anyopaque,
+        _: i64,
+        text_out: *[*c]const u8,
+        length_out: *i64,
+    ) callconv(.c) i32 {
+        const words = "malformed answer";
+        text_out.* = words.ptr;
+        length_out.* = words.len;
+        return 2;
+    }
+};
+
 fn expectBuiltListFailures(kind: BuiltList) !usize {
     var failures: usize = 0;
     for (0..16) |failure_offset| {
@@ -8363,6 +8381,19 @@ test "C callbacks fail closed on null report and argument buffers" {
     try expectCNullValueTrap(
         runtime,
         luce_rt_args_list(runtime, null, NullArgument.count, NullArgument.get, &out),
+    );
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+
+    try expectCNullValueTrap(
+        runtime,
+        luce_rt_args_list(
+            runtime,
+            null,
+            InvalidArgumentAnswer.count,
+            InvalidArgumentAnswer.get,
+            &out,
+        ),
     );
     try testing.expectEqual(@as(i64, 99), out.asLong());
     try testing.expectEqual(@as(u32, 0), runtime.live);

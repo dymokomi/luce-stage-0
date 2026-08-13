@@ -1540,6 +1540,22 @@ pass 36/36, and the full differential suite passes 517/517.
 
 Commit: current Tier 0 C-boundary hardening batch.
 
+## 2026-08-13 — malformed lower-level host answers fail closed
+
+The compiled host boundary now validates the complete `Answer` protocol:
+only `no`, `yes`, and exact `exhausted` are accepted, so an arbitrary C enum
+value cannot be treated as success or cause output parameters to be read.
+The runtime argument-list callback applies the same distinction and preserves
+the exhaustion outcome.  The bounded `path_kind` payload is checked before it
+is published to the Luce program.  Direct regressions cover malformed answer
+values, an out-of-range path kind, and an invalid argument callback answer.
+
+The focused LLVM hardening lane passes 3/3 and the full Luce suite passes
+540/540.  Plain-number payload domains for the other host services and the
+host-installation/forged-table contract remain listed in MISSING.md.
+
+Commit: current Tier 0 lower-host-boundary hardening batch.
+
 ## 2026-08-13 — blocked worker resource cleanup
 
 A barrier-controlled two-child runtime test now holds one worker inside a

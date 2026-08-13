@@ -848,6 +848,12 @@ pub const Provided = struct {
     /// the interpreter's default, so a spec only names this when it
     /// wants a shallower one.
     call_depth: u32 = @intCast(abi.default_call_depth),
+    /// Test-only ABI probe: make the compiled print callback return an
+    /// integer outside `abi.Answer` so the lowering's fail-closed check can
+    /// be exercised without giving the interpreter a malformed vtable.
+    malformed_answer: bool = false,
+    /// Test-only ABI probe for the bounded `path_kind` payload.
+    malformed_path_kind: bool = false,
     /// The world each arm gets its own copy of.
     world: World = .{},
 
@@ -978,6 +984,8 @@ pub const Capture = struct {
     exit_status: ?i64 = null,
     /// What this host answers when asked how deep calls may go.
     call_depth: i64 = abi.default_call_depth,
+    malformed_answer: bool = false,
+    malformed_path_kind: bool = false,
 
     // What this run said, each borrowed from a fixed buffer inside
     // this Capture.  **The next run overwrites all five**: a Capture is
@@ -1012,6 +1020,8 @@ pub const Capture = struct {
     /// entry symbol up in the loaded library and calls it with this.
     pub fn table(self: *Capture, provided: Provided) abi.Host {
         self.call_depth = provided.call_depth;
+        self.malformed_answer = provided.malformed_answer;
+        self.malformed_path_kind = provided.malformed_path_kind;
         self.world = provided.world;
         return .{
             .context = self,
@@ -1083,8 +1093,9 @@ pub const Capture = struct {
     }
 
     fn print(context: ?*anyopaque, text: [*]const u8, length: i64) callconv(.c) abi.Answer {
-        of(context).record("", text[0..@intCast(length)]);
-        return .yes;
+        const self = of(context);
+        self.record("", text[0..@intCast(length)]);
+        return if (self.malformed_answer) @enumFromInt(2) else .yes;
     }
 
     fn raised(
@@ -1187,8 +1198,9 @@ pub const Capture = struct {
         path_length: i64,
         kind: *i64,
     ) callconv(.c) abi.Answer {
-        const found = of(context).world.kindOf(path[0..@intCast(path_length)]) orelse return .no;
-        kind.* = found;
+        const self = of(context);
+        const found = self.world.kindOf(path[0..@intCast(path_length)]) orelse return .no;
+        kind.* = if (self.malformed_path_kind) 99 else found;
         return .yes;
     }
 

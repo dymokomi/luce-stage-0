@@ -1153,6 +1153,35 @@ test "a missing host service fails closed" {
     try std.testing.expectEqualStrings("", capture.printed());
 }
 
+test "a compiled host rejects an unknown Answer before continuing" {
+    var capture: Capture = .{};
+
+    const status = try runBuilt(
+        \\func main():
+        \\    print("first")
+        \\    print("second")
+        \\
+    , &capture, .{ .malformed_answer = true }, .debug);
+
+    try std.testing.expectEqual(abi.Status.trapped, status);
+    try std.testing.expectEqual(mir.TrapCode.host_unavailable, capture.trap_code.?);
+    try std.testing.expectEqualStrings("first\n", capture.printed());
+}
+
+test "a compiled host rejects an out-of-range path kind" {
+    var capture: Capture = .{};
+
+    const status = try runBuilt(
+        \\func main():
+        \\    print(string(try path_kind(".")))
+        \\
+    , &capture, .{ .malformed_path_kind = true }, .debug);
+
+    try std.testing.expectEqual(abi.Status.trapped, status);
+    try std.testing.expectEqual(mir.TrapCode.host_unavailable, capture.trap_code.?);
+    try std.testing.expectEqualStrings("", capture.printed());
+}
+
 // ---------------------------------------------------------------------------
 // The two engines, side by side
 // ---------------------------------------------------------------------------

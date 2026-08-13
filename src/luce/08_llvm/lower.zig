@@ -4811,6 +4811,7 @@ const Body = struct {
         const answer = try self.invokeHost(slot, arguments, name);
         try self.leaveEffects();
         try self.checkExhausted(answer);
+        try self.checkHostAnswer(answer);
         return answer;
     }
 
@@ -4912,19 +4913,44 @@ const Body = struct {
     /// The host could not get memory: end the run `exhausted` rather
     /// than reporting a trap the program did not cause.
     fn checkExhausted(self: *Body, answer: Builder.Value) Error!void {
-        const negative = try self.wip.icmp(
-            .slt,
+        const exhausted = try self.wip.icmp(
+            .eq,
             answer,
-            try self.module.builder.intValue(.i32, 0),
+            try self.module.builder.intValue(.i32, @intFromEnum(abi.Answer.exhausted)),
             "host.exhausted",
         );
         const giving_up = try self.wip.block(1, "exhausted");
         const surviving = try self.wip.block(1, "served");
-        _ = try self.wip.brCond(negative, giving_up, surviving, .else_likely);
+        _ = try self.wip.brCond(exhausted, giving_up, surviving, .else_likely);
         self.seek(giving_up);
         _ = try self.callRuntime(.luce_rt_exhaust, .void, &.{self.runtime}, "");
         _ = try self.wip.ret(try self.module.builder.intValue(.i32, outcome_trapped));
         self.seek(surviving);
+    }
+
+    /// Validate the complete host answer protocol before any caller treats
+    /// a nonzero answer as "yes".  `Answer` is a C enum, so an untrusted
+    /// callback can physically return a value outside its declared set;
+    /// accepting that value as success would make the generated code read
+    /// uninitialized or null output buffers.  Exact `exhausted` was handled
+    /// above; every remaining answer must be exactly `no` or `yes`.
+    fn checkHostAnswer(self: *Body, answer: Builder.Value) Error!void {
+        const not_no = try self.wip.icmp(
+            .ne,
+            answer,
+            try self.module.builder.intValue(.i32, @intFromEnum(abi.Answer.no)),
+            "host.not.no",
+        );
+        const not_yes = try self.wip.icmp(
+            .ne,
+            answer,
+            try self.module.builder.intValue(.i32, @intFromEnum(abi.Answer.yes)),
+            "host.not.yes",
+        );
+        try self.check(
+            try self.wip.bin(.@"and", not_no, not_yes, "host.answer.invalid"),
+            .host_unavailable,
+        );
     }
 
     /// `file_read(path)` — the whole file as a `string`.
@@ -7516,13 +7542,30 @@ const Body = struct {
                     "kind",
                 );
                 self.produced[register].outcome = try self.raiseIo(.inspect, answer, path, path_length);
-                self.produced[register].value = try self.wip.load(
+                const kind = try self.wip.load(
                     .normal,
                     .i64,
                     box,
                     value_alignment,
                     "kind.value",
                 );
+                const below = try self.wip.icmp(
+                    .slt,
+                    kind,
+                    try self.module.builder.intValue(.i64, 0),
+                    "kind.below",
+                );
+                const above = try self.wip.icmp(
+                    .sgt,
+                    kind,
+                    try self.module.builder.intValue(.i64, 3),
+                    "kind.above",
+                );
+                try self.check(
+                    try self.wip.bin(.@"or", below, above, "kind.invalid"),
+                    .host_unavailable,
+                );
+                self.produced[register].value = kind;
             },
             .term_rows => {
                 self.produced[register].value = try self.callHostNumber(.term_rows, "rows");

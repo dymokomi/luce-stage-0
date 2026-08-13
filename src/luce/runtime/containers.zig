@@ -541,7 +541,16 @@ pub fn listOfArguments(
             var size: i64 = 0;
             // A host that says no about an index it counted itself has
             // nothing left to say about the ones after it.
-            if (callback(context, index, &text, &size) == 0) break;
+            const answer = callback(context, index, &text, &size);
+            switch (answer) {
+                0 => break,
+                1 => {},
+                -1 => {
+                    runtime.exhausted = true;
+                    return error.OutOfMemory;
+                },
+                else => return runtime.fail(.host_unavailable),
+            }
             if (text == null) return runtime.fail(.host_unavailable);
             const text_length = std.math.cast(usize, size) orelse
                 return runtime.fail(.host_unavailable);
