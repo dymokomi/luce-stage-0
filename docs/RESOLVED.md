@@ -1888,3 +1888,19 @@ Null Value/out pointers and the remaining malformed C pointer classes stay
 listed in MISSING.md.
 
 Commit: current Tier 0 C-boundary hardening batch.
+
+## 2026-08-13 — full worker-table exhaustion fails before user code
+
+The shared fixed-capacity worker channel now finds a free registry row before
+starting an OS thread and publishes the row while holding the registry lock.
+This prevents a full table from starting a speculative body and then blocking
+while synchronously joining it; nested workers still see their parent's row
+after publication.  The regression fills all 16 rows with gate-blocked
+workers, proves the next spawn returns `no` without entering its body or
+changing its output handle, then releases and joins every worker.
+
+The focused thread-registry lane passes 3/3 and the full Luce suite passes
+540/540.  Production-host allocation-failure behavior remains listed in
+MISSING.md.
+
+Commit: current Tier 0 worker-registry hardening batch.

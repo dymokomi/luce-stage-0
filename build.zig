@@ -320,6 +320,16 @@ pub fn build(b: *std.Build) void {
     );
     test_composition_step.dependOn(&b.addRunArtifact(composition_tests).step);
 
+    const thread_registry_tests = b.addTest(.{
+        .root_module = specs,
+        .filters = &.{"full table"},
+    });
+    const test_thread_registry_step = b.step(
+        "test-thread-registry",
+        "Run fixed worker-table exhaustion and publication regressions",
+    );
+    test_thread_registry_step.dependOn(&b.addRunArtifact(thread_registry_tests).step);
+
     const exceptional_ownership_tests = b.addTest(.{
         .root_module = specs,
         .filters = &.{

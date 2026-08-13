@@ -176,8 +176,10 @@ nested worker races now also have a real-thread matrix: two siblings each
 spawn two nested children, all four nested bodies meet at a barrier, and the
 parent tears the graph down once by bulk release and once by explicit wait
 then release.  It proves all six joins and child closes, zero live rows, and
-zero inherited leaks.  Broader join-table exhaustion beyond this six-worker
-graph still needs an explicit concurrent case.
+zero inherited leaks.  The shared fixed-capacity host registry now also
+reserves a row before starting user code, and a full 16-row table rejects
+the next spawn without running a speculative body; larger production-host
+allocation-failure behavior remains a separate contract to audit.
 The stale-handle slice now probes every list, map, array, and builder door
 after row generation reuse, plus file read/write/flush/copy/give operations;
 it checks that double release is inert and that stale file operations do not

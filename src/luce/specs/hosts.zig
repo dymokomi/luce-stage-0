@@ -573,37 +573,47 @@ fn ThreadChannel(comptime Owner: type) type {
         }
 
         fn start(owner: *Owner, body: Body, argument: ?*anyopaque) ?i64 {
-            const started = std.Thread.spawn(.{}, go, .{ body, argument }) catch return null;
-
-            // Start outside the registry lock: the new thread may
-            // immediately spawn a nested worker and enter this table.
+            // Reserve a physical row before starting user code.  Starting
+            // first and discovering a full table afterwards is not a
+            // harmless allocation failure: the speculative body may block
+            // on a gate, while this caller is synchronously joining it and
+            // therefore cannot open that gate.  Holding the lock across the
+            // OS thread creation is safe — the new thread cannot enter the
+            // registry until this short publication step releases it, and
+            // nested workers then see their parent's row already installed.
             owner.thread_mutex.lockUncancelable(testing.io);
             if (owner.threads_closing) {
                 owner.thread_mutex.unlock(testing.io);
-                started.join();
                 return null;
             }
+            var free_row: ?usize = null;
             for (&owner.threads, 0..) |*row, index| {
                 if (row.* != null) continue;
-
-                // Rows are reusable storage, never identity.  A stale
-                // task value must not acquire a later occupant of the
-                // same row, so handles only move forward for the life
-                // of this registry.
-                const handle = owner.next_thread_handle;
-                if (handle == std.math.maxInt(i64)) break;
-                owner.next_thread_handle = handle + 1;
-                row.* = started;
-                owner.thread_handles[index] = handle;
-                owner.thread_mutex.unlock(testing.io);
-                return handle;
+                free_row = index;
+                break;
             }
+            const index = free_row orelse {
+                owner.thread_mutex.unlock(testing.io);
+                return null;
+            };
+
+            // Rows are reusable storage, never identity.  A stale task
+            // value must not acquire a later occupant of the same row, so
+            // handles only move forward for the life of this registry.
+            const handle = owner.next_thread_handle;
+            if (handle == std.math.maxInt(i64)) {
+                owner.thread_mutex.unlock(testing.io);
+                return null;
+            }
+            const started = std.Thread.spawn(.{}, go, .{ body, argument }) catch {
+                owner.thread_mutex.unlock(testing.io);
+                return null;
+            };
+            owner.next_thread_handle = handle + 1;
+            owner.threads[index] = started;
+            owner.thread_handles[index] = handle;
             owner.thread_mutex.unlock(testing.io);
-            // No room left in the fixed table: the thread must not be
-            // left running with nobody able to wait for it.  Join
-            // outside the lock so it can enter this registry itself.
-            started.join();
-            return null;
+            return handle;
         }
 
         fn waitFor(owner: *Owner, thread: i64) bool {
@@ -1813,6 +1823,74 @@ test "the spec thread channel synchronizes sibling nested registries" {
 
     try testing.expectEqual(@as(u32, 0), stress.failures.load(.acquire));
     try testing.expectEqual(@as(u32, sibling_count * rounds), stress.completed.load(.acquire));
+    for (owner.threads) |thread| try testing.expect(thread == null);
+}
+
+test "the spec thread channel rejects a full table before starting user code" {
+    const Owner = struct {
+        threads: [max_worker_threads]?std.Thread = @splat(null),
+        thread_handles: [max_worker_threads]i64 = @splat(0),
+        next_thread_handle: i64 = 1,
+        thread_mutex: std.Io.Mutex = .init,
+        threads_closing: bool = false,
+    };
+    const Threads = ThreadChannel(Owner);
+    const Stress = struct {
+        gate: std.atomic.Value(bool) = .init(false),
+        started: std.atomic.Value(u32) = .init(0),
+        finished: std.atomic.Value(u32) = .init(0),
+        speculative_started: std.atomic.Value(u32) = .init(0),
+
+        fn pause() void {
+            std.Thread.yield() catch std.atomic.spinLoopHint();
+        }
+
+        fn blocked(argument: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(argument.?));
+            _ = self.started.fetchAdd(1, .release);
+            while (!self.gate.load(.acquire)) pause();
+            _ = self.finished.fetchAdd(1, .release);
+        }
+
+        fn speculative(argument: ?*anyopaque) callconv(.c) void {
+            const self: *@This() = @ptrCast(@alignCast(argument.?));
+            _ = self.speculative_started.fetchAdd(1, .release);
+            while (!self.gate.load(.acquire)) pause();
+        }
+    };
+
+    var owner: Owner = .{};
+    var stress: Stress = .{};
+    defer {
+        stress.gate.store(true, .release);
+        Threads.close(&owner);
+    }
+    var handles: [max_worker_threads]i64 = undefined;
+    for (&handles) |*handle| {
+        try testing.expectEqual(
+            abi.Answer.yes,
+            Threads.spawn(&owner, Stress.blocked, &stress, handle),
+        );
+    }
+    while (stress.started.load(.acquire) != max_worker_threads) Stress.pause();
+
+    var rejected: i64 = 99;
+    try testing.expectEqual(
+        abi.Answer.no,
+        Threads.spawn(&owner, Stress.speculative, &stress, &rejected),
+    );
+    try testing.expectEqual(@as(i64, 99), rejected);
+    try testing.expectEqual(@as(u32, 0), stress.speculative_started.load(.acquire));
+    try testing.expectEqual(@as(u32, 0), stress.finished.load(.acquire));
+
+    stress.gate.store(true, .release);
+    for (handles) |handle| {
+        try testing.expectEqual(
+            abi.Answer.yes,
+            Threads.join(&owner, handle),
+        );
+    }
+    try testing.expectEqual(@as(u32, max_worker_threads), stress.finished.load(.acquire));
     for (owner.threads) |thread| try testing.expect(thread == null);
 }
 
