@@ -1096,3 +1096,10 @@ Python-style formatting mistake and points to f-string interpolation. Numeric
 modulo keeps its existing arithmetic semantics.
 
 Commit: `a992d41`.
+
+F-string holes now trim ordinary spaces at both edges before standalone
+lexing, preserving the source offset for diagnostics.  Nested strings,
+braces/maps, and whitespace around format specs are covered on both execution
+paths; tabs remain invalid source characters.
+
+Commit: `c1815e5`.

@@ -101,11 +101,6 @@ per-value ownership representation.
 - **Library/type questions.**  `wordcount` still uses `""` as a missing
   result; there is no `set(T)`, array slicing, environment mutation, or date
   library.  These are demand-driven extensions, not runtime defects.
-- **F-string hole whitespace.**  Whitespace immediately inside a hole is
-  currently rejected because the hole is lexed as a standalone buffer.
-  Trimming or offset-aware hole lexing needs parser tests for nested strings
-  and braces.
-
 ## Tier 3 — deliberate non-goals
 
 Generics for user code, closures with anonymous captured environments,
@@ -155,7 +150,6 @@ smuggle one in as a convenience feature.
   owner decision before their diagnostics or representations change.
 
 ## Tier 5b — diagnostic precision
-
 
 Smaller harness follow-ups remain: worker arena exhaustion can be translated
 as `host_unavailable`, release-mode origin stripping is redundant, and an
