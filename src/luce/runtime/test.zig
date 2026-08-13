@@ -6325,6 +6325,157 @@ test "host byte counts are bounded before runtime slices or advances" {
     zero_progress.deinit();
 }
 
+test "file callbacks reject unknown answers before using their outputs" {
+    const Host = struct {
+        open_answer: i32 = files.yes,
+        operation_answer: i32 = files.yes,
+        opened: usize = 0,
+        closed: usize = 0,
+
+        fn open(
+            context: ?*anyopaque,
+            _: [*]const u8,
+            _: i64,
+            _: i64,
+            handle: *i64,
+        ) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.opened += 1;
+            handle.* = 51;
+            return self.open_answer;
+        }
+
+        fn read(
+            context: ?*anyopaque,
+            _: i64,
+            _: [*]u8,
+            _: i64,
+            filled: *i64,
+        ) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            filled.* = 0;
+            return self.operation_answer;
+        }
+
+        fn write(
+            context: ?*anyopaque,
+            _: i64,
+            _: [*]const u8,
+            _: i64,
+            written: *i64,
+        ) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            written.* = 0;
+            return self.operation_answer;
+        }
+
+        fn flush(context: ?*anyopaque, _: i64) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            return self.operation_answer;
+        }
+
+        fn close(context: ?*anyopaque, _: i64) callconv(.c) i32 {
+            const self: *@This() = @ptrCast(@alignCast(context.?));
+            self.closed += 1;
+            return files.yes;
+        }
+    };
+
+    // Neither an arbitrary positive value nor an arbitrary negative value is
+    // an answer in the file protocol.  In particular, -2 must not inherit
+    // the old "any negative means exhausted" behavior.
+    for ([_]i32{ 2, -2 }) |malformed| {
+        var bench: Bench = undefined;
+        bench.setup();
+        const runtime = &bench.runtime;
+        var host: Host = .{ .open_answer = malformed };
+        runtime.files = .{
+            .context = &host,
+            .open = Host.open,
+            .close = Host.close,
+        };
+        try expectTrap(
+            .host_unavailable,
+            runtime,
+            files.open(runtime, "malformed-open.txt", @intFromEnum(files.Mode.read)),
+        );
+        try testing.expectEqual(@as(u32, 0), runtime.live);
+        try testing.expectEqual(@as(usize, 1), host.opened);
+        try testing.expectEqual(@as(usize, 0), host.closed);
+        bench.deinit();
+    }
+
+    var exhausted_bench: Bench = undefined;
+    exhausted_bench.setup();
+    const exhausted_runtime = &exhausted_bench.runtime;
+    var exhausted_host: Host = .{ .open_answer = files.exhausted };
+    exhausted_runtime.files = .{
+        .context = &exhausted_host,
+        .open = Host.open,
+        .close = Host.close,
+    };
+    try testing.expectError(
+        error.OutOfMemory,
+        files.open(exhausted_runtime, "exhausted-open.txt", @intFromEnum(files.Mode.read)),
+    );
+    try testing.expect(exhausted_runtime.exhausted);
+    try testing.expectEqual(@as(u32, 0), exhausted_runtime.live);
+    exhausted_bench.deinit();
+
+    for ([_]i32{ 2, -2 }) |malformed| {
+        var bench: Bench = undefined;
+        bench.setup();
+        const runtime = &bench.runtime;
+        var host: Host = .{ .operation_answer = malformed };
+        runtime.files = .{
+            .context = &host,
+            .read = Host.read,
+            .write = Host.write,
+            .flush = Host.flush,
+            .close = Host.close,
+        };
+        const file = try runtime.newFile(51, "malformed-operation.txt");
+        const buffer = try runtime.newArray(&.{4}, Value.ofByte(0));
+
+        try expectTrap(.host_unavailable, runtime, files.read(runtime, file, buffer));
+        runtime.pending = null;
+        try expectTrap(.host_unavailable, runtime, files.write(runtime, file, buffer, 4));
+        runtime.pending = null;
+        try expectTrap(.host_unavailable, runtime, files.flush(runtime, file));
+        runtime.pending = null;
+        runtime.freeValue(buffer);
+        runtime.freeValue(file);
+        try testing.expectEqual(@as(usize, 1), host.closed);
+        bench.deinit();
+    }
+
+    for ([_]i32{ 2, -2 }) |malformed| {
+        var bench: Bench = undefined;
+        bench.setup();
+        const runtime = &bench.runtime;
+        var host: Host = .{ .operation_answer = malformed };
+        runtime.files = .{
+            .context = &host,
+            .open = Host.open,
+            .read = Host.read,
+            .write = Host.write,
+            .flush = Host.flush,
+            .close = Host.close,
+        };
+
+        try expectTrap(.host_unavailable, runtime, files.readText(runtime, "malformed-read.txt"));
+        runtime.pending = null;
+        try expectTrap(
+            .host_unavailable,
+            runtime,
+            files.writeText(runtime, "malformed-write.txt", "payload", .write),
+        );
+        try testing.expectEqual(@as(usize, 2), host.opened);
+        try testing.expectEqual(@as(usize, 2), host.closed);
+        bench.deinit();
+    }
+}
+
 test "failed materialization discards its partial object and every published root" {
     var bench: Bench = undefined;
     bench.setup();

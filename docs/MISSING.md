@@ -275,14 +275,16 @@ C-nullable pointers and reject null before slicing, callbacks, host I/O, or
 ownership work; the regression covers ownership verbs, constructors,
 struct/function runs, workers, files, every container door, strings, and
 comparison.  Callback outputs now fail closed too: an argument callback that
-  reports success with a null byte buffer is rejected before list publication,
-  and null trap/error report callbacks are safe no-ops that preserve the
-  original diagnosis.  The lower-level tables now also reject unknown
-  `Answer` values before output use, distinguish exact exhaustion from other
-  negative values, reject unknown argument-callback answers, and bound
-  `path_kind`'s payload to its documented 0..3 domain.  The remaining callback
-  work is the documented runtime/host installation contract and domain checks
-  for the other plain-number services.
+reports success with a null byte buffer is rejected before list publication,
+and null trap/error report callbacks are safe no-ops that preserve the
+original diagnosis.  The lower-level tables now also reject unknown
+`Answer` values before output use, distinguish exact exhaustion from other
+negative values, reject unknown argument-callback answers, and bound
+`path_kind`'s payload to its documented 0..3 domain.  The file channel now
+applies the same exact-answer rule across raw and whole-file open, read,
+write, and flush paths, while preserving `-1` as exhaustion.  The remaining
+callback work is the documented runtime/host installation contract, join
+failure semantics, and domain checks for other plain-number services.
 The differential specs now put a task inside a union's optional field, that
 union inside a recursive struct with an optional callback and child list, and
 consume the task through a `give`d helper; a companion file case puts an

@@ -187,20 +187,12 @@ pub fn open(runtime: *Runtime, path: []const u8, mode: i64) Error!?Value {
     // before the host acquires anything.
     const closer = runtime.files.close orelse return runtime.fail(.host_unavailable);
     var handle: i64 = -1;
-    switch (callOpen(runtime, service, path, mode, &handle)) {
-        yes => {
-            // The raw handle belongs here until the object row takes it.
-            // Either allocation in `newFile` may fail; neither may leave
-            // the host handle behind.
-            errdefer closeFailedOpen(runtime, closer, handle);
-            return try runtime.newFile(handle, path);
-        },
-        no => return null,
-        else => {
-            runtime.exhausted = true;
-            return error.OutOfMemory;
-        },
-    }
+    if (!try hostAnswer(runtime, callOpen(runtime, service, path, mode, &handle))) return null;
+    // The raw handle belongs here until the object row takes it.  Either
+    // allocation in `newFile` may fail; neither may leave the host handle
+    // behind.
+    errdefer closeFailedOpen(runtime, closer, handle);
+    return try runtime.newFile(handle, path);
 }
 
 /// `f.read(into)` — fill an `array(byte, n)` and answer how many bytes
@@ -213,14 +205,8 @@ pub fn read(runtime: *Runtime, held: Value, buffer: Value) Error!?i64 {
     const into = (try runtime.resolveMutable(buffer)).elements;
     var filled: i64 = 0;
     const cells = into.cells(u8);
-    switch (callRead(runtime, service, handle, cells, &filled)) {
-        yes => return try hostCount(runtime, filled, cells.len),
-        no => return null,
-        else => {
-            runtime.exhausted = true;
-            return error.OutOfMemory;
-        },
-    }
+    if (!try hostAnswer(runtime, callRead(runtime, service, handle, cells, &filled))) return null;
+    return try hostCount(runtime, filled, cells.len);
 }
 
 /// `f.write(from, count)` — write the first `count` bytes of an
@@ -232,14 +218,11 @@ pub fn write(runtime: *Runtime, held: Value, buffer: Value, count: i64) Error!?i
     const cells = from.cells(u8);
     if (count < 0 or count > cells.len) return runtime.fail(.index_bounds);
     var written: i64 = 0;
-    switch (callWrite(runtime, service, handle, cells[0..@intCast(count)], &written)) {
-        yes => return try hostCount(runtime, written, @intCast(count)),
-        no => return null,
-        else => {
-            runtime.exhausted = true;
-            return error.OutOfMemory;
-        },
-    }
+    if (!try hostAnswer(
+        runtime,
+        callWrite(runtime, service, handle, cells[0..@intCast(count)], &written),
+    )) return null;
+    return try hostCount(runtime, written, @intCast(count));
 }
 
 /// Validate a byte count returned by an untrusted host callback before it can
@@ -254,18 +237,28 @@ fn hostCount(runtime: *Runtime, count: i64, capacity: usize) Error!i64 {
     return count;
 }
 
+/// Validate the answer itself before a file operation interprets it.  The C
+/// callback is an untrusted enum-shaped integer: only the three published
+/// values are meaningful.  In particular, an arbitrary negative value is a
+/// malformed host, not memory exhaustion, and an arbitrary positive value is
+/// not success.
+fn hostAnswer(runtime: *Runtime, answer: i32) Error!bool {
+    return switch (answer) {
+        yes => true,
+        no => false,
+        exhausted => blk: {
+            runtime.exhausted = true;
+            break :blk error.OutOfMemory;
+        },
+        else => runtime.fail(.host_unavailable),
+    };
+}
+
 /// `f.flush()` — everything written so far is on the device.
 pub fn flush(runtime: *Runtime, held: Value) Error!bool {
     const service = runtime.files.flush orelse return runtime.fail(.host_unavailable);
     const handle = try handleOf(runtime, held);
-    switch (callFlush(runtime, service, handle)) {
-        yes => return true,
-        no => return false,
-        else => {
-            runtime.exhausted = true;
-            return error.OutOfMemory;
-        },
-    }
+    return try hostAnswer(runtime, callFlush(runtime, service, handle));
 }
 
 /// The host handle behind a Luce one, or a trap.  A handle used after
@@ -354,11 +347,7 @@ pub fn readText(runtime: *Runtime, path: []const u8) Error!?Value {
             loaded.items[before..],
             &filled,
         );
-        if (answered == exhausted) {
-            runtime.exhausted = true;
-            return error.OutOfMemory;
-        }
-        if (answered != yes) return null;
+        if (!try hostAnswer(runtime, answered)) return null;
         const taken = try hostCount(runtime, filled, loaded.items.len - before);
         loaded.shrinkRetainingCapacity(before + @as(usize, @intCast(taken)));
         if (taken == 0) break;
@@ -386,16 +375,12 @@ pub fn writeText(runtime: *Runtime, path: []const u8, text: []const u8, mode: Mo
             text[sent..],
             &written,
         );
-        if (answered == exhausted) {
-            runtime.exhausted = true;
-            return error.OutOfMemory;
-        }
-        if (answered != yes) return false;
+        if (!try hostAnswer(runtime, answered)) return false;
         const moved = try hostCount(runtime, written, text.len - sent);
         // A host that accepts nothing forever is a host that has
         // stopped writing; say so rather than spin.
         if (moved == 0) return false;
         sent += @intCast(moved);
     }
-    return callFlush(runtime, flusher, try handleOf(runtime, handle)) == yes;
+    return try hostAnswer(runtime, callFlush(runtime, flusher, try handleOf(runtime, handle)));
 }

@@ -1919,3 +1919,19 @@ Luce suite remains 540/540.  Broader worker lifecycle and join-status
 permutations remain listed in MISSING.md.
 
 Commit: current Tier 0 production-host worker hardening batch.
+
+## 2026-08-13 — file callback answers fail closed
+
+The runtime file channel now validates the callback answer before it uses any
+handle, byte count, progress, or output parameter.  Exact `yes`, `no`, and
+`exhausted` retain their documented meanings; arbitrary positive and negative
+values trap `host_unavailable` instead of becoming success, ordinary absence,
+or memory exhaustion.  Raw open/read/write/flush and whole-file read/write
+helpers share the same check, and the regression covers both malformed signs
+plus close-once cleanup after whole-file refusal.
+
+The focused runtime ownership lane passes 52/52, both sanitizer lanes pass
+58/58, and the full Luce suite passes 541/541.  Join failure semantics and
+other plain-number callback domains remain listed in MISSING.md.
+
+Commit: current Tier 0 file-protocol hardening batch.
