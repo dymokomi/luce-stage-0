@@ -1579,3 +1579,18 @@ file/task acquisition, and the other allocating C exports still need direct
 failure doors.
 
 Commit: current Tier 0 compound-allocation hardening batch.
+
+## 2026-08-13 — inout replacement across union and optional object fields
+
+The differential self-spec now combines a writing receiver with a union
+payload containing an optional list and a separate optional list field.  It
+deep-copies the holder, replaces both fields through `self`, verifies the old
+copy remains unchanged, then clears the union and optional field and verifies
+the replacement graph is released without disturbing the copy.  This closes
+the source-level inout/union/optional field-replacement seam across the
+interpreter and compiled engine; wider present/absent, return/give, stale
+resource, and exceptional combinations remain in MISSING.md.
+
+The focused resource-composition differential lane passes 5/5.
+
+Commit: current Tier 0 inout composition specification batch.

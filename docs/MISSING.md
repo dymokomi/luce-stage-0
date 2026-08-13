@@ -170,9 +170,12 @@ The differential spec now puts a task inside a union's optional field, that
 union inside a recursive struct with an optional callback and child list, and
 consumes the task through a `give`d helper; a companion file case puts an
 optional file and callback in a struct and reads through the narrowed handle.
-Present/absent transitions, field replacement, return/give across more shapes,
-container storage, and exceptional teardown still need a larger matrix;
-indirect stale task and function-receiver handles remain open.  Finally,
+An inout writer now also replaces a union carrying an optional list and a
+separate optional list field after a deep copy, then clears both; the copied
+graph remains independent.  Present/absent transitions beyond those cases,
+return/give across more shapes, container storage, and exceptional teardown
+still need a larger matrix; indirect stale task and function-receiver handles
+remain open.  Finally,
 measure long mixed traces' live rows, retained capacities, peak bytes, and
 post-run bytes, not only the final leak count, following the snapshot-diff
 style of Python's `tracemalloc`.

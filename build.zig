@@ -326,6 +326,7 @@ pub fn build(b: *std.Build) void {
         .filters = &.{
             "a struct composes a union optional task callback",
             "a struct owns an optional file while a callback consumes its result",
+            "self: inout replaces union and optional object fields",
         },
     });
     const test_resource_composition_step = b.step(
