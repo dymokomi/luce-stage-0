@@ -113,7 +113,10 @@ repeatable
 `test-sanitize-c` and `test-sanitize-thread` ownership lanes; the current
 Zig/macOS arm64 toolchain does not provide a usable address/leak sanitizer or
 Valgrind mode, so those remain environment-dependent rather than claimed
-green here.
+green here.  The focused exceptional lane now also drives nested worker error
+propagation through two joins, worker trap and exit unwinds with union-owned
+lists, and an unobserved worker error whose task is released at scope end.
+Broader randomized worker/resource lifecycle coverage remains open.
 
 ## Tier 1 — design gaps before implementation
 

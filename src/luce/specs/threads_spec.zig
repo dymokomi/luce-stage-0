@@ -301,6 +301,23 @@ test "an unwaited nested union result is discarded with its owned graph" {
     , "joined later\n");
 }
 
+test "discarding a worker error still joins and closes its owned graph" {
+    try agree.prints(
+        \\union Packet:
+        \\    payload(items: list(long), label: string)
+        \\
+        \\func fail() -> long!:
+        \\    var items: list(long) = [10, 11, 12]
+        \\    let packet = Packet.payload(items = give items, label = "discarded")
+        \\    error("ignored")
+        \\
+        \\func main():
+        \\    let task = spawn fail()
+        \\    print("joined")
+        \\
+    , "joined\n");
+}
+
 test "free is an early join" {
     try agree.prints(
         \\func work(n: long) -> long:
@@ -410,6 +427,33 @@ test "a worker's error nobody catches ends the program with its words" {
     , .{}, .user_error, "the worker said no");
 }
 
+test "nested worker errors unwind owned graphs at both joins" {
+    // The error crosses two joins: the leaf first unwinds a union carrying
+    // an owned list, then the parent worker propagates the adopted error to
+    // the main runtime.  Both task rows must be consumed exactly once.
+    try agree.prints(
+        \\union Packet:
+        \\    payload(items: list(long), label: string)
+        \\
+        \\func leaf() -> long!:
+        \\    var items: list(long) = [1, 2, 3]
+        \\    let packet = Packet.payload(items = give items, label = "nested")
+        \\    error("nested failure")
+        \\
+        \\func branch() -> long!:
+        \\    let child = spawn leaf()
+        \\    return try child.wait()
+        \\
+        \\func main() -> !:
+        \\    let outer = spawn branch()
+        \\    var answer: long = 0
+        \\    answer = outer.wait() catch reason:
+        \\        print("caught: " + reason)
+        \\    print("after")
+        \\
+    , "caught: nested failure\nafter\n");
+}
+
 test "a trap in a worker is a trap at the join" {
     try agree.trap(
         \\func divide(n: long) -> long:
@@ -419,6 +463,24 @@ test "a trap in a worker is a trap at the join" {
         \\func main():
         \\    let t = spawn divide(1)
         \\    print(string(t.wait()))
+        \\
+    , .divide_by_zero);
+}
+
+test "a worker trap unwinds a nested union graph before the join" {
+    try agree.trap(
+        \\union Job:
+        \\    run(items: list(long), label: string)
+        \\
+        \\func boom() -> long:
+        \\    var items: list(long) = [4, 5, 6]
+        \\    let job = Job.run(items = give items, label = "worker")
+        \\    var zero: long = 0
+        \\    return 1 // zero
+        \\
+        \\func main():
+        \\    let task = spawn boom()
+        \\    task.wait()
         \\
     , .divide_by_zero);
 }
@@ -666,4 +728,21 @@ test "exit inside a worker stops the program at the join, carrying its status" {
         \\    print("never")
         \\
     , .{}, 3);
+}
+
+test "worker exit unwinds a nested union graph before the join" {
+    try agree.exits(
+        \\union Job:
+        \\    run(items: list(long), label: string)
+        \\
+        \\func bail() -> long:
+        \\    var items: list(long) = [7, 8, 9]
+        \\    let job = Job.run(items = give items, label = "worker")
+        \\    exit(11)
+        \\
+        \\func main():
+        \\    let task = spawn bail()
+        \\    task.wait()
+        \\
+    , .{}, 11);
 }

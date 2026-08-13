@@ -294,6 +294,10 @@ pub fn build(b: *std.Build) void {
             "S34: break and continue release union payloads",
             "an unwaited nested union result is discarded",
             "exit unwinds a union carrying a callback",
+            "nested worker errors unwind owned graphs",
+            "a worker trap unwinds a nested union graph",
+            "worker exit unwinds a nested union graph",
+            "discarding a worker error still joins",
         },
     });
     const test_exceptional_ownership_step = b.step(

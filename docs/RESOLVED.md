@@ -1362,6 +1362,17 @@ optimizer shape suite proves ownership facts do not cross basic blocks.
 
 Commit: current Tier 0 cross-stage ownership hardening batch.
 
+## 2026-08-12 — nested worker exceptional paths carry ownership graphs
+
+The exceptional differential lane now covers a union-owned list graph through
+two nested worker joins carrying an error, a worker trap, and a worker exit.
+It also proves that releasing an unobserved worker error still joins and closes
+the child graph.  The interpreter and LLVM paths agree on each outcome and
+the ownership census; randomized worker/resource generation remains open in
+MISSING.md.
+
+Commit: current Tier 0 exceptional-cleanup hardening batch.
+
 ## 2026-08-12 — array fills cannot strand old cells or partial copies
 
 `array_fill` now releases object ownership as well as value storage when a
