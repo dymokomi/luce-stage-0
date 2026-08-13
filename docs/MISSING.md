@@ -310,6 +310,11 @@ measure long mixed traces' live rows, retained capacities, peak bytes, and
 post-run bytes, not only the final leak count, following the snapshot-diff
 style of Python's `tracemalloc`.
 
+The direct runtime function-value matrix now exercises one borrowed receiver
+through a list element, map value, array fill, struct field, deep copies, and
+stale-receiver teardown; the exhaustive generated receiver matrix and
+allocation-failure permutations remain open.
+
 ## Tier 1 — design gaps before implementation
 
 ### Typed worker channels

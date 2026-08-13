@@ -1990,3 +1990,18 @@ passes 55/55.  The broader worker/resource permutation matrix remains open in
 MISSING.md.
 
 Commit: current Tier 0 worker callback hardening batch.
+
+## 2026-08-13 — function receivers stay borrowed through value containers
+
+The direct runtime ownership corpus now places function values carrying one
+receiver graph in a list, map, value-shaped array fill, and struct field,
+deep-copies every holder, checks the receiver handle in every copy, and then
+retires the receiver before releasing the stale borrowed runs.  This proves
+that function storage is released by its holder without inventing an owner or
+freeing the receiver graph.
+
+The focused runtime ownership lane, both sanitizer lanes, and the full Luce
+suite include this matrix.  Exhaustive generated receiver traces and
+allocator-failure permutations remain listed in MISSING.md.
+
+Commit: current Tier 0 function-value ownership hardening batch.

@@ -75,6 +75,14 @@ fn expectContainerParent(runtime: *Runtime, child: Value, parent: Value) !void {
     try testing.expect(owner.details.parent.same(parent.asObject()));
 }
 
+fn expectBorrowedFunctionReceiver(function: Value, receiver: Value) !void {
+    try testing.expectEqual(value.Tag.function, function.tag);
+    const slots = function.asStruct();
+    try testing.expectEqual(@as(usize, 2), slots.len);
+    try testing.expect(slots[1].tag == .object);
+    try testing.expect(slots[1].asObject().same(receiver.asObject()));
+}
+
 /// A tiny deterministic generator for the ownership state machine.  The
 /// seed and the transition count are part of the test contract: when a
 /// sequence finds a bad edge, the same trace can be replayed without a
@@ -6904,6 +6912,105 @@ test "a union-shaped optional callback keeps borrowed receivers out of ownership
     runtime.freeValue(copied_bag);
     runtime.freeValue(receiver);
     try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
+test "function values stay receiver-borrowed through every value container" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    // The receiver owns a second object and outside text.  Every function
+    // below names this same graph, but none of the function runs may become
+    // a second owner of either row.
+    const receiver = try runtime.newList(Value.none);
+    const nested = try runtime.newList(Value.none);
+    try containers.append(runtime, nested, try runtime.ownValue(Value.ofString(
+        "receiver bytes outlive every borrowed callback run",
+    )));
+    try containers.append(runtime, receiver, nested);
+
+    const list = try runtime.newList(Value.none);
+    var list_function = try runtime.makeFunction(&.{ Value.ofLong(1), receiver });
+    try containers.append(runtime, list, list_function);
+    list_function = .none;
+
+    const map = try runtime.newMap();
+    var map_function = try runtime.makeFunction(&.{ Value.ofLong(2), receiver });
+    try containers.indexSet(runtime, map, &.{Value.ofInlineText(.string, "callback")}, map_function);
+    map_function = .none;
+
+    // A function value is a value-shaped array element.  `arrayFill` makes a
+    // fresh run per cell, so this covers both the array replacement buffer and
+    // repeated copies of a run whose receiver remains borrowed.
+    const array = try runtime.newArray(&.{3}, Value.none);
+    var fill_function = try runtime.makeFunction(&.{ Value.ofLong(3), receiver });
+    try containers.arrayFill(runtime, array, fill_function);
+    runtime.dropStorage(fill_function);
+    fill_function = .none;
+
+    var record_function = try runtime.makeFunction(&.{ Value.ofLong(4), receiver });
+    const record = try runtime.makeStruct(&.{record_function});
+    record_function = .none;
+
+    try expectBorrowedFunctionReceiver(
+        try containers.indexGet(runtime, list, &.{Value.ofLong(0)}),
+        receiver,
+    );
+    try expectBorrowedFunctionReceiver(
+        try containers.mapGet(runtime, map, Value.ofInlineText(.string, "callback")),
+        receiver,
+    );
+    for (0..3) |index| {
+        try expectBorrowedFunctionReceiver(
+            try containers.indexGet(runtime, array, &.{Value.ofLong(@intCast(index))}),
+            receiver,
+        );
+    }
+    try expectBorrowedFunctionReceiver(record.asStruct()[0], receiver);
+    runtime.debugAssertInvariants();
+
+    // Copying every holder duplicates only the function run.  The receiver
+    // handle must remain the same borrowed handle in each copy.
+    const copied_list = try runtime.deepCopy(list);
+    const copied_map = try runtime.deepCopy(map);
+    const copied_array = try runtime.deepCopy(array);
+    const copied_record = try runtime.deepCopy(record);
+    try expectBorrowedFunctionReceiver(
+        try containers.indexGet(runtime, copied_list, &.{Value.ofLong(0)}),
+        receiver,
+    );
+    try expectBorrowedFunctionReceiver(
+        try containers.mapGet(runtime, copied_map, Value.ofInlineText(.string, "callback")),
+        receiver,
+    );
+    for (0..3) |index| {
+        try expectBorrowedFunctionReceiver(
+            try containers.indexGet(runtime, copied_array, &.{Value.ofLong(@intCast(index))}),
+            receiver,
+        );
+    }
+    try expectBorrowedFunctionReceiver(copied_record.asStruct()[0], receiver);
+    runtime.debugAssertInvariants();
+
+    // Function values are not a hidden owner.  Retiring the receiver while
+    // the holders still contain stale borrowed handles must be safe, and
+    // releasing those holders must return only their own runs.
+    runtime.freeValue(receiver);
+    try expectStale(runtime, runtime.resolve(receiver));
+    runtime.debugAssertInvariants();
+
+    runtime.freeValue(copied_list);
+    runtime.freeValue(copied_map);
+    runtime.freeValue(copied_array);
+    runtime.freeValue(copied_record);
+    runtime.freeValue(list);
+    runtime.freeValue(map);
+    runtime.freeValue(array);
+    runtime.freeValue(record);
+    runtime.debugAssertInvariants();
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+    try testing.expectEqual(@as(i64, 0), runtime.leaked());
 }
 
 // ---------------------------------------------------------------------------
