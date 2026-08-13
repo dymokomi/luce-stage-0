@@ -1052,6 +1052,25 @@ test "exit unwinds through nested calls, and the census counts what stood" {
     , .{}, 7);
 }
 
+test "exit unwinds a union carrying a callback and an owned list" {
+    try agree.exits(
+        \\union Job:
+        \\    run(action: (func(long) -> long)?, items: list(long))
+        \\
+        \\func twice(value: long) -> long:
+        \\    return value * 2
+        \\
+        \\func stop(code: long):
+        \\    var job = Job.run(action = twice, items = [8, 9])
+        \\    exit(code)
+        \\
+        \\func main():
+        \\    var kept = Job.run(action = twice, items = [1, 2, 3])
+        \\    stop(7)
+        \\
+    , .{}, 7);
+}
+
 test "a negative and a large status cross the boundary intact" {
     // The host receives the long the program wrote; what an OS does
     // with it is the loader's business (POSIX keeps the low byte),

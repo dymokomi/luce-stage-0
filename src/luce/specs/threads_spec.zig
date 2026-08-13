@@ -285,6 +285,22 @@ test "an unwaited task joins at the end of its scope and the result is discarded
     , .{}, "spawned\n");
 }
 
+test "an unwaited nested union result is discarded with its owned graph" {
+    try agree.prints(
+        \\union Job:
+        \\    run(items: list(long))
+        \\
+        \\func build() -> Job:
+        \\    var items: list(long) = [6, 7]
+        \\    return Job.run(items = give items)
+        \\
+        \\func main():
+        \\    let task = spawn build()
+        \\    print("joined later")
+        \\
+    , "joined later\n");
+}
+
 test "free is an early join" {
     try agree.prints(
         \\func work(n: long) -> long:

@@ -1291,3 +1291,17 @@ ownership operations and every no-result instruction shape, and the consumer
 lanes keep the optimizer, interpreter and LLVM paths behind the same check.
 
 Commit: current MIR hardening batch.
+
+## 2026-08-12 — exceptional joins cannot strand a worker runtime
+
+wait detaches a task before it adopts the worker's answer, trap, or
+error.  If copying a worker-raised error exhausted the joiner's arena,
+the old path returned before closing the child runtime and destroying
+the worker record.  Cleanup now runs through a deferred finish, so
+allocation failure, error adoption, trap adoption, exit, and result
+copying all have one teardown edge.  Focused tests also cover failed
+struct stores, fallible union catches with early return, loop
+break/continue, exit through union-owned graphs, and discarded
+nested-union worker results.
+
+Commit: current Tier 0 exceptional-control-flow hardening batch.

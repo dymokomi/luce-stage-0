@@ -427,6 +427,7 @@ const WorkerFailureState = struct {
     child: *Runtime,
     produce_result: bool = false,
     exhausted: bool = false,
+    raise_error: bool = false,
     closes: usize = 0,
     child_live_at_close: u32 = 0,
     spawns: usize = 0,
@@ -458,6 +459,17 @@ const WorkerFailureState = struct {
         if (self.exhausted) {
             runtime.exhausted = true;
             return workers.raised_trap;
+        }
+        if (self.raise_error) {
+            runtime.raise(.user_error, "the worker raised an error", .{
+                .function = "worker",
+                .function_length = 6,
+                .source = "worker.luc",
+                .source_length = 11,
+                .line = 1,
+                .column = 1,
+            });
+            return workers.raised_error;
         }
         if (!self.produce_result) return workers.survived;
         const words = runtime.ownValue(Value.ofString(
@@ -1337,6 +1349,77 @@ test "worker arena exhaustion crosses the join as out of memory" {
     try testing.expect(parent.pending == null);
     parent.freeValue(task);
     try testing.expectEqual(@as(u32, 0), parent.live);
+}
+
+test "a failed struct store consumes only its replacement and preserves the source" {
+    var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena.deinit();
+    var runtime: Runtime = .init(.{
+        .arena = arena.allocator(),
+        .objects = objects.allocator(),
+    });
+    defer runtime.deinit();
+
+    const child = try runtime.newList(Value.none);
+    var fields = [_]Value{ Value.ofLong(1), child };
+    const record = try runtime.makeStruct(&fields);
+    const replacement = try runtime.ownValue(Value.ofString(
+        "replacement text that is outside the value",
+    ));
+    objects.fail_index = objects.alloc_index;
+
+    try testing.expectError(error.OutOfMemory, runtime.setField(record, 0, replacement));
+    objects.fail_index = std.math.maxInt(usize);
+    try testing.expectEqual(@as(u32, 1), runtime.live);
+    try testing.expect(record.asStruct()[1].asObject().same(child.asObject()));
+    try testing.expectEqual(@as(i64, 0), (try containers.length(&runtime, child)).asLong());
+    try testing.expect(runtime.pending == null);
+
+    runtime.freeValue(record);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
+test "failed worker error adoption still closes the child runtime" {
+    var parent_memory: std.testing.FailingAllocator = .init(testing.allocator, .{});
+    var parent_arena: std.heap.ArenaAllocator = .init(parent_memory.allocator());
+    defer parent_arena.deinit();
+    var parent: Runtime = .init(.{
+        .arena = parent_arena.allocator(),
+        .objects = testing.allocator,
+    });
+
+    var child_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer child_arena.deinit();
+    var child: Runtime = .init(.{
+        .arena = child_arena.allocator(),
+        .objects = testing.allocator,
+    });
+    var state: WorkerFailureState = .{
+        .child = &child,
+        .raise_error = true,
+        .child_live_at_close = std.math.maxInt(u32),
+    };
+    state.install(&parent);
+
+    var task: Value = .none;
+    try workers.spawn(&parent, 0, &.{}, &task);
+    // No parent-arena allocation has happened yet.  Refuse the message
+    // copy in adoptError, after the worker has already been detached.
+    parent_memory.fail_index = parent_memory.alloc_index;
+
+    var answer: Value = .none;
+    try testing.expectError(error.OutOfMemory, workers.wait(&parent, task, &answer));
+    try testing.expect(answer.isNone());
+    try testing.expectEqual(@as(usize, 1), state.joins);
+    try testing.expectEqual(@as(usize, 1), state.closes);
+    try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
+
+    // `wait` consumed the Worker, but the task row remains the caller's
+    // storage and must still be released after the failed join.
+    parent.freeValue(task);
+    try testing.expectEqual(@as(u32, 0), parent.live);
+    parent.deinit();
 }
 
 test "a cross-runtime move attributes a nested stale-handle trap to its source" {

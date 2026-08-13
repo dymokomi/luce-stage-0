@@ -328,6 +328,67 @@ test "a trapped callback releases a union payload and its function run" {
     , .index_bounds);
 }
 
+test "S34: catch releases a fallible union result before an early return" {
+    try agree.ok(
+        \\union Packet:
+        \\    empty
+        \\    payload(action: (func(long) -> long)?, items: list(long))
+        \\
+        \\func twice(value: long) -> long:
+        \\    return value * 2
+        \\
+        \\func identity(value: long) -> long:
+        \\    return value
+        \\
+        \\func risky(ok: bool) -> Packet!:
+        \\    var items: list(long) = [3, 4]
+        \\    if not ok:
+        \\        error("packet unavailable")
+        \\    return Packet.payload(action = twice, items = give items)
+        \\
+        \\func recover(ok: bool) -> long:
+        \\    var packet: Packet
+        \\    packet = risky(ok) catch:
+        \\        return -1
+        \\    match packet:
+        \\        empty:
+        \\            return 0
+        \\        payload(action, items):
+        \\            let chosen = action else identity
+        \\            return chosen(len(items))
+        \\
+        \\func main():
+        \\    assert(recover(true) == 4)
+        \\    assert(recover(false) == -1)
+        \\
+    );
+}
+
+test "S34: break and continue release union payloads and callback runs" {
+    try agree.ok(
+        \\union Job:
+        \\    run(action: (func(long) -> long)?, items: list(long))
+        \\
+        \\func twice(value: long) -> long:
+        \\    return value * 2
+        \\
+        \\func main():
+        \\    var total: long = 0
+        \\    for index in range(0, 8):
+        \\        var job = Job.run(action = twice, items = [index])
+        \\        if index == 2:
+        \\            continue
+        \\        if index == 5:
+        \\            break
+        \\        match job:
+        \\            run(action, items):
+        \\                let chosen = action else twice
+        \\                total += chosen(items[0])
+        \\    assert(total == 16)
+        \\
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The zero: first declared member, every payload field at its own zero
 // ---------------------------------------------------------------------------

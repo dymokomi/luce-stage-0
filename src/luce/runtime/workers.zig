@@ -403,6 +403,12 @@ pub fn wait(joiner: *Runtime, task: Value, out: *Value) heap.Error!i32 {
     const worker = try take(joiner, task);
     joinThread(worker);
     const child = worker.runtime.?;
+    // The task is detached before any result, trap, or error is adopted.
+    // Adoption can allocate in the joiner's arena (notably for a worker
+    // error's message), so cleanup must not depend on the adoption
+    // succeeding.  A failed adoption still owns the child runtime, the
+    // argument block, and the worker record until this scope ends.
+    defer finish(joiner, worker);
 
     if (child.exit_status) |chosen| {
         // The program chose to stop, in a thread that is not the one
@@ -411,23 +417,17 @@ pub fn wait(joiner: *Runtime, task: Value, out: *Value) heap.Error!i32 {
         // reason: there is exactly one place a worker's ending can be
         // spoken, and this is it.
         joiner.exit_status = chosen;
-        finish(joiner, worker);
         return error.Trap;
     }
     if (worker.outcome == raised_trap) {
-        const adopted = adoptTrap(joiner, child);
-        finish(joiner, worker);
-        return adopted;
+        return adoptTrap(joiner, child);
     }
     if (worker.outcome == raised_error) {
-        const adopted = adoptError(joiner, child);
-        finish(joiner, worker);
-        return if (adopted) |_| raised_error else |mistake| mistake;
+        try adoptError(joiner, child);
+        return raised_error;
     }
 
-    const answer = joiner.copyFrom(child, worker.result);
-    finish(joiner, worker);
-    out.* = try answer;
+    out.* = try joiner.copyFrom(child, worker.result);
     return survived;
 }
 

@@ -236,6 +236,21 @@ pub fn build(b: *std.Build) void {
     );
     test_composition_step.dependOn(&b.addRunArtifact(composition_tests).step);
 
+    const exceptional_ownership_tests = b.addTest(.{
+        .root_module = specs,
+        .filters = &.{
+            "S34: catch releases a fallible union result",
+            "S34: break and continue release union payloads",
+            "an unwaited nested union result is discarded",
+            "exit unwinds a union carrying a callback",
+        },
+    });
+    const test_exceptional_ownership_step = b.step(
+        "test-exceptional-ownership",
+        "Run exceptional-control-flow ownership specifications",
+    );
+    test_exceptional_ownership_step.dependOn(&b.addRunArtifact(exceptional_ownership_tests).step);
+
     const function_ownership_tests = b.addTest(.{
         .root_module = specs,
         .filters = &.{
@@ -346,6 +361,8 @@ pub fn build(b: *std.Build) void {
         .filters = &.{
             "cross-runtime moves roll back every nested allocation",
             "cross-runtime moves reject function receiver handles",
+            "a failed struct store consumes only its replacement",
+            "failed worker error adoption still closes the child runtime",
         },
     });
     const test_runtime_ownership_step = b.step(
