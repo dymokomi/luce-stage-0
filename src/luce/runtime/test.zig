@@ -6061,6 +6061,13 @@ extern fn luce_rt_concat(
     right: *const Value,
     out: *Value,
 ) callconv(.c) i32;
+extern fn luce_rt_string_slice(
+    runtime: *Runtime,
+    held: *const Value,
+    start: i64,
+    end: i64,
+    out: *Value,
+) callconv(.c) i32;
 extern fn luce_rt_parse_string(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32;
 extern fn luce_rt_spawn(
     runtime: *Runtime,
@@ -7016,6 +7023,58 @@ test "C compound value doors preserve destinations through every allocation fail
         try testing.expect(completed);
         try testing.expect(failures >= 1);
     }
+}
+
+test "C string slices preserve views and refuse invalid boundaries" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{
+        .arena = arena.allocator(),
+        .objects = testing.allocator,
+    });
+    defer {
+        runtime.deinit();
+        arena.deinit();
+    }
+
+    const outside = Value.ofString("outside text remains behind the view");
+    var out = Value.ofLong(99);
+    try testing.expectEqual(
+        @as(i32, 0),
+        luce_rt_string_slice(&runtime, &outside, 8, 12, &out),
+    );
+    try testing.expectEqualStrings("text", out.asString());
+    // An outside view and owned outside text have the same wire shape;
+    // this result is a borrow because its pointer is inside the source.
+    // The caller must not pass it to dropStorage.
+    try testing.expect(!out.textIsInline());
+    try testing.expectEqual(@intFromPtr(outside.asString().ptr) + 8, @intFromPtr(out.asString().ptr));
+
+    const inline_text = Value.ofInlineText(.string, "inline🙂text");
+    out = Value.ofLong(99);
+    try testing.expectEqual(
+        @as(i32, 0),
+        luce_rt_string_slice(&runtime, &inline_text, 0, 6, &out),
+    );
+    try testing.expectEqualStrings("inline", out.asString());
+    try testing.expect(out.textIsInline());
+
+    out = Value.ofLong(99);
+    try testing.expectEqual(
+        @as(i32, 1),
+        luce_rt_string_slice(&runtime, &outside, 0, -1, &out),
+    );
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(vocabulary.TrapCode.string_bounds, runtime.pending.?.code);
+    runtime.pending = null;
+
+    out = Value.ofLong(99);
+    try testing.expectEqual(
+        @as(i32, 1),
+        luce_rt_string_slice(&runtime, &inline_text, 6, 7, &out),
+    );
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(vocabulary.TrapCode.string_boundary, runtime.pending.?.code);
+    runtime.pending = null;
 }
 
 test "the C materialization surface roots, loads, freezes, and excludes a constant" {

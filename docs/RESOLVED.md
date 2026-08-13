@@ -1674,3 +1674,17 @@ ownership lanes pass 45/45 each.  C string slicing and malformed pointer
 cases remain open in MISSING.md.
 
 Commit: current Tier 0 compound C-door hardening batch.
+
+## 2026-08-13 — C string-view boundary cases
+
+The C string-slice regression now distinguishes the two valid result forms:
+an outside view keeps pointer identity and is not released independently,
+while an inline slice copies into the returned value.  It also proves that a
+negative range and a split UTF-8 sequence trap without overwriting the output
+slot.
+
+The focused runtime ownership lane passes 38/38; the C- and thread-sanitized
+ownership lanes pass 46/46 each.  Null-pointer and other malformed pointer
+cases remain listed in MISSING.md.
+
+Commit: current Tier 0 C string-boundary hardening batch.

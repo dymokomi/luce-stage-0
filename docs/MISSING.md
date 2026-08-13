@@ -179,9 +179,10 @@ nested result transfer is transactional, detaches before copying, closes the
 child on failure, and rejects a second wait without a second join.  The same
 failure corpus now covers optional text, struct replacement, map placement,
 array fill, long concatenation, and `parse_string`, including their distinct
-source/borrow/consumption contracts.  It still needs string slicing,
-null-pointer and other malformed pointer cases, plus any allocating C door not
-yet in these direct corpora.
+source/borrow/consumption contracts.  C string slicing now covers outside
+views, inline copies, UTF-8 boundary refusal, bounds refusal, and out-slot
+preservation.  Null-pointer and other malformed pointer cases, plus any
+allocating C door not yet in these direct corpora, remain open.
 The differential spec now puts a task inside a union's optional field, that
 union inside a recursive struct with an optional callback and child list, and
 consumes the task through a `give`d helper; a companion file case puts an
