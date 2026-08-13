@@ -100,7 +100,11 @@ live-row census, free-row generations, program roots, exact container parent
 edges, duplicate edges, acyclic ancestry, and borrowed function receivers;
 its direct composite regression covers map, array, and nested struct doors.
 Extending that assertion through live worker/resource graphs and allocator
-baseline snapshots remains open.
+baseline snapshots remains open.  The repository now exposes repeatable
+`test-sanitize-c` and `test-sanitize-thread` ownership lanes; the current
+Zig/macOS arm64 toolchain does not provide a usable address/leak sanitizer or
+Valgrind mode, so those remain environment-dependent rather than claimed
+green here.
 
 ## Tier 1 — design gaps before implementation
 

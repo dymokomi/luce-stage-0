@@ -152,6 +152,57 @@ pub fn build(b: *std.Build) void {
     test_hardening_step.dependOn(&run_luce_fuzz_tests.step);
     test_hardening_step.dependOn(&run_luce_stress_tests.step);
 
+    // Sanitizer lanes intentionally build a fresh root module instead of
+    // relying on a command-line flag being inherited by imported modules.
+    // That makes the step's name truthful and keeps the ownership corpus
+    // runnable against the exact same package graph as `test-luce`.
+    const sanitizer_filters = &.{
+        "fixed owner-graph",
+        "fuzz: owner graphs",
+        "checked owner invariants",
+        "failed nested list",
+        "failed function-value copies",
+        "failed worker graph",
+        "a worker result copies",
+        "waiting a task is one-shot",
+        "cross-runtime moves",
+    };
+    const c_sanitize_luce = b.createModule(.{
+        .root_source_file = b.path("src/luce/luce.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .link_libc = true,
+        .sanitize_c = .full,
+    });
+    c_sanitize_luce.addOptions("build_options", generator);
+    const c_sanitize_tests = b.addTest(.{
+        .root_module = c_sanitize_luce,
+        .filters = sanitizer_filters,
+    });
+    const test_sanitize_c_step = b.step(
+        "test-sanitize-c",
+        "Run ownership tests with C undefined-behavior sanitization",
+    );
+    test_sanitize_c_step.dependOn(&b.addRunArtifact(c_sanitize_tests).step);
+
+    const thread_sanitize_luce = b.createModule(.{
+        .root_source_file = b.path("src/luce/luce.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .link_libc = true,
+        .sanitize_thread = true,
+    });
+    thread_sanitize_luce.addOptions("build_options", generator);
+    const thread_sanitize_tests = b.addTest(.{
+        .root_module = thread_sanitize_luce,
+        .filters = sanitizer_filters,
+    });
+    const test_sanitize_thread_step = b.step(
+        "test-sanitize-thread",
+        "Run ownership tests with ThreadSanitizer",
+    );
+    test_sanitize_thread_step.dependOn(&b.addRunArtifact(thread_sanitize_tests).step);
+
     // The one module that calls libLLVM: bitcode in, object code out
     // (`src/luce/08_llvm/emit.zig`).  It carries the backend's
     // end-to-end proof too, because that test is the one thing that

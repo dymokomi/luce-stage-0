@@ -1331,6 +1331,19 @@ the same check before and after teardown.
 
 Commit: current Tier 0 checked-invariant hardening batch.
 
+## 2026-08-12 — ownership sanitizer lanes are repeatable
+
+The build now exposes `test-sanitize-c` and `test-sanitize-thread`, each
+building a fresh Luce module with the sanitizer enabled rather than relying
+on flags leaking through imported modules.  The selected ownership corpus
+covers fixed and fuzzed owner graphs, composite containers, nested copies,
+worker result cleanup, task release, and cross-runtime moves.  Both lanes pass
+24/24 on the current arm64 macOS toolchain.  Zig 0.16 does not offer a usable
+address/leak sanitizer or Valgrind mode for this target, so those remain
+environment-dependent follow-ups rather than false claims of coverage.
+
+Commit: current Tier 0 sanitizer hardening batch.
+
 ## 2026-08-12 — array fills cannot strand old cells or partial copies
 
 `array_fill` now releases object ownership as well as value storage when a
