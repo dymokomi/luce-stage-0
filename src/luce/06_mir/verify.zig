@@ -1018,6 +1018,26 @@ fn verifyInstruction(
             const callee = program.functions[call.function];
             if (callee.parameter_count != 0 and callee.locals[0].inout) return error.BadFunction;
             if (call.arguments.len != callee.parameter_count) return error.BadFunction;
+            // Stage 4 refuses these shapes before it emits a spawn: a
+            // worker has a different Runtime, so a file or task cannot
+            // be re-owned there, and a function value may borrow a
+            // receiver that only exists in the spawning runtime.  Keep
+            // the same transitive rule at the decoded-MIR boundary;
+            // otherwise a hand-built module could reach `copyFrom` with
+            // a resource (a defensive trap) or a function value (a
+            // borrowed receiver with no valid owner on the far side).
+            for (callee.locals[0..callee.parameter_count]) |parameter| {
+                if (try typeCarriesWorker(allocator, program, parameter.local_type, .resource) or
+                    try typeCarriesWorker(allocator, program, parameter.local_type, .function))
+                {
+                    return error.BadFunction;
+                }
+            }
+            if (try typeCarriesWorker(allocator, program, callee.return_type, .resource) or
+                try typeCarriesWorker(allocator, program, callee.return_type, .function))
+            {
+                return error.BadFunction;
+            }
             for (call.arguments, 0..) |argument, index| {
                 const value = try operandType(function, defined, argument);
                 try expectType(value, callee.locals[index].local_type);
@@ -1880,6 +1900,91 @@ fn typeCarriesObjects(allocator: Allocator, program: *const Program, of: Type) V
             .string,
             .enumeration,
             .function,
+            => {},
+        }
+    }
+    return false;
+}
+
+const WorkerCarry = enum { resource, function };
+
+/// Whether a type graph contains a value that cannot cross a worker
+/// boundary.  The source checker asks the same question through
+/// `shapes.carries`; this copy belongs here because a decoded module has
+/// not come through that checker.  Unlike `typeCarriesObjects`, a heap
+/// handle is not automatically a match: lists, maps and arrays must be
+/// opened to find a nested function, file, or task.
+fn typeCarriesWorker(
+    allocator: Allocator,
+    program: *const Program,
+    of: Type,
+    sought: WorkerCarry,
+) VerifyError!bool {
+    const seen_structs = try allocator.alloc(bool, program.structs.len);
+    defer allocator.free(seen_structs);
+    @memset(seen_structs, false);
+
+    const seen_variants = try allocator.alloc(bool, program.variants.len);
+    defer allocator.free(seen_variants);
+    @memset(seen_variants, false);
+
+    const seen_heaps = try allocator.alloc(bool, program.heap_types.len);
+    defer allocator.free(seen_heaps);
+    @memset(seen_heaps, false);
+
+    var pending: std.ArrayList(Type) = .empty;
+    defer pending.deinit(allocator);
+    try pending.append(allocator, of);
+
+    while (pending.items.len != 0) {
+        const current = pending.pop().?;
+        switch (current) {
+            .function => if (sought == .function) return true,
+            .optional => |payload| try pending.append(allocator, payload.asType()),
+            .strukt => |index| {
+                if (index >= program.structs.len) return error.BadStruct;
+                if (seen_structs[index]) continue;
+                seen_structs[index] = true;
+                for (program.structs[index].fields) |field| {
+                    try pending.append(allocator, field.field_type);
+                }
+            },
+            .variant => |index| {
+                if (index >= program.variants.len) return error.BadStruct;
+                if (seen_variants[index]) continue;
+                seen_variants[index] = true;
+                for (program.variants[index].members) |member| {
+                    for (member.fields) |field| {
+                        try pending.append(allocator, field.field_type);
+                    }
+                }
+            },
+            .heap => |index| {
+                if (index >= program.heap_types.len) return error.BadStruct;
+                if (seen_heaps[index]) continue;
+                seen_heaps[index] = true;
+                switch (program.heap_types[index]) {
+                    .file, .task => if (sought == .resource) return true,
+                    .list => |element| try pending.append(allocator, element),
+                    .map => |pair| {
+                        try pending.append(allocator, pair.key);
+                        try pending.append(allocator, pair.value);
+                    },
+                    .array => |shape| try pending.append(allocator, shape.element),
+                    .builder => {},
+                }
+            },
+            .none,
+            .boolean,
+            .byte,
+            .short,
+            .int,
+            .long,
+            .half,
+            .float,
+            .double,
+            .string,
+            .enumeration,
             => {},
         }
     }

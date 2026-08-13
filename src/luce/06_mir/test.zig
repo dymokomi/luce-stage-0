@@ -820,6 +820,116 @@ test "an inout call aliases exactly local zero and cannot use another call lane"
     try verify_mod.verify(testing.allocator, &program);
 }
 
+test "spawn rejects worker parameters carrying functions or resources" {
+    var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    defer program.deinit();
+    const arena = program.arena.allocator();
+
+    const functions = try arena.alloc(Function, 2);
+    const arguments = try arena.dupe(Register, &.{0});
+    functions[0] = .{
+        .name = "main",
+        .parameter_count = 0,
+        .return_type = .none,
+        .locals = &.{},
+        .instructions = try arena.dupe(Instruction, &.{
+            .{ .heap_new = .{ .heap = 1, .dims = &.{} } },
+            .{ .spawn = .{ .function = 1, .arguments = arguments } },
+            .{ .ret = null },
+        }),
+        .result_types = try arena.dupe(types.Type, &.{ .{ .heap = 1 }, .{ .heap = 0 }, .none }),
+        .blocks = try arena.dupe(Block, &.{
+            .{ .items = try arena.dupe(Register, &.{ 0, 1, 2 }) },
+        }),
+    };
+    functions[1] = .{
+        .name = "worker",
+        .parameter_count = 1,
+        .return_type = .none,
+        .locals = try arena.dupe(Local, &.{.{
+            .name = "value",
+            .local_type = .{ .heap = 1 },
+        }}),
+        .instructions = try arena.dupe(Instruction, &.{.{ .trap = .missing_return }}),
+        .result_types = try arena.dupe(types.Type, &.{.none}),
+        .blocks = try arena.dupe(Block, &.{
+            .{ .items = try arena.dupe(Register, &.{0}) },
+        }),
+    };
+    program.functions = functions;
+    program.signatures = try arena.dupe(types.Signature, &.{.{
+        .parameters = &.{},
+        .result = .none,
+    }});
+    program.heap_types = try arena.dupe(types.HeapType, &.{
+        .{ .task = .{ .result = .none, .fallible = false } },
+        .{ .list = .{ .optional = .{ .function = 0 } } },
+        .file,
+    });
+
+    // A function value can borrow a receiver, even when it is nested in
+    // an otherwise ordinary list.  The source boundary refuses that
+    // whole graph before MIR is written; a decoded module must not make
+    // the worker runtime cross it by omission.
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+
+    // The same boundary applies to resources.  Keep the list shape so
+    // this proves the walk is transitive rather than only checking a
+    // direct file/task parameter.
+    program.heap_types[1] = .{ .list = .{ .heap = 2 } };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+}
+
+test "spawn rejects worker results carrying functions or resources" {
+    var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    defer program.deinit();
+    const arena = program.arena.allocator();
+
+    const functions = try arena.alloc(Function, 2);
+    functions[0] = .{
+        .name = "main",
+        .parameter_count = 0,
+        .return_type = .none,
+        .locals = &.{},
+        .instructions = try arena.dupe(Instruction, &.{
+            .{ .spawn = .{ .function = 1, .arguments = &.{} } },
+            .{ .ret = null },
+        }),
+        .result_types = try arena.dupe(types.Type, &.{ .{ .heap = 0 }, .none }),
+        .blocks = try arena.dupe(Block, &.{
+            .{ .items = try arena.dupe(Register, &.{ 0, 1 }) },
+        }),
+    };
+    functions[1] = .{
+        .name = "worker",
+        .parameter_count = 0,
+        .return_type = .{ .heap = 1 },
+        .locals = &.{},
+        .instructions = try arena.dupe(Instruction, &.{.{ .trap = .missing_return }}),
+        .result_types = try arena.dupe(types.Type, &.{.none}),
+        .blocks = try arena.dupe(Block, &.{
+            .{ .items = try arena.dupe(Register, &.{0}) },
+        }),
+    };
+    program.functions = functions;
+    program.signatures = try arena.dupe(types.Signature, &.{.{
+        .parameters = &.{},
+        .result = .none,
+    }});
+    program.heap_types = try arena.dupe(types.HeapType, &.{
+        .{ .task = .{ .result = .{ .heap = 1 }, .fallible = false } },
+        .{ .list = .{ .optional = .{ .function = 0 } } },
+        .file,
+    });
+
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+
+    // A returned resource is just as invalid as a resource argument: the
+    // wait would have to re-own a file or task made by another runtime.
+    program.heap_types[1] = .{ .list = .{ .heap = 2 } };
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+}
+
 test "the heap type table is checked before anything indexes it" {
     var program = try programOf(.{
         .instructions = &.{

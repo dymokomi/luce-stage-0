@@ -352,6 +352,8 @@ pub fn build(b: *std.Build) void {
             "map values cannot be optional while bare function values remain legal",
             "ownership instructions cannot fabricate values or bind non-carrying shapes",
             "every no-result MIR instruction rejects a fabricated result type",
+            "spawn rejects worker parameters carrying functions or resources",
+            "spawn rejects worker results carrying functions or resources",
         },
     });
     const test_mir_function_shapes_step = b.step(

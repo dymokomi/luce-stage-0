@@ -1227,6 +1227,19 @@ and the multi-module adventure differential spec has a focused build step.
 
 Commit: current example cleanup batch.
 
+## 2026-08-12 — worker-boundary shapes are defended in MIR
+
+`spawn` now rejects a decoded MIR callee whose parameters or return type
+transitively contains a `file`, `task`, or function value.  Stage 4 already
+refuses those shapes, because resources belong to the runtime that created
+them and function values may borrow a receiver; the MIR verifier now keeps
+that rule true for hand-built or stale modules as well.  The walk covers
+structs, unions, optionals, lists, maps, and arrays with visited tables, so a
+worker boundary cannot reach `copyFrom` with an impossible cross-runtime
+shape.  Focused adversarial tests cover nested worker parameters and results.
+
+Commit: current MIR hardening batch.
+
 ## 2026-08-12 — MIR ownership instructions cannot invent values
 
 The verifier now requires `object_bind` and `object_unbind` to walk an
