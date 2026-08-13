@@ -1352,7 +1352,9 @@ method, a second callback stored in an enclosing struct, a give parameter,
 and an inout receiver.  It decodes that program and runs it through both the
 interpreter and LLVM paths, comparing the output and end state.  This closes
 the previously untested execution boundary; the broader forged-signature and
-optimizer matrix remains in MISSING.md.
+optimizer matrix remains in MISSING.md.  The optimizer's direct shape suite
+also pins call_indirect as an ownership barrier, so a future pass cannot elide
+a prior bind based on a callee it cannot inspect.
 
 Commit: current Tier 0 cross-stage ownership hardening batch.
 

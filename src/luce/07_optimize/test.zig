@@ -337,6 +337,7 @@ fn handBuilt(
     instructions: []const Instruction,
     result_types: []const types.Type,
     locals: []const Local,
+    signatures: []const types.Signature,
 ) !Program {
     var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
     errdefer program.deinit();
@@ -345,6 +346,7 @@ fn handBuilt(
     const heap_types = try arena.alloc(types.HeapType, 1);
     heap_types[0] = .{ .list = .long };
     program.heap_types = heap_types;
+    program.signatures = try arena.dupe(types.Signature, signatures);
 
     const items = try arena.alloc(Register, instructions.len);
     for (items, 0..) |*item, index| item.* = @intCast(index);
@@ -398,6 +400,7 @@ test "ownership keeps the release that follows a real release" {
             .{ .name = "owner", .local_type = .{ .heap = 0 } },
             .{ .name = "other", .local_type = .{ .heap = 0 } },
         },
+        &.{},
     );
     defer program.deinit();
 
@@ -428,6 +431,7 @@ test "ownership keeps a bind when an opaque instruction closes the window" {
             .{ .name = "first", .local_type = .{ .heap = 0 } },
             .{ .name = "second", .local_type = .{ .heap = 0 } },
         },
+        &.{},
     );
     defer program.deinit();
 
@@ -435,6 +439,49 @@ test "ownership keeps a bind when an opaque instruction closes the window" {
     try mir.verify(testing.allocator, &program);
     try testing.expectEqual(@as(usize, 6), blockLength(&program));
     try testing.expectEqual(@as(usize, 2), countTag(&program, .object_bind));
+}
+
+test "ownership keeps a bind across an indirect call" {
+    // A function value is as opaque to this pass as a named call.  The
+    // callee can free or rebind an object through code this walk cannot
+    // inspect, so a bind before call_indirect must remain even when a
+    // later bind would otherwise look like an overwrite.
+    var program = try handBuilt(
+        &.{
+            .{ .heap_new = .{ .heap = 0, .dims = &.{} } },
+            .{ .object_bind = .{ .local = 0, .value = 0 } },
+            .{ .const_function = .{ .function = 0 } },
+            .{ .call_indirect = .{
+                .callee = 2,
+                .signature = 0,
+                .arguments = &.{},
+            } },
+            .{ .object_bind = .{ .local = 1, .value = 0 } },
+            .{ .object_unbind = .{ .local = 1, .value = 0 } },
+            .{ .ret = null },
+        },
+        &.{
+            .{ .heap = 0 },
+            .none,
+            .{ .function = 0 },
+            .none,
+            .none,
+            .none,
+            .none,
+        },
+        &.{
+            .{ .name = "first", .local_type = .{ .heap = 0 } },
+            .{ .name = "second", .local_type = .{ .heap = 0 } },
+        },
+        &.{.{ .parameters = &.{}, .result = .none }},
+    );
+    defer program.deinit();
+
+    try optimize.ownership(program.arena.allocator(), &program);
+    try mir.verify(testing.allocator, &program);
+    try testing.expectEqual(@as(usize, 7), blockLength(&program));
+    try testing.expectEqual(@as(usize, 2), countTag(&program, .object_bind));
+    try testing.expectEqual(@as(usize, 1), countTag(&program, .object_unbind));
 }
 
 test "ownership never forwards a load out of a slot that owns its storage" {
@@ -539,6 +586,7 @@ test "ownership forwards the last store into a local, not the first" {
             .{ .name = "slot", .local_type = .{ .heap = 0 } },
             .{ .name = "other", .local_type = .{ .heap = 0 } },
         },
+        &.{},
     );
     defer program.deinit();
 
