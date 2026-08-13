@@ -51,9 +51,6 @@ per-value ownership representation.
 - **Reserved `files.append`.**  The list-method namespace reserves `append`,
   so the file API uses names such as `append_text` and `append_bytes`.
   Releasing that name needs a namespace rule, not a one-off exception.
-- **Stale corpus workarounds.**  `examples/adventure/world.luc` still aliases
-  fields into `var` locals in places where nested-place assignment now works.
-  Remove the workaround and its explanatory comments as a cleanup change.
 - **Library/type questions.**  `wordcount` still uses `""` as a missing
   result; there is no `set(T)`, array slicing, environment mutation, or date
   library.  These are demand-driven extensions, not runtime defects.

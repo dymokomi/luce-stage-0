@@ -1217,3 +1217,12 @@ future Payne–Hanek implementation can widen the contract as a separately
 measured change.
 
 Commit: current Tier 0 hardening batch.
+
+## 2026-08-12 — adventure example drops obsolete nested-place aliases
+
+`examples/adventure/world.luc` no longer copies each receiver-owned table into
+a temporary `var` solely to assign through an indexed struct field.  It now
+uses the same direct nested-place spelling already exercised by the editor,
+and the multi-module adventure differential spec has a focused build step.
+
+Commit: current example cleanup batch.

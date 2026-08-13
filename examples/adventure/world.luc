@@ -301,33 +301,27 @@ struct Realm:
 
     # -- changes -------------------------------------------------------
     #
-    # Each of these opens with `var slots = self.<table>`.  The alias
-    # is not decoration: assigning to a field of an element needs a
-    # place whose root binding is a `var`; the implied receiver is not
-    # such a local place, so `self.things[i].at = …` is refused where
-    # `slots[i].at = …` is the same write through the same list.  It is
-    # the one place this program has to say something to the compiler
-    # rather than to the reader.
+    # Nested places retain the receiver's ownership and write through
+    # its tables directly.  The same spelling is used here as in the
+    # editor: no local alias is needed just to reach a field of an
+    # indexed value.
 
     func visit(at: long):
-        var slots = self.rooms
-        slots[at].visited = true
+        self.rooms[at].visited = true
 
     # Pick a thing up if it is here and can be lifted; the answer says
     # which of the three happened, and the caller has the words.
     func pick_up(at: long, name: string) -> bool:
-        var slots = self.things
-        for i, thing in slots:
+        for i, thing in self.things:
             if thing.lying_in(at) and thing.name == name and thing.liftable():
-                slots[i].at = carried
+                self.things[i].at = carried
                 return true
         return false
 
     func put_down(at: long, name: string) -> bool:
-        var slots = self.things
-        for i, thing in slots:
+        for i, thing in self.things:
             if thing.held() and thing.name == name:
-                slots[i].at = at
+                self.things[i].at = at
                 return true
         return false
 
@@ -338,11 +332,10 @@ struct Realm:
         if way == none:
             return false
         let beyond = way.beyond()
-        var slots = self.ways
         var opened = false
-        for i, each in slots:
+        for i, each in self.ways:
             if each.joins(at, beyond):
-                slots[i].locked = false
+                self.ways[i].locked = false
                 opened = true
         return opened
 
@@ -354,22 +347,19 @@ struct Realm:
     # the player was already holding.
 
     func forget():
-        var places = self.rooms
-        for i, place in places:
-            places[i].visited = false
-        var slots = self.things
-        for i, thing in slots:
-            slots[i].at = thing.origin
+        for i, place in self.rooms:
+            self.rooms[i].visited = false
+        for i, thing in self.things:
+            self.things[i].at = thing.origin
 
     # The two the restore path calls, and the reason they are `!`:
     # a save file is text off a disk, so a name in it may be a name
     # this realm has never heard of, and that is news for whoever
     # asked to load it (docs/FAILURE.md).
     func hold(name: string) -> !:
-        var slots = self.things
-        for i, thing in slots:
+        for i, thing in self.things:
             if thing.name == name:
-                slots[i].at = carried
+                self.things[i].at = carried
                 return
         error("the save carries a " + name + ", which this story has none of")
 
@@ -377,5 +367,4 @@ struct Realm:
         let at = self.where(name)
         if at == none:
             error("the save has been in " + name + ", which this story has no room called")
-        var slots = self.rooms
-        slots[at].visited = true
+        self.rooms[at].visited = true

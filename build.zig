@@ -244,6 +244,16 @@ pub fn build(b: *std.Build) void {
     );
     test_std_trig_step.dependOn(&b.addRunArtifact(std_trig_tests).step);
 
+    const adventure_tests = b.addTest(.{
+        .root_module = specs,
+        .filters = &.{"a whole game plays the same, turn for turn, on both engines"},
+    });
+    const test_adventure_step = b.step(
+        "test-adventure",
+        "Run the multi-module adventure regression",
+    );
+    test_adventure_step.dependOn(&b.addRunArtifact(adventure_tests).step);
+
     // The backend must refuse a function comparison even when a hostile MIR
     // shape bypasses the verifier.  Keep this seam independently runnable:
     // it protects the lowerer's refusal from being hidden by the much larger
