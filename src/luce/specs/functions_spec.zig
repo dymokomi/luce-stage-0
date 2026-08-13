@@ -23,9 +23,9 @@
 //!   * **D2** — a lambda *is* the named case after the analyzer runs:
 //!     the two spellings are the same instruction, and the same
 //!     dispatch.
-//!   * **D3** — function values compare `==`/`!=`, `string(f)` answers
-//!     the function's name, and copying one costs nothing and frees
-//!     nothing.
+//!   * **D3** — function values have no equality or ordering;
+//!     `string(f)` answers the function's name, and copying one costs
+//!     nothing and frees nothing.
 //!   * **D5** — a `give`-taking function is passable, and the call
 //!     *through the value* checks the verbs exactly as a direct call
 //!     does.

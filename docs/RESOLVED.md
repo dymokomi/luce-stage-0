@@ -1140,3 +1140,15 @@ honors that same boundary, and the round-trip test proves the forged row is
 rejected as `InvalidModule` rather than materialized.
 
 Commit: `a04fa78`.
+
+## 2026-08-12 — function equality is refused at every boundary
+
+Function values can carry receivers, but their type does not say whether a
+receiver is present.  The old LLVM equality arm compared only the named
+function slot, so hostile MIR could silently treat distinct binds as equal.
+The backend now refuses the shape explicitly, the interpreter no longer has a
+second partial implementation, and the living function-value decision record
+no longer teaches equality.  A focused hostile-MIR test proves the LLVM
+boundary refuses the instruction rather than lowering it.
+
+Commit: this hardening batch is recorded in git history.

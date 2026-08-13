@@ -234,6 +234,20 @@ pub fn build(b: *std.Build) void {
     );
     test_composition_step.dependOn(&b.addRunArtifact(composition_tests).step);
 
+    // The backend must refuse a function comparison even when a hostile MIR
+    // shape bypasses the verifier.  Keep this seam independently runnable:
+    // it protects the lowerer's refusal from being hidden by the much larger
+    // differential specification.
+    const llvm_hardening_tests = b.addTest(.{
+        .root_module = specs,
+        .filters = &.{"LLVM refuses function equality"},
+    });
+    const test_llvm_hardening_step = b.step(
+        "test-llvm-hardening",
+        "Run hostile-MIR LLVM backend hardening tests",
+    );
+    test_llvm_hardening_step.dependOn(&b.addRunArtifact(llvm_hardening_tests).step);
+
     // The ownership diagnostic has a source-order contract of its own:
     // advice for one argument may not make a later argument unusable.
     // Keep that regression independently runnable while the full

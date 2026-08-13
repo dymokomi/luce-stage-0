@@ -944,24 +944,6 @@ pub const Machine = struct {
                     .local_get => |local| registers[item] = self.localSlot(frame, local).*,
                     .local_set => |set| self.localSlot(frame, set.local).* = registers[set.value],
                     .binary => |operation| {
-                        // A function value compares by the function it
-                        // names, and by nothing else (FUNCTIONS.md D3).
-                        // It is answered here rather than in
-                        // `libluce_rt` for the reason the whole seam
-                        // exists: a run of two values is all the
-                        // runtime sees, and which run is a function
-                        // value is a fact about the program's types.
-                        if (operation.operand_type == .function) {
-                            const left = self.boundValue(registers[operation.left]) orelse
-                                return self.trap(.null_object);
-                            const right = self.boundValue(registers[operation.right]) orelse
-                                return self.trap(.null_object);
-                            const same = left.named == right.named;
-                            registers[item] = .ofBoolean(
-                                if (operation.op == .equal) same else !same,
-                            );
-                            continue;
-                        }
                         registers[item] = operators.binary(
                             &self.runtime,
                             operation.op,

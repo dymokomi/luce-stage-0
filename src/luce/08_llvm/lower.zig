@@ -5902,9 +5902,8 @@ const Body = struct {
             // that would say it.
             .enumeration,
             // A function value is a name for a function and nothing a
-            // program may add to (docs/FUNCTIONS.md D3): the only
-            // operators it takes are `==` and `!=`, which arrive at
-            // `int` because that is what one is underneath.
+            // program may operate on (docs/FUNCTIONS.md D3): both
+            // arithmetic and comparison are refused before lowering.
             .function,
             .optional,
             => return self.fail("arithmetic on a type that has none"),
@@ -6199,13 +6198,7 @@ const Body = struct {
         // because that switch's narrow arms are about *numbers*, where
         // promotion has already run and a storage width is a lowering
         // bug; here a `byte` backing is the ordinary case.
-        // A function value compares by the function it names: same
-        // function or not, and no ordering (docs/FUNCTIONS.md D3).  The
-        // enum arm below, one type earlier, and for the same reason it
-        // stands outside the numeric switch — but one indirection
-        // further in, because a function value is a run and the name is
-        // its first slot (docs/BINDING.md D12).
-        if (operation.operand_type == .function or operation.operand_type == .enumeration) {
+        if (operation.operand_type == .enumeration) {
             const same: Builder.IntegerCondition = switch (operation.op) {
                 .equal => .eq,
                 .not_equal => .ne,
@@ -6213,7 +6206,7 @@ const Body = struct {
                 .less_equal,
                 .greater,
                 .greater_equal,
-                => return self.fail("an ordering comparison on an enum or a function value"),
+                => return self.fail("an ordering comparison on an enum"),
                 .bit_and,
                 .bit_or,
                 .bit_xor,
@@ -6227,14 +6220,6 @@ const Body = struct {
                 .modulo,
                 => return self.fail("arithmetic on the comparison path"),
             };
-            if (operation.operand_type == .function) {
-                return self.wip.icmp(
-                    same,
-                    try self.namedFunction(left, "left.named"),
-                    try self.namedFunction(right, "right.named"),
-                    "compare",
-                );
-            }
             return self.wip.icmp(same, left, right, "compare");
         }
 
@@ -6303,7 +6288,13 @@ const Body = struct {
                 .modulo,
                 => return self.fail("arithmetic on the comparison path"),
             },
-            .float, .double, .string, .strukt, .enumeration, .function => unreachable, // answered above
+            .float, .double, .string, .strukt, .enumeration => unreachable, // answered above
+            // A function value has no equality: its receiver is not part
+            // of the function type, so comparing only the named slot would
+            // make two different binds equal.  The verifier refuses this
+            // shape, and this arm keeps hostile MIR from reaching the old
+            // partial comparison (docs/BINDING.md D6).
+            .function => return self.fail("a comparison of function values"),
             // A union is compared by match and nothing else
             // (docs/UNION.md D16): the analyzer refuses `==` on one.
             .variant => return self.fail("a comparison of two unions"),

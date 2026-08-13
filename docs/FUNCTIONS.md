@@ -105,7 +105,7 @@ not bricked up.
 |---|---|
 | **D1** | Named top-level functions and namespace functions (`Struct.func`, `module.func`) are values in function-type positions.  **Methods are not** — a method reference is a closure over `self`, which is the far side of the line.  The refusal names the workaround (`(p) -> p.length()` … which itself needs no capture only when it re-receives the receiver; the sentence shows the honest form). |
 | **D2** | A lambda lowers to a compiler-named top-level function — it *is* S1 after the analyzer runs; MIR gains function-pointer values and an indirect-call shape, `format_version` bumps.  Both engines dispatch through the same table; `libluce_rt` learns nothing. |
-| **D3** | Function values compare with `==`/`!=` (same function or not), have no ordering, and `string(f)` answers the function's name.  They are values: copy freely, no verbs, nothing to free. |
+| **D3** | Function values have no equality or ordering, and `string(f)` answers the function's name.  They are values: copy freely, no verbs, nothing to free. |
 | **D4** | The visibility rule rides along: a lambda may name what its file may name; a function value crossing a module boundary is the *value* crossing, already-resolved — visibility gates the reference site, exactly as ratified. |
 | **D5** | A `give`-taking function is spawnable and passable like any other; the *call through the value* checks argument verbs exactly as a direct call does.  Nothing about ownership moves. |
 | **D6** | The std customers land in the same run: `xs.sort_by(f)`, `xs.keep(f)`, `xs.map_to(f)`-shaped helpers where the design review says they earn their keep — each a `luce.sema.import`-routed std function per the strings precedent, not new builtins. |

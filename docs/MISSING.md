@@ -120,9 +120,6 @@ smuggle one in as a convenience feature.
   widening it requires a runtime-contract test and hostile-MIR proof.
 - Constant arrays of value structs currently zero-fill then replace cells;
   optimize only if startup measurements justify a new constructor seam.
-- The unreachable LLVM equality arm for function values compares only the
-  function index, not the receiver.  Source rejects the shape today; keep the
-  backend refusal total and remove the misleading arm/documentation.
 - Routed string methods type their arguments before routing to `std.strings`.
   They are safe for today's uniform signatures but need a landing rule before
   a routed method accepts width-polymorphic, optional, or function arguments.

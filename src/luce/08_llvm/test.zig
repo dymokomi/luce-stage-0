@@ -21,6 +21,7 @@ const std = @import("std");
 // The language and the emitter come in as modules: this file belongs
 // to `specs`, which is the one module that names both.
 const luce = @import("luce");
+const emit = @import("emit");
 const spec = @import("../specs/agree.zig");
 
 const interpreter = luce.interpreter;
@@ -292,6 +293,96 @@ test "a release artifact carries no origin table, and a debug one does" {
     // And stripping only ever removes: the release artifact is the
     // smaller of the two.
     try std.testing.expect(release.len < debug.len);
+}
+
+test "LLVM refuses function equality in hostile MIR" {
+    // Function equality is refused by stage 4 and by the MIR verifier: a
+    // function type cannot say whether a value carries a receiver.  This
+    // test deliberately adds the impossible binary *after* compilation so
+    // it reaches the backend boundary without pretending that the verifier
+    // is the only line of defense.  The old backend compared only the named
+    // slot and silently treated different binds as equal.
+    const gpa = std.testing.allocator;
+    var program = try spec.program(
+        \\func twice(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\func apply(f: func(long) -> long, n: long) -> long:
+        \\    return f(n)
+        \\
+        \\func main():
+        \\    let left: func(long) -> long = twice
+        \\    let right: func(long) -> long = twice
+        \\    print(string(apply(left, 1)))
+        \\    print(string(apply(right, 2)))
+    );
+    defer program.deinit();
+
+    const entry = &program.functions[program.entry_function];
+    var operands: [2]mir.Register = undefined;
+    var found: usize = 0;
+    for (entry.instructions, 0..) |instruction, register| {
+        if (instruction != .const_function or found == operands.len) continue;
+        operands[found] = @intCast(register);
+        found += 1;
+    }
+    try std.testing.expectEqual(@as(usize, operands.len), found);
+
+    var return_block: ?usize = null;
+    for (entry.blocks, 0..) |block, index| {
+        if (block.items.len == 0) continue;
+        const last = block.items[block.items.len - 1];
+        if (entry.instructions[last] == .ret) {
+            return_block = index;
+            break;
+        }
+    }
+    const block = &entry.blocks[return_block orelse return error.NoReturnBlock];
+    const old_items = block.items;
+    const old_return = old_items[old_items.len - 1];
+    const binary_register: mir.Register = @intCast(entry.instructions.len);
+    const function_type = entry.result_types[operands[0]];
+    try std.testing.expect(function_type == .function);
+
+    const instructions = try program.arena.allocator().alloc(
+        mir.Instruction,
+        entry.instructions.len + 1,
+    );
+    @memcpy(instructions[0..entry.instructions.len], entry.instructions);
+    instructions[binary_register] = .{ .binary = .{
+        .op = .equal,
+        .operand_type = function_type,
+        .left = operands[0],
+        .right = operands[1],
+    } };
+    entry.instructions = instructions;
+
+    const result_types = try program.arena.allocator().alloc(
+        luce.types.Type,
+        entry.result_types.len + 1,
+    );
+    @memcpy(result_types[0..entry.result_types.len], entry.result_types);
+    result_types[binary_register] = .boolean;
+    entry.result_types = result_types;
+
+    const items = try program.arena.allocator().alloc(mir.Register, old_items.len + 1);
+    @memcpy(items[0 .. old_items.len - 1], old_items[0 .. old_items.len - 1]);
+    items[old_items.len - 1] = binary_register;
+    items[old_items.len] = old_return;
+    block.items = items;
+
+    const triple = try emit.hostTriple(gpa);
+    defer gpa.free(triple);
+    switch (try luce.llvm.lowerToText(gpa, &program, .{ .triple = triple })) {
+        .unsupported => |what| try std.testing.expectEqualStrings(
+            "a comparison of function values",
+            what,
+        ),
+        .text => |rendered| {
+            defer gpa.free(rendered);
+            return error.FunctionEqualityLowered;
+        },
+    }
 }
 
 test "a hoisted container read lands on the retired row when the handle is null" {
