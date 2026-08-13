@@ -167,17 +167,20 @@ pub const Owner = struct {
 };
 
 /// The generation a row is retired at: reached, it is never handed
-/// out again.
+/// out again. Even generations name live occupants; odd generations
+/// name free rows. Keeping occupancy in the generation word means a
+/// forged handle using the row's current free generation cannot resolve
+/// an empty row without adding another field to the ABI-visible layout.
 ///
 /// **Generations do not wrap.**  slotmap accepts wraparound after 2³¹
 /// reuses and EnTT's 12-bit version wraps routinely; here a stale
 /// handle catching up with a live one is a use-after-free that stops
 /// trapping, and S9 is a safety guarantee rather than an ECS
-/// convenience.  So the last generation a row can hold is
+/// convenience. So the last live generation a row can hold is
 /// `retired - 1`, the free that ends it puts the row *out* of the free
 /// list instead of back on it, and no handle ever carries `retired`.
-/// The cost is at most one leaked row per four billion frees of that
-/// same row.
+/// Each reuse consumes one free and one live generation, so the cost is
+/// at most one leaked row per two billion frees of that same row.
 pub const retired: u32 = std.math.maxInt(u32);
 
 /// The handle number of a `.file` row whose file has already been
@@ -1150,10 +1153,13 @@ pub const Runtime = struct {
                 continue;
             }
             if (self.debugOnFreeList(@intCast(index))) {
+                std.debug.assert(object.generation & 1 == 1);
                 std.debug.assert(object.next_free == value.null_index or
                     object.next_free < self.table.items.len);
                 continue;
             }
+
+            std.debug.assert(object.generation & 1 == 0);
 
             live += 1;
             switch (object.owner.kind) {
@@ -1294,6 +1300,7 @@ pub const Runtime = struct {
         const object = &self.table.items[handle.index];
         if (object.generation != handle.generation or
             object.generation == retired or
+            object.generation & 1 != 0 or
             self.debugOnFreeList(handle.index)) return null;
         return object;
     }
@@ -1796,9 +1803,11 @@ pub const Runtime = struct {
     /// Put `storage` in a table row and hand back a loose handle.
     ///
     /// A row a previous object vacated is taken in preference to a
-    /// fresh one; it keeps the generation its last occupant's death
-    /// left it at, so the handle handed out here differs from every
-    /// handle that row's earlier occupants were named by.  Only when
+    /// fresh one; its free generation is advanced to the next even
+    /// generation before the handle is handed out, so the handle
+    /// differs from every handle that row's earlier occupants were
+    /// named by and a forged free-generation handle cannot resolve.
+    /// Only when
     /// the free list is empty does the table grow.
     ///
     /// On failure the storage is untouched and still the caller's to
@@ -1808,7 +1817,7 @@ pub const Runtime = struct {
             const index = self.free_row;
             const row = &self.table.items[index];
             self.free_row = row.next_free;
-            const generation = row.generation;
+            const generation = row.generation + 1;
             row.* = storage;
             row.generation = generation;
             self.live += 1;
@@ -2063,10 +2072,11 @@ pub const Runtime = struct {
     /// Resolve a handle to its live object, or fail: null slots trap
     /// null_object, freed ones use_after_free.
     ///
-    /// The generation is the whole liveness test.  A handle whose
-    /// generation is not the row's names an object that has been
-    /// freed, whether or not somebody else has since moved into the
-    /// row — so reuse costs the reader nothing and hides nothing.
+    /// The generation is the whole liveness test. A handle whose
+    /// generation is not the row's, or whose generation is odd (a free
+    /// row), names no object. That remains true whether or not somebody
+    /// else has since moved into the row — so reuse costs the reader
+    /// nothing and hides nothing.
     ///
     /// The pointer is into the object table and is only good until the
     /// next object is allocated (see `table`).
@@ -2075,7 +2085,12 @@ pub const Runtime = struct {
         if (handle.index == value.null_index) return self.fail(.null_object);
         if (handle.index >= self.table.items.len) return self.fail(.use_after_free);
         const found = &self.table.items[handle.index];
-        if (found.generation != handle.generation) return self.fail(.use_after_free);
+        if (found.generation != handle.generation or
+            found.generation == retired or
+            found.generation & 1 != 0)
+        {
+            return self.fail(.use_after_free);
+        }
         return found;
     }
 
@@ -2111,7 +2126,12 @@ pub const Runtime = struct {
     fn liveObject(self: *Runtime, handle: Handle) ?*Object {
         if (handle.index >= self.table.items.len) return null;
         const object = &self.table.items[handle.index];
-        if (object.generation != handle.generation) return null;
+        if (object.generation != handle.generation or
+            object.generation == retired or
+            object.generation & 1 != 0)
+        {
+            return null;
+        }
         return object;
     }
 

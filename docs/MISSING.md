@@ -356,6 +356,12 @@ value; a well-behaved failure still leaves the sentinel untouched.  Broader
 host/engine worker-channel permutations remain part of T0-OWN-11 and
 T0-OWN-15.
 
+Object generations now carry occupancy in their low bit: live rows use even
+generations and free rows odd ones. Runtime and LLVM inline resolution both
+reject a forged handle that matches a freed row's current generation, and row
+reuse advances to a fresh live generation; broader stale-handle generation
+fuzzing remains part of T0-OWN-6.
+
 The shared worker effect lock now treats unmatched releases as inert and
 rejects releases from non-owners before touching recursion state, so malformed
 boundary calls cannot underflow or unlock a platform mutex.  Barrier-driven

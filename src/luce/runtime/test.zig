@@ -3813,6 +3813,34 @@ test "a freed row is reused, so the table follows live objects and not allocatio
     for (held) |slot| runtime.freeObject(slot.asObject());
 }
 
+test "a forged handle using a freed row generation still traps" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const released = try runtime.newList(Value.none);
+    const index = released.asObject().index;
+    runtime.freeObject(released.asObject());
+    const forged = Value.ofObject(.{
+        .index = index,
+        .generation = runtime.table.items[index].generation,
+    });
+
+    // Generation equality alone is not enough: the current generation of a
+    // free row is deliberately representable to a damaged artifact. The
+    // occupancy bit must reject it before an empty row can be read or freed.
+    try expectTrap(.use_after_free, runtime, runtime.resolve(forged));
+    runtime.pending = null;
+    runtime.freeObject(forged.asObject());
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+    runtime.debugAssertInvariants();
+
+    const replacement = try runtime.newList(Value.none);
+    try testing.expect((replacement.asObject().generation & 1) == 0);
+    runtime.freeValue(replacement);
+}
+
 test "a directory listing splits the same list out of both shapes" {
     var bench: Bench = undefined;
     bench.setup();

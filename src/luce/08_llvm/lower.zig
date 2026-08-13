@@ -3916,10 +3916,11 @@ const Body = struct {
         ), .null_object);
     }
 
-    /// The row's generation is not the handle's, so the object the
-    /// handle names is gone — whether or not somebody else has since
-    /// moved into the row.  One load and one compare, which is what it
-    /// cost when a row was retained forever.
+    /// The row's generation is not the handle's, or is odd (a free row),
+    /// so the object the handle names is gone — whether or not somebody
+    /// else has since moved into the row. The low bit is occupancy, so a
+    /// forged handle using a free row's current generation cannot expose
+    /// an empty row through an inline array access.
     fn checkOccupant(
         self: *Body,
         generation: Builder.Value,
@@ -3931,6 +3932,18 @@ const Body = struct {
             expected,
             "stale",
         ), .use_after_free);
+        const free = try self.wip.icmp(
+            .ne,
+            try self.wip.bin(
+                .@"and",
+                generation,
+                try self.module.builder.intValue(.i32, 1),
+                "generation.occupied",
+            ),
+            try self.module.builder.intValue(.i32, 0),
+            "generation.free",
+        );
+        try self.check(free, .use_after_free);
     }
 
     /// A load of a row's facts — the table base, a generation, a
