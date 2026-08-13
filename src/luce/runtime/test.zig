@@ -9020,6 +9020,27 @@ test "C container doors reject wrong tags and object shapes before mutation" {
         .not_owned,
     );
 
+    const overflowing_left: Value = .{
+        .tag = .string,
+        .inline_length = value.text_outside,
+        .bits = 1,
+        .length = @intCast(std.math.maxInt(usize) - 3),
+    };
+    const overflowing_right: Value = .{
+        .tag = .string,
+        .inline_length = value.text_outside,
+        .bits = 1,
+        .length = 8,
+    };
+    out = Value.ofLong(99);
+    try testing.expectEqual(
+        @as(i32, 1),
+        luce_rt_concat(runtime, &overflowing_left, &overflowing_right, &out),
+    );
+    try testing.expect(runtime.exhausted);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    runtime.exhausted = false;
+
     out = Value.ofLong(99);
     // Composite values carry a pointer/length run too.  A null run with a
     // nonzero length must be rejected before give/copy or any ownership walk

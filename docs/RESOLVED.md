@@ -2085,3 +2085,19 @@ gate reaches 29/29 example tests before the known editor subprocess failures;
 those unrelated example-tooling failures remain outside this batch.
 
 Commit: current Tier 0 runtime/host hardening batch.
+
+## 2026-08-13 — string concatenation length overflow fails closed
+
+String concatenation now performs checked `usize` addition before deciding
+whether the result is inline or needs an allocation.  Individually accepted
+outside-string runs whose combined length cannot be represented now follow
+the ordinary exhausted allocation path instead of wrapping the length or
+panicking before the runtime can report it.  The C boundary regression uses
+non-dereferenced, range-valid forged runs and verifies the output sentinel is
+unchanged.
+
+The Luce package suite passes 559/559 and both C and thread sanitizer lanes
+pass 68/68.  The repository gate reaches 29/29 example tests before the
+known editor subprocess failures; those remain outside this runtime fix.
+
+Commit: current Tier 0 string hardening batch.

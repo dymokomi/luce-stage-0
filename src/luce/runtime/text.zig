@@ -34,7 +34,8 @@ pub fn isStringBoundary(held: []const u8, index: usize) bool {
 /// result fits there, which costs the join nothing and the release
 /// nothing (docs/STRINGS.md).
 pub fn concat(runtime: *Runtime, left: []const u8, right: []const u8) Error!Value {
-    const length = left.len + right.len;
+    const length = std.math.add(usize, left.len, right.len) catch
+        return error.OutOfMemory;
     if (length == 0) return Value.ofString("");
     if (Value.fitsInline(length)) {
         var joined: [value.inline_capacity]u8 = undefined;
