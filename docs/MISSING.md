@@ -34,9 +34,12 @@ runtime/verifier boundary.
   growth and `str(builder)` snapshots prove their destination stays
   unchanged; and the common C constructor, owned-storage, and host
   string/list materialization doors now preserve out slots, live rows, and
-  allocator bytes at every observed failure point.  The remaining matrix is
-  union/optional copies, `inout` receiver replacement, file/task acquisition,
-  and the allocating C exports not yet in this direct corpus.
+  allocator bytes at every observed failure point.  A second C matrix now
+  covers exported inline text, deep copy, list slices, map keys and values,
+  `str`, and transactional `key_text` replacement, including nested source
+  graphs.  The remaining matrix is union/optional copies, `inout` receiver
+  replacement, file/task acquisition, and the allocating C exports not yet in
+  these direct corpora.
 - **T0-OWN-3 — Randomized owner-graph state machine.**  Generate valid
   operation sequences and hostile mutations against a reference model that
   requires exactly one owner, forbids illegal cycles, makes stale handles
@@ -170,8 +173,10 @@ close/report calls must remain fail-closed.  The runtime now bounds `read` and
 counts, file modes, enum tags, and callback argument counts now fail closed
 before slicing, allocation, or output publication; the focused regression
 also proves rejected calls preserve their out/status slots.  The remaining
-C-export matrix still needs every allocating entry point under injected
-failure, plus null-pointer and other malformed pointer cases.
+C-export matrix still needs optional-text materialization, worker/task
+transfer and wait, file open/read-text acquisition, struct-field replacement,
+map placement, array fill, string concatenation/slicing, and parse-string under
+injected failure, plus null-pointer and other malformed pointer cases.
 The differential spec now puts a task inside a union's optional field, that
 union inside a recursive struct with an optional callback and child list, and
 consumes the task through a `give`d helper; a companion file case puts an

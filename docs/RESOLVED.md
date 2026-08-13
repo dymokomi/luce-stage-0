@@ -1611,3 +1611,19 @@ The focused runtime ownership lane passes 32/32; the C- and
 thread-sanitized ownership lanes pass 40/40 each.
 
 Commit: current Tier 0 concurrent-worker hardening batch.
+
+## 2026-08-13 — value-producing C allocation doors
+
+The C-boundary allocation corpus now walks injected failure through exported
+inline-text materialization, deep copy, list slicing, map key/value lists,
+`str`, and replacement of the runtime's owned `key_text` slot.  The copy and
+derived-list cases use nested object graphs; every failed call leaves its
+sentinel out value, source graph, prior key text, live-row count, and allocator
+balance unchanged, while successful results are released through the matching
+ownership path.
+
+The focused runtime ownership lane passes 33/33; the C- and thread-sanitized
+ownership lanes pass 41/41 each.  The remaining C allocation doors stay listed
+in MISSING.md rather than being treated as complete.
+
+Commit: current Tier 0 C value-door hardening batch.

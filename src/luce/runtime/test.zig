@@ -651,6 +651,16 @@ const CAllocationDoor = enum {
     args_list,
 };
 
+const CValueAllocationDoor = enum {
+    export_storage,
+    copy,
+    list_slice,
+    map_keys,
+    map_values,
+    str,
+    set_key_text,
+};
+
 fn expectRetainingDoorFailure(door: RetainingDoor) !void {
     var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -5884,6 +5894,8 @@ extern fn luce_rt_function_make(
     out: *Value,
 ) callconv(.c) i32;
 extern fn luce_rt_own_storage(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32;
+extern fn luce_rt_export_storage(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32;
+extern fn luce_rt_copy(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32;
 extern fn luce_rt_append(runtime: *Runtime, target: *const Value, held: *const Value) callconv(.c) i32;
 extern fn luce_rt_index_get(
     runtime: *Runtime,
@@ -5898,6 +5910,25 @@ extern fn luce_rt_index_set(
     indices: [*]const Value,
     rank: i64,
     held: *const Value,
+) callconv(.c) i32;
+extern fn luce_rt_list_slice(
+    runtime: *Runtime,
+    target: *const Value,
+    start: i64,
+    end: i64,
+    out: *Value,
+) callconv(.c) i32;
+extern fn luce_rt_map_keys(
+    runtime: *Runtime,
+    target: *const Value,
+    zero: *const Value,
+    out: *Value,
+) callconv(.c) i32;
+extern fn luce_rt_map_values(
+    runtime: *Runtime,
+    target: *const Value,
+    zero: *const Value,
+    out: *Value,
 ) callconv(.c) i32;
 extern fn luce_rt_spawn(
     runtime: *Runtime,
@@ -6247,6 +6278,127 @@ test "allocating C doors preserve outputs and rows at every failure point" {
             try testing.expectEqual(@as(u32, 0), runtime.live);
             runtime.deinit();
             arena.deinit();
+            try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
+            if (completed) break;
+        }
+        try testing.expect(completed);
+        try testing.expect(failures >= 1);
+    }
+}
+
+test "allocating C value doors preserve graphs and slots at every failure point" {
+    const long_text = "a C value door string long enough to require owned storage";
+    const inline_text = Value.ofInlineText(.string, "inline return bytes");
+    const previous_key = "the previous key text remains on a failed replacement";
+    const next_key = "the next key text replaces it only after allocation succeeds";
+    const doors = [_]CValueAllocationDoor{
+        .export_storage,
+        .copy,
+        .list_slice,
+        .map_keys,
+        .map_values,
+        .str,
+        .set_key_text,
+    };
+
+    for (doors) |door| {
+        var failures: usize = 0;
+        var completed = false;
+        for (0..64) |failure_offset| {
+            var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+            var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+            var runtime: Runtime = .init(.{
+                .arena = arena.allocator(),
+                .objects = objects.allocator(),
+            });
+            var cleaned = false;
+            defer if (!cleaned) {
+                runtime.deinit();
+                arena.deinit();
+            };
+
+            const source = switch (door) {
+                .copy, .list_slice => try nestedCopySource(&runtime, .list),
+                .map_keys, .map_values => try nestedCopySource(&runtime, .map),
+                else => Value.none,
+            };
+            const baseline_live = runtime.live;
+            if (door == .set_key_text) {
+                try testing.expectEqual(
+                    @as(i32, 0),
+                    luce_rt_set_key_text(&runtime, previous_key, previous_key.len),
+                );
+            }
+
+            var out = Value.ofLong(99);
+            objects.fail_index = objects.alloc_index + failure_offset;
+            const status = switch (door) {
+                .export_storage => luce_rt_export_storage(&runtime, &inline_text, &out),
+                .copy => luce_rt_copy(&runtime, &source, &out),
+                .list_slice => luce_rt_list_slice(&runtime, &source, 0, 2, &out),
+                .map_keys => luce_rt_map_keys(&runtime, &source, &Value.ofString(""), &out),
+                .map_values => luce_rt_map_values(&runtime, &source, &Value.none, &out),
+                .str => luce_rt_str(&runtime, &Value.ofString(long_text), &out),
+                .set_key_text => luce_rt_set_key_text(&runtime, next_key, next_key.len),
+            };
+            objects.fail_index = std.math.maxInt(usize);
+
+            if (status == 0) {
+                switch (door) {
+                    .export_storage => {
+                        try testing.expectEqualStrings(inline_text.asString(), out.asString());
+                        try testing.expect(!out.textIsInline());
+                        runtime.dropStorage(out);
+                    },
+                    .copy, .list_slice, .map_values => {
+                        try expectNestedSourceIntact(&runtime, out, .list);
+                        runtime.freeValue(out);
+                    },
+                    .map_keys => {
+                        try testing.expectEqual(@as(i64, 2), (try containers.length(&runtime, out)).asLong());
+                        try testing.expectEqualStrings(
+                            "the first copied map key owns outside bytes",
+                            (try containers.indexGet(&runtime, out, &.{Value.ofLong(0)})).asString(),
+                        );
+                        try testing.expectEqualStrings(
+                            "the second copied map key owns outside bytes",
+                            (try containers.indexGet(&runtime, out, &.{Value.ofLong(1)})).asString(),
+                        );
+                        runtime.freeValue(out);
+                    },
+                    .str => {
+                        try testing.expectEqualStrings(long_text, out.asString());
+                        try testing.expect(out.ownsStorage());
+                        runtime.dropStorage(out);
+                    },
+                    .set_key_text => try testing.expectEqualStrings(next_key, runtime.last_key_text),
+                }
+                completed = true;
+            } else {
+                try testing.expectEqual(@as(i32, 1), status);
+                try testing.expectEqual(@as(i64, 99), out.asLong());
+                try testing.expect(runtime.pending == null);
+                try testing.expect(runtime.exhausted);
+                try testing.expect(objects.has_induced_failure);
+                try testing.expectEqual(baseline_live, runtime.live);
+                if (source.tag == .object) {
+                    try expectNestedSourceIntact(
+                        &runtime,
+                        source,
+                        if (door == .map_keys or door == .map_values) .map else .list,
+                    );
+                }
+                if (door == .set_key_text) {
+                    try testing.expectEqualStrings(previous_key, runtime.last_key_text);
+                }
+                failures += 1;
+            }
+
+            if (source.tag == .object) runtime.freeValue(source);
+            try testing.expectEqual(@as(u32, 0), runtime.live);
+            runtime.deinit();
+            arena.deinit();
+            cleaned = true;
             try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
             if (completed) break;
         }

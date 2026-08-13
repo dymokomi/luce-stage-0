@@ -181,6 +181,7 @@ pub fn build(b: *std.Build) void {
         "map place rolls every key value",
         "builder growth and snapshots",
         "allocating C doors preserve outputs",
+        "allocating C value doors preserve graphs",
         "blocked worker teardown joins",
     };
     const c_sanitize_luce = b.createModule(.{
@@ -477,6 +478,7 @@ pub fn build(b: *std.Build) void {
             "map place rolls every key value",
             "builder growth and snapshots",
             "allocating C doors preserve outputs",
+            "allocating C value doors preserve graphs",
             "blocked worker teardown joins",
         },
     });
