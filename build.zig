@@ -248,6 +248,16 @@ pub fn build(b: *std.Build) void {
     );
     test_ownership_diagnostics_step.dependOn(&b.addRunArtifact(ownership_diagnostic_tests).step);
 
+    const format_diagnostic_tests = b.addTest(.{
+        .root_module = specs,
+        .filters = &.{"percent formatting mistake names f-strings"},
+    });
+    const test_format_diagnostics_step = b.step(
+        "test-format-diagnostics",
+        "Run diagnostics for string-formatting mistakes",
+    );
+    test_format_diagnostics_step.dependOn(&b.addRunArtifact(format_diagnostic_tests).step);
+
     // The documentation site's generator (`www/luce/src/`).  Its tests
     // are what keep the word tables it highlights with, its link
     // resolver and its Markdown honest, and they belong in `zig build

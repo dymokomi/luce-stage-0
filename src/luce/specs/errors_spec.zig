@@ -2595,6 +2595,16 @@ test "luce.sema.type: a narrowing argument earns the same sentence" {
     );
 }
 
+test "luce.sema.type: a percent formatting mistake names f-strings" {
+    try expectSaying(
+        \\func main():
+        \\    let name = "world"
+        \\    let text = "hello %s" % name
+        \\    print(text)
+        \\
+    , "luce.sema.type", "string does not support '%'; use an f-string");
+}
+
 // A conversion the constant folder performs is the *same* conversion
 // the runtime would, per width and at the same boundary — a fold that
 // disagrees with a run is a different language (docs/TYPES.md §3).

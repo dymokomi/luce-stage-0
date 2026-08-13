@@ -1420,6 +1420,15 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
             else => {},
         }
         const string_concat = operation == .add and operand_type == .string;
+        if (operation == .modulo and operand_type == .string) {
+            try self.fail(
+                "luce.sema.type",
+                binary.span,
+                "string does not support '%'; use an f-string such as f\"hello {{name}}\" for interpolation",
+                .{},
+            );
+            return null;
+        }
         if (!operand_type.isNumeric() and !string_concat) {
             try self.fail("luce.sema.type", binary.span, "{s} does not support this operator", .{
                 try self.analyzer.typeName(operand_type),
