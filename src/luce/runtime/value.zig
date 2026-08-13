@@ -330,6 +330,32 @@ pub const Value = extern struct {
         return self.inline_length <= inline_capacity;
     }
 
+    /// Whether a value's tagged storage can be walked without turning a
+    /// malformed C/MIR payload into a native pointer fault.  A struct run
+    /// may have any length, while a function run is always the two slots
+    /// described by the function-value ABI.  This proves representation
+    /// shape, not that an arbitrary outside pointer names allocated memory;
+    /// ownership boundaries still reject the impossible null, alignment,
+    /// and overflow cases before any walk.
+    pub fn hasValidRepresentation(self: Value) bool {
+        return switch (self.tag) {
+            .string => self.hasValidStringRepresentation(),
+            .strukt => self.hasValidFieldRun(),
+            .function => self.length == 2 and self.hasValidFieldRun(),
+            else => true,
+        };
+    }
+
+    fn hasValidFieldRun(self: Value) bool {
+        const length = std.math.cast(usize, self.length) orelse return false;
+        if (length == 0) return true;
+        const address = std.math.cast(usize, self.bits) orelse return false;
+        if (address == 0 or address % @alignOf(Value) != 0) return false;
+        const bytes = std.math.mul(usize, length, @sizeOf(Value)) catch return false;
+        _ = std.math.add(usize, address, bytes) catch return false;
+        return true;
+    }
+
     /// True when the text is in the value rather than behind `bits`.
     pub fn textIsInline(self: Value) bool {
         return self.inline_length != text_outside;

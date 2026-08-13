@@ -168,6 +168,7 @@ fn ordered(op: vocabulary.BinaryOp, left: anytype, right: @TypeOf(left)) bool {
 /// Bool, structs, and objects; full ordering on every number and on
 /// String.
 pub fn compare(op: vocabulary.BinaryOp, left: Value, right: Value) bool {
+    if (!left.hasValidRepresentation() or !right.hasValidRepresentation()) return false;
     // Absence, before the payload dispatch below, because absence has
     // no payload to dispatch on.  Two absences are the same absence
     // and an absent value equals nothing present — the answer every

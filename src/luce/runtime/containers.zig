@@ -716,6 +716,7 @@ pub fn mapPlace(runtime: *Runtime, target: Value, key: Value, zero: Value) Error
 /// `a.fill(v)` — every cell replaced.  A cell owns its storage, so the
 /// old contents go back and every new one is its own copy.
 pub fn arrayFill(runtime: *Runtime, target: Value, held: Value) Error!void {
+    if (!held.hasValidRepresentation()) return runtime.fail(.not_owned);
     const object = try runtime.resolveMutable(target);
     switch (object.data) {
         .array => {},
@@ -812,6 +813,7 @@ pub fn freeVerb(runtime: *Runtime, held: Value, expected: ?OwnedBy) Error!void {
 /// forge a second owner.  Verbs demand an object, so an unfilled slot
 /// traps (S42).
 pub fn giveVerb(runtime: *Runtime, held: Value, expected: ?OwnedBy) Error!Value {
+    if (!held.hasValidRepresentation()) return runtime.fail(.not_owned);
     switch (held.view()) {
         .object => {
             _ = try runtime.resolve(held);
@@ -829,6 +831,7 @@ pub fn giveVerb(runtime: *Runtime, held: Value, expected: ?OwnedBy) Error!Value 
 /// `copy x`.  Verbs demand an object (S42): copying an unfilled or
 /// freed slot traps.
 pub fn copyVerb(runtime: *Runtime, held: Value) Error!Value {
+    if (!held.hasValidRepresentation()) return runtime.fail(.not_owned);
     // Values copy as ordinary values; the explicit verb is reserved for a
     // resource-free object or carrying struct.  The analyzer normally
     // enforces this, but the C/MIR door must not silently accept a forged

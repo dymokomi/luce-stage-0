@@ -1204,7 +1204,7 @@ fn requireValueInput(runtime: *Runtime, held: [*c]const Value) bool {
         _ = runtime.fail(.host_unavailable) catch {};
         return false;
     }
-    if (held.*.tag == .string and !held.*.hasValidStringRepresentation()) {
+    if (!held.*.hasValidRepresentation()) {
         _ = runtime.fail(.not_owned) catch {};
         return false;
     }

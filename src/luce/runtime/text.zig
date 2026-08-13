@@ -102,6 +102,7 @@ pub fn findByte(runtime: *Runtime, held: Value, byte: i64, start: i64) Error!Val
 /// (docs/STRINGS.md).  A Builder hands back a copy of its bytes, so
 /// later appends do not change the String that was taken.
 pub fn str(runtime: *Runtime, held: Value) Error!Value {
+    if (!held.hasValidRepresentation()) return runtime.fail(.not_owned);
     switch (held.view()) {
         // Twenty digits and a sign is the longest an i64 gets, so a
         // number's text always fits inside the value and `string(i)` in

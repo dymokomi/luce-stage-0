@@ -1878,6 +1878,7 @@ pub const Runtime = struct {
     /// makes a program constant safe to "own": storing one copies it,
     /// and the constant itself is never reached by a release.
     pub fn ownValue(self: *Runtime, held: Value) Error!Value {
+        if (!held.hasValidRepresentation()) return self.fail(.not_owned);
         switch (held.tag) {
             .string => {
                 const text = held.asString();
@@ -1919,6 +1920,7 @@ pub const Runtime = struct {
     /// released slot safe to release again: every release writes the
     /// emptied value back, and an empty value frees nothing.
     pub fn dropStorage(self: *Runtime, held: Value) void {
+        if (!held.hasValidRepresentation()) return;
         switch (held.tag) {
             .string => {
                 // Inline text is the value, and a value is not an
@@ -2002,10 +2004,14 @@ pub const Runtime = struct {
     /// flag, because the two runs mean different things about ownership
     /// and a caller that picked the wrong one would be picking that.
     pub fn makeFunction(self: *Runtime, slots: []const Value) Error!Value {
+        if (slots.len != 2) return self.fail(.not_owned);
         return self.makeRun(slots, .function);
     }
 
     fn makeRun(self: *Runtime, fields: []const Value, tag: value.Tag) Error!Value {
+        for (fields) |field| {
+            if (!field.hasValidRepresentation()) return self.fail(.not_owned);
+        }
         if (fields.len == 0) {
             return if (tag == .function) Value.ofFunction(&.{}) else Value.ofStruct(&.{});
         }
@@ -2031,6 +2037,9 @@ pub const Runtime = struct {
     ///
     /// **Consumes `to`**, like every other store site.
     pub fn setField(self: *Runtime, held: Value, index: usize, to: Value) Error!Value {
+        if (held.tag != .strukt or !held.hasValidRepresentation()) {
+            return self.fail(.not_owned);
+        }
         const source = held.asStruct();
         // A forged struct-set must be a trap, not a native slice panic.  The
         // incoming value has not passed its ownership proof on this refusal
@@ -2144,6 +2153,7 @@ pub const Runtime = struct {
 
     /// The objects in `held` now belong to `local` of frame `serial`.
     pub fn bind(self: *Runtime, held: Value, serial: u64, local: u32) void {
+        if (!held.hasValidRepresentation()) return;
         switch (held.view()) {
             .object => |handle| {
                 const object = self.liveObject(handle) orelse return;
@@ -2177,6 +2187,7 @@ pub const Runtime = struct {
     /// ancestor.  A damaged pre-existing parent cycle consumes the
     /// bounded walk and is refused rather than looping forever.
     pub fn ensureAcyclicAdoption(self: *Runtime, parent: Handle, held: Value) Error!void {
+        if (!held.hasValidRepresentation()) return self.fail(.not_owned);
         switch (held.view()) {
             .object => |child| {
                 if (child.index == value.null_index or self.liveObject(child) == null) return;
@@ -2204,6 +2215,7 @@ pub const Runtime = struct {
     /// knows its parent is a brand-new row.  Either way this commit
     /// cannot fail or leave a half-mutated container behind.
     pub fn adoptInto(self: *Runtime, parent: Handle, held: Value) void {
+        if (!held.hasValidRepresentation()) return;
         switch (held.view()) {
             .object => |handle| {
                 const object = self.liveObject(handle) orelse return;
@@ -2218,6 +2230,7 @@ pub const Runtime = struct {
     /// The objects in `held` belong to nobody yet: pop results and
     /// returned values (the receiver adopts or binds them next).
     pub fn loosen(self: *Runtime, held: Value) void {
+        if (!held.hasValidRepresentation()) return;
         switch (held.view()) {
             .object => |handle| {
                 const object = self.liveObject(handle) orelse return;
@@ -2232,6 +2245,7 @@ pub const Runtime = struct {
     /// On return, everything the finished frame still owned in the
     /// returned value moves out loose; the caller owns it (S16).
     pub fn loosenFromFrame(self: *Runtime, held: Value, serial: u64) void {
+        if (!held.hasValidRepresentation()) return;
         switch (held.view()) {
             .object => |handle| {
                 const object = self.liveObject(handle) orelse return;
@@ -2251,6 +2265,7 @@ pub const Runtime = struct {
     /// scope-exit release.  Objects owned elsewhere by now are left
     /// alone, which makes releases safe on every path.
     pub fn unbind(self: *Runtime, held: Value, serial: u64, local: u32) void {
+        if (!held.hasValidRepresentation()) return;
         switch (held.view()) {
             .object => |handle| {
                 const object = self.liveObject(handle) orelse return;
@@ -2323,6 +2338,7 @@ pub const Runtime = struct {
     /// function value deliberately stops at its field run: its object
     /// handles borrow the receiver's graph (docs/BINDING.md D4).
     fn scheduleValue(self: *Runtime, held: Value, pending: *u32) void {
+        if (!held.hasValidRepresentation()) return;
         switch (held.view()) {
             .object => |handle| self.scheduleDestroy(handle, pending, false),
             .strukt => |fields| for (fields) |field| self.scheduleValue(field, pending),
@@ -2400,6 +2416,7 @@ pub const Runtime = struct {
     /// Struct values check every filled field; unfilled fields are
     /// simply carried along.
     pub fn checkGivable(self: *Runtime, held: Value, expected: ?OwnedBy) Error!void {
+        if (!held.hasValidRepresentation()) return self.fail(.not_owned);
         if (held.tag == .string and !held.hasValidStringRepresentation()) {
             return self.fail(.not_owned);
         }
@@ -2476,6 +2493,7 @@ pub const Runtime = struct {
     /// difference; writing the walk twice would have been two places
     /// for one semantic.
     pub fn copyFrom(self: *Runtime, source: *Runtime, held: Value) Error!Value {
+        if (!held.hasValidRepresentation()) return self.fail(.not_owned);
         const initial_table_len = self.table.items.len;
         const initial_table_capacity = self.table.capacity;
         var tasks: std.ArrayList(CopyTask) = .empty;
@@ -2561,6 +2579,7 @@ pub const Runtime = struct {
         task: CopyTask,
         tasks: *std.ArrayList(CopyTask),
     ) Error!void {
+        if (!task.source.hasValidRepresentation()) return self.fail(.not_owned);
         switch (task.source.view()) {
             .object => |handle| {
                 if (handle.index == value.null_index) {

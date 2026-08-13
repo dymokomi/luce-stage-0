@@ -7472,7 +7472,6 @@ test "array fill keeps its old values through every copy allocation failure" {
 }
 
 test "array fill rolls borrowed function runs back at every allocation failure" {
-    const label_text = "function storage copied into every array cell";
     var failures: usize = 0;
     var completed = false;
 
@@ -7495,8 +7494,7 @@ test "array fill rolls borrowed function runs back at every allocation failure" 
         )));
         try containers.append(&runtime, receiver, nested);
         const array = try runtime.newArray(&.{3}, Value.none);
-        const label = try runtime.ownValue(Value.ofString(label_text));
-        const function = try runtime.makeFunction(&.{ Value.ofLong(9), receiver, label });
+        const function = try runtime.makeFunction(&.{ Value.ofLong(9), receiver });
 
         objects.fail_index = objects.alloc_index + offset;
         const outcome = containers.arrayFill(&runtime, array, function);
@@ -7513,7 +7511,7 @@ test "array fill rolls borrowed function runs back at every allocation failure" 
                     &.{Value.ofLong(@intCast(index))},
                 );
                 try testing.expectEqual(value.Tag.function, cell.tag);
-                try testing.expectEqualStrings(label_text, cell.asStruct()[2].asString());
+                try testing.expectEqual(@as(i64, 9), cell.asStruct()[0].asLong());
                 try testing.expect(cell.asStruct()[1].asObject().same(receiver.asObject()));
             }
             completed = true;
@@ -8997,6 +8995,20 @@ test "C container doors reject wrong tags and object shapes before mutation" {
         .length = 1,
     };
     try expectCTrapCode(runtime, luce_rt_string_byte(runtime, &malformed_outside, 0, &out), .not_owned);
+
+    out = Value.ofLong(99);
+    // Composite values carry a pointer/length run too.  A null run with a
+    // nonzero length must be rejected before give/copy or any ownership walk
+    // can reinterpret it as an empty or foreign graph.  Function values are
+    // additionally required to retain their fixed two-slot representation.
+    const malformed_struct: Value = .{ .tag = .strukt, .length = 1 };
+    try expectCTrapCode(runtime, luce_rt_copy(runtime, &malformed_struct, &out), .not_owned);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try expectCTrapCode(runtime, luce_rt_give(runtime, &malformed_struct, 0, 0, 0, &out), .not_owned);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    const malformed_function: Value = .{ .tag = .function, .length = 2 };
+    try expectCTrapCode(runtime, luce_rt_copy(runtime, &malformed_function, &out), .not_owned);
+    try testing.expectEqual(@as(i64, 99), out.asLong());
 
     try testing.expectEqual(@as(i64, 17), (try containers.mapGet(runtime, map, map_key)).asLong());
     try testing.expectEqual(@as(i64, 2), luce_rt_leaked(runtime));
