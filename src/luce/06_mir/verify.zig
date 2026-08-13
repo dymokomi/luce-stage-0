@@ -87,6 +87,12 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
                 .long, .string, .enumeration => try verifyType(program, pair.key),
                 else => return error.BadStruct,
             }
+            // A map's missing-key answer already supplies the one
+            // optional layer (`get` is `V?`).  Stage 4 therefore refuses
+            // `map(K, V?)`, including the storable function spelling;
+            // keep the decoded-MIR boundary in agreement so `map_get`
+            // cannot unwrap a shape with no representable `V??` result.
+            if (pair.value == .optional) return error.BadStruct;
             try verifyType(program, pair.value);
         },
         .array => |shape| {

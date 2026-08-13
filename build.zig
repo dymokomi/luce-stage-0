@@ -327,7 +327,10 @@ pub fn build(b: *std.Build) void {
 
     const mir_function_shape_tests = b.addTest(.{
         .root_module = luce,
-        .filters = &.{"bare function fields are rejected while optional function fields remain storable"},
+        .filters = &.{
+            "bare function fields are rejected while optional function fields remain storable",
+            "map values cannot be optional while bare function values remain legal",
+        },
     });
     const test_mir_function_shapes_step = b.step(
         "test-mir-function-shapes",

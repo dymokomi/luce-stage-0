@@ -907,6 +907,44 @@ test "bare function fields are rejected while optional function fields remain st
     try verify_mod.verify(testing.allocator, &program);
 }
 
+test "map values cannot be optional while bare function values remain legal" {
+    var program = try programOf(.{
+        .instructions = &.{.{ .ret = null }},
+        .result_types = &.{.none},
+        .blocks = &.{&.{0}},
+    });
+    defer program.deinit();
+    const arena = program.arena.allocator();
+    program.signatures = try arena.dupe(types.Signature, &.{.{
+        .parameters = &.{},
+        .result = .none,
+    }});
+    program.heap_types = try arena.dupe(types.HeapType, &.{.{ .map = .{
+        .key = .long,
+        .value = .{ .optional = .long },
+    } }});
+
+    // `get` adds the missing-key absence itself, so a decoded map row
+    // cannot smuggle in a second optional layer.
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
+
+    // The special function-value rule is narrower: a bare function is
+    // a legal map value because the entry exists only after `put`, and
+    // `get` supplies its optional wrapper.  Keep that valid distinction
+    // pinned while refusing every explicitly optional map value.
+    program.heap_types[0] = .{ .map = .{
+        .key = .long,
+        .value = .{ .function = 0 },
+    } };
+    try verify_mod.verify(testing.allocator, &program);
+
+    program.heap_types[0] = .{ .map = .{
+        .key = .long,
+        .value = .{ .optional = .{ .function = 0 } },
+    } };
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
+}
+
 test "a function's integer storage is not a numeric conversion" {
     var program = try programOf(.{
         .instructions = &.{
