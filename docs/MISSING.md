@@ -34,6 +34,11 @@ boundary visible:
 The deep graph tests intentionally exceed ordinary native stack depth.  The
 copy rollback test also checks allocator-visible state, not just `live` rows.
 
+- a statement-level { now gets block-oriented guidance without
+  changing the parser's one-diagnostic recovery rule;
+- ownership advice inspects the complete source-order operand batch before
+  suggesting give, so a repair cannot poison a later occurrence.
+
 ## Tier 0 — decisions that can make a total function lie
 
 ### Large-angle `sin` and `cos`
@@ -151,12 +156,6 @@ smuggle one in as a convenience feature.
 ## Tier 5b — diagnostic precision
 
 - A string-formatting `%` mistake should name f-strings as the Luce fix.
-- A statement-level C-style brace currently gets a map-oriented diagnostic;
-  the wording should identify the likely block mistake without changing the
-  one-diagnostic recovery guarantee.
-- Ownership advice over a whole operand batch can recommend a move that
-  poisons a later occurrence; diagnostics should inspect the batch before
-  prescribing `give`.
 
 Smaller harness follow-ups remain: worker arena exhaustion can be translated
 as `host_unavailable`, release-mode origin stripping is redundant, and an

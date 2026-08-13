@@ -1073,3 +1073,20 @@ The module seam now also has a hostile-MIR fixture: a bound function with an
 out-of-range receiver register and one with a receiver of the wrong type are
 both rejected by verification before execution.  The full repository suite
 passes with 2,018 tests.
+
+## 2026-08-12 — Tier 5b diagnostic precision
+
+The parser now recognizes a statement-level `{` as the likely C-style block
+mistake and says that Luce blocks open with `:` and an indented body, while
+retaining one-diagnostic recovery.  Ownership refusals now receive the
+source-order operand batch at calls, methods, struct and union construction,
+and container literals; before suggesting `give NAME`, they detect a later
+occurrence that the move would poison and instead ask for distinct owned
+values.
+
+The regression matrix covers ordinary calls, bound methods, struct fields,
+union payloads, list elements, and map values.  Focused composition,
+ownership-diagnostic, hardening, and fuzz lanes all pass; the full repository
+suite passes with 2,022 tests.
+
+Commits: `53a5e74`, `79c488f`.
