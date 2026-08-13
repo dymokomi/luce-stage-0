@@ -60,3 +60,62 @@ test "a module encoded and decoded again is the same program on both engines" {
     defer testing.allocator.free(again);
     try testing.expectEqualSlices(u8, encoded, again);
 }
+
+test "optimized ownership graphs execute after module round-trip" {
+    // This is the ownership-heavy composition that a shape-only round-trip
+    // test cannot prove: an owned union carries a list of value structs, a
+    // match arm borrows one struct as a bound method, and an enclosing
+    // struct carries a second callback.  Encode the already optimized MIR,
+    // then run the decoded program through both engines.
+    var program = try agree.program(
+        \\struct Item:
+        \\    prefix: string
+        \\    scale: long
+        \\    func render(value: long) -> string:
+        \\        return self.prefix + string(value * self.scale)
+        \\
+        \\union Work:
+        \\    empty
+        \\    batch(items: list(Item))
+        \\
+        \\struct Plan:
+        \\    work: Work
+        \\    finish: (func(long) -> string)? = none
+        \\
+        \\func suffix(value: long) -> string:
+        \\    return "!" + string(value)
+        \\
+        \\func evaluate(plan: Plan) -> string:
+        \\    let finish = plan.finish
+        \\    match plan.work:
+        \\        empty:
+        \\            return "empty"
+        \\        batch(items):
+        \\            let render: func(long) -> string = items[0].render
+        \\            if finish != none:
+        \\                return render(4) + finish(5)
+        \\            return render(4)
+        \\
+        \\func main():
+        \\    var items = new list(Item)
+        \\    items.append(Item(prefix = "item", scale = 2))
+        \\    let plan = Plan(work = Work.batch(items = give items), finish = suffix)
+        \\    print(evaluate(plan))
+        \\
+    );
+    defer program.deinit();
+
+    const encoded = try mir.module.encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+    var loaded = try mir.module.decode(testing.allocator, encoded);
+    defer loaded.deinit();
+
+    var direct = try agree.compareProgram(&program, .{});
+    defer direct.deinit();
+    var round_tripped = try agree.compareProgram(&loaded, .{});
+    defer round_tripped.deinit();
+
+    try testing.expectEqualStrings("item8!5\n", direct.printed());
+    try testing.expectEqualStrings(direct.printed(), round_tripped.printed());
+    try testing.expectEqual(direct.end, round_tripped.end);
+}

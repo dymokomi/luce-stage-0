@@ -1344,6 +1344,17 @@ environment-dependent follow-ups rather than false claims of coverage.
 
 Commit: current Tier 0 sanitizer hardening batch.
 
+## 2026-08-12 — optimized ownership graphs survive module round-trips
+
+The module/spec lane now serializes an already optimized program whose
+ownership graph combines a union carrying a list of structs, a borrowed bound
+method, and a second callback stored in an enclosing struct.  It decodes that
+program and runs it through both the interpreter and LLVM paths, comparing the
+output and end state.  This closes the previously untested execution boundary;
+the broader forged-signature and optimizer matrix remains in MISSING.md.
+
+Commit: current Tier 0 cross-stage ownership hardening batch.
+
 ## 2026-08-12 — array fills cannot strand old cells or partial copies
 
 `array_fill` now releases object ownership as well as value storage when a
