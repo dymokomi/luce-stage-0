@@ -200,9 +200,14 @@ preservation.  The byte-taking C exports now use null-tolerant C pointer
 types and reject a null input before slicing, allocation, or host access;
 the regression covers text materialization, directory names, key text,
 whole-file paths/content, and all three raise helpers, while an absent
-optional result proves an unused null buffer is not read.  Null pointers for
-Value/out slots, dimensions, indices, fields, task handles, and callbacks,
-plus any allocating C door not yet in these direct corpora, remain open.
+optional result proves an unused null buffer is not read.  Every exported
+`Value` result slot now uses a C-nullable pointer and rejects null before
+inputs are read, callbacks or host I/O run, allocation starts, or ownership
+changes; the direct regression covers constructors, text/list materialization,
+deep copy/give, task/file results, constants, container queries, and string
+conversions, including void readers.  The remaining C pointer matrix is
+status/out slots other than `Value`, borrowed `Value` arguments, dimensions,
+indices, fields, task handles, and callbacks.
 The differential specs now put a task inside a union's optional field, that
 union inside a recursive struct with an optional callback and child list, and
 consume the task through a `give`d helper; a companion file case puts an

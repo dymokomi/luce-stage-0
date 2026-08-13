@@ -1090,8 +1090,10 @@ fn describes(comptime shape: Parameter, comptime T: type) bool {
     return switch (shape) {
         .plain => unreachable, // not a pointer, returned above
         .run => at.size == .one and at.child == runtime.Runtime,
-        .value_in => at.size == .one and at.is_const and at.child == runtime.Value,
-        .value_out => at.size == .one and !at.is_const and at.child == runtime.Value,
+        .value_in => (at.size == .one or at.size == .c) and
+            at.is_const and at.child == runtime.Value,
+        .value_out => (at.size == .one or at.size == .c) and
+            !at.is_const and at.child == runtime.Value,
         .values_in => at.size == .many and at.is_const and at.child == runtime.Value,
         .numbers_in => at.size == .many and at.is_const and at.child == i64,
         // C-facing byte inputs may be declared as a Zig many-pointer or

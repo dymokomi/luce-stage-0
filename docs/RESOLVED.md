@@ -1540,6 +1540,20 @@ pass 36/36, and the full differential suite passes 517/517.
 
 Commit: current Tier 0 C-boundary hardening batch.
 
+## 2026-08-13 — C `Value` output-pointer null refusal
+
+Every exported result slot carrying a `Value` now uses a C-nullable pointer
+and rejects null before reading inputs, invoking callbacks or host I/O,
+allocating, or changing ownership.  The direct regression covers
+constructors, materialization, deep copy/give, task/file results, constants,
+container queries, string conversions, and the void result readers; it also
+checks status sentinels, live rows, and the invariant assertion.
+
+Status/output pointers other than `Value`, borrowed `Value` inputs, arrays,
+task handles, and callbacks remain listed in MISSING.md.
+
+Commit: current Tier 0 C-boundary hardening batch.
+
 ## 2026-08-13 — resource-bearing composite differential cases
 
 The executable specifications now exercise two composition paths across both

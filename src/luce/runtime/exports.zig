@@ -315,7 +315,8 @@ pub export fn luce_rt_raise_io(
 /// one; an empty channel would mean damaged IR, and answering `""`
 /// keeps a damaged module from reading whatever the last error left
 /// behind.
-pub export fn luce_rt_error_message(runtime: *const Runtime, out: *Value) callconv(.c) void {
+pub export fn luce_rt_error_message(runtime: *Runtime, out: [*c]Value) callconv(.c) void {
+    if (!requireValueOut(runtime, out)) return;
     const raised = runtime.raised orelse {
         out.* = Value.ofString("");
         return;
@@ -369,8 +370,9 @@ pub export fn luce_rt_intern_text(
     runtime: *Runtime,
     bytes: [*c]const u8,
     length: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     const borrowed = checkedBytes(runtime, bytes, length) catch |mistake|
         return failed(runtime, mistake);
     out.* = runtime.ownValue(Value.ofString(borrowed)) catch |mistake|
@@ -388,8 +390,9 @@ pub export fn luce_rt_maybe_text(
     present: i32,
     bytes: [*c]const u8,
     length: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     if (present == 0) {
         out.* = Value.none;
         return survived;
@@ -412,8 +415,9 @@ pub export fn luce_rt_names_list(
     runtime: *Runtime,
     bytes: [*c]const u8,
     length: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     const joined = checkedBytes(runtime, bytes, length) catch |mistake|
         return failed(runtime, mistake);
     out.* = containers.listOfJoinedText(runtime, joined) catch |mistake|
@@ -436,8 +440,9 @@ pub export fn luce_rt_args_list(
     context: ?*anyopaque,
     count: ?*const fn (context: ?*anyopaque) callconv(.c) i64,
     get: ?containers.ArgumentFn,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     const total: i64 = if (count) |callback| callback(context) else 0;
     out.* = containers.listOfArguments(runtime, total, context, get) catch |mistake|
         return failed(runtime, mistake);
@@ -465,8 +470,9 @@ pub export fn luce_rt_set_key_text(
 pub export fn luce_rt_own_storage(
     runtime: *Runtime,
     held: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = runtime.ownValue(held.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
@@ -478,8 +484,9 @@ pub export fn luce_rt_own_storage(
 pub export fn luce_rt_export_storage(
     runtime: *Runtime,
     held: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = runtime.exportValue(held.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
@@ -490,14 +497,16 @@ pub export fn luce_rt_export_storage(
 pub export fn luce_rt_drop_storage(
     runtime: *Runtime,
     held: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) void {
+    if (!requireValueOut(runtime, out)) return;
     runtime.dropStorage(held.*);
     out.* = heap.Runtime.emptied(held.*);
 }
 
 /// The text payload of the most recent `key_read`.
-pub export fn luce_rt_key_text(runtime: *const Runtime, out: *Value) callconv(.c) void {
+pub export fn luce_rt_key_text(runtime: *Runtime, out: [*c]Value) callconv(.c) void {
+    if (!requireValueOut(runtime, out)) return;
     out.* = Value.ofString(runtime.last_key_text);
 }
 
@@ -521,8 +530,9 @@ pub export fn luce_rt_key_text(runtime: *const Runtime, out: *Value) callconv(.c
 pub export fn luce_rt_parse_string(
     runtime: *Runtime,
     held: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = files.parseString(runtime, held.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -583,8 +593,9 @@ pub export fn luce_rt_spawn(
     function: i64,
     arguments: [*]const Value,
     count: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     const argument_count = checkedCount(runtime, count) catch |mistake|
         return failed(runtime, mistake);
     workers.spawn(runtime, function, arguments[0..argument_count], out) catch |mistake|
@@ -601,8 +612,9 @@ pub export fn luce_rt_spawn(
 pub export fn luce_rt_task_wait(
     runtime: *Runtime,
     task: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     return workers.wait(runtime, task.*, out) catch |mistake| failed(runtime, mistake);
 }
 
@@ -645,11 +657,12 @@ pub export fn luce_rt_file_open(
     path: [*c]const u8,
     length: i64,
     mode: i64,
-    out: *Value,
+    out: [*c]Value,
     opened: *i32,
     function: u32,
     instruction: u32,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     const named = checkedBytes(runtime, path, length) catch |mistake|
         return failed(runtime, mistake);
     const selected_mode = checkedFileMode(runtime, mode) catch |mistake|
@@ -732,11 +745,12 @@ pub export fn luce_rt_file_read_text(
     runtime: *Runtime,
     path: [*c]const u8,
     length: i64,
-    out: *Value,
+    out: [*c]Value,
     ok: *i32,
     function: u32,
     instruction: u32,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     const named = checkedBytes(runtime, path, length) catch |mistake|
         return failed(runtime, mistake);
     const answer = files.readText(runtime, named) catch |mistake|
@@ -857,10 +871,11 @@ pub export fn luce_rt_constant_publish(
 
 /// Load the borrowed program-root handle at a verified pool slot.
 pub export fn luce_rt_constant_load(
-    runtime: *const Runtime,
+    runtime: *Runtime,
     slot: u32,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) void {
+    if (!requireValueOut(runtime, out)) return;
     out.* = runtime.constant(slot);
 }
 
@@ -937,18 +952,21 @@ pub export fn luce_rt_discard_loose(runtime: *Runtime, held: *const Value) callc
 pub export fn luce_rt_new_list(
     runtime: *Runtime,
     zero: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = runtime.newList(zero.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
 
-pub export fn luce_rt_new_map(runtime: *Runtime, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_new_map(runtime: *Runtime, out: [*c]Value) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = runtime.newMap() catch |mistake| return failed(runtime, mistake);
     return survived;
 }
 
-pub export fn luce_rt_new_builder(runtime: *Runtime, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_new_builder(runtime: *Runtime, out: [*c]Value) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = runtime.newBuilder() catch |mistake| return failed(runtime, mistake);
     return survived;
 }
@@ -958,8 +976,9 @@ pub export fn luce_rt_new_array(
     dims: [*]const i64,
     rank: i64,
     zero: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     const dimension_count = checkedCount(runtime, rank) catch |mistake|
         return failed(runtime, mistake);
     out.* = runtime.newArray(dims[0..dimension_count], zero.*) catch |mistake|
@@ -1012,15 +1031,17 @@ pub export fn luce_rt_give(
     owned: i32,
     serial: u64,
     local: u32,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     const expected: ?heap.OwnedBy = if (owned != 0) .{ .serial = serial, .local = local } else null;
     out.* = containers.giveVerb(runtime, held.*, expected) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
 
-pub export fn luce_rt_copy(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_copy(runtime: *Runtime, held: *const Value, out: [*c]Value) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = containers.copyVerb(runtime, held.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1045,8 +1066,9 @@ pub export fn luce_rt_struct_make(
     runtime: *Runtime,
     fields: [*]const Value,
     count: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     const field_count = checkedCount(runtime, count) catch |mistake|
         return failed(runtime, mistake);
     out.* = runtime.makeStruct(fields[0..field_count]) catch |mistake|
@@ -1063,8 +1085,9 @@ pub export fn luce_rt_function_make(
     runtime: *Runtime,
     slots: [*]const Value,
     count: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     const slot_count = checkedCount(runtime, count) catch |mistake|
         return failed(runtime, mistake);
     out.* = runtime.makeFunction(slots[0..slot_count]) catch |mistake|
@@ -1077,8 +1100,9 @@ pub export fn luce_rt_struct_set(
     held: *const Value,
     field: i64,
     to: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     const index = std.math.cast(usize, field) orelse return rejected(runtime, .index_bounds);
     out.* = runtime.setField(held.*, index, to.*) catch |mistake|
         return failed(runtime, mistake);
@@ -1092,6 +1116,16 @@ pub export fn luce_rt_struct_set(
 fn rejected(runtime: *Runtime, code: vocabulary.TrapCode) i32 {
     _ = runtime.fail(code) catch {};
     return raised_trap;
+}
+
+/// C callers may pass a null result slot even though generated code never
+/// does.  Reject it before any input is read, allocation is attempted, or
+/// ownership is changed.  The C pointer spelling keeps the ABI nullable;
+/// this helper keeps the implementation from ever dereferencing null.
+fn requireValueOut(runtime: *Runtime, out: [*c]Value) bool {
+    if (out != null) return true;
+    _ = runtime.fail(.host_unavailable) catch {};
+    return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -1111,7 +1145,8 @@ fn rejected(runtime: *Runtime, code: vocabulary.TrapCode) i32 {
 // owned by the statement that asked for it, including the fresh Lists
 // `list_slice`, `map_keys` and `map_values` build.
 
-pub export fn luce_rt_len(runtime: *Runtime, target: *const Value, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_len(runtime: *Runtime, target: *const Value, out: [*c]Value) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = containers.length(runtime, target.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1122,8 +1157,9 @@ pub export fn luce_rt_index_get(
     target: *const Value,
     indices: [*]const Value,
     rank: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     const index_count = checkedCount(runtime, rank) catch |mistake|
         return failed(runtime, mistake);
     out.* = containers.indexGet(runtime, target.*, indices[0..index_count]) catch |mistake|
@@ -1152,8 +1188,9 @@ pub export fn luce_rt_list_slice(
     target: *const Value,
     start: i64,
     end: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = containers.listSlice(runtime, target.*, start, end) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1181,7 +1218,8 @@ pub export fn luce_rt_append_ascii(
     return survived;
 }
 
-pub export fn luce_rt_pop(runtime: *Runtime, target: *const Value, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_pop(runtime: *Runtime, target: *const Value, out: [*c]Value) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = containers.pop(runtime, target.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1213,8 +1251,9 @@ pub export fn luce_rt_has_key(
     runtime: *Runtime,
     target: *const Value,
     key: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = containers.hasKey(runtime, target.*, key.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1224,8 +1263,9 @@ pub export fn luce_rt_key_at(
     runtime: *Runtime,
     target: *const Value,
     index: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = containers.keyAt(runtime, target.*, index) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1235,8 +1275,9 @@ pub export fn luce_rt_value_at(
     runtime: *Runtime,
     target: *const Value,
     index: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = containers.valueAt(runtime, target.*, index) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1246,8 +1287,9 @@ pub export fn luce_rt_dim_size(
     runtime: *Runtime,
     target: *const Value,
     axis: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = containers.dimSize(runtime, target.*, axis) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1267,8 +1309,9 @@ pub export fn luce_rt_find(
     runtime: *Runtime,
     target: *const Value,
     wanted: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = containers.find(runtime, target.*, wanted.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1278,8 +1321,9 @@ pub export fn luce_rt_contains(
     runtime: *Runtime,
     target: *const Value,
     wanted: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     const at = containers.find(runtime, target.*, wanted.*) catch |mistake|
         return failed(runtime, mistake);
     out.* = Value.ofBoolean(!at.isNone());
@@ -1299,8 +1343,9 @@ pub export fn luce_rt_map_keys(
     runtime: *Runtime,
     target: *const Value,
     zero: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = containers.mapKeys(runtime, target.*, zero.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1310,8 +1355,9 @@ pub export fn luce_rt_map_values(
     runtime: *Runtime,
     target: *const Value,
     zero: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = containers.mapValues(runtime, target.*, zero.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1321,8 +1367,9 @@ pub export fn luce_rt_map_get(
     runtime: *Runtime,
     target: *const Value,
     key: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = containers.mapGet(runtime, target.*, key.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1335,8 +1382,9 @@ pub export fn luce_rt_map_place(
     target: *const Value,
     key: *const Value,
     zero: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = containers.mapPlace(runtime, target.*, key.*, zero.*) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1371,8 +1419,9 @@ pub export fn luce_rt_concat(
     runtime: *Runtime,
     left: *const Value,
     right: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = text.concat(runtime, left.asString(), right.asString()) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1383,8 +1432,9 @@ pub export fn luce_rt_string_slice(
     held: *const Value,
     start: i64,
     end: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = text.slice(runtime, held.*, start, end) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1394,8 +1444,9 @@ pub export fn luce_rt_string_byte(
     runtime: *Runtime,
     held: *const Value,
     index: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = text.byteAt(runtime, held.*, index) catch |mistake|
         return failed(runtime, mistake);
     return survived;
@@ -1406,34 +1457,40 @@ pub export fn luce_rt_string_find_byte(
     held: *const Value,
     byte: i64,
     start: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = text.findByte(runtime, held.*, byte, start) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }
 
-pub export fn luce_rt_str(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_str(runtime: *Runtime, held: *const Value, out: [*c]Value) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = text.str(runtime, held.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
 
-pub export fn luce_rt_parse_int(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_parse_int(runtime: *Runtime, held: *const Value, out: [*c]Value) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = text.parseInt(runtime, held.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
 
-pub export fn luce_rt_parse_float(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_parse_float(runtime: *Runtime, held: *const Value, out: [*c]Value) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = text.parseFloat(runtime, held.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
 
-pub export fn luce_rt_chr(runtime: *Runtime, code: i64, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_chr(runtime: *Runtime, code: i64, out: [*c]Value) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = text.chr(runtime, code) catch |mistake| return failed(runtime, mistake);
     return survived;
 }
 
-pub export fn luce_rt_ord(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32 {
+pub export fn luce_rt_ord(runtime: *Runtime, held: *const Value, out: [*c]Value) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = text.ord(runtime, held.*) catch |mistake| return failed(runtime, mistake);
     return survived;
 }

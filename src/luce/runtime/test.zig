@@ -6677,10 +6677,12 @@ extern fn luce_rt_constant_publish(
     held: *const Value,
 ) callconv(.c) i32;
 extern fn luce_rt_constant_load(
-    runtime: *const Runtime,
+    runtime: *Runtime,
     slot: u32,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) void;
+extern fn luce_rt_error_message(runtime: *Runtime, out: [*c]Value) callconv(.c) void;
+extern fn luce_rt_key_text(runtime: *Runtime, out: [*c]Value) callconv(.c) void;
 extern fn luce_rt_constants_finish(runtime: *Runtime) callconv(.c) void;
 extern fn luce_rt_constants_abort(runtime: *Runtime) callconv(.c) void;
 extern fn luce_rt_discard_loose(runtime: *Runtime, held: *const Value) callconv(.c) void;
@@ -6710,20 +6712,20 @@ extern fn luce_rt_intern_text(
     runtime: *Runtime,
     bytes: [*c]const u8,
     length: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32;
 extern fn luce_rt_maybe_text(
     runtime: *Runtime,
     present: i32,
     bytes: [*c]const u8,
     length: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32;
 extern fn luce_rt_names_list(
     runtime: *Runtime,
     bytes: [*c]const u8,
     length: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32;
 extern fn luce_rt_set_key_text(runtime: *Runtime, bytes: [*c]const u8, length: i64) callconv(.c) i32;
 extern fn luce_rt_args_list(
@@ -6731,40 +6733,54 @@ extern fn luce_rt_args_list(
     context: ?*anyopaque,
     count: ?*const fn (context: ?*anyopaque) callconv(.c) i64,
     get: ?containers.ArgumentFn,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32;
-extern fn luce_rt_new_list(runtime: *Runtime, zero: *const Value, out: *Value) callconv(.c) i32;
-extern fn luce_rt_new_map(runtime: *Runtime, out: *Value) callconv(.c) i32;
-extern fn luce_rt_new_builder(runtime: *Runtime, out: *Value) callconv(.c) i32;
+extern fn luce_rt_new_list(runtime: *Runtime, zero: *const Value, out: [*c]Value) callconv(.c) i32;
+extern fn luce_rt_new_map(runtime: *Runtime, out: [*c]Value) callconv(.c) i32;
+extern fn luce_rt_new_builder(runtime: *Runtime, out: [*c]Value) callconv(.c) i32;
 extern fn luce_rt_new_array(
     runtime: *Runtime,
     dims: [*]const i64,
     rank: i64,
     zero: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32;
 extern fn luce_rt_struct_make(
     runtime: *Runtime,
     fields: [*]const Value,
     count: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32;
 extern fn luce_rt_function_make(
     runtime: *Runtime,
     slots: [*]const Value,
     count: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32;
-extern fn luce_rt_own_storage(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32;
-extern fn luce_rt_export_storage(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32;
-extern fn luce_rt_copy(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32;
+extern fn luce_rt_own_storage(runtime: *Runtime, held: *const Value, out: [*c]Value) callconv(.c) i32;
+extern fn luce_rt_export_storage(runtime: *Runtime, held: *const Value, out: [*c]Value) callconv(.c) i32;
+extern fn luce_rt_copy(runtime: *Runtime, held: *const Value, out: [*c]Value) callconv(.c) i32;
+extern fn luce_rt_give(
+    runtime: *Runtime,
+    held: *const Value,
+    owned: i32,
+    serial: u64,
+    local: u32,
+    out: [*c]Value,
+) callconv(.c) i32;
+extern fn luce_rt_drop_storage(
+    runtime: *Runtime,
+    held: *const Value,
+    out: [*c]Value,
+) callconv(.c) void;
 extern fn luce_rt_append(runtime: *Runtime, target: *const Value, held: *const Value) callconv(.c) i32;
+extern fn luce_rt_len(runtime: *Runtime, target: *const Value, out: [*c]Value) callconv(.c) i32;
 extern fn luce_rt_index_get(
     runtime: *Runtime,
     target: *const Value,
     indices: [*]const Value,
     rank: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32;
 extern fn luce_rt_index_set(
     runtime: *Runtime,
@@ -6778,26 +6794,69 @@ extern fn luce_rt_list_slice(
     target: *const Value,
     start: i64,
     end: i64,
-    out: *Value,
+    out: [*c]Value,
+) callconv(.c) i32;
+extern fn luce_rt_pop(runtime: *Runtime, target: *const Value, out: [*c]Value) callconv(.c) i32;
+extern fn luce_rt_has_key(
+    runtime: *Runtime,
+    target: *const Value,
+    key: *const Value,
+    out: [*c]Value,
+) callconv(.c) i32;
+extern fn luce_rt_key_at(
+    runtime: *Runtime,
+    target: *const Value,
+    index: i64,
+    out: [*c]Value,
+) callconv(.c) i32;
+extern fn luce_rt_value_at(
+    runtime: *Runtime,
+    target: *const Value,
+    index: i64,
+    out: [*c]Value,
+) callconv(.c) i32;
+extern fn luce_rt_dim_size(
+    runtime: *Runtime,
+    target: *const Value,
+    axis: i64,
+    out: [*c]Value,
+) callconv(.c) i32;
+extern fn luce_rt_find(
+    runtime: *Runtime,
+    target: *const Value,
+    wanted: *const Value,
+    out: [*c]Value,
+) callconv(.c) i32;
+extern fn luce_rt_contains(
+    runtime: *Runtime,
+    target: *const Value,
+    wanted: *const Value,
+    out: [*c]Value,
 ) callconv(.c) i32;
 extern fn luce_rt_map_keys(
     runtime: *Runtime,
     target: *const Value,
     zero: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32;
 extern fn luce_rt_map_values(
     runtime: *Runtime,
     target: *const Value,
     zero: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32;
 extern fn luce_rt_map_place(
     runtime: *Runtime,
     target: *const Value,
     key: *const Value,
     zero: *const Value,
-    out: *Value,
+    out: [*c]Value,
+) callconv(.c) i32;
+extern fn luce_rt_map_get(
+    runtime: *Runtime,
+    target: *const Value,
+    key: *const Value,
+    out: [*c]Value,
 ) callconv(.c) i32;
 extern fn luce_rt_array_fill(
     runtime: *Runtime,
@@ -6808,30 +6867,43 @@ extern fn luce_rt_concat(
     runtime: *Runtime,
     left: *const Value,
     right: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32;
 extern fn luce_rt_string_slice(
     runtime: *Runtime,
     held: *const Value,
     start: i64,
     end: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32;
-extern fn luce_rt_parse_string(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32;
+extern fn luce_rt_string_byte(
+    runtime: *Runtime,
+    held: *const Value,
+    index: i64,
+    out: [*c]Value,
+) callconv(.c) i32;
+extern fn luce_rt_string_find_byte(
+    runtime: *Runtime,
+    held: *const Value,
+    byte: i64,
+    start: i64,
+    out: [*c]Value,
+) callconv(.c) i32;
+extern fn luce_rt_parse_string(runtime: *Runtime, held: *const Value, out: [*c]Value) callconv(.c) i32;
 extern fn luce_rt_spawn(
     runtime: *Runtime,
     function: i64,
     arguments: [*]const Value,
     count: i64,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32;
-extern fn luce_rt_task_wait(runtime: *Runtime, task: *const Value, out: *Value) callconv(.c) i32;
+extern fn luce_rt_task_wait(runtime: *Runtime, task: *const Value, out: [*c]Value) callconv(.c) i32;
 extern fn luce_rt_file_open(
     runtime: *Runtime,
     path: [*c]const u8,
     length: i64,
     mode: i64,
-    out: *Value,
+    out: [*c]Value,
     opened: *i32,
     function: u32,
     instruction: u32,
@@ -6840,7 +6912,7 @@ extern fn luce_rt_file_read_text(
     runtime: *Runtime,
     path: [*c]const u8,
     length: i64,
-    out: *Value,
+    out: [*c]Value,
     ok: *i32,
     function: u32,
     instruction: u32,
@@ -6856,13 +6928,17 @@ extern fn luce_rt_file_write_text(
     function: u32,
     instruction: u32,
 ) callconv(.c) i32;
-extern fn luce_rt_str(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32;
+extern fn luce_rt_str(runtime: *Runtime, held: *const Value, out: [*c]Value) callconv(.c) i32;
+extern fn luce_rt_parse_int(runtime: *Runtime, held: *const Value, out: [*c]Value) callconv(.c) i32;
+extern fn luce_rt_parse_float(runtime: *Runtime, held: *const Value, out: [*c]Value) callconv(.c) i32;
+extern fn luce_rt_chr(runtime: *Runtime, code: i64, out: [*c]Value) callconv(.c) i32;
+extern fn luce_rt_ord(runtime: *Runtime, held: *const Value, out: [*c]Value) callconv(.c) i32;
 extern fn luce_rt_struct_set(
     runtime: *Runtime,
     held: *const Value,
     field: i64,
     to: *const Value,
-    out: *Value,
+    out: [*c]Value,
 ) callconv(.c) i32;
 extern fn luce_rt_compare(op: i32, left: *const Value, right: *const Value) callconv(.c) i32;
 extern fn luce_rt_compare_long_double(op: i32, left: i64, right: f64) callconv(.c) i32;
@@ -7211,6 +7287,100 @@ test "C byte pointers reject null before slicing or host access" {
     out = Value.ofLong(99);
     try testing.expectEqual(@as(i32, 0), luce_rt_maybe_text(runtime, 0, null_bytes, 1, &out));
     try testing.expect(out.isNone());
+}
+
+fn expectCNullValueTrap(runtime: *Runtime, status: i32) !void {
+    try testing.expectEqual(@as(i32, 1), status);
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    runtime.pending = null;
+}
+
+fn expectCNullValueVoid(runtime: *Runtime) !void {
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    runtime.pending = null;
+}
+
+test "C Value output pointers reject null before work" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+    const null_out: [*c]Value = null;
+    const held = Value.ofLong(7);
+    const text_value = Value.ofString("value output");
+    const bytes = "path";
+    const dimensions = [_]i64{2};
+    const fields = [_]Value{Value.ofLong(1)};
+    const indices = [_]Value{Value.ofLong(0)};
+
+    luce_rt_error_message(runtime, null_out);
+    try expectCNullValueVoid(runtime);
+    luce_rt_key_text(runtime, null_out);
+    try expectCNullValueVoid(runtime);
+    luce_rt_constant_load(runtime, 0, null_out);
+    try expectCNullValueVoid(runtime);
+
+    try expectCNullValueTrap(runtime, luce_rt_intern_text(runtime, bytes, bytes.len, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_maybe_text(runtime, 0, null, 1, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_names_list(runtime, bytes, bytes.len, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_args_list(runtime, null, null, null, null_out));
+
+    try expectCNullValueTrap(runtime, luce_rt_new_list(runtime, &Value.none, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_new_map(runtime, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_new_builder(runtime, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_new_array(runtime, &dimensions, dimensions.len, &Value.none, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_struct_make(runtime, &fields, fields.len, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_function_make(runtime, &fields, fields.len, null_out));
+
+    try expectCNullValueTrap(runtime, luce_rt_own_storage(runtime, &text_value, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_export_storage(runtime, &text_value, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_give(runtime, &held, 0, 0, 0, null_out));
+    luce_rt_drop_storage(runtime, &held, null_out);
+    try expectCNullValueVoid(runtime);
+    try expectCNullValueTrap(runtime, luce_rt_copy(runtime, &held, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_parse_string(runtime, &held, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_struct_set(runtime, &held, 0, &held, null_out));
+
+    try expectCNullValueTrap(runtime, luce_rt_spawn(runtime, 0, &fields, fields.len, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_task_wait(runtime, &held, null_out));
+
+    var opened: i32 = 17;
+    try expectCNullValueTrap(
+        runtime,
+        luce_rt_file_open(runtime, bytes, bytes.len, @intFromEnum(files.Mode.read), null_out, &opened, 0, 0),
+    );
+    try testing.expectEqual(@as(i32, 17), opened);
+    var ok: i32 = 23;
+    try expectCNullValueTrap(runtime, luce_rt_file_read_text(runtime, bytes, bytes.len, null_out, &ok, 0, 0));
+    try testing.expectEqual(@as(i32, 23), ok);
+
+    try expectCNullValueTrap(runtime, luce_rt_len(runtime, &held, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_index_get(runtime, &held, &indices, indices.len, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_list_slice(runtime, &held, 0, 1, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_pop(runtime, &held, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_has_key(runtime, &held, &held, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_key_at(runtime, &held, 0, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_value_at(runtime, &held, 0, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_dim_size(runtime, &held, 0, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_find(runtime, &held, &held, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_contains(runtime, &held, &held, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_map_keys(runtime, &held, &held, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_map_values(runtime, &held, &held, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_map_get(runtime, &held, &held, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_map_place(runtime, &held, &held, &held, null_out));
+
+    try expectCNullValueTrap(runtime, luce_rt_concat(runtime, &text_value, &text_value, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_string_slice(runtime, &text_value, 0, 1, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_string_byte(runtime, &text_value, 0, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_string_find_byte(runtime, &text_value, 'v', 0, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_str(runtime, &held, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_parse_int(runtime, &text_value, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_parse_float(runtime, &text_value, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_chr(runtime, 'v', null_out));
+    try expectCNullValueTrap(runtime, luce_rt_ord(runtime, &text_value, null_out));
+
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+    runtime.debugAssertInvariants();
 }
 
 test "allocating C doors preserve outputs and rows at every failure point" {
