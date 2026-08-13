@@ -658,11 +658,12 @@ pub export fn luce_rt_file_open(
     length: i64,
     mode: i64,
     out: [*c]Value,
-    opened: *i32,
+    opened: [*c]i32,
     function: u32,
     instruction: u32,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
+    if (!requireScalarOut(i32, runtime, opened)) return raised_trap;
     const named = checkedBytes(runtime, path, length) catch |mistake|
         return failed(runtime, mistake);
     const selected_mode = checkedFileMode(runtime, mode) catch |mistake|
@@ -682,11 +683,13 @@ pub export fn luce_rt_file_read(
     runtime: *Runtime,
     held: *const Value,
     buffer: *const Value,
-    filled: *i64,
-    ok: *i32,
+    filled: [*c]i64,
+    ok: [*c]i32,
     function: u32,
     instruction: u32,
 ) callconv(.c) i32 {
+    if (!requireScalarOut(i64, runtime, filled) or
+        !requireScalarOut(i32, runtime, ok)) return raised_trap;
     const answer = files.read(runtime, held.*, buffer.*) catch |mistake|
         return failed(runtime, mistake);
     ok.* = @intFromBool(answer != null);
@@ -704,11 +707,13 @@ pub export fn luce_rt_file_write(
     held: *const Value,
     buffer: *const Value,
     count: i64,
-    written: *i64,
-    ok: *i32,
+    written: [*c]i64,
+    ok: [*c]i32,
     function: u32,
     instruction: u32,
 ) callconv(.c) i32 {
+    if (!requireScalarOut(i64, runtime, written) or
+        !requireScalarOut(i32, runtime, ok)) return raised_trap;
     const answer = files.write(runtime, held.*, buffer.*, count) catch |mistake|
         return failed(runtime, mistake);
     ok.* = @intFromBool(answer != null);
@@ -724,10 +729,11 @@ pub export fn luce_rt_file_write(
 pub export fn luce_rt_file_flush(
     runtime: *Runtime,
     held: *const Value,
-    ok: *i32,
+    ok: [*c]i32,
     function: u32,
     instruction: u32,
 ) callconv(.c) i32 {
+    if (!requireScalarOut(i32, runtime, ok)) return raised_trap;
     const answered = files.flush(runtime, held.*) catch |mistake|
         return failed(runtime, mistake);
     ok.* = @intFromBool(answered);
@@ -746,11 +752,12 @@ pub export fn luce_rt_file_read_text(
     path: [*c]const u8,
     length: i64,
     out: [*c]Value,
-    ok: *i32,
+    ok: [*c]i32,
     function: u32,
     instruction: u32,
 ) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
+    if (!requireScalarOut(i32, runtime, ok)) return raised_trap;
     const named = checkedBytes(runtime, path, length) catch |mistake|
         return failed(runtime, mistake);
     const answer = files.readText(runtime, named) catch |mistake|
@@ -774,10 +781,11 @@ pub export fn luce_rt_file_write_text(
     content: [*c]const u8,
     content_length: i64,
     mode: i64,
-    ok: *i32,
+    ok: [*c]i32,
     function: u32,
     instruction: u32,
 ) callconv(.c) i32 {
+    if (!requireScalarOut(i32, runtime, ok)) return raised_trap;
     const named = checkedBytes(runtime, path, path_length) catch |mistake|
         return failed(runtime, mistake);
     const body = checkedBytes(runtime, content, content_length) catch |mistake|
@@ -1123,6 +1131,12 @@ fn rejected(runtime: *Runtime, code: vocabulary.TrapCode) i32 {
 /// ownership is changed.  The C pointer spelling keeps the ABI nullable;
 /// this helper keeps the implementation from ever dereferencing null.
 fn requireValueOut(runtime: *Runtime, out: [*c]Value) bool {
+    if (out != null) return true;
+    _ = runtime.fail(.host_unavailable) catch {};
+    return false;
+}
+
+fn requireScalarOut(comptime T: type, runtime: *Runtime, out: [*c]T) bool {
     if (out != null) return true;
     _ = runtime.fail(.host_unavailable) catch {};
     return false;

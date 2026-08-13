@@ -1540,6 +1540,19 @@ pass 36/36, and the full differential suite passes 517/517.
 
 Commit: current Tier 0 C-boundary hardening batch.
 
+## 2026-08-13 — C status-output pointer null refusal
+
+The status and count outputs of raw file read/write/flush and whole-file
+open/read/write now use C-nullable pointers and are checked before byte
+slicing, host access, or result publication.  The regression covers every
+status slot independently, preserves the other output sentinels, and runs
+through the checked invariant seam.
+
+Borrowed `Value` arguments, array pointers, task handles, callbacks, and
+other C pointer classes remain listed in MISSING.md.
+
+Commit: current Tier 0 C-boundary hardening batch.
+
 ## 2026-08-13 — C `Value` output-pointer null refusal
 
 Every exported result slot carrying a `Value` now uses a C-nullable pointer

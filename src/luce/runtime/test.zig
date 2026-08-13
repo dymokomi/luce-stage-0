@@ -6904,7 +6904,7 @@ extern fn luce_rt_file_open(
     length: i64,
     mode: i64,
     out: [*c]Value,
-    opened: *i32,
+    opened: [*c]i32,
     function: u32,
     instruction: u32,
 ) callconv(.c) i32;
@@ -6913,7 +6913,7 @@ extern fn luce_rt_file_read_text(
     path: [*c]const u8,
     length: i64,
     out: [*c]Value,
-    ok: *i32,
+    ok: [*c]i32,
     function: u32,
     instruction: u32,
 ) callconv(.c) i32;
@@ -6924,7 +6924,33 @@ extern fn luce_rt_file_write_text(
     content: [*c]const u8,
     content_length: i64,
     mode: i64,
-    ok: *i32,
+    ok: [*c]i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32;
+extern fn luce_rt_file_read(
+    runtime: *Runtime,
+    held: *const Value,
+    buffer: *const Value,
+    filled: [*c]i64,
+    ok: [*c]i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32;
+extern fn luce_rt_file_write(
+    runtime: *Runtime,
+    held: *const Value,
+    buffer: *const Value,
+    count: i64,
+    written: [*c]i64,
+    ok: [*c]i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32;
+extern fn luce_rt_file_flush(
+    runtime: *Runtime,
+    held: *const Value,
+    ok: [*c]i32,
     function: u32,
     instruction: u32,
 ) callconv(.c) i32;
@@ -7378,6 +7404,86 @@ test "C Value output pointers reject null before work" {
     try expectCNullValueTrap(runtime, luce_rt_parse_float(runtime, &text_value, null_out));
     try expectCNullValueTrap(runtime, luce_rt_chr(runtime, 'v', null_out));
     try expectCNullValueTrap(runtime, luce_rt_ord(runtime, &text_value, null_out));
+
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+    runtime.debugAssertInvariants();
+}
+
+test "C status output pointers reject null before host file work" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+    const bytes = "path";
+    const held = Value.none;
+    var out = Value.ofLong(99);
+    const opened: i32 = 17;
+    var ok: i32 = 23;
+    var filled: i64 = 29;
+    var written: i64 = 31;
+    const null_i32: [*c]i32 = null;
+    const null_i64: [*c]i64 = null;
+
+    try expectCNullValueTrap(
+        runtime,
+        luce_rt_file_open(
+            runtime,
+            bytes,
+            bytes.len,
+            @intFromEnum(files.Mode.read),
+            &out,
+            null_i32,
+            0,
+            0,
+        ),
+    );
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(i32, 17), opened);
+
+    try expectCNullValueTrap(
+        runtime,
+        luce_rt_file_read(runtime, &held, &held, null_i64, &ok, 0, 0),
+    );
+    try testing.expectEqual(@as(i32, 23), ok);
+    try testing.expectEqual(@as(i64, 29), filled);
+    try expectCNullValueTrap(
+        runtime,
+        luce_rt_file_read(runtime, &held, &held, &filled, null_i32, 0, 0),
+    );
+    try testing.expectEqual(@as(i64, 29), filled);
+
+    try expectCNullValueTrap(
+        runtime,
+        luce_rt_file_write(runtime, &held, &held, 1, null_i64, &ok, 0, 0),
+    );
+    try testing.expectEqual(@as(i32, 23), ok);
+    try testing.expectEqual(@as(i64, 31), written);
+    try expectCNullValueTrap(
+        runtime,
+        luce_rt_file_write(runtime, &held, &held, 1, &written, null_i32, 0, 0),
+    );
+    try testing.expectEqual(@as(i64, 31), written);
+
+    try expectCNullValueTrap(runtime, luce_rt_file_flush(runtime, &held, null_i32, 0, 0));
+    try expectCNullValueTrap(
+        runtime,
+        luce_rt_file_read_text(runtime, bytes, bytes.len, &out, null_i32, 0, 0),
+    );
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try expectCNullValueTrap(
+        runtime,
+        luce_rt_file_write_text(
+            runtime,
+            bytes,
+            bytes.len,
+            bytes,
+            bytes.len,
+            @intFromEnum(files.Mode.write),
+            null_i32,
+            0,
+            0,
+        ),
+    );
 
     try testing.expectEqual(@as(u32, 0), runtime.live);
     runtime.debugAssertInvariants();

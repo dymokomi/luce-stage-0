@@ -205,8 +205,11 @@ optional result proves an unused null buffer is not read.  Every exported
 inputs are read, callbacks or host I/O run, allocation starts, or ownership
 changes; the direct regression covers constructors, text/list materialization,
 deep copy/give, task/file results, constants, container queries, and string
-conversions, including void readers.  The remaining C pointer matrix is
-status/out slots other than `Value`, borrowed `Value` arguments, dimensions,
+conversions, including void readers.  All C status slots for raw file
+read/write/flush, whole-file open/read/write, and their success/count answers
+now use C-nullable pointers and reject null before byte slicing or host work;
+the regression checks every slot and preserves the other sentinels.  The
+remaining C pointer matrix is borrowed `Value` arguments, dimensions,
 indices, fields, task handles, and callbacks.
 The differential specs now put a task inside a union's optional field, that
 union inside a recursive struct with an optional callback and child list, and
