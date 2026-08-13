@@ -79,7 +79,10 @@ and explicit zero-live teardown.  A companion matrix now covers map value
 replacement, array object-cell cleanup, transactional array fills, and
 nested struct fields; the item remains open until the same approach reaches
 unions, optionals, resources, worker graphs, and the cross-stage/invariant
-lanes named above.
+lanes named above.  The runtime corpus now also has direct lanes for a
+union-shaped optional callback whose receiver is borrowed, and for a worker
+result that copies a nested object graph and closes the child runtime; broad
+randomized worker/resource generation remains open.
 
 ## Tier 1 — design gaps before implementation
 

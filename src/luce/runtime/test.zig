@@ -951,6 +951,7 @@ fn expectBuiltListFailures(kind: BuiltList) !usize {
 const WorkerFailureState = struct {
     child: *Runtime,
     produce_result: bool = false,
+    produce_graph: bool = false,
     exhausted: bool = false,
     raise_error: bool = false,
     closes: usize = 0,
@@ -995,6 +996,22 @@ const WorkerFailureState = struct {
                 .column = 1,
             });
             return workers.raised_error;
+        }
+        if (self.produce_graph) {
+            const leaf = runtime.newList(Value.none) catch return workers.raised_trap;
+            containers.append(runtime, leaf, Value.ofLong(11)) catch return workers.raised_trap;
+            const branch = runtime.newList(Value.none) catch return workers.raised_trap;
+            containers.append(runtime, branch, leaf) catch return workers.raised_trap;
+            const words = runtime.ownValue(Value.ofString(
+                "worker graph result has outside storage",
+            )) catch return workers.raised_trap;
+            var fields = [_]Value{
+                branch,
+                words,
+            };
+            out.* = runtime.makeStruct(&fields) catch return workers.raised_trap;
+            self.ran = true;
+            return workers.survived;
         }
         if (!self.produce_result) return workers.survived;
         const words = runtime.ownValue(Value.ofString(
@@ -1892,6 +1909,51 @@ test "worker arena exhaustion crosses the join as out of memory" {
     try testing.expectEqual(@as(usize, 1), state.closes);
     try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
     try testing.expect(parent.pending == null);
+    parent.freeValue(task);
+    try testing.expectEqual(@as(u32, 0), parent.live);
+}
+
+test "a worker result copies and releases a nested object graph" {
+    var parent_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer parent_arena.deinit();
+    var parent: Runtime = .init(.{
+        .arena = parent_arena.allocator(),
+        .objects = testing.allocator,
+    });
+    defer parent.deinit();
+
+    var child_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer child_arena.deinit();
+    var child: Runtime = .init(.{
+        .arena = child_arena.allocator(),
+        .objects = testing.allocator,
+    });
+    var state: WorkerFailureState = .{
+        .child = &child,
+        .produce_graph = true,
+    };
+    state.install(&parent);
+
+    var task: Value = .none;
+    try workers.spawn(&parent, 0, &.{}, &task);
+    var answer: Value = .none;
+    try testing.expectEqual(workers.survived, try workers.wait(&parent, task, &answer));
+    try testing.expect(state.ran);
+    try testing.expectEqual(@as(usize, 1), state.joins);
+    try testing.expectEqual(@as(usize, 1), state.closes);
+    try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
+
+    const fields = answer.asStruct();
+    try testing.expectEqual(@as(usize, 2), fields.len);
+    try testing.expectEqualStrings("worker graph result has outside storage", fields[1].asString());
+    const branch = fields[0];
+    try testing.expectEqual(@as(i64, 1), (try containers.length(&parent, branch)).asLong());
+    const leaf = try containers.indexGet(&parent, branch, &.{Value.ofLong(0)});
+    try expectContainerParent(&parent, leaf, branch);
+    try testing.expectEqual(@as(i64, 11), (try containers.indexGet(&parent, leaf, &.{Value.ofLong(0)})).asLong());
+    try testing.expectEqual(heap.Owner.Kind.loose, (try parent.resolve(branch)).owner.kind);
+
+    parent.freeValue(answer);
     parent.freeValue(task);
     try testing.expectEqual(@as(u32, 0), parent.live);
 }
@@ -2874,6 +2936,44 @@ test "maps and struct values preserve one owner across retaining doors" {
     runtime.freeValue(second);
     runtime.freeValue(other);
     runtime.freeValue(outer);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
+test "a union-shaped optional callback keeps borrowed receivers out of ownership walks" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    // The runtime deliberately sees a union as a struct-shaped value.  This
+    // shape carries an optional callback, an owned object payload, and an
+    // absent optional slot all at once; only the callback's run is owned by
+    // the value, while its receiver remains a borrow.
+    const receiver = try runtime.newList(Value.none);
+    try containers.append(runtime, receiver, Value.ofLong(5));
+    const callback = try runtime.makeFunction(&.{ Value.ofLong(0), receiver });
+    const payload = try runtime.newList(Value.none);
+    try containers.append(runtime, payload, Value.ofLong(9));
+    const packet = try runtime.makeStruct(&.{ callback, payload, Value.none });
+    const bag = try runtime.newList(Value.none);
+    try containers.append(runtime, bag, packet);
+    try expectContainerParent(runtime, payload, bag);
+    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(receiver)).owner.kind);
+
+    const copied_bag = try runtime.deepCopy(bag);
+    const copied_packet = try containers.indexGet(runtime, copied_bag, &.{Value.ofLong(0)});
+    const copied_fields = copied_packet.asStruct();
+    try testing.expectEqual(@as(usize, 3), copied_fields.len);
+    try testing.expectEqual(value.Tag.function, copied_fields[0].tag);
+    try testing.expect(copied_fields[2].isNone());
+    const copied_payload = copied_fields[1];
+    try testing.expect(!copied_payload.asObject().same(payload.asObject()));
+    try expectContainerParent(runtime, copied_payload, copied_bag);
+    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(receiver)).owner.kind);
+
+    runtime.freeValue(bag);
+    runtime.freeValue(copied_bag);
+    runtime.freeValue(receiver);
     try testing.expectEqual(@as(u32, 0), runtime.live);
 }
 

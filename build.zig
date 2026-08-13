@@ -356,6 +356,16 @@ pub fn build(b: *std.Build) void {
     );
     test_worker_exhaustion_step.dependOn(&b.addRunArtifact(worker_exhaustion_tests).step);
 
+    const worker_ownership_tests = b.addTest(.{
+        .root_module = luce,
+        .filters = &.{"a worker result copies and releases a nested object graph"},
+    });
+    const test_worker_ownership_step = b.step(
+        "test-worker-ownership",
+        "Run worker nested-graph ownership regressions",
+    );
+    test_worker_ownership_step.dependOn(&b.addRunArtifact(worker_ownership_tests).step);
+
     const runtime_ownership_tests = b.addTest(.{
         .root_module = luce,
         .filters = &.{
@@ -379,6 +389,7 @@ pub fn build(b: *std.Build) void {
             "array fill keeps its old values",
             "new arrays roll every owned cell",
             "maps and struct values preserve one owner",
+            "a union-shaped optional callback keeps borrowed receivers",
         },
     });
     const test_owner_graph_step = b.step(
