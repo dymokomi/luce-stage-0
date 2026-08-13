@@ -491,12 +491,27 @@ fn verifyFunction(allocator: Allocator, program: *const Program, function: *cons
     if (function.origins.len != 0 and function.origins.len != function.instructions.len)
         return error.BadFunction;
     try verifyType(program, function.return_type);
-    for (function.locals) |local| try verifyType(program, local.local_type);
+    for (function.locals) |local| {
+        try verifyType(program, local.local_type);
+        // `owns_storage` selects the physical local representation in both
+        // engines: a boxed Runtime.Value for storage-bearing values, and
+        // the type's direct ABI shape otherwise.  A decoded module must
+        // not be able to make those choices disagree with the type graph.
+        if (local.owns_storage and !typeCanOwnStorage(local.local_type)) {
+            return error.BadLocal;
+        }
+    }
     for (function.result_types) |result_type| try verifyType(program, result_type);
-    for (function.locals[0..function.parameter_count], function.parameter_gives) |local, gives| {
+    for (function.locals[0..function.parameter_count], function.parameter_gives, 0..) |local, gives, index| {
         if (gives and !try typeCarriesObjects(allocator, program, local.local_type)) {
             return error.BadFunction;
         }
+        // Ordinary parameters borrow value storage from their caller; the
+        // callee owns only the object graph when `give` says so.  The one
+        // exception is a writing receiver, which is an explicit inout
+        // place and may carry a boxed value slot.
+        if (index == 0 and local.inout and gives) return error.BadFunction;
+        if (!local.inout and local.owns_storage) return error.BadLocal;
     }
 
     var defined = std.AutoHashMapUnmanaged(Register, void){};
@@ -1977,6 +1992,31 @@ fn typeCarriesObjects(allocator: Allocator, program: *const Program, of: Type) V
         }
     }
     return false;
+}
+
+/// Whether a type has a value-storage representation a local may own.
+/// Objects are heap rows, not bytes in the local slot; only strings and
+/// value runs (including their optional wrapper) use `Local.owns_storage`.
+/// A struct/variant/function is conservatively storage-bearing even when a
+/// particular zero-width instance happens to need no allocation: that is
+/// the representation contract the lowerer records.
+fn typeCanOwnStorage(of: Type) bool {
+    return switch (of) {
+        .string, .strukt, .variant, .function => true,
+        .optional => |payload| typeCanOwnStorage(payload.asType()),
+        .none,
+        .boolean,
+        .byte,
+        .short,
+        .int,
+        .long,
+        .half,
+        .float,
+        .double,
+        .heap,
+        .enumeration,
+        => false,
+    };
 }
 
 const WorkerCarry = enum { resource, function };

@@ -1354,3 +1354,17 @@ The same lane covers nested file graphs, stale resource generations after row
 reuse, and the one-shot task wait/release edge.
 
 Commit: current Tier 0 worker lifecycle hardening batch.
+
+## 2026-08-12 — local ownership bits match their physical value shapes
+
+The MIR verifier now treats `Local.owns_storage` as a representation
+contract shared by the interpreter and LLVM backends.  A forged decoded
+module can no longer mark a scalar or heap handle as a boxed owning slot,
+while storage-bearing string, optional, struct, variant, and function
+locals remain valid.  Parameters are also kept in their borrowed-slot
+contract, and an inout receiver cannot be simultaneously marked as a
+giving parameter.  Focused hostile-MIR tests cover the scalar, heap,
+parameter, optional, and function cases; the full Luce suite passes through
+both consumers.
+
+Commit: current MIR cross-stage ownership hardening batch.

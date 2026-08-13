@@ -200,6 +200,68 @@ test "ownership instructions cannot fabricate values or bind non-carrying shapes
     try verify_mod.verify(testing.allocator, &program);
 }
 
+test "local storage claims agree with the value representation" {
+    var scalar = try programOf(.{
+        .instructions = &.{.{ .ret = null }},
+        .result_types = &.{.none},
+        .blocks = &.{&.{0}},
+        .locals = &.{.{ .name = "scalar", .local_type = .long, .owns_storage = true }},
+    });
+    defer scalar.deinit();
+    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &scalar));
+
+    var handle = try programOf(.{
+        .instructions = &.{.{ .ret = null }},
+        .result_types = &.{.none},
+        .blocks = &.{&.{0}},
+        .locals = &.{.{ .name = "list", .local_type = .{ .heap = 0 }, .owns_storage = true }},
+    });
+    defer handle.deinit();
+    handle.heap_types = try handle.arena.allocator().dupe(types.HeapType, &.{.{ .list = .long }});
+    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &handle));
+
+    var parameter = try programOf(.{
+        .instructions = &.{.{ .ret = null }},
+        .result_types = &.{.none},
+        .blocks = &.{&.{0}},
+        .parameter_count = 1,
+        .parameter_gives = &.{false},
+        .locals = &.{.{ .name = "text", .local_type = .string, .owns_storage = true }},
+    });
+    defer parameter.deinit();
+    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &parameter));
+
+    var optional = try programOf(.{
+        .instructions = &.{.{ .ret = null }},
+        .result_types = &.{.none},
+        .blocks = &.{&.{0}},
+        .locals = &.{.{
+            .name = "maybe",
+            .local_type = .{ .optional = .string },
+            .owns_storage = true,
+        }},
+    });
+    defer optional.deinit();
+    try verify_mod.verify(testing.allocator, &optional);
+
+    var function = try programOf(.{
+        .instructions = &.{.{ .ret = null }},
+        .result_types = &.{.none},
+        .blocks = &.{&.{0}},
+        .locals = &.{.{
+            .name = "callback",
+            .local_type = .{ .function = 0 },
+            .owns_storage = true,
+        }},
+    });
+    defer function.deinit();
+    function.signatures = try function.arena.allocator().dupe(types.Signature, &.{.{
+        .parameters = &.{},
+        .result = .none,
+    }});
+    try verify_mod.verify(testing.allocator, &function);
+}
+
 fn expectForgedResult(program: *Program, register: Register) !void {
     program.functions[0].result_types[register] = .long;
     try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, program));

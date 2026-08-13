@@ -445,6 +445,7 @@ pub fn build(b: *std.Build) void {
             "spawn rejects worker parameters carrying functions or resources",
             "spawn rejects worker results carrying functions or resources",
             "function values preserve give parameter modes",
+            "local storage claims agree with the value representation",
             "a fallible producer must be observed before control continues",
         },
     });

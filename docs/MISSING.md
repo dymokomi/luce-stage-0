@@ -79,7 +79,11 @@ and explicit zero-live teardown.  A companion matrix now covers map value
 replacement, array object-cell cleanup, transactional array fills, and
 nested struct fields; the item remains open until the same approach reaches
 unions, optionals, resources, worker graphs, and the cross-stage/invariant
-lanes named above.  The runtime corpus now also has direct lanes for a
+lanes named above.  The MIR verifier now also rejects forged owner locals
+whose `owns_storage` bit selects a physical representation incompatible
+with their type, covering scalar, heap, optional, struct, and function
+shapes; broader optimizer/encode/decode contract coverage remains open.
+The runtime corpus now also has direct lanes for a
 union-shaped optional callback whose receiver is borrowed, and for a worker
 result that copies a nested object graph and closes the child runtime; broad
 randomized worker/resource generation remains open.  The allocator-failure
