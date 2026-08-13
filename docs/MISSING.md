@@ -362,6 +362,11 @@ reject a forged handle that matches a freed row's current generation, and row
 reuse advances to a fresh live generation; broader stale-handle generation
 fuzzing remains part of T0-OWN-6.
 
+The C constant-load door now rejects loads before materialization and
+out-of-range pool slots without touching the destination, closing another
+forged-module out-of-bounds path. Broader serialized constant-pool and
+materialization failure permutations remain part of T0-OWN-4 and T0-OWN-12.
+
 The shared worker effect lock now treats unmatched releases as inert and
 rejects releases from non-owners before touching recursion state, so malformed
 boundary calls cannot underflow or unlock a platform mutex.  Barrier-driven

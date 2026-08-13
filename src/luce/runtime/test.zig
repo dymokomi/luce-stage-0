@@ -9976,11 +9976,22 @@ test "the C materialization surface roots, loads, freezes, and excludes a consta
     const runtime = luce_rt_open(null, 0).?;
     defer luce_rt_close(runtime);
 
+    var invalid: Value = Value.ofLong(99);
+    luce_rt_constant_load(runtime, 0, &invalid);
+    try testing.expectEqual(vocabulary.TrapCode.not_owned, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 99), invalid.asLong());
+    runtime.pending = null;
+
     try testing.expectEqual(@as(i32, 0), luce_rt_constants_begin(runtime, 1));
     var rooted: Value = .none;
     try testing.expectEqual(@as(i32, 0), luce_rt_new_list(runtime, &Value.none, &rooted));
     try testing.expectEqual(@as(i32, 0), luce_rt_append(runtime, &rooted, &Value.ofLong(3)));
     try testing.expectEqual(@as(i32, 0), luce_rt_constant_publish(runtime, 0, &rooted));
+    invalid = Value.ofLong(98);
+    luce_rt_constant_load(runtime, 1, &invalid);
+    try testing.expectEqual(vocabulary.TrapCode.not_owned, runtime.pending.?.code);
+    try testing.expectEqual(@as(i64, 98), invalid.asLong());
+    runtime.pending = null;
     luce_rt_constants_finish(runtime);
 
     var loaded: Value = .none;

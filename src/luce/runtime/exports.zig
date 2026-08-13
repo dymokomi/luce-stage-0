@@ -918,6 +918,10 @@ pub export fn luce_rt_constant_load(
     out: [*c]Value,
 ) callconv(.c) void {
     if (!requireValueOut(runtime, out)) return;
+    if (runtime.materializing_constants or slot >= runtime.constant_roots.len) {
+        _ = runtime.fail(.not_owned) catch {};
+        return;
+    }
     out.* = runtime.constant(slot);
 }
 
