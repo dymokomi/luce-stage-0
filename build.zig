@@ -291,6 +291,16 @@ pub fn build(b: *std.Build) void {
     );
     test_worker_exhaustion_step.dependOn(&b.addRunArtifact(worker_exhaustion_tests).step);
 
+    const optimizer_tests = b.addTest(.{
+        .root_module = luce,
+        .filters = &.{"function pruning does not retain an orphaned function reference"},
+    });
+    const test_optimizer_step = b.step(
+        "test-optimizer",
+        "Run optimizer reachability regressions",
+    );
+    test_optimizer_step.dependOn(&b.addRunArtifact(optimizer_tests).step);
+
     // The documentation site's generator (`www/luce/src/`).  Its tests
     // are what keep the word tables it highlights with, its link
     // resolver and its Markdown honest, and they belong in `zig build

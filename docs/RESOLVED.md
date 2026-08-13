@@ -1119,3 +1119,10 @@ join, and a forced interpreter worker allocation failure are covered by a
 focused `test-worker-exhaustion` lane.
 
 Commit: `7662ead`.
+
+Function reachability pruning now runs after dead-instruction compaction.
+An orphaned `const_function` left in a raw MIR pool can no longer retain an
+otherwise unreachable function in the serialized artifact; the regression
+injects that verified-MIR shape and checks the final function table.
+
+Commit: pending.

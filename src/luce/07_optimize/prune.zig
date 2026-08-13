@@ -25,8 +25,8 @@ const Register = defs.Register;
 /// IR, so remapping is a renumber.  Call on verified programs only —
 /// the compiler verifies before pruning (an analyzer bug surfaces as
 /// a diagnostic, not an index panic here) and again after (proving
-/// the renumbering).  `optimize.run` compacts the two constant pools
-/// after this pass and the instruction compactor have settled the
+/// the renumbering).  `optimize.run` calls this after the instruction
+/// compactor and then compacts the two constant pools from the settled
 /// surviving block items.  Struct layouts and heap-type rows stay;
 /// scratch and dead memory stay in the program arena until deinit —
 /// the artifact is what gets smaller, not the resident compiler.

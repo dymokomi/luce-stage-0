@@ -118,8 +118,6 @@ smuggle one in as a convenience feature.
   stages cannot recover them for vectorization.
 - The LLVM program-root proof is conservative beyond fresh `heap_new` rows;
   widening it requires a runtime-contract test and hostile-MIR proof.
-- Function pruning scans raw instruction pools and can retain a dead function
-  through an orphan `const_function`; this affects artifact size only.
 - A decoded module can carry an empty constant-map row that source syntax
   cannot produce; decide whether verifier canonicalization should reject it.
 - Constant arrays of value structs currently zero-fill then replace cells;

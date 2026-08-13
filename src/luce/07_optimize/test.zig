@@ -200,6 +200,54 @@ test "the whole stage shrinks a program and leaves it verifiable" {
     try testing.expect(blockCount(&program) <= blocks);
 }
 
+test "function pruning does not retain an orphaned function reference" {
+    var program = try compileRaw(
+        \\func unused(n: long) -> long:
+        \\    return n * 2
+        \\
+        \\func main():
+        \\    print("done")
+        \\
+    );
+    defer program.deinit();
+
+    const arena = program.arena.allocator();
+    const target = for (program.functions, 0..) |function, index| {
+        if (std.mem.eql(u8, function.name, "unused")) break @as(u32, @intCast(index));
+    } else return error.TestUnexpectedResult;
+    var main = &program.functions[program.entry_function];
+
+    // A prior instruction pass may leave a function-valued register in
+    // the pool after its block item was removed.  The verifier permits
+    // that temporary orphan, but final reachability must not treat it as
+    // executable code and retain the named function forever.
+    const old_instructions = main.instructions;
+    const instructions = try arena.alloc(Instruction, old_instructions.len + 1);
+    @memcpy(instructions[0..old_instructions.len], old_instructions);
+    instructions[old_instructions.len] = .{ .const_function = .{ .function = target } };
+    main.instructions = instructions;
+    const old_result_types = main.result_types;
+    const result_types = try arena.alloc(types.Type, old_result_types.len + 1);
+    @memcpy(result_types[0..old_result_types.len], old_result_types);
+    result_types[old_result_types.len] = .none;
+    main.result_types = result_types;
+    if (main.origins.len != 0) {
+        const old_origins = main.origins;
+        const origins = try arena.alloc(defs.Origin, old_origins.len + 1);
+        @memcpy(origins[0..old_origins.len], old_origins);
+        origins[old_origins.len] = .{ .line = 0, .column = 0 };
+        main.origins = origins;
+    }
+
+    try mir.verify(testing.allocator, &program);
+    try optimize.run(arena, &program, .all);
+    try mir.verify(testing.allocator, &program);
+
+    for (program.functions) |function| {
+        try testing.expect(!std.mem.eql(u8, function.name, "unused"));
+    }
+}
+
 test "running the stage twice changes nothing the second time" {
     var program = try compileRaw(
         \\func main():

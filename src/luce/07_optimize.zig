@@ -48,17 +48,15 @@
 //! `run` applies them in this order, and `Passes` turns each one off by
 //! itself so a bisect can name the one that broke something.
 //!
-//!   prune.zig     — drop functions the entry cannot reach.  `import
-//!                   std.strings` then one call: 26 functions become 2.
 //!   ownership.zig — delete `object_bind`s a later bind overwrites and
 //!                   `object_unbind`s that provably free nothing.
 //!   dead.zig      — sweep instructions nothing reads, then compact the
 //!                   instruction pool.  Must run after the instruction
-//!                   passes above: they leave orphans on purpose rather
-//!                   than renumber.
-//!   prune.zig     — after those three settle the surviving block
-//!                   items, compact constant-container rows and the
-//!                   shared strings they and `const_string` retain.
+//!                   pass above: it leaves orphans on purpose rather than
+//!                   renumbering.
+//!   prune.zig     — drop functions the entry cannot reach after dead
+//!                   compaction, then compact constant-container rows and
+//!                   the shared strings they and `const_string` retain.
 //!
 //! Over the nine bundled programs and six benchmarks, the raw lowering
 //! against what the stage leaves (`luce ir --full` against `luce ir`):
@@ -80,8 +78,8 @@
 //! were buying once nothing interpreted MIR.
 //!
 //! `dead` is not really an optimization at all — it is the compactor
-//! the other two rely on, and its own sweep finds four instructions in
-//! the whole corpus.
+//! that lets final function reachability see only executable block items,
+//! and its own sweep finds four instructions in the whole corpus.
 //!
 //! ## The line none of them may cross
 //!
@@ -162,10 +160,11 @@ pub const effects = @import("07_optimize/effects.zig");
 /// Which passes `run` applies.  Every one defaults on; turn one off to
 /// bisect a miscompile down to the pass that caused it.
 ///
-/// `dead` is not merely another optimization: it is the compactor the
-/// others rely on, so turning it off leaves the pool full of orphaned
-/// instructions.  That is legal MIR — the verifier only checks what a
-/// block holds — and it is what makes the switches independent.
+/// `dead` is not merely another optimization: it is the final instruction
+/// compactor before function reachability, so turning it off leaves the
+/// pool full of orphaned instructions and makes pruning conservative.
+/// That is legal MIR — the verifier only checks what a block holds — and
+/// it is what makes the switches independent.
 /// Constant-pool compaction is the final half of `prune`, after the
 /// selected instruction passes have settled those block items.
 pub const Passes = struct {
@@ -191,12 +190,14 @@ pub const Passes = struct {
 /// Call on verified programs only, and verify again afterwards — the
 /// driver does both (`compile.zig`).
 pub fn run(arena: std.mem.Allocator, program: *mir.Program, passes: Passes) std.mem.Allocator.Error!void {
-    if (passes.prune) try prune(arena, program);
     if (passes.ownership) try ownership(arena, program);
     if (passes.dead) try dead(arena, program);
-    // Pool reachability is defined by the final block items, so this
-    // is prune's last act and necessarily follows instruction
-    // compaction.  `--full` clears `prune` and retains the raw pools.
+    // Function reachability is defined by the final instruction pool:
+    // an unread const_function must not keep its target alive.  Run this
+    // after dead compaction, then compact the constant pools from the
+    // same surviving block items.  `--full` clears `prune` and retains
+    // the raw pools.
+    if (passes.prune) try prune(arena, program);
     if (passes.prune) try prune_pass.compactConstants(arena, program);
 }
 

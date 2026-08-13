@@ -20,10 +20,13 @@
 //! rebuilt with only the instructions some block still holds, in their
 //! original order, and every register renumbered.
 //!
-//! This pass must be the last instruction pass, and it must run: the
-//! passes before it leave orphans behind on purpose, so that none of
-//! them has to renumber.  Constant-pool compaction follows it and
-//! reads the settled block items without changing instruction shape.
+//! This pass must be the last instruction pass, and it must run before
+//! function pruning: the passes before it leave orphans behind on
+//! purpose, so that none of them has to renumber.  Once this compactor
+//! settles the block items, function reachability can no longer be kept
+//! alive by an unread function value.  Constant-pool compaction follows
+//! pruning and reads the same settled block items without changing
+//! instruction shape.
 //!
 //! **The local table is deliberately not compacted, and cannot be.**
 //! Each local is another slot in every frame, so dropping the hidden
