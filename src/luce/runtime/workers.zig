@@ -225,6 +225,14 @@ pub const Effects = struct {
     }
 
     pub fn leave(self: *Effects) void {
+        // This is also a public runtime door.  Generated code balances its
+        // own pairs, but a damaged artifact or a hostile callback must not
+        // be able to decrement another thread's recursion depth or unlock
+        // the platform mutex from the wrong thread.  Check ownership before
+        // touching `depth`; reading it from a non-holder would itself be a
+        // data race.
+        if (self.owner.load(.acquire) != me()) return;
+        if (self.depth == 0) return;
         self.depth -= 1;
         if (self.depth != 0) return;
         self.owner.store(nobody, .release);
@@ -602,6 +610,32 @@ test "the effect lock is recursive on its holder and exclusive of everyone else"
     // Unheld again, so anybody may take it.
     try std.testing.expect(effects.mutex.tryLock());
     effects.mutex.unlock();
+}
+
+test "an unmatched effect release cannot underflow or unlock another thread" {
+    var effects: Effects = .{};
+
+    // A release before any acquire is a malformed boundary call and must be
+    // inert rather than wrapping the recursion depth in a debug build.
+    effects.leave();
+    try std.testing.expectEqual(@as(u32, 0), effects.depth);
+    try std.testing.expectEqual(Effects.nobody, effects.owner.load(.acquire));
+
+    effects.enter();
+    try std.testing.expectEqual(@as(u32, 1), effects.depth);
+    const Foreign = struct {
+        fn leave(held: *Effects) void {
+            held.leave();
+        }
+    };
+    const foreign = try std.Thread.spawn(.{}, Foreign.leave, .{&effects});
+    foreign.join();
+    try std.testing.expectEqual(@as(u32, 1), effects.depth);
+    try std.testing.expect(effects.owner.load(.acquire) != Effects.nobody);
+    effects.leave();
+    effects.leave();
+    try std.testing.expectEqual(@as(u32, 0), effects.depth);
+    try std.testing.expectEqual(Effects.nobody, effects.owner.load(.acquire));
 }
 
 test "a channel and a nursery are available only when every slot is filled" {

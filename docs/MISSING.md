@@ -345,6 +345,11 @@ handle exactly once before returning `host_unavailable`; otherwise a published
 file would bypass scope teardown.  Other resource callback and handle-domain
 permutations remain part of T0-OWN-15.
 
+The shared worker effect lock now treats unmatched releases as inert and
+rejects releases from non-owners before touching recursion state, so malformed
+boundary calls cannot underflow or unlock a platform mutex.  Barrier-driven
+cross-thread lock/interleaving coverage remains part of T0-OWN-11.
+
 The optional-text runtime door now accepts only the compiler’s exact `0`/`1`
 presence flag, rejecting malformed values before it reads the borrowed buffer
 or writes the result slot.  Other callback payload and ownership-event parity
