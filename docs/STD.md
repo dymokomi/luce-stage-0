@@ -47,8 +47,8 @@ without colliding.
 
 Pure Luce over the checked builtins (`sqrt floor ceil abs min max
 clamp` stay builtins; math adds what they lack).  Series are
-range-reduced: `exp`/`ln` hold to ~1e-14 relative, trig to ~1e-12
-absolute.
+range-reduced: `exp`/`ln` hold to ~1e-14 relative, while trig holds to
+~1e-12 absolute for finite `|x| <= 1e4` and traps outside that domain.
 
 ```text
 import std.math
@@ -63,7 +63,7 @@ math.pow(x, y)         # x^y; negative x needs whole y (else trap),
                        # 0^negative traps, 0^0 == 1
 math.ipow(base, n)     # long power by squaring; checked (overflow
                        # traps); negative n traps
-math.sin(x)  math.cos(x)  math.tan(x)  # radians, any magnitude
+math.sin(x)  math.cos(x)  math.tan(x)  # radians; |x| <= 1e4
 ```
 
 ### Vectors and statistics

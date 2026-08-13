@@ -1200,3 +1200,20 @@ keeping bare function map values legal, preserving the deliberate function
 value exception.
 
 Commit: `95c2a5d`.
+
+## 2026-08-12 — Tier 0 trigonometry gets an honest finite domain
+
+The standard-library `sin` and `cos` implementations use ordinary
+double-precision range reduction, whose error grows with the input angle.
+They now accept finite angles through `|x| <= 1e4` and trap explicitly
+outside that measured accuracy domain instead of returning a plausible but
+wrong value; `tan` inherits the same boundary.  The differential standard
+library spec covers the accepted boundary, negative and large rejected
+angles, and all three public functions.
+
+The reduction algorithm remains deliberately simple and the boundary is
+documented in the source, reference manual, and generated site content.  A
+future Payne–Hanek implementation can widen the contract as a separately
+measured change.
+
+Commit: current Tier 0 hardening batch.

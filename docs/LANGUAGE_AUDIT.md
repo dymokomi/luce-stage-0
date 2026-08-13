@@ -103,10 +103,10 @@ Before calling a feature complete, add or locate all of these:
 
 The audit is not a promise that every open design choice should be
 implemented.  The current deliberate remainder is in `MISSING.md`: typed
-channels, fallible function types, owning bound methods, the large-angle
-`sin`/`cos` decision, assertion narrowing, escape additions, direct string
-iteration, and a few library/type-surface questions.  Those need decisions
-before code, not increasingly clever patches.
+channels, fallible function types, owning bound methods, assertion
+narrowing, escape additions, direct string iteration, and a few
+library/type-surface questions.  Those need decisions before code, not
+increasingly clever patches.
 
 ## Invariants worth preserving during refactors
 

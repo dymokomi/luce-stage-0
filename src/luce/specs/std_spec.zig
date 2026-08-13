@@ -157,9 +157,35 @@ test "math: trig against known values, across periods" {
         \\    assert(close(math.tan(1.0), 1.5574077246549023))
         \\    assert(close(math.sin(-1.0), -0.8414709848078965))
         \\    assert(close(math.sin(100.0), -0.5063656411097588))
+        \\    assert(close(math.sin(10000.0), -0.30561438888825215))
+        \\    assert(close(math.cos(10000.0), -0.9521553682590148))
         \\    assert(close(math.sin(2.0) * math.sin(2.0) + math.cos(2.0) * math.cos(2.0), 1.0))
         \\
     );
+}
+
+test "math: trig refuses angles outside its accuracy domain" {
+    try agreeTrap(
+        \\import std.math
+        \\
+        \\func main():
+        \\    let wrong = math.sin(1000000.0)
+        \\
+    , .explicit_trap);
+    try agreeTrap(
+        \\import std.math
+        \\
+        \\func main():
+        \\    let wrong = math.cos(-1000000.0)
+        \\
+    , .explicit_trap);
+    try agreeTrap(
+        \\import std.math
+        \\
+        \\func main():
+        \\    let wrong = math.tan(1000000.0)
+        \\
+    , .explicit_trap);
 }
 
 test "math: log2 and log10" {

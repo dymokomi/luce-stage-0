@@ -367,12 +367,10 @@ std page is worse than an ordinary slip.
 
 ### F10. `/std/math/`'s trig accuracy figure holds only to about `|x| < 1e4`
 
-> **FIXED** (`bf45def`) on the site, with the audit's measurements
-> reproduced exactly against libm at `f333e12` — 1e-14 at 1e3 through
-> 8.0e-3 at 1e15 — printed as a table, plus the fact that nothing traps:
-> a huge angle returns a plausible number that is simply wrong.  **The
-> `math.luc` header carries the same sentence and is not fixed here**:
-> it is `src/`, which this pass does not own.  It needs the same edit.
+> **FIXED** on the site and in `src/luce/std/math.luc`: the audit's
+> measurements are reproduced exactly against libm at `f333e12` — 1e-14
+> at 1e3 through 8.0e-3 at 1e15 — and the source now refuses the range
+> where ordinary double reduction cannot answer honestly.
 
 > "| `math.sin(x)`, `math.cos(x)`, `math.tan(x)` | radians, **any
 > magnitude** |" … "the trigonometric functions to about **1e-12
@@ -380,12 +378,11 @@ std page is worse than an ordinary slip.
 > — `www/luce/content/std/math.md:26,29`
 
 Range reduction is `r = x - floor(x / tau) * tau` in double precision
-(`src/luce/std/math.luc:109`), so absolute error grows with `|x|`.
+(`src/luce/std/math.luc`), so absolute error grows with `|x|`.
 Measured against libm: 1e-14 at `x=1e3`, 1.4e-12 at 1e4, 6.8e-11 at 1e6,
-1.3e-8 at 1e9, 8.0e-3 at 1e15.  "Any magnitude" is true of the *domain*,
-but sitting in the same table as an accuracy claim it reads as a
-guarantee.  The same sentence is in the `math.luc` header (`:5-7`), so it
-is one fix in two places.
+1.3e-8 at 1e9, 8.0e-3 at 1e15.  The implemented contract now accepts
+finite `|x| <= 1e4` and traps outside it, so the table remains evidence
+for the boundary rather than a promise for the rejected inputs.
 
 ### F11. "Eight folders" is seven
 

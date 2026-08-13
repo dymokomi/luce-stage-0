@@ -234,6 +234,16 @@ pub fn build(b: *std.Build) void {
     );
     test_composition_step.dependOn(&b.addRunArtifact(composition_tests).step);
 
+    const std_trig_tests = b.addTest(.{
+        .root_module = specs,
+        .filters = &.{"math: trig refuses angles outside its accuracy domain"},
+    });
+    const test_std_trig_step = b.step(
+        "test-std-trig",
+        "Run large-angle standard-library trigonometry regressions",
+    );
+    test_std_trig_step.dependOn(&b.addRunArtifact(std_trig_tests).step);
+
     // The backend must refuse a function comparison even when a hostile MIR
     // shape bypasses the verifier.  Keep this seam independently runnable:
     // it protects the lowerer's refusal from being hidden by the much larger

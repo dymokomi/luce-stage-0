@@ -3,12 +3,12 @@
 # Pure Luce over the checked builtins (sqrt, floor, ceil, abs, min,
 # max, clamp live there; this module adds what they lack).  Series
 # are range-reduced first.  exp/ln hold ~1e-14 relative across their
-# domains; sin/cos hold ~1e-12 absolute only while |x| stays below
-# about 1e4 — the pi used for reduction carries ~20 digits, so each
-# decade of magnitude past that costs a digit (measured against libm:
-# 1e-14 at 1e3 through 8e-3 at 1e15), and nothing traps: a huge angle
-# answers a plausible number that is simply wrong.  Reduce angles to
-# a revolution before calling if magnitudes run large.
+# domains; sin/cos hold ~1e-12 absolute while |x| stays at or below
+# 1e4.  The pi used for reduction carries ~20 digits, so each decade
+# of magnitude past that costs a digit (measured against libm: 1e-14
+# at 1e3 through 8e-3 at 1e15).  Rather than return a plausible but
+# wrong answer, sin/cos trap outside that finite accuracy domain; tan
+# inherits the same boundary.
 #
 # Randomness is a Lehmer generator in a struct: `var rng =
 # math.rng(42)` then `rng.next()`.  The state is a value that is
@@ -135,8 +135,16 @@ func ipow(base: long, exponent: long) -> long:
             square *= square
     return result
 
-# Sine, by range reduction to (-pi, pi] and a Taylor series.
-func sin(x: double) -> double:
+# Sine, by range reduction to (-pi, pi] and a Taylor series.  The
+# reduction is deliberately bounded: ordinary double arithmetic cannot
+# preserve enough low bits of a large revolution count to answer honestly.
+private const trig_limit: double = 10000.0
+
+private func trig_in_domain(x: double) -> bool:
+    # `x != x` is the IEEE NaN test; infinity fails the magnitude test.
+    return x == x and abs(x) <= trig_limit
+
+private func sine_series(x: double) -> double:
     var r = x - floor(x / tau) * tau
     if r > pi:
         r -= tau
@@ -147,8 +155,15 @@ func sin(x: double) -> double:
         total += term
     return total
 
+func sin(x: double) -> double:
+    if not trig_in_domain(x):
+        trap("math.sin supports finite angles with |x| <= 10000")
+    return sine_series(x)
+
 func cos(x: double) -> double:
-    return sin(x + pi / 2.0)
+    if not trig_in_domain(x):
+        trap("math.cos supports finite angles with |x| <= 10000")
+    return sine_series(x + pi / 2.0)
 
 # Tangent; near odd multiples of pi/2 the true value diverges and the
 # result is a large float, as IEEE division dictates.

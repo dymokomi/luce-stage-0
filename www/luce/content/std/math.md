@@ -24,10 +24,12 @@ for `log2` and `log10`, marked `private` — internals, not surface.)
 | `math.log2(x)`, `math.log10(x)` | |
 | `math.pow(x: double, y: double) -> double` | negative `x` needs a whole `y` or it traps; `0^negative` traps; `0^0` is `1` |
 | `math.ipow(base: long, n: long) -> long` | integer power by squaring; checked, so overflow traps; negative `n` traps |
-| `math.sin(x)`, `math.cos(x)`, `math.tan(x)` | radians; every `double` is in the domain, but see the accuracy note below |
+| `math.sin(x)`, `math.cos(x)`, `math.tan(x)` | radians; finite `|x| <= 1e4`, otherwise an explicit trap |
 
 Series are range-reduced, and `exp` and `ln` hold to about 1e-14
-relative.
+relative. Trigonometry accepts finite angles through `|x| <= 1e4` and
+traps outside that accuracy domain rather than returning a plausible but
+wrong value; `tan` inherits the same boundary.
 
 **The trigonometric accuracy depends on the magnitude.** Range
 reduction is `x - floor(x / tau) * tau` in ordinary double precision,
@@ -45,10 +47,9 @@ host:
 | 1e15 | 8.0e-3 |
 
 So "about 1e-12 absolute" is a promise for arguments up to roughly
-1e4, and nothing bigger. There is no domain error and nothing traps —
-a huge argument returns a plausible number that is simply wrong,
-which is the usual shape of this problem and the reason it is written
-down here. Reduce large angles yourself if you need them.
+1e4, and larger angles are refused rather than reported as plausible
+numbers. Reduce a large angle yourself before calling the functions if
+you need a result beyond this contract.
 
 ```luce run
 import std.math

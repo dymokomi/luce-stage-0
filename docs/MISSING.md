@@ -11,21 +11,6 @@ semantics, and `src/luce/specs/agree.zig` compares both engines on output,
 ending, trace, leak census, and host world.  The repository suite is the
 executable proof of that claim.
 
-## Tier 0 — decisions that can make a total function lie
-
-### Large-angle `sin` and `cos`
-
-`src/luce/std/math.luc` uses a compact range reduction whose accuracy falls
-away beyond roughly `1e4`; large inputs still return plausible numbers.  The
-owner decision is one of:
-
-- refuse the unsupported domain with an honest optional/error result;
-- implement a higher-precision reduction such as Payne–Hanek; or
-- keep the total API and disclose an explicit accuracy domain to users.
-
-Do not add more local series terms without measuring the reduction error and
-recording the chosen contract.
-
 ## Tier 1 — design gaps before implementation
 
 ### Typed worker channels
@@ -119,12 +104,11 @@ No known diagnostic-harness follow-up remains in this tier.
 
 ## Order of work
 
-1. Decide and document the large-angle trigonometry contract.
-2. Design typed channels, fallible function signatures, and the owning-bind
+1. Design typed channels, fallible function signatures, and the owning-bind
    alternative before implementation.
-3. Finish the semantic audit of assertions, escapes, string iteration, and
+2. Finish the semantic audit of assertions, escapes, string iteration, and
    routed method landing.
-4. Clean stale examples, compiler/backend never arms, generated vocabulary,
+3. Clean stale examples, compiler/backend never arms, generated vocabulary,
    and user-facing documentation.
-5. Only then take on publishing packages, cross-compilation, or runtime-size
+4. Only then take on publishing packages, cross-compilation, or runtime-size
    optimizations.
