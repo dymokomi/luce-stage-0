@@ -354,6 +354,7 @@ pub fn build(b: *std.Build) void {
             "every no-result MIR instruction rejects a fabricated result type",
             "spawn rejects worker parameters carrying functions or resources",
             "spawn rejects worker results carrying functions or resources",
+            "a fallible producer must be observed before control continues",
         },
     });
     const test_mir_function_shapes_step = b.step(

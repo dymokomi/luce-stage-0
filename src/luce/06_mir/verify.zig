@@ -501,6 +501,7 @@ fn verifyFunction(allocator: Allocator, program: *const Program, function: *cons
                 return if (last) error.UnterminatedBlock else error.MisplacedTerminator;
             }
             try verifyInstruction(allocator, program, function, &defined, item, instruction);
+            try verifyErrorHandling(program, function, block.items, position, item);
             try defined.put(allocator, item, {});
         }
     }
@@ -1160,6 +1161,61 @@ fn raisesError(program: *const Program, function: *const Function, register: Reg
         },
         else => false,
     };
+}
+
+/// A fallible producer is not a value-producing call until its outcome has
+/// been split.  Stage 5 always writes this compact shape:
+///
+///     producer; errored producer; [local_set producer]; branch errored
+///
+/// The `local_set` is present when the call answers a value and parks that
+/// answer across the two arms.  Requiring the shape here keeps a decoded MIR
+/// module from loading an unwritten result slot after an error, and keeps an
+/// ignored error from falling through as if the call had succeeded.  The
+/// check is deliberately local to one block because registers do not cross
+/// blocks and `errored` is defined to ask the adjacent producer.
+fn verifyErrorHandling(
+    program: *const Program,
+    function: *const Function,
+    items: []const Register,
+    position: usize,
+    register: Register,
+) VerifyError!void {
+    if (!raisesError(program, function, register)) return;
+
+    const malformed = switch (function.instructions[register]) {
+        .intrinsic => error.BadIntrinsic,
+        else => error.BadFunction,
+    };
+    if (position + 1 >= items.len) return malformed;
+
+    const asked_register = items[position + 1];
+    switch (function.instructions[asked_register]) {
+        .intrinsic => |asked| {
+            if (asked.kind != .errored or asked.arguments.len != 1 or
+                asked.arguments[0] != register)
+            {
+                return malformed;
+            }
+        },
+        else => return malformed,
+    }
+
+    var branch_position = position + 2;
+    if (branch_position < items.len) {
+        switch (function.instructions[items[branch_position]]) {
+            .local_set => |set| {
+                if (set.value != register) return malformed;
+                branch_position += 1;
+            },
+            else => {},
+        }
+    }
+    if (branch_position >= items.len) return malformed;
+    switch (function.instructions[items[branch_position]]) {
+        .branch => |branch| if (branch.condition != asked_register) return malformed,
+        else => return malformed,
+    }
 }
 
 /// The task shape a register holds, or null when it holds anything

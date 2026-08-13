@@ -632,7 +632,106 @@ test "errored asks about a call that can fail, and must stand in its block" {
         .{ .items = try arena.dupe(Register, &.{ 0, 1, 2 }) },
         .{ .items = try arena.dupe(Register, &.{ 3, 4 }) },
     });
-    try testing.expectError(error.UndefinedRegister, verify_mod.verify(testing.allocator, &asking));
+    try testing.expectError(error.BadIntrinsic, verify_mod.verify(testing.allocator, &asking));
+}
+
+test "a fallible producer must be observed before control continues" {
+    var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    defer program.deinit();
+    const arena = program.arena.allocator();
+
+    const functions = try arena.alloc(Function, 2);
+    functions[0] = .{
+        .name = "main",
+        .parameter_count = 0,
+        .return_type = .none,
+        .fallible = true,
+        .locals = &.{},
+        .instructions = try arena.dupe(Instruction, &.{
+            .{ .call = .{ .function = 1, .arguments = &.{} } },
+            .{ .ret = null },
+        }),
+        .result_types = try arena.dupe(types.Type, &.{ .none, .none }),
+        .blocks = try arena.dupe(Block, &.{
+            .{ .items = try arena.dupe(Register, &.{ 0, 1 }) },
+        }),
+    };
+    functions[1] = .{
+        .name = "worker",
+        .parameter_count = 0,
+        .return_type = .none,
+        .fallible = true,
+        .locals = &.{},
+        .instructions = try arena.dupe(Instruction, &.{.{ .unwind = {} }}),
+        .result_types = try arena.dupe(types.Type, &.{.none}),
+        .blocks = try arena.dupe(Block, &.{
+            .{ .items = try arena.dupe(Register, &.{0}) },
+        }),
+    };
+    program.functions = functions;
+
+    // A fallible call that falls through to a return has no outcome
+    // consumer.  The compiled path would read an unwritten result slot;
+    // the interpreter would continue with the call's stale register.
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+
+    const asked = try arena.dupe(Register, &.{0});
+    functions[0].instructions = try arena.dupe(Instruction, &.{
+        .{ .call = .{ .function = 1, .arguments = &.{} } },
+        .{ .intrinsic = .{ .kind = .errored, .arguments = asked } },
+        .{ .branch = .{ .condition = 1, .then_block = 1, .else_block = 2 } },
+        .{ .ret = null },
+        .{ .unwind = {} },
+    });
+    functions[0].result_types = try arena.dupe(types.Type, &.{ .none, .boolean, .none, .none, .none });
+    functions[0].blocks = try arena.dupe(Block, &.{
+        .{ .items = try arena.dupe(Register, &.{ 0, 1, 2 }) },
+        .{ .items = try arena.dupe(Register, &.{3}) },
+        .{ .items = try arena.dupe(Register, &.{4}) },
+    });
+    try verify_mod.verify(testing.allocator, &program);
+
+    // A value-bearing fallible call parks its answer in one local between
+    // the outcome query and the branch.  Keep that second legal shape
+    // explicit so the backstop does not accidentally require a void call.
+    functions[0].locals = try arena.dupe(Local, &.{.{
+        .name = "answer",
+        .local_type = .long,
+    }});
+    functions[0].instructions = try arena.dupe(Instruction, &.{
+        .{ .call = .{ .function = 1, .arguments = &.{} } },
+        .{ .intrinsic = .{ .kind = .errored, .arguments = asked } },
+        .{ .local_set = .{ .local = 0, .value = 0 } },
+        .{ .branch = .{ .condition = 1, .then_block = 1, .else_block = 2 } },
+        .{ .ret = null },
+        .{ .unwind = {} },
+    });
+    functions[0].result_types = try arena.dupe(types.Type, &.{ .long, .boolean, .none, .none, .none, .none });
+    functions[0].blocks = try arena.dupe(Block, &.{
+        .{ .items = try arena.dupe(Register, &.{ 0, 1, 2, 3 }) },
+        .{ .items = try arena.dupe(Register, &.{4}) },
+        .{ .items = try arena.dupe(Register, &.{5}) },
+    });
+    functions[1].return_type = .long;
+    functions[1].instructions = try arena.dupe(Instruction, &.{.{ .trap = .missing_return }});
+    try verify_mod.verify(testing.allocator, &program);
+
+    // The same invariant covers a fallible intrinsic, not only a user
+    // function call.  This malformed file read has no `errored` query.
+    var io_argument = [_]Register{0};
+    var unobserved_io = try programOf(.{
+        .instructions = &.{
+            .{ .const_string = 0 },
+            .{ .intrinsic = .{ .kind = .file_read, .arguments = &io_argument } },
+            .{ .ret = null },
+        },
+        .result_types = &.{ .string, .string, .none },
+        .blocks = &.{&.{ 0, 1, 2 }},
+        .fallible = true,
+    });
+    defer unobserved_io.deinit();
+    unobserved_io.constants = &.{"path"};
+    try testing.expectError(error.BadIntrinsic, verify_mod.verify(testing.allocator, &unobserved_io));
 }
 
 test "a call agrees with the callee it names, argument for argument" {

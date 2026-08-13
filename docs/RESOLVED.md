@@ -1227,6 +1227,19 @@ and the multi-module adventure differential spec has a focused build step.
 
 Commit: current example cleanup batch.
 
+## 2026-08-12 — fallible MIR outcomes cannot fall through
+
+The verifier now requires every fallible call or intrinsic to be followed
+in the same block by its `errored` query and the branch that consumes that
+query.  A value-bearing producer may place exactly one `local_set` between
+the query and the branch to carry its answer across the two arms.  This is
+the shape stage 5 emits for `try` and `catch`; without it, LLVM could load an
+unwritten result slot and the interpreter could continue with a stale
+register after an error.  The verifier tests cover both void and
+value-bearing calls, while existing cross-block diagnostics remain covered.
+
+Commit: current MIR hardening batch.
+
 ## 2026-08-12 — worker-boundary shapes are defended in MIR
 
 `spawn` now rejects a decoded MIR callee whose parameters or return type
