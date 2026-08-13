@@ -1522,12 +1522,22 @@ pub const Runtime = struct {
             .of(Value),
             total * kind.width(),
         ) catch return self.fail(.allocation_failed);
-        errdefer self.objects.free(elements);
         const stored: Object.Elements = .{
             .kind = kind,
             .bytes = elements,
             .count = total,
         };
+        // `fillElements` can allocate one owned String/struct/function run
+        // per cell before it reports failure, and `attach` can still refuse
+        // the object-table row after the run is complete.  The raw byte
+        // buffer is not enough to roll either path back: release each value
+        // first, then return the element storage.
+        errdefer {
+            if (stored.kind == .value) {
+                for (stored.cells(Value)) |cell| self.freeValue(cell);
+            }
+            self.objects.free(elements);
+        }
         try self.fillElements(stored, zero);
         return self.attach(.{ .data = .array, .dims = shape, .elements = stored });
     }

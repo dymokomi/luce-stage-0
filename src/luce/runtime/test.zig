@@ -602,6 +602,32 @@ fn copyFunctionWithAllocator(allocator: std.mem.Allocator, held: Value) !void {
     target.dropStorage(duplicate);
 }
 
+fn newArrayWithOwnedFill(allocator: std.mem.Allocator) !void {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{ .arena = arena.allocator(), .objects = allocator });
+    defer {
+        runtime.deinit();
+        arena.deinit();
+    }
+
+    const array = runtime.newArray(
+        &.{4},
+        Value.ofString("a long array fill value that owns outside storage"),
+    ) catch |mistake| {
+        // The public constructor locates raw element-buffer failure as a
+        // runtime allocation trap.  Normalize that boundary back to the
+        // allocator error expected by checkAllAllocationFailures.
+        if (mistake == error.Trap and
+            runtime.pending != null and
+            runtime.pending.?.code == .allocation_failed)
+        {
+            return error.OutOfMemory;
+        }
+        return mistake;
+    };
+    runtime.freeValue(array);
+}
+
 const CopyShape = enum { list, map, array, strukt };
 
 fn expectNestedListIntact(runtime: *Runtime, held: Value) !void {
@@ -2787,6 +2813,70 @@ test "map keys hash as they compare, for long and for String" {
     runtime.freeObject(numbers.asObject());
 }
 
+test "maps and struct values preserve one owner across retaining doors" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    const first = try runtime.newMap();
+    const second = try runtime.newMap();
+    const child = try runtime.newList(Value.none);
+    const placed = try containers.mapPlace(runtime, first, Value.ofString("item"), child);
+    try testing.expect(placed.asObject().same(child.asObject()));
+    try expectContainerParent(runtime, child, first);
+
+    // A map's missing-key path is an ownership door just like list append:
+    // a second map cannot publish the same child or change its first owner.
+    try expectTrap(
+        .not_owned,
+        runtime,
+        containers.mapPlace(runtime, second, Value.ofString("item"), child),
+    );
+    runtime.pending = null;
+    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, second)).asLong());
+    try expectContainerParent(runtime, child, first);
+
+    // Indexed map replacement releases the old child before the new one is
+    // adopted, and keeps the exact key's map owner in the metadata.
+    const replacement = try runtime.newList(Value.none);
+    try containers.indexSet(runtime, first, &.{Value.ofString("item")}, replacement);
+    try expectTrap(.use_after_free, runtime, runtime.resolve(child));
+    runtime.pending = null;
+    try expectContainerParent(runtime, replacement, first);
+
+    try expectTrap(
+        .not_owned,
+        runtime,
+        containers.mapPlace(runtime, second, Value.ofString("replacement"), replacement),
+    );
+    runtime.pending = null;
+
+    // Struct runs own their value storage, while the object fields remain
+    // graph roots.  Nest two runs before storing the outer value so the walk
+    // must cross both layers and still assign the container as the owner.
+    const nested_child = try runtime.newList(Value.none);
+    const inner = try runtime.makeStruct(&.{nested_child});
+    const record = try runtime.makeStruct(&.{inner});
+    const outer = try runtime.newList(Value.none);
+    try containers.append(runtime, outer, record);
+    try expectContainerParent(runtime, nested_child, outer);
+
+    // The same second-owner wall must walk through both value runs, not
+    // merely inspect a direct object argument.
+    const forged_record = try runtime.makeStruct(&.{nested_child});
+    const other = try runtime.newList(Value.none);
+    try expectTrap(.not_owned, runtime, containers.append(runtime, other, forged_record));
+    runtime.pending = null;
+    try expectContainerParent(runtime, nested_child, outer);
+
+    runtime.freeValue(first);
+    runtime.freeValue(second);
+    runtime.freeValue(other);
+    runtime.freeValue(outer);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
 // ---------------------------------------------------------------------------
 // Containers
 // ---------------------------------------------------------------------------
@@ -2822,6 +2912,94 @@ test "lists index, append, pop, insert, remove, and bound-check" {
     );
     try containers.clear(runtime, held);
     try expectTrap(.empty_collection, runtime, containers.pop(runtime, held));
+}
+
+test "array fill releases forged object cells before scalar replacement" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+
+    // Source-level analysis rejects an object array's fill method, but the
+    // runtime must still be total for decoded or hand-built values.  Put two
+    // owned children into a value array, then replace them with a scalar.
+    const array = try runtime.newArray(&.{2}, Value.none);
+    const first = try runtime.newList(Value.none);
+    const second = try runtime.newList(Value.none);
+    try containers.indexSet(runtime, array, &.{Value.ofLong(0)}, first);
+    try containers.indexSet(runtime, array, &.{Value.ofLong(1)}, second);
+    try testing.expectEqual(@as(u32, 3), runtime.live);
+
+    try containers.arrayFill(runtime, array, Value.ofLong(7));
+    try testing.expectEqual(@as(u32, 1), runtime.live);
+    try expectTrap(.use_after_free, runtime, runtime.resolve(first));
+    runtime.pending = null;
+    try expectTrap(.use_after_free, runtime, runtime.resolve(second));
+    runtime.pending = null;
+    try testing.expectEqual(
+        @as(i64, 7),
+        (try containers.indexGet(runtime, array, &.{Value.ofLong(0)})).asLong(),
+    );
+    try testing.expectEqual(
+        @as(i64, 7),
+        (try containers.indexGet(runtime, array, &.{Value.ofLong(1)})).asLong(),
+    );
+    runtime.freeValue(array);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
+test "array fill keeps its old values through every copy allocation failure" {
+    const long_text = "a long fill value that must be copied into every array cell";
+    // One array has one shape allocation, one element run and one table row;
+    // the fill then has one replacement run followed by one String copy per
+    // cell.  Walk beyond that range too, proving success after the failure
+    // points rather than relying on an assumed allocation count.
+    for (0..8) |offset| {
+        var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+        var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var runtime: Runtime = .init(.{
+            .arena = arena.allocator(),
+            .objects = objects.allocator(),
+        });
+        const array = try runtime.newArray(&.{3}, Value.ofString("old"));
+        objects.fail_index = objects.alloc_index + offset;
+
+        const outcome = containers.arrayFill(
+            &runtime,
+            array,
+            Value.ofString(long_text),
+        );
+        objects.fail_index = std.math.maxInt(usize);
+        if (outcome) |_| {
+            for (0..3) |index| {
+                try testing.expectEqualStrings(
+                    long_text,
+                    (try containers.indexGet(&runtime, array, &.{Value.ofLong(@intCast(index))})).asString(),
+                );
+            }
+        } else |mistake| {
+            try testing.expectEqual(error.OutOfMemory, mistake);
+            for (0..3) |index| {
+                try testing.expectEqualStrings(
+                    "old",
+                    (try containers.indexGet(&runtime, array, &.{Value.ofLong(@intCast(index))})).asString(),
+                );
+            }
+        }
+        runtime.freeValue(array);
+        try testing.expectEqual(@as(u32, 0), runtime.live);
+        runtime.deinit();
+        arena.deinit();
+        try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
+    }
+}
+
+test "new arrays roll every owned cell back when construction allocation fails" {
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        newArrayWithOwnedFill,
+        .{},
+    );
 }
 
 // Every bounded operation, at the index on each side of its bound.

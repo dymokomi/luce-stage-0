@@ -610,8 +610,42 @@ pub fn arrayFill(runtime: *Runtime, target: Value, held: Value) Error!void {
     // verified MIR obtained some other way, before any old cell is
     // released.  This is double ownership, not specifically a cycle.
     if (carriesObject(held)) return runtime.fail(.not_owned);
+
+    // A fill of a value with outside storage can fail once per cell.  Build
+    // that replacement off to the side first: releasing the old cells and
+    // then discovering an allocation failure would leave the destination
+    // half-filled and would make a failed store observable as a mutation.
+    if (object.elements.kind == .value and held.ownsStorage()) {
+        const count = object.elements.count;
+        if (count == 0) return;
+        const byte_count = std.math.mul(usize, count, @sizeOf(Value)) catch
+            return error.OutOfMemory;
+        const bytes = try runtime.objects.alignedAlloc(u8, .of(Value), byte_count);
+        var replacement: heap.Object.Elements = .{
+            .kind = .value,
+            .bytes = bytes,
+            .count = count,
+        };
+        errdefer {
+            for (replacement.cells(Value)) |cell| runtime.freeValue(cell);
+            replacement.deinit(runtime.objects);
+        }
+        try runtime.fillElements(replacement, held);
+
+        const old = object.elements;
+        object.elements.bytes = replacement.bytes;
+        for (old.cells(Value)) |cell| runtime.freeValue(cell);
+        runtime.objects.free(old.bytes);
+        return;
+    }
+
     if (object.elements.kind == .value) {
-        for (object.elements.cells(Value)) |cell| runtime.dropStorage(cell);
+        // The source language rejects object arrays at this method, but a
+        // decoded or hand-built runtime value can still have object cells.
+        // Replacing them must end their object ownership as well as their
+        // String/struct storage ownership; otherwise the old children stay
+        // live with an owner that no longer has an edge to them.
+        for (object.elements.cells(Value)) |cell| runtime.freeValue(cell);
     }
     try runtime.fillElements(object.elements, held);
 }

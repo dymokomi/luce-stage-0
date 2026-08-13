@@ -75,9 +75,11 @@ The first T0-OWN-3 corpus slice is now checked in as a four-seed, 2,800-step
 list-forest state machine with a reference owner model.  It covers legal
 append/pop/insert/remove/overwrite/clear transitions, binding and return,
 cycle and second-owner rejection, stale handles, double release, row reuse,
-and explicit zero-live teardown.  The item remains open until the same
-approach reaches maps, arrays, structs/unions, resources, worker graphs, and
-the cross-stage/invariant lanes named above.
+and explicit zero-live teardown.  A companion matrix now covers map value
+replacement, array object-cell cleanup, transactional array fills, and
+nested struct fields; the item remains open until the same approach reaches
+unions, optionals, resources, worker graphs, and the cross-stage/invariant
+lanes named above.
 
 ## Tier 1 — design gaps before implementation
 

@@ -1318,3 +1318,16 @@ A four-seed owner-graph state machine covers the legal transitions, cycle
 rejections, stale handles, double release, binding/return, and teardown.
 
 Commit: current Tier 0 owner-graph hardening batch.
+
+## 2026-08-12 — array fills cannot strand old cells or partial copies
+
+`array_fill` now releases object ownership as well as value storage when a
+hostile value array is overwritten.  For String, struct, and function values
+that require per-cell allocation, it first builds a replacement run and
+leaves the old cells untouched if any copy fails.  `newArray` uses the same
+rollback rule during construction, including a failure while publishing its
+object-table row, so partially copied cells do not outlive their raw buffer.
+The owner-graph lane covers forged object cells, every replacement allocation
+failure, and nested map/array/struct ownership edges.
+
+Commit: current Tier 0 container rollback hardening batch.

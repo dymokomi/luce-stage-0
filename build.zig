@@ -373,7 +373,13 @@ pub fn build(b: *std.Build) void {
 
     const owner_graph_tests = b.addTest(.{
         .root_module = luce,
-        .filters = &.{"fixed owner-graph seeds keep one owner"},
+        .filters = &.{
+            "fixed owner-graph seeds keep one owner",
+            "array fill releases forged object cells",
+            "array fill keeps its old values",
+            "new arrays roll every owned cell",
+            "maps and struct values preserve one owner",
+        },
     });
     const test_owner_graph_step = b.step(
         "test-owner-graph",
