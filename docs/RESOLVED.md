@@ -1369,6 +1369,18 @@ both consumers.
 
 Commit: current MIR cross-stage ownership hardening batch.
 
+## 2026-08-12 — the owner-graph proof is coverage-guided
+
+The deterministic owner-graph reference model is now also registered as a
+coverage-guided fuzz target.  Mutated byte traces become replayable seeds for
+the 700-step list-forest state machine, which checks exact parent edges,
+cycle and second-owner rejection, stale generations, binding/return, double
+release, and zero-live teardown after every transition.  The fixed seeds stay
+as readable regressions; fuzzing expands the operation order and row-reuse
+patterns without weakening the reference model.
+
+Commit: current Tier 0 owner-graph hardening batch.
+
 ## 2026-08-12 — borrowed parameter ownership walks are rejected at MIR
 
 The MIR verifier now refuses `object_bind` and `object_unbind` targeting a

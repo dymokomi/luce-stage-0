@@ -1712,6 +1712,45 @@ test "fixed owner-graph seeds keep one owner through hostile transitions" {
     }
 }
 
+// The fixed corpus above is the readable regression set.  This target makes
+// the same reference model a coverage-guided property: the fuzzer mutates a
+// byte trace into a seed, and every seed still has to preserve exact owner
+// edges, stale generations, and zero-live teardown.  Keeping the generator
+// deterministic is important here; a failing seed can be copied directly
+// into the fixed corpus without depending on a process-global random source.
+test "fuzz: owner graphs preserve one owner through arbitrary traces" {
+    try testing.fuzz({}, fuzzOwnerGraph, .{ .corpus = &.{
+        "owner graph list/map/array seed",
+        "\x00\x00\x00\x01\xA5\x5A\xF0\x0D",
+        "\xFF\xFF\xFF\xFF\x00\x13\x37\x42",
+    } });
+}
+
+fn fuzzOwnerGraph(_: void, smith: *testing.Smith) !void {
+    var bytes: [32]u8 = undefined;
+    const length = smith.sliceWeightedBytes(&bytes, &.{
+        .rangeAtMost(u8, 0x00, 0xff, 1),
+        .value(u8, 0x00, 3),
+        .value(u8, 0xff, 3),
+        .value(u8, '\n', 2),
+    });
+
+    // A small mixing step prevents short inputs from exercising only the
+    // low bits of the LCG while retaining a one-number replay contract.
+    var seed: u64 = 0x9E37_79B9_7F4A_7C15;
+    for (bytes[0..length], 0..) |byte, at| {
+        seed = seed *% 6_364_136_223_846_793_005 +%
+            (@as(u64, byte) +% @as(u64, at) +% 1);
+        seed ^= seed >> 29;
+    }
+
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    try runOwnerGraphSeed(&bench.runtime, seed);
+    try testing.expectEqual(@as(u32, 0), bench.runtime.live);
+}
+
 test "give demands the binding it names still owns the object (S23)" {
     var bench: Bench = undefined;
     bench.setup();

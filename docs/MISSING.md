@@ -91,7 +91,10 @@ randomized worker/resource generation remains open.  The allocator-failure
 matrix now drives every child allocation in a nested worker result, the
 parent-side result copy, and struct construction with an object field; the
 runtime also proves nested file close-once behavior, stale resource handles
-after row reuse, and one-shot task waits.
+after row reuse, and one-shot task waits.  The owner-graph reference model is
+also a coverage-guided fuzz target now: mutated byte traces become
+reproducible seeds for the same 700-step cycle, stale-handle, binding, and
+teardown proof.  Randomized mixed resource and worker graphs remain open.
 
 ## Tier 1 — design gaps before implementation
 
