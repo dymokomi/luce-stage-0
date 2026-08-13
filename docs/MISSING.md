@@ -29,10 +29,14 @@ runtime/verifier boundary.
   allocation point in nested copies, strings, map keys and values, function
   receivers, slices, worker transfers, task/file acquisition, constants, and
   C exports.  Prove destination preservation, rollback, no leak, no
-  double-free, and a stable error/trap.  The remaining slice is compound
-  stores (`mapPlace`, builder growth/snapshots, union/optional copies, and
-  `inout` receiver replacement), host string/list materialization, and a
-  failure point for every C export that can allocate.
+  double-free, and a stable error/trap.  The fresh-key `mapPlace` path now
+  proves key-copy, zero-copy, hash-index, and entry-run rollback; Builder
+  growth and `str(builder)` snapshots prove their destination stays
+  unchanged; and the common C constructor, owned-storage, and host
+  string/list materialization doors now preserve out slots, live rows, and
+  allocator bytes at every observed failure point.  The remaining matrix is
+  union/optional copies, `inout` receiver replacement, file/task acquisition,
+  and the allocating C exports not yet in this direct corpus.
 - **T0-OWN-3 — Randomized owner-graph state machine.**  Generate valid
   operation sequences and hostile mutations against a reference model that
   requires exactly one owner, forbids illegal cycles, makes stale handles

@@ -178,6 +178,9 @@ pub fn build(b: *std.Build) void {
         "struct replacement rejects",
         "host byte counts are bounded",
         "C scalar lengths counts and tags",
+        "map place rolls every key value",
+        "builder growth and snapshots",
+        "allocating C doors preserve outputs",
     };
     const c_sanitize_luce = b.createModule(.{
         .root_source_file = b.path("src/luce/luce.zig"),
@@ -469,6 +472,9 @@ pub fn build(b: *std.Build) void {
             "struct replacement rejects",
             "runtime index and struct doors",
             "C scalar lengths counts and tags",
+            "map place rolls every key value",
+            "builder growth and snapshots",
+            "allocating C doors preserve outputs",
         },
     });
     const test_runtime_ownership_step = b.step(

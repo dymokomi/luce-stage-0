@@ -638,6 +638,19 @@ const CopyShape = enum { list, map, array, strukt };
 
 const RetainingDoor = enum { append, insert, map_index_set };
 
+const CAllocationDoor = enum {
+    new_list,
+    new_map,
+    new_builder,
+    new_array,
+    struct_make,
+    function_make,
+    intern_text,
+    own_storage,
+    names_list,
+    args_list,
+};
+
 fn expectRetainingDoorFailure(door: RetainingDoor) !void {
     var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -956,6 +969,10 @@ const built_list_joined =
     "the second list-builder value owns different outside bytes";
 
 const BuiltListArguments = struct {
+    fn count(_: ?*anyopaque) callconv(.c) i64 {
+        return @intCast(built_list_words.len);
+    }
+
     fn get(
         _: ?*anyopaque,
         index: i64,
@@ -3059,6 +3076,141 @@ test "failed retaining stores consume accepted objects without damaging rejected
     runtime.pending = null;
     try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, target)).asLong());
     _ = try runtime.resolve(target);
+}
+
+test "map place rolls every key value and entry allocation back" {
+    const long_key = "a map key that must be copied before it can be retained";
+    const long_zero = "a map zero that must be copied before it can be retained";
+    var failures: usize = 0;
+    var completed = false;
+
+    // The map starts empty, so the first fresh-key path exercises the key
+    // copy, the value copy, the hash index, and the entry array in order.
+    // Walk beyond the implementation's current allocation count as well:
+    // the test proves success after every real refusal rather than baking
+    // an allocation-count assumption into the contract.
+    for (0..16) |failure_offset| {
+        var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+        var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var runtime: Runtime = .init(.{
+            .arena = arena.allocator(),
+            .objects = objects.allocator(),
+        });
+
+        const map = try runtime.newMap();
+        const baseline_live = runtime.live;
+        objects.fail_index = objects.alloc_index + failure_offset;
+        const outcome = containers.mapPlace(
+            &runtime,
+            map,
+            Value.ofString(long_key),
+            Value.ofString(long_zero),
+        );
+        objects.fail_index = std.math.maxInt(usize);
+
+        if (outcome) |placed| {
+            try testing.expect(placed.tag == .string);
+            try testing.expectEqualStrings(long_zero, placed.asString());
+            try testing.expectEqual(@as(i64, 1), (try containers.length(&runtime, map)).asLong());
+            try testing.expectEqual(baseline_live, runtime.live);
+            completed = true;
+            runtime.freeValue(map);
+        } else |mistake| {
+            try testing.expectEqual(error.OutOfMemory, mistake);
+            try testing.expect(objects.has_induced_failure);
+            try testing.expectEqual(baseline_live, runtime.live);
+            try testing.expectEqual(@as(i64, 0), (try containers.length(&runtime, map)).asLong());
+            failures += 1;
+            runtime.freeValue(map);
+        }
+
+        try testing.expectEqual(@as(u32, 0), runtime.live);
+        runtime.deinit();
+        arena.deinit();
+        try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
+        if (completed) break;
+    }
+
+    try testing.expect(completed);
+    try testing.expect(failures >= 3);
+}
+
+test "builder growth and snapshots preserve bytes through allocation failure" {
+    const long_text = "builder bytes long enough to force a replacement allocation" ++
+        "builder bytes long enough to force a replacement allocation" ++
+        "builder bytes long enough to force a replacement allocation" ++
+        "builder bytes long enough to force a replacement allocation";
+
+    var growth_failures: usize = 0;
+    var growth_completed = false;
+    for (0..8) |failure_offset| {
+        var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+        var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var runtime: Runtime = .init(.{
+            .arena = arena.allocator(),
+            .objects = objects.allocator(),
+        });
+        const builder = try runtime.newBuilder();
+        try containers.append(&runtime, builder, Value.ofString("seed"));
+        objects.fail_index = objects.alloc_index + failure_offset;
+
+        const outcome = containers.append(&runtime, builder, Value.ofString(long_text));
+        objects.fail_index = std.math.maxInt(usize);
+        if (outcome) |_| {
+            const object = try runtime.resolve(builder);
+            try testing.expectEqualStrings("seed" ++ long_text, object.data.builder.items);
+            growth_completed = true;
+            runtime.freeValue(builder);
+        } else |mistake| {
+            try testing.expectEqual(error.OutOfMemory, mistake);
+            const object = try runtime.resolve(builder);
+            try testing.expectEqualStrings("seed", object.data.builder.items);
+            growth_failures += 1;
+            runtime.freeValue(builder);
+        }
+        try testing.expectEqual(@as(u32, 0), runtime.live);
+        runtime.deinit();
+        arena.deinit();
+        try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
+        if (growth_completed) break;
+    }
+    try testing.expect(growth_completed);
+    try testing.expect(growth_failures >= 1);
+
+    var snapshot_failures: usize = 0;
+    var snapshot_completed = false;
+    for (0..8) |failure_offset| {
+        var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+        var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+        var runtime: Runtime = .init(.{
+            .arena = arena.allocator(),
+            .objects = objects.allocator(),
+        });
+        const builder = try runtime.newBuilder();
+        try containers.append(&runtime, builder, Value.ofString(long_text));
+        objects.fail_index = objects.alloc_index + failure_offset;
+
+        const outcome = text.str(&runtime, builder);
+        objects.fail_index = std.math.maxInt(usize);
+        if (outcome) |snapshot| {
+            try testing.expectEqualStrings(long_text, snapshot.asString());
+            runtime.dropStorage(snapshot);
+            snapshot_completed = true;
+        } else |mistake| {
+            try testing.expectEqual(error.OutOfMemory, mistake);
+            const object = try runtime.resolve(builder);
+            try testing.expectEqualStrings(long_text, object.data.builder.items);
+            snapshot_failures += 1;
+        }
+        runtime.freeValue(builder);
+        try testing.expectEqual(@as(u32, 0), runtime.live);
+        runtime.deinit();
+        arena.deinit();
+        try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
+        if (snapshot_completed) break;
+    }
+    try testing.expect(snapshot_completed);
+    try testing.expect(snapshot_failures >= 1);
 }
 
 test "runtime index and struct doors reject malformed rank without touching ownership" {
@@ -5523,6 +5675,8 @@ extern fn luce_rt_args_list(
     out: *Value,
 ) callconv(.c) i32;
 extern fn luce_rt_new_list(runtime: *Runtime, zero: *const Value, out: *Value) callconv(.c) i32;
+extern fn luce_rt_new_map(runtime: *Runtime, out: *Value) callconv(.c) i32;
+extern fn luce_rt_new_builder(runtime: *Runtime, out: *Value) callconv(.c) i32;
 extern fn luce_rt_new_array(
     runtime: *Runtime,
     dims: [*]const i64,
@@ -5542,6 +5696,7 @@ extern fn luce_rt_function_make(
     count: i64,
     out: *Value,
 ) callconv(.c) i32;
+extern fn luce_rt_own_storage(runtime: *Runtime, held: *const Value, out: *Value) callconv(.c) i32;
 extern fn luce_rt_append(runtime: *Runtime, target: *const Value, held: *const Value) callconv(.c) i32;
 extern fn luce_rt_index_get(
     runtime: *Runtime,
@@ -5830,6 +5985,87 @@ test "C scalar lengths counts and tags fail closed without writing outputs" {
         @as(i32, 0),
         luce_rt_compare_long_double(999, 1, 1.0),
     );
+}
+
+test "allocating C doors preserve outputs and rows at every failure point" {
+    const long_text = "a host string long enough to require owned storage";
+    const dims = [_]i64{3};
+    const fields = [_]Value{ Value.ofLong(1), Value.ofLong(2) };
+    const slots = [_]Value{ Value.ofLong(3), Value.ofLong(4) };
+    const doors = [_]CAllocationDoor{
+        .new_list,
+        .new_map,
+        .new_builder,
+        .new_array,
+        .struct_make,
+        .function_make,
+        .intern_text,
+        .own_storage,
+        .names_list,
+        .args_list,
+    };
+
+    for (doors) |door| {
+        var failures: usize = 0;
+        var completed = false;
+        for (0..24) |failure_offset| {
+            var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
+            var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+            var runtime: Runtime = .init(.{
+                .arena = arena.allocator(),
+                .objects = objects.allocator(),
+            });
+            var out = Value.ofLong(99);
+            objects.fail_index = objects.alloc_index + failure_offset;
+
+            const status = switch (door) {
+                .new_list => luce_rt_new_list(&runtime, &Value.none, &out),
+                .new_map => luce_rt_new_map(&runtime, &out),
+                .new_builder => luce_rt_new_builder(&runtime, &out),
+                .new_array => luce_rt_new_array(&runtime, &dims, dims.len, &Value.ofLong(0), &out),
+                .struct_make => luce_rt_struct_make(&runtime, &fields, fields.len, &out),
+                .function_make => luce_rt_function_make(&runtime, &slots, slots.len, &out),
+                .intern_text => luce_rt_intern_text(&runtime, long_text, long_text.len, &out),
+                .own_storage => luce_rt_own_storage(&runtime, &Value.ofString(long_text), &out),
+                .names_list => luce_rt_names_list(&runtime, built_list_joined, built_list_joined.len, &out),
+                .args_list => luce_rt_args_list(
+                    &runtime,
+                    null,
+                    BuiltListArguments.count,
+                    BuiltListArguments.get,
+                    &out,
+                ),
+            };
+            objects.fail_index = std.math.maxInt(usize);
+
+            if (status == 0) {
+                switch (door) {
+                    .struct_make, .function_make, .intern_text, .own_storage => runtime.dropStorage(out),
+                    else => runtime.freeValue(out),
+                }
+                completed = true;
+            } else {
+                try testing.expectEqual(@as(i32, 1), status);
+                try testing.expectEqual(@as(i64, 99), out.asLong());
+                try testing.expectEqual(@as(u32, 0), runtime.live);
+                if (runtime.pending) |pending| {
+                    try testing.expectEqual(CAllocationDoor.new_array, door);
+                    try testing.expectEqual(vocabulary.TrapCode.allocation_failed, pending.code);
+                } else {
+                    try testing.expect(runtime.exhausted);
+                }
+                failures += 1;
+            }
+
+            try testing.expectEqual(@as(u32, 0), runtime.live);
+            runtime.deinit();
+            arena.deinit();
+            try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
+            if (completed) break;
+        }
+        try testing.expect(completed);
+        try testing.expect(failures >= 1);
+    }
 }
 
 test "the C materialization surface roots, loads, freezes, and excludes a constant" {

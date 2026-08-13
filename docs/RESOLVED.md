@@ -1557,3 +1557,25 @@ field-replacement, exceptional, stale-task, and allocator-failure matrices
 remain in MISSING.md.
 
 Commit: current Tier 0 composite-ownership specification batch.
+
+## 2026-08-13 — compound allocation rollback and common C allocation doors
+
+The allocation-failure corpus now drives the fresh-key `mapPlace` path
+through copied keys, copied zero values, the map's hash index, and its entry
+run, proving that a rejected compound store leaves the empty map and returns
+all temporary storage.  Builder growth and `str(builder)` snapshots are
+similarly driven through failure and success, with the builder's bytes
+unchanged on refusal.  A direct C matrix covers new list/map/builder/array,
+struct and function runs, owned-storage copies, interned text, directory-name
+materialization, and argument-list materialization; every rejected call
+leaves its sentinel out slot untouched, has no live rows, and returns the
+allocator to balance.
+
+The focused runtime ownership lane passes 31/31; the C- and thread-sanitized
+ownership lanes pass 39/39 each; and the package/runtime gate passes 520/520.
+The remaining allocation matrix is recorded in MISSING.md rather than being
+claimed closed: union/optional copies, `inout` receiver replacement,
+file/task acquisition, and the other allocating C exports still need direct
+failure doors.
+
+Commit: current Tier 0 compound-allocation hardening batch.
