@@ -172,8 +172,12 @@ worker inside a blocked file read while its sibling waits for the effect lock,
 releases the parent task root, and proves teardown does not deadlock: one file
 closes in the normal body, the trapped sibling's file closes during
 child-runtime sweep, and join/close/leak counts remain exact.  Sibling and
-nested worker races and broader join-table exhaustion still need explicit
-concurrent cases.
+nested worker races now also have a real-thread matrix: two siblings each
+spawn two nested children, all four nested bodies meet at a barrier, and the
+parent tears the graph down once by bulk release and once by explicit wait
+then release.  It proves all six joins and child closes, zero live rows, and
+zero inherited leaks.  Broader join-table exhaustion beyond this six-worker
+graph still needs an explicit concurrent case.
 The stale-handle slice now probes every list, map, array, and builder door
 after row generation reuse, plus file read/write/flush/copy/give operations;
 it checks that double release is inert and that stale file operations do not

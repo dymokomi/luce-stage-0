@@ -2476,6 +2476,258 @@ test "blocked worker resource calls unwind through normal and exceptional cleanu
     cleaned = true;
 }
 
+const NestedWorkerRace = struct {
+    const top_count = 2;
+    const nested_per_top = 2;
+    const capacity = top_count + top_count * nested_per_top;
+
+    const Child = struct {
+        arena: std.heap.ArenaAllocator = undefined,
+        runtime: Runtime = undefined,
+        active: bool = false,
+    };
+
+    const Launch = struct {
+        body: workers.Body,
+        argument: ?*anyopaque,
+    };
+
+    gate: std.atomic.Value(bool) = .init(false),
+    nested_started: std.atomic.Value(usize) = .init(0),
+    nested_finished: std.atomic.Value(usize) = .init(0),
+    top_finished: std.atomic.Value(usize) = .init(0),
+    opened: std.atomic.Value(usize) = .init(0),
+    spawned: std.atomic.Value(usize) = .init(0),
+    joined: std.atomic.Value(usize) = .init(0),
+    closed: std.atomic.Value(usize) = .init(0),
+    children: [capacity]Child = undefined,
+    threads: [capacity]?std.Thread = [_]?std.Thread{null} ** capacity,
+    child_live_at_close: [capacity]u32 = [_]u32{std.math.maxInt(u32)} ** capacity,
+
+    fn open(context: ?*anyopaque) callconv(.c) ?*Runtime {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        const index = self.opened.fetchAdd(1, .acq_rel);
+        if (index >= capacity) return null;
+        const child = &self.children[index];
+        child.arena = .init(testing.allocator);
+        child.runtime = .init(.{
+            .arena = child.arena.allocator(),
+            .objects = testing.allocator,
+        });
+        child.active = true;
+        return &child.runtime;
+    }
+
+    fn close(context: ?*anyopaque, runtime: *Runtime) callconv(.c) void {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        for (&self.children, 0..) |*child, index| {
+            if (runtime != &child.runtime) continue;
+            self.child_live_at_close[index] = runtime.live;
+            runtime.debugAssertInvariants();
+            runtime.deinit();
+            child.arena.deinit();
+            child.active = false;
+            _ = self.closed.fetchAdd(1, .acq_rel);
+            return;
+        }
+        @panic("nested worker race closed an unknown child");
+    }
+
+    fn threadMain(launch: Launch) void {
+        launch.body(launch.argument);
+    }
+
+    fn spawn(
+        context: ?*anyopaque,
+        body: workers.Body,
+        argument: ?*anyopaque,
+        thread: *i64,
+    ) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        const index = self.spawned.fetchAdd(1, .acq_rel);
+        if (index >= capacity) return workers.no;
+        const made = std.Thread.spawn(.{}, threadMain, .{Launch{
+            .body = body,
+            .argument = argument,
+        }}) catch return workers.no;
+        self.threads[index] = made;
+        thread.* = @intCast(index);
+        return workers.yes;
+    }
+
+    fn join(context: ?*anyopaque, thread: i64) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        const index: usize = @intCast(thread);
+        if (index >= capacity) return workers.no;
+        const running = self.threads[index] orelse return workers.no;
+        // Only a parent-level join may release the nested barrier.  The
+        // first two thread tickets belong to the sibling workers; joins
+        // from those workers to their nested children must remain blocked
+        // until the parent reaches this graph.
+        if (index < top_count) self.gate.store(true, .release);
+        running.join();
+        self.threads[index] = null;
+        _ = self.joined.fetchAdd(1, .acq_rel);
+        return workers.yes;
+    }
+
+    fn failed(runtime: *Runtime, mistake: heap.Error) i32 {
+        if (mistake == error.OutOfMemory) runtime.exhausted = true;
+        return workers.raised_trap;
+    }
+
+    fn run(
+        context: ?*anyopaque,
+        runtime: *Runtime,
+        function: i64,
+        _: [*]const Value,
+        _: i64,
+        out: *Value,
+        _: i64,
+    ) callconv(.c) i32 {
+        const self: *@This() = @ptrCast(@alignCast(context.?));
+        if (function == 1) {
+            _ = self.nested_started.fetchAdd(1, .acq_rel);
+            while (!self.gate.load(.acquire)) std.Thread.yield() catch {};
+            _ = self.nested_finished.fetchAdd(1, .acq_rel);
+            out.* = .none;
+            return workers.survived;
+        }
+
+        const nested_tasks = runtime.newList(Value.none) catch |mistake|
+            return failed(runtime, mistake);
+        for (0..nested_per_top) |_| {
+            var task: Value = .none;
+            workers.spawn(runtime, 1, &.{}, &task) catch |mistake| {
+                runtime.freeValue(nested_tasks);
+                return failed(runtime, mistake);
+            };
+            containers.append(runtime, nested_tasks, task) catch |mistake| {
+                runtime.freeValue(task);
+                runtime.freeValue(nested_tasks);
+                return failed(runtime, mistake);
+            };
+        }
+
+        // The top worker owns both nested task values.  Its own release
+        // joins the nested children, while the parent may concurrently be
+        // joining this top worker.  This is the nested ownership edge that
+        // the synchronous lifecycle model cannot exercise.
+        runtime.freeValue(nested_tasks);
+        _ = self.top_finished.fetchAdd(1, .acq_rel);
+        out.* = .none;
+        return workers.survived;
+    }
+
+    fn install(self: *@This(), parent: *Runtime) void {
+        parent.workers = .{
+            .context = self,
+            .spawn = spawn,
+            .join = join,
+        };
+        parent.nursery = .{
+            .context = self,
+            .open = open,
+            .close = close,
+            .run = run,
+        };
+    }
+};
+
+fn runNestedWorkerRace(wait_first: bool) !void {
+    var state: NestedWorkerRace = .{};
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{
+        .arena = arena.allocator(),
+        .objects = testing.allocator,
+    });
+    var cleaned = false;
+    defer if (!cleaned) {
+        state.gate.store(true, .release);
+        runtime.deinit();
+        arena.deinit();
+    };
+    state.install(&runtime);
+
+    var top_tasks = try runtime.newList(Value.none);
+    defer if (!cleaned) {
+        state.gate.store(true, .release);
+        runtime.freeValue(top_tasks);
+    };
+    for (0..NestedWorkerRace.top_count) |_| {
+        var task: Value = .none;
+        workers.spawn(&runtime, 0, &.{}, &task) catch |mistake| return mistake;
+        containers.append(&runtime, top_tasks, task) catch |mistake| {
+            runtime.freeValue(task);
+            return mistake;
+        };
+    }
+
+    while (state.nested_started.load(.acquire) !=
+        NestedWorkerRace.top_count * NestedWorkerRace.nested_per_top)
+    {
+        std.Thread.yield() catch {};
+    }
+    try testing.expectEqual(
+        NestedWorkerRace.capacity,
+        state.spawned.load(.acquire),
+    );
+    try testing.expectEqual(
+        NestedWorkerRace.capacity,
+        state.opened.load(.acquire),
+    );
+    try testing.expectEqual(
+        @as(usize, 0),
+        state.nested_finished.load(.acquire),
+    );
+
+    if (wait_first) {
+        // Consume one sibling explicitly.  Its nested joins open the gate,
+        // and the second sibling is then released through list teardown.
+        const first = try containers.pop(&runtime, top_tasks);
+        var answer: Value = .none;
+        try testing.expectEqual(
+            workers.survived,
+            try workers.wait(&runtime, first, &answer),
+        );
+        runtime.freeValue(answer);
+        runtime.freeValue(first);
+    }
+
+    runtime.freeValue(top_tasks);
+    top_tasks = .none;
+    try testing.expectEqual(
+        NestedWorkerRace.top_count * NestedWorkerRace.nested_per_top,
+        state.nested_finished.load(.acquire),
+    );
+    try testing.expectEqual(
+        NestedWorkerRace.top_count,
+        state.top_finished.load(.acquire),
+    );
+    try testing.expectEqual(
+        NestedWorkerRace.capacity,
+        state.joined.load(.acquire),
+    );
+    try testing.expectEqual(
+        NestedWorkerRace.capacity,
+        state.closed.load(.acquire),
+    );
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+    try testing.expectEqual(@as(i64, 0), runtime.leaked());
+    for (state.child_live_at_close) |live| try testing.expectEqual(@as(u32, 0), live);
+    for (state.children) |child| try testing.expect(!child.active);
+    runtime.debugAssertInvariants();
+
+    runtime.deinit();
+    arena.deinit();
+    cleaned = true;
+}
+
+test "sibling workers join nested workers through both teardown orders" {
+    try runNestedWorkerRace(false);
+    try runNestedWorkerRace(true);
+}
+
 const ParentStop = enum { trap, exit };
 
 fn runBlockedParentStop(stop: ParentStop) !void {

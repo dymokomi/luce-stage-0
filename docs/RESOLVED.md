@@ -1551,10 +1551,22 @@ both resources close once, no callback runs outside the effect guard, no
 worker remains joined or active, and the inherited leak census accounts for
 the intentionally abandoned file.
 
-Sibling/nested worker races and broader join-table exhaustion remain in
-MISSING.md.
+Broader join-table exhaustion remains in MISSING.md.
 
 Commit: current Tier 0 blocked-resource worker hardening batch.
+
+## 2026-08-13 — sibling and nested worker join orders
+
+A real-thread ownership matrix now creates two sibling workers, each with two
+nested workers.  All four nested bodies block at a barrier while the parent
+tears down the graph in two orders: bulk task-list release and explicit wait
+followed by release.  The test checks every join and child-runtime close,
+zero live rows, zero inherited leaks, and no stale task ownership after the
+graph disappears.
+
+Broader join-table exhaustion remains in MISSING.md.
+
+Commit: current Tier 0 sibling/nested worker hardening batch.
 
 ## 2026-08-13 — blocked-worker parent-stop and channel exhaustion
 
