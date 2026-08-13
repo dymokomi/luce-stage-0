@@ -213,9 +213,12 @@ borrowed `Value` inputs and value arrays, plus dimension arrays, now use
 C-nullable pointers and reject null before slicing, callbacks, host I/O, or
 ownership work; the regression covers ownership verbs, constructors,
 struct/function runs, workers, files, every container door, strings, and
-comparison.  The remaining C pointer matrix is callback function slots and
-callback-produced buffers, plus the documented runtime/host installation
-contracts.
+comparison.  Callback outputs now fail closed too: an argument callback that
+reports success with a null byte buffer is rejected before list publication,
+and null trap/error report callbacks are safe no-ops that preserve the
+original diagnosis.  The remaining callback work is the documented
+runtime/host installation contract and malformed callback behavior for the
+lower-level host tables.
 The differential specs now put a task inside a union's optional field, that
 union inside a recursive struct with an optional callback and child list, and
 consume the task through a `give`d helper; a companion file case puts an

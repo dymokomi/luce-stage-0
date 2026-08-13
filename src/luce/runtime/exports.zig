@@ -244,11 +244,12 @@ pub export fn luce_rt_unwound(
 pub export fn luce_rt_report(
     runtime: *const Runtime,
     context: ?*anyopaque,
-    report: trace.ReportFn,
+    report: ?trace.ReportFn,
 ) callconv(.c) void {
     if (runtime.exhausted) return;
     const raised = runtime.pending orelse return;
-    report(
+    const callback = report orelse return;
+    callback(
         context,
         @intFromEnum(raised.code),
         raised.message.ptr,
@@ -335,11 +336,12 @@ pub export fn luce_rt_forget_error(runtime: *Runtime) callconv(.c) void {
 pub export fn luce_rt_report_error(
     runtime: *const Runtime,
     context: ?*anyopaque,
-    report: trace.ErrorReportFn,
+    report: ?trace.ErrorReportFn,
 ) callconv(.c) void {
     if (runtime.exhausted) return;
     const raised = runtime.raised orelse return;
-    report(
+    const callback = report orelse return;
+    callback(
         context,
         @intFromEnum(raised.code),
         raised.message.ptr,

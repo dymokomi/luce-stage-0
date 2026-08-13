@@ -1199,7 +1199,7 @@ pub const Capture = struct {
     fn argAt(
         context: ?*anyopaque,
         index: i64,
-        text: *[*]const u8,
+        text: *[*c]const u8,
         length: *i64,
     ) callconv(.c) abi.Answer {
         const found = of(context).world.argument(index) orelse return .no;

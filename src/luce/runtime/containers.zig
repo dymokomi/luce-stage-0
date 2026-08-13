@@ -512,7 +512,7 @@ pub fn listOfJoinedText(runtime: *Runtime, joined: []const u8) Error!Value {
 pub const ArgumentFn = *const fn (
     context: ?*anyopaque,
     index: i64,
-    text: *[*]const u8,
+    text: *[*c]const u8,
     length: *i64,
 ) callconv(.c) i32;
 
@@ -537,11 +537,12 @@ pub fn listOfArguments(
     if (get) |callback| {
         var index: i64 = 0;
         while (index < count) : (index += 1) {
-            var text: [*]const u8 = undefined;
+            var text: [*c]const u8 = null;
             var size: i64 = 0;
             // A host that says no about an index it counted itself has
             // nothing left to say about the ones after it.
             if (callback(context, index, &text, &size) == 0) break;
+            if (text == null) return runtime.fail(.host_unavailable);
             const text_length = std.math.cast(usize, size) orelse
                 return runtime.fail(.host_unavailable);
             const borrowed = text[0..text_length];

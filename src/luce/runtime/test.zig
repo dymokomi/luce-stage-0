@@ -1731,13 +1731,30 @@ const BuiltListArguments = struct {
     fn get(
         _: ?*anyopaque,
         index: i64,
-        text_out: *[*]const u8,
+        text_out: *[*c]const u8,
         length_out: *i64,
     ) callconv(.c) i32 {
         if (index < 0 or index >= @as(i64, built_list_words.len)) return 0;
         const held = built_list_words[@intCast(index)];
         text_out.* = held.ptr;
         length_out.* = @intCast(held.len);
+        return 1;
+    }
+};
+
+const NullArgument = struct {
+    fn count(_: ?*anyopaque) callconv(.c) i64 {
+        return 1;
+    }
+
+    fn get(
+        _: ?*anyopaque,
+        _: i64,
+        text_out: *[*c]const u8,
+        length_out: *i64,
+    ) callconv(.c) i32 {
+        text_out.* = null;
+        length_out.* = 1;
         return 1;
     }
 };
@@ -6667,7 +6684,12 @@ extern fn luce_rt_unwound(runtime: *Runtime, function: u32, instruction: u32) ca
 extern fn luce_rt_report(
     runtime: *const Runtime,
     context: ?*anyopaque,
-    report: trace.ReportFn,
+    report: ?trace.ReportFn,
+) callconv(.c) void;
+extern fn luce_rt_report_error(
+    runtime: *const Runtime,
+    context: ?*anyopaque,
+    report: ?trace.ErrorReportFn,
 ) callconv(.c) void;
 extern fn luce_rt_leaked(runtime: *const Runtime) callconv(.c) i64;
 extern fn luce_rt_constants_begin(runtime: *Runtime, count: u32) callconv(.c) i32;
@@ -7644,6 +7666,41 @@ test "C borrowed Value and array pointers reject null before work" {
     try testing.expectEqual(@as(i64, 29), filled);
     try testing.expectEqual(@as(i64, 31), written);
     try testing.expectEqual(@as(u32, 0), runtime.live);
+    runtime.debugAssertInvariants();
+}
+
+test "C callbacks fail closed on null report and argument buffers" {
+    var bench: Bench = undefined;
+    bench.setup();
+    defer bench.deinit();
+    const runtime = &bench.runtime;
+    var out = Value.ofLong(99);
+
+    try expectCNullValueTrap(
+        runtime,
+        luce_rt_args_list(runtime, null, NullArgument.count, NullArgument.get, &out),
+    );
+    try testing.expectEqual(@as(i64, 99), out.asLong());
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+
+    _ = runtime.fail(.host_unavailable) catch {};
+    const pending_code = runtime.pending.?.code;
+    luce_rt_report(runtime, null, null);
+    try testing.expectEqual(pending_code, runtime.pending.?.code);
+    runtime.pending = null;
+
+    runtime.raise(.user_error, "callback report", .{
+        .function = "main",
+        .function_length = 4,
+        .source = "callback.luc",
+        .source_length = 13,
+        .line = 1,
+        .column = 1,
+    });
+    const raised_code = runtime.raised.?.code;
+    luce_rt_report_error(runtime, null, null);
+    try testing.expectEqual(raised_code, runtime.raised.?.code);
+    runtime.raised = null;
     runtime.debugAssertInvariants();
 }
 

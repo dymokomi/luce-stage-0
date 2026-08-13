@@ -468,7 +468,7 @@ pub const ArgCountFn = *const fn (context: ?*anyopaque) callconv(.c) i64;
 pub const ArgFn = *const fn (
     context: ?*anyopaque,
     index: i64,
-    text: *[*]const u8,
+    text: *[*c]const u8,
     length: *i64,
 ) callconv(.c) Answer;
 

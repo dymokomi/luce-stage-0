@@ -1540,6 +1540,19 @@ pass 36/36, and the full differential suite passes 517/517.
 
 Commit: current Tier 0 C-boundary hardening batch.
 
+## 2026-08-13 — C callback buffer and report-pointer refusal
+
+Argument callbacks now expose their returned byte pointer as C-nullable and
+reject a successful callback that leaves it null before constructing or
+publishing the argument list.  Trap and error report callbacks are also
+nullable at the runtime door; a missing reporter is a safe no-op that leaves
+the original pending trap or error intact.  The direct regression checks the
+output sentinel, live-row census, and invariant seam.
+
+Malformed lower-level host-table callbacks remain listed in MISSING.md.
+
+Commit: current Tier 0 C-boundary hardening batch.
+
 ## 2026-08-13 — C borrowed-value and array-pointer null refusal
 
 Borrowed `Value` inputs, value arrays, and dimension arrays on the exported
