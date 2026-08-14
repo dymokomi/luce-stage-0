@@ -219,7 +219,13 @@ test "Ctrl-B saves, runs the current file and shows the host transcript" {
 
     const shown = try screenText(session.printed());
     defer testing.allocator.free(shown);
-    try testing.expect(std.mem.indexOf(u8, shown, "mock shell: luce build 'notes.txt' --emit=exe -o 'notes.txt.run' && 'notes.txt.run'") != null);
+    // The terminal wraps long shell transcripts at its 80-column edge, so
+    // the complete command is not one contiguous screen substring.  Pin
+    // the executable-first command prefix and its generated output name
+    // separately; together they keep Ctrl-B's build-and-run contract while
+    // matching what a user can actually see.
+    try testing.expect(std.mem.indexOf(u8, shown, "mock shell: luce build 'notes.txt' --emit=exe") != null);
+    try testing.expect(std.mem.indexOf(u8, shown, "notes.txt.run") != null);
     try testing.expect(std.mem.indexOf(u8, shown, "exit status: 0") != null);
     try testing.expect(std.mem.indexOf(u8, shown, "─ output ") != null);
 }

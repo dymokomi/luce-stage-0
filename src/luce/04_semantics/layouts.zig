@@ -31,6 +31,7 @@ const constants = @import("constants.zig");
 const naming = @import("naming.zig");
 const resolve = @import("resolve.zig");
 const shapes = @import("shapes.zig");
+const interfaces = @import("interfaces.zig");
 
 const context = @import("context.zig");
 const Error = context.Error;
@@ -459,6 +460,11 @@ pub fn collectStructs(self: *Analyzer) Error!void {
             });
         }
     }
+
+    // Interfaces reserve their hidden layouts before struct fields are
+    // resolved, so a struct may name an interface regardless of order.
+    try interfaces.collectDeclarations(self);
+    try interfaces.settleDeclarations(self);
 
     for (self.struct_decls.items) |info| {
         const declaration = info.declaration;

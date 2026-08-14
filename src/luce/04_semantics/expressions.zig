@@ -1140,6 +1140,15 @@ pub fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Typed {
         return null;
     }
     const layout_index = target.value_type.strukt;
+    if (self.analyzer.interfaceForLayout(layout_index) != null) {
+        try self.fail(
+            "luce.sema.interface",
+            field.span,
+            "interfaces expose methods, not fields; call {s}.{s}(…) directly",
+            .{ try self.analyzer.typeName(target.value_type), field.name },
+        );
+        return null;
+    }
     const layout = self.analyzer.structs.items[layout_index];
     const field_index = layout.findField(field.name) orelse {
         // `let f = p.length` — a *bound method value*, which is a

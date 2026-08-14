@@ -443,6 +443,33 @@ pub const StructDecl = struct {
     name_span: Span,
     fields: []Field,
     functions: []FuncDecl,
+    /// Interfaces this struct explicitly promises to implement.  The
+    /// parser keeps the written type names; stage 4 checks the promise
+    /// against the completed method table.
+    interfaces: []TypeName = &.{},
+    visibility: Visibility = .none,
+    span: Span,
+};
+
+/// A method contract inside an interface.  Unlike a function declaration,
+/// this has no body: the interface says what an implementer must provide.
+pub const InterfaceMethod = struct {
+    name: []const u8,
+    name_span: Span,
+    parameters: []Parameter,
+    returns: []TypeName,
+    fallible: bool = false,
+    span: Span,
+};
+
+/// `interface Name:` — a nominal set of method contracts.  Interfaces are
+/// intentionally small in this first version: they have methods only,
+/// cannot inherit from one another, and are implemented explicitly by a
+/// struct's `: Name` list.
+pub const InterfaceDecl = struct {
+    name: []const u8,
+    name_span: Span,
+    methods: []InterfaceMethod,
     visibility: Visibility = .none,
     span: Span,
 };
@@ -584,6 +611,7 @@ pub const Program = struct {
     imports: []Import,
     constants: []ConstDecl,
     structs: []StructDecl,
+    interfaces: []InterfaceDecl = &.{},
     enums: []EnumDecl = &.{},
     unions: []UnionDecl = &.{},
     functions: []FuncDecl,

@@ -49,6 +49,7 @@ human-reviewed.  These files are the reasoning behind it.
 | [STD.md](STD.md) | The standard library, module by module, and what it takes to add one. |
 | [CODING_GUIDE.md](CODING_GUIDE.md) | How Zig is written here. Authoritative and intentionally opinionated. |
 | [SOFTWARE_DESIGN.md](SOFTWARE_DESIGN.md) | How to decide what a module is, what it hides, and what it is called — deep modules, information hiding, and the red flags that say an abstraction is not paying for itself. The guide above wins on anything it covers. |
+| [INTERFACES.md](INTERFACES.md) | The nominal interface contract: explicit conformance, read-only dispatch, effect matching, heterogeneous collections, and receiver ownership. |
 | [LANGUAGE_AUDIT.md](LANGUAGE_AUDIT.md) | The living feature-by-feature review matrix: pipeline seam, positive and adversarial behavior, composition probes, and the test anchor to extend. |
 | [MISSING.md](MISSING.md) | Confirmed bugs only. Feature requests, design questions, coverage campaigns, refactors, optimizations, and deliberate non-goals do not belong here. |
 

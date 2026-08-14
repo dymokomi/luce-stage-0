@@ -257,6 +257,17 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
             return null;
         }
         const key = try naming.importedName(self, module, written.name);
+        if (self.interface_names.get(key)) |interface_index| {
+            const info = self.interface_decls.items[interface_index];
+            if (!naming.reachable(info.module, info.declaration.visibility, module)) {
+                try self.fail("luce.sema.private", written.span, "{s} is private to {s}", .{
+                    info.declaration.name,
+                    naming.moduleName(self, info.module),
+                });
+                return null;
+            }
+            return .{ .strukt = info.layout };
+        }
         if (self.struct_names.get(key)) |index| {
             // Private is not unknown (VISIBILITY.md D2): the name
             // exists and is withheld, and the sentence says which.
@@ -302,6 +313,7 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
         return null;
     }
     const local = try naming.qualify(self, self.modules[module].prefix, written.name);
+    if (self.interface_names.get(local)) |interface_index| return .{ .strukt = self.interface_decls.items[interface_index].layout };
     if (self.struct_names.get(local)) |index| return .{ .strukt = index };
     if (self.enum_names.get(local)) |index| return self.enumType(index);
     if (self.variant_names.get(local)) |index| return .{ .variant = index };
@@ -427,6 +439,16 @@ fn failUnknownType(self: *Analyzer, module: usize, written: ast.TypeName) Error!
             {
                 suggestion.offer(key.*[prefix.len + 1 ..]);
             }
+        }
+    }
+    var interfaces = self.interface_names.keyIterator();
+    while (interfaces.next()) |key| {
+        if (prefix.len == 0) {
+            suggestion.offer(key.*);
+        } else if (key.len > prefix.len + 1 and
+            std.mem.startsWith(u8, key.*, prefix) and key.*[prefix.len] == '.')
+        {
+            suggestion.offer(key.*[prefix.len + 1 ..]);
         }
     }
     if (suggestion.best()) |closest| {

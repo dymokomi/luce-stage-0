@@ -81,6 +81,7 @@ const receiver = @import("receiver.zig");
 const resolve = @import("resolve.zig");
 const shapes = @import("shapes.zig");
 const signatures = @import("signatures.zig");
+const interfaces = @import("interfaces.zig");
 
 // The check/lower seam's far side (05_hir.zig): the walk below checks
 // and records the typed tree, and `hir.lower` is the one emission —
@@ -102,6 +103,8 @@ const ModuleTree = context.ModuleTree;
 const FunctionDeclInfo = context.FunctionDeclInfo;
 const StructDeclInfo = context.StructDeclInfo;
 const StructShape = context.StructShape;
+const InterfaceDeclInfo = context.InterfaceDeclInfo;
+const InterfaceConformance = context.InterfaceConformance;
 const ConstantInfo = context.ConstantInfo;
 const OwnershipClass = context.OwnershipClass;
 const isReserved = context.isReserved;
@@ -187,6 +190,12 @@ pub const Analyzer = struct {
     /// two identically written signatures are one type.
     signatures: std.ArrayList(types.Signature) = .empty,
     struct_names: std.StringHashMapUnmanaged(u32) = .empty,
+    /// Interfaces use the same written type namespace as structs, but keep
+    /// a separate map so their hidden dispatch layouts cannot be constructed
+    /// or mistaken for ordinary field-bearing structs.
+    interface_names: std.StringHashMapUnmanaged(u32) = .empty,
+    interface_decls: std.ArrayList(InterfaceDeclInfo) = .empty,
+    conformances: std.ArrayList(InterfaceConformance) = .empty,
     /// The declared enums, in declaration order (docs/ENUMS.md).  They
     /// share the type-name space with structs — a program that declares
     /// both `struct Method` and `enum Method` has declared one name
@@ -252,6 +261,9 @@ pub const Analyzer = struct {
         self.struct_decls.deinit(self.temporary);
         self.struct_shapes.deinit(self.temporary);
         self.struct_names.deinit(self.temporary);
+        self.interface_names.deinit(self.temporary);
+        self.interface_decls.deinit(self.temporary);
+        self.conformances.deinit(self.temporary);
         self.enum_decls.deinit(self.temporary);
         self.enum_names.deinit(self.temporary);
         self.variant_decls.deinit(self.temporary);
@@ -307,6 +319,7 @@ pub const Analyzer = struct {
         try defaults.settleVariantDefaults(self);
         try signatures.collectFunctions(self);
         try receiver.inferReceiverWrites(self);
+        try interfaces.settleConformances(self);
         try signatures.synthesizeShapes(self);
         if (self.diagnostics.hasErrors()) return null;
 
@@ -368,6 +381,22 @@ pub const Analyzer = struct {
     /// always the width that index declares.
     pub fn enumType(self: *const Analyzer, index: u32) Type {
         return .{ .enumeration = .{ .index = index, .backing = self.enums.items[index].backing } };
+    }
+
+    /// The interface declaration owning a hidden struct layout, if any.
+    pub fn interfaceForLayout(self: *const Analyzer, layout: u32) ?u32 {
+        for (self.interface_decls.items, 0..) |decl, index| {
+            if (decl.layout == layout) return @intCast(index);
+        }
+        return null;
+    }
+
+    /// The explicit implementation row for a concrete struct/interface pair.
+    pub fn conformance(self: *const Analyzer, strukt: u32, interface: u32) ?context.InterfaceConformance {
+        for (self.conformances.items) |entry| {
+            if (entry.strukt == strukt and entry.interface == interface) return entry;
+        }
+        return null;
     }
 
     pub fn typeName(self: *Analyzer, of: Type) Error![]const u8 {

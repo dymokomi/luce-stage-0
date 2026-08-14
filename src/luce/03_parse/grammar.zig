@@ -512,6 +512,8 @@ pub const Parser = struct {
         defer constants.deinit(self.arena);
         var structs: std.ArrayList(ast.StructDecl) = .empty;
         defer structs.deinit(self.arena);
+        var interfaces: std.ArrayList(ast.InterfaceDecl) = .empty;
+        defer interfaces.deinit(self.arena);
         var enums: std.ArrayList(ast.EnumDecl) = .empty;
         defer enums.deinit(self.arena);
         var unions: std.ArrayList(ast.UnionDecl) = .empty;
@@ -539,6 +541,13 @@ pub const Parser = struct {
                 .keyword_struct => {
                     if (try self.structDecl()) |declaration| {
                         try structs.append(self.arena, declaration);
+                    } else {
+                        self.recover();
+                    }
+                },
+                .keyword_interface => {
+                    if (try self.interfaceDecl()) |declaration| {
+                        try interfaces.append(self.arena, declaration);
                     } else {
                         self.recover();
                     }
@@ -599,7 +608,7 @@ pub const Parser = struct {
                     self.recover();
                 },
                 .keyword_public, .keyword_private => {
-                    try self.markedDeclaration(&constants, &structs, &enums, &unions, &functions);
+                    try self.markedDeclaration(&constants, &structs, &interfaces, &enums, &unions, &functions);
                 },
                 else => {
                     // A file-scope name is never valid, so a word that
@@ -627,7 +636,7 @@ pub const Parser = struct {
                     try self.report(
                         "luce.parse.top",
                         self.peek().span,
-                        "expected import, const, struct, enum, union, or func at file scope, found {s}",
+                        "expected import, const, struct, interface, enum, union, or func at file scope, found {s}",
                         .{try self.found()},
                     );
                     self.recover();
@@ -638,6 +647,7 @@ pub const Parser = struct {
             .imports = try imports.toOwnedSlice(self.arena),
             .constants = try constants.toOwnedSlice(self.arena),
             .structs = try structs.toOwnedSlice(self.arena),
+            .interfaces = try interfaces.toOwnedSlice(self.arena),
             .enums = try enums.toOwnedSlice(self.arena),
             .unions = try unions.toOwnedSlice(self.arena),
             .functions = try functions.toOwnedSlice(self.arena),
@@ -653,6 +663,7 @@ pub const Parser = struct {
         self: *Parser,
         constants: *std.ArrayList(ast.ConstDecl),
         structs: *std.ArrayList(ast.StructDecl),
+        interfaces: *std.ArrayList(ast.InterfaceDecl),
         enums: *std.ArrayList(ast.EnumDecl),
         unions: *std.ArrayList(ast.UnionDecl),
         functions: *std.ArrayList(ast.FuncDecl),
@@ -725,6 +736,15 @@ pub const Parser = struct {
                     self.recover();
                 }
             },
+            .keyword_interface => {
+                if (try self.interfaceDecl()) |declaration| {
+                    var marked = declaration;
+                    marked.visibility = visibility;
+                    try interfaces.append(self.arena, marked);
+                } else {
+                    self.recover();
+                }
+            },
             .keyword_enum => {
                 if (try self.enumDecl()) |declaration| {
                     var marked = declaration;
@@ -747,7 +767,7 @@ pub const Parser = struct {
                 try self.report(
                     "luce.parse.top",
                     marker.span,
-                    "'{s}' marks a declaration: expected func, const, struct, enum, or union after it, found {s}",
+                    "'{s}' marks a declaration: expected func, const, struct, interface, enum, or union after it, found {s}",
                     .{ keywordWord(marker.kind).?, try self.found() },
                 );
                 self.recover();
@@ -1105,7 +1125,29 @@ pub const Parser = struct {
         const start = self.advance(); // struct
         const name = (try self.expect(.identifier, "a struct name")) orelse return null;
         try self.refuseWildcardName(name);
-        if (!try self.colonOrLayout("':' after the struct name")) return null;
+        var interfaces: std.ArrayList(ast.TypeName) = .empty;
+        defer interfaces.deinit(self.arena);
+        // A plain struct ends its header with `:`.  When a name follows
+        // that first colon, it is the explicit-conformance list and a
+        // second colon opens the body: `struct Button: Clickable:`.
+        if (self.accept(.colon) != null) {
+            if (self.peekKind() != .newline) {
+                while (true) {
+                    const contract = (try self.typeName()) orelse return null;
+                    try interfaces.append(self.arena, contract);
+                    if (self.accept(.comma) == null) break;
+                }
+                if ((try self.expect(.colon, "':' after the interface list")) == null) return null;
+            }
+        } else {
+            try self.expected("':' after the struct name");
+            // Keep reading when the layout makes the intended body
+            // unambiguous.  This mirrors function-header recovery: the
+            // missing colon is one diagnostic, while mistakes in the
+            // orphaned fields still belong to the reader and should be
+            // reported at their own locations.
+            if (self.peekKind() != .newline or self.peekAhead(1) != .indent) return null;
+        }
         if ((try self.expect(.newline, "end of line after ':'")) == null) return null;
         if ((try self.blockBody("struct")) == null) return null;
 
@@ -1149,6 +1191,156 @@ pub const Parser = struct {
             .name_span = name.span,
             .fields = try fields.toOwnedSlice(self.arena),
             .functions = try functions.toOwnedSlice(self.arena),
+            .interfaces = try interfaces.toOwnedSlice(self.arena),
+            .span = .{ .start = start.span.start, .end = name.span.end },
+        };
+    }
+
+    /// `interface Name:` followed by declaration-only method signatures.
+    /// Bodies are deliberately not accepted: an interface describes the
+    /// call surface, while the implementing struct owns the code.
+    fn interfaceDecl(self: *Parser) Error!?ast.InterfaceDecl {
+        const start = self.advance(); // interface
+        const name = (try self.expect(.identifier, "an interface name")) orelse return null;
+        try self.refuseWildcardName(name);
+        if (!try self.colonOrLayout("':' after the interface name")) return null;
+        if ((try self.expect(.newline, "end of line after ':'")) == null) return null;
+        if ((try self.blockBody("interface")) == null) return null;
+
+        var methods: std.ArrayList(ast.InterfaceMethod) = .empty;
+        defer methods.deinit(self.arena);
+        while (self.peekKind() != .dedent and self.peekKind() != .end_of_file) {
+            if (self.accept(.newline) != null) continue;
+            if (self.peekKind() == .indent) {
+                try self.unexpectedIndent();
+                continue;
+            }
+            if (self.peekKind() != .keyword_func) {
+                try self.report(
+                    "luce.parse.interface",
+                    self.peek().span,
+                    "an interface contains method signatures: write 'func name(...) -> type'",
+                    .{},
+                );
+                self.recover();
+                continue;
+            }
+            const method_start = self.advance();
+            const method_name = (try self.expect(.identifier, "an interface method name")) orelse {
+                self.recover();
+                continue;
+            };
+            try self.refuseWildcardName(method_name);
+            const opener = (try self.expect(.left_paren, "'(' opening the parameter list")) orelse {
+                self.recover();
+                continue;
+            };
+            var parameters: std.ArrayList(ast.Parameter) = .empty;
+            defer parameters.deinit(self.arena);
+            var previous_end = opener.span.end;
+            while (!expr.endsList(self.peekKind(), .right_paren)) {
+                if (self.peekKind() == .keyword_self or
+                    (self.peekKind() == .keyword_var and self.peekAhead(1) == .keyword_self))
+                {
+                    const receiver_start = self.peek();
+                    _ = self.accept(.keyword_var);
+                    const receiver = self.advance();
+                    try self.report(
+                        "luce.parse.self",
+                        .{ .start = receiver_start.span.start, .end = receiver.span.end },
+                        "self is implied in an interface method; remove the parameter",
+                        .{},
+                    );
+                    self.recover();
+                    break;
+                }
+                if (self.peekKind() == .keyword_var) {
+                    const marker = self.advance();
+                    try self.report(
+                        "luce.parse.self",
+                        marker.span,
+                        "parameters are values and never var; use a local var or return the updated value",
+                        .{},
+                    );
+                    self.recover();
+                    break;
+                }
+                const parameter_name = (try self.expect(.identifier, "a parameter name")) orelse {
+                    self.recover();
+                    break;
+                };
+                try self.refuseWildcardName(parameter_name);
+                if ((try self.expect(.colon, "':' after the parameter name")) == null) {
+                    self.recover();
+                    break;
+                }
+                const mode: ast.ParameterMode = if (self.accept(.keyword_give) != null) .give else .borrow;
+                const parameter_type = (try self.typeName()) orelse {
+                    self.recover();
+                    break;
+                };
+                var default_value: ?*ast.Expression = null;
+                var written_end = parameter_type.span.end;
+                if (self.accept(.assign) != null) {
+                    const written = (try self.expression()) orelse {
+                        self.recover();
+                        break;
+                    };
+                    default_value = written;
+                    written_end = written.span().end;
+                    try self.report(
+                        "luce.parse.interface",
+                        written.span(),
+                        "interface methods cannot declare defaults; put the default on the implementation or at the call site",
+                        .{},
+                    );
+                }
+                try parameters.append(self.arena, .{
+                    .name = self.text(parameter_name),
+                    .name_span = parameter_name.span,
+                    .mode = mode,
+                    .type_name = parameter_type,
+                    .default = default_value,
+                    .span = .{ .start = parameter_name.span.start, .end = written_end },
+                });
+                previous_end = written_end;
+                if (self.accept(.comma) == null) break;
+            }
+            if (try self.missingSeparator(previous_end)) return null;
+            if ((try self.expectClose(.right_paren, opener)) == null) {
+                self.recover();
+                continue;
+            }
+            var returns: std.ArrayList(ast.TypeName) = .empty;
+            defer returns.deinit(self.arena);
+            var fallible = false;
+            var method_end = method_name.span.end;
+            if (self.accept(.arrow) != null) {
+                if (self.peekKind() == .left_paren) {
+                    if (!try self.returnShape(&returns)) return null;
+                    method_end = returns.items[returns.items.len - 1].span.end;
+                } else if (self.peekKind() != .bang) {
+                    const only = (try self.typeName()) orelse return null;
+                    method_end = only.span.end;
+                    try returns.append(self.arena, only);
+                }
+                fallible = self.accept(.bang) != null;
+            }
+            try self.endOfStatement("end of line after the interface method");
+            try methods.append(self.arena, .{
+                .name = self.text(method_name),
+                .name_span = method_name.span,
+                .parameters = try parameters.toOwnedSlice(self.arena),
+                .returns = try returns.toOwnedSlice(self.arena),
+                .fallible = fallible,
+                .span = .{ .start = method_start.span.start, .end = method_end },
+            });
+        }
+        _ = self.accept(.dedent);
+        return .{
+            .name = self.text(name),
+            .name_span = name.span,
+            .methods = try methods.toOwnedSlice(self.arena),
             .span = .{ .start = start.span.start, .end = name.span.end },
         };
     }
@@ -1960,7 +2152,7 @@ pub const Parser = struct {
                 );
                 return null;
             },
-            .keyword_func, .keyword_struct, .keyword_enum, .keyword_union, .keyword_import => {
+            .keyword_func, .keyword_struct, .keyword_interface, .keyword_enum, .keyword_union, .keyword_import => {
                 const word = keywordWord(self.peekKind()).?;
                 try self.report(
                     "luce.parse.expected",
@@ -2838,6 +3030,7 @@ pub fn describe(kind: Kind) []const u8 {
         .keyword_func => "the keyword 'func'",
         .keyword_static => "the keyword 'static'",
         .keyword_struct => "the keyword 'struct'",
+        .keyword_interface => "the keyword 'interface'",
         .keyword_enum => "the keyword 'enum'",
         .keyword_union => "the keyword 'union'",
         .keyword_match => "the keyword 'match'",

@@ -274,6 +274,9 @@ pub const Expression = union(enum) {
     /// arguments do), defaults appended after the written operands in
     /// the order they materialize.
     struct_make: StructMake,
+    /// A compiler-generated interface value: one bound function value per
+    /// contract method, all targeting the same concrete receiver.
+    interface_make: InterfaceMake,
     /// A union member built whole (docs/UNION.md D8).
     variant_make: VariantMake,
     /// `[a, b, c]` at its landing container type.
@@ -570,6 +573,24 @@ pub const Expression = union(enum) {
         park: ?Park = null,
     };
 
+    pub const InterfaceMethod = struct {
+        function: u32,
+        signature: u32,
+        /// Internal interface dispatch may point at a fallible method;
+        /// ordinary function values keep this false because their type
+        /// intentionally carries no failure obligation.
+        fallible: bool = false,
+    };
+
+    pub const InterfaceMake = struct {
+        layout: u32,
+        receiver: NodeRef,
+        methods: []const InterfaceMethod,
+        result: Type,
+        span: Span,
+        park: ?Park = null,
+    };
+
     pub const VariantMake = struct {
         variant: u32,
         member: u32,
@@ -743,6 +764,9 @@ pub const ResolvedCallee = union(enum) {
         /// do so an argument that opens a block cannot strand it.
         callee: NodeRef,
         signature: u32,
+        /// Interface dispatch can carry a fallible method even though an
+        /// ordinary function value's type does not encode fallibility.
+        fallible: bool = false,
         /// The defensive borrow copy `OperandBatch.borrow_copy` records
         /// for an argument, recorded here for the callee, which is not
         /// one of the slot-filling operands: a callee read out of a
@@ -1128,7 +1152,7 @@ pub fn provenance(expression: *const Expression) Provenance {
         // The answer is a reload of the slot both arms stored into.
         .catch_expr => .view,
         // Built whole; each owns its run (docs/UNION.md D8).
-        .struct_make, .variant_make => .fresh,
+        .struct_make, .variant_make, .interface_make => .fresh,
         // These answer fresh *objects*, which the objects park tracks;
         // the storage question the tape asks of them answers no.
         .list_literal, .map_literal, .new_object => .plain,
@@ -1237,6 +1261,7 @@ pub fn splitsBlocks(expression: *const Expression, declared: Declarations) bool 
         // A fallible call's branch is the whole point of both.
         .try_call, .catch_expr => true,
         .struct_make => |built| splitsBatch(built.operands, declared),
+        .interface_make => |built| splitsBlocks(built.receiver, declared),
         .variant_make => |built| splitsBatch(built.operands, declared),
         .list_literal => |literal| splitsRun(literal.elements, declared),
         .map_literal => |literal| for (literal.entries) |entry| {

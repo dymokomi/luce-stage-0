@@ -185,7 +185,7 @@
         },
         {
           "name": "storage.type.luce",
-          "match": "\\b(?:func|struct|enum|union|const|let|var)\\b"
+          "match": "\\b(?:func|struct|interface|enum|union|const|let|var)\\b"
         },
         {
           "name": "storage.modifier.luce",

@@ -1048,10 +1048,25 @@ pub const Instruction = union(enum) {
     /// the same two-slot run either way — the function index, then the
     /// receiver or `none` — so a bound value and a plain one are one
     /// shape at a call, and only this field says which was written.
-    pub const BoundFunction = struct { function: u32, receiver: ?Register = null };
+    pub const BoundFunction = struct {
+        function: u32,
+        receiver: ?Register = null,
+        /// Compiler-generated interface witness entries may point at a
+        /// fallible implementation even though ordinary function values
+        /// have no fallibility in their source type.
+        fallible: bool = false,
+    };
     pub const Call = struct { function: u32, arguments: []Register };
     pub const InoutCall = struct { function: u32, receiver: LocalId, arguments: []Register };
-    pub const IndirectCall = struct { callee: Register, signature: u32, arguments: []Register };
+    pub const IndirectCall = struct {
+        callee: Register,
+        signature: u32,
+        arguments: []Register,
+        /// Whether the target is allowed to return through the error
+        /// channel. Interface dispatch carries this at the call site because
+        /// the source function type itself has no fallibility bit.
+        fallible: bool = false,
+    };
     pub const IntrinsicCall = struct { kind: Intrinsic, arguments: []Register };
     pub const HeapNew = struct { heap: u32, dims: []Register };
 

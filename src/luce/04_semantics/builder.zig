@@ -888,6 +888,49 @@ pub const FunctionBuilder = struct {
     pub fn fit(self: *FunctionBuilder, value: Typed, expected: Type) Error!?Typed {
         if (value.value_type.eql(expected)) return value;
         if (value.value_type.widensTo(expected)) return try self.widenNumeric(value, expected);
+        // A concrete struct may be passed to a nominal interface only
+        // after it explicitly promised that interface.  The conversion
+        // records one bound method per contract slot; lower reuses the
+        // ordinary function-value ABI for those slots.
+        if (value.value_type == .strukt and expected == .strukt) {
+            if (self.analyzer.interfaceForLayout(expected.strukt)) |interface_index| {
+                if (self.analyzer.conformance(value.value_type.strukt, interface_index)) |conformance| {
+                    const contract = self.analyzer.interface_decls.items[interface_index];
+                    const methods = try self.arena().alloc(nodes.Expression.InterfaceMethod, contract.methods.len);
+                    for (conformance.methods, contract.methods, methods) |function, method, *slot| {
+                        slot.* = .{
+                            .function = function,
+                            .signature = method.signature,
+                            // The interface call carries the contract's
+                            // failure obligation; the witness entry carries
+                            // the concrete target's actual effect.  A
+                            // non-fallible implementation may satisfy a
+                            // fallible requirement, just as Swift's
+                            // throwing protocol witness rules do.
+                            .fallible = self.analyzer.functions.items[function].fallible,
+                        };
+                    }
+                    const converted = Typed{
+                        .node = try recorder.recordNode(self, .{ .interface_make = .{
+                            .layout = expected.strukt,
+                            .receiver = value.node,
+                            .methods = methods,
+                            .result = expected,
+                            .span = value.node.span(),
+                        } }),
+                        .value_type = expected,
+                        .root = value.root,
+                    };
+                    // The conversion allocates an interface value even
+                    // when it appears only as a call argument.  Keep it in
+                    // the statement ledger until the call either adopts it
+                    // or the statement unwinds; without this park the hidden
+                    // function slots (and their owned receiver copies) leak.
+                    try ledger.parkFreshStorage(self, converted, value.node.span());
+                    return converted;
+                }
+            }
+        }
         const payload = expected.held() orelse return null;
         const inner = (try self.fit(value, payload)) orelse return null;
         // The `T <: T?` widening is a node of its own
@@ -1560,7 +1603,9 @@ pub const FunctionBuilder = struct {
                 // (docs/ARGS.md D5), so the slot is answered silently
                 // by the same rule the checker applies after the
                 // batch, through the one `argumentSlot`.
-                if (calls.declaredName(self, receiver) != null) {
+                if (calls.declaredName(self, receiver) != null and
+                    !(receiver == .strukt and self.analyzer.interfaceForLayout(receiver.strukt) != null))
+                {
                     const function_index = (try calls.structMethod(self, receiver, method.name)) orelse {
                         // No declaration of that name at all: what the
                         // receiver has is the answer, and it has to

@@ -17,7 +17,8 @@ and the [Tour](/tour/) is the short introduction.
 
 - Static types with inference, checked arithmetic and explicit numeric
   promotion.
-- Values, structs, enums, unions, functions and capture-free lambdas.
+- Values, structs, enums, unions, functions, interfaces and capture-free
+  lambdas.
 - Lists, maps, arrays and builders.
 - `T?` for absence, with narrowing and `else`.
 - `T!` for recoverable failure, with `try`, `catch` and `error(...)`.
@@ -25,6 +26,8 @@ and the [Tour](/tour/) is the short introduction.
   `free` and `new`.
 - Modules, visibility, file-scope constants and named/default arguments.
 - Methods with implied `self`, `static` functions and multiple returns.
+- Explicit nominal interfaces with read-only method dispatch; interface
+  values can be mixed in lists, maps, arrays and struct fields.
 - Workers with scope-owned `task` values and joins.
 
 These are not separate implementations on separate execution paths. The
@@ -49,8 +52,9 @@ commands and failure modes.
 ### Standard library and complete programs
 
 The compiler ships these standard modules: `std.math`, `std.files`,
-`std.strings`, `std.lists`, `std.paths`, `std.os`, `std.term`, `std.zip`
-and `std.json`. They are written in Luce and embedded in the toolchain.
+`std.strings`, `std.lists`, `std.paths`, `std.os`, `std.term`, `std.zip`,
+`std.json`, `std.gpu` and `std.ui`. They are written in Luce and embedded
+in the toolchain.
 
 The repository also contains complete programs, including a parser,
 archive tool, file utilities, games and a terminal editor. The
@@ -65,8 +69,8 @@ These are design decisions, not missing documentation:
 - garbage collection, reference counting, shared ownership and weak
   references;
 - implicit narrowing, shadowing, truthiness and a ternary operator;
-- tuples as a type, user-defined generics, interfaces, inheritance and
-  operator overloading;
+- tuples as a type, user-defined generics, interface inheritance and operator
+  overloading;
 - exceptions, `errdefer`, asynchronous functions and reflection;
 - capturing closures. Use a struct with a method when state must travel
   with behavior.

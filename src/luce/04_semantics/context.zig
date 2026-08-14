@@ -417,6 +417,39 @@ pub const StructDeclInfo = struct {
     field_visibility: []ast.Visibility = &.{},
 };
 
+/// The settled contract of one interface method.  The parameter names stay
+/// in the AST for diagnostics; these are the resolved types and ownership
+/// modes used by dispatch and conformance checks.
+pub const InterfaceMethodInfo = struct {
+    declaration: *const ast.InterfaceMethod,
+    parameter_types: []Type,
+    parameter_modes: []ast.ParameterMode,
+    results: []Type,
+    return_type: Type,
+    fallible: bool,
+    field: u32,
+    signature: u32,
+};
+
+/// A named interface and its opaque dispatch layout.  The layout index is a
+/// normal struct run in MIR; only stage 4 knows that its fields are private
+/// method slots rather than source-visible fields.
+pub const InterfaceDeclInfo = struct {
+    declaration: *const ast.InterfaceDecl,
+    module: usize,
+    layout: u32,
+    methods: []InterfaceMethodInfo = &.{},
+};
+
+/// One explicit `struct S: I` implementation.  Method function indexes are
+/// in interface declaration order and are baked into the interface value at
+/// each conversion site.
+pub const InterfaceConformance = struct {
+    interface: u32,
+    strukt: u32,
+    methods: []u32,
+};
+
 /// One struct field's default: the written expression and, once
 /// folded, its value.  `expression` is null for a required field, and
 /// the state machine is `ConstantInfo`'s.

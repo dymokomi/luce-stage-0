@@ -157,7 +157,12 @@ pub const magic = "LUCE";
 /// 44 — the backend-neutral `std.ui`/`std.gpu` resource operations join the
 /// intrinsic set.  They are appended after `path_kind`, so old modules must
 /// not reinterpret a later tag as a different host operation.
-pub const format_version: u32 = 44;
+///
+/// 45 — compiler-generated interface layouts are marked so their private
+/// function fields remain distinct from source struct fields, and bound
+/// witnesses plus indirect calls record fallibility. Ordinary function
+/// values remain non-fallible because their source type has no `!` spelling.
+pub const format_version: u32 = 45;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -193,6 +198,7 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
     try writer.int(u32, @intCast(program.structs.len));
     for (program.structs) |layout| {
         try writer.blob(layout.name);
+        try writer.int(u8, @intFromBool(layout.interface));
         try writer.int(u32, @intCast(layout.fields.len));
         for (layout.fields) |field| {
             try writer.blob(field.name);
@@ -392,6 +398,7 @@ const Writer = struct {
                 try self.int(u32, named.function);
                 try self.int(u8, @intFromBool(named.receiver != null));
                 if (named.receiver) |receiver| try self.int(u32, receiver);
+                try self.int(u8, @intFromBool(named.fallible));
             },
             .local_get => |local| try self.int(u32, local),
             .local_set => |set| {
@@ -449,6 +456,7 @@ const Writer = struct {
                 try self.int(u32, call.callee);
                 try self.int(u32, call.signature);
                 try self.registers(call.arguments);
+                try self.int(u8, @intFromBool(call.fallible));
             },
             .intrinsic => |intrinsic| {
                 try self.int(u8, @intFromEnum(intrinsic.kind));
@@ -514,6 +522,7 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
     const structs = try arena.alloc(types.StructLayout, struct_count);
     for (structs) |*layout| {
         layout.name = try arena.dupe(u8, try reader.blob());
+        layout.interface = (try reader.int(u8)) != 0;
         const field_count = try reader.count();
         const fields = try arena.alloc(types.StructField, field_count);
         for (fields) |*field| {
@@ -815,6 +824,7 @@ const Reader = struct {
                 break :blk .{ .const_function = .{
                     .function = named,
                     .receiver = if (bound) try self.int(u32) else null,
+                    .fallible = (try self.int(u8)) != 0,
                 } };
             },
             .local_get => .{ .local_get = try self.int(u32) },
@@ -879,6 +889,7 @@ const Reader = struct {
                 .callee = try self.int(u32),
                 .signature = try self.int(u32),
                 .arguments = try self.registers(arena),
+                .fallible = (try self.int(u8)) != 0,
             } },
             .intrinsic => .{ .intrinsic = .{
                 .kind = try self.enumTag(mir.Intrinsic),
@@ -1984,7 +1995,9 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // ownership handoff.
     // 43 -> 44: the backend-neutral window/GPU intrinsic names are appended
     // after `path_kind`.
-    try testing.expectEqual(@as(u32, 44), format_version);
+    // 44 -> 45: compiler-generated interface witness entries record whether
+    // their concrete target is fallible.
+    try testing.expectEqual(@as(u32, 45), format_version);
     try testing.expectEqual(@as(u64, 7247777384699053929), hasher.final());
 }
 

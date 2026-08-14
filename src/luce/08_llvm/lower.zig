@@ -994,10 +994,11 @@ const Module = struct {
                 .i64,
             ) },
             .enumeration => unreachable, // answered by storage() above
-            // A struct field is never a *bare* function value: the
-            // storable form is `(func(...) -> R)?`, which zeroes at the
-            // `.optional` arm above (docs/BINDING.md D7).
-            .function => unreachable, // not a field type
+            // Compiler-generated interface layouts keep bound function
+            // values in private dispatch fields.  A null function value is
+            // the representation's zero; calling it follows the same null
+            // indirect-call trap as any uninitialized function slot.
+            .function => .{ .function, try self.builder.intConst(.i64, 0) },
         };
         const length: u64 = switch (of) {
             .strukt => |nested| self.program.structs[nested].fields.len,
@@ -6603,9 +6604,10 @@ const Body = struct {
     /// module's function table — the same table both engines dispatch
     /// through, one holding pointers and one holding `mir.Function`s.
     /// Everything else is `emitCall` exactly: the same three hidden
-    /// arguments, the same depth check, the same out-parameter, the
-    /// same unwind edge.  A fallible function is never a value, so
-    /// there is no error edge here to get wrong.
+    /// arguments, the same depth check, the same out-parameter, and
+    /// the same unwind edge. Ordinary function values are non-fallible;
+    /// interface dispatch carries the contract's fallibility explicitly
+    /// at this call site, so a fallible witness can propagate its trap.
     /// A function value: the two-slot run holding the function it names
     /// and the receiver it carries, built exactly the way a struct
     /// value is (docs/BINDING.md D12).
@@ -6764,6 +6766,7 @@ const Body = struct {
             arguments.items,
             "outcome",
         );
+        if (called.fallible) self.produced[register].outcome = outcome;
         try self.propagate(try self.wip.icmp(
             .ne,
             outcome,

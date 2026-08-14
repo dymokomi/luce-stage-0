@@ -331,6 +331,7 @@ pub fn settleTypeShapes(self: *Analyzer) Error!void {
     try reportStructCycles(self, cyclic);
 
     for (0..self.structs.items.len) |index| {
+        if (self.interfaceForLayout(@intCast(index)) != null) continue;
         if (cyclic[index]) continue;
         const info = self.struct_decls.items[index];
         self.diagnostics.scope = self.modules[info.module].file;

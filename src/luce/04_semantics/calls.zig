@@ -1242,6 +1242,15 @@ fn lowerValueMethod(
         return null;
     }
 
+    // Interface values expose only their contract methods.  Their hidden
+    // function fields never enter ordinary field lookup; this path builds a
+    // field-get plus indirect call instead.
+    if (receiver.value_type == .strukt) {
+        if (self.analyzer.interfaceForLayout(receiver.value_type.strukt)) |interface_index| {
+            return lowerInterfaceCall(self, method, run, as_statement, fallible_allowed, interface_index);
+        }
+    }
+
     const found: MethodFound = blk: {
         if (receiver.value_type == .string) {
             // The primitives above, and nothing else: every other
@@ -1493,6 +1502,128 @@ pub fn declaredName(self: *const FunctionBuilder, of: Type) ?[]const u8 {
         .variant => |index| self.analyzer.variants.items[index].name,
         else => null,
     };
+}
+
+/// `element.method(args)` where `element` is an interface value.  The
+/// receiver is already bound in the function slot stored by `interface_make`;
+/// the call therefore passes only the explicit arguments to `call_indirect`.
+fn lowerInterfaceCall(
+    self: *FunctionBuilder,
+    method: ast.Method,
+    run: OperandRun,
+    as_statement: bool,
+    fallible_allowed: bool,
+    interface_index: u32,
+) Error!?Typed {
+    const contract = self.analyzer.interface_decls.items[interface_index];
+    var selected: ?context.InterfaceMethodInfo = null;
+    for (contract.methods) |candidate| {
+        if (std.mem.eql(u8, candidate.declaration.name, method.name)) {
+            selected = candidate;
+            break;
+        }
+    }
+    const info = selected orelse {
+        try self.fail("luce.sema.method", method.span, "interface {s} has no method {s}", .{
+            contract.declaration.name,
+            method.name,
+        });
+        return null;
+    };
+    if (info.fallible and !fallible_allowed) {
+        try self.fail(
+            "luce.sema.fallible",
+            method.span,
+            "{s} can fail: write 'try {s}.{s}(…)' to pass the error on, or '{s}.{s}(…) catch …' to handle it",
+            .{ method.name, try writtenReceiver(self, method), method.name, try writtenReceiver(self, method), method.name },
+        );
+        return null;
+    }
+
+    const surface = try self.arena().alloc(CallSlot, info.parameter_types.len);
+    for (info.declaration.parameters, surface) |parameter, *slot| {
+        slot.* = .{ .name = parameter.name };
+    }
+    const seen = try self.temporary().alloc(bool, surface.len);
+    defer self.temporary().free(seen);
+    @memset(seen, false);
+    const slots = (try resolveSlots(self, method.name, "luce.sema.method", surface, 0, method.arguments, seen, method.span)) orelse
+        return null;
+    if (!(try checkRequiredSlots(self, method.name, "luce.sema.method", surface, seen, method.span))) return null;
+
+    const argument_expressions = try self.arena().alloc(*ast.Expression, method.arguments.len);
+    for (method.arguments, argument_expressions) |argument, *expression| expression.* = argument.value;
+    const entries = try self.arena().alloc(RecordedOperand, run.values.len - 1);
+    for (method.arguments, slots, 0..) |argument, slot, index| {
+        const value = run.values[index + 1];
+        const fitted = (try self.fit(value, info.parameter_types[slot])) orelse {
+            try self.fail("luce.sema.type", argument.span, "argument {d} of {s} is {s}, got {s}{s}", .{
+                index + 1,
+                method.name,
+                try self.analyzer.typeName(info.parameter_types[slot]),
+                try self.analyzer.typeName(value.value_type),
+                try refusals.absenceAdvice(self, value.value_type, argument.value),
+            });
+            return null;
+        };
+        if (info.parameter_modes[slot] != .give and argument.value.* == .give) {
+            try self.fail(
+                "luce.sema.own",
+                argument.span,
+                "{s} only borrows this argument; give needs a give parameter in the signature [OWNERSHIP.md S11, S13]",
+                .{method.name},
+            );
+            return null;
+        }
+        if (info.parameter_modes[slot] == .give and
+            !(try self.yieldsOwnership(argument.value)))
+        {
+            try refusals.failNeedsOwnershipBatch(
+                self,
+                argument.span,
+                try std.fmt.allocPrint(self.arena(), "argument {d} of {s} takes ownership", .{ index + 1, method.name }),
+                argument.value,
+                value.value_type,
+                "S13, S14",
+                argument_expressions,
+                index,
+            );
+            return null;
+        }
+        entries[index] = .{
+            .node = fitted.node,
+            .slot = slot,
+            .copied = run.copied[index + 1],
+        };
+    }
+    if (info.return_type == .none and !as_statement) {
+        try self.fail("luce.sema.call", method.span, "{s} returns nothing", .{method.name});
+        return null;
+    }
+    const receiver = run.values[0];
+    const callee = try self.arena().create(nodes.Expression);
+    callee.* = .{ .field_get = .{
+        .target = receiver.node,
+        .layout = receiver.value_type.strukt,
+        .field = info.field,
+        .result = .{ .function = info.signature },
+        .span = method.span,
+    } };
+    const node = try recorder.recordCallNode(
+        self,
+        .{ .indirect = .{
+            .callee = callee,
+            .signature = info.signature,
+            .fallible = info.fallible,
+        } },
+        entries,
+        entries.len,
+        info.fallible,
+        info.return_type,
+        method.span,
+    );
+    if (info.fallible) return try self.openFallible(info.return_type, node, method.span);
+    return .{ .node = node, .value_type = info.return_type };
 }
 
 /// `x.f(a, b)` where `x` is a value of a declared type — a struct
@@ -1983,6 +2114,14 @@ pub fn methodParameters(self: *FunctionBuilder, receiver: Type, name: []const u8
             if (std.mem.eql(u8, name, primitive.name)) return primitive.takes;
         }
         return null;
+    }
+    if (receiver == .strukt) {
+        if (self.analyzer.interfaceForLayout(receiver.strukt)) |interface_index| {
+            for (self.analyzer.interface_decls.items[interface_index].methods) |method| {
+                if (std.mem.eql(u8, name, method.declaration.name)) return method.parameter_types;
+            }
+            return null;
+        }
     }
     const descriptor = self.analyzer.heapOf(receiver) orelse return null;
     return switch (descriptor) {

@@ -118,7 +118,12 @@ pub fn markedIn(self: *const Analyzer, module: usize) []const u8 {
 /// and every caller wants the same one thing to put in a sentence.
 pub fn privateMentioned(self: *const Analyzer, of: Type) ?[]const u8 {
     return switch (of) {
-        .strukt => |index| if (self.struct_decls.items[index].declaration.visibility == .private)
+        .strukt => |index| if (self.interfaceForLayout(index)) |interface_index|
+            if (self.interface_decls.items[interface_index].declaration.visibility == .private)
+                self.interface_decls.items[interface_index].declaration.name
+            else
+                null
+        else if (self.struct_decls.items[index].declaration.visibility == .private)
             self.struct_decls.items[index].declaration.name
         else
             null,
@@ -225,6 +230,10 @@ pub fn firstDeclarationOf(self: *Analyzer, qualified: []const u8) Error!?[]const
     }
     if (self.struct_names.get(qualified)) |index| {
         const info = self.struct_decls.items[index];
+        return try declaredAt(self, self.modules[info.module].file, info.declaration.name_span);
+    }
+    if (self.interface_names.get(qualified)) |index| {
+        const info = self.interface_decls.items[index];
         return try declaredAt(self, self.modules[info.module].file, info.declaration.name_span);
     }
     if (self.enum_names.get(qualified)) |index| {

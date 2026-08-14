@@ -8982,3 +8982,147 @@ test "luce.parse.spawn: a worker runs a declared call, not a call suffix" {
         \\
     , "luce.parse.spawn", "spawn runs a call on a worker");
 }
+
+test "luce.sema.interface: a struct must implement every interface method" {
+    try expectHostSaying(
+        \\interface UIElement:
+        \\    func render(value: long) -> long
+        \\
+        \\struct UIButton: UIElement:
+        \\    label: string
+        \\
+        \\func main():
+        \\    let button = UIButton(label = "ok")
+        \\    _ = button
+        \\
+    , "luce.sema.interface", "does not implement UIElement.render");
+}
+
+test "luce.sema.interface: an implementation must match the contract signature" {
+    try expectHostSaying(
+        \\interface UIElement:
+        \\    func render(value: long) -> long
+        \\
+        \\struct UIButton: UIElement:
+        \\    label: string
+        \\    func render(value: long) -> string:
+        \\        return value
+        \\
+        \\func main():
+        \\    let button = UIButton(label = "ok")
+        \\    _ = button
+        \\
+    , "luce.sema.interface", "does not match interface method");
+}
+
+test "luce.sema.interface: a writing method cannot satisfy a read-only interface" {
+    try expectHostSaying(
+        \\interface Counter:
+        \\    func update(value: long)
+        \\
+        \\struct Box: Counter:
+        \\    value: long
+        \\    func update(value: long):
+        \\        self.value = value
+        \\
+        \\func main():
+        \\    let box = Box(value = 0)
+        \\    _ = box
+        \\
+    , "luce.sema.interface", "writes self");
+}
+
+test "luce.sema.interface: a conformance list names interfaces only" {
+    try expectHostSaying(
+        \\struct Box: long:
+        \\    value: long
+        \\
+        \\func main():
+        \\    let box = Box(value = 0)
+        \\    _ = box
+        \\
+    , "luce.sema.interface", "names interfaces only");
+}
+
+test "luce.sema.interface: hidden dispatch fields cannot be read" {
+    try expectHostSaying(
+        \\interface UIElement:
+        \\    func render(value: long) -> long
+        \\
+        \\struct UIButton: UIElement:
+        \\    label: string
+        \\    func render(value: long) -> long:
+        \\        return value
+        \\
+        \\func read(element: UIElement) -> long:
+        \\    return element.render
+        \\
+        \\func main():
+        \\    let button = UIButton(label = "ok")
+        \\    print(string(read(button)))
+        \\
+    , "luce.sema.interface", "expose methods, not fields");
+}
+
+test "luce.sema.interface: a fallible witness cannot satisfy a non-fallible requirement" {
+    try expectHostSaying(
+        \\interface Reader:
+        \\    func read(value: long) -> long
+        \\
+        \\struct Buffer: Reader:
+        \\    marker: long
+        \\    func read(value: long) -> long!:
+        \\        return value
+        \\
+        \\func main():
+        \\    let buffer = Buffer(marker = 0)
+        \\    _ = buffer
+        \\
+    , "luce.sema.interface", "does not match interface method");
+}
+
+test "luce.sema.interface: duplicate method requirements are rejected once" {
+    try expectHostSaying(
+        \\interface Duplicate:
+        \\    func run(value: long) -> long
+        \\    func run(other: long) -> long
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.duplicate", "interface Duplicate declares method run twice");
+}
+
+test "luce.sema.interface: static methods cannot be witnesses" {
+    try expectHostSaying(
+        \\interface Renderable:
+        \\    func render(value: long) -> long
+        \\
+        \\struct Button: Renderable:
+        \\    marker: long
+        \\    static func render(value: long) -> long:
+        \\        return value
+        \\
+        \\func main():
+        \\    let button = Button(marker = 0)
+        \\    _ = button
+        \\
+    , "luce.sema.interface", "is static; an interface method needs an instance receiver");
+}
+
+test "luce.sema.interface: a conformance cannot be listed twice" {
+    try expectHostSaying(
+        \\interface Renderable:
+        \\    func render(value: long) -> long
+        \\
+        \\struct Button: Renderable, Renderable:
+        \\    marker: long
+        \\    func render(value: long) -> long:
+        \\        return value
+        \\
+        \\func main():
+        \\    let button = Button(marker = 0)
+        \\    _ = button
+        \\
+    , "luce.sema.duplicate", "lists interface Renderable twice");
+}

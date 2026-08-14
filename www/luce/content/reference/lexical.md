@@ -86,7 +86,7 @@ main.luc:2:9: _ is the array-shape wildcard, not a name (array(long, _)); a bind
 
 ```
 and      break    catch    const    continue copy     elif
-else     enum     false    for      func     give     if
+else     enum     false    for      func     give     if       interface
 import   in       let      match    new      none     not
 or       private  public   return   self     spawn    static
 struct   true     try      union    var      while

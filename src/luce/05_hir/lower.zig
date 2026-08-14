@@ -576,6 +576,24 @@ const Replay = struct {
             .try_call => |attempt| try self.replayTry(attempt),
             .catch_expr => |caught| try self.replayCatch(caught),
             .struct_make => |built| try self.replayStructMake(built),
+            .interface_make => |built| interface: {
+                const receiver = try self.replayValue(built.receiver);
+                const fields = try self.arena().alloc(Register, built.methods.len);
+                for (built.methods, fields) |method, *field| {
+                    // Each bound method owns an independent receiver slot.
+                    // The interface value therefore has one release path per
+                    // method without double-releasing the concrete value.
+                    const held = try self.code.ownStorage(receiver);
+                    field.* = try self.code.emit(.{ .const_function = .{
+                        .function = method.function,
+                        .receiver = held,
+                    } }, .{ .function = method.signature });
+                }
+                break :interface try self.code.emit(.{ .struct_make = .{
+                    .layout = built.layout,
+                    .fields = fields,
+                } }, built.result);
+            },
             .variant_make => |built| try self.replayVariantMake(built),
             .list_literal => |literal| try self.replayListLiteral(literal),
             .map_literal => |literal| try self.replayMapLiteral(literal),
@@ -1189,6 +1207,7 @@ const Replay = struct {
             .callee = entries[0].register,
             .signature = through.signature,
             .arguments = registers,
+            .fallible = called.fallible,
         } }, signature.result);
         return self.finishFallible(call, called, .fresh);
     }

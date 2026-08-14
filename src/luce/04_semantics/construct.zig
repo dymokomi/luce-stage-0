@@ -49,6 +49,15 @@ pub fn lowerConstruct(
     span: Span,
     layout_index: u32,
 ) Error!?Typed {
+    if (self.analyzer.interfaceForLayout(layout_index) != null) {
+        try self.fail(
+            "luce.sema.interface",
+            span,
+            "interfaces cannot be constructed; implement the interface on a struct and pass that struct",
+            .{},
+        );
+        return null;
+    }
     const layout = self.analyzer.structs.items[layout_index];
     // A marked struct constructed outside its module is the type
     // refusal; construction is never reached (VISIBILITY.md §8).

@@ -143,6 +143,7 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
 
         .keyword_func,
         .keyword_struct,
+        .keyword_interface,
         // `enum` and `union` declare types beside `struct`, and wear
         // its class.
         .keyword_enum,

@@ -260,7 +260,7 @@ private const keyword_words = {
     "and": true, "break": true, "catch": true, "const": true,
     "continue": true, "copy": true, "elif": true, "else": true,
     "enum": true, "false": true, "for": true, "func": true,
-    "give": true, "if": true, "import": true, "in": true,
+    "give": true, "if": true, "import": true, "in": true, "interface": true,
     "let": true, "match": true, "new": true, "none": true,
     "not": true, "or": true, "private": true, "public": true,
     "return": true, "self": true, "spawn": true, "static": true,

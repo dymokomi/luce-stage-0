@@ -682,6 +682,10 @@ pub const VariantType = struct {
 pub const StructLayout = struct {
     name: []const u8, // arena-owned by the program
     fields: []StructField,
+    /// Compiler-generated interface layouts are the one place a bare
+    /// function field is valid. Source structs keep the ordinary rule that
+    /// function fields must be optional.
+    interface: bool = false,
 
     pub fn findField(self: StructLayout, name: []const u8) ?u32 {
         for (self.fields, 0..) |field, index| {

@@ -114,14 +114,14 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
         .task => |work| try verifyType(program, work.result),
     };
     for (program.structs) |layout| {
-        for (layout.fields) |field| try verifyFieldType(program, field.field_type);
+        for (layout.fields) |field| try verifyFieldType(program, field.field_type, layout.interface);
     }
     for (program.variants) |declared| {
         // A union with no members has no zero and no tag to dispatch
         // on; stage 4 cannot write one, so this is decode defense.
         if (declared.members.len == 0) return error.BadStruct;
         for (declared.members) |member| {
-            for (member.fields) |field| try verifyFieldType(program, field.field_type);
+            for (member.fields) |field| try verifyFieldType(program, field.field_type, false);
         }
     }
     if (try typeTableCycle(allocator, program)) |cycle| return switch (cycle) {
@@ -221,16 +221,11 @@ fn verifyType(program: *const Program, of: Type) VerifyError!void {
     }
 }
 
-/// A bare function value has no zero, so it cannot be a stored field.  The
-/// storable form is `(func(...) -> R)?`: absence supplies the field's zero and
-/// narrowing supplies the function at a call site (docs/BINDING.md D7).
-///
-/// Heap rows already apply this rule while checking their element shapes.  A
-/// struct or union field is the other storage boundary, and keeping the check
-/// here makes every backend zero/field walk rely on the same invariant rather
-/// than on an `unreachable` that a decoded module could reach.
-fn verifyFieldType(program: *const Program, of: Type) VerifyError!void {
-    if (of == .function) return error.BadStruct;
+/// Source structs cannot declare bare function fields, but compiler-generated
+/// interface layouts use them as private dispatch slots. Keep the distinction
+/// in the module so a decoded ordinary struct cannot smuggle one through.
+fn verifyFieldType(program: *const Program, of: Type, allow_function: bool) VerifyError!void {
+    if (of == .function and !allow_function) return error.BadStruct;
     try verifyType(program, of);
 }
 
@@ -753,11 +748,11 @@ fn isMember(program: *const Program, held: i64, of: Type) bool {
 /// order, and the same answer.  A mismatched type, verb or arity is a
 /// module that would call one function through another's spelling.
 ///
-/// A fallible function is never a value (docs/FUNCTIONS.md, As built),
-/// so one arriving here is a module stage 4 could not have written.
-/// A function value names a function and wears a signature, and the two
-/// have to agree — with the receiver, when there is one, standing where
-/// the signature does not reach.
+/// Ordinary function values are non-fallible (docs/FUNCTIONS.md, As built),
+/// while compiler-generated interface witnesses may name a fallible target.
+/// In either case the bound metadata must agree with the target. A function
+/// value wears a signature, and the two have to agree — with the receiver,
+/// when there is one, standing where the signature does not reach.
 ///
 /// **A bind drops one parameter from the written shape**
 /// (docs/BINDING.md D1): the callee's parameter zero is the receiver the
@@ -772,7 +767,7 @@ fn expectSignature(
     named: Instruction.BoundFunction,
 ) VerifyError!void {
     const callee = program.functions[named.function];
-    if (callee.fallible) return error.TypeMismatch;
+    if (callee.fallible != named.fallible) return error.TypeMismatch;
     if (callee.parameter_count != 0 and callee.locals[0].inout) return error.BadFunction;
     if (callee.locals.len < callee.parameter_count) return error.BadLocal;
     const bound: u32 = if (named.receiver == null) 0 else 1;
@@ -1213,6 +1208,7 @@ fn raisesError(program: *const Program, function: *const Function, register: Reg
             program.functions[call.function].fallible,
         .call_inout => |call| call.function < program.functions.len and
             program.functions[call.function].fallible,
+        .call_indirect => |call| call.fallible,
         .intrinsic => |intrinsic| switch (intrinsic.kind) {
             // The one intrinsic whose fallibility is not a fact about
             // the intrinsic: a wait comes back errored exactly when

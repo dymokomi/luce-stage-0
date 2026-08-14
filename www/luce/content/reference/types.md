@@ -256,6 +256,82 @@ for a bound value, the method's qualified name.
 See [calls and lambdas](../expressions/#function-values-and-lambdas)
 for the expression forms, the bind and the capture rule.
 
+## Interface
+
+An interface is a nominal, method-only contract. A struct opts in by naming
+the interface after its name; a matching method set without that declaration
+is not enough.
+
+```text
+interface Drawable:
+    func draw(scale: long) -> long
+
+struct Button: Drawable:
+    label: string
+
+    func draw(scale: long) -> long:
+        return scale + 1
+```
+
+The contract is checked at the declaration. Method names, parameter count and
+types, `give` modes, return count and types, and receiver mutability must
+match. Interface methods are read-only, so an implementation that writes
+`self` is rejected. Extra methods on the struct are harmless. A non-fallible
+implementation may satisfy a fallible requirement; the reverse is rejected.
+
+An interface exposes methods, not the concrete struct's fields. Calling a
+method uses the implementation carried by the value:
+
+```luce run
+interface Drawable:
+    func draw(scale: long) -> long
+
+struct Button: Drawable:
+    label: string
+
+    func draw(scale: long) -> long:
+        return scale + 1
+
+struct Badge: Drawable:
+    label: string
+
+    func draw(scale: long) -> long:
+        return scale + 2
+
+func paint(item: Drawable) -> long:
+    return item.draw(40)
+
+func main():
+    var items = new list(Drawable)
+    items.append(Button(label = "button"))
+    items.append(Badge(label = "badge"))
+    var named = new map(string, Drawable)
+    named["button"] = Button(label = "button")
+    named["badge"] = Badge(label = "badge")
+    print(string(items[0].draw(40)))
+    print(string(items[1].draw(40)))
+    let found = named.get("badge") else Button(label = "fallback")
+    print(string(paint(found)))
+```
+
+```output
+41
+42
+42
+```
+
+`list(I)` and `map(K, I)` are heterogeneous: each element may have a
+different concrete type. The same interface value can be stored in an array
+or a struct field. Interface values own their dispatch storage; object graphs
+inside a carrying receiver remain borrowed from the concrete value that
+supplied them, just as they are for a bound read-only method. Keep that owner
+alive or make an explicit `copy` before retaining the interface elsewhere.
+
+Interfaces do not inherit from one another, expose fields, or support
+multi-value return shapes in this release. The exact declaration and
+conformance rules are summarized above; compiler diagnostics point to the
+offending method or conformance list.
+
 ## struct
 
 A named product of fields. Fields are annotated; construction names

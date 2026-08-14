@@ -1168,6 +1168,15 @@ fn lowerLateDeclaration(
         );
         return refusals.forgetName(self, name);
     }
+    if (declared == .strukt and self.analyzer.interfaceForLayout(declared.strukt) != null) {
+        try self.fail(
+            "luce.sema.interface",
+            written.span,
+            "an interface value has no default implementation: initialize {s} with a conforming struct",
+            .{name},
+        );
+        return refusals.forgetName(self, name);
+    }
     // The declaration establishes the binding and its scope; the
     // scope owns whatever a later assignment fills in (S36, S40).
     const local = (try self.declareLocal(name, declared, true, .owned, name_span)) orelse

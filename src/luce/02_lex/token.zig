@@ -29,6 +29,9 @@ pub const Kind = enum {
     /// function rather than a method with an implied `self`.
     keyword_static,
     keyword_struct,
+    /// `interface Name:` — a named set of method contracts that a
+    /// struct may explicitly implement.
+    keyword_interface,
     /// `enum Name:` — a set of named constants at one integer width
     /// (docs/ENUMS.md D1).  A declaration keyword beside `struct`,
     /// because an enum declares a type the same way one does.
@@ -181,6 +184,7 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "func", .kind = .keyword_func },
     .{ .word = "static", .kind = .keyword_static },
     .{ .word = "struct", .kind = .keyword_struct },
+    .{ .word = "interface", .kind = .keyword_interface },
     .{ .word = "enum", .kind = .keyword_enum },
     .{ .word = "union", .kind = .keyword_union },
     .{ .word = "match", .kind = .keyword_match },

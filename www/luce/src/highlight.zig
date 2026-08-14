@@ -33,11 +33,11 @@ const Buffer = @import("buffer.zig");
 
 /// Reserved words that read as control or declaration.
 pub const keywords = [_][]const u8{
-    "func", "struct", "enum",   "union",  "match",    "const",
-    "let",  "var",    "if",     "elif",   "else",     "while",
-    "for",  "in",     "return", "break",  "continue", "and",
-    "or",   "not",    "true",   "false",  "import",   "none",
-    "try",  "catch",  "self",   "static", "public",   "private",
+    "func",   "struct", "interface", "enum",     "union", "match", "const",
+    "let",    "var",    "if",        "elif",     "else",  "while", "for",
+    "in",     "return", "break",     "continue", "and",   "or",    "not",
+    "true",   "false",  "import",    "none",     "try",   "catch", "self",
+    "static", "public", "private",
 };
 
 /// The words that move ownership.  They get a class of their own
