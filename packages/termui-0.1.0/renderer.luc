@@ -1,0 +1,52 @@
+# The terminal-facing owner for a termui frame.
+#
+# `Screen` remains an in-memory, deterministic surface.  `Renderer` is the
+# thin owner that knows when to resize it, when to begin a frame, and when to
+# turn a painted frame into terminal output.  Applications still own their
+# event loop and state; this type only removes repeated terminal choreography.
+
+import std.term
+import termui
+import screen
+import events
+
+struct Renderer:
+    surface: screen.Screen
+    input: events.Events = events.Events()
+
+    # Use this in programs that are connected to a terminal.  Host setup is
+    # lazy in std.term, so construction does not emit output.
+    static func open() -> Renderer:
+        return Renderer(surface = screen.Screen.of(term.rows(), term.cols()))
+
+    # A host-free constructor keeps renderer tests deterministic and lets a
+    # caller drive a fixed-size frame without a real terminal.
+    static func of(rows: long, columns: long) -> Renderer:
+        return Renderer(surface = screen.Screen.of(rows, columns))
+
+    func begin_at(rows: long, columns: long) -> termui.Rect:
+        if rows != self.surface.rows or columns != self.surface.columns:
+            self.surface = screen.Screen.of(rows, columns)
+        self.surface.clear()
+        return self.surface.area()
+
+    # Start the next frame and answer the area available to views.
+    func begin() -> termui.Rect:
+        return self.begin_at(term.rows(), term.cols())
+
+    # The testable part of presentation.  `flush` is separate so an app can
+    # put the cursor after its last paint before committing terminal output.
+    func present() -> screen.Painted:
+        return self.surface.present()
+
+    func cursor(row: long, column: long):
+        term.move(row, column)
+
+    func flush():
+        term.flush()
+
+    func next() -> events.Event:
+        var input = self.input
+        let event = input.next()
+        self.input = input
+        return event

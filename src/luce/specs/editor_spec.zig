@@ -47,7 +47,9 @@ const termui_files = package("termui", @embedFile("termui/termui.luc")) ++
     package("screen", @embedFile("termui/screen.luc")) ++
     package("events", @embedFile("termui/events.luc")) ++
     package("border", @embedFile("termui/border.luc")) ++
-    package("rows", @embedFile("termui/rows.luc"));
+    package("rows", @embedFile("termui/rows.luc")) ++
+    package("view", @embedFile("termui/view.luc")) ++
+    package("renderer", @embedFile("termui/renderer.luc"));
 
 /// One package module under both of its spellings.
 fn package(comptime name: []const u8, comptime source: []const u8) [2]agree.File {

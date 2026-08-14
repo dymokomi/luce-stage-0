@@ -25,8 +25,10 @@ import std.strings
 import std.term
 import termui
 import termui.events
+import termui.renderer as renderer
 import termui.rows
 import termui.screen
+import termui.view as views
 
 # **termui ships no theme, deliberately** (docs/TERMUI.md D3): a
 # library that owns the palette owns the app's identity, and the
@@ -865,7 +867,15 @@ private struct State:
                 " ",
                 theme.selected,
             )
-        pane.draw(view, interior, theme.plain, theme.selected)
+        let listing: views.View = rows.RowsView(
+            render = pane.render,
+            count = pane.count,
+            top = pane.top,
+            selected = pane.selected,
+            normal = theme.plain,
+            highlight = theme.selected,
+        )
+        listing.draw(view, interior)
         self.files = pane
 
     func paint_output(view: screen.Screen, layout: model.Layout):
@@ -908,7 +918,8 @@ private struct State:
         # answers "" for a width already overrun, and the screen clips
         # what will not fit.
         let bar = left + strings.repeat(" ", area.columns - left.width() - hint.width()) + hint
-        view.write(area, 0, 0, bar, theme.status)
+        let status: views.View = views.Text(content = bar, style = theme.status)
+        status.draw(view, area)
 
     # Where the terminal's own cursor belongs after the frame.
     func cursor_at(layout: model.Layout) -> (long, long):
@@ -1116,20 +1127,19 @@ func main(args: list(string)):
     state.refresh_files()
     # The app owns the loop (D1): termui supplies a screen, a layout
     # vocabulary and an event stream, and never takes control.
-    var view = screen.Screen.of(term.rows(), term.cols())
-    var input = events.Events()
+    var ui = renderer.Renderer.open()
     while not state.quit:
-        # A resize is a new grid and a full repaint; an unchanged size
-        # answers immediately, so this is the whole of resize handling.
-        view.resize(term.rows(), term.cols())
-        let layout = model.Layout.of(view.area(), state.file_pane, state.output_pane)
+        # Renderer owns the repeated resize/clear step; the application
+        # still owns the layout and every editing decision.
+        let area = ui.begin()
+        let layout = model.Layout.of(area, state.file_pane, state.output_pane)
         state.adjust(layout.text.rows)
-        state.paint(view, layout)
-        view.present()
+        state.paint(ui.surface, layout)
+        ui.present()
         let cursor_row, cursor_column = state.cursor_at(layout)
-        term.move(cursor_row, cursor_column)
-        term.flush()
-        match input.next():
+        ui.cursor(cursor_row, cursor_column)
+        ui.flush()
+        match ui.next():
             closed:
                 # The keyboard ran dry — a pipe that ended, a terminal
                 # that closed — and there is no one left to ask what to

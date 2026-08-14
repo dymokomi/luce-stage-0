@@ -8,6 +8,7 @@
 
 import termui
 import screen
+import view as views
 
 # What a key did to the list.  A widget's events are a small closed
 # set the widget owns, which is exactly what a union is for; the app
@@ -57,4 +58,44 @@ struct Rows:
             var style = normal
             if index == self.selected:
                 style = highlight
+            into.write(area, row, 0, self.label(index), style)
+
+# A read-only view of Rows for interface composition.  Interaction remains
+# with `Rows` above: the app moves that value in response to events, then
+# snapshots its position into this adapter for painting.  The adapter never
+# mutates its receiver, so it satisfies View's read-only contract.
+struct RowsView: views.View:
+    render: (func(long) -> string)?
+    count: long = 0
+    top: long = 0
+    selected: long = 0
+    normal: termui.Style = termui.Style()
+    highlight: termui.Style = termui.Style(foreground = 7, background = 4)
+
+    func measure(area: termui.Rect) -> (long, long):
+        return min(max(self.count, 0), max(area.rows, 0)), max(area.columns, 0)
+
+    func label(index: long) -> string:
+        let provider = self.render
+        if provider == none:
+            return ""
+        return provider(index)
+
+    func draw(into: screen.Screen, area: termui.Rect):
+        if self.count <= 0 or area.rows <= 0:
+            return
+        var selected = clamp(self.selected, 0, self.count - 1)
+        var top = max(self.top, 0)
+        if selected < top:
+            top = selected
+        if selected >= top + area.rows:
+            top = selected - area.rows + 1
+        top = clamp(top, 0, max(self.count - 1, 0))
+        for row in range(0, area.rows):
+            let index = top + row
+            if index >= self.count:
+                return
+            var style = self.normal
+            if index == selected:
+                style = self.highlight
             into.write(area, row, 0, self.label(index), style)

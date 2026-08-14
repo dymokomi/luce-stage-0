@@ -24,11 +24,15 @@ struct Painted:
 struct Screen:
     back: array(Cell, _, _)
     front: array(Cell, _, _)
-    rows: long = 0
-    columns: long = 0
     # The terminal's contents after a resize are not knowable, so the
     # first frame after one is written whole.
-    stale: bool = true
+    # Stored in a one-element list so presenting a frame mutates the
+    # surface's owned front grid without making the whole Screen a
+    # writing receiver.  That lets Renderer own a Screen field and call
+    # present directly; replacing the grids on resize remains a writer.
+    stale: list(bool)
+    rows: long = 0
+    columns: long = 0
 
     static func of(rows: long, columns: long) -> Screen:
         let high = max(rows, 1)
@@ -38,6 +42,7 @@ struct Screen:
             front = new array(Cell, high, wide),
             rows = high,
             columns = wide,
+            stale = [true],
         )
 
     func area() -> termui.Rect:
@@ -52,7 +57,7 @@ struct Screen:
         self.front = new array(Cell, high, wide)
         self.rows = high
         self.columns = wide
-        self.stale = true
+        self.stale = [true]
 
     # Blank the frame being built.  `front` is untouched: it is what
     # the terminal shows, and only `present` may claim to know that.
@@ -91,7 +96,7 @@ struct Screen:
         for row in range(0, self.rows):
             var column: long = 0
             while column < self.columns:
-                if self.back[row, column] == self.front[row, column] and not self.stale:
+                if self.back[row, column] == self.front[row, column] and not self.stale[0]:
                     column += 1
                     continue
                 # A run: changed cells, sharing a style, side by side.
@@ -102,7 +107,7 @@ struct Screen:
                     let cell = self.back[row, stop]
                     if cell.style != style:
                         break
-                    if cell == self.front[row, stop] and not self.stale:
+                    if cell == self.front[row, stop] and not self.stale[0]:
                         break
                     text.append(cell.text)
                     self.front[row, stop] = cell
@@ -114,5 +119,5 @@ struct Screen:
                 painted.runs += 1
                 painted.cells += stop - column
                 column = stop
-        self.stale = false
+        self.stale[0] = false
         return painted

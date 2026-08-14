@@ -7,7 +7,7 @@ const test_suites = @import("tools/test_suites.zig");
 /// files: the editor's compiles (it imports them), the specs (they
 /// compile the editor), and the package's own test run.
 const termui_version = "0.1.0";
-const termui_modules = [_][]const u8{ "termui", "screen", "events", "border", "rows" };
+const termui_modules = [_][]const u8{ "termui", "screen", "events", "border", "rows", "view", "renderer" };
 
 // LuciaOS v2 builds two executables from one language module:
 //
@@ -1261,7 +1261,7 @@ pub fn build(b: *std.Build) void {
         .{
             .directory = "termui-0.1.0",
             .modules = &termui_modules,
-            .tests = &.{ "layout", "screen", "events", "border", "rows" },
+            .tests = &.{ "layout", "screen", "events", "border", "rows", "view", "renderer" },
         },
     };
     for (packages) |package| {

@@ -3,6 +3,7 @@
 import rows
 import screen
 import termui
+import view as views
 
 struct Names:
     names: list(string)
@@ -89,3 +90,25 @@ func test_drawing_paints_the_visible_window():
     # Selection 7 with three visible rows puts 5 at the top.
     assert(s.front[0, 4].text == "5")
     assert(s.front[2, 4].text == "7")
+
+func test_rows_view_paints_through_the_render_interface_without_mutating_state():
+    var held = names_of(4)
+    var pane = rows.Rows(render = held.at, count = 4, selected = 2, top = 1)
+    let item: views.View = rows.RowsView(
+        render = pane.render,
+        count = pane.count,
+        selected = pane.selected,
+        top = pane.top,
+        normal = termui.Style(),
+        highlight = termui.Style(foreground = 3),
+    )
+    var s = screen.Screen.of(2, 8)
+    s.clear()
+    let needed_rows, needed_columns = item.measure(s.area())
+    assert(needed_rows == 2 and needed_columns == 8)
+    item.draw(s, s.area())
+    s.present()
+    assert(s.front[0, 4].text == "1")
+    assert(s.front[1, 4].text == "2")
+    assert(s.front[1, 4].style.foreground == 3)
+    assert(pane.top == 1 and pane.selected == 2)
