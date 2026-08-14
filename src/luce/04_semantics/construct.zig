@@ -861,7 +861,7 @@ pub fn lowerIntrinsic(
     {
         return .failed;
     }
-    var argument_expressions: [3]*ast.Expression = undefined;
+    const argument_expressions = try self.arena().alloc(*ast.Expression, call.arguments.len);
     for (call.arguments, 0..) |argument, index| {
         // Builtins borrow (S11); a give with no owner to receive
         // it would silently become an early free (free's operand
@@ -1242,6 +1242,55 @@ pub fn lowerIntrinsic(
             if (arguments[0].value_type != .string)
                 return failIntrinsic(self, call, "path_kind takes a string path");
             result = .long;
+        },
+        .gpu_backend => {
+            result = .long;
+        },
+        .ui_window_open => {
+            if (arguments[0].value_type != .string or
+                !try self.widensInto(&arguments[1], .long) or
+                !try self.widensInto(&arguments[2], .long))
+                return failIntrinsic(self, call, "ui_window_open takes (title string, width long, height long)");
+            result = try resolve.internHeapType(self.analyzer, .file);
+        },
+        .ui_window_surface => {
+            const file_type = try resolve.internHeapType(self.analyzer, .file);
+            if (!arguments[0].value_type.eql(file_type))
+                return failIntrinsic(self, call, "ui_window_surface takes a ui window handle");
+            result = file_type;
+        },
+        .gpu_surface_size => {
+            const file_type = try resolve.internHeapType(self.analyzer, .file);
+            if (!arguments[0].value_type.eql(file_type) or
+                !try self.widensInto(&arguments[1], .long))
+                return failIntrinsic(self, call, "gpu_surface_size takes (surface file, axis long)");
+            result = .long;
+        },
+        .gpu_surface_clear => {
+            const file_type = try resolve.internHeapType(self.analyzer, .file);
+            if (!arguments[0].value_type.eql(file_type) or
+                !try self.widensInto(&arguments[1], .long) or
+                !try self.widensInto(&arguments[2], .long) or
+                !try self.widensInto(&arguments[3], .long) or
+                !try self.widensInto(&arguments[4], .long))
+                return failIntrinsic(self, call, "gpu_surface_clear takes (surface file, red long, green long, blue long, alpha long)");
+            result = .none;
+        },
+        .gpu_surface_fill_rect => {
+            const file_type = try resolve.internHeapType(self.analyzer, .file);
+            if (!arguments[0].value_type.eql(file_type))
+                return failIntrinsic(self, call, "gpu_surface_fill_rect takes a surface first");
+            inline for (1..9) |index| {
+                if (!try self.widensInto(&arguments[index], .long))
+                    return failIntrinsic(self, call, "gpu_surface_fill_rect takes long coordinates, dimensions, and colors");
+            }
+            result = .none;
+        },
+        .gpu_surface_present => {
+            const file_type = try resolve.internHeapType(self.analyzer, .file);
+            if (!arguments[0].value_type.eql(file_type))
+                return failIntrinsic(self, call, "gpu_surface_present takes a surface");
+            result = .none;
         },
         .term_rows, .term_cols => {
             result = .long;

@@ -1947,23 +1947,25 @@ test "the spec thread channel closes publication and joins outside its lock" {
         entered: std.atomic.Value(bool) = .init(false),
         go: std.atomic.Value(bool) = .init(false),
         nested_answer: std.atomic.Value(i32) = .init(luce.runtime.workers.exhausted),
-        probe_entered: std.atomic.Value(bool) = .init(false),
+        registry_probe_completed: std.atomic.Value(bool) = .init(false),
 
         fn pause() void {
             std.Thread.yield() catch std.atomic.spinLoopHint();
         }
 
-        fn probe(argument: ?*anyopaque) callconv(.c) void {
-            const self: *@This() = @ptrCast(@alignCast(argument.?));
-            if (self.channel.join.?(self.channel.context, 0) == luce.runtime.workers.no) {
-                self.probe_entered.store(true, .release);
-            }
-        }
+        fn probe(_: ?*anyopaque) callconv(.c) void {}
 
         fn parent(argument: ?*anyopaque) callconv(.c) void {
             const self: *@This() = @ptrCast(@alignCast(argument.?));
             self.entered.store(true, .release);
             while (!self.go.load(.acquire)) pause();
+
+            // `close` has detached this parent and is joining it.  A
+            // registry call from the parent must still get through:
+            // holding the mutex across that join would deadlock here.
+            if (self.channel.join.?(self.channel.context, 0) == luce.runtime.workers.no) {
+                self.registry_probe_completed.store(true, .release);
+            }
 
             var nested: i64 = 0;
             const answer = self.channel.spawn.?(
@@ -2010,7 +2012,7 @@ test "the spec thread channel closes publication and joins outside its lock" {
     teardown.join();
 
     try testing.expectEqual(luce.runtime.workers.no, closing.nested_answer.load(.acquire));
-    try testing.expect(closing.probe_entered.load(.acquire));
+    try testing.expect(closing.registry_probe_completed.load(.acquire));
     for (owner.threads) |thread| try testing.expect(thread == null);
     // Teardown clears both the row and its identity.
     try testing.expectEqual(

@@ -321,6 +321,16 @@ pub const Intrinsic = enum {
     /// Fallible on the same grounds as every other file service: the
     /// world decides, and no non-racy check stands in for the result.
     path_kind,
+    /// The backend-neutral native window/GPU channel.  The runtime owns
+    /// opaque handles and scope-close; these names are the only language
+    /// instructions that cross that seam.
+    gpu_backend,
+    ui_window_open,
+    ui_window_surface,
+    gpu_surface_size,
+    gpu_surface_clear,
+    gpu_surface_fill_rect,
+    gpu_surface_present,
     /// The byte channel: a file reached through an open handle
     /// (docs/BYTES.md R4, R5).  `file_open` answers a `file` the
     /// caller's scope owns and whose end closes it — there is no
@@ -465,6 +475,16 @@ pub const Intrinsic = enum {
             .handle_read,
             .handle_write,
             .handle_flush,
+            // The graphics callbacks are reached through the runtime
+            // channel, which takes its own effect lock around each host
+            // operation just like files.
+            .gpu_backend,
+            .ui_window_open,
+            .ui_window_surface,
+            .gpu_surface_size,
+            .gpu_surface_clear,
+            .gpu_surface_fill_rect,
+            .gpu_surface_present,
             // A wait joins a thread; it must **not** hold the lock
             // while it does, or a worker that prints could never
             // finish (docs/THREADS.md D9).
@@ -560,6 +580,12 @@ pub const Intrinsic = enum {
             .handle_read,
             .handle_write,
             .handle_flush,
+            .ui_window_open,
+            .ui_window_surface,
+            .gpu_surface_size,
+            .gpu_surface_clear,
+            .gpu_surface_fill_rect,
+            .gpu_surface_present,
             // Conditionally: the worker's own fallibility crosses the
             // join, and the task's heap type is what records it
             // (docs/THREADS.md D4).  Yes here means "may", which is
@@ -644,6 +670,7 @@ pub const Intrinsic = enum {
             .os_total_memory,
             .os_available_memory,
             .os_cpu_count,
+            .gpu_backend,
             .term_event_data,
             .own_storage,
             .drop_storage,
@@ -746,6 +773,13 @@ pub const Intrinsic = enum {
             .dir_list,
             .dir_create,
             .path_kind,
+            .gpu_backend,
+            .ui_window_open,
+            .ui_window_surface,
+            .gpu_surface_size,
+            .gpu_surface_clear,
+            .gpu_surface_fill_rect,
+            .gpu_surface_present,
             .term_rows,
             .term_cols,
             .term_clear,
@@ -850,6 +884,13 @@ pub const Intrinsic = enum {
             .dir_list,
             .dir_create,
             .path_kind,
+            .gpu_backend,
+            .ui_window_open,
+            .ui_window_surface,
+            .gpu_surface_size,
+            .gpu_surface_clear,
+            .gpu_surface_fill_rect,
+            .gpu_surface_present,
             .term_rows,
             .term_cols,
             .term_clear,

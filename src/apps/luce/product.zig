@@ -121,6 +121,7 @@ test "a command line with nothing to do prints usage and fails" {
         &.{"build"},
         &.{"check"},
         &.{"ir"},
+        &.{"package"},
     };
     for (empty_handed) |arguments| {
         var ran = try runLuce(gpa, &tree, arguments, null);
@@ -129,8 +130,12 @@ test "a command line with nothing to do prints usage and fails" {
         try testing.expectEqualStrings("", ran.out);
         try testing.expect(ran.saysErr("usage:"));
         // Usage that does not name a command is usage that hides one.
-        for ([_][]const u8{ "luce build", "luce check", "luce ir" }) |form| {
-            try testing.expect(ran.saysErr(form));
+        if (arguments.len == 1 and std.mem.eql(u8, arguments[0], "package")) {
+            try testing.expect(ran.saysErr("luce package new"));
+        } else {
+            for ([_][]const u8{ "luce build", "luce check", "luce ir", "luce package" }) |form| {
+                try testing.expect(ran.saysErr(form));
+            }
         }
     }
 }
@@ -230,6 +235,94 @@ test "an option in the file's slot is answered with the rule, not the wrong word
         try testing.expect(!tree.exists("sums.lc"));
         try testing.expect(!tree.exists("sums.o"));
     }
+}
+
+test "package commands create a direct source package and version it" {
+    const gpa = testing.allocator;
+    var tree = try installTree(gpa);
+    defer tree.deinit(gpa);
+
+    try tree.write("luce.yaml",
+        \\name: atlas
+        \\version: 0.1.0
+        \\
+    );
+    try tree.write("main.luc",
+        \\import widget
+        \\
+    );
+
+    var created = try runLuceHere(gpa, &tree, &.{ "package", "new", "widget" });
+    defer created.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), created.status);
+    try testing.expectEqualStrings("", created.err);
+    try testing.expect(created.saysOut("created package widget 0.1.0 in widget/"));
+    try testing.expect(tree.exists("widget/luce.yaml"));
+    try testing.expect(tree.exists("widget/widget.luc"));
+    try testing.expect(!tree.exists("packages/widget/widget.luc"));
+    try tree.write("widget/widget.luc",
+        \\func answer() -> long:
+        \\    return 42
+        \\
+    );
+    try tree.write("main.luc",
+        \\import widget
+        \\
+        \\func main():
+        \\    print(string(widget.answer()))
+        \\
+    );
+    var checked = try runLuceHere(gpa, &tree, &.{ "check", "main.luc" });
+    defer checked.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), checked.status);
+    try testing.expect(checked.saysOut("main.luc: ok"));
+
+    const root_after_new = try tree.read(gpa, "luce.yaml");
+    defer gpa.free(root_after_new);
+    try testing.expect(std.mem.indexOf(u8, root_after_new, "widget: 0.1.0 path:widget") != null);
+    const package_after_new = try tree.read(gpa, "widget/luce.yaml");
+    defer gpa.free(package_after_new);
+    try testing.expectEqualStrings("name: widget\nversion: 0.1.0\n", package_after_new);
+
+    var versioned = try runLuceHere(gpa, &tree, &.{ "package", "version", "widget", "0.2.0" });
+    defer versioned.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), versioned.status);
+    try testing.expectEqualStrings("", versioned.err);
+    try testing.expect(versioned.saysOut("versioned package widget: 0.1.0 -> 0.2.0"));
+
+    const root_after_version = try tree.read(gpa, "luce.yaml");
+    defer gpa.free(root_after_version);
+    try testing.expect(std.mem.indexOf(u8, root_after_version, "widget: 0.2.0 path:widget") != null);
+    const package_after_version = try tree.read(gpa, "widget/luce.yaml");
+    defer gpa.free(package_after_version);
+    try testing.expectEqualStrings("name: widget\nversion: 0.2.0\n", package_after_version);
+
+    var published = try runLuceHere(gpa, &tree, &.{ "package", "publish", "widget" });
+    defer published.deinit(gpa);
+    try testing.expectEqual(@as(u8, 1), published.status);
+    try testing.expectEqualStrings("", published.out);
+    try testing.expect(published.saysErr("publishing is not available yet"));
+    try testing.expect(published.saysErr("no package registry is configured"));
+}
+
+test "package new bootstraps a rootless source tree" {
+    const gpa = testing.allocator;
+    var tree = try installTree(gpa);
+    defer tree.deinit(gpa);
+    try tree.write("main.luc", "# the project entry\n");
+
+    var created = try runLuceHere(gpa, &tree, &.{ "package", "new", "greet" });
+    defer created.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), created.status);
+    try testing.expectEqualStrings("", created.err);
+    try testing.expect(tree.exists("luce.yaml"));
+    try testing.expect(tree.exists("greet/luce.yaml"));
+    try testing.expect(tree.exists("greet/greet.luc"));
+
+    const root_manifest = try tree.read(gpa, "luce.yaml");
+    defer gpa.free(root_manifest);
+    try testing.expect(std.mem.indexOf(u8, root_manifest, "version: 0.1.0") != null);
+    try testing.expect(std.mem.indexOf(u8, root_manifest, "greet: 0.1.0 path:greet") != null);
 }
 
 // ---------------------------------------------------------------------------
@@ -430,7 +523,10 @@ test "each --emit shape writes what it says, and the object links into a program
     const linked = try tree.at(gpa, "byhand");
     defer gpa.free(linked);
     const by_hand: []const []const u8 = if (@import("builtin").os.tag.isDarwin())
-        &.{ "cc", "-o", linked, object, start, runtime }
+        &.{
+            "cc",         "-o",     linked,       object,  start,        runtime,
+            "-framework", "AppKit", "-framework", "Metal", "-framework", "QuartzCore",
+        }
     else
         &.{ "cc", "-o", linked, object, start, runtime, "-lm" };
     var link = try tree.spawn(gpa, by_hand, .{});

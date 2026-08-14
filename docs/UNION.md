@@ -759,7 +759,7 @@ live:
   something the shape charges.
 
 `std.json`'s own header, `docs/STD.md`'s section and
-`/std/json/` carry the rest.
+`/library/json/` carry the rest.
 
 ## D16's `==`, as it had to be corrected (2026-08-12)
 

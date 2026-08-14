@@ -28,8 +28,10 @@ because each one silently costs you something if you miss it:
    the compiled path and the differential oracle and the two are
    compared.  Anything that inspects a structure lives beside the code
    it proves.  A new language package must be added to
-   `src/luce/luce.zig`'s re-exports *and* its test block, and a new
-   spec file to `src/luce/specs.zig`'s, or the tests do not run.
+   `src/luce/luce.zig`'s re-exports *and* its test roster, and a new
+   spec file to `src/luce/specs.zig`'s test-only import roster, or the
+   tests do not run. A spec file also needs exactly one owner in
+   `tools/test_suites.zig`.
 2. **`zig fmt src/ build.zig www/luce/src/ tools/`** before committing.
    The documentation site's generator and repository tools are Zig too.
 3. **Semantics live in `src/luce/runtime/` and nowhere else.**  The

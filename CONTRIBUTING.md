@@ -11,6 +11,10 @@ and `cc` is a prerequisite of building at all, because compiling a
 bundled program is a link.  `loom` links no LLVM, so a machine that
 only *runs* Luce programs needs none.
 
+The complete test gate also needs Node.js for the dependency-free VS Code
+extension tests (`node --test`); Node is not a build or runtime dependency of
+Luce itself.
+
 ```sh
 ./build.sh   # installs build/luce, build/loom, build/editor,
              # build/lib/*, and build/examples/<name>/<name>.lc
@@ -41,12 +45,15 @@ answer, not a workaround.
 zig build test
 ```
 
-The build summary prints the count; no document repeats it, because
-every document that ever did went stale.  It runs the executable
-specification, the language, compiler and terminal suites, and the
-documentation site's generator — and it compiles and links every
-bundled program and every benchmark, which is why `cc` and an
-installed `libluce_rt.a` are prerequisites of testing too.
+The gate prints its counts; no document repeats them, because every document
+that ever did went stale.  The long internal and differential
+binaries print bounded progress plus a 15-second heartbeat naming the active
+test, so a healthy run never disappears for minutes.  The gate is grouped by
+owner—language internals, executable specification, apps, packages, editor,
+examples, benchmarks, and tools—and compiles and links every bundled program
+and benchmark.  That is why `cc` and an installed `libluce_rt.a` are
+prerequisites of testing too.  The lane map and focused commands are in
+[`docs/TESTING.md`](docs/TESTING.md#engineering-lanes-for-the-compiler).
 
 It does **not** refresh `build/`.  Run `./build.sh` for that.
 
@@ -64,16 +71,19 @@ ordinary regression test before the change is committed.
 
 One rule decides it:
 
-> **Anything that runs a Luce program is a specification and lives in
-> `src/luce/specs/`**, where it runs on both the compiled path and the
-> differential oracle and the two are compared — prints, trap code,
-> trap message, call trace frame for frame, leak census, and the world
-> each left behind.  **Anything that inspects a structure lives beside
-> the code it proves**, as a `test` block in the same file.
+> **Any claim about a Luce program's observable behavior is a specification
+> and lives in `src/luce/specs/`**, where it runs on both the compiled path and
+> the differential oracle and the two are compared — prints, trap code, trap
+> message, call trace frame for frame, leak census, and the world each left
+> behind.  **Anything that inspects a structure lives beside the code it
+> proves**, as a `test` block in the same file; a program may be only the
+> fixture that drives that otherwise-unobservable structure.
 
-Two registration steps silently skip your tests if you miss them: a
-new language package must be added to `src/luce/luce.zig`'s re-exports
-*and* its test block, and a new spec file to `src/luce/specs.zig`'s.
+Registration is guarded on both sides: a new language package must be added to
+`src/luce/luce.zig`'s re-exports and test roster; a new spec file must be
+added to `src/luce/specs.zig`'s test-only import roster and assigned exactly one owner in
+`tools/test_suites.zig`.  The suite audit fails if the latter is missing or
+overlaps another owner.
 
 Tests are named after what they prove — `test "truncated, oversold,
 and damaged modules are rejected"` — use `std.testing` directly with

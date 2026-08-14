@@ -123,7 +123,7 @@ pub fn close(out: *Buffer, where: Where, headings: []const markdown.Heading) !vo
 
     try out.add(
         \\<footer>
-        \\<p>Luce and loom are part of <a href="https://github.com/dymokomi/luciaos" rel="noreferrer">LuciaOS</a>. Every Luce sample on this site was checked by the freshly built toolchain; runnable output and expected failure results are verified separately.</p>
+        \\<p>Luce and loom are part of LuciaOS. Every Luce sample on this site was checked by the freshly built toolchain; runnable output and expected failure results are verified separately.</p>
         \\</footer>
         \\<script src="
     );
@@ -236,8 +236,8 @@ test "the asset prefix climbs exactly as far as the page is deep" {
     const gpa = std.testing.allocator;
     const cases = [_]struct { url: []const u8, want: []const u8 }{
         .{ .url = "/", .want = "./" },
-        .{ .url = "/tour/", .want = "../" },
-        .{ .url = "/tour/hello/", .want = "../../" },
+        .{ .url = "/learn/", .want = "../" },
+        .{ .url = "/learn/hello/", .want = "../../" },
     };
     for (cases) |case| {
         var out: Buffer = .init(gpa);

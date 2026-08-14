@@ -1,0 +1,134 @@
+<!doctype html>
+<!-- stats.luciaos.com — the numbers, and where they come from.
+     There is nothing generated about this file: it is the shape of the
+     page, and `stats.js` fills it from `data/stats.json`, which the
+     collector on the edge server rewrites every quarter hour.  With scripting
+     blocked the page still says what it measures and how; it just has
+     no numbers in it. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stats — LuciaOS</title>
+<meta name="description" content="Visitors, pages and installs across luciaos.com, luce.luciaos.com and loom.luciaos.com. Counted from the web server's own logs; no cookies, no third-party analytics.">
+<link rel="icon" href="assets/mark.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<script>
+  /* Before first paint, so a chosen theme never flashes the other one. */
+  try {
+    var chosen = localStorage.getItem("luce-theme");
+    if (chosen) document.documentElement.dataset.theme = chosen;
+  } catch (e) {}
+</script>
+</head>
+<body>
+
+<header class="top">
+<a class="mark" href="https://luciaos.com">LuciaOS</a>
+<nav class="tabs"><span class="tab here">Stats</span></nav>
+<div class="tools">
+<a class="cross" href="https://luce.luciaos.com">Luce</a>
+<a class="cross" href="https://loom.luciaos.com">loom</a>
+<button id="theme" type="button" aria-label="Switch between light and dark">&#9681;</button>
+</div>
+</header>
+
+<main>
+
+<div class="hero">
+<h1>What the three sites see</h1>
+<p class="lead">Every number here is counted from the web server's own access
+logs. There is no script on any page, no cookie, and nothing is sent to anyone
+else — which is also why installs are visible at all: <code>curl … | bash</code>
+is not something a browser tracker can see.</p>
+<p class="since" id="since">Loading…</p>
+</div>
+
+<div class="controls" role="group" aria-label="Time range">
+<button type="button" class="range" data-days="30">30 days</button>
+<button type="button" class="range on" data-days="90">90 days</button>
+</div>
+
+<section class="tiles" id="tiles" aria-label="Headline numbers">
+<noscript><p class="empty">The numbers on this page are drawn by a small
+script from <a href="data/stats.json">data/stats.json</a>, which is public —
+it is the same file, and it is readable without it.</p></noscript>
+</section>
+
+<section class="panel">
+<h2 id="visitors">People a day</h2>
+<p class="note">One person, one site, one day — so someone who reads two of
+these sites appears on both lines here, while the <strong>People</strong> figure
+above counts them once. Counted by a hash of address and browser salted with a
+random value made for that day and destroyed when the day closes, so the count
+survives and the means of recomputing it does not. Crawlers and scanners are
+identified and left out.</p>
+<figure class="chart">
+<div class="legend" id="visitors-legend"></div>
+<div class="plot" id="visitors-plot"></div>
+</figure>
+<details class="table">
+<summary>The same numbers as a table</summary>
+<div id="visitors-table"></div>
+</details>
+</section>
+
+<section class="panel">
+<h2 id="installs">Installing Luce</h2>
+<p class="note">Two different things, kept apart on purpose. The
+<strong>install line</strong> is <code>install.sh</code> being fetched — anyone
+who ran the command on the front page. An <strong>install</strong> is the
+toolchain archive actually being downloaded, which only happens once the script
+has decided the machine is one it supports.</p>
+<figure class="chart">
+<div class="legend" id="installs-legend"></div>
+<div class="plot" id="installs-plot"></div>
+</figure>
+<details class="table">
+<summary>The same numbers as a table</summary>
+<div id="installs-table"></div>
+</details>
+</section>
+
+<section class="lists">
+<div class="list">
+<h2 id="pages">Most-read pages</h2>
+<div id="top-pages"></div>
+</div>
+<div class="list">
+<h2 id="referrers">Arrived from</h2>
+<p class="note">Hosts that linked here. A visit with no referrer — typed,
+bookmarked, or from an app that sends none — appears in no row.</p>
+<div id="top-referrers"></div>
+</div>
+<div class="list">
+<h2 id="countries">Countries</h2>
+<div id="top-countries"></div>
+</div>
+</section>
+
+<section class="panel wide">
+<h2 id="traffic">Everything that knocked</h2>
+<p class="note">Every request the three sites answered, people and machines
+alike. Most of it is neither: scanners looking for someone else's software,
+and crawlers doing their job.</p>
+<figure class="chart short">
+<div class="legend" id="traffic-legend"></div>
+<div class="plot" id="traffic-plot"></div>
+</figure>
+</section>
+
+</main>
+
+<footer>
+<p>Counted by <a href="https://github.com/dymokomi/luciaos/tree/main/www/stats">www/stats</a>
+in the LuciaOS repository: the collector reads Caddy's access logs on the one
+server these sites are served from, keeps per-day counts in SQLite, and writes
+<a href="data/stats.json">the file this page draws</a>. No addresses are stored.</p>
+<p class="fine">IP geolocation by <a href="https://db-ip.com">DB-IP</a>.
+Days are UTC. <span id="generated"></span></p>
+</footer>
+
+<script src="assets/stats.js" defer></script>
+</body>
+</html>

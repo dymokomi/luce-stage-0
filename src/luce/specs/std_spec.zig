@@ -6,9 +6,11 @@
 //! everything else, and run on **both** engines with the two
 //! compared (`specs/agree.zig`).
 //!
-//! The pure modules (math, strings) need nothing from the world; the
-//! hosted ones (files) run against the harness's world, which both
-//! engines see the same copy of.
+//! The pure modules (math, lists, strings, paths) need nothing from the
+//! world; the hosted ones (files, os, term) run against the harness's world,
+//! which both engines see the same copy of.  JSON and ZIP have larger
+//! format-specific files of their own, but `test-stdlib` gives all three
+//! files one owner and one focused lane.
 
 const std = @import("std");
 const agree = @import("agree.zig");
@@ -31,6 +33,42 @@ fn agreeOk(source: []const u8) !void {
 /// Both engines abort with exactly `code`.
 fn agreeTrap(source: []const u8, code: mir.TrapCode) !void {
     return agree.trapGiven(source, budget, code);
+}
+
+// ---------------------------------------------------------------------------
+// gpu and ui
+// ---------------------------------------------------------------------------
+
+test "gpu and ui: the public types compose without a host" {
+    // Importing the modules and naming their types is deliberately a
+    // host-free check.  A package can describe a window/surface in a
+    // platform-neutral way even when it has not opened one yet.
+    try agreeOk(
+        \\import std.gpu
+        \\import std.ui
+        \\
+        \\func main():
+        \\    let backend: gpu.Backend = gpu.Backend.headless
+        \\    assert(backend == gpu.Backend.headless)
+        \\
+    );
+}
+
+test "gpu and ui: an unavailable native host fails closed" {
+    // The portable test host intentionally installs no graphics callbacks.
+    // Opening a window must therefore be the same explicit
+    // `host_unavailable` refusal on the oracle and compiled engines.
+    var unavailable = budget;
+    unavailable.files = false;
+    try agree.trapGiven(
+        \\import std.ui
+        \\
+        \\func main() -> !:
+        \\    let window = try ui.open("test", 320, 240)
+        \\    let surface = try window.surface()
+        \\    try surface.present()
+        \\
+    , unavailable, .host_unavailable);
 }
 
 // ---------------------------------------------------------------------------
@@ -295,6 +333,103 @@ test "math: the generator is deterministic, in range, and covers its die" {
         \\    let bad = rng.in_range(5, 5)
         \\
     , .explicit_trap);
+}
+
+// ---------------------------------------------------------------------------
+// lists
+// ---------------------------------------------------------------------------
+// `sort_by` is docs/FUNCTIONS.md D6's proving standard-library customer:
+// callbacks exercise the language mechanism, while ordering, stability, and
+// moving the elements are promises made by std.lists and therefore live here.
+
+test "lists: sort_by specializes for a struct and accepts a lambda" {
+    try agreeOk(
+        \\import std.lists
+        \\
+        \\struct Player:
+        \\    score: long
+        \\    order: long
+        \\
+        \\func by_score(a: Player, b: Player) -> bool:
+        \\    return a.score < b.score
+        \\
+        \\func main():
+        \\    var empty = new list(Player)
+        \\    empty.sort_by(by_score)
+        \\    assert(len(empty) == 0)
+        \\    var one = [Player(score = 7, order = 9)]
+        \\    one.sort_by(by_score)
+        \\    assert(one[0].order == 9)
+        \\    var players = [
+        \\        Player(score = 20, order = 0),
+        \\        Player(score = 10, order = 1),
+        \\        Player(score = 20, order = 2),
+        \\        Player(score = 30, order = 3),
+        \\    ]
+        \\    players.sort_by(by_score)
+        \\    assert(players[0].score == 10)
+        \\    assert(players[1].score == 20)
+        \\    assert(players[1].order == 0)
+        \\    assert(players[2].score == 20)
+        \\    assert(players[2].order == 2)
+        \\    assert(players[3].score == 30)
+        \\    players.sort_by((a, b) -> a.score > b.score)
+        \\    assert(players[0].score == 30)
+        \\    assert(players[1].score == 20)
+        \\    assert(players[1].order == 0)
+        \\    assert(players[2].score == 20)
+        \\    assert(players[2].order == 2)
+        \\    assert(players[3].score == 10)
+        \\    var numbers: list(long) = [3, 1, 2]
+        \\    numbers.sort_by((a, b) -> a < b)
+        \\    assert(numbers[0] == 1)
+        \\    assert(numbers[1] == 2)
+        \\    assert(numbers[2] == 3)
+        \\
+    );
+}
+
+test "lists: sort_by moves object elements without copying them" {
+    try agreeOk(
+        \\import std.lists
+        \\
+        \\func row_before(a: list(long), b: list(long)) -> bool:
+        \\    return a[0] < b[0]
+        \\
+        \\func main():
+        \\    var rows = new list(list(long))
+        \\    rows.append([3])
+        \\    rows.append([1])
+        \\    rows.append([2])
+        \\    rows.sort_by(row_before)
+        \\    assert(rows[0][0] == 1)
+        \\    assert(rows[1][0] == 2)
+        \\    assert(rows[2][0] == 3)
+        \\
+    );
+}
+
+test "lists: sort_by moves task resources and keeps equivalent elements stable" {
+    try agree.printsGiven(
+        \\import std.lists
+        \\
+        \\func answer(n: long) -> long:
+        \\    return n
+        \\
+        \\func equivalent(a: task(long), b: task(long)) -> bool:
+        \\    return false
+        \\
+        \\func main():
+        \\    var tasks = new list(task(long))
+        \\    tasks.append(spawn answer(1))
+        \\    tasks.append(spawn answer(2))
+        \\    tasks.sort_by(equivalent)
+        \\    var joined: long = 0
+        \\    for work in tasks:
+        \\        joined = joined * 10 + work.wait()
+        \\    print(string(joined))
+        \\
+    , budget, "12\n");
 }
 
 // ---------------------------------------------------------------------------
@@ -691,6 +826,30 @@ test "paths: extension and stem split the base, and rejoin to it" {
     );
 }
 
+test "paths: joined folds join, and an empty list answers the empty path" {
+    var session = try agree.compare(
+        \\import std.paths
+        \\
+        \\func main():
+        \\    print("[" + paths.joined(new list(string)) + "]")
+        \\    print(paths.joined(["only"]))
+        \\    print(paths.joined(["a", "b", "c.luc"]))
+        \\    # An absolute part starts again, exactly as join does.
+        \\    print(paths.joined(["a", "/etc", "hosts"]))
+        \\    # Piled separators collapse at the seam, and an empty
+        \\    # part contributes nothing.
+        \\    print(paths.joined(["a/", "", "b"]))
+        \\    print(paths.joined(["/", "etc"]))
+        \\
+    , budget);
+    defer session.deinit();
+
+    try testing.expectEqualStrings(
+        "[]\nonly\na/b/c.luc\n/etc/hosts\na/b\n/etc\n",
+        session.printed(),
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The mechanism
 // ---------------------------------------------------------------------------
@@ -801,6 +960,138 @@ test "files: append, rename, delete and list reach the services beyond read and 
     );
     // The delete really happened: the world holds nothing now.
     try testing.expect(session.file() == null);
+}
+
+test "files: kind answers each member, and none for a name nothing holds" {
+    var world: agree.World = .withFile("notes.txt", "body");
+    world.kinds = &[_]agree.World.KindRow{
+        .{ .path = "notes.txt", .kind = .file },
+        .{ .path = "papers", .kind = .directory },
+        .{ .path = "wire", .kind = .other },
+    };
+    var provided = budget;
+    provided.world = world;
+    var session = try agree.compare(
+        \\import std.files
+        \\
+        \\func name_of(path: string) -> string!:
+        \\    let what = try files.kind(path)
+        \\    if what == none:
+        \\        return "nothing"
+        \\    match what:
+        \\        file:
+        \\            return "file"
+        \\        directory:
+        \\            return "directory"
+        \\        other:
+        \\            return "other"
+        \\
+        \\func main() -> !:
+        \\    print(try name_of("notes.txt"))
+        \\    print(try name_of("papers"))
+        \\    print(try name_of("wire"))
+        \\    print(try name_of("ghost.txt"))
+        \\
+    , provided);
+    defer session.deinit();
+
+    try testing.expectEqualStrings("file\ndirectory\nother\nnothing\n", session.printed());
+}
+
+test "files: exists, is_file and is_dir answer bool! and let a refusal through" {
+    var world: agree.World = .withFile("notes.txt", "body");
+    world.kinds = &[_]agree.World.KindRow{
+        .{ .path = "notes.txt", .kind = .file },
+        .{ .path = "papers", .kind = .directory },
+    };
+    world.refused_kinds = &[_][]const u8{"locked"};
+    var provided = budget;
+    provided.world = world;
+    var session = try agree.compare(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    print(string(try files.exists("notes.txt")))
+        \\    print(string(try files.is_file("notes.txt")))
+        \\    print(string(try files.is_dir("notes.txt")))
+        \\    print(string(try files.is_dir("papers")))
+        \\    print(string(try files.is_file("papers")))
+        \\    print(string(try files.exists("ghost.txt")))
+        \\    files.exists("locked/inside.txt") catch reason:
+        \\        print(reason)
+        \\    print(string(files.exists("locked/inside.txt") catch false))
+        \\
+    , provided);
+    defer session.deinit();
+
+    // The last line is Python's behaviour, spelled in three visible
+    // words rather than chosen for the caller by the library.
+    try testing.expectEqualStrings(
+        "true\ntrue\nfalse\ntrue\nfalse\nfalse\n" ++
+            "cannot inspect locked/inside.txt\nfalse\n",
+        session.printed(),
+    );
+}
+
+test "files: entries carries kinds, sorted, with a path that reaches each one" {
+    // The default world lists three names into ".", and one of them
+    // is a directory — so one listing carries two kinds and a walk
+    // written against it has both branches to take.
+    var session = try agree.compare(
+        \\import std.files
+        \\
+        \\func main() -> !:
+        \\    for entry in try files.entries("."):
+        \\        match entry.kind:
+        \\            file:
+        \\                print("file " + entry.name + " " + entry.path)
+        \\            directory:
+        \\                print("dir  " + entry.name + " " + entry.path)
+        \\            other:
+        \\                print("othr " + entry.name + " " + entry.path)
+        \\
+    , budget);
+    defer session.deinit();
+
+    try testing.expectEqualStrings(
+        "file alpha.txt ./alpha.txt\n" ++
+            "file beta.txt ./beta.txt\n" ++
+            "dir  notes ./notes\n",
+        session.printed(),
+    );
+}
+
+test "files: list answers names alone, while entries carries kinds" {
+    var session = try agree.compare(
+        \\import std.files
+        \\import std.strings
+        \\
+        \\func main() -> !:
+        \\    let names = try files.list(".")
+        \\    print(names.join(","))
+        \\    free(names)
+        \\    let listed = try files.entries(".")
+        \\    print(string(len(listed)))
+        \\    free(listed)
+        \\
+    , budget);
+    defer session.deinit();
+
+    try testing.expectEqualStrings("alpha.txt,beta.txt,notes\n3\n", session.printed());
+}
+
+test "files: a refused entries listing is an error on both engines" {
+    var session = try agree.compare(
+        \\import std.files
+        \\
+        \\func main():
+        \\    files.entries("elsewhere") catch reason:
+        \\        print(reason)
+        \\
+    , budget);
+    defer session.deinit();
+
+    try testing.expectEqualStrings("cannot list elsewhere\n", session.printed());
 }
 
 test "files: a listing the world refuses is an error naming the path" {
@@ -928,4 +1219,69 @@ test "os: a host that has the slots and cannot tell refuses the same way" {
         \\    print(string(os.cpu_count()))
         \\
     , unmeasurable, .host_unavailable);
+}
+
+test "os: shell.run crosses the host boundary as captured text" {
+    try agree.printsGiven(
+        \\import std.os
+        \\
+        \\func main() -> !:
+        \\    print(try os.shell.run("echo hi"))
+        \\
+    , budget, "mock shell: echo hi\nexit status: 0\n\n");
+}
+
+test "os: shell.run traps when the host withholds the shell" {
+    var no_shell = budget;
+    no_shell.shell = false;
+    try agree.trapGiven(
+        \\import std.os
+        \\
+        \\func main() -> !:
+        \\    print(try os.shell.run("echo hi"))
+        \\
+    , no_shell, .host_unavailable);
+}
+
+// ---------------------------------------------------------------------------
+// term
+// ---------------------------------------------------------------------------
+
+test "term: io carries mouse coordinates, modifiers, and wheel values" {
+    const keys = [_]agree.World.Key{
+        .{
+            .name = "mouse_press",
+            .row = 6,
+            .column = 10,
+            .button = 0,
+            .modifiers = 1,
+        },
+        .{
+            .name = "mouse_wheel",
+            .row = 8,
+            .column = 4,
+            .value = -1,
+        },
+    };
+    var provided = budget;
+    provided.world.keys = &keys;
+    var session = try agree.compare(
+        \\import std.term
+        \\
+        \\func main():
+        \\    let pressed = term.io.read() else ""
+        \\    assert(pressed == "mouse_press")
+        \\    assert(term.io.text() == "")
+        \\    assert(term.io.row() == 6)
+        \\    assert(term.io.column() == 10)
+        \\    assert(term.io.button() == 0)
+        \\    assert(term.io.modifiers() == 1)
+        \\    let wheel = term.io.read() else ""
+        \\    assert(wheel == "mouse_wheel")
+        \\    assert(term.io.row() == 8)
+        \\    assert(term.io.column() == 4)
+        \\    assert(term.io.value() == -1)
+        \\
+    , provided);
+    defer session.deinit();
 }

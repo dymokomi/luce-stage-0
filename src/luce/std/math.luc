@@ -176,7 +176,7 @@ func tan(x: double) -> double:
 # type.  Sums accumulate left to right — the same order both engines
 # and the C benchmark twins use, so results are bit-reproducible.
 # Empty arrays: sum is 0.0; the operations that have no empty answer
-# (mean, vmin, vmax, variance) trap.
+# (mean, vmin, vmax, variance) answer `none`.
 
 func sum(xs: array(double, _)) -> double:
     var total: double = 0.0

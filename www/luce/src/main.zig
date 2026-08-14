@@ -22,7 +22,7 @@ const verify = @import("verify.zig");
 
 /// A rendered page, kept until the link check has seen every other one.
 const Built = struct {
-    /// Path under the output root, e.g. `tour/hello/index.html`.
+    /// Path under the output root, e.g. `learn/hello/index.html`.
     path: []u8,
     url: []u8,
     title: []u8,
@@ -335,8 +335,8 @@ fn freeNeighbours(gpa: Allocator, neighbours: Neighbours) void {
     if (neighbours.next) |link| gpa.free(link.url);
 }
 
-/// The home page ends with one card per section — the whole site in
-/// six lines, so nobody has to guess which door is theirs.
+/// The home page ends with one card per section, so nobody has to guess
+/// which door is theirs.
 fn doors(out: *Buffer) !void {
     try out.add("<div class=\"cards doors\">\n");
     for (&site.sections) |*section| {
@@ -541,11 +541,11 @@ fn resolve(gpa: Allocator, from: []const u8, href: []const u8) ![]u8 {
 test "links resolve against the page that carries them" {
     const gpa = std.testing.allocator;
     const cases = [_]struct { from: []const u8, href: []const u8, want: []const u8 }{
-        .{ .from = "index.html", .href = "tour/", .want = "tour/index.html" },
-        .{ .from = "tour/hello/index.html", .href = "../values/", .want = "tour/values/index.html" },
-        .{ .from = "tour/hello/index.html", .href = "../../ref/types/", .want = "ref/types/index.html" },
-        .{ .from = "tour/index.html", .href = "/status/", .want = "status/index.html" },
-        .{ .from = "tour/hello/index.html", .href = "../../assets/style.css", .want = "assets/style.css" },
+        .{ .from = "index.html", .href = "learn/", .want = "learn/index.html" },
+        .{ .from = "learn/hello/index.html", .href = "../values/", .want = "learn/values/index.html" },
+        .{ .from = "learn/hello/index.html", .href = "../../reference/types/", .want = "reference/types/index.html" },
+        .{ .from = "learn/index.html", .href = "/status/", .want = "status/index.html" },
+        .{ .from = "learn/hello/index.html", .href = "../../assets/style.css", .want = "assets/style.css" },
     };
     for (cases) |case| {
         const got = try resolve(gpa, case.from, case.href);

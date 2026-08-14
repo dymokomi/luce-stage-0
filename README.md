@@ -8,8 +8,9 @@ and **loom**, the terminal that runs compiled Luce programs against
 ordinary files on Linux and macOS.
 
 **The documentation is [luce.luciaos.com](https://luce.luciaos.com)** —
-a tour, worked examples, a reference, and a status page that says out
-loud what the language cannot yet do.  It is built from
+a Learn path, thematic Guides with complete programs, an exhaustive
+Reference, the standard Library, and a Status page that says out loud what
+the language cannot yet do. It is built from
 [`www/luce/`](www/luce/) in this repository.  **Every Luce sample on it is
 checked by the freshly built toolchain**: runnable examples execute,
 their printed output is compared byte for byte, and expected traps,
@@ -43,10 +44,8 @@ of building at all, because compiling a bundled program is a link:
 ```sh
 ./build.sh         # installs build/luce, build/loom, build/editor, libraries, and bundled examples
 ./install.sh       # builds ReleaseSafe and installs a user-local snapshot
-zig build test     # ~5 min: the executable specification (every program
-                   # run on both the compiled path and the test suite's
-                   # reference implementation, and compared) + language,
-                   # compiler, terminal and documentation-site suites
+zig build test     # the complete owner-grouped release gate; long targets
+                   # print bounded progress and a 15-second heartbeat
 ```
 
 `VERSION` is the shared public release label, currently `0.18`. During the
@@ -63,6 +62,13 @@ needs `sudo`. Use `./install.sh --no-build` to install an existing `build/`
 tree, or `--no-path` to leave shell profiles unchanged. Tests and benchmarks
 continue to invoke `build/luce` and `build/loom` explicitly, so installing a
 snapshot cannot change what repository development exercises.
+
+The published macOS Apple Silicon release also installs the Luce VS Code and
+Cursor syntax extension in one step:
+
+```sh
+curl -fsSL https://luce.luciaos.com/install/0.18/install.sh | bash
+```
 
 ## Try it
 
@@ -218,8 +224,8 @@ www/                      everything published to the web, one folder
                           HTML fragment each, links and anchors checked
   luciaos/                the luciaos.com landing page, hand-written
   deploy/                 publish.sh: the one rsync all three go out by
-tools/vscode-luce/        VS Code syntax highlighting for .luc,
-                          generated from the compiler's own tables by
+tools/vscode-luce/        VS Code highlighting and brace-aware indentation;
+                          the grammar is generated from compiler tables by
                           `zig build grammar` and pinned by a test
 docs/                     the decision records and references, indexed
                           by docs/README.md; v1/ preserves the Fabric
@@ -232,8 +238,9 @@ vendor-llvm.sh            build a pinned libLLVM from source, for when
 
 `CONTRIBUTING.md` is the short version of all of it; the coding
 conventions themselves are [docs/CODING_GUIDE.md](docs/CODING_GUIDE.md),
-and [docs/MISSING.md](docs/MISSING.md) is the honest list of what is
-not built.
+and [docs/MISSING.md](docs/MISSING.md) is the list of confirmed bugs. Open
+language and tooling ideas live in their decision records and
+[docs/LANGUAGE_AUDIT.md](docs/LANGUAGE_AUDIT.md), not in the bug list.
 
 ## Deferred scope
 

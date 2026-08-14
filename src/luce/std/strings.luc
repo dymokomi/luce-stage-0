@@ -259,9 +259,9 @@ func characters(s: string) -> list(string):
         at = stop
     return out
 
-# How many display cells `s` occupies — **the seam** described above.
-# In v0.1 that is one cell per character, so `width(s)` is the
-# character count and `len(s)` is still the byte count.
+# The display-width seam described above. In v0.1 it counts code
+# points, not terminal cells, so `width(s)` is the character count and
+# `len(s)` is still the byte count.
 func width(s: string) -> long:
     var cells: long = 0
     var at = first_character(s)

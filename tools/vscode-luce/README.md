@@ -1,16 +1,17 @@
 # Luce language support
 
 A repository-local extension that gives Visual Studio Code and Cursor TextMate
-highlighting and basic editing behavior for `.luc` files. It has no runtime
-dependency on LuciaOS: three files, no build step, no code.
+highlighting and brace-aware editing behavior for `.luc` files. It has no
+runtime dependency on LuciaOS and no third-party package dependency or build
+step.
 
 - `syntaxes/luce.tmLanguage.json` — **generated**, see below.
 - `language-configuration.json` — comments, brackets, folding, indentation.
   Hand-written and deliberately word-free: the indent rule recognizes a line
-  ending in a colon, which covers every ordinary layout block. It is an editor
-  approximation rather than the parser's brace-aware layout rule; the split
-  map-value exception is documented below.
-- `package.json` — what VS Code loads, plus the two defaults below.
+  ending in a colon, which covers every ordinary layout block.
+- `extension.js` — a dependency-free on-type correction for colons inside
+  grouping delimiters, where Luce suspends layout.
+- `package.json` — what VS Code loads, plus the defaults below.
 
 Only `.luc` is claimed. A `.lc` is a compiled artifact and a `.lcm` a serialized
 module — both are binary, and an editor that offered to open one as text would
@@ -39,15 +40,16 @@ Nothing tied it to the language, so nothing said anything for a year.
 `test "the committed grammar is what the generator emits"`, which embeds this
 file and compares it byte-for-byte against a fresh run of the generator. Add a
 keyword, a builtin or a method to the language without regenerating and the
-suite fails, naming this path. Five more tests in the same file keep the
+suite fails, naming this path. Structural tests in the same file keep the
 generator honest: every keyword the lexer reserves must have a class; every
 name in `reserved_names` must be coloured exactly once — no name uncoloured, no
 name claimed by two classes; every *symbol* token kind must have a row in the
 generator's spelling table, and every row's text must lex back to the kind it
 claims; and no spelling may be written before a longer one it opens with, which
 is what makes `<<=` a compound assignment rather than a shift and a stray `=`.
-A last one reads `examples/editor/editor.luc`, the largest Luce program there is, and
-checks that every language word it actually uses has a class.
+The f-string rule must recursively enter nested strings and balanced braces. A
+corpus guard also reads `examples/editor/editor.luc`, the largest Luce program
+there is, and checks that every language word it actually uses has a class.
 
 ## What is coloured
 
@@ -84,10 +86,9 @@ Three decisions worth knowing about:
   own; `xs.find(1)` is the language and a bare `find(1)` is not.
 - **An f-string hole is real code.** `f"total {n + 1}"` highlights the
   expression inside the braces, using the same rules as everything outside a
-  string. The compiler also accepts nested strings and map braces in a hole;
-  the current TextMate grammar does not recursively recognize those two shapes,
-  so their colouring can end early. `{{` and `}}` are literal braces. The
-  editor-only gap is tracked in `docs/MISSING.md`.
+  string. Nested plain strings, nested f-strings, and map braces recursively
+  enter the same string and balanced-brace regions, so an inner quote or `}`
+  cannot end the outer hole early. `{{` and `}}` are literal braces.
 - **Symbols are written longest first.** The operator rules come out of one
   table sorted by spelling length, so `<<=` is tried before `<<`, `<<` before
   `<`, and `==` before `=`. That order is the whole reason a compound
@@ -101,10 +102,10 @@ while `1.foo` is member access, and a base with no digits (`0x`), a digit that
 does not belong to it (`0b12`), a misplaced separator (`1_`, `1__0`) or a unit
 suffix (`12ab`) is one malformed literal rather than a number glued to a word.
 
-## The two defaults it sets
+## The defaults it sets
 
-`contributes.configurationDefaults` carries exactly two, both of them the
-language's own rules rather than anybody's taste:
+`contributes.configurationDefaults` carries the language's own rules rather
+than indentation guesses:
 
 - **`error` and `trap` are red**, through a `textMateRules` entry on their two
   scopes. They are the two ways a Luce program stops — one raises and can be
@@ -116,14 +117,14 @@ language's own rules rather than anybody's taste:
   columns deeper than the one containing it and a tab is refused outright by
   the lexer, so an editor guessing indentation from the file can only guess
   wrong.
+- **Brace-aware on-type formatting.** The word-free `:\s*$` rule supplies the
+  normal four spaces after a layout block. When the colon is inside `()`, `[]`,
+  or `{}`, `extension.js` scans the source while ignoring comments and nested
+  strings and removes that block indent. `editor.formatOnType` is enabled for
+  Luce by default so split map entries and grouped expressions follow the same
+  layout-suspension rule as the lexer.
 
-  The word-free `:\s*$` rule cannot see whether layout is suspended inside map
-  braces. It therefore adds an extra indent after a legal split map entry such
-  as `"key":` followed by its value on the next line, and cannot know to return
-  for the next key. Fixing that needs brace-aware editor state rather than a
-  different one-line regex; the approximation is tracked in `docs/MISSING.md`.
-
-Both are defaults: a setting of your own in `settings.json` still wins.
+These are defaults: a setting of your own in `settings.json` still wins.
 
 ## Package and install
 
@@ -155,6 +156,6 @@ its identifier, `luciaos.luce-language`.
 
 Open `tools/vscode-luce` as an extension-development project and press `F5` to
 launch an Extension Development Host. There is no build step for the extension
-itself — the three files are loaded directly — but a change to the grammar is a
-change to `tools/grammar.zig` followed by `zig build grammar`, never an edit to
-the JSON.
+itself. Run `npm test` for the pure indentation scanner. A change to the grammar
+is a change to `tools/grammar.zig` followed by `zig build grammar`, never an edit
+to the JSON.

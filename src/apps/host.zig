@@ -146,6 +146,24 @@ pub const Host = struct {
     error_length: usize = 0,
     error_origin: report.Frame = .{ .function = "", .source = "", .line = 0, .column = 0 },
 
+    /// Optional platform graphics channel. The portable host leaves this
+    /// unset; a runner with a real window backend installs one before it
+    /// takes the ABI table. The callback context belongs to that backend,
+    /// while the ABI still carries this Host as its one table context.
+    graphics_hooks: ?GraphicsHooks = null,
+
+    pub const GraphicsHooks = struct {
+        context: ?*anyopaque,
+        backend: abi.GpuBackendFn,
+        window_open: abi.UiWindowOpenFn,
+        window_surface: abi.UiWindowSurfaceFn,
+        surface_size: abi.GpuSurfaceSizeFn,
+        surface_clear: abi.GpuSurfaceClearFn,
+        surface_fill_rect: abi.GpuSurfaceFillRectFn,
+        surface_present: abi.GpuSurfacePresentFn,
+        close: abi.GpuCloseFn,
+    };
+
     pub fn setup(
         self: *Host,
         gpa: Allocator,
@@ -162,6 +180,18 @@ pub const Host = struct {
             .arguments = arguments,
             .screen = .{},
         };
+    }
+
+    /// Install a platform graphics channel for this run. Keeping the
+    /// adapter here means the ABI retains one context pointer and all other
+    /// host callbacks stay on the portable host.
+    pub fn installGraphics(self: *Host, hooks: GraphicsHooks) void {
+        self.graphics_hooks = hooks;
+    }
+
+    /// Remove the graphics channel before its native state is destroyed.
+    pub fn uninstallGraphics(self: *Host) void {
+        self.graphics_hooks = null;
     }
 
     pub fn deinit(self: *Host) void {
@@ -277,6 +307,17 @@ pub const Host = struct {
             .worker_join = cWorkerJoin,
             .shell_run = cShellRun,
             .path_kind = cPathKind,
+            // The portable host leaves these unset. A runner-installed
+            // channel is adapted through this Host so the table's single
+            // context pointer remains stable.
+            .gpu_backend = if (self.graphics_hooks != null) cGpuBackend else null,
+            .ui_window_open = if (self.graphics_hooks != null) cUiWindowOpen else null,
+            .ui_window_surface = if (self.graphics_hooks != null) cUiWindowSurface else null,
+            .gpu_surface_size = if (self.graphics_hooks != null) cGpuSurfaceSize else null,
+            .gpu_surface_clear = if (self.graphics_hooks != null) cGpuSurfaceClear else null,
+            .gpu_surface_fill_rect = if (self.graphics_hooks != null) cGpuSurfaceFillRect else null,
+            .gpu_surface_present = if (self.graphics_hooks != null) cGpuSurfacePresent else null,
+            .gpu_close = if (self.graphics_hooks != null) cGpuClose else null,
         };
     }
 
@@ -705,8 +746,35 @@ pub const Host = struct {
     fn runShell(self: *Host, command: []const u8) error{OutOfMemory}!?[]const u8 {
         const shell = if (builtin.os.tag == .windows) "cmd.exe" else "/bin/sh";
         const flag = if (builtin.os.tag == .windows) "/C" else "-c";
+        // A terminal launched from a GUI does not necessarily inherit the
+        // user's interactive shell profile.  Keep shell services usable in
+        // that environment by putting the installed toolchain beside this
+        // process (loom/editor) on the child's PATH.  The parent process's
+        // environment remains untouched, and the user's PATH stays after it
+        // so ordinary host commands retain their normal lookup order.
+        var environment = processEnvironment().createMap(self.gpa) catch |mistake| switch (mistake) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return null,
+        };
+        defer environment.deinit();
+        const executable_dir = std.process.executableDirPathAlloc(self.io, self.gpa) catch null;
+        defer if (executable_dir) |path| self.gpa.free(path);
+        if (executable_dir) |path| {
+            const old_path = environment.get("PATH") orelse "";
+            const child_path = if (old_path.len == 0)
+                try self.gpa.dupe(u8, path)
+            else
+                try std.fmt.allocPrint(
+                    self.gpa,
+                    "{s}{c}{s}",
+                    .{ path, if (builtin.os.tag == .windows) ';' else ':', old_path },
+                );
+            defer self.gpa.free(child_path);
+            try environment.put("PATH", child_path);
+        }
         const ran = std.process.run(self.gpa, self.io, .{
             .argv = &.{ shell, flag, command },
+            .environ_map = &environment,
         }) catch |mistake| switch (mistake) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return null,
@@ -968,6 +1036,87 @@ pub const Host = struct {
 
     fn of(context: ?*anyopaque) *Host {
         return @ptrCast(@alignCast(context.?));
+    }
+
+    fn graphics(context: ?*anyopaque) ?*const GraphicsHooks {
+        const self = of(context);
+        return if (self.graphics_hooks) |*hooks| hooks else null;
+    }
+
+    fn cGpuBackend(context: ?*anyopaque, backend: *i64) callconv(.c) abi.Answer {
+        const hooks = graphics(context) orelse return .no;
+        return hooks.backend(hooks.context, backend);
+    }
+
+    fn cUiWindowOpen(
+        context: ?*anyopaque,
+        title: [*]const u8,
+        title_length: i64,
+        width: i64,
+        height: i64,
+        handle: *i64,
+    ) callconv(.c) abi.Answer {
+        const hooks = graphics(context) orelse return .no;
+        return hooks.window_open(hooks.context, title, title_length, width, height, handle);
+    }
+
+    fn cUiWindowSurface(context: ?*anyopaque, window: i64, surface: *i64) callconv(.c) abi.Answer {
+        const hooks = graphics(context) orelse return .no;
+        return hooks.window_surface(hooks.context, window, surface);
+    }
+
+    fn cGpuSurfaceSize(context: ?*anyopaque, surface: i64, axis: i64, size: *i64) callconv(.c) abi.Answer {
+        const hooks = graphics(context) orelse return .no;
+        return hooks.surface_size(hooks.context, surface, axis, size);
+    }
+
+    fn cGpuSurfaceClear(
+        context: ?*anyopaque,
+        surface: i64,
+        red: i64,
+        green: i64,
+        blue: i64,
+        alpha: i64,
+    ) callconv(.c) abi.Answer {
+        const hooks = graphics(context) orelse return .no;
+        return hooks.surface_clear(hooks.context, surface, red, green, blue, alpha);
+    }
+
+    fn cGpuSurfaceFillRect(
+        context: ?*anyopaque,
+        surface: i64,
+        x: i64,
+        y: i64,
+        width: i64,
+        height: i64,
+        red: i64,
+        green: i64,
+        blue: i64,
+        alpha: i64,
+    ) callconv(.c) abi.Answer {
+        const hooks = graphics(context) orelse return .no;
+        return hooks.surface_fill_rect(
+            hooks.context,
+            surface,
+            x,
+            y,
+            width,
+            height,
+            red,
+            green,
+            blue,
+            alpha,
+        );
+    }
+
+    fn cGpuSurfacePresent(context: ?*anyopaque, surface: i64) callconv(.c) abi.Answer {
+        const hooks = graphics(context) orelse return .no;
+        return hooks.surface_present(hooks.context, surface);
+    }
+
+    fn cGpuClose(context: ?*anyopaque, handle: i64, kind: i64) callconv(.c) abi.Answer {
+        const hooks = graphics(context) orelse return .no;
+        return hooks.close(hooks.context, handle, kind);
     }
 
     fn cPrint(context: ?*anyopaque, text: [*]const u8, length: i64) callconv(.c) abi.Answer {
@@ -2147,10 +2296,23 @@ test "the C table offers every service, over the same implementation" {
     // one bit could not tell absence from refusal (docs/FILESYSTEM.md
     // D16), and `path_kind` is what asks now.
     const retired = [_][]const u8{ "file_read", "file_write", "file_append", "file_exists" };
+    const unavailable = [_][]const u8{
+        "gpu_backend",
+        "ui_window_open",
+        "ui_window_surface",
+        "gpu_surface_size",
+        "gpu_surface_clear",
+        "gpu_surface_fill_rect",
+        "gpu_surface_present",
+        "gpu_close",
+    };
     inline for (@typeInfo(abi.Host).@"struct".fields) |field| {
         if (@typeInfo(field.type) == .optional) {
             var is_retired = false;
             for (retired) |name| {
+                if (std.mem.eql(u8, name, field.name)) is_retired = true;
+            }
+            for (unavailable) |name| {
                 if (std.mem.eql(u8, name, field.name)) is_retired = true;
             }
             if (is_retired) {
@@ -2473,4 +2635,97 @@ test "the C table offers every service, over the same implementation" {
     try testing.expectEqual(@as(u32, 12), reported.trace[1].line);
     try testing.expectEqual(@as(u32, 9), reported.dropped);
     try testing.expectEqual(@as(?i64, 3), host.leaked);
+}
+
+test "an installed graphics channel is forwarded through the host table" {
+    const Forward = struct {
+        fn backend(context: ?*anyopaque, selected: *i64) callconv(.c) abi.Answer {
+            const seen = @as(*i64, @ptrCast(@alignCast(context.?)));
+            seen.* += 1;
+            selected.* = 2;
+            return .yes;
+        }
+
+        fn open(
+            _: ?*anyopaque,
+            _: [*]const u8,
+            _: i64,
+            _: i64,
+            _: i64,
+            handle: *i64,
+        ) callconv(.c) abi.Answer {
+            handle.* = 7;
+            return .yes;
+        }
+
+        fn surface(_: ?*anyopaque, _: i64, handle: *i64) callconv(.c) abi.Answer {
+            handle.* = 8;
+            return .yes;
+        }
+
+        fn size(_: ?*anyopaque, _: i64, axis: i64, measured: *i64) callconv(.c) abi.Answer {
+            measured.* = if (axis == 0) 320 else 240;
+            return .yes;
+        }
+
+        fn clear(_: ?*anyopaque, _: i64, _: i64, _: i64, _: i64, _: i64) callconv(.c) abi.Answer {
+            return .yes;
+        }
+
+        fn fill(
+            _: ?*anyopaque,
+            _: i64,
+            _: i64,
+            _: i64,
+            _: i64,
+            _: i64,
+            _: i64,
+            _: i64,
+            _: i64,
+            _: i64,
+        ) callconv(.c) abi.Answer {
+            return .yes;
+        }
+
+        fn present(_: ?*anyopaque, _: i64) callconv(.c) abi.Answer {
+            return .yes;
+        }
+
+        fn close(_: ?*anyopaque, _: i64, _: i64) callconv(.c) abi.Answer {
+            return .yes;
+        }
+    };
+
+    var output: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer output.deinit();
+    var diagnostics: std.Io.Writer.Allocating = .init(testing.allocator);
+    defer diagnostics.deinit();
+    var host: Host = undefined;
+    host.setup(testing.allocator, testing.io, &output.writer, &diagnostics.writer, &.{});
+    defer host.deinit();
+
+    var calls: i64 = 0;
+    host.installGraphics(.{
+        .context = &calls,
+        .backend = Forward.backend,
+        .window_open = Forward.open,
+        .window_surface = Forward.surface,
+        .surface_size = Forward.size,
+        .surface_clear = Forward.clear,
+        .surface_fill_rect = Forward.fill,
+        .surface_present = Forward.present,
+        .close = Forward.close,
+    });
+    const table = host.table();
+    var selected: i64 = -1;
+    try testing.expectEqual(abi.Answer.yes, table.gpu_backend.?(table.context, &selected));
+    try testing.expectEqual(@as(i64, 2), selected);
+    try testing.expectEqual(@as(i64, 1), calls);
+    var window: i64 = 0;
+    try testing.expectEqual(abi.Answer.yes, table.ui_window_open.?(table.context, "test", 4, 320, 240, &window));
+    try testing.expectEqual(@as(i64, 7), window);
+    var surface: i64 = 0;
+    try testing.expectEqual(abi.Answer.yes, table.ui_window_surface.?(table.context, window, &surface));
+    try testing.expectEqual(@as(i64, 8), surface);
+    try testing.expectEqual(abi.Answer.yes, table.gpu_close.?(table.context, surface, 2));
 }

@@ -32,7 +32,7 @@ because file access genuinely does not exist there.
 
 Sources live in `src/luce/std/*.luc`; the table that embeds them is
 in `src/luce/01_source/load.zig`; the suite proving them is
-`src/luce/specs/std_spec.zig` and the language specs — all nine
+`src/luce/specs/std_spec.zig` and the language specs — all eleven
 modules are ordinary source, with each program run on both engines and
 compared (docs/ENGINE.md).
 
@@ -40,6 +40,55 @@ Naming follows the language's own style: modules are short lower-case
 nouns, functions are short verbs read *with* the module prefix —
 `files.read(path)`, `math.round(x)` — so bare names stay short
 without colliding.
+
+The two low-level platform modules are deliberately small seams rather
+than a widget toolkit. `std.ui` opens an owned window and exposes its
+drawing surface; `std.gpu` describes that surface and submits simple
+clear, rectangle, and present operations. Their native callbacks live in
+the host table, so Metal, Vulkan, and a headless test host can be supplied
+without changing Luce source. The macOS `loom` host installs Metal when the
+machine exposes it and otherwise uses a CPU-backed window; other hosts may
+leave the channel absent and report `host_unavailable`.
+
+## gpu
+
+`std.gpu` is the backend-neutral surface API. `gpu.backend()` reports the
+host's selected backend (`Backend.metal`, `Backend.vulkan`, or
+`Backend.headless`). A `gpu.Surface` is obtained from `ui.Window.surface()`;
+the surface owns its native resource and is released with its scope.
+
+```text
+import std.gpu
+import std.ui
+
+func draw(window: ui.Window) -> !:
+    let surface = try window.surface()
+    try surface.clear(24, 32, 48)
+    try surface.fill_rect(10, 10, 120, 80, 220, 80, 40)
+    try surface.present()
+```
+
+`width()` and `height()` answer the current surface dimensions. Drawing
+coordinates and color channels are `long`; the host validates ranges and
+reports a normal Luce error. The module does not expose Metal or Vulkan
+objects: those belong behind the host ABI.
+
+## ui
+
+`std.ui` is the matching window boundary. `ui.open(title, width, height)`
+asks the host for a window, and `window.surface()` gives the `gpu.Surface`
+used by drawing code. It stops before layout, widgets, input dispatch, or
+an event loop; those belong in a higher-level package once interfaces and
+generics are available.
+
+```text
+import std.ui
+
+func main() -> !:
+    let window = try ui.open("Luce", 800, 600)
+    let surface = try window.surface()
+    try surface.present()
+```
 
 ---
 
@@ -191,13 +240,13 @@ strings.format_float(x, decimals)    # fixed-point: "2.50"; rounds
 
 strings.characters(s)            # list(string) — the code points, one
                                  # string each, in order
-strings.width(s)                 # long — display cells
+strings.width(s)                 # long — code points in v0.1, not terminal cells
 strings.take(s, cells)           # the longest prefix that fits in
                                  # `cells` cells; never cuts a
                                  # character in half
 strings.pad_left(s, cells)  strings.pad_right(s, cells)
-                                 # space-padded to `cells` display
-                                 # cells
+                                 # space-padded to `cells` width units;
+                                 # code points in v0.1
 
 strings.to_bytes(s)              # list(byte) — total; a string always
                                  # has bytes
@@ -358,7 +407,8 @@ travels in the error channel like everything else here.
 `append_text` is spelled that way because `append` is a **reserved
 name** — it is `xs.append(v)`, the list method — and nothing
 user-declared may take one, module-qualified or not.  It is a wart and
-it is recorded as one in `docs/MISSING.md`.
+its rationale and reconsideration trigger are recorded in
+`docs/FILESYSTEM.md` D22.
 
 `list` sorts because the host's order is whatever the file system felt
 like, and two machines holding the same files answer differently.  A

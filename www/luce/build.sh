@@ -14,7 +14,7 @@ set -e
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
 
-if [ "$1" != "--fast" ]; then
+if [ "${1:-}" != "--fast" ]; then
     echo "==> toolchain"
     (cd "$root" && ./build.sh)
 fi
@@ -28,13 +28,16 @@ done
 
 echo "==> generator"
 mkdir -p "$here/work"
+zig_global_cache="$here/work/zig-global-cache"
+mkdir -p "$zig_global_cache"
 zig build-exe "$here/src/main.zig" \
     -O ReleaseSafe \
     --name lucedoc \
+    --global-cache-dir "$zig_global_cache" \
     -femit-bin="$here/work/lucedoc"
 
 echo "==> generator tests"
-zig test "$here/src/main.zig"
+zig test "$here/src/main.zig" --global-cache-dir "$zig_global_cache"
 
 echo "==> pages"
 cd "$here"
@@ -45,5 +48,79 @@ cd "$here"
     --toolchain "$root/build" \
     --work "$here/work/samples" \
     --repository "$root"
+
+echo "==> release"
+release_version=$(tr -d '[:space:]' <"$root/VERSION")
+release_source="$here/install/$release_version/install.sh"
+release_work="$here/work/release"
+release_prefix="$release_work/prefix"
+release_tree="$release_work/luce-$release_version"
+release_output="$here/out/install/$release_version"
+archive_name="luce-${release_version}-macos-aarch64.tar.gz"
+extension_source="$root/tools/vscode-luce"
+extension_version=$(awk -F'"' '/^[[:space:]]*"version"[[:space:]]*:/ { print $4; exit }' "$extension_source/package.json")
+extension_id="luciaos.luce-language"
+extension_tree="$release_tree/share/vscode/extensions/$extension_id-$extension_version"
+
+if [ ! -x "$release_source" ]; then
+    echo "luce site: missing executable installer for release $release_version: $release_source" >&2
+    exit 1
+fi
+if ! grep -Fq "version=$release_version" "$release_source"; then
+    echo "luce site: installer version does not match VERSION ($release_version)" >&2
+    exit 1
+fi
+if ! grep -Fq "extension_version=$extension_version" "$release_source"; then
+    echo "luce site: installer extension version does not match package.json ($extension_version)" >&2
+    exit 1
+fi
+if [ -z "$extension_version" ] || [ ! -f "$extension_source/package.json" ] || [ ! -f "$extension_source/extension.js" ]; then
+    echo "luce site: VS Code extension package is incomplete" >&2
+    exit 1
+fi
+
+# Build the public release in a target-specific prefix.  The regular site
+# build above uses the host toolchain; this second build is intentionally
+# explicit so a release cannot accidentally contain host binaries.
+rm -rf "$release_work"
+mkdir -p "$release_prefix" "$release_tree/bin" "$release_tree/lib" "$extension_tree/syntaxes" "$release_output"
+macos_sdk=$(xcrun --sdk macosx --show-sdk-path)
+(cd "$root" && zig build \
+    --prefix "$release_prefix" \
+    -Dtarget=aarch64-macos \
+    -Doptimize=ReleaseSafe \
+    -Dsysroot="$macos_sdk" \
+    --global-cache-dir "$zig_global_cache" \
+    --summary all)
+
+for tool in luce loom editor; do
+    if [ ! -x "$release_prefix/$tool" ]; then
+        echo "luce site: ARM64 release is missing $tool" >&2
+        exit 1
+    fi
+    cp "$release_prefix/$tool" "$release_tree/bin/$tool"
+done
+for library in libluce_rt.a libluce_start.a; do
+    if [ ! -f "$release_prefix/lib/$library" ]; then
+        echo "luce site: ARM64 release is missing lib/$library" >&2
+        exit 1
+    fi
+    cp "$release_prefix/lib/$library" "$release_tree/lib/$library"
+done
+printf '%s\n' "$release_version" >"$release_tree/VERSION"
+# Keep the editor support in the same checked release.  The installer copies
+# this dependency-free extension into VS Code's per-user extension shelf.
+cp "$extension_source/package.json" "$extension_tree/package.json"
+cp "$extension_source/extension.js" "$extension_tree/extension.js"
+cp "$extension_source/language-configuration.json" "$extension_tree/language-configuration.json"
+cp "$extension_source/README.md" "$extension_tree/README.md"
+cp "$extension_source/syntaxes/luce.tmLanguage.json" "$extension_tree/syntaxes/luce.tmLanguage.json"
+cp "$release_source" "$release_output/install.sh"
+chmod +x "$release_output/install.sh"
+tar -czf "$release_output/$archive_name" \
+    -C "$release_work" "luce-$release_version"
+(cd "$release_output" && shasum -a 256 "$archive_name" >"$archive_name.sha256")
+tar -tzf "$release_output/$archive_name" >/dev/null
+echo "release: $release_output/$archive_name"
 
 echo "==> done: $here/out"

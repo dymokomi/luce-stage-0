@@ -502,6 +502,20 @@ pub fn link(
     try arguments.append(gpa, object_path);
     if (kind == .executable) try arguments.append(gpa, tools.start);
     try arguments.append(gpa, tools.runtime);
+    // `libluce_start.a` carries the optional macOS AppKit/Metal host for
+    // standalone programs. The framework flags belong on the final link,
+    // not in the archive, so an executable produced by `luce build` gets
+    // the same window backend as `loom`.
+    if (kind == .executable and @import("builtin").os.tag == .macos) {
+        try arguments.appendSlice(gpa, &.{
+            "-framework",
+            "AppKit",
+            "-framework",
+            "Metal",
+            "-framework",
+            "QuartzCore",
+        });
+    }
     // Float `%` is `fmod`, so the runtime's semantics reach the C
     // math functions.  Darwin keeps them in libSystem, which every
     // link already gets; glibc keeps them in a library of their own

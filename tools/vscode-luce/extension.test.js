@@ -1,0 +1,41 @@
+"use strict";
+
+const assert = require("node:assert/strict");
+const test = require("node:test");
+const {
+  indentationCorrection,
+  layoutDepth,
+  lineEndsWithColon,
+} = require("./extension.js");
+
+test("layout depth follows grouping and ignores comments and strings", () => {
+  assert.equal(layoutDepth("let values = {\n    \"key\": [1, 2]"), 1);
+  assert.equal(layoutDepth("let text = \"{[(}\" # {\n"), 0);
+  assert.equal(layoutDepth("let text = f\"{len({ \"key\": f\"{name}\" })}\""), 0);
+  assert.equal(layoutDepth("let values = {\n}\n"), 0);
+});
+
+test("only a code colon ends a block-looking line", () => {
+  assert.equal(lineEndsWithColon("    if ready: # now"), true);
+  assert.equal(lineEndsWithColon("    \"key\":"), true);
+  assert.equal(lineEndsWithColon("    let text = \"not a block:\""), false);
+  assert.equal(lineEndsWithColon("    call(value): suffix"), false);
+});
+
+test("a real layout block keeps VS Code's normal four-space indent", () => {
+  assert.equal(indentationCorrection("func main():", "func main():", "    "), null);
+});
+
+test("a colon inside grouping does not create a layout indent", () => {
+  const map = "func main():\n    let values = {\n        \"key\":";
+  assert.equal(indentationCorrection(map, "        \"key\":", "            "), "        ");
+
+  const call = "func main():\n    consume(\n        option:";
+  assert.equal(indentationCorrection(call, "        option:", "            "), "        ");
+});
+
+test("on-type correction leaves nonblank lines and settled indentation alone", () => {
+  const source = "let values = {\n    \"key\":";
+  assert.equal(indentationCorrection(source, "    \"key\":", "    "), null);
+  assert.equal(indentationCorrection(source, "    \"key\":", "        value"), null);
+});

@@ -1,13 +1,13 @@
 # What Luce was missing, and no longer is — the closed record
 
-**This file exists so that `docs/MISSING.md` can be read as a to-do
-list rather than as a history.**  That document is the honest gap list
-and the closest thing this project has to a work queue; by 2026-08-12
+**This file exists so that `docs/MISSING.md` can contain current bugs
+rather than their history.**  Before its scope narrowed to confirmed
+incorrect behavior, that document was the project's general gap list; by 2026-08-12
 it was 1,221 lines with sixty-one strikethrough markers in it, whole
 tiers closed at the top, and closed items scattered through the open
 ones.  A reader looking for what is left had to read what was done
-first.  So the done work moved here, and MISSING.md kept only the
-gaps.
+first.  So the done work moved here. MISSING.md now keeps only confirmed
+bugs; feature requests and undecided designs stay in their owning documents.
 
 **What an entry here is:** what was missing, when and how it closed,
 and where the detail lives — the decision memo's *As built* section
@@ -28,9 +28,37 @@ and, where it helps, the commit.  Two kinds of entry, deliberately:
 describes and is not maintained against the tree afterwards.  Where it
 disagrees with a living document, the living document wins.  Line and
 file references are as they were when the entry closed and are not
-re-derived; MISSING.md re-derives its own.
+re-derived; the current bug list re-derives its own.
 
 Ordered chronologically, oldest first.
+
+---
+
+## 2026-08-13 — `loom run` could not open `std.ui` on macOS
+
+`std.ui` and `std.gpu` reached the ABI correctly, but the shipped macOS
+`loom` table left every graphics callback empty, so `ui.open` trapped with
+`host_unavailable`. `loom` (and generated macOS executables) now install an
+AppKit/Metal adapter; machines without a usable Metal device use a small
+CPU-backed surface with the same ABI. The adapter keeps native handles behind
+the existing ownership walk and other platforms remain fail-closed.
+
+Proof: the host forwarding test, the macOS `loom` product test, and the full
+app suite (`147/147` tests) cover the callback seam and an open/clear/fill/
+present program.
+
+## 2026-08-13 — editor build could not find `loom` from a shell service
+
+The editor's Ctrl-B action runs `loom luce ...` through `std.os.shell`. A
+GUI-launched editor can inherit a minimal `PATH` even when an interactive
+terminal can run `loom`, so `/bin/sh` reported `loom: command not found`.
+The host now prepends the directory containing the running tool (`loom` or a
+standalone `editor`) to the child shell's PATH while preserving the user's
+PATH for other commands.
+
+Proof: the installed-pair product test runs `std.os.shell.run("loom --version")`
+with only system directories in PATH and checks the real version
+and status transcript. The editor's Ctrl-B path uses the same service.
 
 ---
 
@@ -2117,3 +2145,61 @@ known editor subprocess failures; those unrelated example-tooling failures
 remain outside this batch.
 
 Commit: current Tier 0 C-boundary hardening batch.
+
+## 2026-08-13 — the remaining confirmed tool and documentation bugs close
+
+The IR printer now carries each constant-container slot's type through map
+keys, values, and nested struct fields. Enum atoms therefore print as
+`Method.stored` rather than their erased integer payloads; the module
+round-trip test pins enum lists, enum-keyed maps, and optional enum fields.
+
+Both syntax highlighters now keep a complete f-string together when a hole
+contains strings, nested f-strings, or map braces. The site scanner follows a
+bounded recursive string/brace walk, while the generated TextMate grammar
+recursively includes its string and balanced-brace repository groups. A
+structural generator test pins those includes.
+
+The VS Code extension now corrects indentation after a colon while layout is
+suspended inside `()`, `[]`, or `{}`. Its dependency-free on-type scanner
+ignores comments and nested strings, leaves real block colons to the ordinary
+four-space rule, and has direct Node tests for map, call, string, comment, and
+already-settled cases.
+
+The `std.os.cpu_count` comments now acknowledge workers, the `std.math`
+vector header says empty reductions answer `none`, and the `strings.width`
+tables state the v0.1 code-point behavior rather than promising terminal-cell
+width. The lexical reserved-name roster includes `term_event_data`, and site
+coverage now compares both the lexical rosters and the example editor's three
+word maps exactly against compiler-derived sets, in both directions.
+
+`MISSING.md` now has one job: confirmed incorrect behavior. Feature requests,
+design questions, coverage campaigns, refactors, optimizations, and deliberate
+non-goals were removed rather than mislabeled as resolved bugs. No confirmed
+bug remains in the file after this batch.
+
+The serial, fixed-seed Luce gate passes 559/559, the living-document guard
+passes 7/7, grammar generation passes 5/5, and the extension scanner passes
+5/5. Focused source-derived vocabulary, site-highlighter, grammar-structure,
+and IR round-trip regressions pass as well.
+
+Commit: current tool/documentation bug closeout batch.
+
+## 2026-08-13 — compiled keyboard exhaustion answers absence
+
+The compiled `key_read` path now substitutes the module's canonical non-null
+empty string when the host answers end-of-input. Previously the lowering
+cleared the host out-pointer to null and then handed it to the runtime's strict
+C byte boundary; that correctly rejected null even at length zero, trapping
+the run before `key_read` could answer `none`. The name still becomes an absent
+optional, and `key_text()` now becomes empty on every dry read as documented.
+
+The aggregate run also exposed two stale regression fixtures. The malformed
+`path_kind` program now declares its fallible `main`, and the thread-channel
+teardown test probes the registry from the already-running parent instead of
+expecting a callback from a nested spawn that teardown must reject.
+
+The serial, fixed-seed Luce gate passes 559/559. The complete differential
+specification passes 1,373/1,373, including all three keyboard exhaustion
+cases, malformed path-kind rejection, and close-time registry synchronization.
+
+Commit: current host-boundary bug closeout batch.

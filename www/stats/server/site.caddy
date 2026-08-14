@@ -1,0 +1,43 @@
+# The stats.luciaos.com site block, and the record of what was added
+# to /etc/caddy/Caddyfile by hand.
+#
+# Applied with `www/stats/server/enable-site.sh`.  Like `logging.caddy`
+# beside it, this exists because the edge server's Caddyfile is not in
+# this repository — it serves a dozen unrelated sites — so the part
+# that is ours is written down here instead.
+#
+# Nothing unusual: a static root and a file server, the same as the
+# other three.  Caddy takes the certificate itself over HTTP-01, which
+# is why the DNS record has to exist first.
+#
+# The one addition is the cache rule, and it is only about `data/`:
+# `stats.json` is rewritten every quarter hour and must never be served
+# stale.  Everything else is left to Caddy's ETag, so a browser
+# revalidates and gets a 304 — three assets are not worth a `max-age`,
+# and a `max-age` on them means an hour of visitors reading a deployed
+# page with the previous deploy's script.  That is not a saving, it is
+# a class of bug.
+
+stats.luciaos.com {
+	root * /opt/apps/luciaos_stats
+	file_server
+	encode zstd gzip
+
+	@data path /data/*
+	header @data Cache-Control "no-cache"
+
+	# This site logs, but the collector does not read `stats.log`: the
+	# page says it counts the three sites the project publishes, and a
+	# dashboard that quietly counted itself would make that untrue.
+	# The log is kept because a 404 here still has to be findable.
+	# Counting it later is one row in `classify.zig` and one in
+	# `ingest.live_logs` — and a rewrite of the page's first sentence.
+	log {
+		output file /var/log/caddy/stats.log {
+			roll_size 20MiB
+			roll_keep 4
+			roll_keep_for 720h
+		}
+		format json
+	}
+}

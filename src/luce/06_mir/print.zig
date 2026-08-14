@@ -67,20 +67,26 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
         });
         switch (constant.payload) {
             .sequence => |values| {
+                const element_type = switch (program.heap_types[constant.heap]) {
+                    .list => |element| element,
+                    .array => |shape| shape.element,
+                    else => unreachable, // verified constant/container agreement
+                };
                 try text.append(allocator, '[');
                 for (values, 0..) |value, value_index| {
                     if (value_index != 0) try text.appendSlice(allocator, ", ");
-                    try printConstantValue(&text, allocator, program, value);
+                    try printConstantValue(&text, allocator, program, value, element_type);
                 }
                 try text.appendSlice(allocator, "]\n");
             },
             .map => |entries| {
+                const pair = program.heap_types[constant.heap].map;
                 try text.append(allocator, '{');
                 for (entries, 0..) |entry, entry_index| {
                     if (entry_index != 0) try text.appendSlice(allocator, ", ");
-                    try printConstantValue(&text, allocator, program, entry.key);
+                    try printConstantValue(&text, allocator, program, entry.key, pair.key);
                     try text.appendSlice(allocator, ": ");
-                    try printConstantValue(&text, allocator, program, entry.value);
+                    try printConstantValue(&text, allocator, program, entry.value, pair.value);
                 }
                 try text.appendSlice(allocator, "}\n");
             },
@@ -149,10 +155,21 @@ fn printConstantValue(
     allocator: Allocator,
     program: *const Program,
     constant: defs.ConstantValue,
+    wanted: Type,
 ) error{OutOfMemory}!void {
+    // Constant atoms erase their source type on the wire.  Recover it
+    // from the container slot so an enum remains the named value the
+    // source wrote instead of becoming an unexplained integer in the
+    // human-readable IR.  `verifyConstantValue` proves this same walk
+    // before a decoded program may be used.
+    const expected = if (wanted == .optional) wanted.optional.asType() else wanted;
     switch (constant) {
         .boolean => |value| try appendPrint(text, allocator, "{}", .{value}),
-        .long => |value| try appendPrint(text, allocator, "{d}", .{value}),
+        .long => |value| if (expected == .enumeration) {
+            const declared = program.enums[expected.enumeration.index];
+            const member = declared.members[declared.memberOfValue(value).?];
+            try appendPrint(text, allocator, "{s}.{s}", .{ declared.name, member.name });
+        } else try appendPrint(text, allocator, "{d}", .{value}),
         .double => |value| try appendPrint(text, allocator, "{d}", .{value}),
         .string => |index| try appendPrint(text, allocator, "data#{d}", .{index}),
         .strukt => |value| {
@@ -161,7 +178,7 @@ fn printConstantValue(
             for (value.fields, layout.fields, 0..) |field, declared, index| {
                 if (index != 0) try text.appendSlice(allocator, ", ");
                 try appendPrint(text, allocator, "{s}=", .{declared.name});
-                try printConstantValue(text, allocator, program, field);
+                try printConstantValue(text, allocator, program, field, declared.field_type);
             }
             try text.append(allocator, ')');
         },

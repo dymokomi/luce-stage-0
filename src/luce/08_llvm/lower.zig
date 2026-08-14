@@ -510,6 +510,30 @@ const Module = struct {
             .os_cpu_count,
             .epoch_ms,
             => builder.fnType(.i32, &.{ .ptr, .ptr }, .normal),
+            // The backend-neutral window/GPU channel.  These callbacks are
+            // installed into the runtime at entry and are not called by
+            // generated code directly, but keeping their exact C shapes here
+            // makes every ABI slot checked by the same exhaustive table.
+            .gpu_backend => builder.fnType(.i32, &.{ .ptr, .ptr }, .normal),
+            .ui_window_open => builder.fnType(
+                .i32,
+                &.{ .ptr, .ptr, .i64, .i64, .i64, .ptr },
+                .normal,
+            ),
+            .ui_window_surface => builder.fnType(.i32, &.{ .ptr, .i64, .ptr }, .normal),
+            .gpu_surface_size => builder.fnType(.i32, &.{ .ptr, .i64, .i64, .ptr }, .normal),
+            .gpu_surface_clear => builder.fnType(
+                .i32,
+                &.{ .ptr, .i64, .i64, .i64, .i64, .i64 },
+                .normal,
+            ),
+            .gpu_surface_fill_rect => builder.fnType(
+                .i32,
+                &.{ .ptr, .i64, .i64, .i64, .i64, .i64, .i64, .i64, .i64, .i64 },
+                .normal,
+            ),
+            .gpu_surface_present => builder.fnType(.i32, &.{ .ptr, .i64 }, .normal),
+            .gpu_close => builder.fnType(.i32, &.{ .ptr, .i64, .i64 }, .normal),
             // The handle channel (docs/BYTES.md).  Named and typed
             // here like `trap` is, and called from here for the same
             // reason it is not: the five pointers are handed to
@@ -2336,6 +2360,23 @@ const Module = struct {
             try self.loadHostSlot(&wip, host, .handle_write, "files.write.fn"),
             try self.loadHostSlot(&wip, host, .handle_flush, "files.flush.fn"),
             try self.loadHostSlot(&wip, host, .handle_close, "files.close.fn"),
+        }, "");
+
+        // The backend-neutral window/GPU channel follows the same lifetime
+        // rule as files: install its host callbacks once, before `main`, so
+        // native windows and surfaces can be closed by the runtime's scope
+        // walk even when no generated code remains on the stack.
+        _ = try self.callService(&wip, .luce_rt_graphics_install, .void, &.{
+            started,
+            context,
+            try self.loadHostSlot(&wip, host, .gpu_backend, "graphics.backend.fn"),
+            try self.loadHostSlot(&wip, host, .ui_window_open, "graphics.window.open.fn"),
+            try self.loadHostSlot(&wip, host, .ui_window_surface, "graphics.window.surface.fn"),
+            try self.loadHostSlot(&wip, host, .gpu_surface_size, "graphics.surface.size.fn"),
+            try self.loadHostSlot(&wip, host, .gpu_surface_clear, "graphics.surface.clear.fn"),
+            try self.loadHostSlot(&wip, host, .gpu_surface_fill_rect, "graphics.surface.fill.fn"),
+            try self.loadHostSlot(&wip, host, .gpu_surface_present, "graphics.surface.present.fn"),
+            try self.loadHostSlot(&wip, host, .gpu_close, "graphics.close.fn"),
         }, "");
 
         // The thread channel and this engine's nursery, handed over
@@ -5031,6 +5072,42 @@ const Body = struct {
         );
     }
 
+    /// One backend-neutral graphics service.  The runtime export receives
+    /// its operation-specific arguments, then an `ok` flag and source site;
+    /// a zero flag is an ordinary `io_failed` outcome, while a nonzero C
+    /// return is a trap already reported by the runtime.
+    fn graphicsService(
+        self: *Body,
+        which: Service,
+        arguments: []const Builder.Value,
+    ) Error!Builder.Value {
+        const builder = self.module.builder;
+        const word = Builder.Alignment.fromByteUnits(4);
+        const gpa = self.module.gpa;
+        const agreed = try self.scratch(.i32, word, "graphics.ok");
+        var all: std.ArrayList(Builder.Value) = .empty;
+        defer all.deinit(gpa);
+        try all.append(gpa, self.runtime);
+        try all.appendSlice(gpa, arguments);
+        try all.append(gpa, agreed);
+        try all.append(gpa, try builder.intValue(.i32, self.index));
+        try all.append(gpa, try builder.intValue(.i32, self.current));
+        try self.callChecked(which, all.items);
+        const refused = try self.wip.icmp(
+            .eq,
+            try self.wip.load(.normal, .i32, agreed, word, "graphics.flag"),
+            try builder.intValue(.i32, 0),
+            "graphics.refused",
+        );
+        return self.wip.select(
+            .normal,
+            refused,
+            try builder.intValue(.i32, outcome_errored),
+            try builder.intValue(.i32, outcome_ok),
+            "graphics.outcome",
+        );
+    }
+
     /// `file_write(path, text)` and `file_append(path, text)`, which
     /// differ only in where the write starts — one `libluce_rt` door
     /// with the mode as an argument, since version 12 defined both as
@@ -7384,6 +7461,94 @@ const Body = struct {
                 self.produced[register].outcome = try self.raiseIo(.make, answer, path, path_length);
             },
 
+            // -- backend-neutral window/GPU channel ------------------
+            //
+            // These doors are runtime calls rather than direct ABI calls.
+            // `libluce_rt` owns native-resource validation and turns a host
+            // refusal into the same fallible outcome as file I/O; the
+            // generated code only boxes/unboxes the language values.
+            .gpu_backend => {
+                const out = try self.scratch(.i64, value_alignment, "gpu.backend");
+                try self.callChecked(.luce_rt_gpu_backend, &.{ rt, out });
+                self.produced[register].value = try self.wip.load(
+                    .normal,
+                    .i64,
+                    out,
+                    value_alignment,
+                    "gpu.backend.value",
+                );
+            },
+            .ui_window_open => {
+                const title, const title_length = try self.textParts(of[0], "title");
+                const box = try self.scratch(self.module.value_type, value_alignment, "window.box");
+                const result = self.function.result_types[register];
+                try self.fillBoxShape(box, result);
+                try self.fillBoxValue(box, result, try self.zeroValue(result));
+                self.produced[register].outcome = try self.graphicsService(.luce_rt_ui_window_open, &.{
+                    title,
+                    title_length,
+                    self.produced[of[1]].value,
+                    self.produced[of[2]].value,
+                    box,
+                });
+                self.produced[register].value = try self.unboxed(result, box, "window.value");
+                self.produced[register].box = box;
+            },
+            .ui_window_surface => {
+                const box = try self.scratch(self.module.value_type, value_alignment, "surface.box");
+                const result = self.function.result_types[register];
+                try self.fillBoxShape(box, result);
+                try self.fillBoxValue(box, result, try self.zeroValue(result));
+                self.produced[register].outcome = try self.graphicsService(.luce_rt_ui_window_surface, &.{
+                    try self.boxedRegister(of[0], "window"),
+                    box,
+                });
+                self.produced[register].value = try self.unboxed(result, box, "surface.value");
+                self.produced[register].box = box;
+            },
+            .gpu_surface_size => {
+                const out = try self.scratch(.i64, value_alignment, "surface.size");
+                self.produced[register].outcome = try self.graphicsService(.luce_rt_gpu_surface_size, &.{
+                    try self.boxedRegister(of[0], "surface"),
+                    self.produced[of[1]].value,
+                    out,
+                });
+                self.produced[register].value = try self.wip.load(
+                    .normal,
+                    .i64,
+                    out,
+                    value_alignment,
+                    "surface.size.value",
+                );
+            },
+            .gpu_surface_clear => {
+                self.produced[register].outcome = try self.graphicsService(.luce_rt_gpu_surface_clear, &.{
+                    try self.boxedRegister(of[0], "surface"),
+                    self.produced[of[1]].value,
+                    self.produced[of[2]].value,
+                    self.produced[of[3]].value,
+                    self.produced[of[4]].value,
+                });
+            },
+            .gpu_surface_fill_rect => {
+                self.produced[register].outcome = try self.graphicsService(.luce_rt_gpu_surface_fill_rect, &.{
+                    try self.boxedRegister(of[0], "surface"),
+                    self.produced[of[1]].value,
+                    self.produced[of[2]].value,
+                    self.produced[of[3]].value,
+                    self.produced[of[4]].value,
+                    self.produced[of[5]].value,
+                    self.produced[of[6]].value,
+                    self.produced[of[7]].value,
+                    self.produced[of[8]].value,
+                });
+            },
+            .gpu_surface_present => {
+                self.produced[register].outcome = try self.graphicsService(.luce_rt_gpu_surface_present, &.{
+                    try self.boxedRegister(of[0], "surface"),
+                });
+            },
+
             // -- the byte channel (docs/BYTES.md) ---------------------
             //
             // Every one of these is a `libluce_rt` call and not a host
@@ -7627,13 +7792,32 @@ const Body = struct {
                     &.{ name.text, name.length, typed.text, typed.length },
                     "key",
                 );
-                const present = try self.wip.cast(.zext, try self.saidYes(answer), .i32, "present");
+                const has_key = try self.saidYes(answer);
+                const present = try self.wip.cast(.zext, has_key, .i32, "present");
                 // The payload belongs to the run, not to the host's
                 // buffer: copy it in before `key_text` can be asked.
                 // Cleared, so end of input empties it rather than
-                // leaving the last key's text standing.
+                // leaving the last key's text standing.  A dry host
+                // leaves a null pointer behind; the runtime's C door
+                // quite deliberately rejects null even at length zero,
+                // so select the module's canonical non-null empty text
+                // on that branch.
                 const typed_bytes, const typed_size = try typed.load(self);
-                try self.callChecked(.luce_rt_set_key_text, &.{ rt, typed_bytes, typed_size });
+                const remembered_bytes = try self.wip.select(
+                    .normal,
+                    has_key,
+                    typed_bytes,
+                    (try self.module.textBytes("")).toValue(),
+                    "key.text.or.empty",
+                );
+                const remembered_size = try self.wip.select(
+                    .normal,
+                    has_key,
+                    typed_size,
+                    try self.module.builder.intValue(.i64, 0),
+                    "key.length.or.zero",
+                );
+                try self.callChecked(.luce_rt_set_key_text, &.{ rt, remembered_bytes, remembered_size });
                 const name_bytes, const name_size = try name.load(self);
                 try self.callAnswering(register, .luce_rt_maybe_text, &.{
                     rt,

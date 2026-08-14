@@ -496,7 +496,7 @@ at every element type, indexing/iteration/slicing, `copy`, the refusals
 (each verb, each mutating method, each container), duplicate keys, the
 `immutable_object` backstop driven from hand-made IR, the census
 exclusion, and the artifact-refusal row for the version bump.  Site: a
-tour section, the reference, and `/ref/ownership/#s46`.
+Learn section, the reference, and `/reference/ownership/#s46`.
 
 **Sequencing.**  After threads → lambdas → the self revision, on a
 quiet tree, as the final feature before the lock.  Threads and lambdas

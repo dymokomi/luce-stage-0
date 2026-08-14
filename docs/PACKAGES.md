@@ -1,17 +1,19 @@
 # Packages: using and loading (design)
 
-**Status: BUILT — the consuming half this memo designs is complete.
+**Status: BUILT — the consuming half this memo designs is complete, and the
+local authoring commands (`luce package new` and `luce package version`) now
+cover the source-tree workflow.
 All five implementation-order steps landed (each with its as-built
 note below): the manifest, discovery and the D7 seam; subfolder
 imports and `import ... as`; the store, `LUCE_LIB`, `path:`, hashes,
 diamonds + `override:`, and root-qualified serialized names; the
 `.luce/cache/` compile cache; and the closing spec sweep.  What this
-memo deliberately stops before — authoring, publishing, fetching,
-`luce install`/`luce update`/`luce init`, the registry — remains
-unbuilt and is the next memo's, as designed.**  This memo designs the
+memo deliberately stops before — publishing, fetching, `luce install`/
+`luce update`/`luce init`, and the registry — remains unbuilt and is the next
+memo's, as designed.**  This memo designs the
 consuming half of packages — how a program *finds and loads* code it
-did not write — and deliberately stops before authoring and
-publishing.  The machinery for using packages has to be solid before a
+did not write — and deliberately stops before registry publishing and
+fetching.  The machinery for using packages has to be solid before a
 registry, a manifest format for publishing, or a fetch protocol means
 anything: every one of those produces files that this memo's resolver
 has to load, so this memo comes first.  The durable direction was set
@@ -180,7 +182,7 @@ collides with a declared package is refused, not preferred.
 
 ```text
 geo-1.2.0/
-├── luce.zon          # .name = "geo", .version = "1.2.0"
+├── luce.yaml         # name: geo, version: 1.2.0
 ├── geo.luc           # the entry module: `import geo` reads this
 └── shapes.luc        # `import geo.shapes` reads this
 ```
@@ -237,6 +239,22 @@ geo-1.2.0/
   by hand — `cp -r` a checkout, a git submodule; vendoring is just
   the store with no tooling — which is how the machinery stays
   testable before any fetch protocol exists.
+- **Authoring is not the store.** A project keeps a package in a direct
+  source directory such as `geo/` beside `main.luc` and names it with a
+  root want's `path:geo` development override.  That directory
+  is edited and committed with the project; it does not carry the
+  `NAME-VERSION` store suffix.  Promotion to `.luce/packages/NAME-VERSION/`
+  is the installed/published boundary.  Both forms carry the package's
+  `luce.yaml`, so the source form can be checked with the same name/version
+  identity before a registry or downloader exists.
+- **The local authoring commands own this edit.** `luce package new NAME
+  [VERSION]` creates the direct source folder, its `luce.yaml`, its entry
+  module, and the root `path:` want (and bootstraps a root manifest when the
+  tree is still rootless).  `luce package version NAME VERSION` updates the
+  package manifest and root want together.  `luce package publish NAME`
+  validates the source boundary but refuses until a registry and upload
+  protocol exist; a refusal is preferable to claiming a package was
+  published when no server was contacted.
 - **`cache/` takes over the compile cache** for projects.  The keying
   already works unchanged: `artifact.sourceHash` hashes the encoded
   module, which the front end rebuilds from *all* loaded sources —
@@ -299,7 +317,7 @@ The review's second blocker, adopted as the implementation contract:
   edge server and be replaced by the Luce-written registry server
   with no client change.  That memo is written when this one is
   built.
-- **Authoring/publishing** — manifests beyond the fields above,
+- **Registry publishing** — manifests beyond the fields above,
   mandatory hashes, signatures, yanking, scoped names, the package
   export boundary: each named above at the decision that defers it.
 - **Version ranges and a solver** — after a registry with metadata

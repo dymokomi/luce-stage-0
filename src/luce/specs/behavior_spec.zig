@@ -3215,92 +3215,6 @@ test "the explicit frame stack survives a deep iterative-recursive sum" {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Strings: the full method surface
-// ---------------------------------------------------------------------------
-
-test "strings: find, contains, starts_with, ends_with" {
-    try agreeOk(
-        \\import std.strings
-        \\
-        \\func main():
-        \\    let s = "hello world"
-        \\    assert((s.find("world") else -1) == 6)
-        \\    assert(s.find("xyz") == none)
-        \\    assert((s.find("hello") else -1) == 0)
-        \\    assert(s.contains("lo w"))
-        \\    assert(not s.contains("zzz"))
-        \\    assert(s.starts_with("hello"))
-        \\    assert(not s.starts_with("world"))
-        \\    assert(s.ends_with("world"))
-        \\    assert(not s.ends_with("hello"))
-        \\
-    );
-}
-
-test "strings: trim, lower, upper, repeat" {
-    try agreeOk(
-        \\import std.strings
-        \\
-        \\func main():
-        \\    assert("  hi  ".trim() == "hi")
-        \\    assert("\t\nhi\n".trim() == "hi")
-        \\    assert("".trim() == "")
-        \\    assert("MiXeD".lower() == "mixed")
-        \\    assert("MiXeD".upper() == "MIXED")
-        \\    assert("ab".repeat(3) == "ababab")
-        \\    assert("ab".repeat(0) == "")
-        \\    assert("x".repeat(1) == "x")
-        \\
-    );
-}
-
-test "strings: replace substitutes every occurrence" {
-    try agreeOk(
-        \\import std.strings
-        \\
-        \\func main():
-        \\    assert("a.b.c".replace(".", "-") == "a-b-c")
-        \\    assert("aaa".replace("a", "bb") == "bbbbbb")
-        \\    assert("hello".replace("z", "y") == "hello")
-        \\    assert("hello".replace("l", "") == "heo")
-        \\
-    );
-}
-
-test "strings: split on a separator and split on whitespace" {
-    try agreeOk(
-        \\import std.strings
-        \\
-        \\func main():
-        \\    let a = "1,2,3".split(",")
-        \\    assert(len(a) == 3)
-        \\    assert(a[0] == "1" and a[1] == "2" and a[2] == "3")
-        \\    let b = "  the   quick brown  ".split("")
-        \\    assert(len(b) == 3)
-        \\    assert(b[0] == "the" and b[1] == "quick" and b[2] == "brown")
-        \\    let c = "solo".split(",")
-        \\    assert(len(c) == 1 and c[0] == "solo")
-        \\
-    );
-}
-
-test "strings: join round-trips split" {
-    try agreeOk(
-        \\import std.strings
-        \\
-        \\func main():
-        \\    let parts = "a-b-c".split("-")
-        \\    assert(parts.join("-") == "a-b-c")
-        \\    assert(parts.join("") == "abc")
-        \\    let two = ["x", "y"]
-        \\    assert(two.join(", ") == "x, y")
-        \\    let one = ["only"]
-        \\    assert(one.join(",") == "only")
-        \\
-    );
-}
-
 test "strings: slicing corners — empty, full, and open ends" {
     try agreeOk(
         \\func main():
@@ -5041,42 +4955,8 @@ test "S33: nothing leaks — scope ownership frees what free() used to" {
     );
 }
 
-test "string methods: search, case, trim, replace, repeat, split" {
-    try agreeOk(
-        \\import std.strings
-        \\
-        \\func main():
-        \\    let text = "  Hello, Luce World  "
-        \\    let cleaned = text.trim()
-        \\    assert(cleaned == "Hello, Luce World")
-        \\    assert((cleaned.find("Luce") else -1) == 7)
-        \\    assert(cleaned.find("zig") == none)
-        \\    assert(cleaned.contains("World"))
-        \\    assert(cleaned.starts_with("Hello"))
-        \\    assert(cleaned.ends_with("World"))
-        \\    assert(cleaned.lower() == "hello, luce world")
-        \\    assert(cleaned.upper() == "HELLO, LUCE WORLD")
-        \\    assert(cleaned.replace("Luce", "brave") == "Hello, brave World")
-        \\    assert("ab".repeat(3) == "ababab")
-        \\    assert("x".repeat(0) == "")
-        \\    assert("na".byte_at(0) == 110)
-        \\    var words = cleaned.replace(",", "").split("")
-        \\    assert(len(words) == 3)
-        \\    assert(words[0] == "Hello")
-        \\    var csv = "a;b;;c".split(";")
-        \\    assert(len(csv) == 4)
-        \\    assert(csv[2] == "")
-        \\    assert(csv.join("|") == "a|b||c")
-        \\    free(words)
-        \\    free(csv)
-        \\
-    );
-}
-
 test "list and array methods: sort, reverse, find, contains, fill, clear" {
     try agreeOk(
-        \\import std.strings
-        \\
         \\func main():
         \\    var xs = [3, 1, 4, 1, 5]
         \\    xs.sort()
@@ -5093,6 +4973,7 @@ test "list and array methods: sort, reverse, find, contains, fill, clear" {
         \\    var names = ["cyan", "amber"]
         \\    names.sort()
         \\    assert(names[0] == "amber")
+        \\    assert(names[1] == "cyan")
         \\    var row = new array(long, 4)
         \\    row.fill(7)
         \\    assert(row[3] == 7)
@@ -5104,7 +4985,8 @@ test "list and array methods: sort, reverse, find, contains, fill, clear" {
         \\    ages["ada"] = 36
         \\    ages["alan"] = 41
         \\    var listed = ages.keys()
-        \\    assert(listed.join(",") == "ada,alan")
+        \\    assert(len(listed) == 2)
+        \\    assert(listed[0] == "ada" and listed[1] == "alan")
         \\    ages.clear()
         \\    assert(len(ages) == 0)
         \\    free(xs)
@@ -5150,8 +5032,6 @@ test "short-circuit operands survive block splits everywhere" {
 
 test "file-scope constants fold every value kind" {
     try agreeOk(
-        \\import std.strings
-        \\
         \\const width = 80
         \\const tau = 2.0 * pi
         \\const pi = 3.14159
@@ -5169,7 +5049,7 @@ test "file-scope constants fold every value kind" {
         \\    assert(tau > 6.28 and tau < 6.29)
         \\    assert(debug)
         \\    assert(greeting == "hello, loom")
-        \\    assert(shout.upper() == "HELLO, LOOM")
+        \\    assert(shout == "hello, loom")
         \\    assert(truncated == 6)
         \\    assert(widened == 80.0)
         \\    assert(roomy)

@@ -39,6 +39,14 @@ const std = @import("std");
 const luce = @import("luce");
 const manifest = @import("manifest.zig");
 
+// Package commands use the same parser and file name as the loader. These
+// aliases keep one manifest module in the build graph; importing the source
+// file a second time through a separate CLI module would make Zig reject the
+// duplicate module ownership.
+pub const ProjectManifest = manifest.Manifest;
+pub const manifest_file_name = manifest.file_name;
+pub const parseManifest = manifest.parse;
+
 const Allocator = std.mem.Allocator;
 
 /// The path that means standard input, by the convention every Unix

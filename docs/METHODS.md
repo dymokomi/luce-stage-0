@@ -634,7 +634,7 @@ it retires machinery Decision 2 would otherwise have to keep working.
 2. **The list gets built, on both arms.** `luce_rt_args` over
    `luce_rt_names_list`, the `luce_main` wrapper's fourth push, the
    interpreter's mirror, empty-list-when-no-service. S44 into
-   `docs/OWNERSHIP.md` with its `/ref/ownership/#s44` anchor.
+   `docs/OWNERSHIP.md` with its `/reference/ownership/#s44` anchor.
    *Tests:* `specs/agree.zig` with and without arguments — both arms
    compared on prints, leak census and the world left behind.
    **~1 day.**

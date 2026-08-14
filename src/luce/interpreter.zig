@@ -264,6 +264,12 @@ pub const Host = struct {
     /// moving UTF-8 validation into the runtime was for.
     files: runtime.files.Channel = .{},
 
+    /// The backend-neutral window/GPU channel behind `std.ui` and
+    /// `std.gpu`.  Like files, it is C-shaped and installed into the
+    /// shared runtime so resource close happens after the owning scope
+    /// releases, not in a second interpreter-only lifetime path.
+    graphics: runtime.graphics.Channel = .{},
+
     /// The thread channel behind `spawn` (docs/THREADS.md D8).
     ///
     /// C-shaped for the reason `files` is, and one step more so: a

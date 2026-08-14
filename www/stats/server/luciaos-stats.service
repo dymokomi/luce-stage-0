@@ -1,0 +1,46 @@
+[Unit]
+# Read whatever the access logs have gained, count it, and rewrite the
+# report stats.luciaos.com draws.  One shot; the timer decides when.
+Description=Collect LuciaOS site statistics
+Documentation=https://github.com/dymokomi/luciaos/tree/main/www/stats
+After=caddy.service
+
+[Service]
+Type=oneshot
+
+# Its own user, in caddy's group: the logs are 0640 caddy:caddy, and
+# reading them is the only reason this needs to belong anywhere.
+User=luciastats
+Group=luciastats
+SupplementaryGroups=caddy
+
+ExecStart=/usr/local/bin/luciastats ingest \
+    --logs /var/log/caddy \
+    --db /var/lib/luciaos-stats/stats.db \
+    --geo /var/lib/luciaos-stats/countries.bin \
+    --out /opt/apps/luciaos_stats/data/stats.json
+
+# It reads three log files, writes one database and one JSON file, and
+# has no business anywhere else on the machine.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ReadWritePaths=/var/lib/luciaos-stats /opt/apps/luciaos_stats/data
+ReadOnlyPaths=/var/log/caddy
+
+# Nothing here talks to the network.  Counting local files does not
+# need a socket, and saying so is how it stays that way.
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

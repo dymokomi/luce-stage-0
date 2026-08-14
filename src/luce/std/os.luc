@@ -201,10 +201,10 @@ func available_memory() -> long:
 # would schedule work onto — logical processors, so a machine with
 # simultaneous multithreading counts the threads.
 #
-# Luce has no threads, so this is a fact to report and not yet a fact
-# to act on. It is here because the machine's facts are one subject
-# and the alternative was asking for it in a later ABI version, which
-# would have cost every artifact a rebuild to learn one number.
+# Workers make this a sizing fact as well as a reporting one: a program
+# may use it to bound a batch of independent `spawn` calls. It is here
+# at the raw machine seam because adding that fact in a later ABI
+# version would have cost every artifact a rebuild to learn one number.
 func cpu_count() -> long:
     return os_cpu_count()
 

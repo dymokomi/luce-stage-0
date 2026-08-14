@@ -316,6 +316,13 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .os_cpu_count,
         .shell_run,
         .term_event_data,
+        .gpu_backend,
+        .ui_window_open,
+        .ui_window_surface,
+        .gpu_surface_size,
+        .gpu_surface_clear,
+        .gpu_surface_fill_rect,
+        .gpu_surface_present,
         => .impure,
     };
 }
@@ -516,7 +523,16 @@ pub fn viewStable(instruction: Instruction) bool {
             // The two host services that make an object: each takes a
             // table row, which is exactly what a resolved array view
             // cannot survive.
-            .dir_list, .file_open => false,
+            .dir_list,
+            .file_open,
+            .gpu_backend,
+            .ui_window_open,
+            .ui_window_surface,
+            .gpu_surface_size,
+            .gpu_surface_clear,
+            .gpu_surface_fill_rect,
+            .gpu_surface_present,
+            => false,
             // A wait moves the worker's result in, which attaches
             // rows to *this* table.
             .task_wait => false,

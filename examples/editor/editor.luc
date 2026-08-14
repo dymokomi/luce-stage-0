@@ -231,17 +231,18 @@ private struct Editing:
 
 # --- the word tables -------------------------------------------------
 #
-# **The language's own words, spelled once each.**  These used to be
-# forty-six `word == "…"` comparisons — a hash set written as a truth
-# table — and they had drifted eight language generations out of date:
+# **The language's own words, kept against their sources.** These used
+# to be `word == "…"` comparisons — a hash set written as a truth table
+# — and they had drifted eight language generations out of date:
 # `enum`, `match`, `new`, `import`, `give`, `copy`, `none`, `try`,
 # `catch`, `self`, `spawn` and `static` were all missing, and so were
 # twenty-one builtins the language has gained since.  Ground truth is
 # the compiler's own tables, which `tools/grammar.zig` reads for the
-# VS Code grammar:
-# `02_lex/token.zig`'s `keywords` (thirty-four words) and
-# `04_semantics/builtins.zig`'s `builtins` (forty-six), plus `range`,
-# which is syntax the parser recognises only inside a `for`.
+# VS Code grammar. The site build reads those same compiler tables and
+# holds these three maps to exact set equality: `02_lex/token.zig`'s
+# `keywords`, `support/types.zig`'s builtin types, and
+# `04_semantics/builtins.zig`'s `builtins` plus `range`, which is syntax
+# the parser recognises only inside a `for`.
 #
 # Two words came *out*.  `slice` is a name the language does not have
 # at all any more, and `byte_at` is a **method**: it is only
@@ -294,6 +295,9 @@ private const builtin_words = {
     "term_event_data": true, "term_flush": true, "term_move": true,
     "term_rows": true, "term_style": true, "term_write": true,
     "trap": true, "trunc": true,
+    "gpu_backend": true, "ui_window_open": true, "ui_window_surface": true,
+    "gpu_surface_size": true, "gpu_surface_clear": true,
+    "gpu_surface_fill_rect": true, "gpu_surface_present": true,
 }
 
 # What a word in a source line is, and the style that says so.

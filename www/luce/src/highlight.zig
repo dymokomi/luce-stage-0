@@ -69,16 +69,18 @@ pub const type_names = [_][]const u8{
 /// constructors, which are named for the types they produce and are
 /// spelled in `type_names`.
 pub const builtins = [_][]const u8{
-    "abs",             "min",                 "max",          "clamp",       "sqrt",
-    "floor",           "ceil",                "trunc",        "len",         "range",
-    "assert",          "trap",                "error",        "parse_int",   "parse_float",
-    "chr",             "ord",                 "print",        "print_error", "read_line",
-    "env",             "clock_ms",            "sleep_ms",     "file_read",   "file_write",
-    "file_append",     "path_kind",           "file_delete",  "file_rename", "dir_list",
-    "term_rows",       "term_cols",           "term_clear",   "term_move",   "term_style",
-    "term_write",      "term_flush",          "key_read",     "key_text",    "exit",
-    "os_total_memory", "os_available_memory", "os_cpu_count", "shell_run",   "file_open",
-    "term_event_data", "parse_string",        "dir_create",   "epoch_ms",
+    "abs",                 "min",                 "max",              "clamp",             "sqrt",
+    "floor",               "ceil",                "trunc",            "len",               "range",
+    "assert",              "trap",                "error",            "parse_int",         "parse_float",
+    "chr",                 "ord",                 "print",            "print_error",       "read_line",
+    "env",                 "clock_ms",            "sleep_ms",         "file_read",         "file_write",
+    "file_append",         "path_kind",           "file_delete",      "file_rename",       "dir_list",
+    "term_rows",           "term_cols",           "term_clear",       "term_move",         "term_style",
+    "term_write",          "term_flush",          "key_read",         "key_text",          "exit",
+    "os_total_memory",     "os_available_memory", "os_cpu_count",     "shell_run",         "file_open",
+    "term_event_data",     "parse_string",        "dir_create",       "epoch_ms",          "gpu_backend",
+    "ui_window_open",      "ui_window_surface",   "gpu_surface_size", "gpu_surface_clear", "gpu_surface_fill_rect",
+    "gpu_surface_present",
 };
 
 /// Names that mean something only behind a receiver: `xs.append(v)`,
@@ -137,13 +139,13 @@ pub fn render(out: *Buffer, source: []const u8) !void {
         }
 
         // An f-string is presented as one string token: the `f`
-        // belongs to the literal.  The forgiving scanner does not yet
-        // skip a nested string inside a hole, so that legal shape is an
-        // editor-only approximation recorded in docs/MISSING.md.
+        // belongs to the literal. Its scanner follows brace depth and
+        // nested strings so quotes and map braces inside a hole cannot
+        // end the token early.
         if (byte == 'f' and index + 1 < source.len and source[index + 1] == '"' and
             (index == 0 or !isWordByte(source[index - 1])))
         {
-            index = try string(out, source, index, index + 1);
+            index = try formattedString(out, source, index, index + 1);
             previous_word = "";
             after_dot = false;
             continue;
@@ -200,18 +202,83 @@ pub fn render(out: *Buffer, source: []const u8) !void {
     }
 }
 
-/// Emit a string literal starting at `open` (the quote), with the token
-/// itself beginning at `start` (one earlier for an f-string).  Returns
-/// the index just past the literal.  An unterminated literal runs to
-/// the end of its line, which is what the lexer reports too.
+/// Emit a plain string literal starting at `open` (the quote). Returns
+/// the index just past the literal. An unterminated literal runs to the
+/// end of its line, which is what the lexer reports too.
 fn string(out: *Buffer, source: []const u8, start: usize, open: usize) !usize {
+    const index = plainStringEnd(source, open);
+    try span(out, "s", source[start..index]);
+    return index;
+}
+
+fn plainStringEnd(source: []const u8, open: usize) usize {
     var index = open + 1;
     while (index < source.len and source[index] != '"' and source[index] != '\n') {
         if (source[index] == '\\' and index + 1 < source.len) index += 1;
         index += 1;
     }
     if (index < source.len and source[index] == '"') index += 1;
+    return index;
+}
+
+/// Emit one complete f-string, including nested grouping, plain strings,
+/// and f-strings inside its holes.  The language limits syntactic nesting;
+/// mirroring a finite ceiling here keeps deliberately broken site samples
+/// unable to exhaust the generator's native stack.
+fn formattedString(out: *Buffer, source: []const u8, start: usize, open: usize) !usize {
+    const index = formattedStringEnd(source, open, 0);
     try span(out, "s", source[start..index]);
+    return index;
+}
+
+const max_string_nesting = 400;
+
+fn formattedStringEnd(source: []const u8, open: usize, nesting: u16) usize {
+    var index = open + 1;
+    var brace_depth: usize = 0;
+    while (index < source.len and source[index] != '\n') {
+        const byte = source[index];
+        if (brace_depth == 0) {
+            if (byte == '"') return index + 1;
+            if (byte == '\\') {
+                if (index + 1 >= source.len or source[index + 1] == '\n') return index;
+                index += 2;
+                continue;
+            }
+            if (byte == '{') {
+                if (index + 1 < source.len and source[index + 1] == '{') {
+                    index += 2;
+                    continue;
+                }
+                brace_depth = 1;
+            }
+            index += 1;
+            continue;
+        }
+
+        // A hole is Luce code. Skip its literals whole before looking
+        // at grouping braces; a nested f-string recursively applies the
+        // same rule, while a plain string only needs escape handling.
+        if (byte == 'f' and index + 1 < source.len and source[index + 1] == '"' and
+            (index == 0 or !isWordByte(source[index - 1])))
+        {
+            index = if (nesting < max_string_nesting)
+                formattedStringEnd(source, index + 1, nesting + 1)
+            else
+                plainStringEnd(source, index + 1);
+            continue;
+        }
+        if (byte == '"') {
+            index = plainStringEnd(source, index);
+            continue;
+        }
+        if (byte == '{') {
+            brace_depth += 1;
+        } else if (byte == '}') {
+            brace_depth -= 1;
+        }
+        index += 1;
+    }
     return index;
 }
 
@@ -261,6 +328,20 @@ test "comments, strings, f-strings and numbers are one token each" {
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"c\"># note</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"s\">f&quot;a{b}&quot;</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"n\">1.5e-3</span>") != null);
+}
+
+test "an f-string spans nested strings, f-strings, and map braces" {
+    const gpa = std.testing.allocator;
+    const source = "let value = f\"{ len({ \"key\": f\"{name}\" }) } tail\"\nlet done = true";
+    const html = try highlighted(gpa, source);
+    defer gpa.free(html);
+
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        html,
+        "<span class=\"s\">f&quot;{ len({ &quot;key&quot;: f&quot;{name}&quot; }) } tail&quot;</span>",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"k\">let</span> done") != null);
 }
 
 test "every byte of the input survives highlighting" {

@@ -25,19 +25,93 @@ discovery, a synthesized entry, and a report — and no new semantic.
 
 ## Engineering lanes for the compiler
 
-The language test suite has a second layer below `luce test`: tests beside
-compiler stages prove the structures that a Luce program cannot inspect.
-Their property targets are named `fuzz:` so the build can run them as a
-coherent lane.
+The repository's tests have a second layer below `luce test`.  Ownership is by
+the claim a test makes, not by incidental dependencies in its fixture: a
+binding test may call `std.lists.sort_by` to exercise a callback and still be a
+language test; a test of `sort_by`'s ordering and stability is a standard-
+library test.  That distinction keeps the core language, standard library,
+host, products, and tools independently diagnosable.
 
 ```text
 zig build test
 ```
 
-The normal build runs the full deterministic corpus, including every
-checked-in fuzz seed.  This is the release gate and also runs the executable
-specification, product suites, documentation checks, and bundled-program
-builds described in `CONTRIBUTING.md`.
+This is the one deterministic release gate.  It runs these owner lanes:
+
+| lane | owns |
+|---|---|
+| `test-luce` | Unit and structural tests beside the lexer, parser, semantic passes, MIR, optimizer, interpreter, and shared runtime. |
+| `test-specs` | Every observable language contract, on the interpreter and compiled engine, compared by the differential harness. |
+| `test-apps` | The `luce` and `loom` implementation and their command-line product tests. |
+| `test-packages` | Userland packages through the shipped `luce test` command. |
+| `test-editor-product` | The editor model's own Luce tests and the standalone editor build. |
+| `test-example-builds` | Every bundled example compiled through the shipped compiler path. |
+| `test-benchmarks` | Every benchmark compiled, but never timed as part of correctness testing. |
+| `test-tools` | Documentation and site guards, grammar generation, test-suite ownership, and the VS Code extension's JavaScript tests. |
+
+`test-specs` is one fused binary on purpose.  Splitting it physically would
+compile and load the LLVM-backed harness repeatedly and would let several
+memory-heavy copies compete.  Its tests still have exactly one logical owner,
+enforced by `tools/test_suites.zig` and its directory audit:
+
+| focused lane | specification owner |
+|---|---|
+| `test-language` | Core syntax, types, control flow, functions, ownership, modules, threading semantics, diagnostics, optimization equivalence, module round trips, and the synthesized Luce-test entry. |
+| `test-stdlib` | `std`, including math, lists, strings, paths, files, OS, JSON, and ZIP. |
+| `test-host` | The raw host boundary and its byte/resource representation. |
+| `test-backend` | Source-to-loaded-machine-code LLVM behavior and defensive lowering checks. |
+| `test-editor` | The editor's scripted differential behavior plus `test-editor-product`. |
+| `test-examples` | The adventure's scripted differential behavior plus every bundled example build. |
+| `test-spec-harness` | The comparison harness and scripted host used by all specification owners. |
+
+The focused specification lanes are developer feedback commands; the release
+gate uses the fused run, so no specification is executed twice.  A new
+`src/luce/specs/*_spec.zig` file without exactly one suite fails
+`test-tools`, and the full runner also refuses an unclassified or overlapping
+test name before executing the corpus.
+
+The fused roster is ordered by those same owners—language, standard library,
+host, backend, editor, then examples—so its progress is a sequence of phases,
+not merely a set of labels over an interleaved legacy import order.  Harness
+guards bracket the run because every phase imports the shared comparator.
+Test-only comptime rosters register imported modules without adding anonymous,
+zero-work rows to every focused lane, so a focused count is its owner count.
+
+The internal corpus, fused specification, and focused specification lanes
+inherit their output.  They report bounded completion progress and, while one
+test is long-running, a 15-second heartbeat with the exact test name.  The two
+memory-heavy release-gate binaries are also serialized, keeping their memory
+use predictable.  Smaller targets retain Zig's normal concise reporting.
+
+### Placement audit
+
+The 2026-08-13 whole-tree audit applied these boundaries:
+
+- A test of observable Luce behavior belongs in `src/luce/specs/` and runs on
+  both engines.  Compiler refusals live there too; a rejected program has no
+  engine run to compare.
+- Standard-library behavior lives in `std_spec.zig`, `json_spec.zig`, or
+  `zip_spec.zig`.  The `std.lists.sort_by` ordering, stability, object, and
+  resource cases and the `std.files`, `std.paths`, `std.os`, and `std.term`
+  wrapper cases were consolidated there, and the older duplicate string-
+  method rows were removed from the core behavior file.  Language tests that
+  merely use a std function to construct the feature under test remain with
+  that feature.
+- The editor has three deliberate layers: scripted behavior on both engines,
+  pure model/keymap tests through `luce test`, and a standalone executable
+  build.  None is part of the core-language lane.
+- Product, package, example, benchmark, site, documentation, grammar, and
+  extension tests have their own lanes.  They remain in the release gate but
+  cannot inflate or obscure the core-language result.
+- A beside-the-code test may drive a program only to inspect an internal
+  structure the program cannot observe—for example the interpreter's reusable
+  frame storage.  Damaged serialized MIR is likewise a decoder/verifier input,
+  not a Luce program.  The LLVM end-to-end tests stay beside the backend but
+  are imported only by the executable-specification module.  These are narrow,
+  documented structural seams, not alternate semantic suites.
+
+Compiler-stage property targets are named `fuzz:` so the build can run them as
+a coherent hardening lane:
 
 ```text
 zig build test-hardening

@@ -1,0 +1,21 @@
+[Unit]
+Description=Collect LuciaOS site statistics regularly
+Documentation=https://github.com/dymokomi/luciaos/tree/main/www/stats
+
+[Timer]
+# Every quarter hour.  A run reads only the bytes the logs have gained
+# since the last one, so the cost is the same whether it runs four
+# times an hour or once — and a dashboard that is fifteen minutes stale
+# reads as live, where an hour-old one reads as broken.
+OnCalendar=*:0/15
+
+# Spread out from the exact minute, so this is not competing with every
+# other timer on the box that also likes round numbers.
+RandomizedDelaySec=90
+
+# A machine that was off, or a timer that was masked, catches up on the
+# next boot rather than silently leaving a gap.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

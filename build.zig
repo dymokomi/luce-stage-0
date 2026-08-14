@@ -1,5 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
+const test_suites = @import("tools/test_suites.zig");
 
 /// termui's modules, entry module first (docs/TERMUI.md D12).  The
 /// package is userland, and three things in this file need to name its
@@ -15,9 +16,9 @@ const termui_modules = [_][]const u8{ "termui", "screen", "events", "border", "r
 //
 // zig build installs both plus the compiled bundled programs
 // (examples/*/*.luc -> PREFIX/examples/*/*.lc); zig build test runs the
-// language suite and both app suites.  The editor is one of those
-// bundled programs and is installed as a standalone `editor` binary
-// too — loom carries no editor of its own (owner, 2026-08-12).
+// owner-grouped release gate documented in docs/TESTING.md.  The editor is
+// one of those bundled programs and is installed as a standalone `editor`
+// binary too — loom carries no editor of its own (owner, 2026-08-12).
 //
 // **Only `luce` links libLLVM, and that is a decision about what the
 // two binaries are.**  libLLVM is 164 MB; dyld maps and binds it before
@@ -30,6 +31,12 @@ const termui_modules = [_][]const u8{ "termui", "screen", "events", "border", "r
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    // Cross-target macOS release builds do not inherit Zig's host SDK
+    // framework search path. The release script supplies the path from
+    // `xcrun`; keeping it an explicit build option makes a CI/Xcode selection
+    // visible in the build command rather than hiding it in the Objective-C
+    // seam.
+    const sysroot = b.option([]const u8, "sysroot", "SDK sysroot for cross-target builds");
     const project_version = readProjectVersion(b);
 
     const llvm = discoverLlvm(b);
@@ -116,12 +123,52 @@ pub fn build(b: *std.Build) void {
     generator.addOption(u64, "generator", generatorIdentity(b, target, optimize, llvm));
     luce.addOptions("build_options", generator);
 
-    const luce_tests = b.addTest(.{ .root_module = luce });
-    const run_luce_tests = b.addRunArtifact(luce_tests);
-    const test_step = b.step("test", "Run the Luce and loom test suites");
-    test_step.dependOn(&run_luce_tests.step);
+    const progress_test_runner: std.Build.Step.Compile.TestRunner = .{
+        .path = b.path("tools/test_runner.zig"),
+        .mode = .simple,
+    };
+    const luce_tests = b.addTest(.{
+        .root_module = luce,
+        .test_runner = progress_test_runner,
+    });
+    const run_luce_tests = addProgressTestRun(b, luce_tests, "internals");
+    const test_step = b.step("test", "Run every deterministic release-gate suite");
     const test_luce_step = b.step("test-luce", "Run the Luce package and runtime tests");
     test_luce_step.dependOn(&run_luce_tests.step);
+    test_step.dependOn(test_luce_step);
+
+    // The release gate is intentionally grouped by owner.  The executable
+    // specification below remains one fused binary (and reports its own
+    // language/stdlib/host/backend/editor/example sub-suites) so LLVM is
+    // compiled and loaded once, while the rest of the tree has build lanes
+    // that can be run and diagnosed independently.
+    const test_tools_step = b.step(
+        "test-tools",
+        "Run documentation, site, and repository-tool tests",
+    );
+    const test_apps_step = b.step(
+        "test-apps",
+        "Run compiler and terminal unit and product tests",
+    );
+    const test_packages_step = b.step("test-packages", "Run userland package tests");
+    const test_editor_product_step = b.step(
+        "test-editor-product",
+        "Run the editor's userland tests and standalone build check",
+    );
+    const test_example_builds_step = b.step(
+        "test-example-builds",
+        "Compile every bundled example with the shipped compiler path",
+    );
+    const test_benchmarks_step = b.step(
+        "test-benchmarks",
+        "Compile every benchmark without timing it",
+    );
+    test_step.dependOn(test_tools_step);
+    test_step.dependOn(test_apps_step);
+    test_step.dependOn(test_packages_step);
+    test_step.dependOn(test_editor_product_step);
+    test_step.dependOn(test_example_builds_step);
+    test_step.dependOn(test_benchmarks_step);
 
     // Keep the property corpus addressable on its own.  The ordinary test
     // step runs the checked-in corpus; this lane is where a developer turns
@@ -316,7 +363,30 @@ pub fn build(b: *std.Build) void {
     const runtime_path = b.addOptions();
     runtime_path.addOptionPath("luce_rt_library", runtime_archive);
     specs.addOptions("build_options", runtime_path);
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = specs })).step);
+
+    // The release gate runs the specification once.  Its progress runner
+    // classifies every test and refuses an unowned or multiply-owned name,
+    // while the focused steps below compile only one category for quick
+    // local feedback.
+    const all_specs_tests = b.addTest(.{
+        .root_module = specs,
+        .test_runner = progress_test_runner,
+    });
+    const run_all_specs = addProgressTestRun(b, all_specs_tests, "specifications");
+    const test_specs_step = b.step(
+        "test-specs",
+        "Run the fused executable specification with live suite progress",
+    );
+    test_specs_step.dependOn(&run_all_specs.step);
+    test_step.dependOn(test_specs_step);
+
+    _ = addSpecificationSuite(b, specs, .language);
+    _ = addSpecificationSuite(b, specs, .standard_library);
+    _ = addSpecificationSuite(b, specs, .host);
+    _ = addSpecificationSuite(b, specs, .backend);
+    const test_editor_step = addSpecificationSuite(b, specs, .editor);
+    const test_examples_step = addSpecificationSuite(b, specs, .examples);
+    _ = addSpecificationSuite(b, specs, .harness);
 
     // Keep the highest-risk function/union ownership composition seams addressable
     // without waiting for the bundled applications.  This is a focused
@@ -337,7 +407,7 @@ pub fn build(b: *std.Build) void {
 
     const thread_registry_tests = b.addTest(.{
         .root_module = specs,
-        .filters = &.{"full table"},
+        .filters = &.{ "full table", "closes publication" },
     });
     const test_thread_registry_step = b.step(
         "test-thread-registry",
@@ -664,7 +734,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = site_generator })).step);
+    test_tools_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = site_generator })).step);
 
     // The editor grammar's generator (`tools/grammar.zig`).  Unlike the
     // site generator above it *does* import `luce`: it verifies nothing
@@ -686,7 +756,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = spelling_guard })).step);
+    test_tools_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = spelling_guard })).step);
 
     // The compiler-rt confinement tool's namespace rule, tested on
     // every host — macOS never runs the tool (no bundling), so without
@@ -696,7 +766,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = localize_guard })).step);
+    test_tools_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = localize_guard })).step);
 
     // The guard on the documentation: every Luce sample in every living
     // document is compiled by the compiler this build just made
@@ -714,7 +784,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "luce", .module = luce },
         },
     });
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = documentation_guard })).step);
+    test_tools_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = documentation_guard })).step);
 
     const grammar_generator = b.createModule(.{
         .root_source_file = b.path("tools/grammar.zig"),
@@ -734,7 +804,35 @@ pub fn build(b: *std.Build) void {
     grammar_generator.addAnonymousImport("editor_model.luc", .{
         .root_source_file = b.path("examples/editor/editor_model.luc"),
     });
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = grammar_generator })).step);
+    test_tools_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = grammar_generator })).step);
+
+    // The suite catalogue is executable policy: a new `*_spec.zig` file
+    // without one owner, or a prefix claimed by two suites, fails here.
+    const suite_catalogue_guard = b.createModule(.{
+        .root_source_file = b.path("tools/test_suites_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_tools_step.dependOn(
+        &b.addRunArtifact(b.addTest(.{ .root_module = suite_catalogue_guard })).step,
+    );
+
+    // The VS Code extension's indentation scanner is JavaScript and is
+    // therefore tested by the runtime that actually loads it.  It has no npm
+    // dependencies; `node --test` is the complete test command.
+    const vscode_tests = b.addSystemCommand(&.{
+        "node",
+        "--test",
+        "tools/vscode-luce/extension.test.js",
+    });
+    vscode_tests.addFileInput(b.path("tools/vscode-luce/extension.js"));
+    vscode_tests.addFileInput(b.path("tools/vscode-luce/extension.test.js"));
+    const test_vscode_step = b.step(
+        "test-vscode",
+        "Run the VS Code extension's pure JavaScript tests",
+    );
+    test_vscode_step.dependOn(&vscode_tests.step);
+    test_tools_step.dependOn(test_vscode_step);
 
     const grammar_tool = b.addExecutable(.{
         .name = "luce-grammar",
@@ -758,7 +856,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app_streams })).step);
+    test_apps_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app_streams })).step);
 
     // File access shared by both executables (import loader, whole-
     // file read/write) — one copy, no drift.
@@ -772,7 +870,19 @@ pub fn build(b: *std.Build) void {
     });
 
     const app_files_tests = b.addTest(.{ .root_module = app_files });
-    test_step.dependOn(&b.addRunArtifact(app_files_tests).step);
+    test_apps_step.dependOn(&b.addRunArtifact(app_files_tests).step);
+
+    // Local package authoring commands.  The package tool shares the
+    // compiler's project discovery and atomic file helpers, but remains a
+    // separate module so the compiler pipeline never learns about manifests.
+    const app_package = b.createModule(.{
+        .root_source_file = b.path("src/apps/luce/package.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "files", .module = app_files },
+        },
+    });
 
     // Finding the tools, linking an object, loading an artifact — and
     // finding the `luce` binary, which is how loom gets something
@@ -791,7 +901,7 @@ pub fn build(b: *std.Build) void {
         },
     });
     const native_tests = b.addTest(.{ .root_module = app_native });
-    test_step.dependOn(&b.addRunArtifact(native_tests).step);
+    test_apps_step.dependOn(&b.addRunArtifact(native_tests).step);
 
     // ANSI colour for the two binaries that write to a person: loom's
     // shell prompt and `luce test`'s report.  Shared because there is
@@ -802,7 +912,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app_palette })).step);
+    test_apps_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app_palette })).step);
 
     // The one rule that keeps a program's own text from forging the
     // terminal (`src/apps/sanitize.zig`).  Its own module because it
@@ -814,7 +924,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app_sanitize })).step);
+    test_apps_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app_sanitize })).step);
 
     // How a run ended, said and scored: one rendering of a trap, an
     // uncaught error and a leak census, and one exit table, for every
@@ -830,7 +940,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "sanitize", .module = app_sanitize },
         },
     });
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app_report })).step);
+    test_apps_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app_report })).step);
 
     // The real host — console, cwd-relative files, arguments, the
     // terminal — as the ABI's C table, which is the one shape a
@@ -847,7 +957,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "sanitize", .module = app_sanitize },
         },
     });
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app_host })).step);
+    test_apps_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = app_host })).step);
     const host_worker_tests = b.addTest(.{
         .root_module = app_host,
         .filters = &.{"worker table"},
@@ -858,25 +968,61 @@ pub fn build(b: *std.Build) void {
     );
     test_host_workers_step.dependOn(&b.addRunArtifact(host_worker_tests).step);
 
+    // The native macOS graphics adapter is kept outside the portable host:
+    // its Objective-C/Metal symbols belong only to runners that can display
+    // a window. Other targets build the same Zig seam with no native source,
+    // so std.ui/std.gpu continue to fail closed there.
+    const app_macos_graphics = b.createModule(.{
+        .root_source_file = b.path("src/apps/loom/macos_graphics.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "luce", .module = luce },
+            .{ .name = "host", .module = app_host },
+        },
+    });
+    if (target.result.os.tag == .macos) {
+        if (sysroot) |path| {
+            app_macos_graphics.addSystemIncludePath(.{
+                .cwd_relative = b.pathJoin(&.{ path, "usr/include" }),
+            });
+            app_macos_graphics.addLibraryPath(.{
+                .cwd_relative = b.pathJoin(&.{ path, "usr/lib" }),
+            });
+            app_macos_graphics.addFrameworkPath(.{
+                .cwd_relative = b.pathJoin(&.{ path, "System/Library/Frameworks" }),
+            });
+        }
+        app_macos_graphics.addCSourceFile(.{
+            .file = b.path("src/apps/loom/macos_graphics.m"),
+            .flags = &.{ "-fno-objc-arc", "-fno-sanitize=undefined" },
+        });
+        app_macos_graphics.linkFramework("AppKit", .{});
+        app_macos_graphics.linkFramework("Metal", .{});
+        app_macos_graphics.linkFramework("QuartzCore", .{});
+    }
+
     // libluce_start: `main` for a compiled program, so `luce build
     // --emit=exe` is one `cc` invocation over three files (the
     // program's object, this, and libluce_rt).  Installed beside the
     // runtime library, and found the same way (`apps/native.zig`).
+    const start_module = b.createModule(.{
+        .root_source_file = b.path("src/apps/start.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "luce", .module = luce },
+            .{ .name = "host", .module = app_host },
+            .{ .name = "macos_graphics", .module = app_macos_graphics },
+            .{ .name = "report", .module = app_report },
+            .{ .name = "streams", .module = app_streams },
+        },
+    });
     const start_library = b.addLibrary(.{
         .name = "luce_start",
         .linkage = .static,
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/apps/start.zig"),
-            .target = target,
-            .optimize = optimize,
-            .link_libc = true,
-            .imports = &.{
-                .{ .name = "luce", .module = luce },
-                .{ .name = "host", .module = app_host },
-                .{ .name = "report", .module = app_report },
-                .{ .name = "streams", .module = app_streams },
-            },
-        }),
+        .root_module = start_module,
     });
     // A named install step rather than the anonymous one, because the
     // editor's `--emit=exe` compile below resolves libluce_start.a
@@ -897,6 +1043,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "luce", .module = luce },
             .{ .name = "files", .module = app_files },
+            .{ .name = "package", .module = app_package },
             .{ .name = "native", .module = app_native },
             .{ .name = "emit", .module = emit },
             .{ .name = "streams", .module = app_streams },
@@ -926,7 +1073,7 @@ pub fn build(b: *std.Build) void {
     });
     b.getInstallStep().dependOn(&install_compiler.step);
     const compiler_tests = b.addTest(.{ .root_module = compiler_module });
-    test_step.dependOn(&b.addRunArtifact(compiler_tests).step);
+    test_apps_step.dependOn(&b.addRunArtifact(compiler_tests).step);
 
     // The miniature install tree both product suites drive
     // (`src/apps/harness.zig`).  Test-only, and shared because it was
@@ -965,7 +1112,7 @@ pub fn build(b: *std.Build) void {
     compiler_pieces.addOptionPath("luce_rt_library", runtime_archive);
     compiler_pieces.addOptionPath("luce_start_library", start_library.getEmittedBin());
     compiler_product.addOptions("build_options", compiler_pieces);
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = compiler_product })).step);
+    test_apps_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = compiler_product })).step);
 
     // The loom terminal.
     const terminal_module = b.createModule(.{
@@ -976,6 +1123,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "luce", .module = luce },
             .{ .name = "files", .module = app_files },
             .{ .name = "host", .module = app_host },
+            .{ .name = "macos_graphics", .module = app_macos_graphics },
             .{ .name = "native", .module = app_native },
             .{ .name = "palette", .module = app_palette },
             .{ .name = "report", .module = app_report },
@@ -991,7 +1139,7 @@ pub fn build(b: *std.Build) void {
     });
     b.getInstallStep().dependOn(&install_terminal.step);
     const terminal_tests = b.addTest(.{ .root_module = terminal_module });
-    test_step.dependOn(&b.addRunArtifact(terminal_tests).step);
+    test_apps_step.dependOn(&b.addRunArtifact(terminal_tests).step);
 
     // The shipped pair, proved together: loom compiling a program by
     // running luce, and refusing to when there is no luce to run.
@@ -1017,7 +1165,7 @@ pub fn build(b: *std.Build) void {
     binaries.addOptionPath("luce_binary", compiler.getEmittedBin());
     binaries.addOptionPath("luce_rt_library", runtime_archive);
     product_module.addOptions("build_options", binaries);
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = product_module })).step);
+    test_apps_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = product_module })).step);
 
     // The userland program the pair exists to run, proved end to end:
     // a real ZIP archive on a real disk, listed, extracted and built
@@ -1041,7 +1189,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("examples/zipper/zipper.luc"),
     });
     zipping_module.addOptions("build_options", binaries);
-    test_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = zipping_module })).step);
+    test_apps_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = zipping_module })).step);
 
     // Compile the bundled Luce programs with the freshly built luce.
     // `deps` lists imported sibling modules so edits to them re-run
@@ -1093,8 +1241,9 @@ pub fn build(b: *std.Build) void {
         // `zig build test` compiles every bundled program too, so a
         // broken userland program fails the suite — not only a full
         // ./build.sh install.
-        test_step.dependOn(&compile_program.step);
+        test_example_builds_step.dependOn(&compile_program.step);
     }
+    test_examples_step.dependOn(test_example_builds_step);
 
     // The packages are userland too, and they carry their own tests
     // (docs/TESTING.md), so `zig build test` runs the runner over them
@@ -1128,7 +1277,7 @@ pub fn build(b: *std.Build) void {
             test_package.addFileInput(b.path(b.fmt("packages/{s}/tests/{s}_test.luc", .{ package.directory, one })));
         }
         linkAgainstRuntime(test_package, install_runtime, runtime_directory, runtime_archive);
-        test_step.dependOn(&test_package.step);
+        test_packages_step.dependOn(&test_package.step);
     }
 
     // The editor carries tests of its own now that its pure pieces —
@@ -1144,7 +1293,7 @@ pub fn build(b: *std.Build) void {
     }
     linkAgainstRuntime(test_editor, install_runtime, runtime_directory, runtime_archive);
     addTermuiPackage(b, test_editor, runtime_directory, "editor");
-    test_step.dependOn(&test_editor.step);
+    test_editor_product_step.dependOn(&test_editor.step);
 
     // The editor is also useful as a standalone command.  Keep this
     // executable in the build graph beside the `.lc`: the source and its
@@ -1168,7 +1317,8 @@ pub fn build(b: *std.Build) void {
     const install_editor_example = b.addInstallFile(editor_executable, "examples/editor/editor");
     b.getInstallStep().dependOn(&install_editor.step);
     b.getInstallStep().dependOn(&install_editor_example.step);
-    test_step.dependOn(&compile_editor.step);
+    test_editor_product_step.dependOn(&compile_editor.step);
+    test_editor_step.dependOn(test_editor_product_step);
 
     // The benchmark programs compile under test too, so bench/*.luc
     // cannot rot; timing them stays manual (bench/run.sh).  Every name
@@ -1192,8 +1342,48 @@ pub fn build(b: *std.Build) void {
         compile_bench.addArg("-o");
         _ = compile_bench.addOutputFileArg(b.fmt("{s}.lc", .{name}));
         linkAgainstRuntime(compile_bench, install_runtime, runtime_directory, runtime_archive);
-        test_step.dependOn(&compile_bench.step);
+        test_benchmarks_step.dependOn(&compile_bench.step);
     }
+}
+
+/// Run a long deterministic test binary with output inherited by the build,
+/// so CI and non-interactive shells see bounded progress and a heartbeat.
+/// Inherited stdio also serializes these two memory-heavy binaries: the core
+/// unit corpus and the LLVM-backed executable specification should not fight
+/// each other for several gigabytes merely because both are ready to run.
+fn addProgressTestRun(
+    b: *std.Build,
+    tests: *std.Build.Step.Compile,
+    label: []const u8,
+) *std.Build.Step.Run {
+    const run = b.addRunArtifact(tests);
+    run.stdio = .inherit;
+    run.addArg(b.fmt("--suite={s}", .{label}));
+    run.addArg(b.fmt("--seed=0x{x}", .{b.graph.random_seed}));
+    return run;
+}
+
+/// One independently runnable slice of the fused executable specification.
+/// These steps are developer feedback lanes; `zig build test` uses the single
+/// unfiltered binary above so every specification executes once in the gate.
+fn addSpecificationSuite(
+    b: *std.Build,
+    specs: *std.Build.Module,
+    suite: test_suites.Suite,
+) *std.Build.Step {
+    const definition = test_suites.definition(suite);
+    const tests = b.addTest(.{
+        .name = b.fmt("spec-{s}", .{definition.label}),
+        .root_module = specs,
+        .filters = definition.filters,
+        .test_runner = .{
+            .path = b.path("tools/test_runner.zig"),
+            .mode = .simple,
+        },
+    });
+    const step = b.step(definition.step, definition.description);
+    step.dependOn(&addProgressTestRun(b, tests, definition.label).step);
+    return step;
 }
 
 /// Give one `luce build` run what it needs to link: the installed

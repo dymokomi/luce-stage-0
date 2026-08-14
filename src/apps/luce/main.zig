@@ -1,10 +1,11 @@
 //! The luce compiler: .luc source in, machine code out.
 //!
-//! Four commands over one pipeline:
+//! The compiler commands over one pipeline:
 //!   luce build FILE.luc [-o OUT]   compile and write an artifact
 //!   luce check FILE.luc            compile, report, write nothing
 //!   luce ir FILE.luc               compile and dump readable IR
 //!   luce test [PATH ...]           compile and run the tests found
+//!   luce package ...               create and maintain local packages
 //!
 //! The front half every one of them needs is `front.zig`; `object.zig`
 //! is the back half `build` adds to it.  `test` is a *runner* as well
@@ -51,6 +52,7 @@ const object = @import("object.zig");
 const front = @import("front.zig");
 const streams = @import("streams");
 const suite = @import("suite.zig");
+const package = @import("package");
 
 pub fn main(init: std.process.Init.Minimal) !u8 {
     var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
@@ -101,6 +103,13 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
             .driver = environment.get("LUCE_CC"),
             .palette = .{ .enabled = colored },
         });
+    }
+
+    // Package management is host-side file work and does not compile a
+    // source file, so it has its own argument grammar before the ordinary
+    // FILE-required commands below.
+    if (std.mem.eql(u8, command, "package")) {
+        return package.run(gpa, io, out, err, arguments[2..]);
     }
 
     if (arguments.len < 3) return usage(err);
@@ -253,6 +262,9 @@ fn usage(err: *std.Io.Writer) !u8 {
             "  luce build FILE [-o OUT] [--release] [--emit=WHAT]\n" ++
             "  luce check FILE\n" ++
             "  luce ir FILE [--full]\n" ++
+            "  luce package new NAME [VERSION]\n" ++
+            "  luce package version NAME VERSION\n" ++
+            "  luce package publish NAME\n" ++
             "\n" ++
             "FILE is a .luc source file, or a .lcm module to take up\n" ++
             "from where it was left — the same program either way.\n" ++
@@ -401,6 +413,7 @@ fn stemOf(path: []const u8) []const u8 {
 
 test {
     _ = luce;
+    _ = package;
     _ = discover;
     _ = front;
     _ = object;

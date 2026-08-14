@@ -1172,7 +1172,7 @@ test "a compiled host rejects an out-of-range path kind" {
     var capture: Capture = .{};
 
     const status = try runBuilt(
-        \\func main():
+        \\func main() -> !:
         \\    print(string(try path_kind(".")))
         \\
     , &capture, .{ .malformed_path_kind = true }, .debug);

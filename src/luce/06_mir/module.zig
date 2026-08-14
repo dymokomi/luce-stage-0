@@ -153,7 +153,11 @@ pub const magic = "LUCE";
 /// verifier can tie a function value's `Signature.Parameter.gives` to the
 /// function it names.  A stale module otherwise lets an indirect call omit
 /// the `give_object` handoff while the callee still binds the incoming graph.
-pub const format_version: u32 = 43;
+///
+/// 44 — the backend-neutral `std.ui`/`std.gpu` resource operations join the
+/// intrinsic set.  They are appended after `path_kind`, so old modules must
+/// not reinterpret a later tag as a different host operation.
+pub const format_version: u32 = 44;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -1978,8 +1982,10 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // 42 -> 43: `mir.Function` records the `give` bit for each parameter,
     // so an indirect function-value call cannot disagree with the callee's
     // ownership handoff.
-    try testing.expectEqual(@as(u32, 43), format_version);
-    try testing.expectEqual(@as(u64, 15759308545664136256), hasher.final());
+    // 43 -> 44: the backend-neutral window/GPU intrinsic names are appended
+    // after `path_kind`.
+    try testing.expectEqual(@as(u32, 44), format_version);
+    try testing.expectEqual(@as(u64, 7247777384699053929), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {
@@ -1987,6 +1993,17 @@ test "an enum round-trips with its members, and a foreign width is rejected" {
         \\enum Method(byte):
         \\    stored = 0
         \\    deflated = 8
+        \\
+        \\struct Entry:
+        \\    method: Method
+        \\    fallback: Method?
+        \\
+        \\const MODES = [Method.stored, Method.deflated]
+        \\const BINDINGS = {Method.stored: Method.deflated}
+        \\const ENTRIES = [
+        \\    Entry(method = Method.deflated, fallback = Method.stored),
+        \\    Entry(method = Method.stored, fallback = none),
+        \\]
         \\
         \\func main():
         \\    var m = Method.stored
@@ -1996,6 +2013,10 @@ test "an enum round-trips with its members, and a foreign width is rejected" {
         \\    assert(seen[0] == Method.deflated)
         \\    assert(string(m) == "deflated")
         \\    assert(int(m) == 8)
+        \\    assert(MODES[0] == Method.stored)
+        \\    assert(BINDINGS[Method.stored] == Method.deflated)
+        \\    assert((ENTRIES[0].fallback else Method.deflated) == Method.stored)
+        \\    assert(ENTRIES[1].fallback == none)
         \\
     );
     defer program.deinit();
@@ -2013,6 +2034,9 @@ test "an enum round-trips with its members, and a foreign width is rejected" {
     try testing.expect(std.mem.indexOf(u8, loaded_dump, "enum Method(byte):") != null);
     try testing.expect(std.mem.indexOf(u8, loaded_dump, "deflated = 8") != null);
     try testing.expect(std.mem.indexOf(u8, loaded_dump, "list(Method)") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "MODES: list(Method) = [Method.stored, Method.deflated]") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "BINDINGS: map(Method, Method) = {Method.stored: Method.deflated}") != null);
+    try testing.expect(std.mem.indexOf(u8, loaded_dump, "ENTRIES: list(Entry) = [Entry(method=Method.deflated, fallback=Method.stored), Entry(method=Method.stored, fallback=none)]") != null);
 
     const again = try encode(testing.allocator, &loaded);
     defer testing.allocator.free(again);

@@ -77,6 +77,7 @@ const luce = @import("luce");
 const files = @import("files");
 const native = @import("native");
 const host_mod = @import("host");
+const macos_graphics = @import("macos_graphics");
 const report = @import("report");
 
 const Allocator = std.mem.Allocator;
@@ -713,9 +714,14 @@ fn runLoaded(
     loaded: *native.Loaded,
     arguments: []const []const u8,
 ) !u8 {
+    var graphics = macos_graphics.init();
+    defer if (graphics) |*backend| macos_graphics.deinit(backend);
+
     var services: host_mod.Host = undefined;
     services.setup(gpa, io, out, err, arguments);
     defer services.deinit();
+
+    if (graphics) |*backend| macos_graphics.install(&services, backend);
 
     const table = services.table();
     const status = loaded.entry(&table);

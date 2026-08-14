@@ -18,6 +18,7 @@ const builtin = @import("builtin");
 const std = @import("std");
 const vocabulary = @import("../support/vocabulary.zig");
 const files = @import("files.zig");
+const graphics = @import("graphics.zig");
 const trace = @import("trace.zig");
 const value = @import("value.zig");
 const workers = @import("workers.zig");
@@ -286,8 +287,20 @@ pub const Object = struct {
     /// supply the name themselves.  The bytes are the object's, freed
     /// with it.
     pub const File = struct {
+        /// One object-table representation serves files, windows and
+        /// GPU surfaces.  Ordinary file methods accept only `.file`;
+        /// `runtime.graphics` accepts `.window` and `.surface`.  Keeping
+        /// the ownership representation shared is what lets structs own
+        /// native resources without a second lifetime protocol.
+        pub const Kind = enum(i64) {
+            file = 0,
+            window = 1,
+            surface = 2,
+        };
+
         handle: i64,
         path: []const u8,
+        kind: Kind = .file,
     };
 
     /// A run of elements stored at their real width — the storage a
@@ -1032,6 +1045,11 @@ pub const Runtime = struct {
     /// effect.
     files: files.Channel = .{},
 
+    /// The window/GPU channel, installed once at the start of a run.  Native
+    /// handles live in the same object table as files so scope teardown,
+    /// `give`, `copy` refusal, and stale-handle checks remain one mechanism.
+    graphics: graphics.Channel = .{},
+
     /// The host's thread channel, installed once at the start of a run
     /// and inherited by every worker (docs/THREADS.md D8).  Held rather
     /// than passed for the reason `files` is: a task's join happens at
@@ -1358,7 +1376,7 @@ pub const Runtime = struct {
             .builder => {},
             // A handle the program leaked is still an open file: the
             // run gives it back even though ownership did not.
-            .file => |open| self.closeFile(open.handle),
+            .file => |open| self.closeFile(open),
             // And a task the program leaked is still a running thread:
             // the sweep joins it, for the same reason and with the
             // same silence (`workers.release`).
@@ -1670,9 +1688,21 @@ pub const Runtime = struct {
     /// (docs/BYTES.md R5).  Loose like every other `new`: the binding
     /// that receives it owns it, and its scope's end closes it.
     pub fn newFile(self: *Runtime, handle: i64, path: []const u8) Error!Value {
+        return self.newResource(handle, path, .file);
+    }
+
+    /// Attach a host-owned resource to the object table.  `file`, `window`,
+    /// and `surface` share the same non-copyable resource semantics; the kind
+    /// selects which channel receives the scope-end close.
+    pub fn newResource(
+        self: *Runtime,
+        handle: i64,
+        path: []const u8,
+        kind: Object.File.Kind,
+    ) Error!Value {
         const kept = try self.objects.dupe(u8, path);
         errdefer self.objects.free(kept);
-        return self.attach(.{ .data = .{ .file = .{ .handle = handle, .path = kept } } });
+        return self.attach(.{ .data = .{ .file = .{ .handle = handle, .path = kept, .kind = kind } } });
     }
 
     /// A fresh object owning a worker that is already on its way
@@ -1713,14 +1743,18 @@ pub const Runtime = struct {
     /// own sweep of what a program leaked — neither of which has
     /// anybody to report a failure to, so the answer is not read: a
     /// host that cannot close has already lost the file.
-    fn closeFile(self: *Runtime, handle: i64) void {
-        if (handle == no_file) return;
+    fn closeFile(self: *Runtime, resource: Object.File) void {
+        if (resource.handle == no_file) return;
+        if (resource.kind != .file) {
+            graphics.close(self, resource);
+            return;
+        }
         const service = self.files.close orelse return;
         // A close is a host call like any other, and this is the one
         // that happens with no engine standing (docs/THREADS.md D9).
         self.enterEffects();
         defer self.leaveEffects();
-        _ = service(self.files.context, handle);
+        _ = service(self.files.context, resource.handle);
     }
 
     /// A fresh array of `dims`, every element `zero`.  The element zero
@@ -2377,7 +2411,7 @@ pub const Runtime = struct {
                 },
                 .builder => {},
                 // The scope's end is the close (docs/BYTES.md R5).
-                .file => |open| self.closeFile(open.handle),
+                .file => |open| self.closeFile(open),
                 // And for a worker the scope's end is the join
                 // (docs/THREADS.md D5).
                 .task => |held| if (held) |worker| workers.release(self, worker),

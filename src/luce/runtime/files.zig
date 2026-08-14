@@ -291,7 +291,10 @@ pub fn flush(runtime: *Runtime, held: Value) Error!bool {
 fn handleOf(runtime: *Runtime, held: Value) Error!i64 {
     const object = try runtime.resolve(held);
     return switch (object.data) {
-        .file => |held_file| held_file.handle,
+        .file => |held_file| if (held_file.kind == .file)
+            held_file.handle
+        else
+            runtime.fail(.not_owned),
         // The verifier admits only a `file` here.
         .list, .map, .array, .builder, .task => return runtime.fail(.not_owned),
     };

@@ -1104,7 +1104,7 @@ fn verifyInstruction(
             }
             if (!result.eql(signature.result)) return error.TypeMismatch;
         },
-        .intrinsic => |intrinsic| try verifyIntrinsic(program, function, defined, register, intrinsic),
+        .intrinsic => |intrinsic| try verifyIntrinsic(allocator, program, function, defined, register, intrinsic),
         .object_bind => |bind| {
             try expectType(result, .none);
             if (bind.local >= function.locals.len) return error.BadLocal;
@@ -1302,6 +1302,7 @@ fn taskShape(
 // ---------------------------------------------------------------------------
 
 fn verifyIntrinsic(
+    allocator: Allocator,
     program: *const Program,
     function: *const Function,
     defined: *const std.AutoHashMapUnmanaged(Register, void),
@@ -1309,7 +1310,6 @@ fn verifyIntrinsic(
     call: Instruction.IntrinsicCall,
 ) VerifyError!void {
     const result = function.result_types[register];
-    if (call.arguments.len > 6) return error.BadIntrinsic;
     // `errored` names an *instruction*, not a value: the call it asks
     // about may return nothing at all (`-> !`), so its argument never
     // goes through the operand pass below.
@@ -1321,11 +1321,15 @@ fn verifyIntrinsic(
         if (!raisesError(program, function, asked)) return error.BadIntrinsic;
         return expectType(result, .boolean);
     }
-    var buffer: [6]Type = undefined;
+    // Intrinsics are not limited to an arbitrary small operand count.  The
+    // verifier owns an allocator already, so size this scratch to the MIR
+    // instruction itself; adding a surface primitive or a future variadic
+    // host operation cannot silently become a verifier cap.
+    const arguments = try allocator.alloc(Type, call.arguments.len);
+    defer allocator.free(arguments);
     for (call.arguments, 0..) |argument, index| {
-        buffer[index] = try operandType(function, defined, argument);
+        arguments[index] = try operandType(function, defined, argument);
     }
-    const arguments = buffer[0..call.arguments.len];
 
     switch (call.kind) {
         // The math builtins compute like operators, so a storage
@@ -1768,6 +1772,45 @@ fn verifyIntrinsic(
             try exactly(arguments, 1);
             try expectType(arguments[0], .string);
             try expectType(result, .long);
+        },
+        .gpu_backend => {
+            try exactly(arguments, 0);
+            try expectType(result, .long);
+        },
+        .ui_window_open => {
+            try exactly(arguments, 3);
+            try expectType(arguments[0], .string);
+            try expectType(arguments[1], .long);
+            try expectType(arguments[2], .long);
+            if (try heapShape(program, result) != .file) return error.BadIntrinsic;
+        },
+        .ui_window_surface => {
+            try exactly(arguments, 1);
+            if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
+            if (try heapShape(program, result) != .file) return error.BadIntrinsic;
+        },
+        .gpu_surface_size => {
+            try exactly(arguments, 2);
+            if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
+            try expectType(arguments[1], .long);
+            try expectType(result, .long);
+        },
+        .gpu_surface_clear => {
+            try exactly(arguments, 5);
+            if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
+            for (arguments[1..]) |argument| try expectType(argument, .long);
+            try expectType(result, .none);
+        },
+        .gpu_surface_fill_rect => {
+            try exactly(arguments, 9);
+            if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
+            for (arguments[1..]) |argument| try expectType(argument, .long);
+            try expectType(result, .none);
+        },
+        .gpu_surface_present => {
+            try exactly(arguments, 1);
+            if (try heapShape(program, arguments[0]) != .file) return error.BadIntrinsic;
+            try expectType(result, .none);
         },
         .term_rows, .term_cols => {
             try exactly(arguments, 0);

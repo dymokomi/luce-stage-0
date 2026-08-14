@@ -213,6 +213,70 @@ test "a .luc with no artifact is compiled by luce and runs, warm the next time" 
     try testing.expect(!try install.holdsAnything(luce.mir.module.extension));
 }
 
+test "the macOS loom supplies std.ui and std.gpu" {
+    if (@import("builtin").os.tag != .macos) return;
+
+    const gpa = testing.allocator;
+    var install = try installTree(gpa, true);
+    defer install.deinit(gpa);
+    try install.write("window.luc",
+        \\import std.ui
+        \\
+        \\func main(args: list(string)) -> !:
+        \\    let window = try ui.open("test", 320, 240)
+        \\    let surface = try window.surface()
+        \\    try surface.clear(10, 20, 30)
+        \\    try surface.fill_rect(8, 8, 80, 40, 200, 120, 40)
+        \\    try surface.present()
+        \\
+    );
+    const source = try install.at(gpa, "window.luc");
+    defer gpa.free(source);
+    var built = try runLuce(gpa, &install, &.{ "build", source });
+    defer built.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), built.status);
+
+    const artifact = try install.at(gpa, "window.lc");
+    defer gpa.free(artifact);
+    var ran = try runLoom(gpa, &install, &.{ "run", artifact }, null, null);
+    defer ran.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), ran.status);
+    try testing.expect(!ran.saysErr("host service unavailable"));
+}
+
+test "shell services find the installed loom beside the running host" {
+    // GUI launchers commonly start a process without the interactive shell's
+    // PATH.  The editor's Ctrl-B uses this same shell service, so the
+    // installed toolchain must remain discoverable from loom's own directory
+    // even when PATH names only the system tools.
+    const gpa = testing.allocator;
+    var install = try installTree(gpa, true);
+    defer install.deinit(gpa);
+    try install.write("shell.luc",
+        \\import std.os
+        \\
+        \\func main(args: list(string)) -> !:
+        \\    print(try os.shell.run("loom --version"))
+        \\
+    );
+    const source = try install.at(gpa, "shell.luc");
+    defer gpa.free(source);
+    var built = try runLuce(gpa, &install, &.{ "build", source });
+    defer built.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), built.status);
+
+    var system_path: std.process.Environ.Map = .init(gpa);
+    defer system_path.deinit();
+    try system_path.put("PATH", "/usr/bin:/bin");
+    const artifact = try install.at(gpa, "shell.lc");
+    defer gpa.free(artifact);
+    var ran = try runLoom(gpa, &install, &.{ "run", artifact }, &system_path, null);
+    defer ran.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), ran.status);
+    try testing.expectEqualStrings(expected_version ++ "exit status: 0\n\n", ran.out);
+    try testing.expectEqualStrings("", ran.err);
+}
+
 test "a vendored package resolves end to end: luce builds the project, loom runs it" {
     // The store, used the way a person would (docs/PACKAGES.md D3-D5):
     // a project with a luce.yaml naming its one want, the geo package

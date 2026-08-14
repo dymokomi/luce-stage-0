@@ -220,7 +220,14 @@ const trace = @import("../runtime/trace.zig");
 /// trap, and an uncaught error.  Only exhaustion has no runtime to
 /// count.  Hosts that use the number to diagnose a run must rebuild
 /// with this meaning rather than treating a missing callback as zero.
-pub const version: u32 = 18;
+///
+/// 19 — the backend-neutral window/GPU channel arrived.  The eight
+/// optional slots at the end describe backend selection, window creation,
+/// a window's surface, surface dimensions, three drawing operations, and
+/// native-resource close.  Nothing before them moved.  The callbacks carry
+/// native handles as opaque `i64`s; the language owns them through the same
+/// resource walk as files, while Metal/Vulkan policy remains in the host.
+pub const version: u32 = 19;
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the
@@ -716,6 +723,74 @@ pub const PathKindFn = *const fn (
 ) callconv(.c) Answer;
 
 // ---------------------------------------------------------------------------
+// The backend-neutral window/GPU channel (version 19)
+// ---------------------------------------------------------------------------
+
+/// The host's backend identifier: 0 Metal, 1 Vulkan, 2 headless.  The
+/// standard library validates the closed range before exposing its enum.
+pub const GpuBackendFn = *const fn (
+    context: ?*anyopaque,
+    backend: *i64,
+) callconv(.c) Answer;
+
+pub const UiWindowOpenFn = *const fn (
+    context: ?*anyopaque,
+    title: [*]const u8,
+    title_length: i64,
+    width: i64,
+    height: i64,
+    handle: *i64,
+) callconv(.c) Answer;
+
+pub const UiWindowSurfaceFn = *const fn (
+    context: ?*anyopaque,
+    window: i64,
+    surface: *i64,
+) callconv(.c) Answer;
+
+pub const GpuSurfaceSizeFn = *const fn (
+    context: ?*anyopaque,
+    surface: i64,
+    axis: i64,
+    size: *i64,
+) callconv(.c) Answer;
+
+pub const GpuSurfaceClearFn = *const fn (
+    context: ?*anyopaque,
+    surface: i64,
+    red: i64,
+    green: i64,
+    blue: i64,
+    alpha: i64,
+) callconv(.c) Answer;
+
+pub const GpuSurfaceFillRectFn = *const fn (
+    context: ?*anyopaque,
+    surface: i64,
+    x: i64,
+    y: i64,
+    width: i64,
+    height: i64,
+    red: i64,
+    green: i64,
+    blue: i64,
+    alpha: i64,
+) callconv(.c) Answer;
+
+pub const GpuSurfacePresentFn = *const fn (
+    context: ?*anyopaque,
+    surface: i64,
+) callconv(.c) Answer;
+
+/// Close a native window or surface.  It runs from scope teardown, so its
+/// answer is intentionally ignored just like file-handle close.
+pub const GpuCloseFn = *const fn (
+    context: ?*anyopaque,
+    handle: i64,
+    kind: i64,
+) callconv(.c) Answer;
+
+// ---------------------------------------------------------------------------
 // The handle channel (version 12)
 // ---------------------------------------------------------------------------
 //
@@ -895,6 +970,19 @@ pub const Host = extern struct {
     /// so every earlier field keeps its address — including
     /// `file_exists`, which this retires from use without moving.
     path_kind: ?PathKindFn = null,
+    /// Version 19: the backend-neutral window/GPU channel.  Native handles
+    /// remain opaque to Luce and are closed by the runtime's ownership walk.
+    /// Hosts may leave every slot null; a call then fails closed with
+    /// `host_unavailable` until a Metal, Vulkan, or headless backend is
+    /// installed.
+    gpu_backend: ?GpuBackendFn = null,
+    ui_window_open: ?UiWindowOpenFn = null,
+    ui_window_surface: ?UiWindowSurfaceFn = null,
+    gpu_surface_size: ?GpuSurfaceSizeFn = null,
+    gpu_surface_clear: ?GpuSurfaceClearFn = null,
+    gpu_surface_fill_rect: ?GpuSurfaceFillRectFn = null,
+    gpu_surface_present: ?GpuSurfacePresentFn = null,
+    gpu_close: ?GpuCloseFn = null,
 };
 
 /// The index of each `Host` field, as the generated code addresses it.
@@ -945,6 +1033,14 @@ pub const Slot = enum(u32) {
     dir_create = 41,
     epoch_ms = 42,
     path_kind = 43,
+    gpu_backend = 44,
+    ui_window_open = 45,
+    ui_window_surface = 46,
+    gpu_surface_size = 47,
+    gpu_surface_clear = 48,
+    gpu_surface_fill_rect = 49,
+    gpu_surface_present = 50,
+    gpu_close = 51,
 
     pub const count = @typeInfo(Slot).@"enum".fields.len;
 };

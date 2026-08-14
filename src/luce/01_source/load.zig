@@ -197,6 +197,8 @@ const standard_modules = [_]struct { name: []const u8, source: []const u8 }{
     .{ .name = "term", .source = @embedFile("../std/term.luc") },
     .{ .name = "zip", .source = @embedFile("../std/zip.luc") },
     .{ .name = "json", .source = @embedFile("../std/json.luc") },
+    .{ .name = "gpu", .source = @embedFile("../std/gpu.luc") },
+    .{ .name = "ui", .source = @embedFile("../std/ui.luc") },
 };
 
 /// The whole library, spelled as it is imported — for the messages

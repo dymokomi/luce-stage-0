@@ -1,17 +1,16 @@
 {
   "name": "luce-language",
   "displayName": "Luce Language",
-  "description": "TextMate syntax highlighting and editor configuration for Luce.",
-  "version": "0.3.0",
+  "description": "Syntax highlighting and brace-aware editor configuration for Luce.",
+  "version": "0.4.0",
   "publisher": "luciaos",
   "license": "UNLICENSED",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/dymokomi/luciaos.git",
-    "directory": "tools/vscode-luce"
-  },
   "engines": {
     "vscode": "^1.85.0"
+  },
+  "main": "./extension.js",
+  "scripts": {
+    "test": "node --test extension.test.js"
   },
   "categories": [
     "Programming Languages"
@@ -28,6 +27,7 @@
     }
   },
   "files": [
+    "extension.js",
     "language-configuration.json",
     "syntaxes/luce.tmLanguage.json",
     "README.md"
@@ -57,7 +57,8 @@
       "[luce]": {
         "editor.insertSpaces": true,
         "editor.tabSize": 4,
-        "editor.detectIndentation": false
+        "editor.detectIndentation": false,
+        "editor.formatOnType": true
       },
       "editor.tokenColorCustomizations": {
         "textMateRules": [

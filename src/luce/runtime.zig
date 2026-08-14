@@ -71,6 +71,10 @@ pub const maxElements = @import("runtime/heap.zig").maxElements;
 /// artifact reaches the same bodies through `exports.zig`.
 pub const files = @import("runtime/files.zig");
 
+/// Window and GPU handles: the backend-neutral host channel behind
+/// `std.ui` and `std.gpu`.
+pub const graphics = @import("runtime/graphics.zig");
+
 /// Workers: the host's thread channel, this engine's nursery, the
 /// argument and result transfers, the join, and the effect lock
 /// (docs/THREADS.md).  Reached the same two ways `files` is.
@@ -124,6 +128,7 @@ test {
     _ = @import("runtime/operators.zig");
     _ = @import("runtime/text.zig");
     _ = @import("runtime/files.zig");
+    _ = @import("runtime/graphics.zig");
     _ = @import("runtime/workers.zig");
     _ = @import("runtime/trace.zig");
     _ = @import("runtime/exports.zig");

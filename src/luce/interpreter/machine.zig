@@ -27,6 +27,7 @@ const Budget = interpreter.Budget;
 
 const containers = runtime.containers;
 const files = runtime.files;
+const graphics = runtime.graphics;
 const operators = runtime.operators;
 const text = runtime.text;
 
@@ -58,6 +59,7 @@ pub fn run(
     // compiled path installs the same five pointers through
     // `luce_rt_files_install`, so both engines reach one channel.
     if (host) |given| machine.runtime.files = given.files;
+    if (host) |given| machine.runtime.graphics = given.graphics;
     // And the thread channel, plus this engine's own answer to what a
     // worker's runtime is and how one function is run in it
     // (docs/THREADS.md D10).  The oracle threads for real: a `Machine`
@@ -1938,6 +1940,80 @@ pub const Machine = struct {
                     return .ofLong(0);
                 };
                 return .ofLong(code);
+            },
+            // -- backend-neutral window/GPU channel ------------------
+            //
+            // The runtime owns native-resource validation and close.  The
+            // interpreter only supplies the source site for an ordinary
+            // refused operation, keeping the result and error shape equal to
+            // the compiled runtime exports.
+            .gpu_backend => return .ofLong(try graphics.backend(&self.runtime)),
+            .ui_window_open => {
+                const title = registers[arguments[0]].asString();
+                const answer = try graphics.openWindow(
+                    &self.runtime,
+                    title,
+                    registers[arguments[1]].asLong(),
+                    registers[arguments[2]].asLong(),
+                );
+                return answer orelse blk: {
+                    self.runtime.raiseIo(.open, title, self.placeOf(site));
+                    break :blk .none;
+                };
+            },
+            .ui_window_surface => {
+                const answer = try graphics.windowSurface(
+                    &self.runtime,
+                    registers[arguments[0]],
+                );
+                return answer orelse blk: {
+                    self.runtime.raiseIo(.open, "ui.window", self.placeOf(site));
+                    break :blk .none;
+                };
+            },
+            .gpu_surface_size => {
+                const answer = try graphics.size(
+                    &self.runtime,
+                    registers[arguments[0]],
+                    registers[arguments[1]].asLong(),
+                );
+                return .ofLong(answer orelse blk: {
+                    self.runtime.raiseIo(.inspect, "gpu.surface", self.placeOf(site));
+                    break :blk 0;
+                });
+            },
+            .gpu_surface_clear => {
+                const answered = try graphics.clear(
+                    &self.runtime,
+                    registers[arguments[0]],
+                    registers[arguments[1]].asLong(),
+                    registers[arguments[2]].asLong(),
+                    registers[arguments[3]].asLong(),
+                    registers[arguments[4]].asLong(),
+                );
+                if (!answered) self.runtime.raiseIo(.write, "gpu.surface", self.placeOf(site));
+                return .none;
+            },
+            .gpu_surface_fill_rect => {
+                const answered = try graphics.fillRect(
+                    &self.runtime,
+                    registers[arguments[0]],
+                    registers[arguments[1]].asLong(),
+                    registers[arguments[2]].asLong(),
+                    registers[arguments[3]].asLong(),
+                    registers[arguments[4]].asLong(),
+                    registers[arguments[5]].asLong(),
+                    registers[arguments[6]].asLong(),
+                    registers[arguments[7]].asLong(),
+                    registers[arguments[8]].asLong(),
+                );
+                if (!answered) self.runtime.raiseIo(.write, "gpu.surface", self.placeOf(site));
+                return .none;
+            },
+            .gpu_surface_present => {
+                const answered = try graphics.present(&self.runtime, registers[arguments[0]]);
+                if (!answered) self.runtime.raiseIo(.flush, "gpu.surface", self.placeOf(site));
+                return .none;
             },
             .term_rows => {
                 const screen = try self.terminal();

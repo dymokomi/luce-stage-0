@@ -1,0 +1,67 @@
+# gpu — the small, backend-neutral drawing surface.
+#
+# A Surface is the thing a window gives you to draw on.  This module keeps
+# the language API independent of Metal, Vulkan, and any window-system
+# handle; the host supplies those through the runtime graphics channel.
+# Resource ownership is ordinary Luce ownership: the binding that receives a
+# Surface owns its native resource until it is moved, freed, or leaves scope.
+#
+# The macOS host shipped with `loom` uses Metal when it is available and a
+# CPU-backed window when it is not. Other hosts may leave this channel absent;
+# calling one of these functions there fails closed with `host_unavailable`.
+
+enum Backend:
+    metal
+    vulkan
+    headless
+
+struct Surface:
+    private:
+        handle: file
+
+    static func from_handle(handle: give file) -> Surface:
+        return Surface(handle = give handle)
+
+    func width() -> long!:
+        return try gpu_surface_size(self.handle, 0)
+
+    func height() -> long!:
+        return try gpu_surface_size(self.handle, 1)
+
+    func clear(red: long, green: long, blue: long, alpha: long = 255) -> !:
+        try gpu_surface_clear(self.handle, red, green, blue, alpha)
+
+    func fill_rect(
+        x: long,
+        y: long,
+        width: long,
+        height: long,
+        red: long,
+        green: long,
+        blue: long,
+        alpha: long = 255,
+    ) -> !:
+        try gpu_surface_fill_rect(
+            self.handle,
+            x,
+            y,
+            width,
+            height,
+            red,
+            green,
+            blue,
+            alpha,
+        )
+
+    func present() -> !:
+        try gpu_surface_present(self.handle)
+
+func backend() -> Backend:
+    let code = gpu_backend()
+    if code == 0:
+        return Backend.metal
+    if code == 1:
+        return Backend.vulkan
+    if code == 2:
+        return Backend.headless
+    trap("host returned an unknown GPU backend")

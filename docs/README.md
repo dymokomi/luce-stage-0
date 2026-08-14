@@ -21,8 +21,10 @@ fails `zig build test`.
 Start with [V2.md](V2.md) for what the project is for, then
 [LANGUAGE.md](LANGUAGE.md) for the language and
 [PIPELINE.md](PIPELINE.md) for the compiler.  If you are about to
-write code, [CODING_GUIDE.md](CODING_GUIDE.md) is not optional.  If
-you want to know what is *not* here, [MISSING.md](MISSING.md).
+write code, [CODING_GUIDE.md](CODING_GUIDE.md) is not optional.  For
+confirmed incorrect behavior, see [MISSING.md](MISSING.md); proposed
+features and deliberate omissions stay in their decision records and
+[LANGUAGE_AUDIT.md](LANGUAGE_AUDIT.md).
 
 The prose that faces users lives on the documentation site instead —
 **[luce.luciaos.com](https://luce.luciaos.com)**, built from
@@ -48,11 +50,11 @@ human-reviewed.  These files are the reasoning behind it.
 | [CODING_GUIDE.md](CODING_GUIDE.md) | How Zig is written here. Authoritative and intentionally opinionated. |
 | [SOFTWARE_DESIGN.md](SOFTWARE_DESIGN.md) | How to decide what a module is, what it hides, and what it is called — deep modules, information hiding, and the red flags that say an abstraction is not paying for itself. The guide above wins on anything it covers. |
 | [LANGUAGE_AUDIT.md](LANGUAGE_AUDIT.md) | The living feature-by-feature review matrix: pipeline seam, positive and adversarial behavior, composition probes, and the test anchor to extend. |
-| [MISSING.md](MISSING.md) | The honest gap list, re-derived against the tree rather than carried forward. The closest thing to a work queue. |
+| [MISSING.md](MISSING.md) | Confirmed bugs only. Feature requests, design questions, coverage campaigns, refactors, optimizations, and deliberate non-goals do not belong here. |
 
-Where a gap **closes**, its entry leaves MISSING.md for
-[RESOLVED.md](RESOLVED.md) below, so the gap list can be read as a
-to-do list rather than as a history.
+Where a bug **closes**, its entry leaves MISSING.md for
+[RESOLVED.md](RESOLVED.md) below, so the bug list contains only current
+incorrect behavior rather than history.
 
 ## Decision records — frozen, and true of when they were written
 
@@ -89,7 +91,7 @@ and each says so in its own preamble.
 | [TERMUI.md](TERMUI.md) | **Design, not built.** The flagship package: the app keeps its own loop, the screen is a diffed cell grid, layout is four total splits, input is one `Event` union with a `Key` enum, and there is no widget tree — the app's own struct is the tree, because a `Widget` union in a package would be a ceiling. Generic-free widgets by reading providers in and per-widget event unions out. |
 | [SELF.md](SELF.md) | Self implied, `static` for the functions without one, and a call site that cannot lie: `f(x)` never mutates a value, `x.advance(8)` may — and reads like it. `var self` and `var` parameters retired. Ratified and built. |
 | [CONSTANTS.md](CONSTANTS.md) | Constant containers: file-scope `const`, the program root, `{k: v}` maps, flat lists and rank-1 arrays, and the static line with one runtime trap behind it. Ratified and built; the EOF appendix records where the implementation superseded the proposal prose. |
-| [RESOLVED.md](RESOLVED.md) | **Not a decision — a record of closures.** What Luce was missing and no longer is, chronologically: what was missing, when and how it closed, and where the detail lives. It exists so MISSING.md can be read as a to-do list; the arguments and measurements that live nowhere else moved here verbatim. |
+| [RESOLVED.md](RESOLVED.md) | **Not a decision — a record of closures.** Historical gaps and bugs, chronologically: what was missing, when and how it closed, and where the detail lives. MISSING.md now keeps only current confirmed bugs. |
 
 ## History
 
@@ -107,4 +109,4 @@ The SELF and constants ledgers record implementation closeout; the
 [language-lock](audit/LANGUAGE_LOCK.md) ledger records fixed, open and
 deferred dispositions.  They are dated to the commit they were taken at
 and are not maintained; what they found is fixed in the files above or
-transferred explicitly to MISSING.md.
+remains recorded in the relevant living reference or decision record.

@@ -59,6 +59,16 @@ link `luce` runs adds `-lm` there, and a link you write by hand out of
 cc -o FILE FILE.o lib/libluce_start.a lib/libluce_rt.a -lm
 ```
 
+On macOS, add the window host frameworks when linking a standalone program:
+
+```sh
+cc -o FILE FILE.o lib/libluce_start.a lib/libluce_rt.a \
+  -framework AppKit -framework Metal -framework QuartzCore
+```
+
+`luce build --emit=exe` adds these flags for you. They are needed because the
+standalone start archive carries the same `std.ui`/`std.gpu` host as `loom`.
+
 ## Getting it to a person
 
 Three questions had to be answered, and the answers are all in

@@ -698,11 +698,11 @@ pub fn emit(gpa: Allocator) Error![]u8 {
     };
 
     // -- f-string holes ----------------------------------------------------
-    // A hole is one expression.  The TextMate approximation reuses
-    // `#code`; unlike the compiler, it does not yet enter nested string
-    // regions or balance nested map braces inside the hole.  Keep that
-    // editor limitation explicit rather than attributing it to the
-    // lexer, which accepts both shapes (docs/MISSING.md).
+    // A hole is one expression. Its inner rules enter strings and a
+    // recursive brace group before ordinary code, so a quote or map
+    // closing brace inside the expression cannot end the outer region.
+    // Repository includes make the recursion structural: every nested
+    // region consumes its opener before it can include itself again.
     const escape_rules = [_]Rule{
         .{ .match = .{
             .scope = "constant.character.escape.luce",
@@ -712,6 +712,12 @@ pub fn emit(gpa: Allocator) Error![]u8 {
             .scope = "invalid.illegal.escape.luce",
             .pattern = "\\\\.",
         } },
+    };
+    const nested_code_rules = [_]Rule{
+        .{ .include = "#comments" },
+        .{ .include = "#strings" },
+        .{ .include = "#braces" },
+        .{ .include = "#code" },
     };
     const hole_rules = [_]Rule{
         // `{{` and `}}` are literal braces and must be tried first:
@@ -726,7 +732,7 @@ pub fn emit(gpa: Allocator) Error![]u8 {
             .begin_captures = &.{.{ .group = "0", .scope = "punctuation.section.interpolation.begin.luce" }},
             .end = "\\}",
             .end_captures = &.{.{ .group = "0", .scope = "punctuation.section.interpolation.end.luce" }},
-            .patterns = &.{.{ .include = "#code" }},
+            .patterns = &nested_code_rules,
         } },
         // A `}` that closes nothing: `luce.parse.fstring`, "unmatched
         // close brace in f-string (double it for a literal)".
@@ -763,6 +769,20 @@ pub fn emit(gpa: Allocator) Error![]u8 {
             .end = "(\")|$",
             .end_captures = &.{.{ .group = "1", .scope = "punctuation.definition.string.end.luce" }},
             .patterns = &escape_rules,
+        } },
+    };
+
+    // Braces are a proper recursive region inside an interpolation.
+    // Outside one, `#punctuation` still colours the same bytes without
+    // assigning a map-specific meaning to every brace in the file.
+    const brace_rules = [_]Rule{
+        .{ .region = .{
+            .scope = "meta.braces.luce",
+            .begin = "\\{",
+            .begin_captures = &.{.{ .group = "0", .scope = "punctuation.section.braces.begin.luce" }},
+            .end = "\\}",
+            .end_captures = &.{.{ .group = "0", .scope = "punctuation.section.braces.end.luce" }},
+            .patterns = &nested_code_rules,
         } },
     };
 
@@ -965,6 +985,7 @@ pub fn emit(gpa: Allocator) Error![]u8 {
     const groups = [_]Group{
         .{ .name = "accessors", .patterns = &accessor_rules },
         .{ .name = "builtins", .patterns = &builtin_rules },
+        .{ .name = "braces", .patterns = &brace_rules },
         .{ .name = "calls", .patterns = &call_rules },
         .{ .name = "code", .patterns = &code_rules },
         .{ .name = "comments", .patterns = &comment_rules },
@@ -1280,6 +1301,49 @@ test "what it emits is JSON, and it is a grammar" {
         index = end;
     }
     try std.testing.expectEqual(@as(usize, 0), missing);
+}
+
+test "f-string holes enter strings and recursively balanced braces" {
+    const gpa = std.testing.allocator;
+    const text = try emit(gpa);
+    defer gpa.free(text);
+
+    var parsed = try std.json.parseFromSlice(std.json.Value, gpa, text, .{});
+    defer parsed.deinit();
+    const repository = parsed.value.object.get("repository").?.object;
+
+    var hole_has_strings = false;
+    var hole_has_braces = false;
+    const string_rules = repository.get("strings").?.object.get("patterns").?.array.items;
+    for (string_rules) |string_value| {
+        const string_rule = string_value.object;
+        const string_begin = string_rule.get("begin") orelse continue;
+        if (string_begin != .string or !std.mem.eql(u8, string_begin.string, "\\bf\"")) continue;
+        for (string_rule.get("patterns").?.array.items) |hole_value| {
+            const hole = hole_value.object;
+            const hole_begin = hole.get("begin") orelse continue;
+            if (hole_begin != .string or !std.mem.eql(u8, hole_begin.string, "\\{")) continue;
+            for (hole.get("patterns").?.array.items) |inside_value| {
+                const include = inside_value.object.get("include") orelse continue;
+                if (std.mem.eql(u8, include.string, "#strings")) hole_has_strings = true;
+                if (std.mem.eql(u8, include.string, "#braces")) hole_has_braces = true;
+            }
+        }
+    }
+
+    var braces_recurse = false;
+    var braces_enter_strings = false;
+    const brace_rules = repository.get("braces").?.object.get("patterns").?.array.items;
+    for (brace_rules[0].object.get("patterns").?.array.items) |inside_value| {
+        const include = inside_value.object.get("include") orelse continue;
+        if (std.mem.eql(u8, include.string, "#braces")) braces_recurse = true;
+        if (std.mem.eql(u8, include.string, "#strings")) braces_enter_strings = true;
+    }
+
+    try std.testing.expect(hole_has_strings);
+    try std.testing.expect(hole_has_braces);
+    try std.testing.expect(braces_recurse);
+    try std.testing.expect(braces_enter_strings);
 }
 
 test "every keyword the lexer reserves has a class" {

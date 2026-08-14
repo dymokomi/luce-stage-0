@@ -47,7 +47,7 @@ not run together: section G2 opens at S36 and section H closes at S35.
 That is deliberate — a situation belongs beside the ones it is about,
 and a number, once a compiler diagnostic quotes it (`[OWNERSHIP.md
 S21]`), is not something to renumber.  The site's
-[ownership reference](https://luce.luciaos.com/ref/ownership/)
+[ownership reference](https://luce.luciaos.com/reference/ownership/)
 presents the same 46 in numeric order with a stable `#sNN` anchor
 each, which is what those diagnostics point at.
 
@@ -146,8 +146,8 @@ func main():
 Decision: `free` is legal only on an owned container or resource handle
 and poisons the name like `give`.  A carrying struct still releases its
 fields at scope end; an explicit early-release spelling for the whole
-struct is not part of the current surface (docs/MISSING.md).  Casual
-code never needs it.
+struct is not part of the current surface; `docs/UNION.md` A2 records
+the matching struct/union boundary.  Casual code never needs it.
 
 **S7. A fresh object created inside a loop dies every iteration.**
 ```luce

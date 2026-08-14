@@ -161,6 +161,16 @@ pub const Service = enum {
     luce_rt_file_read_text,
     luce_rt_file_write_text,
 
+    // -- windows and GPU surfaces ------------------------------------
+    luce_rt_graphics_install,
+    luce_rt_gpu_backend,
+    luce_rt_ui_window_open,
+    luce_rt_ui_window_surface,
+    luce_rt_gpu_surface_size,
+    luce_rt_gpu_surface_clear,
+    luce_rt_gpu_surface_fill_rect,
+    luce_rt_gpu_surface_present,
+
     // -- workers (docs/THREADS.md) ------------------------------------
     luce_rt_workers_install,
     luce_rt_spawn,
@@ -662,6 +672,75 @@ pub fn describe(service: Service) Effect {
             },
             .willreturn = false,
         },
+        // The backend-neutral window/GPU channel.  These exports resolve
+        // resource handles and call arbitrary host callbacks, so the object
+        // heap and all host-visible memory remain conservative.  The runtime
+        // reports ordinary I/O refusal through the `ok`/outcome pair; a
+        // missing channel or malformed answer is a trap.
+        .luce_rt_graphics_install => .{
+            .memory = touches_run,
+            .parameters = &.{
+                .run,
+                .unknown,
+                .unknown,
+                .unknown,
+                .unknown,
+                .unknown,
+                .unknown,
+                .unknown,
+                .unknown,
+                .unknown,
+            },
+        },
+        .luce_rt_gpu_backend => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .unknown },
+            .willreturn = false,
+        },
+        .luce_rt_ui_window_open => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .bytes_in, .plain, .plain, .plain, .value_out, .unknown, .plain, .plain },
+            .willreturn = false,
+        },
+        .luce_rt_ui_window_surface => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .value_out, .unknown, .plain, .plain },
+            .willreturn = false,
+        },
+        .luce_rt_gpu_surface_size => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .plain, .unknown, .unknown, .plain, .plain },
+            .willreturn = false,
+        },
+        .luce_rt_gpu_surface_clear => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .plain, .plain, .plain, .plain, .unknown, .plain, .plain },
+            .willreturn = false,
+        },
+        .luce_rt_gpu_surface_fill_rect => .{
+            .memory = touches_heap,
+            .parameters = &.{
+                .run,
+                .value_in,
+                .plain,
+                .plain,
+                .plain,
+                .plain,
+                .plain,
+                .plain,
+                .plain,
+                .plain,
+                .unknown,
+                .plain,
+                .plain,
+            },
+            .willreturn = false,
+        },
+        .luce_rt_gpu_surface_present => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .unknown, .plain, .plain },
+            .willreturn = false,
+        },
         .luce_rt_set_key_text => .{
             .memory = touches_text,
             .parameters = &.{ .run, .bytes_in, .plain },
@@ -1039,6 +1118,13 @@ test "exactly callbacks, waits, deep copies, and release-reachable services with
             .luce_rt_file_flush,
             .luce_rt_file_read_text,
             .luce_rt_file_write_text,
+            .luce_rt_gpu_backend,
+            .luce_rt_ui_window_open,
+            .luce_rt_ui_window_surface,
+            .luce_rt_gpu_surface_size,
+            .luce_rt_gpu_surface_clear,
+            .luce_rt_gpu_surface_fill_rect,
+            .luce_rt_gpu_surface_present,
             .luce_rt_spawn,
             .luce_rt_task_wait,
             .luce_rt_effects_enter,

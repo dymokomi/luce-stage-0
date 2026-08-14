@@ -61,8 +61,8 @@ bound receiver at the same time.
 
 These probes are deliberately split across the source, runtime, and module
 boundaries.  They do not make bound receivers owning or introduce captured
-closures; they pin the current borrowing contract while those future designs
-remain open in `MISSING.md`.
+closures; they pin the current borrowing contract. The rejected owning-bind
+alternative remains in `BINDING.md` D8 rather than in the bug list.
 
 ## Feature matrix
 
@@ -102,11 +102,11 @@ Before calling a feature complete, add or locate all of these:
 6. A differential spec whenever the behavior is observable from Luce.
 
 The audit is not a promise that every open design choice should be
-implemented.  The current deliberate remainder is in `MISSING.md`: typed
-channels, fallible function types, owning bound methods, assertion
-narrowing, escape additions, direct string iteration, and a few
-library/type-surface questions.  Those need decisions before code, not
-increasingly clever patches.
+implemented. Typed channels remain a held question in `THREADS.md`, fallible
+function types and owning bound methods in `FUNCTIONS.md` and `BINDING.md`,
+and assertion narrowing, escape additions, direct string iteration, and
+library/type-surface ideas remain unratified surface work. Those need concrete
+use and decisions before code, not entries in a confirmed-bug list.
 
 ## Invariants worth preserving during refactors
 

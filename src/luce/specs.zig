@@ -22,6 +22,8 @@
 //! (docs/ENGINE.md); every spec below is one of its disagreement
 //! detectors.
 
+const builtin = @import("builtin");
+
 /// How a spec runs a program.
 pub const agree = @import("specs/agree.zig");
 
@@ -39,19 +41,6 @@ pub const unions = @import("specs/union_spec.zig");
 /// spec that runs nothing: a program that does not compile has no
 /// engine to disagree about.
 pub const errors = @import("specs/errors_spec.zig");
-/// The standard library (docs/STD.md).
-pub const standard = @import("specs/std_spec.zig");
-/// `std.zip`: a container format, so the specification is other
-/// people's bytes as well as its own.
-pub const zip = @import("specs/zip_spec.zig");
-/// `std.json`: a grammar, so the specification is mostly what it
-/// refuses — RFC 8259 clause by clause, over JSONTestSuite's rows.
-pub const json = @import("specs/json_spec.zig");
-/// The binary half of the host boundary: packed byte lists, file
-/// handles as scope-owned resources, and text as a validation
-/// (docs/BYTES.md).
-pub const bytes = @import("specs/bytes_spec.zig");
-
 /// Functions as values: named functions, lambdas, and the call through
 /// one (docs/FUNCTIONS.md).
 pub const functions = @import("specs/functions_spec.zig");
@@ -66,8 +55,6 @@ pub const constants = @import("specs/constants_spec.zig");
 /// Threads: a worker owns its world, and the ownership model is the
 /// concurrency model (docs/THREADS.md).
 pub const threads = @import("specs/threads_spec.zig");
-/// The host boundary: every effect, offered and withheld.
-pub const host = @import("specs/host_spec.zig");
 /// Several files compiled as one program (`compile/modules.zig`).
 pub const modules = @import("specs/modules_spec.zig");
 /// `07_optimize` may not change what a program does, on either engine.
@@ -77,6 +64,29 @@ pub const module_format = @import("specs/format_spec.zig");
 /// The entry the compiler writes for `luce test`, run on both engines
 /// like any other program (docs/TESTING.md D3).
 pub const testing = @import("specs/testing_spec.zig");
+
+/// The standard library (docs/STD.md), including the backend-neutral
+/// graphics and window seams.
+pub const standard = @import("specs/std_spec.zig");
+/// `std.zip`: a container format, so the specification is other
+/// people's bytes as well as its own.
+pub const zip = @import("specs/zip_spec.zig");
+/// `std.json`: a grammar, so the specification is mostly what it
+/// refuses — RFC 8259 clause by clause, over JSONTestSuite's rows.
+pub const json = @import("specs/json_spec.zig");
+
+/// The binary half of the host boundary: packed byte lists, file
+/// handles as scope-owned resources, and text as a validation
+/// (docs/BYTES.md).
+pub const bytes = @import("specs/bytes_spec.zig");
+/// The host boundary: every effect, offered and withheld.
+pub const host = @import("specs/host_spec.zig");
+
+// The backend's end-to-end proof: source to machine code to a loaded shared
+// library.  It stays beside the backend it proves and is reached only by this
+// test module, because it runs programs and this is the module that can.
+const backend = @import("08_llvm/test.zig");
+
 /// The flagship program, driven by a scripted keyboard: the only
 /// thing that says what `examples/editor/editor.luc` *does*.
 pub const editor = @import("specs/editor_spec.zig");
@@ -84,33 +94,34 @@ pub const editor = @import("specs/editor_spec.zig");
 /// files importing each other, played through end to end.
 pub const adventure = @import("specs/adventure_spec.zig");
 
-test {
-    _ = agree;
-    _ = behavior;
-    _ = ownership;
-    _ = enums;
-    _ = unions;
-    _ = errors;
-    _ = standard;
-    _ = zip;
-    _ = json;
-    _ = bytes;
-    _ = functions;
-    _ = self;
-    _ = binding;
-    _ = constants;
-    _ = threads;
-    _ = host;
-    _ = modules;
-    _ = optimizer;
-    _ = module_format;
-    _ = testing;
-    _ = editor;
-    _ = adventure;
+comptime {
+    if (builtin.is_test) {
+        _ = agree;
+        _ = behavior;
+        _ = ownership;
+        _ = enums;
+        _ = unions;
+        _ = errors;
+        _ = functions;
+        _ = self;
+        _ = binding;
+        _ = constants;
+        _ = threads;
+        _ = modules;
+        _ = optimizer;
+        _ = module_format;
+        _ = testing;
 
-    // The backend's end-to-end proof: source to machine code to a
-    // loaded shared library.  It stays beside the backend it proves
-    // and belongs to this module, because it runs programs and this is
-    // the module that can.
-    _ = @import("08_llvm/test.zig");
+        _ = standard;
+        _ = zip;
+        _ = json;
+
+        _ = bytes;
+        _ = host;
+
+        _ = backend;
+
+        _ = editor;
+        _ = adventure;
+    }
 }

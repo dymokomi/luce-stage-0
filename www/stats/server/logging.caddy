@@ -1,0 +1,71 @@
+# The access logging the three sites need, and the record of what was
+# added to /etc/caddy/Caddyfile by hand.
+#
+# The edge server's Caddyfile is not in this repository — it serves a
+# dozen sites that have nothing to do with LuciaOS, and there is no
+# infrastructure-as-code for it (www/README.md says so).  What *is*
+# ours is the snippet below: the one block that has to be inside each
+# of our three site blocks for stats.luciaos.com to have anything to
+# count.  It is written down here so the configuration can be restored
+# from this tree, and so a reader can see exactly what is collected.
+#
+# Applied with `www/stats/server/enable-logging.sh`, which validates
+# and reloads Caddy rather than trusting an edit.
+#
+# ---------------------------------------------------------------- what
+#
+# Caddy's JSON access log, one object per request, holding the client
+# address, the host, the method and URI, the status, the response size,
+# the duration and the request headers (Caddy redacts Authorization
+# and Cookie itself).  Nothing is added to it and nothing is asked of
+# the visitor: there is no script on any page, no cookie and no
+# identifier that survives a day.
+#
+# The collector reads these files and keeps only per-day counts; the
+# raw log is the only place an address ever appears, it never leaves
+# the server, and it ages out with the roll below.
+#
+# ------------------------------------------------------------- rolling
+#
+# 20 MiB a file, eight kept, ninety days at the outside — Caddy rolls
+# and gzips them itself, so no logrotate rule is involved.  At the
+# traffic these sites see that is far more history than the collector
+# needs; it exists so that a collector that stops running for a week
+# loses nothing when it starts again.
+
+luce.luciaos.com {
+	log {
+		output file /var/log/caddy/luce.log {
+			roll_size 20MiB
+			roll_keep 8
+			roll_keep_for 2160h
+		}
+		format json
+	}
+}
+
+loom.luciaos.com {
+	log {
+		output file /var/log/caddy/loom.log {
+			roll_size 20MiB
+			roll_keep 8
+			roll_keep_for 2160h
+		}
+		format json
+	}
+}
+
+# luciaos.com and www.luciaos.com share one file: the second is a
+# permanent redirect to the first, and a visitor who arrived by it is
+# a visitor to the same site.  The collector tells them apart by the
+# status it sees.
+luciaos.com, www.luciaos.com {
+	log {
+		output file /var/log/caddy/luciaos.log {
+			roll_size 20MiB
+			roll_keep 8
+			roll_keep_for 2160h
+		}
+		format json
+	}
+}

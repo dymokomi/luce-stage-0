@@ -650,10 +650,12 @@ pub fn printsGiven(source: []const u8, provided: Provided, expected: []const u8)
 // The harness's own tests
 // ---------------------------------------------------------------------------
 
-test {
+comptime {
     // The hosts' own tests reach the runner through here: `specs.zig`
-    // names this file, and this file names theirs.
-    _ = hosts;
+    // names this file, and this file names theirs.  A test-only comptime
+    // import registers them without manufacturing a zero-work test row in
+    // every focused specification lane.
+    if (builtin.is_test) _ = hosts;
 }
 
 test "a spec run leaves a file of the working directory's alone" {

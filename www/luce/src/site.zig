@@ -6,12 +6,18 @@
 //! directory, so the order of the site is a thing someone decided
 //! rather than a thing the filesystem happened to produce.
 //!
-//! The six sections follow the split every good language site
-//! converges on — a linear tour for someone new, short complete
-//! programs for someone browsing, essays for someone who already
-//! writes the language, a normative reference for someone
-//! implementing against it, the library, and an honest account of
-//! where the thing actually stands.
+//! Five sections form the documentation's main paths; Status records the
+//! boundary around them:
+//!
+//!   Learn     — "How do I start and build a working mental model?"
+//!   Guides    — "How do I reason about a whole theme?"
+//!   Reference — "What exactly does this syntax mean?"
+//!   Library   — "What can the standard modules do?"
+//!   Status    — "What is implemented today?"
+//!
+//! The URL slugs describe the current pre-release information architecture.
+//! Labels and ordering are part of the reading experience; changing them is
+//! cheap before the first public release, but should still be deliberate.
 
 pub const Page = struct {
     /// Both the source path under `content/` and the URL path.
@@ -33,10 +39,10 @@ pub const Section = struct {
 
 pub const sections = [_]Section{
     .{
-        .slug = "tour",
-        .label = "Tour",
-        .title = "A tour of Luce",
-        .blurb = "Start here. Seventeen short chapters, in order, from installing the compiler to writing a program that reads a file.",
+        .slug = "learn",
+        .label = "Learn",
+        .title = "Learn Luce",
+        .blurb = "A guided path from your first program to modules, ownership, failure handling and the outside world.",
         .pages = &.{
             .{ .slug = "hello", .title = "Hello, Luce", .blurb = "Build the toolchain, compile a program, run it." },
             .{ .slug = "values", .title = "Values and types", .blurb = "Numbers, strings, enums and function values, plus the one-way numeric promotion rules." },
@@ -46,7 +52,7 @@ pub const sections = [_]Section{
             .{ .slug = "collections", .title = "Lists, maps and arrays", .blurb = "The four heap objects, their methods, and how you walk them." },
             .{ .slug = "constants", .title = "Constants and shared tables", .blurb = "File-scope const, map literals, program-root identity, and the immutable boundary." },
             .{ .slug = "strings", .title = "Strings", .blurb = "Immutable UTF-8, f-strings, slicing, and where the rest of the string library lives." },
-            .{ .slug = "ownership", .title = "Memory", .blurb = "Scope ownership: no collector, no reference counting, and four words to learn." },
+            .{ .slug = "ownership", .title = "Memory and ownership", .blurb = "Scope ownership: no collector, no reference counting, and four words to learn." },
             .{ .slug = "absence", .title = "Absence", .blurb = "T?, none, narrowing, and else — saying that a thing might not be there." },
             .{ .slug = "unions", .title = "Unions", .blurb = "One of a few shapes, each carrying its own fields — and match, the only door to the payload." },
             .{ .slug = "failure", .title = "Failure", .blurb = "T!, try, catch and error — and the rule that decides between a trap and an error." },
@@ -58,45 +64,40 @@ pub const sections = [_]Section{
         },
     },
     .{
-        .slug = "examples",
-        .label = "Examples",
-        .title = "Luce by example",
-        .blurb = "Complete programs and failure cases, each checked against the result printed beneath it. Read them in any order.",
+        .slug = "guides",
+        .label = "Guides",
+        .title = "Guides",
+        .blurb = "Task-oriented explanations for the parts of Luce that need more than a syntax entry.",
         .pages = &.{
-            .{ .slug = "hello", .title = "Hello and arguments", .blurb = "The smallest program, and reading the command line." },
+            .{ .slug = "structures", .title = "Structures: keep data and invariants together", .blurb = "Choose fields and methods, preserve invariants, and decide when a struct should own an object." },
+            .{ .slug = "unions", .title = "Unions: make alternatives explicit", .blurb = "Model several valid shapes, match them safely, and keep payload ownership explicit." },
+            .{ .slug = "memory", .title = "Memory without a collector", .blurb = "Why scope ownership, what it costs, and how it compares to the alternatives that were refused." },
+            .{ .slug = "failure", .title = "Traps are bugs, errors are news", .blurb = "The one rule that decides whether a failure is a trap, an error, or an absence." },
+            .{ .slug = "strings", .title = "Strings and copies", .blurb = "Immutable UTF-8 values with an owner, small-string optimisation, and the one benchmark still behind." },
+            .{ .slug = "organization", .title = "Organize a project and make a package", .blurb = "Author in the source tree, then promote the package to an installed dependency." },
+            .{ .slug = "performance", .title = "Performance", .blurb = "The benchmark table against C twins, what it measures, and what it does not." },
+            .{ .slug = "toolchain", .title = "The compiler and the terminal", .blurb = "luce, loom, the three artifacts, the one engine, and the two build modes." },
+            .{ .slug = "testing", .title = "Testing", .blurb = "luce test: a test is a func test_* in an ordinary file, and there is no framework." },
+            .{ .slug = "first-program", .title = "Hello and arguments", .blurb = "The smallest complete program, and reading the command line." },
             .{ .slug = "loops", .title = "Loops and ranges", .blurb = "range, for over a collection, enumerate, while, break and continue." },
-            .{ .slug = "lists", .title = "Lists", .blurb = "Building, comparator sorting, searching, slicing." },
-            .{ .slug = "maps", .title = "Maps", .blurb = "Insertion-ordered dictionaries with O(1) lookup." },
+            .{ .slug = "lists", .title = "Lists", .blurb = "Building, comparator sorting, searching, and slicing in a complete program." },
+            .{ .slug = "maps", .title = "Maps", .blurb = "Insertion-ordered dictionaries with O(1) lookup in a complete program." },
             .{ .slug = "arrays", .title = "Arrays and grids", .blurb = "Fixed-shape numeric storage, up to four dimensions." },
-            .{ .slug = "text", .title = "Text processing", .blurb = "Splitting, joining, trimming and counting with std.strings." },
+            .{ .slug = "text", .title = "Text processing", .blurb = "Splitting, joining, trimming, and counting with std.strings." },
             .{ .slug = "structs", .title = "Structs", .blurb = "Value aggregates, implied-self methods, static functions, and structs that carry objects." },
-            .{ .slug = "ownership", .title = "give, copy and free", .blurb = "The four situations where memory needs a word from you." },
+            .{ .slug = "ownership-example", .title = "give, copy and free", .blurb = "The four situations where memory needs a word from you." },
             .{ .slug = "optionals", .title = "Optionals", .blurb = "parse_int, none, narrowing, and the else fallback." },
             .{ .slug = "errors", .title = "Errors", .blurb = "A fallible function, try, catch, and an uncaught error's one-line report." },
             .{ .slug = "traps", .title = "Traps", .blurb = "What a bug looks like: a stable code, a line, and a call trace." },
             .{ .slug = "files", .title = "Files", .blurb = "Reading and writing through std.files, with the failure handled." },
-            .{ .slug = "programs", .title = "The bundled programs", .blurb = "The real userland in the repository, included from source and exercised by the site." },
+            .{ .slug = "programs", .title = "The bundled programs", .blurb = "Real userland programs, included from source and exercised by the site." },
         },
     },
     .{
-        .slug = "guide",
-        .label = "Guides",
-        .title = "Effective Luce",
-        .blurb = "Longer pieces on the parts of the language that are unusual, and on what the measurements actually say.",
-        .pages = &.{
-            .{ .slug = "memory", .title = "Memory without a collector", .blurb = "Why scope ownership, what it costs, and how it compares to the alternatives that were refused." },
-            .{ .slug = "failure", .title = "Traps are bugs, errors are news", .blurb = "The one rule that decides whether a failure is a trap, an error, or an absence." },
-            .{ .slug = "strings", .title = "Strings and copies", .blurb = "Immutable UTF-8 values with an owner, small-string optimisation, and the one benchmark still behind." },
-            .{ .slug = "performance", .title = "Performance", .blurb = "The benchmark table against C twins, what it measures, and what it does not." },
-            .{ .slug = "toolchain", .title = "The compiler and the terminal", .blurb = "luce, loom, the three artifacts, the one engine, and the two build modes." },
-            .{ .slug = "testing", .title = "Testing", .blurb = "luce test: a test is a func test_* in an ordinary file, and there is no framework." },
-        },
-    },
-    .{
-        .slug = "ref",
+        .slug = "reference",
         .label = "Reference",
         .title = "The Luce reference",
-        .blurb = "Normative. What the compiler in this repository accepts and what it means. Terse on purpose; the tour is where the explanations are.",
+        .blurb = "The exact rules: syntax, types, statements, expressions, ownership, modules, builtins and failure.",
         .pages = &.{
             .{ .slug = "lexical", .title = "Source text and lexical elements", .blurb = "Encoding, indentation, comments, literals, keywords, operators." },
             .{ .slug = "types", .title = "Types", .blurb = "Values, function signatures, heap objects, optionals, and the type of every expression." },
@@ -109,10 +110,10 @@ pub const sections = [_]Section{
         },
     },
     .{
-        .slug = "std",
+        .slug = "library",
         .label = "Library",
-        .title = "The standard library",
-        .blurb = "Nine modules, written in ordinary Luce and embedded in the compiler. There is no install path and there is no package manager.",
+        .title = "Standard library",
+        .blurb = "The modules that ship with the compiler, with signatures, examples and the limits of each API.",
         .pages = &.{
             .{ .slug = "math", .title = "std.math", .blurb = "Transcendentals, integer powers, whole-array reductions, and a seeded generator." },
             .{ .slug = "strings", .title = "std.strings", .blurb = "Everything built on the String primitives: find, split, join, trim, case, padding." },
@@ -123,13 +124,15 @@ pub const sections = [_]Section{
             .{ .slug = "term", .title = "std.term", .blurb = "Terminal drawing and keyboard, mouse, and resize events." },
             .{ .slug = "zip", .title = "std.zip", .blurb = "ZIP archives and DEFLATE, in pure Luce: read a real archive, write one, and check it." },
             .{ .slug = "json", .title = "std.json", .blurb = "JSON against RFC 8259, as a union: match a value, build one, write it back." },
+            .{ .slug = "gpu", .title = "std.gpu", .blurb = "Backend-neutral surfaces for low-level drawing, with Metal and Vulkan kept behind the host boundary." },
+            .{ .slug = "ui", .title = "std.ui", .blurb = "Windows and their drawing surfaces, before a higher-level UI package exists." },
         },
     },
     .{
         .slug = "status",
         .label = "Status",
         .title = "Where Luce stands",
-        .blurb = "What works, what is measured, and what is missing. Written from the repository's own inventory rather than from hope.",
+        .blurb = "A dated, concrete account of what works, what is missing and what is deliberately out of scope.",
         .pages = &.{},
     },
 };

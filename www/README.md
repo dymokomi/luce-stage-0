@@ -1,4 +1,4 @@
-# www — the three sites
+# www — the sites
 
 Everything this project publishes to the web, one directory per site,
 plus the one script that sends any of them.
@@ -8,6 +8,7 @@ plus the one script that sends any of them.
 | `luce/` | [luce.luciaos.com](https://luce.luciaos.com) — the language's documentation | `./www/luce/build.sh` | `./www/luce/deploy.sh` | `/opt/apps/luce_docs` |
 | `loom/` | [loom.luciaos.com](https://loom.luciaos.com) — the tool's documentation | `./www/loom/build.sh` | `./www/loom/deploy.sh` | `/opt/apps/loom_docs` |
 | `luciaos/` | [luciaos.com](https://luciaos.com) — the landing page | none; the page is one file | `./www/luciaos/deploy.sh` | `/opt/apps/luciaos_home` |
+| `stats/` | [stats.luciaos.com](https://stats.luciaos.com) — what the other three see | `./www/stats/build.sh` | `./www/stats/deploy.sh` | `/opt/apps/luciaos_stats` |
 
 Each site has its own README saying what it is and what its build
 guarantees.  `luce/` is the one wired to the language: every fenced
@@ -15,7 +16,9 @@ Luce sample on it is compiled and run by the freshly built toolchain
 and its printed output compared byte for byte, so `www/luce/build.sh`
 builds `build/luce` and `build/loom` first.  `loom/` checks its links
 and nothing else, deliberately, and says so.  `luciaos/` is a single
-hand-written `index.html`.
+hand-written `index.html`.  `stats/` is the odd one: a site **and the
+program that fills it**, because its numbers exist only on the machine
+that answers the requests — see its own README.
 
 ## Deploying
 
@@ -49,4 +52,5 @@ www/
   luce/           luce.luciaos.com: generator (src/), content/, assets/
   loom/           loom.luciaos.com: pages manifest, content/, assets/
   luciaos/        luciaos.com: index.html
+  stats/          stats.luciaos.com: collector (src/), site/, server/
 ```

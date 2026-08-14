@@ -70,6 +70,7 @@ const std = @import("std");
 const vocabulary = @import("../support/vocabulary.zig");
 const containers = @import("containers.zig");
 const files = @import("files.zig");
+const graphics = @import("graphics.zig");
 const heap = @import("heap.zig");
 const operators = @import("operators.zig");
 const text = @import("text.zig");
@@ -669,6 +670,189 @@ pub export fn luce_rt_files_install(
         .flush = flush,
         .close = close,
     };
+}
+
+// ---------------------------------------------------------------------------
+// Window and GPU: one backend-neutral channel
+// ---------------------------------------------------------------------------
+//
+// The runtime owns the lifetime and validation of native handles.  A host
+// supplies the platform policy once at run start; the language-facing calls
+// below never mention Metal, Vulkan, or a window-system type.  A missing or
+// refused callback becomes the ordinary host-unavailable/io failure rather
+// than a fabricated headless object.
+
+pub export fn luce_rt_graphics_install(
+    runtime: *Runtime,
+    context: ?*anyopaque,
+    backend: ?graphics.BackendFn,
+    window_open: ?graphics.WindowOpenFn,
+    window_surface: ?graphics.WindowSurfaceFn,
+    surface_size: ?graphics.SurfaceSizeFn,
+    surface_clear: ?graphics.SurfaceClearFn,
+    surface_fill_rect: ?graphics.SurfaceFillRectFn,
+    surface_present: ?graphics.SurfacePresentFn,
+    close: ?graphics.CloseFn,
+) callconv(.c) void {
+    runtime.graphics = .{
+        .context = context,
+        .backend = backend,
+        .window_open = window_open,
+        .window_surface = window_surface,
+        .surface_size = surface_size,
+        .surface_clear = surface_clear,
+        .surface_fill_rect = surface_fill_rect,
+        .surface_present = surface_present,
+        .close = close,
+    };
+}
+
+pub export fn luce_rt_gpu_backend(
+    runtime: *Runtime,
+    out: [*c]i64,
+) callconv(.c) i32 {
+    if (!requireScalarOut(i64, runtime, out)) return raised_trap;
+    out.* = graphics.backend(runtime) catch |mistake| return failed(runtime, mistake);
+    return survived;
+}
+
+pub export fn luce_rt_ui_window_open(
+    runtime: *Runtime,
+    title: [*c]const u8,
+    title_length: i64,
+    width: i64,
+    height: i64,
+    out: [*c]Value,
+    ok: [*c]i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out) or !requireScalarOut(i32, runtime, ok)) return raised_trap;
+    const named = checkedBytes(runtime, title, title_length) catch |mistake|
+        return failed(runtime, mistake);
+    const answer = graphics.openWindow(runtime, named, width, height) catch |mistake|
+        return failed(runtime, mistake);
+    ok.* = @intFromBool(answer != null);
+    if (answer) |window| {
+        out.* = window;
+    } else {
+        runtime.raiseIo(.open, named, runtime.frameAt(function, instruction));
+    }
+    return survived;
+}
+
+pub export fn luce_rt_ui_window_surface(
+    runtime: *Runtime,
+    window: [*c]const Value,
+    out: [*c]Value,
+    ok: [*c]i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out) or !requireScalarOut(i32, runtime, ok)) return raised_trap;
+    if (!requireObjectInput(runtime, window)) return raised_trap;
+    const answer = graphics.windowSurface(runtime, window.*) catch |mistake|
+        return failed(runtime, mistake);
+    ok.* = @intFromBool(answer != null);
+    if (answer) |surface| {
+        out.* = surface;
+    } else {
+        runtime.raiseIo(.open, "ui.window", runtime.frameAt(function, instruction));
+    }
+    return survived;
+}
+
+pub export fn luce_rt_gpu_surface_size(
+    runtime: *Runtime,
+    surface: [*c]const Value,
+    axis: i64,
+    out: [*c]i64,
+    ok: [*c]i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    if (!requireScalarOut(i64, runtime, out) or !requireScalarOut(i32, runtime, ok)) return raised_trap;
+    if (!requireObjectInput(runtime, surface)) return raised_trap;
+    const answer = graphics.size(runtime, surface.*, axis) catch |mistake|
+        return failed(runtime, mistake);
+    ok.* = @intFromBool(answer != null);
+    out.* = answer orelse 0;
+    if (answer == null) runtime.raiseIo(
+        .inspect,
+        "gpu.surface",
+        runtime.frameAt(function, instruction),
+    );
+    return survived;
+}
+
+pub export fn luce_rt_gpu_surface_clear(
+    runtime: *Runtime,
+    surface: [*c]const Value,
+    red: i64,
+    green: i64,
+    blue: i64,
+    alpha: i64,
+    ok: [*c]i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    if (!requireScalarOut(i32, runtime, ok)) return raised_trap;
+    if (!requireObjectInput(runtime, surface)) return raised_trap;
+    const answered = graphics.clear(runtime, surface.*, red, green, blue, alpha) catch |mistake|
+        return failed(runtime, mistake);
+    ok.* = @intFromBool(answered);
+    if (!answered) runtime.raiseIo(.write, "gpu.surface", runtime.frameAt(function, instruction));
+    return survived;
+}
+
+pub export fn luce_rt_gpu_surface_fill_rect(
+    runtime: *Runtime,
+    surface: [*c]const Value,
+    x: i64,
+    y: i64,
+    width: i64,
+    height: i64,
+    red: i64,
+    green: i64,
+    blue: i64,
+    alpha: i64,
+    ok: [*c]i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    if (!requireScalarOut(i32, runtime, ok)) return raised_trap;
+    if (!requireObjectInput(runtime, surface)) return raised_trap;
+    const answered = graphics.fillRect(
+        runtime,
+        surface.*,
+        x,
+        y,
+        width,
+        height,
+        red,
+        green,
+        blue,
+        alpha,
+    ) catch |mistake| return failed(runtime, mistake);
+    ok.* = @intFromBool(answered);
+    if (!answered) runtime.raiseIo(.write, "gpu.surface", runtime.frameAt(function, instruction));
+    return survived;
+}
+
+pub export fn luce_rt_gpu_surface_present(
+    runtime: *Runtime,
+    surface: [*c]const Value,
+    ok: [*c]i32,
+    function: u32,
+    instruction: u32,
+) callconv(.c) i32 {
+    if (!requireScalarOut(i32, runtime, ok)) return raised_trap;
+    if (!requireObjectInput(runtime, surface)) return raised_trap;
+    const answered = graphics.present(runtime, surface.*) catch |mistake|
+        return failed(runtime, mistake);
+    ok.* = @intFromBool(answered);
+    if (!answered) runtime.raiseIo(.flush, "gpu.surface", runtime.frameAt(function, instruction));
+    return survived;
 }
 
 pub export fn luce_rt_file_open(

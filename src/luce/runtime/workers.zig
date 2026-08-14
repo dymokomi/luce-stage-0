@@ -382,6 +382,7 @@ pub fn spawn(
     // depth budget are its own, which is the whole of D1.
     child.functions = parent.functions;
     child.files = parent.files;
+    child.graphics = parent.graphics;
     child.workers = parent.workers;
     child.nursery = parent.nursery;
     child.effects = effects;
