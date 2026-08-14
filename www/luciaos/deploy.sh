@@ -1,9 +1,8 @@
 #!/bin/sh
 # Publish luciaos.com.
 #
-# The landing page is one self-contained file — no build step, nothing
-# to verify beyond its existence — so deploying is handing this
-# directory to the shared publisher, minus the two files that are
+# The landing page has no build step: one HTML file and its stylesheet
+# are handed to the shared publisher, minus the two files that are
 # about the page rather than part of it.
 #
 #   ./www/luciaos/deploy.sh
@@ -14,8 +13,8 @@ set -e
 
 here=$(cd "$(dirname "$0")" && pwd)
 
-if [ ! -f "$here/index.html" ]; then
-    echo "deploy: $here/index.html is missing" >&2
+if [ ! -f "$here/index.html" ] || [ ! -f "$here/style.css" ]; then
+    echo "deploy: $here needs index.html and style.css" >&2
     exit 1
 fi
 

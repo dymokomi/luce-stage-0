@@ -1,8 +1,8 @@
 # luciaos — luciaos.com
 
-The LuciaOS landing page: one self-contained `index.html`, published
-by `deploy.sh` through `www/deploy/publish.sh`.  There is nothing to
-build.
+The LuciaOS landing page: a hand-written `index.html` and
+`style.css`, published by `deploy.sh` through
+`www/deploy/publish.sh`. There is nothing to build.
 
 ```sh
 ./www/luciaos/deploy.sh
