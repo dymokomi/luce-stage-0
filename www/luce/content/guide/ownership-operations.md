@@ -1,4 +1,4 @@
-# give, copy and free
+# Ownership Operations
 
 Most Luce code never says any of these. They appear at exactly four
 places: storing a named object somewhere that outlives the statement,

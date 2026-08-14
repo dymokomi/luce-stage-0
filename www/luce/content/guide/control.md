@@ -1,4 +1,4 @@
-# Control flow
+# Control Flow
 
 Luce uses indentation for blocks. A block follows `:` and is indented by
 four spaces. Conditions are `bool`; numbers and strings are not implicitly
@@ -84,7 +84,7 @@ word plum
 ```
 
 Do not change the size of, or free, the collection being iterated. See
-[Lists](/guide/lists/), [maps](/guide/maps/) and [arrays](/guide/arrays/) for
+[Collection Types](/guide/collections/) for
 the collection operations.
 
 ## `break` and `continue`
@@ -135,4 +135,4 @@ func main():
 7! = 5040
 ```
 
-Next: [Functions and structs](/guide/functions/).
+Continue with [Functions](/guide/functions/).

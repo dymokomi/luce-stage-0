@@ -1,4 +1,4 @@
-# Traps and errors
+# Errors and Traps
 
 Luce has three outcomes for an operation that cannot produce its normal
 value:

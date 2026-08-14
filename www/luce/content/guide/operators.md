@@ -1,0 +1,138 @@
+# Basic Operators
+
+Operators combine, compare, or update values. Their operands are statically
+typed: Luce does not turn numbers, strings, or objects into Boolean
+conditions.
+
+| Purpose | Operators |
+|---|---|
+| Arithmetic | `+` `-` `*` `/` `//` `%` |
+| Comparison | `==` `!=` `<` `<=` `>` `>=` |
+| Boolean logic | `and` `or` `not` |
+| Bitwise integer work | `&` `|` `^` `~` `<<` `>>` |
+| Assignment | `=` and the compound forms such as `+=` and `<<=` |
+
+This chapter teaches the common forms. [Expressions](/guide/reference/expressions/)
+defines the complete precedence table and every accepted spelling.
+
+## Arithmetic
+
+`+`, `-`, and `*` preserve the common numeric type. `/` is real
+division and returns `double`. `//` is floor division, and `%` is the
+remainder that pairs with it.
+
+```luce run
+func main():
+    print(string(1 / 2))
+    print(string(7 // 2) + " " + string(7 % 2))
+    print(string(-7 // 3) + " " + string(-7 % 3))
+    print(string(-1 % 256))
+```
+
+```output
+0.5
+3 1
+-3 2
+255
+```
+
+Integer arithmetic is checked in every build mode. Overflow, division by
+zero, and remainder by zero trap instead of silently producing a different
+value.
+
+```luce trap
+func main():
+    var n: long = 9223372036854775807
+    print("about to add one")
+    n += 1
+    print(string(n))
+```
+
+```output
+about to add one
+loom: trap: integer overflow [integer_overflow]
+    at main (main.luc:4:5)
+```
+
+Floating-point arithmetic follows IEEE rules. Adding two strings
+concatenates them; use a [string builder](/guide/strings/#building-text)
+when assembling many pieces.
+
+## Comparison
+
+Equality and order comparisons work on the scalar types that define those
+operations. Numeric operands may use different widths without losing the
+exact integer value being compared.
+
+```luce run
+func main():
+    let after: long = 9007199254740993
+    let rounded: double = 9007199254740992.0
+    print(string(1 < 1.5))
+    print(string(after == rounded))
+```
+
+```output
+true
+false
+```
+
+Comparisons do not chain. Write both comparisons so the shared operand and
+the Boolean operation are visible:
+
+```luce fail
+func main():
+    let a = 1
+    let b = 2
+    let c = 3
+    print(string(a < b < c))
+```
+
+```output
+luce: compile failed
+main.luc:5:24: chained comparison: write 'a < b and b < c' [luce.parse.chain]
+        print(string(a < b < c))
+                           ^
+```
+
+## Boolean logic
+
+`and`, `or`, and `not` require `bool`. The first two short-circuit:
+the right operand is evaluated only when it can affect the result.
+
+```luce run
+func valid_port(value: long) -> bool:
+    return value >= 1 and value <= 65535
+
+func main():
+    print(string(valid_port(8080)))
+    print(string(not valid_port(70000)))
+```
+
+```output
+true
+true
+```
+
+## Assignment
+
+`=` replaces the value of a `var` binding or an assignable field,
+element, or map entry. A compound assignment reads its target once, applies
+the operator, and writes the result back.
+
+```luce run
+func main():
+    var total = 4
+    total *= 3
+
+    var counts = new map(string, long)
+    counts["pear"] = 1
+    counts["pear"] += 1
+    print(f"{total} {counts["pear"]}")
+```
+
+```output
+12 2
+```
+
+Continue with [Strings and Text](/guide/strings/).

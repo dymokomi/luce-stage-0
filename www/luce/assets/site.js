@@ -1,12 +1,36 @@
-/* Three small things, and nothing else: a theme toggle, a copy button
- * on every sample, an "on this page" marker that follows the reading
- * position, and search over the index the generator emitted.
+/* Five small things, and nothing else: responsive section navigation, a
+ * theme toggle, a copy button on every sample, an "on this page" marker
+ * that follows the reading position, and search over the generated index.
  *
  * The site is entirely readable with this file blocked.  Nothing here
  * loads anything, stores anything but the chosen theme, or talks to
  * any other host. */
 (function () {
   "use strict";
+
+  // ---- section navigation -------------------------------------------
+  // A 34-chapter book must not place its full contents before the article
+  // on a phone. Native details keeps the contents available without making
+  // the rest of the page depend on JavaScript.
+  var narrow = window.matchMedia("(max-width: 52rem)");
+  var sectionNav = document.querySelector(".side details.nav");
+  function revealCurrent() {
+    if (!sectionNav || narrow.matches) return;
+    var side = sectionNav.closest(".side");
+    var current = sectionNav.querySelector("a.here");
+    if (!side || !current) return;
+    var sideBox = side.getBoundingClientRect();
+    var currentBox = current.getBoundingClientRect();
+    side.scrollTop += currentBox.top - sideBox.top
+      - (side.clientHeight - currentBox.height) / 2;
+  }
+  function fitNavigation() {
+    if (!sectionNav) return;
+    sectionNav.open = !narrow.matches;
+    if (!narrow.matches) requestAnimationFrame(revealCurrent);
+  }
+  fitNavigation();
+  if (narrow.addEventListener) narrow.addEventListener("change", fitNavigation);
 
   // ---- theme ---------------------------------------------------------
   var root = document.documentElement;

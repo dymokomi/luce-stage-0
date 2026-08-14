@@ -22,7 +22,7 @@ const verify = @import("verify.zig");
 
 /// A rendered page, kept until the link check has seen every other one.
 const Built = struct {
-    /// Path under the output root, e.g. `guide/first-program/index.html`.
+    /// Path under the output root, e.g. `guide/basics/index.html`.
     path: []u8,
     url: []u8,
     title: []u8,
@@ -79,6 +79,11 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
 
 fn generate(gpa: Allocator, io: Io, options: Options) !u8 {
     const cwd = Io.Dir.cwd();
+
+    // Markdown that is not in the table of contents is invisible online and
+    // therefore guaranteed to drift. Refuse it before doing any expensive
+    // sample work.
+    try auditContent(gpa, io, options.content);
 
     // A build starts from nothing.  Anything left from a page that was
     // deleted or renamed is a dead link waiting to be published — and
@@ -184,6 +189,72 @@ fn clear(io: Io, cwd: Io.Dir, path: []const u8) !void {
         );
         return failure;
     };
+}
+
+fn auditContent(gpa: Allocator, io: Io, root: []const u8) !void {
+    var orphaned: usize = 0;
+    try auditContentTree(gpa, io, root, "", &orphaned);
+    if (orphaned != 0) {
+        std.debug.print(
+            "lucedoc: {d} Markdown file(s) are outside the table of contents\n",
+            .{orphaned},
+        );
+        return error.OrphanedContent;
+    }
+}
+
+fn auditContentTree(
+    gpa: Allocator,
+    io: Io,
+    root: []const u8,
+    relative: []const u8,
+    orphaned: *usize,
+) !void {
+    const where = if (relative.len == 0)
+        try gpa.dupe(u8, root)
+    else
+        try std.fs.path.join(gpa, &.{ root, relative });
+    defer gpa.free(where);
+
+    var directory = try Io.Dir.cwd().openDir(io, where, .{ .iterate = true });
+    defer directory.close(io);
+    var entries = directory.iterate();
+    while (try entries.next(io)) |entry| {
+        const child = if (relative.len == 0)
+            try gpa.dupe(u8, entry.name)
+        else
+            try std.fs.path.join(gpa, &.{ relative, entry.name });
+        defer gpa.free(child);
+
+        if (entry.kind == .directory) {
+            try auditContentTree(gpa, io, root, child, orphaned);
+            continue;
+        }
+        if (entry.kind != .file or !std.mem.endsWith(u8, entry.name, ".md")) continue;
+        if (try declaredSource(gpa, child)) continue;
+        std.debug.print("lucedoc: {s} is not in site.zig\n", .{child});
+        orphaned.* += 1;
+    }
+}
+
+fn declaredSource(gpa: Allocator, path: []const u8) !bool {
+    if (std.mem.eql(u8, path, "index.md")) return true;
+    for (site.sections) |section| {
+        const overview = try std.fmt.allocPrint(gpa, "{s}/index.md", .{section.slug});
+        defer gpa.free(overview);
+        if (std.mem.eql(u8, path, overview)) return true;
+
+        for (section.pages) |entry| {
+            if (entry.source) |source| {
+                if (std.mem.eql(u8, path, source)) return true;
+                continue;
+            }
+            const source = try std.fmt.allocPrint(gpa, "{s}/{s}.md", .{ section.slug, entry.slug });
+            defer gpa.free(source);
+            if (std.mem.eql(u8, path, source)) return true;
+        }
+    }
+    return false;
 }
 
 fn release(gpa: Allocator, item: Built) void {
@@ -365,18 +436,36 @@ fn doors(out: *Buffer) !void {
     try out.add("</div>\n");
 }
 
-/// The list of pages a section overview ends with.
+/// The grouped table of contents a section overview ends with.
 fn cards(out: *Buffer, section: *const site.Section) !void {
     if (section.pages.len == 0) return;
-    try out.add("<div class=\"cards\">\n");
+    var current_part: []const u8 = "";
     for (section.pages) |entry| {
+        if (!std.mem.eql(u8, current_part, entry.part)) {
+            if (current_part.len != 0) try out.add("</div>\n</section>\n");
+            current_part = entry.part;
+            try out.add("<section class=\"card-part\">\n<h2 id=\"");
+            try out.add(partId(current_part));
+            try out.add("\">");
+            try out.addEscaped(current_part);
+            try out.add("</h2>\n<div class=\"cards\">\n");
+        }
         try out.print("<a class=\"card\" href=\"{s}/\"><strong>", .{entry.slug});
         try out.addEscaped(entry.title);
         try out.add("</strong><span>");
         try out.addEscaped(entry.blurb);
         try out.add("</span></a>\n");
     }
-    try out.add("</div>\n");
+    try out.add("</div>\n</section>\n");
+}
+
+fn partId(part: []const u8) []const u8 {
+    if (std.mem.eql(u8, part, "Language Guide")) return "language-guide";
+    if (std.mem.eql(u8, part, "Tools and Projects")) return "tools-and-projects";
+    if (std.mem.eql(u8, part, "Language Reference")) return "language-reference";
+    if (std.mem.eql(u8, part, "Standard Library")) return "standard-library";
+    if (std.mem.eql(u8, part, "Maintained Packages")) return "maintained-packages";
+    unreachable;
 }
 
 // ---------------------------------------------------------------------------
@@ -558,17 +647,25 @@ test "links resolve against the page that carries them" {
     const gpa = std.testing.allocator;
     const cases = [_]struct { from: []const u8, href: []const u8, want: []const u8 }{
         .{ .from = "index.html", .href = "tour/", .want = "tour/index.html" },
-        .{ .from = "guide/first-program/index.html", .href = "../loops/", .want = "guide/loops/index.html" },
-        .{ .from = "guide/values/index.html", .href = "../control/", .want = "guide/control/index.html" },
-        .{ .from = "guide/values/index.html", .href = "/reference/types/", .want = "reference/types/index.html" },
+        .{ .from = "guide/basics/index.html", .href = "../control/", .want = "guide/control/index.html" },
+        .{ .from = "guide/basics/index.html", .href = "/guide/reference/types/", .want = "guide/reference/types/index.html" },
+        .{ .from = "guide/reference/types/index.html", .href = "../expressions/", .want = "guide/reference/expressions/index.html" },
         .{ .from = "guide/index.html", .href = "/status/", .want = "status/index.html" },
-        .{ .from = "guide/first-program/index.html", .href = "../../assets/style.css", .want = "assets/style.css" },
+        .{ .from = "guide/basics/index.html", .href = "../../assets/style.css", .want = "assets/style.css" },
     };
     for (cases) |case| {
         const got = try resolve(gpa, case.from, case.href);
         defer gpa.free(got);
         try std.testing.expectEqualStrings(case.want, got);
     }
+}
+
+test "every Markdown source must be declared" {
+    const gpa = std.testing.allocator;
+    try std.testing.expect(try declaredSource(gpa, "index.md"));
+    try std.testing.expect(try declaredSource(gpa, "guide/basics.md"));
+    try std.testing.expect(try declaredSource(gpa, "guide/reference/types.md"));
+    try std.testing.expect(!(try declaredSource(gpa, "guide/loops.md")));
 }
 
 test "the generator's own units" {

@@ -1,4 +1,4 @@
-# Enums
+# Enumerations
 
 An enum gives names to a finite set of values. The names are qualified by
 the enum type (`Method.stored`), so unrelated enums cannot be mixed by
@@ -236,4 +236,4 @@ green, and go is true
 
 An enum is not a bit set and cannot carry payload fields. Use integer bit
 operators for flags and [a union](/guide/unions/) when each alternative needs
-data. Next: [Lists](/guide/lists/), [maps](/guide/maps/) and [arrays](/guide/arrays/).
+data. Continue with [Structures and Methods](/guide/structures/).

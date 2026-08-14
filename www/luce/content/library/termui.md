@@ -9,7 +9,7 @@ presenting changed cells.
 This is a package, not a second standard-library namespace. In a checkout its
 source lives under `packages/termui-0.1.0/`. The package manifest and import
 layout are ordinary Luce files, so you can study or copy the pattern in the
-[organization guide](/guide/organization/).
+[Packages and Projects](/guide/packages/).
 
 ## The public pieces
 
@@ -105,7 +105,7 @@ Build the adapter from the current `render`, `count`, `top`, and `selected`
 values; it never moves the selection while painting.
 
 See the [interface guide](/guide/interfaces/) and the exact [interface
-rules](/reference/types/#interface) for conformance and ownership.
+rules](/guide/reference/types/#interface) for conformance and ownership.
 
 ## Input
 

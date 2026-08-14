@@ -760,12 +760,12 @@ test "the reference names every builtin the analyzer dispatches" {
     var names = try builtins(repository);
     defer names.deinit();
 
-    try expectDocumented(repository, "reference/builtins.md", names, &.{});
+    try expectDocumented(repository, "guide/reference/builtins.md", names, &.{});
 }
 
 test "the reference names every builtin's parameters" {
     // One level down from the test above (docs/ARGS.md §3): the table
-    // is the builtin's signature, so the line of reference/builtins.md that
+    // is the builtin's signature, so the line of guide/reference/builtins.md that
     // shows `name(` must carry every parameter name the table
     // declares.  This is what stops the table and the prose drifting
     // the way the old grammar drifted.
@@ -777,7 +777,7 @@ test "the reference names every builtin's parameters" {
     defer freeSignatures(gpa, rows);
     try std.testing.expect(rows.len >= 30);
 
-    const page = try repository.read("www/luce/content/reference/builtins.md");
+    const page = try repository.read("www/luce/content/guide/reference/builtins.md");
     defer gpa.free(page);
 
     var missing: usize = 0;
@@ -792,13 +792,13 @@ test "the reference names every builtin's parameters" {
             found_signature = true;
             for (row.parameters) |parameter| {
                 if (namesWord(line, parameter)) continue;
-                std.debug.print("reference/builtins.md: the {s} line does not name its parameter '{s}'\n", .{ row.name, parameter });
+                std.debug.print("guide/reference/builtins.md: the {s} line does not name its parameter '{s}'\n", .{ row.name, parameter });
                 missing += 1;
             }
             break;
         }
         if (!found_signature) {
-            std.debug.print("reference/builtins.md never shows {s}(…)\n", .{row.name});
+            std.debug.print("guide/reference/builtins.md never shows {s}(…)\n", .{row.name});
             missing += 1;
         }
     }
@@ -813,7 +813,7 @@ test "the reference names every method a receiver answers to" {
     var names = try methods(repository);
     defer names.deinit();
 
-    try expectDocumented(repository, "reference/builtins.md", names, &.{});
+    try expectDocumented(repository, "guide/reference/builtins.md", names, &.{});
 }
 
 test "the reference names every trap code and every error code" {
@@ -826,11 +826,11 @@ test "the reference names every trap code and every error code" {
     // only re-exports them.
     var traps = try enumMembers(repository, "src/luce/support/vocabulary.zig", "TrapCode");
     defer traps.deinit();
-    try expectDocumented(repository, "reference/failure.md", traps, &.{});
+    try expectDocumented(repository, "guide/reference/failure.md", traps, &.{});
 
     var errors = try enumMembers(repository, "src/luce/support/vocabulary.zig", "ErrorCode");
     defer errors.deinit();
-    try expectDocumented(repository, "reference/failure.md", errors, &.{});
+    try expectDocumented(repository, "guide/reference/failure.md", errors, &.{});
 }
 
 test "each std page names every function and constant its module exports" {
@@ -914,15 +914,15 @@ test "the reference keeps function value and lambda syntax visible" {
     const repository = try open(gpa, std.testing.io);
     defer gpa.free(repository.prefix);
 
-    const types = try describedCode(repository, "reference/types.md");
+    const types = try describedCode(repository, "guide/reference/types.md");
     defer gpa.free(types);
     try std.testing.expect(std.mem.indexOf(u8, types, "func(long, long) -> bool") != null);
 
-    const expressions = try describedCode(repository, "reference/expressions.md");
+    const expressions = try describedCode(repository, "guide/reference/expressions.md");
     defer gpa.free(expressions);
     try std.testing.expect(std.mem.indexOf(u8, expressions, "(n) -> n * 2") != null);
 
-    for ([_][]const u8{ "reference/expressions.md", "reference/statements.md" }) |page| {
+    for ([_][]const u8{ "guide/reference/expressions.md", "guide/reference/statements.md" }) |page| {
         const path = try std.fmt.allocPrint(gpa, "www/luce/content/{s}", .{page});
         defer gpa.free(path);
         const text = try repository.read(path);
@@ -940,17 +940,17 @@ test "the public site keeps constant containers and map literals visible" {
     const repository = try open(gpa, std.testing.io);
     defer gpa.free(repository.prefix);
 
-    const lexical = try repository.read("www/luce/content/reference/lexical.md");
+    const lexical = try repository.read("www/luce/content/guide/reference/lexical.md");
     defer gpa.free(lexical);
     try std.testing.expect(std.mem.indexOf(u8, lexical, "`const` declares a file-scope") != null);
     try std.testing.expect(std.mem.indexOf(u8, lexical, "map literals") != null);
 
-    const expressions = try repository.read("www/luce/content/reference/expressions.md");
+    const expressions = try repository.read("www/luce/content/guide/reference/expressions.md");
     defer gpa.free(expressions);
     try std.testing.expect(std.mem.indexOf(u8, expressions, "{\"one\": 1, \"two\": 2}") != null);
     try std.testing.expect(std.mem.indexOf(u8, expressions, "Empty `{}` is refused") != null);
 
-    const statements = try repository.read("www/luce/content/reference/statements.md");
+    const statements = try repository.read("www/luce/content/guide/reference/statements.md");
     defer gpa.free(statements);
     for ([_][]const u8{
         "program root",
@@ -961,11 +961,11 @@ test "the public site keeps constant containers and map literals visible" {
         try std.testing.expect(std.mem.indexOf(u8, statements, claim) != null);
     }
 
-    const ownership = try repository.read("www/luce/content/reference/ownership.md");
+    const ownership = try repository.read("www/luce/content/guide/reference/ownership.md");
     defer gpa.free(ownership);
     try std.testing.expect(std.mem.indexOf(u8, ownership, "### S46 — a constant container belongs to the program root") != null);
 
-    const failure = try repository.read("www/luce/content/reference/failure.md");
+    const failure = try repository.read("www/luce/content/guide/reference/failure.md");
     defer gpa.free(failure);
     try std.testing.expect(std.mem.indexOf(u8, failure, "`immutable_object`") != null);
 
@@ -982,7 +982,7 @@ test "the reference keeps implied self and static visible" {
     const repository = try open(gpa, std.testing.io);
     defer gpa.free(repository.prefix);
 
-    const statements = try repository.read("www/luce/content/reference/statements.md");
+    const statements = try repository.read("www/luce/content/guide/reference/statements.md");
     defer gpa.free(statements);
     for ([_][]const u8{
         "**method** with an implied `self`",
@@ -993,20 +993,20 @@ test "the reference keeps implied self and static visible" {
         try std.testing.expect(std.mem.indexOf(u8, statements, claim) != null);
     }
 
-    const expressions = try repository.read("www/luce/content/reference/expressions.md");
+    const expressions = try repository.read("www/luce/content/guide/reference/expressions.md");
     defer gpa.free(expressions);
     try std.testing.expect(std.mem.indexOf(u8, expressions, "`Point.length(p)` is refused") != null);
 
-    const types = try repository.read("www/luce/content/reference/types.md");
+    const types = try repository.read("www/luce/content/guide/reference/types.md");
     defer gpa.free(types);
     try std.testing.expect(std.mem.indexOf(u8, types, "inside a struct is a method with implied") != null);
     try std.testing.expect(std.mem.indexOf(u8, types, "A `static func` has no receiver") != null);
 
-    const lexical = try repository.read("www/luce/content/reference/lexical.md");
+    const lexical = try repository.read("www/luce/content/guide/reference/lexical.md");
     defer gpa.free(lexical);
     try std.testing.expect(std.mem.indexOf(u8, lexical, "`static` belongs immediately before `func`") != null);
 
-    const toolchain = try repository.read("www/luce/content/guide/toolchain.md");
+    const toolchain = try repository.read("www/luce/content/guide/command-line.md");
     defer gpa.free(toolchain);
     try std.testing.expect(std.mem.indexOf(u8, toolchain, "Current release label:") != null);
 }
@@ -1022,7 +1022,7 @@ test "the toolchain page carries the module format and host ABI the tree has" {
     const repository = try open(gpa, std.testing.io);
     defer gpa.free(repository.prefix);
 
-    const toolchain = try repository.read("www/luce/content/guide/toolchain.md");
+    const toolchain = try repository.read("www/luce/content/guide/command-line.md");
     defer gpa.free(toolchain);
 
     const format = try declaredNumber(repository, "src/luce/06_mir/module.zig", "format_version");
@@ -1040,7 +1040,7 @@ test "the toolchain page carries the module format and host ABI the tree has" {
     defer for (claims) |claim| gpa.free(claim);
     for (claims) |claim| {
         if (std.mem.indexOf(u8, toolchain, claim) != null) continue;
-        std.debug.print("guide/toolchain.md does not say {s}\n", .{claim});
+        std.debug.print("guide/command-line.md does not say {s}\n", .{claim});
         return error.TestUnexpectedResult;
     }
 }
@@ -1053,17 +1053,17 @@ test "the reference keeps existing-name multi-return assignment visible" {
     const repository = try open(gpa, std.testing.io);
     defer gpa.free(repository.prefix);
 
-    for ([_][]const u8{ "reference/statements.md", "reference/expressions.md" }) |page| {
+    for ([_][]const u8{ "guide/reference/statements.md", "guide/reference/expressions.md" }) |page| {
         const code = try describedCode(repository, page);
         defer gpa.free(code);
         try std.testing.expect(std.mem.indexOf(u8, code, "low, high = minmax(xs)") != null);
     }
 
-    const failure = try describedCode(repository, "reference/failure.md");
+    const failure = try describedCode(repository, "guide/reference/failure.md");
     defer gpa.free(failure);
     try std.testing.expect(std.mem.indexOf(u8, failure, "left, right = read_pair() catch reason:") != null);
 
-    for ([_][]const u8{ "reference/statements.md", "reference/expressions.md" }) |page| {
+    for ([_][]const u8{ "guide/reference/statements.md", "guide/reference/expressions.md" }) |page| {
         const path = try std.fmt.allocPrint(gpa, "www/luce/content/{s}", .{page});
         defer gpa.free(path);
         const source = try repository.read(path);
@@ -1082,7 +1082,7 @@ test "the toolchain page names every option and command word the binaries take" 
     var names = try commandLine(repository);
     defer names.deinit();
 
-    try expectDocumented(repository, "guide/toolchain.md", names, &.{});
+    try expectDocumented(repository, "guide/command-line.md", names, &.{});
 }
 
 test "a name is found only as a whole word" {
@@ -1116,7 +1116,7 @@ test "an option is recognised by shape, and a sentence about one is not" {
 /// (`short(x)` — docs/NUMERICS.md §7).  Neither was checked until the
 /// ladder grew to seven, and the gap was the same shape as the one
 /// this file was written for: `byte`, `short` and `half` landed in the
-/// compiler and `reference/builtins.md` went on listing four conversions.
+/// compiler and `guide/reference/builtins.md` went on listing four conversions.
 fn typeNames(repository: Repository) !Names {
     var names: Names = .{ .gpa = repository.gpa };
     errdefer names.deinit();
@@ -1140,12 +1140,12 @@ test "the reference names every type the language answers to" {
     var names = try typeNames(repository);
     defer names.deinit();
 
-    try expectDocumented(repository, "reference/types.md", names, &.{});
+    try expectDocumented(repository, "guide/reference/types.md", names, &.{});
 }
 
 test "the reference names every conversion constructor" {
     // The scalars from the same table are also functions — `byte(x)`,
-    // `half(x)`, `string(x)` — and `reference/builtins.md` is where a reader
+    // `half(x)`, `string(x)` — and `guide/reference/builtins.md` is where a reader
     // looks for a function.  `bool` and the four containers are not
     // conversions (`types.conversionNamed` refuses them), so they are
     // exempt here and covered by the type test above.
@@ -1156,7 +1156,7 @@ test "the reference names every conversion constructor" {
     var names = try typeNames(repository);
     defer names.deinit();
 
-    try expectDocumented(repository, "reference/builtins.md", names, &.{
+    try expectDocumented(repository, "guide/reference/builtins.md", names, &.{
         "bool",
         "list",
         "map",
@@ -1164,7 +1164,7 @@ test "the reference names every conversion constructor" {
         "builder",
         // `file` and `task` are resources rather than conversions, and
         // neither is a function at all: one is opened and the other is
-        // spawned.  `reference/types.md` is where a reader looks for them.
+        // spawned.  `guide/reference/types.md` is where a reader looks for them.
         "task",
     });
 }
@@ -1200,7 +1200,7 @@ test "the lexical keyword and reserved rosters exactly match the compiler" {
     const repository = try open(gpa, std.testing.io);
     defer gpa.free(repository.prefix);
 
-    const lexical = try repository.read("www/luce/content/reference/lexical.md");
+    const lexical = try repository.read("www/luce/content/guide/reference/lexical.md");
     defer gpa.free(lexical);
 
     var documented_keywords: Names = .{ .gpa = gpa };
@@ -1210,7 +1210,7 @@ test "the lexical keyword and reserved rosters exactly match the compiler" {
     try plainWords(&documented_keywords, keyword_block);
     var compiler_keywords = try lexerKeywords(repository);
     defer compiler_keywords.deinit();
-    try expectSameNames("reference/lexical.md keywords", compiler_keywords, documented_keywords);
+    try expectSameNames("guide/reference/lexical.md keywords", compiler_keywords, documented_keywords);
 
     var documented_reserved: Names = .{ .gpa = gpa };
     defer documented_reserved.deinit();
@@ -1225,7 +1225,7 @@ test "the lexical keyword and reserved rosters exactly match the compiler" {
     try plainWords(&documented_reserved, after_fence[0..reserved_stop]);
     var compiler_reserved = try reservedNames(repository);
     defer compiler_reserved.deinit();
-    try expectSameNames("reference/lexical.md reserved names", compiler_reserved, documented_reserved);
+    try expectSameNames("guide/reference/lexical.md reserved names", compiler_reserved, documented_reserved);
 }
 
 fn editorWordTable(gpa: Allocator, source: []const u8, declaration: []const u8) !Names {

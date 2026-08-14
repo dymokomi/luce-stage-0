@@ -1,4 +1,4 @@
-# Modules
+# Modules and Imports
 
 Each `.luc` file is a module. `import name` loads the sibling
 `name.luc` and binds the module under `name`. An import is required before
@@ -34,7 +34,8 @@ func main():
 
 The module name qualifies functions, structs, methods, constants, and type
 annotations. Declarations marked `private` are not reachable from an
-importer; [Visibility](/guide/visibility/) explains that boundary. Imports are
+importer; [Access Control](/guide/access-control/) explains that boundary.
+Imports are
 case-sensitive and conditional imports and re-exports are not part of Luce.
 
 ## The standard library
@@ -91,7 +92,8 @@ The current modules are [`math`](/library/math/), [`strings`](/library/strings/)
 Source is UTF-8 text. LF and CRLF line endings are accepted, and imports
 from standard input resolve relative to the current directory. Invalid UTF-8,
 NUL bytes, unsupported line endings or encoding markers, and an oversized
-source file are rejected before parsing. See the [lexical reference](/reference/lexical/)
+source file are rejected before parsing. See the
+[lexical reference](/guide/reference/lexical/)
 for limits and diagnostic codes.
 
 ## Projects and aliases
@@ -121,5 +123,5 @@ func main():
 ```
 
 Without a project manifest, imports remain single-segment sibling imports.
-The [module reference](/reference/modules/) covers manifest resolution and
-collision rules. Next: [Visibility](/guide/visibility/).
+The [module reference](/guide/reference/modules/) covers manifest resolution
+and collision rules. Continue with [Host Services](/guide/host/).

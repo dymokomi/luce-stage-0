@@ -6,10 +6,9 @@ This page separates three things that are easy to confuse:
 2. what Luce intentionally does not include; and
 3. what is being considered or built next.
 
-The rest of the site documents the first category. The [Guide](/guide/) states
-the language rules and explains the decisions that affect day-to-day work;
-the [Reference](/reference/) is exhaustive; and the [Tour](/tour/) is the
-short introduction.
+The rest of the site documents the first category. The [Guide](/guide/)
+teaches the language and closes with its exhaustive Language Reference; the
+[Tour](/tour/) is the short introduction.
 
 ## Available today
 
@@ -46,7 +45,7 @@ The repository builds two programs:
 
 A `.lc` file is native machine code. Running one does not invoke the
 compiler or LLVM. A source file does need the compiler and the C linker
-during its build. The [build guide](/guide/toolchain/) gives the exact
+during its build. [Command-Line Tools](/guide/command-line/) gives the exact
 commands and failure modes.
 
 ### Standard library and complete programs
@@ -75,9 +74,9 @@ These are design decisions, not missing documentation:
 - capturing closures. Use a struct with a method when state must travel
   with behavior.
 
-The [memory guide](/guide/memory/), [failure guide](/guide/failure/) and
-[exact language rules](/reference/) explain the alternatives Luce chose and the
-rules that follow from them.
+[Memory and Ownership](/guide/memory/), [Error Handling](/guide/errors/),
+and the [exact language rules](/guide/reference/) explain the alternatives
+Luce chose and the rules that follow from them.
 
 ## Not shipped yet
 

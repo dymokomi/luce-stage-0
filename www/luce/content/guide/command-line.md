@@ -1,4 +1,4 @@
-# Build and run Luce programs
+# Command-Line Tools
 
 The first Luce workflow is deliberately ordinary: write a source file,
 compile a native executable, and run that executable.
@@ -112,7 +112,7 @@ Loom's exit status distinguishes a finished program, a trap, an uncaught
 error, an out-of-memory stop, and a refusal to run or write output. A trap is
 not an error result: it indicates a violated language precondition and
 includes its stable code. An uncaught error carries the error code and
-message. See [Failure](/guide/failure/) for choosing between them.
+message. See [Error Handling](/guide/errors/) for choosing between them.
 
 ## Debug and release
 

@@ -175,7 +175,14 @@ fn sidebar(out: *Buffer, where: Where, headings: []const markdown.Heading) !void
     try prefix(out, where.url);
     try out.print("{s}/\">Overview</a></li>\n", .{section.slug});
 
+    var current_part: []const u8 = "";
     for (section.pages) |*page| {
+        if (!std.mem.eql(u8, current_part, page.part)) {
+            current_part = page.part;
+            try out.add("<li class=\"part\">");
+            try out.addEscaped(current_part);
+            try out.add("</li>\n");
+        }
         const current = where.page != null and where.page.? == page;
         try out.add(if (current) "<li><a class=\"here\" href=\"" else "<li><a href=\"");
         try prefix(out, where.url);
@@ -236,7 +243,8 @@ test "the asset prefix climbs exactly as far as the page is deep" {
     const cases = [_]struct { url: []const u8, want: []const u8 }{
         .{ .url = "/", .want = "./" },
         .{ .url = "/guide/", .want = "../" },
-        .{ .url = "/guide/first-program/", .want = "../../" },
+        .{ .url = "/guide/basics/", .want = "../../" },
+        .{ .url = "/guide/reference/types/", .want = "../../../" },
     };
     for (cases) |case| {
         var out: Buffer = .init(gpa);

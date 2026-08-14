@@ -1,6 +1,6 @@
 # Modules
 
-Each `.luc` file is a module. Imports are explicit; declarations are
+Each `.luc` file is a module. Imports are explicit, and declarations are
 public unless marked `private`.
 
 ## import

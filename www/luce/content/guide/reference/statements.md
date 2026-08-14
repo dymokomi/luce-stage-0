@@ -1,4 +1,4 @@
-# Statements and declarations
+# Statements and Declarations
 
 ## File structure
 

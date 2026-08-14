@@ -1,4 +1,4 @@
-# Editor and VS Code
+# Editor Support
 
 Luce ships with two ways to edit programs locally:
 
@@ -39,6 +39,6 @@ luce build hello.luc
 ./hello
 ```
 
-The [build guide](/guide/toolchain/) explains output shapes, debug and
+[Command-Line Tools](/guide/command-line/) explains output shapes, debug and
 release builds, and `loom`. The [Guide](/guide/) explains the language and
 the [Library](/library/) explains its modules.

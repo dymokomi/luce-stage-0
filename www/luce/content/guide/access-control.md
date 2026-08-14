@@ -1,4 +1,4 @@
-# Visibility
+# Access Control
 
 Top-level declarations and struct members are public unless marked
 `private`. The compiler enforces this at module boundaries. A leading
@@ -197,5 +197,6 @@ main.luc:1:1: a visibility region belongs inside a struct; at file scope mark ea
 ```
 
 Standard-library modules use the same rules. The exact boundary rules and
-signature checks are in the [module reference](/reference/modules/#visibility).
-Next: [The outside world](/guide/host/).
+signature checks are in the
+[module reference](/guide/reference/modules/#visibility).
+Continue with [Modules and Imports](/guide/modules/).

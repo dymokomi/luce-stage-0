@@ -1,5 +1,7 @@
 # Expressions
 
+This chapter specifies every expression form and how expressions bind.
+
 ## Precedence
 
 Loosest to tightest:

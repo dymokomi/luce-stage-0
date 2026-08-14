@@ -53,7 +53,7 @@ is ordinary absence while malformed JSON has a reason worth reporting.
 A new standard module is written in `src/luce/std/NAME.luc`, added to the
 compiler's embedded-module table and standard-library tests, then documented
 here and on its own page. A package follows the project layout in the
-[organization guide](/guide/organization/): source first, `luce.yaml` and a
+[Packages and Projects](/guide/packages/): source first, `luce.yaml` and a
 version when it is ready to be shared. Each page describes the public surface
 that the source actually exports; the site checks that named functions and
 constants do not drift.

@@ -1,8 +1,22 @@
-# Errors
+# Error Handling
 
-An error is a failure a correct program can meet anyway, because the
-world decided. A `-> T!` says a call may raise one; `try` passes it up
-and `catch` handles it here.
+An operation that does not produce its normal value has one of three
+shapes. Choose the shape from what the caller needs to know.
+
+| Shape | Meaning | Caller response |
+|---|---|---|
+| `T?` | The value is absent | Narrow it or use `else` |
+| `T!` or `!` | A valid request can fail | Propagate with `try` or handle with `catch` |
+| trap | The program broke a checked rule | Fix the program |
+
+The useful test is whether the caller could have prevented the result with
+a non-racy check. A bad index is a trap. A file read is fallible because the
+file can change after any check. Parsing returns an optional when absence
+already carries all the information the caller needs.
+
+An error is therefore a failure a correct program can encounter anyway. A
+`-> T!` says a call may raise one; `try` passes it up and `catch`
+handles it here.
 
 ```luce run
 func parse_port(text: string) -> long!:
@@ -23,7 +37,7 @@ func main() -> !:
 -1
 ```
 
-## try propagates
+## Propagating with `try`
 
 `try` releases what this frame owns and leaves — exactly what `return`
 does, with one terminator changed. It needs a caller that said `!`.
@@ -68,7 +82,7 @@ main.luc:5:5: risky can fail: write 'try risky(…)' to pass the error on, or 'r
         ^~~~~~~
 ```
 
-## catch has two forms
+## Handling with `catch`
 
 `catch EXPR` supplies a value. `catch:` opens a handler block, and it
 guards exactly one call — there is never a question about which
@@ -96,7 +110,27 @@ the write did not land
 (new file)
 ```
 
-## An uncaught error
+The block form can bind the error message. The binding is an immutable
+`string` scoped to the handler:
+
+```luce run
+func parse_count(text: string) -> long!:
+    let value = parse_int(text) else error("not a count: " + text)
+    return value
+
+func main():
+    parse_count("many") catch reason:
+        print(reason)
+```
+
+```output
+not a count: many
+```
+
+Luce does not have typed error payloads. Branch on known data before the
+call, or handle the message at the boundary where it is useful.
+
+## Uncaught errors
 
 Out of `main() -> !` it ends the run, and loom prints the words and
 the one place it was raised. One line, not a stack: a trap is a bug
@@ -120,7 +154,34 @@ loom: error: 500 is too large [user_error]
     raised in check (main.luc:3:9)
 ```
 
-## The worked example
+## Traps
+
+A trap is deterministic, has a stable code, and stops the program. Debug
+builds show the source location and call trace from the machine code you
+ship.
+
+```luce trap
+func read_third(values: list(long)) -> long:
+    return values[2]
+
+func main():
+    let values: list(long) = [10]
+    print(string(read_third(values)))
+```
+
+```output
+loom: trap: index out of bounds [index_bounds]
+    at read_third (main.luc:2:5)
+    at main (main.luc:6:5)
+```
+
+Checked integer overflow, division by zero, missing map keys, invalid
+indexes, UTF-8 boundary violations, failed assertions, and explicit
+`trap(message)` calls all trap. Do not catch them as normal control flow.
+[Errors and Traps](/guide/reference/failure/) lists every stable code and
+the condition that produces it.
+
+## A complete example
 
 `examples/calc/calc.luc` in the repository is a recursive-descent
 calculator — a `double` one, because `/` is real division and a pocket

@@ -1,6 +1,6 @@
 # Types
 
-Luce is statically typed with inference. Every expression has exactly
+Luce is statically typed and supports inference. Every expression has exactly
 one type, known at compile time. Widening is implicit along each
 numeric ladder and, across the two, only into `double`. **Nothing
 narrows implicitly** — not in any direction and not in any context.

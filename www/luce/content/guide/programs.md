@@ -1,4 +1,4 @@
-# The bundled programs
+# Complete Programs
 
 The repository's `examples/` directory contains programs that use Luce
 as a normal user would. The samples on this page include those source
@@ -21,7 +21,7 @@ Sorting, searching and joining a `list(long)`.
 `stats.luc` imports `mathx.luc` as a sibling module. Both compile into
 one program and one `.lc`.
 
-It is a small example of [visibility](/reference/modules/):
+It is a small example of [access control](/guide/reference/modules/):
 `mathx.sorted` is marked `private`, because it exists for `median` and
 for nothing else. `stats.luc` reaches `mean`, `extremes`, `median` and
 `deviation`, and reaching `sorted` would be `luce.sema.private`.
@@ -192,8 +192,8 @@ adventure.luc   the loop, and the only file that talks to the world
 ```
 
 It demonstrates several features together: private
-fields with public [factories](/reference/modules/), `T?` narrowed in
-the command loop, a [failure](/reference/failure/) chain three files deep
+fields with public [factories](/guide/reference/modules/), `T?` narrowed in
+the command loop, an [error](/guide/reference/failure/) chain three files deep
 caught once at the top, `give` and `copy` where a list crosses a
 module boundary, and `exit(0)` when the player types `quit`.
 

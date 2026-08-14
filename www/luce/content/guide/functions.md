@@ -1,4 +1,4 @@
-# Functions and structs
+# Functions
 
 Functions define reusable work. Parameters have types, a return type
 follows `->`, and a function with no return value omits it. A return value
@@ -178,83 +178,5 @@ nothing
 
 An optional function is narrowed in the same way as any other optional.
 
-## Structs
-
-A `struct` is a value aggregate. Fields are named and typed; fields with a
-default may be omitted at construction. Copying a struct copies its value
-fields and follows the ownership rules for any fields that hold objects.
-
-```luce run
-struct Point:
-    x: double
-    y: double
-
-func main():
-    let origin = Point(x = 0.0, y = 0.0)
-    var here = Point(x = 3.0, y = 4.0)
-    var there = here
-    there.x = 10.0
-    print(f"here {here.x},{here.y}  there {there.x},{there.y}")
-    print(f"origin {origin.x},{origin.y}")
-```
-
-```output
-here 3,4  there 10,4
-origin 0,0
-```
-
-## Methods and static functions
-
-An ordinary member function has an implied `self` and is called through an
-instance. A `static func` has no receiver and is called through the struct
-name.
-
-```luce run
-struct Point:
-    x: double
-    y: double
-
-    func length() -> double:
-        return sqrt(self.x * self.x + self.y * self.y)
-
-    static func plus(a: Point, b: Point) -> Point:
-        return Point(x = a.x + b.x, y = a.y + b.y)
-
-func main():
-    let a = Point(x = 3.0, y = 4.0)
-    let b = Point(x = 1.0, y = 2.0)
-    print(string(a.length()))
-    let sum = Point.plus(a, b)
-    print(f"({sum.x}, {sum.y}) has length {sum.length()}")
-```
-
-```output
-5
-(4, 6) has length 7.211102550927978
-```
-
-## Nested assignment
-
-Fields and indexes are places. A place can be nested, and compound
-assignment evaluates it once:
-
-```luce run
-struct Inner:
-    n: long
-
-struct Outer:
-    label: string
-    inner: Inner
-
-func main():
-    var box = Outer(label = "b", inner = Inner(n = 1))
-    box.inner.n = 41
-    box.inner.n += 1
-    print(f"{box.label} {box.inner.n}")
-```
-
-```output
-b 42
-```
-
-Next: [Enums](/guide/enums/).
+Continue with [Enumerations](/guide/enums/). Structures and their methods
+have their own chapter: [Structures and Methods](/guide/structures/).

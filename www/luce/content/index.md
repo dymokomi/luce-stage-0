@@ -39,7 +39,7 @@ language's shape in one sitting and points to the detailed Guide.
 ## Where to go next
 
 Choose the kind of help you need below. [Tour](/tour/) is the one-page
-introduction; [Guide](/guide/) teaches the language and the tools around it;
-[Reference](/reference/) is exhaustive and deliberately dry;
-[Library](/library/) documents standard modules and maintained packages; and
-[Status](/status/) records what is available now.
+introduction. [Guide](/guide/) is the complete language book: teaching
+chapters first, tools and projects next, and the exhaustive Language
+Reference at the end. [Library](/library/) documents standard modules and
+maintained packages. [Status](/status/) records what is available now.

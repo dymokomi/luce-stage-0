@@ -267,6 +267,12 @@ a.cross:hover { color: var(--ink); text-decoration: none; }
   font-size: .92rem; color: var(--ink-soft);
 }
 .side li a:hover { background: var(--paper-soft); color: var(--ink); text-decoration: none; }
+.side li.part {
+  margin: 1.05rem .55rem .28rem;
+  color: var(--ink-faint); font-size: .66rem; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase;
+}
+.side li.part:first-of-type { margin-top: .75rem; }
 .side li.h3 a { padding-left: 1.4rem; font-size: .88rem; }
 .side li a.here {
   color: var(--ink); font-weight: 560;
@@ -453,6 +459,9 @@ td code, th code { white-space: nowrap; }
 /* --------------------------------------------------------------- cards */
 
 .cards { display: grid; gap: .7rem; margin: 1.6rem 0 0; }
+.card-part { margin-top: 2.4rem; }
+.card-part h2 { margin-bottom: -.4rem; }
+.card-part .cards { margin-top: 1.2rem; }
 .card {
   display: block; padding: .9rem 1.1rem;
   border: 1px solid var(--line); border-radius: .5rem;

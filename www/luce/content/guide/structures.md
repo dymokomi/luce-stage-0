@@ -1,4 +1,4 @@
-# Structures: keep data and invariants together
+# Structures and Methods
 
 Use a `struct` when a value has a small, known set of fields that belong
 together. A struct gives those fields names, gives callers a type to name,
@@ -70,7 +70,7 @@ the receiver's value at the point it is read.
 When several structs should answer the same small question, use an interface
 as the boundary between the caller and the implementation. The contract,
 multi-value returns, heterogeneous collections, and ownership rules are
-explained in the dedicated [Interfaces guide](/guide/interfaces/). Keep this
+explained in [Interfaces](/guide/interfaces/). Keep this
 page focused on the data shape; use that chapter when the design question is
 which behavior belongs behind a shared type.
 
@@ -89,12 +89,36 @@ This is a design boundary, not just an access check:
 3. Expose methods that preserve the invariant after construction.
 4. Keep private helpers and implementation types behind the module boundary.
 
-The [visibility chapter](/guide/visibility/) shows the smallest example;
-the [module reference](/reference/modules/#visibility) lists every boundary
+The [Access Control](/guide/access-control/) chapter shows the smallest
+example; the [module reference](/guide/reference/modules/#visibility) lists every boundary
 that visibility checks, including fields, types, constants, and function
 signatures.
 
-## Structs that carry objects
+## Nested assignment
+
+Fields and indexes are assignable places. A place can be nested, and a
+compound assignment evaluates it once:
+
+```luce run
+struct Inner:
+    value: long
+
+struct Outer:
+    label: string
+    inner: Inner
+
+func main():
+    var box = Outer(label = "answer", inner = Inner(value = 1))
+    box.inner.value = 41
+    box.inner.value += 1
+    print(f"{box.label}: {box.inner.value}")
+```
+
+```output
+answer: 42
+```
+
+## Structures that carry objects
 
 A struct containing a `list`, `map`, `array`, `builder`, `file`, or `task` is
 an object-carrying value. The struct itself is still a value, but its object
@@ -110,8 +134,8 @@ let job = Job(labels = give labels)
 
 Use `copy labels` when the new struct needs an independent object. Use a
 borrow when a function only needs to inspect or mutate an object during the
-call. The [memory guide](/guide/memory/) explains the four ownership words
-and the [ownership reference](/reference/ownership/) gives the exact rule
+call. [Memory and Ownership](/guide/memory/) explains the four ownership
+words, and the [ownership reference](/guide/reference/ownership/) gives the exact rule
 for each place a struct can occur.
 
 ## A practical review
@@ -129,5 +153,6 @@ stable. A struct is most useful when it makes an invalid state difficult to
 express, not when it merely renames a handful of unrelated variables.
 
 For the exact grammar, defaults, methods, visibility regions, and assignment
-rules, use [Statements and declarations](/reference/statements/), [Types](/reference/types/),
-and [Expressions](/reference/expressions/).
+rules, use [Statements and Declarations](/guide/reference/statements/),
+[Types](/guide/reference/types/), and
+[Expressions](/guide/reference/expressions/).

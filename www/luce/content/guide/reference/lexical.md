@@ -1,4 +1,4 @@
-# Source text and lexical elements
+# Lexical Structure
 
 ## Encoding
 

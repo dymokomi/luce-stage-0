@@ -1,4 +1,4 @@
-# Memory without a collector
+# Memory and Ownership
 
 Luce releases owned values at scope boundaries. There is no garbage
 collector and no reference counting. A program does not normally call a
@@ -20,7 +20,8 @@ of values are ordinary values: assignment and return copy their value.
 
 An unnamed object temporary lives until the statement that created it is
 finished. A file-scope constant container belongs to the program root and
-lives until that runtime ends. The [ownership reference](/reference/ownership/)
+lives until that runtime ends. The
+[ownership reference](/guide/reference/ownership/)
 lists the rule for every form of statement.
 
 ```luce run

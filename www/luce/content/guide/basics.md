@@ -1,4 +1,69 @@
-# Values and types
+# The Basics
+
+Start with a complete program. Every executable has a function named
+`main`; its indented body is the work the program performs.
+
+```luce run
+func main():
+    print("hello, Luce")
+```
+
+```output
+hello, Luce
+```
+
+Save that program as `hello.luc`, then build and run it:
+
+```text
+$ luce build hello.luc
+$ ./hello
+hello, Luce
+```
+
+The compiler names the executable after the source file. The
+[Command-Line Tools](/guide/command-line/) chapter covers other artifact
+types and build modes after you have something worth building.
+
+## Command-line arguments
+
+Declare a `list(string)` parameter on `main` when a program needs its
+arguments. Leave the parameter out when it does not.
+
+```luce run args=fig pear plum
+func main(args: list(string)):
+    if len(args) == 0:
+        print("usage: greet NAME [NAME ...]")
+        return
+    var index = 0
+    for name in args:
+        index += 1
+        print(f"{index}. hello, {name}")
+```
+
+```output
+1. hello, fig
+2. hello, pear
+3. hello, plum
+```
+
+Arguments are strings. `parse_int` returns a `long?` because some text
+is not an integer; `else` supplies a value when it is absent:
+
+```luce run args=4
+func main(args: list(string)):
+    let times = parse_int(args[0]) else 1
+    for i in range(0, times):
+        print(f"line {i}")
+```
+
+```output
+line 0
+line 1
+line 2
+line 3
+```
+
+## Values and types
 
 Every expression has one statically known type. You can annotate a value
 or let its context infer the type. An unannotated integer literal defaults
@@ -17,7 +82,7 @@ func main():
 7 0.5 true Luce
 ```
 
-## The scalar types
+## Scalar types
 
 | Type | Meaning |
 |---|---|
@@ -32,7 +97,7 @@ func main():
 | `string` | Immutable UTF-8 text. |
 
 Enums, structs and functions are values too. A function value has a type
-such as `func(long) -> long` and is covered in [Functions and structs](/guide/functions/).
+such as `func(long) -> long` and is covered in [Functions](/guide/functions/).
 
 Literals may be decimal, hexadecimal (`0xFF`) or binary (`0b1010`), with
 underscores between digits. A fraction or exponent makes a floating-point
@@ -111,44 +176,6 @@ true
 false
 ```
 
-## Checked arithmetic and division
-
-Integer overflow, integer division by zero, and integer remainder by zero
-are traps in every build mode. Floating-point division follows IEEE
-semantics.
-
-```luce trap
-func main():
-    var n: long = 9223372036854775807
-    print("about to add one")
-    n += 1
-    print(string(n))
-```
-
-```output
-about to add one
-loom: trap: integer overflow [integer_overflow]
-    at main (main.luc:4:5)
-```
-
-`/` is real division and returns `double`. `//` is floor division and `%`
-is its matching remainder:
-
-```luce run
-func main():
-    print(string(1 / 2))
-    print(string(7 // 2) + " " + string(7 % 2))
-    print(string(-7 // 3) + " " + string(-7 % 3))
-    print(string(-1 % 256))
-```
-
-```output
-0.5
-3 1
--3 2
-255
-```
-
 ## Bindings
 
 `let` prevents reassignment of a name. `var` permits it. Neither keyword
@@ -189,68 +216,5 @@ func main():
 There is no shadowing. Compound assignment evaluates its target once;
 `counts[key] += 1` is the map-counting form.
 
-## Conditions and comparisons
-
-`and`, `or` and `not` require `bool` and short-circuit. Equality and order
-comparisons support the documented scalar types; they do not turn other
-values into conditions. Chained comparisons are refused so that the
-parentheses of a compound condition are explicit:
-
-```luce fail
-func main():
-    let a = 1
-    let b = 2
-    let c = 3
-    print(string(a < b < c))
-```
-
-```output
-luce: compile failed
-main.luc:5:24: chained comparison: write 'a < b and b < c' [luce.parse.chain]
-        print(string(a < b < c))
-                           ^
-```
-
-## File-scope constants
-
-Use `const` at file scope. Foldable expressions are evaluated when the
-program is compiled; function calls and function values do not fold.
-
-```luce run
-const width = 80
-const half_width = width // 2
-const version = "2"
-const banner = "Luce v" + version
-
-func main():
-    print(banner)
-    print(string(half_width))
-```
-
-```output
-Luce v2
-40
-```
-
-Constants may refer to other constants in any order but cannot form a
-cycle. Flat lists, maps and rank-one arrays are also possible; see
-[Constants and shared tables](/guide/constants/).
-
-```luce fail
-func label() -> string:
-    return "Luce"
-
-const banner = label() + " v2"
-
-func main():
-    print(banner)
-```
-
-```output
-luce: compile failed
-main.luc:4:16: constants fold at compile time; calls are not constant [luce.sema.const]
-    const banner = label() + " v2"
-                   ^~~~~~~
-```
-
-Next: [Control flow](/guide/control/).
+Continue with [Basic Operators](/guide/operators/), or use
+[Types](/guide/reference/types/) when you need the exact type rules.
