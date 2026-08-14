@@ -48,7 +48,20 @@ error will be raised. A fallible implementation may not satisfy a
 non-fallible requirement.
 
 Interfaces in this release contain methods only. They do not inherit from
-other interfaces, expose fields, or support multi-value return shapes.
+other interfaces or expose fields. A method may return a multi-value shape
+using the same \`(T, U)\` syntax as an ordinary function; callers receive it
+with a destructuring \`let\`, \`var\`, or assignment:
+
+\`\`\`text
+interface Measured:
+    func span(value: long) -> (long, long)
+
+func total(item: Measured) -> long:
+    let low, high = item.span(10)
+    return low + high
+\`\`\`
+
+The shape cannot be used as one scalar expression or passed as one argument.
 
 ## Heterogeneous collections
 
@@ -71,8 +84,10 @@ An interface value owns its dispatch storage. As with a bound read-only
 method, object graphs inside a carrying receiver remain borrowed from the
 concrete value that supplied them; the interface does not silently create a
 second owner. Keep that owner alive, or make an explicit `copy` before a
-value is kept beyond the owner's lifetime. Value-only receivers (including
-strings) are independent copies.
+value is kept beyond the owner's lifetime. A function cannot return a
+carrying concrete receiver as an interface, because its local owner would
+die at the return; return the concrete owner instead. Value-only receivers
+(including strings) are independent copies.
 
 The executable specification is
 [`src/luce/specs/interfaces_spec.zig`](../src/luce/specs/interfaces_spec.zig),

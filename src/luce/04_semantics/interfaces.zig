@@ -12,6 +12,7 @@ const types = @import("../support/types.zig");
 const naming = @import("naming.zig");
 const resolve = @import("resolve.zig");
 const shapes = @import("shapes.zig");
+const signatures = @import("signatures.zig");
 const context = @import("context.zig");
 const Error = context.Error;
 const Type = types.Type;
@@ -96,15 +97,6 @@ pub fn settleDeclarations(self: *Analyzer) Error!void {
                 }
             }
             if (duplicate) continue;
-            if (method.returns.len >= 2) {
-                try self.fail(
-                    "luce.sema.interface",
-                    method.span,
-                    "interface method {s}.{s} must answer one value; return shapes cannot be dispatched yet",
-                    .{ declaration.name, method.name },
-                );
-                continue;
-            }
             var parameter_types: std.ArrayList(Type) = .empty;
             defer parameter_types.deinit(self.arena);
             var parameter_modes: std.ArrayList(ast.ParameterMode) = .empty;
@@ -138,7 +130,13 @@ pub fn settleDeclarations(self: *Analyzer) Error!void {
                 try results.append(self.arena, resolved);
             }
             if (!valid) continue;
-            const return_type: Type = if (results.items.len == 0) .none else results.items[0];
+            // A multi-value answer is represented by the same synthesized
+            // product layout ordinary functions use.  The layout is not
+            // available until all declared function shapes have been
+            // interned, so this first pass records a provisional `none`
+            // result and `synthesizeShapes` replaces it before bodies are
+            // checked or lowered.
+            const return_type: Type = if (results.items.len == 1) results.items[0] else .none;
             const signature = (try resolve.internSignature(self, .{
                 .parameters = try signature_parameters.toOwnedSlice(self.arena),
                 .result = return_type,
@@ -164,6 +162,55 @@ pub fn settleDeclarations(self: *Analyzer) Error!void {
         _ = interface_index;
     }
     self.diagnostics.scope = source_mod.root_file;
+}
+
+/// Finish interface method signatures after ordinary function return shapes
+/// have been interned.  Interfaces use the same product representation as a
+/// declared multi-value function, which keeps destructuring, ownership, MIR,
+/// the interpreter and LLVM on one path instead of adding a second aggregate
+/// convention.
+pub fn synthesizeShapes(self: *Analyzer) Error!void {
+    for (self.interface_decls.items) |*info| {
+        self.diagnostics.scope = self.modules[info.module].file;
+        for (info.methods) |*method| {
+            if (method.parameter_modes.len != method.parameter_types.len) continue;
+            for (method.parameter_modes, method.parameter_types, method.declaration.parameters) |mode, parameter_type, parameter| {
+                if (mode == .give and !shapes.carriesObjects(self, parameter_type)) {
+                    try self.fail(
+                        "luce.sema.own",
+                        parameter.span,
+                        "give applies to containers and resources (list, map, array, builder, file, task) and structs that carry them, not values [OWNERSHIP.md S32]",
+                        .{},
+                    );
+                }
+            }
+            if (method.results.len < 2) continue;
+            const return_type = (try signatures.internResultShape(
+                self,
+                method.results,
+                method.declaration.span,
+                method.declaration.name,
+            )) orelse continue;
+            method.return_type = return_type;
+            method.signature = (try resolve.internSignature(self, .{
+                .parameters = try interfaceSignatureParameters(self, method),
+                .result = return_type,
+            })).function;
+            self.structs.items[info.layout].fields[method.field].field_type = .{ .function = method.signature };
+        }
+    }
+    self.diagnostics.scope = source_mod.root_file;
+}
+
+fn interfaceSignatureParameters(
+    self: *Analyzer,
+    method: *const context.InterfaceMethodInfo,
+) Error![]types.Signature.Parameter {
+    const parameters = try self.arena.alloc(types.Signature.Parameter, method.parameter_types.len);
+    for (method.parameter_types, method.parameter_modes, parameters) |value_type, mode, *parameter| {
+        parameter.* = .{ .value_type = value_type, .gives = mode == .give };
+    }
+    return parameters;
 }
 
 /// Check every `struct S: I` promise against the completed method table and

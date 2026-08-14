@@ -1003,6 +1003,7 @@ const Module = struct {
         const length: u64 = switch (of) {
             .strukt => |nested| self.program.structs[nested].fields.len,
             .variant => |nested| self.program.variants[nested].runLength(),
+            .function => mir.function_run_length,
             else => 0,
         };
         // An empty String's zero says its bytes are outside, at the

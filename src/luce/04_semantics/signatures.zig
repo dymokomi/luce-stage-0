@@ -481,7 +481,12 @@ pub fn synthesizeShapes(self: *Analyzer) Error!void {
     for (self.functions.items) |*info| {
         if (info.channel.len < 2) continue;
         self.diagnostics.scope = self.modules[info.module].file;
-        info.return_type = (try internShape(self, info)) orelse continue;
+        info.return_type = (try internResultShape(
+            self,
+            info.channel,
+            info.declaration.returnsSpan() orelse info.declaration.span,
+            info.declaration.name,
+        )) orelse continue;
     }
     self.diagnostics.scope = source_mod.root_file;
 }
@@ -496,8 +501,14 @@ pub fn synthesizeShapes(self: *Analyzer) Error!void {
 /// `luce ir` and it reads correctly if it ever reaches a
 /// diagnostic through `types.typeName`.  Two functions with the
 /// same shape intern to one layout, as heap type shapes already do.
-fn internShape(self: *Analyzer, info: *const FunctionDeclInfo) Error!?Type {
-    const name = try writtenResults(self, info);
+pub fn internResultShape(
+    self: *Analyzer,
+    results: []const Type,
+    span: source_mod.Span,
+    subject: []const u8,
+) Error!?Type {
+    std.debug.assert(results.len >= 2);
+    const name = try writtenResultTypes(self, results);
     for (self.structs.items, 0..) |layout, index| {
         if (std.mem.eql(u8, layout.name, name)) return .{ .strukt = @intCast(index) };
     }
@@ -506,7 +517,7 @@ fn internShape(self: *Analyzer, info: *const FunctionDeclInfo) Error!?Type {
     defer fields.deinit(self.arena);
     var values: u32 = 0;
     var carries = false;
-    for (info.channel, 0..) |result, position| {
+    for (results, 0..) |result, position| {
         try fields.append(self.arena, .{
             .name = try std.fmt.allocPrint(self.arena, "field{d}", .{position}),
             .field_type = result,
@@ -522,9 +533,9 @@ fn internShape(self: *Analyzer, info: *const FunctionDeclInfo) Error!?Type {
     if (values > helpers.max_struct_values) {
         try self.fail(
             "luce.sema.return",
-            info.declaration.returnsSpan() orelse info.declaration.span,
+            span,
             "{s} answers {d} values in all, past the limit of {d}",
-            .{ info.declaration.name, values, helpers.max_struct_values },
+            .{ subject, values, helpers.max_struct_values },
         );
         return null;
     }
@@ -546,12 +557,20 @@ fn internShape(self: *Analyzer, info: *const FunctionDeclInfo) Error!?Type {
 /// value, `(long, long)` for a shape, `None` for nothing.  Also the
 /// synthesized layout's name, so the two can never disagree.
 pub fn writtenResults(self: *Analyzer, info: *const FunctionDeclInfo) Error![]const u8 {
-    if (info.channel.len == 0) return "None";
-    if (info.channel.len == 1) return self.typeName(info.channel[0]);
+    return writtenResultTypes(self, info.channel);
+}
+
+/// Render a settled result channel in the spelling used to intern its
+/// synthesized product layout.  Interface methods use the same product
+/// representation as declared functions, but they do not have a
+/// `FunctionDeclInfo` row of their own.
+pub fn writtenResultTypes(self: *Analyzer, results: []const Type) Error![]const u8 {
+    if (results.len == 0) return "None";
+    if (results.len == 1) return self.typeName(results[0]);
     var written: std.ArrayList(u8) = .empty;
     errdefer written.deinit(self.arena);
     try written.append(self.arena, '(');
-    for (info.channel, 0..) |result, position| {
+    for (results, 0..) |result, position| {
         if (position != 0) try written.appendSlice(self.arena, ", ");
         try written.appendSlice(self.arena, try self.typeName(result));
     }

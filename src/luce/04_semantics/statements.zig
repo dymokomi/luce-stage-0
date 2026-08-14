@@ -24,6 +24,7 @@ const effects = @import("effects.zig");
 const builtins_mod = @import("builtins.zig");
 const builtins = builtins_mod.builtins;
 const context = @import("context.zig");
+const Analyzer = @import("declarations.zig").Analyzer;
 const LocalInfo = context.LocalInfo;
 const Error = context.Error;
 const Span = source_mod.Span;
@@ -1856,6 +1857,7 @@ fn lowerReturn(self: *FunctionBuilder, returned: ast.Return) Error!void {
         }
         self.wantPlace(self.return_type);
         const lowered = (try self.lowerExpression(expression, false)) orelse return;
+        if (try refuseCarryingInterfaceResult(self, lowered.value_type, self.return_type, returned.span)) return;
         const value = (try self.fit(lowered, self.return_type)) orelse {
             try self.fail("luce.sema.type", returned.span, "returning {s} from a function returning {s}{s}", .{
                 try self.analyzer.typeName(lowered.value_type),
@@ -2040,6 +2042,7 @@ fn lowerReturnShape(self: *FunctionBuilder, returned: ast.Return) Error!void {
     // effects.  Fit every staged result first, then ask whether a
     // later operand poisoned or replaced one of the names.
     for (values, returned.values, 0..) |lowered, expression, position| {
+        if (try refuseCarryingInterfaceResult(self, lowered.value_type, self.results[position], expression.span())) return;
         fitted_values[position] = (try self.fit(lowered, self.results[position])) orelse {
             try self.fail(
                 "luce.sema.type",
@@ -2102,6 +2105,45 @@ fn lowerReturnShape(self: *FunctionBuilder, returned: ast.Return) Error!void {
         .span = returned.span,
         .copied = shaped_run.copied,
     } });
+}
+
+/// Interface dispatch borrows object graphs inside a concrete receiver.  A
+/// receiver made in this function cannot outlive its frame merely because its
+/// dispatch table is returned, so reject that escape at the return boundary.
+/// Value-only receivers remain freely returnable; callers that need to keep a
+/// carrying graph must return the concrete owner and create the interface
+/// view while that owner remains live (docs/INTERFACES.md).
+fn refuseCarryingInterfaceResult(
+    self: *FunctionBuilder,
+    actual: Type,
+    expected: Type,
+    span: Span,
+) Error!bool {
+    if (!containsInterfacePayload(self.analyzer, expected)) return false;
+    if (!containsConcreteCarrying(self.analyzer, actual)) return false;
+    try self.fail(
+        "luce.sema.own",
+        span,
+        "a carrying receiver cannot be returned as an interface because the interface borrows its owner; return the concrete owner or a value-only copy [INTERFACES.md]",
+        .{},
+    );
+    return true;
+}
+
+fn containsInterfacePayload(analyzer: *const Analyzer, written: Type) bool {
+    return switch (written) {
+        .optional => |payload| containsInterfacePayload(analyzer, payload.asType()),
+        .strukt => |layout| analyzer.interfaceForLayout(layout) != null,
+        else => false,
+    };
+}
+
+fn containsConcreteCarrying(analyzer: *const Analyzer, written: Type) bool {
+    return switch (written) {
+        .optional => |payload| containsConcreteCarrying(analyzer, payload.asType()),
+        .strukt => |layout| analyzer.interfaceForLayout(layout) == null and shapes.carriesObjects(analyzer, written),
+        else => false,
+    };
 }
 
 /// One position of a `return a, b`: check that this value may

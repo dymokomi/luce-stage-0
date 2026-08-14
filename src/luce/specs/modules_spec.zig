@@ -23,6 +23,7 @@ const std = @import("std");
 const testing = std.testing;
 
 const agree = @import("agree.zig");
+const luce = @import("luce");
 
 const geo: agree.File = .{ .name = "geo", .source =
     \\struct Point:
@@ -57,6 +58,116 @@ test "a file is a module: imports, qualified names, and shared types run" {
     defer program.deinit();
     try agree.okProgram(&program, .{});
 }
+
+test "an interface and its witness can cross a module boundary" {
+    const drawing: agree.File = .{ .name = "drawing", .source =
+        \\interface Drawable:
+        \\    func render(value: long) -> long
+        \\
+        \\struct Button: Drawable:
+        \\    offset: long
+        \\    func render(value: long) -> long:
+        \\        return value + self.offset
+        \\
+        \\func make() -> Drawable:
+        \\    return Button(offset = 2)
+        \\
+    };
+    var program = try agree.project(
+        \\import drawing
+        \\
+        \\func use(item: drawing.Drawable) -> long:
+        \\    return item.render(40)
+        \\
+        \\func main():
+        \\    let item = drawing.make()
+        \\    assert(use(item) == 42)
+        \\
+    , &.{drawing});
+    defer program.deinit();
+    try agree.okProgram(&program, .{});
+}
+
+test "a private interface cannot leak through a module's type surface" {
+    const hidden: agree.File = .{ .name = "hidden", .source =
+        \\private interface Secret:
+        \\    func value() -> long
+        \\
+        \\struct Thing: Secret:
+        \\    marker: long
+        \\    func value() -> long:
+        \\        return self.marker
+        \\
+        \\func make() -> Thing:
+        \\    return Thing(marker = 7)
+        \\
+    };
+    try expectPrivateInterface(
+        \\import hidden
+        \\
+        \\func main():
+        \\    let item: hidden.Secret = hidden.make()
+        \\    _ = item
+        \\
+    , &.{hidden}, "Secret is private to hidden");
+}
+
+fn expectPrivateInterface(
+    root: []const u8,
+    files: []const agree.File,
+    saying: []const u8,
+) !void {
+    var found: agreeFiles = .{ .all = files };
+    var result = try luce.compile.compileProject(
+        testing.allocator,
+        root,
+        .{ .context = &found, .load = agreeFiles.find },
+        agree.hosted,
+    );
+    defer result.deinit();
+    switch (result) {
+        .success => {
+            std.debug.print("expected private interface refusal, but this compiled:\n{s}", .{root});
+            return error.TestUnexpectedResult;
+        },
+        .failure => |diagnostics| {
+            for (0..diagnostics.count()) |index| {
+                const diagnostic = diagnostics.at(index).?;
+                if (!std.mem.eql(u8, diagnostic.code, "luce.sema.private")) continue;
+                if (std.mem.indexOf(u8, diagnostic.message, saying) != null) return;
+            }
+            const rendered = try diagnostics.render(testing.allocator);
+            defer testing.allocator.free(rendered);
+            std.debug.print("expected private interface refusal:\n{s}", .{rendered});
+            return error.TestUnexpectedResult;
+        },
+    }
+}
+
+const agreeFiles = struct {
+    all: []const agree.File,
+
+    fn find(
+        context: *anyopaque,
+        arena: std.mem.Allocator,
+        name: []const u8,
+        from_root: []const u8,
+    ) error{OutOfMemory}!luce.source.Found {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        for (self.all) |file| {
+            if (!std.mem.eql(u8, file.name, name)) continue;
+            if (file.from) |only| {
+                if (!std.mem.eql(u8, only, from_root)) continue;
+            }
+            return .{ .text = .{
+                .bytes = try arena.dupe(u8, file.source),
+                .path = file.path,
+                .root = file.root,
+            } };
+        }
+        return .missing;
+    }
+};
 
 test "an imported module compiles and runs the same with CRLF line endings" {
     // The layout rules run on the loaded text, so a module edited on

@@ -8998,6 +8998,24 @@ test "luce.sema.interface: a struct must implement every interface method" {
     , "luce.sema.interface", "does not implement UIElement.render");
 }
 
+test "luce.sema.interface: a multi-method conformance checks every slot" {
+    try expectHostSaying(
+        \\interface Drawable:
+        \\    func render(value: long) -> long
+        \\    func label() -> string
+        \\
+        \\struct Button: Drawable:
+        \\    marker: long
+        \\    func render(value: long) -> long:
+        \\        return value + self.marker
+        \\
+        \\func main():
+        \\    let button = Button(marker = 1)
+        \\    _ = button
+        \\
+    , "luce.sema.interface", "does not implement Drawable.label");
+}
+
 test "luce.sema.interface: an implementation must match the contract signature" {
     try expectHostSaying(
         \\interface UIElement:
@@ -9125,4 +9143,226 @@ test "luce.sema.interface: a conformance cannot be listed twice" {
         \\    _ = button
         \\
     , "luce.sema.duplicate", "lists interface Renderable twice");
+}
+
+test "luce.sema.interface: a non-conforming struct cannot be passed as the contract" {
+    try expectHostSaying(
+        \\interface Renderable:
+        \\    func render(value: long) -> long
+        \\
+        \\struct Button:
+        \\    marker: long
+        \\    func render(value: long) -> long:
+        \\        return value
+        \\
+        \\func draw(item: Renderable) -> long:
+        \\    return item.render(1)
+        \\
+        \\func main():
+        \\    let button = Button(marker = 0)
+        \\    print(string(draw(button)))
+        \\
+    , "luce.sema.type", "argument 1 of draw is Renderable, got Button");
+}
+
+test "luce.sema.own: a fresh carrying receiver cannot be retained as an interface" {
+    try expectHostSaying(
+        \\interface Sized:
+        \\    func size() -> long
+        \\
+        \\struct Box: Sized:
+        \\    values: list(long)
+        \\    func size() -> long:
+        \\        return len(self.values)
+        \\
+        \\func main():
+        \\    var views = new list(Sized)
+        \\    views.append(Box(values = [1, 2, 3]))
+        \\
+    , "luce.sema.own", "an interface value borrows its receiver");
+}
+
+test "luce.sema.own: a carrying receiver cannot escape through an interface return" {
+    try expectHostSaying(
+        \\interface Sized:
+        \\    func size() -> long
+        \\
+        \\struct Box: Sized:
+        \\    values: list(long)
+        \\    func size() -> long:
+        \\        return len(self.values)
+        \\
+        \\func make() -> Sized:
+        \\    let box = Box(values = [1, 2, 3])
+        \\    return box
+        \\
+        \\func main():
+        \\    let item = make()
+        \\    _ = item
+        \\
+    , "luce.sema.own", "a carrying receiver cannot be returned as an interface");
+}
+
+test "luce.parse.interface: an interface must have at least one method" {
+    try expectHostSaying(
+        \\interface Empty:
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.expected", "expected an indented block under 'interface'");
+}
+
+test "luce.sema.interface: a multi-value witness must match every result" {
+    try expectHostSaying(
+        \\interface Measured:
+        \\    func span(value: long) -> (long, long)
+        \\
+        \\struct Range: Measured:
+        \\    marker: long
+        \\    func span(value: long) -> (long, string):
+        \\        return value, "wrong"
+        \\
+        \\func main():
+        \\    let range = Range(marker = 0)
+        \\    _ = range
+        \\
+    , "luce.sema.interface", "does not match interface method");
+}
+
+test "luce.sema.interface: ownership verbs on interface methods need an object type" {
+    try expectHostSaying(
+        \\interface Bad:
+        \\    func take(value: give long) -> long
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.own", "give applies to containers and resources");
+}
+
+test "luce.sema.interface: witness parameter ownership must match" {
+    try expectHostSaying(
+        \\interface Sink:
+        \\    func accept(value: list(long)) -> long
+        \\
+        \\struct Collector: Sink:
+        \\    marker: long
+        \\    func accept(value: give list(long)) -> long:
+        \\        return len(value)
+        \\
+        \\func main():
+        \\    let collector = Collector(marker = 0)
+        \\    _ = collector
+        \\
+    , "luce.sema.interface", "does not match interface method");
+}
+
+test "luce.sema.interface: a fallible dispatch must be handled" {
+    try expectHostSaying(
+        \\interface Reader:
+        \\    func read(value: long) -> long!
+        \\
+        \\struct Buffer: Reader:
+        \\    marker: long
+        \\    func read(value: long) -> long:
+        \\        return value
+        \\
+        \\func main():
+        \\    let buffer = Buffer(marker = 0)
+        \\    let reader: Reader = buffer
+        \\    print(string(reader.read(1)))
+        \\
+    , "luce.sema.fallible", "read can fail");
+}
+
+test "luce.parse.interface: interface methods cannot declare defaults" {
+    try expectHostSaying(
+        \\interface Defaulted:
+        \\    func run(value: long = 1) -> long
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.interface", "interface methods cannot declare defaults");
+}
+
+test "luce.parse.interface: interface bodies contain signatures only" {
+    try expectHostSaying(
+        \\interface Bad:
+        \\    let value = 1
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.interface", "an interface contains method signatures");
+}
+
+test "luce.parse.self: interface methods imply their receiver" {
+    try expectHostSaying(
+        \\interface Bad:
+        \\    func render(self: long) -> long
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.parse.self", "self is implied in an interface method");
+}
+
+test "luce.sema.interface: an interface variable needs a conforming value" {
+    try expectHostSaying(
+        \\interface Renderable:
+        \\    func render(value: long) -> long
+        \\
+        \\func main():
+        \\    var item: Renderable
+        \\    _ = item
+        \\
+    , "luce.sema.interface", "has no default implementation");
+}
+
+test "luce.sema.interface: an interface cannot be constructed directly" {
+    try expectHostSaying(
+        \\interface Renderable:
+        \\    func render(value: long) -> long
+        \\
+        \\func main():
+        \\    let item = Renderable()
+        \\    _ = item
+        \\
+    , "luce.sema.interface", "interfaces cannot be constructed");
+}
+
+test "luce.sema.method: dispatch exposes only declared interface methods" {
+    try expectHostSaying(
+        \\interface Renderable:
+        \\    func render(value: long) -> long
+        \\
+        \\struct Button: Renderable:
+        \\    marker: long
+        \\    func render(value: long) -> long:
+        \\        return value
+        \\
+        \\func main():
+        \\    let item: Renderable = Button(marker = 0)
+        \\    print(string(item.missing(1)))
+        \\
+    , "luce.sema.method", "interface Renderable has no method missing");
+}
+
+test "luce.sema.call: a multi-value interface call must be destructured" {
+    try expectHostSaying(
+        \\interface Measured:
+        \\    func span(value: long) -> (long, long)
+        \\
+        \\struct Range: Measured:
+        \\    marker: long
+        \\    func span(value: long) -> (long, long):
+        \\        return value, value + 1
+        \\
+        \\func main():
+        \\    let item: Measured = Range(marker = 0)
+        \\    print(string(item.span(1)))
+        \\
+    , "luce.sema.call", "answers 2 values");
 }

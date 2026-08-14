@@ -1374,7 +1374,7 @@ pub const Machine = struct {
             // and every reader of one refuses the run that is nowhere,
             // exactly as the compiled path does (docs/FUNCTIONS.md, As
             // built; docs/BINDING.md D12).
-            .function => .{ .tag = .function },
+            .function => .{ .tag = .function, .length = mir.function_run_length },
             .strukt => |layout_index| blk: {
                 // One shared zero template per layout, built on first
                 // use.  Sharing the fields slice across every

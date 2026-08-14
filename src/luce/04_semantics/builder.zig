@@ -895,6 +895,35 @@ pub const FunctionBuilder = struct {
         if (value.value_type == .strukt and expected == .strukt) {
             if (self.analyzer.interfaceForLayout(expected.strukt)) |interface_index| {
                 if (self.analyzer.conformance(value.value_type.strukt, interface_index)) |conformance| {
+                    // Interface dispatch borrows the concrete receiver's
+                    // object graph, just like a read-only bound method.
+                    // A resource graph can never be borrowed by a value
+                    // that may outlive its owner, and a fresh carrying
+                    // receiver has no owner beyond this statement.  Refuse
+                    // both at the conversion boundary instead of allowing
+                    // a retained interface to become a delayed
+                    // use-after-free.
+                    if (shapes.carriesObjects(self.analyzer, value.value_type)) {
+                        const interface_name = try self.analyzer.typeName(expected);
+                        if (try shapes.carries(self.analyzer, value.value_type, .resource)) {
+                            try self.fail(
+                                "luce.sema.own",
+                                value.node.span(),
+                                "{s} carries a file or task, and an interface value borrows its receiver; keep the owner and call the method directly, or copy a resource-free value [INTERFACES.md]",
+                                .{interface_name},
+                            );
+                            return null;
+                        }
+                        if (value.provenance() == .fresh) {
+                            try self.fail(
+                                "luce.sema.own",
+                                value.node.span(),
+                                "this {s} is made here and dies at the end of this statement, and an interface value borrows its receiver; store the concrete value in a name first or copy it before conversion [INTERFACES.md]",
+                                .{try self.analyzer.typeName(value.value_type)},
+                            );
+                            return null;
+                        }
+                    }
                     const contract = self.analyzer.interface_decls.items[interface_index];
                     const methods = try self.arena().alloc(nodes.Expression.InterfaceMethod, contract.methods.len);
                     for (conformance.methods, contract.methods, methods) |function, method, *slot| {

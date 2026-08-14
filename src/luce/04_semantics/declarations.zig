@@ -319,8 +319,9 @@ pub const Analyzer = struct {
         try defaults.settleVariantDefaults(self);
         try signatures.collectFunctions(self);
         try receiver.inferReceiverWrites(self);
-        try interfaces.settleConformances(self);
         try signatures.synthesizeShapes(self);
+        try interfaces.synthesizeShapes(self);
+        try interfaces.settleConformances(self);
         if (self.diagnostics.hasErrors()) return null;
 
         // The check/lower seam (05_hir.zig): every body is checked and

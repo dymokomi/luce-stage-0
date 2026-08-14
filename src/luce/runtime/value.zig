@@ -350,7 +350,13 @@ pub const Value = extern struct {
         return switch (self.tag) {
             .string => self.hasValidStringRepresentation(),
             .strukt => self.hasValidFieldRun(),
-            .function => self.length == 2 and self.hasValidFieldRun(),
+            // An unwritten function slot is a valid null function: its
+            // ABI shape is still the two-slot run, but there is no
+            // backing allocation until a function is stored.  Readers
+            // reject the null name as an absent callable; ownership
+            // walks must still be able to carry and release the slot.
+            .function => self.length == 2 and
+                (self.bits == 0 or self.hasValidFieldRun()),
             else => true,
         };
     }

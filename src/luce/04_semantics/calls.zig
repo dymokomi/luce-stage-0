@@ -373,6 +373,14 @@ pub fn lowerCall(
     if (self.analyzer.struct_names.get(resolved)) |layout_index| {
         return construct.lowerConstruct(self, call.arguments, call.span, layout_index);
     }
+    if (self.analyzer.interface_names.get(resolved)) |interface_index| {
+        return construct.lowerConstruct(
+            self,
+            call.arguments,
+            call.span,
+            self.analyzer.interface_decls.items[interface_index].layout,
+        );
+    }
     if (self.analyzer.enum_names.get(resolved)) |enum_index| {
         return construct.lowerEnumOfNumber(self, call.callee, call.arguments, call.span, enum_index);
     }
@@ -1096,6 +1104,14 @@ pub fn lowerMethod(
             if (self.analyzer.struct_names.get(resolved)) |layout_index| {
                 return construct.lowerConstruct(self, method.arguments, method.span, layout_index);
             }
+            if (self.analyzer.interface_names.get(resolved)) |interface_index| {
+                return construct.lowerConstruct(
+                    self,
+                    method.arguments,
+                    method.span,
+                    self.analyzer.interface_decls.items[interface_index].layout,
+                );
+            }
             if (self.analyzer.enum_names.get(resolved)) |enum_index| {
                 return construct.lowerEnumOfNumber(self, method.name, method.arguments, method.span, enum_index);
             }
@@ -1178,11 +1194,13 @@ fn methodNamespace(self: *FunctionBuilder, method: ast.Method) Error!NamespaceRe
     if (chain.count >= 2 and self.namesMember(parts[0..chain.count])) return .value;
     const head_qualified = try naming.qualify(self.analyzer, self.prefix, head);
     if (self.analyzer.struct_names.contains(head_qualified) or
+        self.analyzer.interface_names.contains(head_qualified) or
         self.analyzer.enum_names.contains(head_qualified) or
         self.analyzer.variant_names.contains(head_qualified))
     {
         const local = try naming.qualify(self.analyzer, self.prefix, joined);
         if (self.analyzer.struct_names.contains(local) or
+            self.analyzer.interface_names.contains(local) or
             self.analyzer.enum_names.contains(local) or
             self.analyzer.variant_names.contains(local) or
             self.analyzer.function_names.contains(local) or
@@ -1196,6 +1214,7 @@ fn methodNamespace(self: *FunctionBuilder, method: ast.Method) Error!NamespaceRe
     if (naming.importsModule(self.analyzer, self.module, head)) {
         const key = try self.importedName(joined);
         if (self.analyzer.struct_names.contains(key) or
+            self.analyzer.interface_names.contains(key) or
             self.analyzer.enum_names.contains(key) or
             self.analyzer.variant_names.contains(key) or
             self.analyzer.function_names.contains(key) or
@@ -1247,7 +1266,7 @@ fn lowerValueMethod(
     // field-get plus indirect call instead.
     if (receiver.value_type == .strukt) {
         if (self.analyzer.interfaceForLayout(receiver.value_type.strukt)) |interface_index| {
-            return lowerInterfaceCall(self, method, run, as_statement, fallible_allowed, interface_index);
+            return lowerInterfaceCall(self, method, run, as_statement, fallible_allowed, shape_position, interface_index);
         }
     }
 
@@ -1513,6 +1532,7 @@ fn lowerInterfaceCall(
     run: OperandRun,
     as_statement: bool,
     fallible_allowed: bool,
+    shape_position: ShapePosition,
     interface_index: u32,
 ) Error!?Typed {
     const contract = self.analyzer.interface_decls.items[interface_index];
@@ -1598,6 +1618,15 @@ fn lowerInterfaceCall(
     }
     if (info.return_type == .none and !as_statement) {
         try self.fail("luce.sema.call", method.span, "{s} returns nothing", .{method.name});
+        return null;
+    }
+    if (info.results.len >= 2 and !as_statement and shape_position != .receive) {
+        try self.fail(
+            "luce.sema.call",
+            method.span,
+            "{s} answers {d} values, and only a destructuring let, var, or assignment can receive them",
+            .{ method.name, info.results.len },
+        );
         return null;
     }
     const receiver = run.values[0];
