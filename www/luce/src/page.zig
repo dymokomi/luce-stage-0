@@ -123,7 +123,7 @@ pub fn close(out: *Buffer, where: Where, headings: []const markdown.Heading) !vo
 
     try out.add(
         \\<footer>
-        \\<p>Luce and loom are part of LuciaOS. Every Luce sample on this site was checked by the freshly built toolchain; runnable output and expected failure results are verified separately.</p>
+        \\<p>Luce is part of LuciaOS. Every Luce sample on this site was checked by the freshly built toolchain; runnable output and expected failure results are verified separately.</p>
         \\</footer>
         \\<script src="
     );
@@ -147,7 +147,6 @@ fn header(out: *Buffer, where: Where) !void {
         \\</nav>
         \\<div class="tools">
         \\<label class="find"><span class="sr">Search</span><input id="q" type="search" placeholder="Search" autocomplete="off"></label>
-        \\<a class="cross" href="https://loom.luciaos.com">loom</a>
         \\<a class="cross" href="https://luciaos.com">LuciaOS</a>
         \\<button id="theme" type="button" aria-label="Switch between light and dark">◑</button>
         \\</div>

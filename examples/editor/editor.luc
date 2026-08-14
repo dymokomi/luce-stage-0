@@ -1,4 +1,4 @@
-# The loom editor — a modern terminal editor written in Luce, for Luce.
+# The Luce editor — a modern terminal editor written in Luce, for Luce.
 #
 # The first Luce program to carry a dependency: it draws through
 # **termui** (docs/TERMUI.md), which owns the cell grid, the diff, the
@@ -7,7 +7,7 @@
 # Per-line syntax highlighting for Luce: keywords, capitalized type
 # names, builtins, strings, numbers, and comments.
 #
-#   loom edit FILE [FILE ...] (or: loom run editor.lc FILE [FILE ...])
+#   editor FILE [FILE ...]
 #   Ctrl-S save   Ctrl-B build/run   Ctrl-Q quit (twice to discard changes)
 #   Ctrl-E files  Ctrl-O output     Ctrl-W focus next pane
 #
@@ -544,7 +544,8 @@ private struct State:
         if self.dirty:
             self.output = "build skipped: " + self.message + "\n"
         else:
-            let command = "loom luce " + State.shell_quote(self.path)
+            let output = self.path + ".run"
+            let command = "luce build " + State.shell_quote(self.path) + " --emit=exe -o " + State.shell_quote(output) + " && " + State.shell_quote(output)
             var command_output = ""
             command_output = os.shell.run(command) catch reason:
                 self.output = reason

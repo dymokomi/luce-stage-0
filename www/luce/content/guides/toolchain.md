@@ -1,10 +1,16 @@
-# The compiler and the terminal
+# Build and run Luce programs
 
-Luce separates compiling from running:
+The first Luce workflow is deliberately ordinary: write a source file,
+compile a native executable, and run that executable.
 
-- `luce` reads source and produces a native artifact.
-- `loom` runs a `.lc` artifact and provides the host services (files,
-  terminal, and process arguments).
+- `luce build FILE --emit=exe` creates a program your operating system can
+  launch directly.
+- `editor FILE` gives you the same loop from a terminal editor; Ctrl-B saves,
+  builds, and runs the current file.
+
+Luce also has a loadable `.lc` artifact and a small terminal runner for
+development and distribution workflows. They are described later on this
+page; you do not need them for your first program.
 
 ## Install a released toolchain
 

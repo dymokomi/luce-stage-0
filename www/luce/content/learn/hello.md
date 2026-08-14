@@ -1,11 +1,14 @@
 # Hello, Luce
 
+You are going to write a tiny program, turn it into a native executable,
+and run it. The first useful Luce program is deliberately small: one file,
+one function, one line of output.
+
 ## Install the tools
 
-The released installer currently supports macOS on Apple Silicon. It
-downloads the compiler, runner, editor and runtime libraries into
-`~/.local/luce`, installs Luce syntax highlighting for local VS Code or
-Cursor, checks the archive, and adds `~/.local/luce/bin` to your shell's
+The released installer currently supports macOS on Apple Silicon. It puts
+the Luce compiler, editor, runtime libraries, and local VS Code syntax
+highlighting in `~/.local/luce`, then adds the compiler to your shell's
 startup profile:
 
 ```sh
@@ -13,85 +16,76 @@ curl -fsSL https://luce.luciaos.com/install/0.18/install.sh | bash
 ```
 
 Open a new shell (or source the profile named by the installer), then check
-that the tools are available:
+the compiler:
 
 ```text
 luce --version
-loom --version
 ```
 
-Running the installer again downloads a fresh copy of the same release and
-replaces the previous `~/.local/luce` tree only after the archive has passed
-its checksum and contents checks.
+Running the installer again downloads a fresh copy and replaces the previous
+installation only after the archive has passed its checksum and contents
+checks.
 
-This chapter gets a program from source to output. It assumes only that
-you can open a terminal and edit a text file.
+## Write your first program
 
-## The smallest program
-
-Every executable Luce program has a `main` function. A block starts after
-`:` and is indented by four spaces. Luce does not use semicolons or braces
-for blocks; `{...}` is map-literal syntax.
-
-```luce run
-func main():
-    print("hello, loom")
-```
-
-```output
-hello, loom
-```
-
-## Compile and run
-
-Save this as `hello.luc`:
+Create a file named `hello.luc` in a new folder. You can use the installed
+editor or any text editor:
 
 ```luce module file=hello.luc
-func main(args: list(string)):
-    var name = "loom"
-    if len(args) > 0:
-        name = args[0]
-    print("hello, " + name)
+func main():
+    print("Hello, Luce!")
 ```
 
-Compile it to a `.lc` artifact and run that artifact:
+Every executable Luce program starts at `main`. A block begins after `:` and
+is indented by four spaces. There are no semicolons or braces to remember.
+
+## Check, compile, and run
+
+Ask the compiler to check the file before it writes anything:
 
 ```console
-$ luce build hello.luc
-hello.luc -> hello.lc
-$ loom run hello.lc
-hello, loom
-$ loom run hello.lc world
-hello, world
+$ luce check hello.luc
+hello.luc: ok
 ```
 
-`luce build` writes machine code. `loom run` loads that artifact; it does
-not compile or interpret the source. While editing, `loom luce` combines
-the two steps:
+Now make a native executable:
 
 ```console
-$ loom luce hello.luc there
-hello, there
+$ luce build hello.luc --emit=exe -o hello
+hello.luc -> hello
 ```
 
-## The compiler commands
+Run the file your operating system can launch directly:
 
-| Command | Purpose |
-|---|---|
-| `luce build FILE [-o OUT] [--release] [--emit=WHAT]` | Compile and write an artifact. |
-| `luce check FILE` | Check a source file without writing an artifact. |
-| `luce ir FILE [--full]` | Print the compiler's intermediate form. |
+```console
+$ ./hello
+Hello, Luce!
+```
 
-`--emit=library` (the default) writes the `.lc` form used by `loom`.
-`--emit=object` writes a relocatable object, and `--emit=exe` writes a
-standalone executable. Debug builds include source locations in runtime
-diagnostics; `--release` removes those locations but does not disable
-safety checks.
+`--emit=exe` is the important part. It tells `luce` to produce a standalone
+program rather than an intermediate library. Once it has been built, the
+program does not need a second Luce command to start.
 
-## Errors are reported before execution
+## Try the same loop in the editor
 
-Luce checks types before it runs the program. The diagnostic includes a
-stable code and a source span:
+Open the file with the Luce editor:
+
+```sh
+editor hello.luc
+```
+
+Press Ctrl-B. The editor saves the file, compiles a standalone executable
+beside it with a `.run` suffix, and runs that executable. Its output and any
+diagnostic appear in the output pane. Ctrl-S saves without running; Ctrl-Q
+quits.
+
+This is the same source-to-executable loop as the terminal commands above,
+with the edit-and-run steps kept close together.
+
+## When something is wrong
+
+Luce checks types before it runs a program. A mistake points to the source
+span and includes a stable diagnostic code:
 
 ```luce fail
 func main():
@@ -107,4 +101,5 @@ main.luc:4:18: operands of + are long and string, and there is no conversion bet
                      ^~~~~
 ```
 
-Next, learn what the values and types mean: [Values and types](../values/).
+The next chapter explains the [values and types](../values/) that make this
+check possible.

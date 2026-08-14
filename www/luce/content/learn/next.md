@@ -31,13 +31,7 @@ current source for that distinction.
 
 ## Build a program
 
-During development, compile and run in one command:
-
-```sh
-loom luce program.luc
-```
-
-When you need an artifact, use the compiler directly:
+The simplest development loop is to make the native executable and run it:
 
 ```sh
 luce build program.luc --emit=exe -o program

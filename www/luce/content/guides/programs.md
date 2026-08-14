@@ -223,9 +223,10 @@ editor notes.txt                   # Ctrl-S saves, Ctrl-Q quits
 loom run examples/life/life.lc
 ```
 
-Ctrl-B saves the current file and asks `loom` to compile it. This also works
-when `editor` was launched from a graphical app: the installed host locates
-the sibling `loom` even if that launcher supplied no interactive-shell PATH.
+Ctrl-B saves the current file, compiles it as a standalone executable, and
+runs it. The output appears in the editor's output pane. The editor locates
+the installed compiler beside itself, so this also works when it was opened
+from Finder or another launcher that did not load your interactive-shell PATH.
 
 The editor translates terminal key names to an `Intent` enum at the
 host boundary, then dispatches with an exhaustive `match`. Its keyword

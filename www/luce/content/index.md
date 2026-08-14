@@ -18,11 +18,10 @@ source the profile it names), then verify the installation:
 
 ```text
 luce --version
-loom --version
 ```
 
-It installs `luce`, `loom`, `editor`, the runtime libraries, and Luce syntax
-highlighting for local VS Code, VS Code Insiders, or Cursor installations.
+It installs the `luce` compiler, the `editor`, the runtime libraries, and Luce
+syntax highlighting for local VS Code, VS Code Insiders, or Cursor installations.
 If an editor has not been opened yet, it prepares the standard VS Code
 extension shelf so the extension is picked up on first launch. Restart the
 editor (or reload its window) after installation.
@@ -32,6 +31,9 @@ been checked.
 
 This release supports macOS on Apple Silicon (ARM64). Other platforms do
 not have a published installer yet.
+
+Your first program is only a few lines long. The [first Learn chapter](/learn/hello/)
+walks from that program to a native executable you can run immediately.
 
 ## Where to go next
 

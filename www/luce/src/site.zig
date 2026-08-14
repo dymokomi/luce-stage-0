@@ -76,7 +76,7 @@ pub const sections = [_]Section{
             .{ .slug = "strings", .title = "Strings and copies", .blurb = "Immutable UTF-8 values with an owner, small-string optimisation, and the one benchmark still behind." },
             .{ .slug = "organization", .title = "Organize a project and make a package", .blurb = "Author in the source tree, then promote the package to an installed dependency." },
             .{ .slug = "performance", .title = "Performance", .blurb = "The benchmark table against C twins, what it measures, and what it does not." },
-            .{ .slug = "toolchain", .title = "The compiler and the terminal", .blurb = "luce, loom, the three artifacts, the one engine, and the two build modes." },
+            .{ .slug = "toolchain", .title = "Build and run Luce programs", .blurb = "luce, standalone executables, loadable artifacts, and the two build modes." },
             .{ .slug = "testing", .title = "Testing", .blurb = "luce test: a test is a func test_* in an ordinary file, and there is no framework." },
             .{ .slug = "first-program", .title = "Hello and arguments", .blurb = "The smallest complete program, and reading the command line." },
             .{ .slug = "loops", .title = "Loops and ranges", .blurb = "range, for over a collection, enumerate, while, break and continue." },

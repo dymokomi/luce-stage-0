@@ -219,7 +219,7 @@ test "Ctrl-B saves, runs the current file and shows the host transcript" {
 
     const shown = try screenText(session.printed());
     defer testing.allocator.free(shown);
-    try testing.expect(std.mem.indexOf(u8, shown, "mock shell: loom luce 'notes.txt'") != null);
+    try testing.expect(std.mem.indexOf(u8, shown, "mock shell: luce build 'notes.txt' --emit=exe -o 'notes.txt.run' && 'notes.txt.run'") != null);
     try testing.expect(std.mem.indexOf(u8, shown, "exit status: 0") != null);
     try testing.expect(std.mem.indexOf(u8, shown, "─ output ") != null);
 }
