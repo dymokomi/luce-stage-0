@@ -495,8 +495,9 @@ mutation checks behind it.  Specs: two-engine rows for materialization
 at every element type, indexing/iteration/slicing, `copy`, the refusals
 (each verb, each mutating method, each container), duplicate keys, the
 `immutable_object` backstop driven from hand-made IR, the census
-exclusion, and the artifact-refusal row for the version bump.  Site: a
-Learn section, the reference, and `/reference/ownership/#s46`.
+exclusion, and the artifact-refusal row for the version bump.  Site: the
+Guide's language chapters, its exact-rules appendix, and
+`/guide/reference/ownership/#s46`.
 
 **Sequencing.**  After threads → lambdas → the self revision, on a
 quiet tree, as the final feature before the lock.  Threads and lambdas

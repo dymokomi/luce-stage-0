@@ -53,7 +53,7 @@ func main():
 Strings are values, so putting a string into a container copies its bytes.
 That makes lifetime predictable; it also makes copying a large value a real
 cost. Keep large text in one owner, use a `builder` for construction, and
-measure before changing an algorithm. [Strings and copies](/guides/strings/)
+measure before changing an algorithm. [Strings and copies](/guide/strings/)
 explains the trade-off.
 
 ### Keep numeric storage in arrays

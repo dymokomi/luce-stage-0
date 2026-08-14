@@ -2,7 +2,7 @@
 
 Add `?` to a type when a value may be absent. `T?` has either a `T` or the
 value `none`. This is separate from failure (`!`), which is covered in
-[Failure](../failure/).
+[Failure](/guide/failure/).
 
 ```luce run
 func main():
@@ -162,4 +162,4 @@ loom: trap: null object reference [null_object]
 ```
 
 Use `T?` when absence is valid; use an uninitialized `var` only when the
-type's zero value is the intended placeholder. Next: [Unions](../unions/).
+type's zero value is the intended placeholder. Next: [Unions](/guide/unions/).

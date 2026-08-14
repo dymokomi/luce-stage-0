@@ -179,5 +179,5 @@ There are no shared mutable objects, locks, atomics, condition variables,
 thread identifiers, or `async`/`await` syntax in this model. Typed channels
 are a separate future design; see the [status page](/status/) for current
 availability. For design patterns and advice on choosing worker boundaries,
-continue with [Concurrency and workers](/guides/concurrency/). Next: [Where to
+continue with [Concurrency and workers](/guide/concurrency/). Next: [Where to
 go next](../next/).

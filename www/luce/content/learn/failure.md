@@ -12,7 +12,7 @@ Luce separates two questions:
 - An **error** is an event a correct program may encounter, such as a file
   service refusing an operation.
 
-Absence without a reason to carry is `T?`. The [failure reference](/reference/failure/)
+Absence without a reason to carry is `T?`. The [failure reference](/guide/reference/failure/)
 lists the stable trap and error codes.
 
 ## `try` and `catch`
@@ -145,4 +145,4 @@ The runtime currently exposes two error codes: `io_failed` for host I/O and
 `user_error` for `error(...)`. Ownership releases resources while a function
 returns or propagates an error; there is no `errdefer` construct.
 
-Next: [Modules](../modules/).
+Next: [Modules](/guide/language/modules/).

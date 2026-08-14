@@ -47,7 +47,7 @@ not run together: section G2 opens at S36 and section H closes at S35.
 That is deliberate — a situation belongs beside the ones it is about,
 and a number, once a compiler diagnostic quotes it (`[OWNERSHIP.md
 S21]`), is not something to renumber.  The site's
-[ownership reference](https://luce.luciaos.com/reference/ownership/)
+[ownership reference](https://luce.luciaos.com/guide/reference/ownership/)
 presents the same 46 in numeric order with a stable `#sNN` anchor
 each, which is what those diagnostics point at.
 

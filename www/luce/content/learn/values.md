@@ -32,7 +32,7 @@ func main():
 | `string` | Immutable UTF-8 text. |
 
 Enums, structs and functions are values too. A function value has a type
-such as `func(long) -> long` and is covered in [Functions and structs](../functions/).
+such as `func(long) -> long` and is covered in [Functions and structs](/guide/language/functions/).
 
 Literals may be decimal, hexadecimal (`0xFF`) or binary (`0b1010`), with
 underscores between digits. A fraction or exponent makes a floating-point
@@ -234,7 +234,7 @@ loom v2
 
 Constants may refer to other constants in any order but cannot form a
 cycle. Flat lists, maps and rank-one arrays are also possible; see
-[Constants and shared tables](../constants/).
+[Constants and shared tables](/guide/language/constants/).
 
 ```luce fail
 func label() -> string:
@@ -253,4 +253,4 @@ main.luc:4:16: constants fold at compile time; calls are not constant [luce.sema
                    ^~~~~~~
 ```
 
-Next: [Control flow](../control/).
+Next: [Control flow](/guide/language/control/).

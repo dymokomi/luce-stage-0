@@ -21,7 +21,7 @@ Assigning or returning a string gives the receiver its own value. Storing a
 string in a list, map, array, or struct copies its bytes into that owner.
 There is no `give`, `copy`, or `free` word for a string. The trade-off is
 visible when a large string is copied; the benefit is that a container never
-refers to bytes owned by a shorter-lived scope. See [Memory without a collector](/guides/memory/)
+refers to bytes owned by a shorter-lived scope. See [Memory without a collector](/guide/memory/)
 for the general ownership rules.
 
 ## Build text once
@@ -45,7 +45,7 @@ func main():
 
 Use `append_ascii(byte)` when the byte is already known to be ASCII. It
 avoids making a one-byte temporary string. For a complete list of builder
-operations, see [the builtins reference](/reference/builtins/).
+operations, see [the builtins reference](/guide/reference/builtins/).
 
 ## Search and slicing
 

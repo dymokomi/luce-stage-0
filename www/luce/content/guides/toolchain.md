@@ -65,7 +65,7 @@ for standard input. Standard input needs `-o` because there is no source
 name from which to derive an output path. `check` type-checks without
 writing an artifact. `ir` prints the verified Luce IR; `--full` keeps
 functions that the normal build would prune. `test` is the test runner
-described in [Testing](/guides/testing/).
+described in [Testing](/command-line/testing/).
 
 For a `.luc` source, `build` defaults to a standalone executable named after
 the source: `luce build hello.luc` writes `hello`. `-o` chooses a different
@@ -112,7 +112,7 @@ Loom's exit status distinguishes a finished program, a trap, an uncaught
 error, an out-of-memory stop, and a refusal to run or write output. A trap is
 not an error result: it indicates a violated language precondition and
 includes its stable code. An uncaught error carries the error code and
-message. See [Failure](/guides/failure/) for choosing between them.
+message. See [Failure](/guide/failure/) for choosing between them.
 
 ## Debug and release
 

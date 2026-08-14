@@ -197,5 +197,5 @@ main.luc:1:1: a visibility region belongs inside a struct; at file scope mark ea
 ```
 
 Standard-library modules use the same rules. The exact boundary rules and
-signature checks are in the [module reference](/reference/modules/#visibility).
-Next: [The outside world](../host/).
+signature checks are in the [module reference](/guide/reference/modules/#visibility).
+Next: [The outside world](/guide/language/host/).

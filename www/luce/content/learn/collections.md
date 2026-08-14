@@ -1,7 +1,7 @@
 # Lists, maps and arrays
 
 Luce has four container types. They are mutable objects with one owner;
-their variables hold references. [Ownership](../ownership/) explains what
+their variables hold references. [Ownership](/guide/memory/) explains what
 happens when a container is copied, moved, or leaves a scope.
 
 | Type | Use |
@@ -200,4 +200,4 @@ a == b: false
 a == same: true
 ```
 
-Next: [Constants and shared tables](../constants/).
+Next: [Constants and shared tables](/guide/language/constants/).

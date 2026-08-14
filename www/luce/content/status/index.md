@@ -6,10 +6,10 @@ This page separates three things that are easy to confuse:
 2. what Luce intentionally does not include; and
 3. what is being considered or built next.
 
-The rest of the site documents the first category. The [Reference](/reference/)
-states the language rules, and the [Guides](/guides/) explain the decisions
-that affect day-to-day work through both thematic pages and complete
-programs.
+The rest of the site documents the first category. The [Guide](/guide/) states
+the language rules and explains the decisions that affect day-to-day work;
+the [Command Line Tool](/command-line/) documents installation and execution;
+and the [Tour](/tour/) is the short introduction.
 
 ## Available today
 
@@ -42,9 +42,9 @@ The repository builds two programs:
   provides the terminal and file services used by a program.
 
 A `.lc` file is native machine code. Running one does not invoke the
-  compiler or LLVM. A source file does need the compiler and the C linker
-  during its build. The [toolchain guide](/guides/toolchain/) gives the
-  exact commands and failure modes.
+compiler or LLVM. A source file does need the compiler and the C linker
+during its build. The [build guide](/command-line/build/) gives the exact
+commands and failure modes.
 
 ### Standard library and complete programs
 
@@ -54,7 +54,7 @@ and `std.json`. They are written in Luce and embedded in the toolchain.
 
 The repository also contains complete programs, including a parser,
 archive tool, file utilities, games and a terminal editor. The
-[Guides](/guides/) include them as runnable programs because they use the same
+[Guide](/guide/) includes them as runnable programs because they use the same
 language and libraries available to you; they are not special cases in the
 compiler.
 
@@ -71,9 +71,9 @@ These are design decisions, not missing documentation:
 - capturing closures. Use a struct with a method when state must travel
   with behavior.
 
-The [memory guide](/guides/memory/), [failure guide](/guides/failure/) and
-[reference](/reference/) explain the alternatives Luce chose and the rules that
-follow from them.
+The [memory guide](/guide/memory/), [failure guide](/guide/failure/) and
+[exact language rules](/guide/) explain the alternatives Luce chose and the
+rules that follow from them.
 
 ## Not shipped yet
 

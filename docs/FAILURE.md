@@ -45,7 +45,7 @@ every time and the function's name already implies it.
 > rule: `step_budget_exhausted` left with the step budget itself
 > (`16ed137`). **Luce has 18 trap codes today**, and
 > `06_mir/defs.zig`'s `TrapCode` is the list — the site's
-> [reference](https://luce.luciaos.com/reference/failure/) carries all of
+> [reference](https://luce.luciaos.com/guide/reference/failure/) carries all of
 > them, and a test fails the site build if it stops doing so.
 `key_missing` and `empty_collection` keep their traps and gain
 optional-returning siblings.

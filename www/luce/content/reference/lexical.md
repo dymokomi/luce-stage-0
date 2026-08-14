@@ -167,7 +167,7 @@ one expression and may contain nested string literals. A hole may end
 with `:.Nf`, which formats a `double` to N decimal places (rounded half
 away from zero) through `std.strings.format_float`; that form requires
 `import std.strings`. A colon inside brackets is part of a slice, so
-`f"{s[1:3]}"` is not a format spec. See [format specs](/learn/strings/#format-specs).
+`f"{s[1:3]}"` is not a format spec. See [formatting](/guide/strings/#formatting-and-byte-conversion).
 
 ## Operators and punctuation
 

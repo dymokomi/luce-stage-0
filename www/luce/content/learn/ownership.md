@@ -27,7 +27,7 @@ be copied. Numbers, strings, booleans, enums, functions, and structs with no
 owned fields are values and copy normally.
 
 Objects created at file scope as constants belong to the program root; see
-[Constants](../constants/). Objects created in a loop or a temporary scope
+[Constants](/guide/language/constants/). Objects created in a loop or a temporary scope
 are released when that scope ends:
 
 ```luce run
@@ -230,5 +230,5 @@ func main():
 released
 ```
 
-The [ownership reference](/reference/ownership/) lists the complete S1–S46
-contract. Next: [Absence](../absence/).
+The [ownership reference](/guide/reference/ownership/) lists the complete S1–S46
+contract. Next: [Absence](/guide/optionals/).

@@ -503,7 +503,7 @@ them live.
 
 ## task
 
-A running worker (see the [Workers](/learn/threads/) chapter). The
+A running worker (see the [Workers](/guide/concurrency/) chapter). The
 `file` precedent exactly: a resource rather than a container, with no
 `new task` — `spawn` is the only door in — and a scope-owned death
 point. What "release" *is* differs: for a file it is a close, for a

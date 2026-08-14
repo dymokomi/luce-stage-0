@@ -6,8 +6,8 @@ diagnostics — a message ending `[OWNERSHIP.md S21]` points at
 [S21](#s21) below — and an executable specification in the repository
 runs every one of them.
 
-[Memory without a collector](/guides/memory/) is the rationale;
-[the Learn chapter](/learn/ownership/) is the introduction. This page is
+[Memory without a collector](/guide/memory/) is the rationale;
+[the Learn chapter](/guide/memory/) is the introduction. This page is
 the rules.
 
 ### Find a rule

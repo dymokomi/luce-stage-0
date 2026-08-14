@@ -7,10 +7,10 @@ rule; use the guides when you want the design rationale.
 
 ## Choose by task
 
-- [Guides](/guides/) take one theme at a time—structures, unions,
+- [Guides](/guide/) take one theme at a time—structures, unions,
   ownership, failure, modules and packages, strings, the toolchain, and
   testing—and include complete programs you can copy and change.
-- [Reference](/reference/) lists the accepted syntax, types, expressions,
+- [Guide](/guide/) lists the accepted syntax, types, expressions,
   statements, ownership situations, failure codes, modules, and builtins.
 - [Standard library](/library/) documents the modules shipped with the
   compiler.

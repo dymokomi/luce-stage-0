@@ -7,7 +7,7 @@ invariants.
 
 Use a `list` when order and repetition are the point. Use a `map` when the
 keys are discovered at runtime. Use an `enum` when the value is one of a
-fixed set of names with no payload, and a [union](/guides/unions/) when its
+fixed set of names with no payload, and a [union](/guide/unions/) when its
 alternatives carry different data.
 
 ## Start with the data shape
@@ -22,11 +22,11 @@ struct Point:
     y: double
 ```
 
-The complete construction and copy example is in [Structs](/guides/structs/).
+The complete construction and copy example is in [Structs](/guide/structs/).
 The important property is value semantics: copying a struct copies its
 value fields. If a field contains a list, map, array, builder, file, or task,
 the struct carries that object and follows the ordinary [ownership
-rules](/guides/memory/); copying the struct does not silently deep-copy the
+rules](/guide/memory/); copying the struct does not silently deep-copy the
 object.
 
 ## Put behavior beside the fields
@@ -81,8 +81,8 @@ This is a design boundary, not just an access check:
 3. Expose methods that preserve the invariant after construction.
 4. Keep private helpers and implementation types behind the module boundary.
 
-The [visibility chapter](/learn/visibility/) shows the smallest example;
-the [module reference](/reference/modules/#visibility) lists every boundary
+The [visibility chapter](/guide/reference/modules/) shows the smallest example;
+the [module reference](/guide/reference/modules/#visibility) lists every boundary
 that visibility checks, including fields, types, constants, and function
 signatures.
 
@@ -102,8 +102,8 @@ let job = Job(labels = give labels)
 
 Use `copy labels` when the new struct needs an independent object. Use a
 borrow when a function only needs to inspect or mutate an object during the
-call. The [memory guide](/guides/memory/) explains the four ownership words
-and the [ownership reference](/reference/ownership/) gives the exact rule
+call. The [memory guide](/guide/memory/) explains the four ownership words
+and the [ownership reference](/guide/reference/ownership/) gives the exact rule
 for each place a struct can occur.
 
 ## A practical review
@@ -121,5 +121,5 @@ stable. A struct is most useful when it makes an invalid state difficult to
 express, not when it merely renames a handful of unrelated variables.
 
 For the exact grammar, defaults, methods, visibility regions, and assignment
-rules, use [Statements and declarations](/reference/statements/), [Types](/reference/types/),
-and [Expressions](/reference/expressions/).
+rules, use [Statements and declarations](/guide/reference/statements/), [Types](/guide/reference/types/),
+and [Expressions](/guide/reference/expressions/).

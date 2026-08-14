@@ -257,4 +257,4 @@ func main():
 b 42
 ```
 
-Next: [Enums](../enums/).
+Next: [Enums](/guide/language/enums/).

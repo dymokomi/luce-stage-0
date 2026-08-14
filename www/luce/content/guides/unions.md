@@ -69,7 +69,7 @@ let document = Json.array(items = give items)
 
 Use `copy` if both the old name and the union must continue to own data. A
 borrowed object cannot be retained in a union. See [Memory without a
-collector](/guides/memory/) for the ownership decision and [Ownership](/reference/ownership/)
+collector](/guide/memory/) for the ownership decision and [Ownership](/guide/reference/ownership/)
 for the rule numbers cited by diagnostics.
 
 ## Recursive data needs an indirection
@@ -101,5 +101,5 @@ valid far better than `is_ready`, `has_value`, and `error_text` that can
 contradict one another.
 
 For exact arm syntax, zero values, recursive restrictions, optional unions,
-and comparison rules, read the [Unions chapter](/learn/unions/) and the
-[Types reference](/reference/types/).
+and comparison rules, read the [Unions chapter](/guide/unions/) and the
+[Types reference](/guide/reference/types/).

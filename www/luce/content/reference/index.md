@@ -18,8 +18,8 @@ name. It describes the language implemented by this repository.
 - [Builtins](builtins/) — free functions, host services, and receiver
   methods.
 
-The [Learn](/learn/) section teaches the language from the beginning. The
-[Guides](/guides/) combine design explanations with complete programs. The
+The [Learn](/tour/) section teaches the language from the beginning. The
+[Guides](/guide/) combine design explanations with complete programs. The
 [Library](/library/) documents the modules shipped with the compiler.
 
 All Luce samples on the site are checked during the site build. If a

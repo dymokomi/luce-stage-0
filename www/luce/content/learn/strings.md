@@ -187,6 +187,6 @@ true
 ```
 
 `parse_int` and `parse_float` return optionals because the text may not
-contain a number. See [Absence](../absence/).
+contain a number. See [Absence](/guide/optionals/).
 
-Next: [Memory](../ownership/).
+Next: [Memory](/guide/memory/).

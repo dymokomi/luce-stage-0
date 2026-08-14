@@ -11,5 +11,4 @@ complete program that you can copy, change, and build; the site checks the
 examples and their expected output as part of each release.
 
 Begin with [Hello, Luce](hello/). Once the shape of the language feels
-familiar, use the [guides](/guides/) for a whole theme or the
-[reference](/reference/) for one exact rule.
+familiar, use the [Guide](/guide/) for a whole theme or an exact rule.

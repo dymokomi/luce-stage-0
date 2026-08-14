@@ -211,7 +211,7 @@ Terminal dimensions, drawing, and key input are host services available when
 running in a terminal. `key_read` returns a `string?`; an empty input stream
 therefore ends a draw loop cleanly. Terminal output is sanitized by the
 host. These services need a real terminal and are not demonstrated by the
-site's non-interactive examples. The [editor example](/guides/programs/)
+site's non-interactive examples. The [editor example](/guide/programs/)
 uses them in a complete program.
 
 ## The host gate
@@ -219,4 +219,4 @@ uses them in a complete program.
 Host-dependent names are gated at compile time. Compiling without the
 corresponding service produces a `luce.sema.host` diagnostic instead of a
 runtime surprise. The [standard-library pages](/library/) document each module's
-available host surface. Next: [Workers](../threads/).
+available host surface. Next: [Workers](/guide/concurrency/).

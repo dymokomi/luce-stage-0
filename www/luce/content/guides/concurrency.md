@@ -120,7 +120,7 @@ caught: negative input
 
 An error is data that can cross the join. A trap is still a trap: the runtime
 reports the worker's trace when the parent joins it. See [Traps are bugs,
-errors are news](/guides/failure/) for the rule that separates those outcomes.
+errors are news](/guide/failure/) for the rule that separates those outcomes.
 
 ## Run several workers
 
@@ -163,8 +163,8 @@ CPU-heavy calculations. They are not a substitute for a shared state model.
 - Measure before adding workers. A small task can cost more to start and join
   than the work it performs.
 
-The [Workers chapter in Learn](/learn/threads/) walks through the ownership
-refusals in detail. The [type reference](/reference/types/#task) and
-[ownership reference](/reference/ownership/) give the complete rules. Typed
+The [Workers chapter in Learn](/guide/concurrency/) walks through the ownership
+refusals in detail. The [type reference](/guide/reference/types/#task) and
+[ownership reference](/guide/reference/ownership/) give the complete rules. Typed
 channels and shared-memory synchronization are not part of the current
 language; the [status page](/status/) records that boundary.

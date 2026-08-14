@@ -176,7 +176,7 @@ main.luc:5:5: cents of Account is private to account [luce.sema.private]
         ^~~~~~~
 ```
 
-[The visibility chapter](/learn/visibility/) has the rest: the word on
+[The visibility chapter](/guide/reference/modules/) has the rest: the word on
 functions and constants, `public`, regions, and what the compiler says
 at every kind of crossing.
 

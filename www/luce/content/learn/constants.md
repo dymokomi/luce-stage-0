@@ -94,5 +94,5 @@ The compiler enforces the boundary, and the runtime checks it again for
 paths that reach inline generated stores. Each worker has its own runtime
 and its own copy of the roots.
 
-See the [statement reference](/reference/statements/#file-scope-constants) and
-[ownership rule S46](/reference/ownership/#s46). Next: [Strings](../strings/).
+See the [statement reference](/guide/reference/statements/#file-scope-constants) and
+[ownership rule S46](/guide/reference/ownership/#s46). Next: [Strings](/guide/strings/).

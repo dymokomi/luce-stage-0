@@ -29,7 +29,7 @@ func main():
 ```
 
 Luce has no ternary or `switch` expression. For a fallback value, use the
-optional operator described in [Absence](../absence/).
+optional operator described in [Absence](/guide/optionals/).
 
 ## `while`
 
@@ -84,7 +84,7 @@ word plum
 ```
 
 Do not change the size of, or free, the collection being iterated. See
-[Lists, maps and arrays](../collections/) for the collection operations.
+[Lists, maps and arrays](/guide/language/collections/) for the collection operations.
 
 ## `break` and `continue`
 
@@ -134,4 +134,4 @@ func main():
 7! = 5040
 ```
 
-Next: [Functions and structs](../functions/).
+Next: [Functions and structs](/guide/language/functions/).

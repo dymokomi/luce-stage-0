@@ -22,7 +22,7 @@ const verify = @import("verify.zig");
 
 /// A rendered page, kept until the link check has seen every other one.
 const Built = struct {
-    /// Path under the output root, e.g. `learn/hello/index.html`.
+    /// Path under the output root, e.g. `guide/first-program/index.html`.
     path: []u8,
     url: []u8,
     title: []u8,
@@ -124,7 +124,10 @@ fn generate(gpa: Allocator, io: Io, options: Options) !u8 {
             .entry = null,
         });
         for (section.pages) |*entry| {
-            const source = try std.fmt.allocPrint(gpa, "{s}/{s}.md", .{ section.slug, entry.slug });
+            const source = if (entry.source) |path|
+                try gpa.dupe(u8, path)
+            else
+                try std.fmt.allocPrint(gpa, "{s}/{s}.md", .{ section.slug, entry.slug });
             defer gpa.free(source);
             const here = try std.fmt.allocPrint(gpa, "/{s}/{s}/", .{ section.slug, entry.slug });
             defer gpa.free(here);
@@ -305,18 +308,21 @@ fn surroundings(gpa: Allocator, target: Target) !Neighbours {
             if (candidate != entry) continue;
             var found: Neighbours = .{};
             if (position == 0) {
-                found.previous = .{ .url = try gpa.dupe(u8, "../"), .title = section.title };
+                found.previous = .{
+                    .url = try std.fmt.allocPrint(gpa, "/{s}/", .{section.slug}),
+                    .title = section.title,
+                };
             } else {
                 const before = section.pages[position - 1];
                 found.previous = .{
-                    .url = try std.fmt.allocPrint(gpa, "../{s}/", .{before.slug}),
+                    .url = try std.fmt.allocPrint(gpa, "/{s}/{s}/", .{ section.slug, before.slug }),
                     .title = before.title,
                 };
             }
             if (position + 1 < section.pages.len) {
                 const after = section.pages[position + 1];
                 found.next = .{
-                    .url = try std.fmt.allocPrint(gpa, "../{s}/", .{after.slug}),
+                    .url = try std.fmt.allocPrint(gpa, "/{s}/{s}/", .{ section.slug, after.slug }),
                     .title = after.title,
                 };
             }
@@ -325,7 +331,7 @@ fn surroundings(gpa: Allocator, target: Target) !Neighbours {
         return .{};
     }
     return .{ .next = .{
-        .url = try std.fmt.allocPrint(gpa, "{s}/", .{section.pages[0].slug}),
+        .url = try std.fmt.allocPrint(gpa, "/{s}/{s}/", .{ section.slug, section.pages[0].slug }),
         .title = section.pages[0].title,
     } };
 }
@@ -541,11 +547,12 @@ fn resolve(gpa: Allocator, from: []const u8, href: []const u8) ![]u8 {
 test "links resolve against the page that carries them" {
     const gpa = std.testing.allocator;
     const cases = [_]struct { from: []const u8, href: []const u8, want: []const u8 }{
-        .{ .from = "index.html", .href = "learn/", .want = "learn/index.html" },
-        .{ .from = "learn/hello/index.html", .href = "../values/", .want = "learn/values/index.html" },
-        .{ .from = "learn/hello/index.html", .href = "../../reference/types/", .want = "reference/types/index.html" },
-        .{ .from = "learn/index.html", .href = "/status/", .want = "status/index.html" },
-        .{ .from = "learn/hello/index.html", .href = "../../assets/style.css", .want = "assets/style.css" },
+        .{ .from = "index.html", .href = "tour/", .want = "tour/index.html" },
+        .{ .from = "guide/first-program/index.html", .href = "../loops/", .want = "guide/loops/index.html" },
+        .{ .from = "guide/language/values/index.html", .href = "../control/", .want = "guide/language/control/index.html" },
+        .{ .from = "guide/language/values/index.html", .href = "/guide/reference/types/", .want = "guide/reference/types/index.html" },
+        .{ .from = "guide/index.html", .href = "/status/", .want = "status/index.html" },
+        .{ .from = "guide/first-program/index.html", .href = "../../assets/style.css", .want = "assets/style.css" },
     };
     for (cases) |case| {
         const got = try resolve(gpa, case.from, case.href);

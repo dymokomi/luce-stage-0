@@ -33,13 +33,13 @@ been checked.
 This release supports macOS on Apple Silicon (ARM64). Other platforms do
 not have a published installer yet.
 
-Your first program is only a few lines long. The [first Learn chapter](/learn/hello/)
-walks from that program to a native executable you can run immediately.
+Your first program is only a few lines long. The [Tour](/tour/) shows the
+language's shape in one sitting and points to the detailed Guide.
 
 ## Where to go next
 
-Choose the kind of help you need below. [Learn](/learn/) is the guided path;
-[Guides](/guides/) take one theme through a complete program;
-[Reference](/reference/) is the exhaustive lookup; [Library](/library/) documents the
-modules shipped with Luce; and [Status](/status/) records what is available
-now.
+Choose the kind of help you need below. [Tour](/tour/) is the one-page
+introduction; [Guide](/guide/) is the language book and exact rule lookup;
+[Command Line Tool](/command-line/) covers installation, building, the editor,
+packages, and tests; [Library](/library/) documents the shipped modules; and
+[Status](/status/) records what is available now.
