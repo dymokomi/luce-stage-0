@@ -178,4 +178,6 @@ func main():
 There are no shared mutable objects, locks, atomics, condition variables,
 thread identifiers, or `async`/`await` syntax in this model. Typed channels
 are a separate future design; see the [status page](/status/) for current
-availability. Next: [Where to go next](../next/).
+availability. For design patterns and advice on choosing worker boundaries,
+continue with [Concurrency and workers](/guides/concurrency/). Next: [Where to
+go next](../next/).

@@ -1,54 +1,69 @@
 # Guides
 
-Guides are thematic. They take a problem that crosses several language
-features and explain how to reason about it, make a design choice, and
-build a maintainable program. They are not a second syntax reference and
-they are not a linear course.
+Guides are thematic, but their order is deliberate: start with a working
+program, add data and control flow, then learn the ownership and failure
+rules that make larger programs safe. The final pages cover packages,
+testing, workers, and performance.
 
-## Language design
+## 1. Start with a working program
 
-- [Structures](/guides/structures/) — choose fields and methods, preserve
-  invariants, and decide when a struct should own an object.
-- [Unions](/guides/unions/) — model a value with several valid shapes,
-  match it safely, and keep payload ownership explicit.
-- [Memory without a collector](/guides/memory/) — scope ownership, aliases,
-  `give`, `copy`, and early release.
-- [Traps are bugs, errors are news](/guides/failure/) — choose absence,
-  fallible errors, or a trap before writing recovery code.
-- [Strings and copies](/guides/strings/) — immutable UTF-8, slices, and
-  builders without hidden borrowing.
+Install the tools, compile an executable, and make a small program respond
+to its inputs before taking on a larger design.
 
-## Building programs
-
-- [Organize a project and make a package](/guides/organization/) — establish
-  a project root, author in a direct source subfolder, and promote the package
-  to the installed store with the package commands.
-- [Testing](/guides/testing/) — the ordinary Luce functions that `luce test`
-  discovers, and how to keep tests close to the behavior they specify.
-- [The compiler and the terminal](/guides/toolchain/) — source, artifacts,
-  `luce`, `loom`, and debug/release behavior.
-- [Performance](/guides/performance/) — what the current measurements say,
-  which choices affect a program, and where to measure instead of guess.
-
-## Complete programs
-
-When you want code to copy, run, and change, these pages keep the same
-reader-first explanations but use a complete program as their centre:
-
+- [Build and run Luce programs](/guides/toolchain/) — install the compiler,
+  editor, VS Code extension, and the commands that turn source into a program.
 - [Hello and arguments](/guides/first-program/) — the smallest program and
   its command-line input.
-- [Loops and ranges](/guides/loops/), [lists](/guides/lists/),
-  [maps](/guides/maps/), and [arrays](/guides/arrays/) — the core collection
-  shapes in working programs.
-- [Text processing](/guides/text/) and [files](/guides/files/) — common
-  host-facing tasks with the standard library.
-- [Structs](/guides/structs/) and [ownership in context](/guides/ownership-example/)
-  — values, objects, and the words that move or release them.
-- [Optionals](/guides/optionals/), [errors](/guides/errors/), and
-  [traps](/guides/traps/) — the three different failure outcomes.
-- [Complete bundled programs](/guides/programs/) — multi-file programs,
-  including the editor, games, and utilities.
+- [Loops and ranges](/guides/loops/) — repeat work with `range`, `for`,
+  `while`, `break`, and `continue`.
 
-Start with [Learn](/learn/) if you are new to Luce. Use the
-[Reference](/reference/) for an exact rule and the [Library](/library/)
-for a module's complete API.
+## 2. Work with data
+
+- [Lists](/guides/lists/) — build, sort, search, and slice a growable sequence.
+- [Maps](/guides/maps/) — keep insertion-ordered key/value data and count it.
+- [Arrays and grids](/guides/arrays/) — use fixed-shape storage for numeric work.
+- [Text processing](/guides/text/) — split, join, trim, search, and format text.
+- [Files](/guides/files/) — read and write through `std.files`, handling the
+  fallible boundary.
+
+## 3. Shape the program
+
+- [Structures: keep data and invariants together](/guides/structures/) —
+  decide which fields belong together and where behavior should live.
+- [Structs](/guides/structs/) — build value aggregates, methods, static
+  functions, and structs that carry objects.
+- [Strings and copies](/guides/strings/) — understand immutable UTF-8 values,
+  slices, and builders without hidden borrowing.
+- [Memory without a collector](/guides/memory/) — learn scope ownership,
+  aliases, and the cost of moving or copying objects.
+- [give, copy and free](/guides/ownership-example/) — see the ownership words
+  in complete programs.
+
+## 4. Handle absence and failure
+
+- [Optionals](/guides/optionals/) — represent a value that may not be there.
+- [Errors](/guides/errors/) — propagate and handle failures from the outside
+  world with `try` and `catch`.
+- [Traps are bugs, errors are news](/guides/failure/) — choose between an
+  optional, a fallible error, and a trap before writing recovery code.
+- [Traps](/guides/traps/) — read the stable code, source location, and trace
+  when a program violates a checked precondition.
+- [Unions: make alternatives explicit](/guides/unions/) — model several valid
+  shapes and keep payload ownership explicit.
+
+## 5. Build maintainable programs
+
+- [Organize a project and make a package](/guides/organization/) — author in a
+  direct source subfolder, version it, and promote it to an installed package.
+- [Testing](/guides/testing/) — write ordinary `test_*` functions and keep
+  tests close to the behavior they specify.
+- [Concurrency and workers](/guides/concurrency/) — build multi-threaded work
+  with share-nothing runtimes, explicit ownership, and structured joins.
+- [The bundled programs](/guides/programs/) — study complete multi-file
+  programs, including utilities, games, and the editor.
+- [Performance](/guides/performance/) — measure the program you care about and
+  understand what the current benchmark snapshot does and does not promise.
+
+Start with [Learn](/learn/) if you want a guided language course. Use the
+[Reference](/reference/) for an exact rule and the [Library](/library/) for a
+module's complete API.
