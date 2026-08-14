@@ -68,6 +68,7 @@ pub const sections = [_]Section{
             .{ .slug = "files", .title = "Files", .source = "guides/files.md", .blurb = "Reading and writing through std.files, with the failure handled." },
             .{ .slug = "structures", .title = "Structures: keep data and invariants together", .source = "guides/structures.md", .blurb = "Choose fields and methods, preserve invariants, and decide when a struct should own an object." },
             .{ .slug = "structs", .title = "Structs", .source = "guides/structs.md", .blurb = "Value aggregates, implied-self methods, static functions, and structs that carry objects." },
+            .{ .slug = "interfaces", .title = "Interfaces", .source = "guides/interfaces.md", .blurb = "Share a small behavior across different structs, with explicit contracts and visible ownership." },
             .{ .slug = "strings", .title = "Strings and copies", .source = "guides/strings.md", .blurb = "Immutable UTF-8 values with an owner, small-string optimisation, and the one benchmark still behind." },
             .{ .slug = "memory", .title = "Memory without a collector", .source = "guides/memory.md", .blurb = "Why scope ownership, what it costs, and how it compares to the alternatives that were refused." },
             .{ .slug = "ownership-example", .title = "give, copy and free", .source = "guides/ownership-example.md", .blurb = "The four situations where memory needs a word from you." },

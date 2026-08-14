@@ -279,6 +279,33 @@ match. Interface methods are read-only, so an implementation that writes
 `self` is rejected. Extra methods on the struct are harmless. A non-fallible
 implementation may satisfy a fallible requirement; the reverse is rejected.
 
+An interface may declare several distinct methods. Every method is a required
+dispatch slot, and the implementation must provide every slot:
+
+```text
+interface Drawable:
+    func render(value: long) -> long
+    func label() -> string
+```
+
+The following are part of the contract check:
+
+| Requirement | Rule |
+| --- | --- |
+| Receiver | The witness is an instance method; `static` functions cannot satisfy it. |
+| Parameters | Count, types, order, and `give` modes match exactly. Interface methods cannot declare default arguments. |
+| Results | Count and types match exactly. Two or more results use the ordinary return shape. |
+| Effects | A non-fallible witness may satisfy a fallible requirement; a fallible witness may not satisfy a non-fallible one. |
+| Mutation | The witness may not write `self`. |
+
+The conversion is nominal and implicit: a concrete value enters an interface
+when an interface-typed parameter, local, field, collection element, or
+return slot expects it. There is no cast and no structural conformance. An
+interface itself cannot be constructed and an interface-typed variable has no
+default implementation; initialize it with a value from a conforming struct.
+Interfaces do not convert to one another because this release has no
+inheritance.
+
 An interface exposes methods, not the concrete struct's fields. Calling a
 method uses the implementation carried by the value:
 

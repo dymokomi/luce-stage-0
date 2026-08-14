@@ -68,52 +68,12 @@ the receiver's value at the point it is read.
 
 ## Let several structs share a contract
 
-Use an interface when a caller needs one small behavior and the concrete
-structs are intentionally different. The struct opts in explicitly:
-
-```luce run
-interface Labelled:
-    func score(value: long) -> long
-
-struct Low: Labelled:
-    name: string
-
-    func score(value: long) -> long:
-        return value + 1
-
-struct High: Labelled:
-    name: string
-
-    func score(value: long) -> long:
-        return value + 2
-
-func total(item: Labelled) -> long:
-    return item.score(40)
-
-func main():
-    var values = new list(Labelled)
-    values.append(Low(name = "low"))
-    values.append(High(name = "high"))
-    print(string(total(values[0])))
-    print(string(total(values[1])))
-```
-
-```output
-41
-42
-```
-
-The interface lists method signatures only. Implementations must match the
-parameter types and ownership modes, return shape, and read-only receiver;
-the struct may still have other methods. A fallible requirement may be
-satisfied by a non-fallible method, but a fallible method cannot be hidden
-behind a non-fallible contract. Interface values expose methods, not fields.
-
-The same conversion works for `map(string, Labelled)` and for an array or
-struct field. This is a good fit for a caller that should not know which
-concrete type it received. Keep in mind that a carrying receiver's object
-graph remains borrowed from its concrete owner; use an explicit `copy` when
-you need an independent graph.
+When several structs should answer the same small question, use an interface
+as the boundary between the caller and the implementation. The contract,
+multi-value returns, heterogeneous collections, and ownership rules are
+explained in the dedicated [Interfaces guide](/guide/interfaces/). Keep this
+page focused on the data shape; use that chapter when the design question is
+which behavior belongs behind a shared type.
 
 ## Decide who may construct the value
 

@@ -32,6 +32,8 @@ to its inputs before taking on a larger design.
   decide which fields belong together and where behavior should live.
 - [Structs](/guide/structs/) — build value aggregates, methods, static
   functions, and structs that carry objects.
+- [Interfaces](/guide/interfaces/) — share a small behavior across different
+  structs, including multi-value methods and heterogeneous collections.
 - [Strings and copies](/guide/strings/) — understand immutable UTF-8 values,
   slices, and builders without hidden borrowing.
 - [Memory without a collector](/guide/memory/) — learn scope ownership,

@@ -54,6 +54,8 @@ ownership visible:
   which fields belong together and where behavior should live.
 - [Structs](/guide/structs/) — value aggregates, methods, static functions,
   and structs that carry objects.
+- [Interfaces](/guide/interfaces/) — share a small behavior across different
+  structs, including multi-value methods and heterogeneous collections.
 - [Strings and copies](/guide/strings/) — immutable UTF-8 values, slices, and
   builders without hidden borrowing.
 - [Memory without a collector](/guide/memory/) — scope ownership, aliases,
