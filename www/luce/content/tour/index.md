@@ -3,8 +3,7 @@
 This is the short version of Luce. Read it once to see the shape of a
 program, the values it works with, and the rules that keep it predictable.
 You do not need to memorize every detail here. The [Guide](/guide/) explains
-each idea carefully; the [Command Line Tool](/command-line/) documents the
-tools around the language.
+each idea carefully; the [Reference](/reference/) is the exact lookup.
 
 ## Install and make a program
 
@@ -94,7 +93,7 @@ need a second object, and `free` when you want to release one early.
 
 That rule applies to files and workers as well. It is why a value can be sent
 to another worker without a shared heap and why a resource cannot be copied.
-The [ownership guide](/guide/memory/) and [exact ownership rules](/guide/reference/ownership/)
+The [ownership guide](/guide/memory/) and [exact ownership rules](/reference/ownership/)
 show every form.
 
 ## Absence and failure are different
@@ -135,7 +134,7 @@ import std.files
 import std.strings
 ```
 
-The [Library](/library/) documents every shipped module. The [package guide](/command-line/packages/)
+The [Library](/library/) documents every shipped module. The [package guide](/guide/organization/)
 shows how a direct source folder becomes a versioned package.
 
 ## Workers
@@ -165,7 +164,7 @@ parallel work.
 
 - Read the [Guide](/guide/) for the language in depth, including the exact
   syntax and semantics appendix.
-- Use the [Command Line Tool](/command-line/) for `luce`, `loom`, the editor,
-  packages, and tests.
+- Use the [Guide](/guide/) for the compiler, editor, packages, and tests.
+- Use the [Reference](/reference/) when you need an exact rule.
 - Look up a module in the [Library](/library/).
 - Check [Status](/status/) for current platform and feature boundaries.

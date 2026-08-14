@@ -65,7 +65,7 @@ for standard input. Standard input needs `-o` because there is no source
 name from which to derive an output path. `check` type-checks without
 writing an artifact. `ir` prints the verified Luce IR; `--full` keeps
 functions that the normal build would prune. `test` is the test runner
-described in [Testing](/command-line/testing/).
+described in [Testing](/guide/testing/).
 
 For a `.luc` source, `build` defaults to a standalone executable named after
 the source: `luce build hello.luc` writes `hello`. `-o` chooses a different

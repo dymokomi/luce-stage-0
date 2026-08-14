@@ -7,7 +7,7 @@ diagnostics — a message ending `[OWNERSHIP.md S21]` points at
 runs every one of them.
 
 [Memory without a collector](/guide/memory/) is the rationale;
-[the Learn chapter](/guide/memory/) is the introduction. This page is
+[the memory chapter](/guide/memory/) is the introduction. This page is
 the rules.
 
 ### Find a rule
@@ -475,7 +475,7 @@ Values take neither: they copy by themselves.
 
 ```luce fail
 func main():
-    let name = "loom"
+    let name = "Luce"
     let title = give name
     print(title)
 ```

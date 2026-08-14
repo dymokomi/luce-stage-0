@@ -1,109 +1,63 @@
 # The Luce guide
 
-The Guide is the language book. Read the early chapters in order when you
-are learning Luce; later chapters help you design larger programs. The final
-section is deliberately slower and more exact: it is where you look up a rule
-when a program is surprising.
+The Guide is the practical language book. Read it in order when Luce is new;
+each chapter answers one question that comes up while building a real
+program. The [Tour](/tour/) is the one-page map. The [Reference](/reference/)
+is the exhaustive rule book. The [Library](/library/) documents the modules
+and packages you can import.
 
-The [Tour](/tour/) is the one-page overview. The [Command Line Tool](/command-line/)
-covers installation, building, the editor, packages, and tests. The
-[Library](/library/) is the API reference for shipped modules.
+## Start here
 
-## 1. Write useful programs
+1. [Build and run a Luce program](/guide/toolchain/) — install the release,
+   compile an executable, and understand the few commands you need.
+2. [Editor and VS Code](/guide/editor/) — use the shipped editor or the local
+   extension without changing the build loop.
+3. [Hello and arguments](/guide/first-program/) — write a complete program
+   and read its command-line input.
 
-Start with a program that accepts input, repeats work, and stores data:
+## Learn the language
 
-- [Hello and arguments](/guide/first-program/) — the smallest complete
-  program and its command-line input.
-- [Loops and ranges](/guide/loops/) — `range`, `for`, `while`, `break`, and
-  `continue`.
+Read these chapters in order. They introduce one idea, then use it in the
+next idea rather than making you learn the whole grammar first.
 
-The language chapters then fill in the core ideas in the order a program uses
-them:
+- [Values and types](/guide/values/) — literals, inference, numeric promotion,
+  strings and function values.
+- [Control flow](/guide/control/) — conditions, loops, matching and the
+  explicit forms the parser refuses to guess at.
+- [Functions and structs](/guide/functions/) — parameters, returns, methods,
+  function values and value structs.
+- [Enums](/guide/enums/) — named sets and exhaustive `match`.
+- [Collections](/guide/collections/) — choose a list, map or fixed-shape array
+  by the question your data needs to answer; then read the focused chapters
+  for [lists](/guide/lists/), [maps](/guide/maps/) or [arrays](/guide/arrays/).
+- [Text processing](/guide/text/) and [files](/guide/files/) — work with
+  text and cross the host boundary deliberately.
+- [Constants and shared tables](/guide/constants/) — immutable file-scope
+  data and program-root identity.
+- [Modules](/guide/modules/) and [visibility](/guide/visibility/) — split a
+  program without making its dependencies mysterious.
 
-- [Values and types](/guide/language/values/) — literals, numeric promotion,
-  strings, enums, and function values.
-- [Control flow](/guide/language/control/) — conditions, loops, and the
-  parser's deliberately explicit forms.
-- [Functions and structs](/guide/language/functions/) — parameters, returns,
-  function values, lambdas, and value structs.
-- [Enums](/guide/language/enums/) — named sets and exhaustive `match`.
-- [Lists, maps and arrays](/guide/language/collections/) — the collection
-  shapes and how iteration sees each one.
-- [Constants and shared tables](/guide/language/constants/) — file-scope
-  `const`, program-root identity, and immutable data.
-- [Modules](/guide/language/modules/) — imports and the `std` namespace.
-- [Visibility](/guide/language/visibility/) — public and private boundaries.
-- [The outside world](/guide/language/host/) — arguments, files, terminals,
-  and host services.
+## Design larger programs
 
-- [Lists](/guide/lists/) — build, sort, search, and slice a sequence.
-- [Maps](/guide/maps/) — keep insertion-ordered key/value data.
-- [Arrays and grids](/guide/arrays/) — use fixed-shape storage for numeric
-  work.
-- [Text processing](/guide/text/) — split, join, trim, search, and format
-  text.
-- [Files](/guide/files/) — cross the host boundary through `std.files`.
+- [Organize a project and make a package](/guide/organization/) — keep a
+  source package as a direct subfolder, add `luce.yaml` when it needs a
+  version, and use the package commands.
+- [Structures](/guide/structures/) — keep data and invariants together.
+- [Interfaces](/guide/interfaces/) — share behavior across different structs,
+  including multi-value methods and heterogeneous collections.
+- [Strings and copies](/guide/strings/), [memory](/guide/memory/) and
+  [`give`, `copy`, `free`](/guide/ownership-example/) — make ownership visible.
+- [Optionals](/guide/optionals/), [errors](/guide/errors/) and
+  [failure boundaries](/guide/failure/) — distinguish absence, recoverable
+  failure and a bug.
+- [Unions](/guide/unions/) — model several valid shapes explicitly.
+- [Concurrency and workers](/guide/concurrency/) — build multi-threaded work
+  with share-nothing runtimes and structured joins.
+- [Testing](/guide/testing/) — keep behavior repeatable as the program grows.
+- [The outside world](/guide/host/) — arguments, terminals and host services.
+- [Bundled programs](/guide/programs/) and [performance](/guide/performance/)
+  — study complete programs and measure the code you care about.
 
-## 2. Shape data and control its lifetime
-
-Once the basic operations feel familiar, choose data shapes and make their
-ownership visible:
-
-- [Structures: keep data and invariants together](/guide/structures/) — decide
-  which fields belong together and where behavior should live.
-- [Structs](/guide/structs/) — value aggregates, methods, static functions,
-  and structs that carry objects.
-- [Interfaces](/guide/interfaces/) — share a small behavior across different
-  structs, including multi-value methods and heterogeneous collections.
-- [Strings and copies](/guide/strings/) — immutable UTF-8 values, slices, and
-  builders without hidden borrowing.
-- [Memory without a collector](/guide/memory/) — scope ownership, aliases,
-  and the cost of moving or copying objects.
-- [`give`, `copy`, and `free`](/guide/ownership-example/) — see ownership
-  decisions in complete programs.
-- [Unions: make alternatives explicit](/guide/unions/) — model several valid
-  shapes and keep payload ownership explicit.
-
-## 3. Handle the outcomes of a computation
-
-Luce makes absence, recoverable failure, and bugs different types of outcome:
-
-- [Optionals](/guide/optionals/) — represent a value that may not be there.
-- [Errors](/guide/errors/) — propagate and handle fallible operations.
-- [Traps are bugs, errors are news](/guide/failure/) — choose the right
-  boundary before writing recovery code.
-- [Traps](/guide/traps/) — read stable codes, source locations, and traces.
-
-## 4. Build larger programs
-
-These chapters apply the language to a project rather than a single file:
-
-- [Concurrency and workers](/guide/concurrency/) — use share-nothing runtimes,
-  explicit ownership, and structured joins for multi-threaded work.
-- [The bundled programs](/guide/programs/) — study complete multi-file
-  programs, including utilities, games, and the editor.
-- [Performance](/guide/performance/) — measure a real workload and understand
-  what the current benchmark snapshot does and does not promise.
-
-## 5. Exact language rules
-
-These chapters are the reference part of the Guide. They are intentionally
-plain and complete rather than motivational:
-
-- [Source text and lexical elements](/guide/reference/lexical/) — encoding,
-  indentation, comments, literals, keywords, and operators.
-- [Types](/guide/reference/types/) — every value, object, resource, and
-  expression type.
-- [Expressions](/guide/reference/expressions/) — operators, precedence,
-  calls, lambdas, indexing, slicing, and refused shapes.
-- [Statements and declarations](/guide/reference/statements/) — `let`, `var`,
-  assignment, control flow, functions, structs, and constants.
-- [Ownership](/guide/reference/ownership/) — the complete ratified model,
-  S1–S46.
-- [Traps and errors](/guide/reference/failure/) — every runtime code and
-  recoverable error code.
-- [Modules](/guide/reference/modules/) — imports, visibility, and the `std`
-  namespace.
-- [Builtins](/guide/reference/builtins/) — every free function and method
-  signature.
+When a chapter leaves a question about exact syntax, go to the matching
+article in the [Reference](/reference/). It is intentionally boring: its job
+is to be trusted lookup material, not to teach by surprise.

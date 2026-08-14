@@ -182,8 +182,8 @@ private func normalize(name: string) -> string:
 A consumer cannot call a private declaration. A public function also cannot
 expose a private type in its signature. If callers need to create a value
 without knowing its fields, provide a public factory and keep the fields
-private. The [visibility chapter](/guide/reference/modules/) explains the language
-rules; the [modules reference](/guide/reference/modules/#visibility) lists every
+private. The [visibility chapter](/guide/visibility/) explains the language
+rules; the [modules reference](/reference/modules/#visibility) lists every
 diagnostic.
 
 ## 5. Version the package deliberately
@@ -330,5 +330,5 @@ installed, and the package manifest tells you what the package claims to be.
   tied to that development directory?
 
 For the complete resolution rules and diagnostics, see the [modules
-reference](/guide/reference/modules/#packages). For the language's first
-introduction to imports and project roots, start with [Modules](/guide/reference/modules/).
+reference](/reference/modules/#packages). For the language's first
+introduction to imports and project roots, start with [Modules](/guide/modules/).

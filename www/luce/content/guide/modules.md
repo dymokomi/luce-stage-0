@@ -34,7 +34,7 @@ func main():
 
 The module name qualifies functions, structs, methods, constants, and type
 annotations. Declarations marked `private` are not reachable from an
-importer; [Visibility](/guide/language/visibility/) explains that boundary. Imports are
+importer; [Visibility](/guide/visibility/) explains that boundary. Imports are
 case-sensitive and conditional imports and re-exports are not part of Luce.
 
 ## The standard library
@@ -91,7 +91,7 @@ The current modules are [`math`](/library/math/), [`strings`](/library/strings/)
 Source is UTF-8 text. LF and CRLF line endings are accepted, and imports
 from standard input resolve relative to the current directory. Invalid UTF-8,
 NUL bytes, unsupported line endings or encoding markers, and an oversized
-source file are rejected before parsing. See the [lexical reference](/guide/reference/lexical/)
+source file are rejected before parsing. See the [lexical reference](/reference/lexical/)
 for limits and diagnostic codes.
 
 ## Projects and aliases
@@ -121,5 +121,5 @@ func main():
 ```
 
 Without a project manifest, imports remain single-segment sibling imports.
-The [module reference](/guide/reference/modules/) covers manifest resolution and
-collision rules. Next: [Visibility](/guide/language/visibility/).
+The [module reference](/reference/modules/) covers manifest resolution and
+collision rules. Next: [Visibility](/guide/visibility/).

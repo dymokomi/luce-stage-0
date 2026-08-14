@@ -20,7 +20,7 @@ of values are ordinary values: assignment and return copy their value.
 
 An unnamed object temporary lives until the statement that created it is
 finished. A file-scope constant container belongs to the program root and
-lives until that runtime ends. The [ownership reference](/guide/reference/ownership/)
+lives until that runtime ends. The [ownership reference](/reference/ownership/)
 lists the rule for every form of statement.
 
 ```luce run

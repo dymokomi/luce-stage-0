@@ -4,11 +4,11 @@ The smallest useful program: `main`, `print`, and a string.
 
 ```luce run
 func main():
-    print("hello, loom")
+    print("hello, Luce")
 ```
 
 ```output
-hello, loom
+hello, Luce
 ```
 
 The command line reaches a program as `main`'s parameter. Declare it

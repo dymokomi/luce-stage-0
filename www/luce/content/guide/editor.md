@@ -39,6 +39,6 @@ luce build hello.luc
 ./hello
 ```
 
-The [build guide](/command-line/build/) explains output shapes, debug and
+The [build guide](/guide/toolchain/) explains output shapes, debug and
 release builds, and `loom`. The [Guide](/guide/) explains the language and
 the [Library](/library/) explains its modules.

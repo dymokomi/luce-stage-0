@@ -235,8 +235,8 @@ test "the asset prefix climbs exactly as far as the page is deep" {
     const gpa = std.testing.allocator;
     const cases = [_]struct { url: []const u8, want: []const u8 }{
         .{ .url = "/", .want = "./" },
-        .{ .url = "/learn/", .want = "../" },
-        .{ .url = "/learn/hello/", .want = "../../" },
+        .{ .url = "/guide/", .want = "../" },
+        .{ .url = "/guide/first-program/", .want = "../../" },
     };
     for (cases) |case| {
         var out: Buffer = .init(gpa);

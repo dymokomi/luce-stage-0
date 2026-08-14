@@ -1,8 +1,11 @@
-# Standard library
+# Library
 
-The standard library is a small set of ordinary Luce modules embedded in
-the compiler. There is nothing to install and no package search path:
-`import std.math` works wherever the Luce toolchain is available.
+Luce has two kinds of reusable code. The standard library is a small set of
+ordinary Luce modules embedded in the compiler: `import std.math` works
+wherever the toolchain is available. Packages are ordinary source trees beside
+an application until their author chooses to version and publish them. The
+maintained `termui` package is documented here because it is a useful example
+of that second kind.
 
 Each module follows the same language rules as application code. Containers
 have scope ownership, arithmetic is checked, and a host-facing module is
@@ -11,10 +14,10 @@ available only when the program has a host. `std.paths`, `std.math`,
 are pure; `std.files`, `std.os`, `std.term`, `std.ui`, `std.gpu`, and the
 file doors in `std.zip` use host services.
 
-On macOS, the installed `loom` runner provides the window and drawing
-services with Metal when available, falling back to a CPU-backed window. A
-runner on another platform can report `host_unavailable` for these two
-modules until that platform's backend is installed.
+The low-level `std.ui` and `std.gpu` modules are host boundaries. On macOS an
+installed runner may provide a Metal-backed implementation; a host without a
+backend reports `host_unavailable`. Higher-level packages should keep that
+fact at their boundary rather than making every application know the OS API.
 
 ## Choose a module
 
@@ -27,6 +30,7 @@ modules until that platform's backend is installed.
 | [`std.paths`](/library/paths/) | joining and inspecting path text without touching the host |
 | [`std.os`](/library/os/) | memory, processor, shell, and terminal services |
 | [`std.term`](/library/term/) | the shorter terminal drawing and input facade |
+| [`termui`](/library/termui/) | a deterministic renderer, cell surface, views, layout, and events |
 | [`std.zip`](/library/zip/) | ZIP/DEFLATE over byte lists, plus explicit file helpers |
 | [`std.json`](/library/json/) | parse, inspect, build, and write JSON values |
 | [`std.gpu`](/library/gpu/) | backend-neutral drawing surfaces |
@@ -46,8 +50,10 @@ is ordinary absence while malformed JSON has a reason worth reporting.
 
 ## Adding a module
 
-A new module is written in `src/luce/std/NAME.luc`, added to the compiler's
-embedded-module table and standard-library tests, then documented here and
-on its own page. The page must describe the public surface that the source
-actually exports; the site checks that the named functions and constants do
-not drift.
+A new standard module is written in `src/luce/std/NAME.luc`, added to the
+compiler's embedded-module table and standard-library tests, then documented
+here and on its own page. A package follows the project layout in the
+[organization guide](/guide/organization/): source first, `luce.yaml` and a
+version when it is ready to be shared. Each page describes the public surface
+that the source actually exports; the site checks that named functions and
+constants do not drift.

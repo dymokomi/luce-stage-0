@@ -45,7 +45,7 @@ func main():
 
 Use `append_ascii(byte)` when the byte is already known to be ASCII. It
 avoids making a one-byte temporary string. For a complete list of builder
-operations, see [the builtins reference](/guide/reference/builtins/).
+operations, see [the builtins reference](/reference/builtins/).
 
 ## Search and slicing
 

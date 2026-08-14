@@ -358,7 +358,7 @@ explicit value families listed in the conversions table.
 | `flush() -> !` | everything written so far is on the device |
 
 All three are fallible: the world decides. There is deliberately no
-`close` — a [`file`](/guide/reference/types/#file) is scope-owned, so the end of
+`close` — a [`file`](/reference/types/#file) is scope-owned, so the end of
 the owning scope closes it and `free(f)` closes it early.
 
 The buffer is the caller's, which is the C shape and is what makes the
@@ -377,7 +377,7 @@ a graph carrying either is refused at `spawn` instead. An error crosses
 as an error, and a trap surfaces with the worker's frames before the
 joiner's. A task not explicitly waited on is still joined when its
 owning scope ends, but its answer is discarded. See the [`task`
-type](/guide/reference/types/#task).
+type](/reference/types/#task).
 
 ## string
 
@@ -398,7 +398,7 @@ needs `import std.strings` in scope.
 
 ```luce run
 func main():
-    let s = "hello, loom"
+    let s = "hello, Luce"
     print(f"{len(s)} bytes")
     print(s[7:11])
     print(string(s.byte_at(0)))
@@ -408,7 +408,7 @@ func main():
 
 ```output
 11 bytes
-loom
+Luce
 104
 5
 -1

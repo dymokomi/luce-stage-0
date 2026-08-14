@@ -359,16 +359,16 @@ its local owner would die at the return; return the concrete owner instead.
 Interfaces do not inherit from one another or expose fields. Interface
 methods may use the ordinary multi-value return shape:
 
-\`\`\`luce
+```text
 interface Measured:
     func span(value: long) -> (long, long)
 
 func total(item: Measured) -> long:
     let low, high = item.span(10)
     return low + high
-\`\`\`
+```
 
-Receive the shape with a destructuring \`let\`, \`var\`, or assignment; it is not
+Receive the shape with a destructuring `let`, `var`, or assignment; it is not
 a scalar expression and cannot be passed as one argument. The exact
 declaration and conformance rules are summarized above; compiler diagnostics
 point to the offending method or conformance list.

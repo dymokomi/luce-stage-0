@@ -128,7 +128,7 @@ make a resource-free copy, store that copy in a named owner, and then create
 the interface view.
 
 The [memory guide](/guide/memory/) explains the ownership words. The
-[interface reference](/guide/reference/types/#interface) gives the exact
+[interface reference](/reference/types/#interface) gives the exact
 matching, storage, and diagnostic rules.
 
 ## A useful boundary
@@ -143,6 +143,6 @@ method only when every implementation really has that responsibility; a
 separate interface is usually clearer than a large one with methods some
 implementations cannot meaningfully provide.
 
-For exact syntax and every refusal, see [Types: Interface](/guide/reference/types/#interface).
+For exact syntax and every refusal, see [Types: Interface](/reference/types/#interface).
 For the broader choice between structs, unions, and interfaces, see
 [Structures](/guide/structures/).

@@ -9,12 +9,12 @@ func main():
     let count = 7                 # int
     let ratio: double = 0.5
     let ready = true              # bool
-    let name = "loom"             # string
+    let name = "Luce"             # string
     print(f"{count} {ratio} {ready} {name}")
 ```
 
 ```output
-7 0.5 true loom
+7 0.5 true Luce
 ```
 
 ## The scalar types
@@ -32,7 +32,7 @@ func main():
 | `string` | Immutable UTF-8 text. |
 
 Enums, structs and functions are values too. A function value has a type
-such as `func(long) -> long` and is covered in [Functions and structs](/guide/language/functions/).
+such as `func(long) -> long` and is covered in [Functions and structs](/guide/functions/).
 
 Literals may be decimal, hexadecimal (`0xFF`) or binary (`0b1010`), with
 underscores between digits. A fraction or exponent makes a floating-point
@@ -220,7 +220,7 @@ program is compiled; function calls and function values do not fold.
 const width = 80
 const half_width = width // 2
 const version = "2"
-const banner = "loom v" + version
+const banner = "Luce v" + version
 
 func main():
     print(banner)
@@ -228,17 +228,17 @@ func main():
 ```
 
 ```output
-loom v2
+Luce v2
 40
 ```
 
 Constants may refer to other constants in any order but cannot form a
 cycle. Flat lists, maps and rank-one arrays are also possible; see
-[Constants and shared tables](/guide/language/constants/).
+[Constants and shared tables](/guide/constants/).
 
 ```luce fail
 func label() -> string:
-    return "loom"
+    return "Luce"
 
 const banner = label() + " v2"
 
@@ -253,4 +253,4 @@ main.luc:4:16: constants fold at compile time; calls are not constant [luce.sema
                    ^~~~~~~
 ```
 
-Next: [Control flow](/guide/language/control/).
+Next: [Control flow](/guide/control/).

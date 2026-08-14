@@ -8,8 +8,8 @@ This page separates three things that are easy to confuse:
 
 The rest of the site documents the first category. The [Guide](/guide/) states
 the language rules and explains the decisions that affect day-to-day work;
-the [Command Line Tool](/command-line/) documents installation and execution;
-and the [Tour](/tour/) is the short introduction.
+the [Reference](/reference/) is exhaustive; and the [Tour](/tour/) is the
+short introduction.
 
 ## Available today
 
@@ -46,7 +46,7 @@ The repository builds two programs:
 
 A `.lc` file is native machine code. Running one does not invoke the
 compiler or LLVM. A source file does need the compiler and the C linker
-during its build. The [build guide](/command-line/build/) gives the exact
+during its build. The [build guide](/guide/toolchain/) gives the exact
 commands and failure modes.
 
 ### Standard library and complete programs
@@ -76,7 +76,7 @@ These are design decisions, not missing documentation:
   with behavior.
 
 The [memory guide](/guide/memory/), [failure guide](/guide/failure/) and
-[exact language rules](/guide/) explain the alternatives Luce chose and the
+[exact language rules](/reference/) explain the alternatives Luce chose and the
 rules that follow from them.
 
 ## Not shipped yet

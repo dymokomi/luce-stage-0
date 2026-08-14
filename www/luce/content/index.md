@@ -39,7 +39,7 @@ language's shape in one sitting and points to the detailed Guide.
 ## Where to go next
 
 Choose the kind of help you need below. [Tour](/tour/) is the one-page
-introduction; [Guide](/guide/) is the language book and exact rule lookup;
-[Command Line Tool](/command-line/) covers installation, building, the editor,
-packages, and tests; [Library](/library/) documents the shipped modules; and
+introduction; [Guide](/guide/) teaches the language and the tools around it;
+[Reference](/reference/) is exhaustive and deliberately dry;
+[Library](/library/) documents standard modules and maintained packages; and
 [Status](/status/) records what is available now.

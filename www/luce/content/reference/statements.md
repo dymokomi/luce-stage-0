@@ -495,7 +495,7 @@ functions; top-level `let` is retired, and there is no top-level
 const width = 80
 const margin = 4
 const usable = width - margin * 2
-const title = "loom"
+const title = "Luce"
 const banner = title + " console"
 
 func main():
@@ -503,7 +503,7 @@ func main():
 ```
 
 ```output
-loom console: 72 columns
+Luce console: 72 columns
 ```
 
 Initializers fold at compile time. Foldable forms include literals,

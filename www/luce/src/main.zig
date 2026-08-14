@@ -105,8 +105,14 @@ fn generate(gpa: Allocator, io: Io, options: Options) !u8 {
         built.deinit(gpa);
     }
 
-    // The home page, then every section: its overview, then its pages.
-    try build(gpa, io, options, &verifier, &built, .{
+    // The home page, then every section: its overview, then its pages. Keep
+    // the count here rather than hiding it in the verifier: a clean build can
+    // spend time compiling a sample, and a bounded page heartbeat tells the
+    // person running the release that it is still making progress.
+    var total_pages: usize = 1;
+    for (site.sections) |section| total_pages += 1 + section.pages.len;
+    var completed_pages: usize = 0;
+    try build(gpa, io, options, &verifier, &built, &completed_pages, total_pages, .{
         .source = "index.md",
         .url = "/",
         .section = null,
@@ -117,7 +123,7 @@ fn generate(gpa: Allocator, io: Io, options: Options) !u8 {
         defer gpa.free(overview);
         const url = try std.fmt.allocPrint(gpa, "/{s}/", .{section.slug});
         defer gpa.free(url);
-        try build(gpa, io, options, &verifier, &built, .{
+        try build(gpa, io, options, &verifier, &built, &completed_pages, total_pages, .{
             .source = overview,
             .url = url,
             .section = section,
@@ -131,7 +137,7 @@ fn generate(gpa: Allocator, io: Io, options: Options) !u8 {
             defer gpa.free(source);
             const here = try std.fmt.allocPrint(gpa, "/{s}/{s}/", .{ section.slug, entry.slug });
             defer gpa.free(here);
-            try build(gpa, io, options, &verifier, &built, .{
+            try build(gpa, io, options, &verifier, &built, &completed_pages, total_pages, .{
                 .source = source,
                 .url = here,
                 .section = section,
@@ -206,8 +212,12 @@ fn build(
     options: Options,
     verifier: *verify.Verifier,
     built: *std.ArrayList(Built),
+    completed_pages: *usize,
+    total_pages: usize,
     target: Target,
 ) !void {
+    completed_pages.* += 1;
+    std.debug.print("lucedoc: [{d}/{d}] {s}\n", .{ completed_pages.*, total_pages, target.source });
     const source_path = try std.fs.path.join(gpa, &.{ options.content, target.source });
     defer gpa.free(source_path);
     const text = Io.Dir.cwd().readFileAlloc(io, source_path, gpa, .unlimited) catch |failure| {
@@ -549,8 +559,8 @@ test "links resolve against the page that carries them" {
     const cases = [_]struct { from: []const u8, href: []const u8, want: []const u8 }{
         .{ .from = "index.html", .href = "tour/", .want = "tour/index.html" },
         .{ .from = "guide/first-program/index.html", .href = "../loops/", .want = "guide/loops/index.html" },
-        .{ .from = "guide/language/values/index.html", .href = "../control/", .want = "guide/language/control/index.html" },
-        .{ .from = "guide/language/values/index.html", .href = "/guide/reference/types/", .want = "guide/reference/types/index.html" },
+        .{ .from = "guide/values/index.html", .href = "../control/", .want = "guide/control/index.html" },
+        .{ .from = "guide/values/index.html", .href = "/reference/types/", .want = "reference/types/index.html" },
         .{ .from = "guide/index.html", .href = "/status/", .want = "status/index.html" },
         .{ .from = "guide/first-program/index.html", .href = "../../assets/style.css", .want = "assets/style.css" },
     };

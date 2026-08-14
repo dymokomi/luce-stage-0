@@ -22,7 +22,7 @@ Examples:
   absence already says what the caller needs to know.
 - `math.mean` returns `double?` for an empty array.
 
-The complete trap and error vocabulary is in the [failure reference](/guide/reference/failure/).
+The complete trap and error vocabulary is in the [failure reference](/reference/failure/).
 
 ## Propagate a failure with `try`
 
@@ -118,5 +118,5 @@ func main() -> !:
 
 The `catch` is the recovery point. If the file disappears between an
 `exists` check and `read`, the read still reports its own result. See
-[`std.files`](/library/files/) for the file API and [Failure in the reference](/guide/reference/failure/)
+[`std.files`](/library/files/) for the file API and [Failure in the reference](/reference/failure/)
 for every trap code.

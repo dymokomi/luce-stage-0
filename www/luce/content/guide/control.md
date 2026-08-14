@@ -84,7 +84,8 @@ word plum
 ```
 
 Do not change the size of, or free, the collection being iterated. See
-[Lists, maps and arrays](/guide/language/collections/) for the collection operations.
+[Lists](/guide/lists/), [maps](/guide/maps/) and [arrays](/guide/arrays/) for
+the collection operations.
 
 ## `break` and `continue`
 
@@ -134,4 +135,4 @@ func main():
 7! = 5040
 ```
 
-Next: [Functions and structs](/guide/language/functions/).
+Next: [Functions and structs](/guide/functions/).

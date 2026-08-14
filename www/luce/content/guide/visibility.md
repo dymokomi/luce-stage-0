@@ -152,11 +152,11 @@ public struct Line:
         self.marker = self.marker + 1
 
 public func main():
-    print(f"{banner("loom")} {width}")
+    print(f"{banner("Luce")} {width}")
 ```
 
 ```output
-loom 40
+Luce 40
 ```
 
 `main` is the entry point and must not be private.
@@ -197,5 +197,5 @@ main.luc:1:1: a visibility region belongs inside a struct; at file scope mark ea
 ```
 
 Standard-library modules use the same rules. The exact boundary rules and
-signature checks are in the [module reference](/guide/reference/modules/#visibility).
-Next: [The outside world](/guide/language/host/).
+signature checks are in the [module reference](/reference/modules/#visibility).
+Next: [The outside world](/guide/host/).

@@ -236,4 +236,4 @@ green, and go is true
 
 An enum is not a bit set and cannot carry payload fields. Use integer bit
 operators for flags and [a union](/guide/unions/) when each alternative needs
-data. Next: [Lists, maps and arrays](/guide/language/collections/).
+data. Next: [Lists](/guide/lists/), [maps](/guide/maps/) and [arrays](/guide/arrays/).

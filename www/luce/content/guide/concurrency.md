@@ -163,8 +163,8 @@ CPU-heavy calculations. They are not a substitute for a shared state model.
 - Measure before adding workers. A small task can cost more to start and join
   than the work it performs.
 
-The [Workers chapter in Learn](/guide/concurrency/) walks through the ownership
-refusals in detail. The [type reference](/guide/reference/types/#task) and
-[ownership reference](/guide/reference/ownership/) give the complete rules. Typed
+The [workers chapter](/guide/concurrency/) walks through the ownership
+refusals in detail. The [type reference](/reference/types/#task) and
+[ownership reference](/reference/ownership/) give the complete rules. Typed
 channels and shared-memory synchronization are not part of the current
 language; the [status page](/status/) records that boundary.
