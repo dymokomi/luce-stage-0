@@ -34,6 +34,20 @@ Ordered chronologically, oldest first.
 
 ---
 
+## 2026-08-14 — a later carrying argument could invalidate an interface receiver
+
+A call that first used a multi-value interface method and then passed a
+carrying argument could trigger the residual-hazard copy intended for borrowed
+container views. That copy duplicated the interface's hidden dispatch runs and
+released the original runs at statement end, leaving the interface value
+dangling before its next method call.
+
+The operand lowering now recognizes an interface dispatch value and leaves its
+borrowed receiver under the interface ownership rule instead of applying that
+copy. The regression uses a two-method interface, a multi-value result, and a
+carrying `Grid` argument, and agrees on the interpreter and compiled paths.
+The full specification gate covers it in the 1,408 differential tests.
+
 ## 2026-08-13 — `loom run` could not open `std.ui` on macOS
 
 `std.ui` and `std.gpu` reached the ABI correctly, but the shipped macOS

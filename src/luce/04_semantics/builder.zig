@@ -1869,7 +1869,18 @@ pub const FunctionBuilder = struct {
             // is the shape.  An object would go stale and trap (S9); a
             // string has no handle to check, so it closes here, by
             // deciding the copy before the mutation can happen.
+            // An interface receiver is already a dispatch value whose
+            // hidden function runs borrow the concrete receiver.  A
+            // conservative "later argument may mutate a container"
+            // copy would duplicate those runs, then release the copy at
+            // the end of this statement and leave the original interface
+            // dangling.  The receiver is not the storage hazard this
+            // rule protects; keep it as the caller's value and let the
+            // interface ownership contract govern its concrete owner.
+            const interface_receiver = value.value_type == .strukt and
+                self.analyzer.interfaceForLayout(value.value_type.strukt) != null;
             if (mutating[index] and
+                !interface_receiver and
                 shapes.ownsStorage(self.analyzer, value.value_type) and
                 value.provenance() == .view)
             {

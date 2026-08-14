@@ -146,6 +146,36 @@ test "a multi-method interface dispatches every contract slot" {
     , "ok:42\nnew:43\n");
 }
 
+test "a multi-value method does not invalidate a later method with a carrying argument" {
+    try agree.prints(
+        \\struct Grid:
+        \\    cells: list(long)
+        \\    func area() -> long:
+        \\        return len(self.cells)
+        \\
+        \\interface View:
+        \\    func measure(size: long) -> (long, long)
+        \\    func draw(into: Grid) -> long
+        \\
+        \\struct Label: View:
+        \\    width: long
+        \\    func measure(size: long) -> (long, long):
+        \\        return size, self.width
+        \\    func draw(into: Grid) -> long:
+        \\        return len(into.cells) + self.width
+        \\
+        \\func render(item: View, grid: Grid) -> long:
+        \\    let rows, columns = item.measure(grid.area())
+        \\    return item.draw(grid) + rows + columns
+        \\
+        \\func main():
+        \\    let grid = Grid(cells = [1, 2, 3])
+        \\    let label: View = Label(width = 4)
+        \\    print(string(render(label, grid)))
+        \\
+    , "14\n");
+}
+
 test "a multi-value interface method uses the ordinary return shape" {
     try agree.prints(
         \\interface Measured:
