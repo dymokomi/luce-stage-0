@@ -147,7 +147,7 @@ pub fn run(
 /// can pick (`native.writerTag`), claimed before it is built
 /// (`native.Scratch`) and removed when the file's tests are done — so
 /// `luce test` leaves a directory exactly as it found it, can never
-/// delete the `NAME.lc` a `luce build` put there, and stops rather than
+/// delete the `NAME.lc` a `luce build --emit=library` put there, and stops rather than
 /// removing any other file that happens to wear the name.
 fn runFile(
     gpa: Allocator,
@@ -558,7 +558,7 @@ test "a test passes by returning with nothing left behind, and fails every other
 test "an artifact is named beside its source, distinctly per writer" {
     // Two `luce test` runs over one tree must not write each other's
     // half-linked file, and neither may ever land on the `NAME.lc` a
-    // `luce build` put there — which is why it is not that name.
+    // `luce build --emit=library` put there — which is why it is not that name.
     const gpa = testing.allocator;
     const path = try artifactFor(gpa, "tests/geo_test.luc");
     defer gpa.free(path);

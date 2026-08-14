@@ -37,7 +37,8 @@
 //! ## Where a compiled `.luc` puts its artifact
 //!
 //! Beside the source, as `NAME.lc` — the same file `luce build
-//! NAME.luc` writes, so a build can ship one and loom simply finds it.
+//! NAME.luc --emit=library` writes, so a build can ship one and loom
+//! simply finds it.
 //! Under a governing `luce.yaml` the project's own
 //! **`.luce/cache/`** takes the artifact over instead
 //! (docs/PACKAGES.md D5): the same relative spot the source holds in
@@ -288,7 +289,7 @@ pub fn runSource(
     defer program.deinit();
 
     // The canonical form of the program: same bytes, same hash, same
-    // artifact `luce build` would produce from the same source — and
+    // artifact `luce build --emit=library` would produce from the same source — and
     // the bytes the compiler is handed when one has to be built.
     const encoded = try luce.mir.module.encode(gpa, &program);
     defer gpa.free(encoded);
@@ -469,7 +470,7 @@ fn compileTo(
     };
 
     const ran = std.process.run(gpa, io, .{
-        .argv = &.{ compiler, "build", module_path, "-o", output },
+        .argv = &.{ compiler, "build", module_path, "-o", output, "--emit=library" },
     }) catch |mistake| switch (mistake) {
         error.OutOfMemory => return error.OutOfMemory,
         else => return .{ .failed = try std.fmt.allocPrint(

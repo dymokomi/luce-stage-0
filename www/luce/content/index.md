@@ -20,8 +20,9 @@ source the profile it names), then verify the installation:
 luce --version
 ```
 
-It installs the `luce` compiler, the `editor`, the runtime libraries, and Luce
-syntax highlighting for local VS Code, VS Code Insiders, or Cursor installations.
+The release ships the `luce` compiler and `editor`, the runtime libraries, and
+the Luce VS Code extension (plugin) for local VS Code, VS Code Insiders, or
+Cursor installations.
 If an editor has not been opened yet, it prepares the standard VS Code
 extension shelf so the extension is picked up on first launch. Restart the
 editor (or reload its window) after installation.

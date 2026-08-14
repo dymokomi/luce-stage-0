@@ -1,7 +1,7 @@
 //! The luce compiler: .luc source in, machine code out.
 //!
 //! The compiler commands over one pipeline:
-//!   luce build FILE.luc [-o OUT]   compile and write an artifact
+//!   luce build FILE.luc [-o OUT]   compile and write an executable
 //!   luce check FILE.luc            compile, report, write nothing
 //!   luce ir FILE.luc               compile and dump readable IR
 //!   luce test [PATH ...]           compile and run the tests found
@@ -12,20 +12,20 @@
 //! as a compile and is `suite.zig`'s, with `discover.zig` deciding what
 //! it will run (docs/TESTING.md).
 //!
-//! **`build` writes a `.lc`, and a `.lc` is machine code** — a tagged
-//! shared library `loom` opens and calls (`docs/CODEGEN.md`).  There is
-//! no second, slower thing to write: the artifact is the deliverable
-//! and the tag is what makes it safe to hand around, because a loader
-//! refuses the wrong machine, the wrong host ABI, or another code
-//! generator's output by name (`luce.llvm.artifact.Artifact`).
+//! **`build` writes a native executable by default.**  It is the thing a
+//! person can launch after writing `hello.luc`: `luce build hello.luc`
+//! writes `hello`.  `--emit=library` asks for the tagged `.lc` shared
+//! library that `loom` opens and calls (`docs/CODEGEN.md`); the other
+//! explicit shapes are a relocatable object and an executable with a
+//! caller-chosen path.
 //!
 //! `--emit` says which of three shapes it takes, and it is the only
 //! thing that differs between them — the same program walks the same
 //! pipeline either way:
 //!
-//!   (default)  FILE.lc    a loadable artifact; loom runs it
+//!   exe        FILE       a standalone native executable (default)
+//!   library    FILE.lc    a loadable artifact; loom runs it
 //!   object     FILE.o     a relocatable object; the caller links it
-//!   exe        FILE       a standalone native executable
 //!
 //! **FILE may be a `.lcm` as well as a `.luc`.**  That is the serialized
 //! module (`06_mir/module.zig`) — the front end's hand-over to the back
@@ -128,7 +128,7 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
         }
         var output_path: []const u8 = "";
         var release = false;
-        var emit: Emit = .library;
+        var emit: Emit = .exe;
         var said_output = false;
         var said_release = false;
         var said_emit = false;
@@ -159,7 +159,7 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
             }
         }
         // A stream has no name to derive an output path from, so say
-        // so rather than write a file called "-.lc".
+        // so rather than write a file called "-".
         if (std.mem.eql(u8, path, files.standard_input) and output_path.len == 0) {
             try err.print("luce: reading from {s} needs -o to say where to write\n", .{files.standard_input});
             return 1;
@@ -216,8 +216,9 @@ pub fn main(init: std.process.Init.Minimal) !u8 {
 
 /// Which artifact `build` writes.  One program, three shapes.
 const Emit = enum {
-    /// A loadable `.lc` — what loom runs, what an embedder opens
-    /// through the published ABI, and the default.
+    /// A loadable `.lc` — what loom runs and what an embedder opens
+    /// through the published ABI. It is explicit because a person
+    /// building a source file normally wants an executable.
     library,
     /// A relocatable object; linking it is the caller's job.
     object,
@@ -272,13 +273,13 @@ fn usage(err: *std.Io.Writer) !u8 {
             "something to ship; loom writes one when it needs a\n" ++
             "program compiled.\n" ++
             "\n" ++
-            "--emit says which shape to write, and nothing else\n" ++
+            "--emit says which shape to write; the default is exe\n" ++
             "differs between them — the same program walks the same\n" ++
             "pipeline either way:\n" ++
             "\n" ++
-            "  library  FILE.lc   a native artifact loom runs (default)\n" ++
+            "  exe      FILE      a standalone native executable (default)\n" ++
+            "  library  FILE.lc   a native artifact loom runs\n" ++
             "  object   FILE.o    a relocatable object; you link it\n" ++
-            "  exe      FILE      a standalone native executable\n" ++
             "\n" ++
             "All three compile through LLVM and are stamped with the\n" ++
             "machine, the host ABI and the code generator they were\n" ++
@@ -423,9 +424,9 @@ test {
 test "an artifact's name comes from the program's, whichever form it arrived in" {
     const gpa = std.testing.allocator;
     for ([_][]const u8{ "sub/game.luc", "sub/game.lcm" }) |path| {
-        const artifact = try replaceExtension(gpa, path, ".lc");
-        defer gpa.free(artifact);
-        try std.testing.expectEqualStrings("sub/game.lc", artifact);
+        const library = try replaceExtension(gpa, path, ".lc");
+        defer gpa.free(library);
+        try std.testing.expectEqualStrings("sub/game.lc", library);
 
         const binary = try replaceExtension(gpa, path, "");
         defer gpa.free(binary);

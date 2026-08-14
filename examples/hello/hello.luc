@@ -1,7 +1,7 @@
-# The smallest loom program.
+# The smallest Luce program.
 #
 #   luce build examples/hello/hello.luc
-#   loom run examples/hello/hello.lc you
+#   ./examples/hello/hello you
 
 func main(args: list(string)):
     var name = "loom"

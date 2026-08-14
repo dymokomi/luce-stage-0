@@ -11,7 +11,7 @@
 //!
 //!   * a `.luc` with no artifact present compiles and runs, and leaves
 //!     the artifact beside itself for the next run to find;
-//!   * the `.lc` `luce build` writes runs under a loom that has no
+//!   * the `.lc` `luce build --emit=library` writes runs under a loom that has no
 //!     compiler at all, because a `.lc` is machine code;
 //!   * a loom that cannot find `luce` says so, naming the binary that
 //!     is missing and where it was looked for — there is no second
@@ -152,7 +152,7 @@ fn plantCompiler(install: *const Install, gpa: Allocator, status: u8, says: []co
 /// refusal from outside, because the real compiler cannot be made to
 /// build the wrong program.
 fn plantCopyingCompiler(install: *const Install, gpa: Allocator, artifact: []const u8) !void {
-    // `luce build MODULE -o OUTPUT`: the fourth word is where the
+    // `luce build MODULE -o OUTPUT --emit=library`: the fourth word is where the
     // artifact was asked for.
     const script = try std.fmt.allocPrint(gpa,
         \\#!/bin/sh
@@ -232,7 +232,7 @@ test "the macOS loom supplies std.ui and std.gpu" {
     );
     const source = try install.at(gpa, "window.luc");
     defer gpa.free(source);
-    var built = try runLuce(gpa, &install, &.{ "build", source });
+    var built = try runLuce(gpa, &install, &.{ "build", source, "--emit=library" });
     defer built.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), built.status);
 
@@ -261,7 +261,7 @@ test "shell services find the installed loom beside the running host" {
     );
     const source = try install.at(gpa, "shell.luc");
     defer gpa.free(source);
-    var built = try runLuce(gpa, &install, &.{ "build", source });
+    var built = try runLuce(gpa, &install, &.{ "build", source, "--emit=library" });
     defer built.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), built.status);
 
@@ -330,14 +330,14 @@ test "a vendored package resolves end to end: luce builds the project, loom runs
         \\
     );
 
-    // `luce build`, exactly as a person types it.  Nothing on stderr:
+    // `luce build --emit=library`, exactly as a person types it.  Nothing on stderr:
     // a store resolution is the predictable case and stays quiet —
     // only shelves and path: overrides are loud.
     const main_path = try install.at(gpa, "project/main.luc");
     defer gpa.free(main_path);
     const out_path = try install.at(gpa, "project/app.lc");
     defer gpa.free(out_path);
-    var built = try runLuce(gpa, &install, &.{ "build", main_path, "-o", out_path });
+    var built = try runLuce(gpa, &install, &.{ "build", main_path, "--emit=library", "-o", out_path });
     defer built.deinit(gpa);
     try testing.expectEqualStrings("", built.err);
     try testing.expectEqual(@as(u8, 0), built.status);
@@ -418,7 +418,7 @@ test "the .lc luce writes runs on a loom with no compiler at all" {
     defer gpa.free(compiler);
     const source = try install.at(gpa, "sums.luc");
     defer gpa.free(source);
-    const built = try std.process.run(gpa, io, .{ .argv = &.{ compiler, "build", source } });
+    const built = try std.process.run(gpa, io, .{ .argv = &.{ compiler, "build", source, "--emit=library" } });
     defer gpa.free(built.stdout);
     defer gpa.free(built.stderr);
     try testing.expectEqual(@as(u8, 0), built.term.exited);
@@ -463,7 +463,7 @@ test "a program named the way a person in its directory names it is the file, no
 
     const source = try install.at(gpa, "sums.luc");
     defer gpa.free(source);
-    var built = try runLuce(gpa, &install, &.{ "build", source });
+    var built = try runLuce(gpa, &install, &.{ "build", source, "--emit=library" });
     defer built.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), built.status);
 
@@ -909,7 +909,7 @@ test "an artifact whose tag is wrong in one field is refused by naming that fiel
     defer gpa.free(source);
     const artifact = try install.at(gpa, "sums.lc");
     defer gpa.free(artifact);
-    var built = try runLuce(gpa, &install, &.{ "build", source });
+    var built = try runLuce(gpa, &install, &.{ "build", source, "--emit=library" });
     defer built.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), built.status);
 
@@ -1104,7 +1104,7 @@ test "a truncated artifact is refused by name, wherever it was cut" {
 
     const source = try install.at(gpa, "sums.luc");
     defer gpa.free(source);
-    var built = try runLuce(gpa, &install, &.{ "build", source });
+    var built = try runLuce(gpa, &install, &.{ "build", source, "--emit=library" });
     defer built.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), built.status);
 
@@ -1154,7 +1154,7 @@ test "an artifact built from another program is rebuilt, and said so when it can
         try install.write("sums.luc", greeting);
         const source = try install.at(gpa, "sums.luc");
         defer gpa.free(source);
-        var built = try runLuce(gpa, &install, &.{ "build", source });
+        var built = try runLuce(gpa, &install, &.{ "build", source, "--emit=library" });
         defer built.deinit(gpa);
         try testing.expectEqual(@as(u8, 0), built.status);
 
@@ -1177,7 +1177,7 @@ test "an artifact built from another program is rebuilt, and said so when it can
         try install.write("other.luc", "func main():\n    print(\"other\")\n");
         const other_source = try install.at(gpa, "other.luc");
         defer gpa.free(other_source);
-        var built = try runLuce(gpa, &install, &.{ "build", other_source });
+        var built = try runLuce(gpa, &install, &.{ "build", other_source, "--emit=library" });
         defer built.deinit(gpa);
         try testing.expectEqual(@as(u8, 0), built.status);
 

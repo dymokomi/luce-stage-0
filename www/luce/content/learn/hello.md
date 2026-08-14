@@ -7,9 +7,8 @@ one function, one line of output.
 ## Install the tools
 
 The released installer currently supports macOS on Apple Silicon. It puts
-the Luce compiler, editor, runtime libraries, and local VS Code syntax
-highlighting in `~/.local/luce`, then adds the compiler to your shell's
-startup profile:
+the Luce compiler, editor, runtime libraries, and Luce VS Code extension in
+`~/.local/luce`, then adds the compiler to your shell's startup profile:
 
 ```sh
 curl -fsSL https://luce.luciaos.com/install/0.18/install.sh | bash
@@ -39,19 +38,12 @@ func main():
 Every executable Luce program starts at `main`. A block begins after `:` and
 is indented by four spaces. There are no semicolons or braces to remember.
 
-## Check, compile, and run
+## Compile and run
 
-Ask the compiler to check the file before it writes anything:
-
-```console
-$ luce check hello.luc
-hello.luc: ok
-```
-
-Now make a native executable:
+Make a native executable:
 
 ```console
-$ luce build hello.luc --emit=exe -o hello
+$ luce build hello.luc
 hello.luc -> hello
 ```
 
@@ -62,9 +54,11 @@ $ ./hello
 Hello, Luce!
 ```
 
-`--emit=exe` is the important part. It tells `luce` to produce a standalone
-program rather than an intermediate library. Once it has been built, the
-program does not need a second Luce command to start.
+For a `.luc` source file, this is the normal build: Luce uses the source name
+for the executable and leaves off an extension. Once it has been built, the
+program does not need a second Luce command to start. Later, when you need a
+loadable `.lc` library or a relocatable object, you can choose one with
+`--emit=library` or `--emit=object`.
 
 ## Try the same loop in the editor
 

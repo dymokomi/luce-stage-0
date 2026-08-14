@@ -461,7 +461,7 @@ test "a program may arrive on standard input, and is named for what it is" {
 
     const target = try tree.at(gpa, "streamed.lc");
     defer gpa.free(target);
-    var built = try runLuce(gpa, &tree, &.{ "build", "-", "-o", target }, greeting);
+    var built = try runLuce(gpa, &tree, &.{ "build", "-", "--emit=library", "-o", target }, greeting);
     defer built.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), built.status);
     try testing.expect(built.saysOut("<stdin> -> "));
@@ -473,13 +473,12 @@ test "a program may arrive on standard input, and is named for what it is" {
 // ---------------------------------------------------------------------------
 
 test "each --emit shape writes what it says, and the object links into a program that runs" {
-    // The default and `--emit=library` are the same request said two
-    // ways; `--emit=exe` is a file a shell can run; and `--emit=object`
-    // is the one nothing had ever built, which is the shape whose
-    // whole promise is that somebody *else* links it.  So this links
-    // it — by hand, with `cc`, over the two installed libraries, which
-    // is exactly what `--emit=exe` does internally and exactly what an
-    // embedder would type.
+    // The default and `--emit=exe` are the same request said two ways;
+    // `--emit=library` is the loadable `.lc`; and `--emit=object` is the
+    // one whose whole promise is that somebody else links it.  So this
+    // links it — by hand, with `cc`, over the two installed libraries,
+    // which is exactly what `--emit=exe` does internally and exactly
+    // what an embedder would type.
     const gpa = testing.allocator;
     var tree = try installTree(gpa);
     defer tree.deinit(gpa);
@@ -487,17 +486,24 @@ test "each --emit shape writes what it says, and the object links into a program
     const program = try tree.at(gpa, "sums.luc");
     defer gpa.free(program);
 
-    // The default: FILE.luc -> FILE.lc, and one line saying so.
+    // The default: FILE.luc -> FILE, and one line saying so.
     var implied = try runLuce(gpa, &tree, &.{ "build", program }, null);
     defer implied.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), implied.status);
     try testing.expectEqualStrings("", implied.err);
     try testing.expect(implied.saysOut("sums.luc -> "));
-    try testing.expect(implied.saysOut("sums.lc"));
-    try testing.expect(tree.exists("sums.lc"));
+    try testing.expect(implied.saysOut("sums\n"));
+    try testing.expect(tree.exists("sums"));
+    const default_binary = try tree.at(gpa, "sums");
+    defer gpa.free(default_binary);
+    var default_ran = try tree.spawn(gpa, &.{default_binary}, .{});
+    defer default_ran.deinit(gpa);
+    try testing.expectEqual(@as(u8, 0), default_ran.status);
+    try testing.expectEqualStrings("total 30\n", default_ran.out);
 
-    // Said out loud, it is the same request.
-    try tree.scratch.dir.deleteFile(io, "sums.lc");
+    // Said out loud, the library shape is still available when a loader
+    // needs a `.lc`.
+    try tree.scratch.dir.deleteFile(io, "sums");
     var named = try runLuce(gpa, &tree, &.{ "build", program, "--emit=library" }, null);
     defer named.deinit(gpa);
     try testing.expectEqual(@as(u8, 0), named.status);
@@ -890,7 +896,7 @@ test "luce test compiles a tests tree, runs each test on its own, and scores the
     ));
 
     // Nothing was left behind: the artifacts were removed, and the
-    // `NAME.lc` a `luce build` would write was never touched.
+    // `NAME.lc` a `luce build --emit=library` would write was never touched.
     try testing.expect(!tree.exists("tests/geo_test.lc"));
     try testing.expect(!tree.exists("tests/edge_test.lc"));
     for ([_][]const u8{ ".lc", luce_module_extension }) |suffix| {

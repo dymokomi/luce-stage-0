@@ -3,8 +3,8 @@
 The first Luce workflow is deliberately ordinary: write a source file,
 compile a native executable, and run that executable.
 
-- `luce build FILE --emit=exe` creates a program your operating system can
-  launch directly.
+- `luce build FILE` creates a program your operating system can launch
+  directly. The executable takes the source name, without `.luc`.
 - `editor FILE` gives you the same loop from a terminal editor; Ctrl-B saves,
   builds, and runs the current file.
 
@@ -20,8 +20,8 @@ On macOS with Apple Silicon, install the current release with one command:
 curl -fsSL https://luce.luciaos.com/install/0.18/install.sh | bash
 ```
 
-The installer places `luce`, `loom`, `editor` and their runtime libraries
-under `~/.local/luce`, installs the Luce syntax extension into the local
+The release ships `luce`, `loom`, `editor`, and their runtime libraries under
+`~/.local/luce`. It also installs the Luce syntax extension into the local
 VS Code, VS Code Insiders, or Cursor extension shelf, adds
 `~/.local/luce/bin` to your shell's startup profile, and verifies the
 downloaded archive before replacing an existing installation. Run it again
@@ -32,10 +32,10 @@ The published toolchain is currently macOS ARM64 only. A machine that only
 runs `.lc` files does not need LLVM; the released compiler already contains
 what it needs to compile Luce programs.
 
-The editor's Ctrl-B action uses the installed `loom` beside it. The host adds
-that tool directory when it starts a shell command, so the action also works
-when the editor was opened from Finder or another launcher that did not load
-your interactive shell profile.
+The editor's Ctrl-B action uses the installed `luce` compiler beside it. The
+host adds that tool directory when it starts a shell command, so the action
+also works when the editor was opened from Finder or another launcher that did
+not load your interactive shell profile.
 
 ## `luce` commands
 
@@ -67,18 +67,20 @@ writing an artifact. `ir` prints the verified Luce IR; `--full` keeps
 functions that the normal build would prune. `test` is the test runner
 described in [Testing](/guides/testing/).
 
-`-o` chooses the output path. `--release` removes source locations from
-runtime traps. `--emit=library`, `--emit=object`, and `--emit=exe` choose the
-artifact shape. Each option may be given once; a repeated option is refused
-so a typo cannot silently select a different file or artifact kind.
+For a `.luc` source, `build` defaults to a standalone executable named after
+the source: `luce build hello.luc` writes `hello`. `-o` chooses a different
+output path. `--release` removes source locations from runtime traps.
+`--emit=library`, `--emit=object`, and `--emit=exe` choose the artifact shape;
+`exe` is the default. Each option may be given once; a repeated option is
+refused so a typo cannot silently select a different file or artifact kind.
 
 ## The three artifact shapes
 
 | option | default output | use |
 |---|---|---|
+| `--emit=exe` | `FILE` | a standalone executable (the default) |
 | `--emit=library` | `FILE.lc` | a native library that `loom run` loads |
 | `--emit=object` | `FILE.o` | a relocatable object for a link step |
-| `--emit=exe` | `FILE` | a standalone executable |
 
 All three use the same front end, optimizer, LLVM backend, and runtime.
 Artifacts record the target machine, host ABI, program hash, and code

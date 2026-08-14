@@ -34,7 +34,7 @@ current source for that distinction.
 The simplest development loop is to make the native executable and run it:
 
 ```sh
-luce build program.luc --emit=exe -o program
+luce build program.luc
 ./program
 ```
 

@@ -139,7 +139,7 @@ glazed with rain water
 ```
 
 ```console
-$ luce build zipper.luc -o zipper.lc
+$ luce build zipper.luc --emit=library -o zipper.lc
 zipper.luc -> zipper.lc
 $ loom run zipper.lc zip papers.zip notes.txt poem.txt
           89  notes.txt

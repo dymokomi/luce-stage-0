@@ -156,7 +156,7 @@ Build and run from `hello-app`:
 
 ```sh
 luce check main.luc
-luce build main.luc -o hello.lc
+luce build main.luc --emit=library -o hello.lc
 loom run hello.lc
 ```
 

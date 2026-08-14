@@ -46,7 +46,7 @@ pub const Kind = enum {
     /// A relocatable object; the caller links it (`docs/CODEGEN.md`).
     object,
     /// A shared library a loader opens: **the `.lc`** — what `luce
-    /// build` writes, what loom runs, and what an embedder loads.
+    /// build --emit=library` writes, what loom runs, and what an embedder loads.
     /// Carries the artifact tag.
     library,
     /// A standalone executable: the same code plus `libluce_start`'s

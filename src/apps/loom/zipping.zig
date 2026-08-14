@@ -82,7 +82,7 @@ const Yard = struct {
         // is inherited, because taking `PATH` away takes `cc` with it.
         const compiler = try tree.at(gpa, "luce");
         defer gpa.free(compiler);
-        var built = try tree.spawn(gpa, &.{ compiler, "build", "zipper.luc", "-o", "zipper.lc" }, .{
+        var built = try tree.spawn(gpa, &.{ compiler, "build", "zipper.luc", "--emit=library", "-o", "zipper.lc" }, .{
             .in_tree = true,
         });
         defer built.deinit(gpa);

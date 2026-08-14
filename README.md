@@ -73,8 +73,8 @@ curl -fsSL https://luce.luciaos.com/install/0.18/install.sh | bash
 ## Try it
 
 ```sh
-build/luce build examples/hello/hello.luc   # hello.luc -> hello.lc (machine code)
-build/loom run examples/hello/hello.lc you  # hello, you
+build/luce build examples/hello/hello.luc   # examples/hello/hello.luc -> examples/hello/hello
+./examples/hello/hello you                  # hello, you
 build/loom                            # the interactive shell
 build/loom run build/examples/editor/editor.lc notes.txt  # the editor, in Luce
 build/editor notes.txt                      # the same editor, standalone
@@ -94,9 +94,9 @@ luce ir FILE.luc [--full]          compile and dump readable IR
 the same program walks the same pipeline either way:
 
 ```text
-library  FILE.lc    a native artifact loom runs (default)
+exe      FILE       a standalone native executable (default)
+library  FILE.lc    a native artifact loom runs
 object   FILE.o     a relocatable object; you link it
-exe      FILE       a standalone native executable
 ```
 
 `FILE` may also be a `.lcm`: the serialized module, which is the front
@@ -125,8 +125,8 @@ uses `cc`; `LUCE_CC` names another driver and `LUCE_LIB` the directory
 holding `libluce_rt.a`.
 
 ```sh
-build/luce build examples/hello/hello.luc --emit=exe -o hello
-./hello you                           # hello, you — no loom, no runtime
+build/luce build examples/hello/hello.luc --emit=library -o hello.lc
+build/loom run hello.lc you           # hello, you — the loadable form
 ```
 
 The terminal:

@@ -35,8 +35,9 @@ same observable behavior together.
 
 The repository builds two programs:
 
-- `luce` checks source, builds a native `.lc` artifact, emits a relocatable
-  object or standalone executable, prints IR, and runs Luce test functions.
+- `luce` builds a standalone executable by default, or explicitly emits a
+  loadable `.lc` artifact or relocatable object, prints IR, and runs Luce test
+  functions.
 - `loom` runs an existing `.lc`, or compiles a `.luc` file and runs it. It
   provides the terminal and file services used by a program.
 

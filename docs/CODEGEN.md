@@ -5,9 +5,9 @@ hands that to libLLVM, and gets back machine code.  This file is both
 the decision record for that seam and the description of what is
 there.
 
-The path is **the only one**: `luce build` writes a loadable artifact
-and calls it `.lc`, `--emit=exe` writes a standalone binary, and
-`loom run FILE.lc` opens and calls machine code.  The interpreter is
+The path is **the only one**: `luce build` writes a standalone executable
+named from the source, `--emit=library` writes the loadable `.lc` artifact,
+and `loom run FILE.lc` opens and calls machine code.  The interpreter is
 no longer an engine — it ships in nothing and survives as the
 differential oracle in the test suite (docs/ENGINE.md).  What follows
 says exactly how far this path reaches and how it reaches a person.
@@ -36,9 +36,9 @@ FILE.luc → 02_lex → 03_parse → 04_semantics → typed MIR → 07_optimize
 ```
 
 ```sh
-luce build FILE.luc                 # FILE.lc   — loom loads and calls it
+luce build FILE.luc                 # FILE      — a shell runs it (default)
+luce build FILE.luc --emit=library  # FILE.lc   — loom loads and calls it
 luce build FILE.luc --emit=object   # FILE.o    — you link it
-luce build FILE.luc --emit=exe      # FILE      — a shell runs it
 ```
 
 The object is built for the host triple, is position-independent,
@@ -66,7 +66,7 @@ cc -o FILE FILE.o lib/libluce_start.a lib/libluce_rt.a \
   -framework AppKit -framework Metal -framework QuartzCore
 ```
 
-`luce build --emit=exe` adds these flags for you. They are needed because the
+`luce build` adds these flags for you. They are needed because the
 standalone start archive carries the same `std.ui`/`std.gpu` host as `loom`.
 
 ## Getting it to a person
@@ -178,11 +178,11 @@ generates for a named CPU; the day that changes, the string grows and
 
 ### Where a compiled artifact lives, and when it is rebuilt
 
-A `.lc` **is** the artifact: `luce build NAME.luc` writes one and
-`loom run NAME.lc` opens it.  What is cached is the compile that loom
-does on a person's behalf — `loom luce NAME.luc` puts the result
-beside the source, as `NAME.lc`, exactly the file `luce build` would
-have written, so a second run finds a warm one.  It is deletable with
+A `.lc` **is** the loadable artifact: `luce build NAME.luc --emit=library`
+writes one and `loom run NAME.lc` opens it.  What is cached is the compile
+that loom does on a person's behalf — `loom luce NAME.luc` puts the result
+beside the source, as `NAME.lc`, exactly the library file it would have
+written, so a second run finds a warm one.  It is deletable with
 the program and visible in a listing, which a hidden cache is not.
 When there is nowhere to write beside the program — a read-only
 directory, or a program with no path at all, like the editor embedded

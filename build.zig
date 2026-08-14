@@ -1228,6 +1228,7 @@ pub fn build(b: *std.Build) void {
         compile_program.addFileArg(b.path(b.fmt("examples/{s}/{s}.luc", .{ program.name, program.name })));
         compile_program.addArg("-o");
         const artifact_file = compile_program.addOutputFileArg(b.fmt("{s}.lc", .{program.name}));
+        compile_program.addArg("--emit=library");
         for (program.deps) |dependency| {
             compile_program.addFileInput(b.path(b.fmt("examples/{s}/{s}.luc", .{ program.name, dependency })));
         }
@@ -1341,6 +1342,7 @@ pub fn build(b: *std.Build) void {
         compile_bench.addFileArg(b.path(b.fmt("bench/{s}.luc", .{name})));
         compile_bench.addArg("-o");
         _ = compile_bench.addOutputFileArg(b.fmt("{s}.lc", .{name}));
+        compile_bench.addArg("--emit=library");
         linkAgainstRuntime(compile_bench, install_runtime, runtime_directory, runtime_archive);
         test_benchmarks_step.dependOn(&compile_bench.step);
     }
