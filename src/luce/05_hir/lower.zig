@@ -1945,11 +1945,19 @@ const Replay = struct {
                 std.debug.assert(stored.kind == recorded);
                 prepared[position] = stored.register;
             } else {
+                // A reference read out of the returned shape is a borrow of
+                // it; the target that keeps it counts it (the shape is
+                // released when the statement's temporary goes).
+                try self.keepReference(fitted, target_type, .view);
                 std.debug.assert(recorded == .plain);
                 prepared[position] = fitted;
             }
         }
+        // The new values were prepared (and any borrow retained) above, so
+        // each target's old reference and old storage can go now, before
+        // the new value replaces it — the object first, as everywhere else.
         for (assign.targets, prepared) |target, staged| {
+            if (try self.carriesObjects(self.code.localType(target))) try self.code.releaseObject(target);
             try self.code.release(target, self.code.localOwnsStorage(target));
             try self.code.store(target, staged);
         }

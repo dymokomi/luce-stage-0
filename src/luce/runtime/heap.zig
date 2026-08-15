@@ -1822,6 +1822,13 @@ pub const Runtime = struct {
             slot.* = if (at == index) to else try self.ownValue(field);
             filled += 1;
         }
+        // Every copy succeeded, so the new run is committed: the replaced
+        // field's reference — carried into nothing, its storage dropped
+        // with the old run by the caller — is released here (docs/MEMORY.md).
+        // Every other field is copied, sharing its object with the old run
+        // until that run is dropped.  Released after the loop so a failed
+        // copy above leaves the old run whole for its owner.
+        self.freeObjectsIn(source[index]);
         return Value.ofStruct(stored);
     }
 

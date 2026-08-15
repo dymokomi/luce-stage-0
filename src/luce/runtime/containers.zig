@@ -104,11 +104,11 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
             if (index < 0 or index >= object.elements.count) {
                 return runtime.fail(.index_bounds);
             }
-            // An element overwrite drops the old cell's value storage;
-            // the old object, if any, leaks until the final sweep.  Only
-            // a `Value` cell can be holding storage.
+            // An element overwrite lets the old cell's value go: its
+            // storage back and its reference released (docs/MEMORY.md).
+            // Only a `Value` cell can hold either.
             if (object.elements.kind == .value) {
-                runtime.dropStorage(object.elements.at(@intCast(index)));
+                runtime.freeValue(object.elements.at(@intCast(index)));
             }
             object.elements.put(@intCast(index), stored);
         },
@@ -116,7 +116,7 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
             const key = indices[0];
             try requireMapKey(runtime, key);
             if (map.find(&key)) |at| {
-                runtime.dropStorage(map.entries.items[at].value);
+                runtime.freeValue(map.entries.items[at].value);
                 map.entries.items[at].value = stored;
             } else {
                 // A fresh entry owns its key too, and its storage is
@@ -130,11 +130,11 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
             for (indices) |index| try requireLongIndex(runtime, index);
             const flat = heap.flattenIndex(object.dims, indices) orelse
                 return runtime.fail(.index_bounds);
-            // An element overwrite drops the old cell's value storage;
-            // the old object, if any, leaks until the final sweep.  Only
-            // a `Value` cell can be holding storage.
+            // An element overwrite lets the old cell's value go: its
+            // storage back and its reference released (docs/MEMORY.md).
+            // Only a `Value` cell can hold either.
             if (object.elements.kind == .value) {
-                runtime.dropStorage(object.elements.at(flat));
+                runtime.freeValue(object.elements.at(flat));
             }
             object.elements.put(flat, stored);
         },
@@ -260,8 +260,8 @@ pub fn insert(runtime: *Runtime, target: Value, index: i64, held: Value) Error!v
 }
 
 /// `xs.remove(i)` or `m.remove(key)`.  Removing an element drops its
-/// value storage; the removed object, if any, leaks until the final
-/// sweep.  Removing a key a map does not hold does nothing.
+/// value: its storage back and its reference released (docs/MEMORY.md).
+/// Removing a key a map does not hold does nothing.
 pub fn remove(runtime: *Runtime, target: Value, which: Value) Error!void {
     const object = try runtime.resolveMutable(target);
     switch (object.data) {
@@ -271,14 +271,16 @@ pub fn remove(runtime: *Runtime, target: Value, which: Value) Error!void {
             if (index < 0 or index >= object.elements.count) {
                 return runtime.fail(.index_bounds);
             }
-            runtime.dropStorage(object.elements.orderedRemove(@intCast(index)));
+            runtime.freeValue(object.elements.orderedRemove(@intCast(index)));
         },
         .map => |*map| {
             try requireMapKey(runtime, which);
             if (map.find(&which)) |at| {
                 const removed = map.removeAt(at);
+                // A key is a `long` or a String, storage only; a value can
+                // hold a reference, so it is released, not just dropped.
                 runtime.dropStorage(removed.key);
-                runtime.dropStorage(removed.value);
+                runtime.freeValue(removed.value);
             }
         },
         .array, .builder, .file, .task => return runtime.fail(.not_owned),

@@ -495,19 +495,13 @@ fn expectClean(session: *const Session) !void {
     switch (session.end) {
         .finished => |left| {
             if (left == 0) return;
-            // sub_cut_b: object reclamation is not wired yet — ARC
-            // retain/release emission is the next cut — so a program that
-            // builds a reference container (list/map/array/builder) leaves
-            // it alive to end-of-run.  The full two-engine comparison above
-            // (`compareProgram`) already ran and agreed: prints, trap code
-            // and message, call trace, AND the leak census itself all
-            // matched, and any behavioural wrong answer would have trapped
-            // and failed here as `.trapped` rather than reaching this arm.
-            // The only invariant that cannot hold is the zero-leak gate, so
-            // skip exactly that case rather than delete the behavioural
-            // proof.  Restore the hard failure when ARC lands: search
-            // `sub_cut_b`.
-            return error.SkipZigTest;
+            // The zero-leak gate: ARC frees every reference at its last
+            // release, so a program that ends with a live object has a real
+            // leak — an emission gap to close.  Both engines already agreed
+            // on the census above; this names the count so the leak can be
+            // found and fixed.
+            std.debug.print("{d} objects leaked at end of run\n", .{left});
+            return error.TestUnexpectedResult;
         },
         .trapped => |code| {
             std.debug.print("unexpected trap: {s} ({s})\n", .{ session.message(), @tagName(code) });
