@@ -642,18 +642,19 @@ const Replay = struct {
             ),
             .bound_method => |bound| bind: {
                 const receiver = try self.replayValue(bound.receiver);
-                // **The receiver becomes the value's own here** (D3):
-                // the same store a struct field takes, so fresh storage
-                // moves in and a borrowed read is duplicated.  What the
-                // run holds is then released with the run.
-                const held = try self.ownedForStore(
-                    receiver,
-                    bound.receiver.result(),
-                    nodes.provenance(bound.receiver),
-                );
+                // A function value owns the two-slot run that holds it and
+                // never owns the objects inside it (BINDING.md, "As built":
+                // D4 retired D3's owning bind).  The receiver's shell is
+                // copied in so the value carries its own state, but its heap
+                // children are *borrowed* — never retained — and the run's
+                // death is `drop_storage` alone.  Retaining them here (an
+                // owning store) leaked one reference per carrying receiver,
+                // because nothing releases what `drop_storage` leaves.  This
+                // is the same borrow `interface_make` above takes.
+                const held = try self.code.ownStorage(receiver);
                 break :bind try self.code.emit(.{ .const_function = .{
                     .function = bound.function,
-                    .receiver = held.register,
+                    .receiver = held,
                 } }, bound.result);
             },
         };
