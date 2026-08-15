@@ -19,11 +19,9 @@ claimed result fails the build.  Links, anchors and selected
 compiler-to-reference vocabulary are checked too; prose beyond those
 checks remains human-reviewed.
 
-v1 — the persistent Fabric of Texels and Fibers — lives on the
-`main-v1` branch and in [docs/v1/](docs/v1/).  Its lesson drives v2:
-the language is the part that enables everything else, so the language
-comes first and the Fabric returns later on top of it.  The plan is
-[docs/V2.md](docs/V2.md); the language itself is
+v2 is language-first: the language is the part that enables everything
+else, so it comes first and the environment is built on top of it.  The
+plan is [docs/V2.md](docs/V2.md); the language itself is
 [docs/LANGUAGE.md](docs/LANGUAGE.md), and
 [docs/README.md](docs/README.md) indexes the rest.  To make a change,
 [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -157,16 +155,15 @@ means **a machine that only runs Luce programs needs neither LLVM nor
 `luce` installed** — a shipped `.lc` needs a loader and nothing else.
 
 A Luce program is a script with a `main` entry.  The language is
-statically typed with inference, has structs, `list`/`map`/`array`/
-`builder` container objects created with `new` or literals, and `file`/
-`task` resources, all released by scope ownership. Containers may
-`give` or `free`, and may `copy` when their whole graph is resource-free;
-resources may `give` or `free` but never copy (docs/OWNERSHIP.md). The
-language also has slices and checked traps —
-`docs/LANGUAGE.md` is the reference.  Effects — console, files and the
-screen — only exist as host builtins that loom, the trusted boundary,
-implements; arguments are instead handed to `main` as its owned
-parameter.  The language itself stays pure:
+statically typed with inference, has value `struct`s and reference
+`class`es, `list`/`map`/`array`/`builder` containers created with `new`
+or literals, and `file`/`task` resources — the reference types are
+reference-counted and freed automatically at the last reference, with
+`weak` for cycles (docs/MEMORY.md).  The language also has slices and
+checked traps — `docs/LANGUAGE.md` is the reference.  Effects — console,
+files and the screen — only exist as host builtins that loom, the
+trusted boundary, implements; arguments are instead handed to `main` as
+its parameter.  The language itself stays pure:
 
 ```python
 func main(args: list(string)):
@@ -240,16 +237,16 @@ vendor-llvm.sh            build a pinned libLLVM from source, for when
 `CONTRIBUTING.md` is the short version of all of it; the coding
 conventions themselves are [docs/CODING_GUIDE.md](docs/CODING_GUIDE.md),
 and [docs/MISSING.md](docs/MISSING.md) is the list of confirmed bugs. Open
-language and tooling ideas live in their decision records and
-[docs/LANGUAGE_AUDIT.md](docs/LANGUAGE_AUDIT.md), not in the bug list.
+language and tooling ideas live in their decision records, not in the
+bug list.
 
 ## Deferred scope
 
-Persistence images, the Fabric (Texels, Fibers, Views, capabilities),
-a user-facing C FFI/ABI for Luce programs, braids/synchronization,
-multi-user collaboration, and the agent all stay deferred until the
-language and terminal are excellent.  The runtime and host C ABI used
-internally by compiled artifacts is already built.
+Persistence images, a user-facing C FFI/ABI for Luce programs,
+network synchronization, multi-user collaboration, and the agent all
+stay deferred until the language and terminal are excellent.  The
+runtime and host C ABI used internally by compiled artifacts is
+already built.
 
 ## License
 
