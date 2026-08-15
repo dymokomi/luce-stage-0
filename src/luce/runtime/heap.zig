@@ -167,9 +167,17 @@ pub const Object = struct {
     /// until the runtime ends.  It is the one lifetime distinction the
     /// runtime still draws between rows — a constant is immutable, is
     /// excluded from the ordinary leak census, and is reclaimed only by
-    /// the final sweep or a materialization abort.  Every other row
-    /// simply lives until `Runtime.deinit` sweeps it.
+    /// the final sweep or a materialization abort.  A constant is never
+    /// retained or released: it outlives every count.
     constant: bool = false,
+
+    /// The ARC reference count: how many live references name this
+    /// object — a binding, a container cell, a struct field, a map
+    /// value.  Set to 1 when the object is created (the creator holds
+    /// the first reference), raised by `Runtime.retain`, lowered by
+    /// `Runtime.release`, and the object is reclaimed the moment it
+    /// reaches zero (docs/MEMORY.md).  A constant row ignores it.
+    references: u32 = 1,
 
     /// The elements of a List or an Array — a field of the row rather
     /// than a payload inside `data`, which is a deliberate exception
@@ -1902,16 +1910,41 @@ pub const Runtime = struct {
     // recursively — and never descends into an object's elements, which
     // already belong to it.
 
-    /// Free one object and everything it owns, give its storage back,
-    /// and offer its row to the next `new`.
+    /// Raise an object's reference count by one: a new name now holds it.
+    /// A stale handle and a program constant are both no-ops — the first
+    /// names nothing, the second outlives every count (docs/MEMORY.md).
+    pub fn retain(self: *Runtime, handle: Handle) void {
+        const object = self.liveObject(handle) orelse return;
+        if (object.constant) return;
+        object.references += 1;
+    }
+
+    /// Lower an object's reference count by one.  While others still name
+    /// it the object only loses a count; when the last reference goes the
+    /// object is destroyed and each object it named is released in turn,
+    /// so a shared element outlives the container that let go of it.  A
+    /// stale handle and a program constant are no-ops.
+    pub fn release(self: *Runtime, handle: Handle) void {
+        const object = self.liveObject(handle) orelse return;
+        if (object.constant) return;
+        if (object.references > 1) {
+            object.references -= 1;
+            return;
+        }
+        self.destroyObject(handle);
+    }
+
+    /// Free one object and release everything it named, give its storage
+    /// back, and offer its row to the next `new`.  This is the
+    /// unconditional destroy the rollback paths need (a fresh object that
+    /// failed to be published); ARC's ordinary drop is `release`.
     ///
-    /// The release walk is iterative.  A row's `next_free` field is
-    /// temporarily the link in a private worklist while that row is
-    /// being destroyed; the row joins the allocator's free list only
-    /// after its children and storage are gone.  This keeps release
-    /// independent of the native call stack and, because it allocates
-    /// nothing, makes the final cleanup path total even under memory
-    /// pressure.
+    /// The walk is iterative.  A row's `next_free` field is temporarily
+    /// the link in a private worklist while that row is being destroyed;
+    /// the row joins the allocator's free list only after its children
+    /// and storage are gone.  This keeps it independent of the native
+    /// call stack and, because it allocates nothing, makes the final
+    /// cleanup path total even under memory pressure.
     pub fn freeObject(self: *Runtime, handle: Handle) void {
         const object = self.liveObject(handle) orelse return;
         // A program constant is sticky: it is reclaimed only by the
@@ -1954,14 +1987,25 @@ pub const Runtime = struct {
         pending.* = handle.index;
     }
 
-    /// Add every object named by a value to the release worklist.  A
-    /// function value deliberately stops at its field run: its object
-    /// handles borrow the receiver's graph (docs/BINDING.md D4).
-    fn scheduleValue(self: *Runtime, held: Value, pending: *u32) void {
+    /// Drop one reference to every object a value names, scheduling for
+    /// destruction only those whose last reference this was.  A shared
+    /// object simply loses a count and survives — the difference between
+    /// ARC release and the old owning destroy.  A struct's fields are
+    /// walked; a function value stops at its run (its receiver is
+    /// released on its own, docs/MEMORY.md); a constant ignores the drop.
+    fn releaseValue(self: *Runtime, held: Value, pending: *u32) void {
         if (!held.hasValidRepresentation()) return;
         switch (held.view()) {
-            .object => |handle| self.scheduleDestroy(handle, pending, false),
-            .strukt => |fields| for (fields) |field| self.scheduleValue(field, pending),
+            .object => |handle| {
+                const object = self.liveObject(handle) orelse return;
+                if (object.constant) return;
+                if (object.references > 1) {
+                    object.references -= 1;
+                    return;
+                }
+                self.scheduleDestroy(handle, pending, false);
+            },
+            .strukt => |fields| for (fields) |field| self.releaseValue(field, pending),
             .function => {},
             else => {},
         }
@@ -1983,7 +2027,7 @@ pub const Runtime = struct {
                 // to walk.
                 .list, .array => if (object.elements.kind == .value) {
                     for (object.elements.cells(Value)) |item| {
-                        self.scheduleValue(item, pending);
+                        self.releaseValue(item, pending);
                         self.dropStorage(item);
                     }
                 },
@@ -1992,7 +2036,7 @@ pub const Runtime = struct {
                     // values'; keys are long or String, so there is
                     // never an object in one.
                     self.dropStorage(entry.key);
-                    self.scheduleValue(entry.value, pending);
+                    self.releaseValue(entry.value, pending);
                     self.dropStorage(entry.value);
                 },
                 .builder => {},
@@ -2022,12 +2066,28 @@ pub const Runtime = struct {
         self.dropStorage(held);
     }
 
-    /// The object half of `freeValue`, on its own: everything a struct
-    /// value's fields name, without touching the run they sit in.
+    /// The object half of `freeValue`, on its own: release one reference
+    /// to everything a value names, without touching the run it sits in.
     pub fn freeObjectsIn(self: *Runtime, held: Value) void {
         var pending = value.null_index;
-        self.scheduleValue(held, &pending);
+        self.releaseValue(held, &pending);
         self.releaseScheduled(&pending);
+    }
+
+    /// Raise by one the reference count of every object a value names —
+    /// the object a handle names, or a struct's object fields
+    /// recursively.  Retaining is shallow: it counts the new name for the
+    /// value itself, never the elements the value already holds (they are
+    /// released only when the value's last reference goes).  A function
+    /// value stops at its run.
+    pub fn retainValue(self: *Runtime, held: Value) void {
+        if (!held.hasValidRepresentation()) return;
+        switch (held.view()) {
+            .object => |handle| self.retain(handle),
+            .strukt => |fields| for (fields) |field| self.retainValue(field),
+            .function => {},
+            else => {},
+        }
     }
 
     /// Deep copy (S31): duplicate the object and everything it owns,

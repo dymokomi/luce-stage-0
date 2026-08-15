@@ -8200,3 +8200,64 @@ test "an array's cells are exactly as wide as its element, which is the prize" {
     try testing.expectEqual(@as(u8, 128), byte_row.elements.at(128).asByte());
     try testing.expectEqual(@as(u8, 255), byte_row.elements.at(255).asByte());
 }
+
+// ---------------------------------------------------------------------------
+// ARC — the reference count (docs/MEMORY.md, Sub-cut B)
+// ---------------------------------------------------------------------------
+
+test "ARC: retain and release count references, and zero frees the object" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{ .arena = arena.allocator(), .objects = testing.allocator });
+    defer {
+        runtime.deinit();
+        arena.deinit();
+    }
+
+    const list = try runtime.newList(Value.none);
+    const handle = list.view().object;
+    try testing.expectEqual(@as(u32, 1), (try runtime.resolve(list)).references);
+    const live = runtime.live;
+
+    runtime.retain(handle);
+    try testing.expectEqual(@as(u32, 2), (try runtime.resolve(list)).references);
+
+    runtime.release(handle);
+    try testing.expectEqual(@as(u32, 1), (try runtime.resolve(list)).references);
+    try testing.expectEqual(live, runtime.live); // still alive while one name holds it
+
+    runtime.release(handle);
+    try testing.expectEqual(live - 1, runtime.live); // the last reference frees it
+}
+
+test "ARC: a shared element outlives the container that let it go" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{ .arena = arena.allocator(), .objects = testing.allocator });
+    defer {
+        runtime.deinit();
+        arena.deinit();
+    }
+
+    // A leaf list held by two containers. `append` stores the reference;
+    // the retain beside it models the store the ARC emission will add.
+    const leaf = try runtime.newList(Value.none);
+    const leaf_handle = leaf.view().object;
+
+    const a = try runtime.newList(Value.none);
+    try containers.append(&runtime, a, leaf);
+    runtime.retain(leaf_handle); // a now names leaf
+    const b = try runtime.newList(Value.none);
+    try containers.append(&runtime, b, leaf);
+    runtime.retain(leaf_handle); // b now names leaf
+    try testing.expectEqual(@as(u32, 3), (try runtime.resolve(leaf)).references);
+
+    runtime.release(leaf_handle); // drop the local name: a and b still hold it
+    try testing.expectEqual(@as(u32, 2), (try runtime.resolve(leaf)).references);
+
+    const before = runtime.live;
+    runtime.release(a.view().object); // a dies and releases leaf, which survives in b
+    try testing.expectEqual(before - 1, runtime.live);
+    try testing.expectEqual(@as(u32, 1), (try runtime.resolve(leaf)).references);
+
+    runtime.release(b.view().object); // b dies and releases leaf's last reference
+    try testing.expectEqual(before - 3, runtime.live); // b and leaf both gone
+}

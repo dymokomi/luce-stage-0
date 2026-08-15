@@ -513,6 +513,21 @@ pub export fn luce_rt_drop_storage(
     out.* = heap.Runtime.emptied(held.*);
 }
 
+/// Raise by one the reference count of every object a value names: a new
+/// name — a binding, a cell, a field — now holds it (docs/MEMORY.md).
+pub export fn luce_rt_retain(runtime: *Runtime, held: [*c]const Value) callconv(.c) void {
+    if (!requireValueInput(runtime, held)) return;
+    runtime.retainValue(held.*);
+}
+
+/// Drop one reference to every object a value names.  The objects it
+/// named are reclaimed the moment their last reference goes; a shared one
+/// only loses a count.  This is ARC's scope-end and overwrite release.
+pub export fn luce_rt_release(runtime: *Runtime, held: [*c]const Value) callconv(.c) void {
+    if (!requireValueInput(runtime, held)) return;
+    runtime.freeObjectsIn(held.*);
+}
+
 /// The text payload of the most recent `key_read`.
 pub export fn luce_rt_key_text(runtime: *Runtime, out: [*c]Value) callconv(.c) void {
     if (!requireValueOut(runtime, out)) return;
