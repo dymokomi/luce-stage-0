@@ -406,6 +406,17 @@ pub const Intrinsic = enum {
     /// The standard library presents this host query as `term.io`'s
     /// mouse and resize accessors.
     term_event_data,
+    /// The object half of a value's lifetime, which value storage's three
+    /// intrinsics deliberately never touch (docs/MEMORY.md).  `retain`
+    /// raises the reference count of every object a value names — a new
+    /// binding, cell, or field now holds it — and `release` lowers it,
+    /// reclaiming the object the moment its last reference goes.  A
+    /// reference is shared, so a store retains what it keeps and a scope's
+    /// end releases what it held; both are no-ops on a value that names no
+    /// object and on a program constant.  Neither answers a value.
+    /// Appended so the intrinsic tags before them do not renumber.
+    retain,
+    release,
 
     // -- per-intrinsic facts, classified once ---------------------------
     //
@@ -545,6 +556,8 @@ pub const Intrinsic = enum {
             .own_storage,
             .drop_storage,
             .export_storage,
+            .retain,
+            .release,
             => false,
         };
     }
@@ -670,6 +683,8 @@ pub const Intrinsic = enum {
             .own_storage,
             .drop_storage,
             .export_storage,
+            .retain,
+            .release,
             => false,
         };
     }
@@ -796,6 +811,8 @@ pub const Intrinsic = enum {
             .os_cpu_count,
             .drop_storage,
             .export_storage,
+            .retain,
+            .release,
             => false,
         };
     }
@@ -911,6 +928,8 @@ pub const Intrinsic = enum {
             .own_storage,
             .drop_storage,
             .export_storage,
+            .retain,
+            .release,
             => null,
         };
     }

@@ -1403,6 +1403,13 @@ fn verifyIntrinsic(
             try exactly(arguments, 1);
             try expectType(result, arguments[0]);
         },
+        // retain/release adjust an object's reference count and answer
+        // nothing; the argument is any value (only the objects it names
+        // are touched).
+        .retain, .release => {
+            try exactly(arguments, 1);
+            try expectType(result, .none);
+        },
         .index_get, .index_set => {
             const reads = call.kind == .index_get;
             const value_slots: usize = if (reads) 0 else 1;

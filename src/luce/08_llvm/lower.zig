@@ -6897,6 +6897,20 @@ const Body = struct {
                 try self.storageOf(of[0]),
             }),
 
+            // -- object lifetime (ARC) --------------------------------
+            //
+            // A retain and a release cross as a boxed value and answer
+            // nothing; the runtime touches only the objects the value
+            // names, and a value naming none is a no-op (docs/MEMORY.md).
+            .retain => _ = try self.callRuntime(.luce_rt_retain, .void, &.{
+                rt,
+                try self.boxedRegister(of[0], "held"),
+            }, ""),
+            .release => _ = try self.callRuntime(.luce_rt_release, .void, &.{
+                rt,
+                try self.boxedRegister(of[0], "held"),
+            }, ""),
+
             // -- errors -----------------------------------------------
             //
             // The channel is the outcome word the call beside it

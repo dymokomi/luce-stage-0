@@ -244,6 +244,11 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .own_storage,
         .drop_storage,
         .export_storage,
+        // A refcount adjustment mutates the object's row and can free it,
+        // so it is never dead and never foldable — the ARC-elision pass
+        // reasons about retain/release pairs specifically, not this table.
+        .retain,
+        .release,
         => .impure,
 
         // Fresh objects, mutation, and every host service.
@@ -456,9 +461,15 @@ pub fn viewStable(instruction: Instruction) bool {
             // field run are not the object table and not an array's
             // storage (docs/STRINGS.md).
             .own_storage, .drop_storage, .export_storage => true,
+            // A retain only increments a count word — no attach, no free,
+            // no table growth — so a resolved view survives it.
+            .retain => true,
 
             // Attaches a fresh object, so the table may grow.
             .list_slice, .map_keys, .map_values, .copy_object => false,
+            // A release can drop an object's last reference and retire its
+            // row, moving a generation; re-resolve a view across it.
+            .release => false,
             // Replaces an element that owned something.
             .index_set,
             .array_fill,

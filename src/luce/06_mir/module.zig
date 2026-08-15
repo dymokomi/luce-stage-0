@@ -172,7 +172,12 @@ pub const magic = "LUCE";
 /// exactly one reason and it is this line: the version moved with them, so
 /// a module written under 45 is refused by name instead of decoded against
 /// the wrong tags.
-pub const format_version: u32 = 46;
+///
+/// 47 — ARC arrives (docs/MEMORY.md): the `retain` and `release` intrinsics
+/// join `Intrinsic`, appended after `term_event_data` so no tag before them
+/// renumbers.  A 46 module has no way to spell them, so the bump is only the
+/// usual refuse-a-stale-module warrant rather than a renumbering one.
+pub const format_version: u32 = 47;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -1897,8 +1902,11 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // of their unions, so the hash moves with the four names *and* every
     // tag after them renumbers; `mir.Function` drops `parameter_gives`,
     // which moves the hash again.
-    try testing.expectEqual(@as(u32, 46), format_version);
-    try testing.expectEqual(@as(u64, 13641449965612214969), hasher.final());
+    // 46 -> 47: ARC arrives — the `retain` and `release` intrinsics are
+    // appended after `term_event_data`, so the hash moves with the two new
+    // names and no tag before them renumbers.
+    try testing.expectEqual(@as(u32, 47), format_version);
+    try testing.expectEqual(@as(u64, 3520324807276805816), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

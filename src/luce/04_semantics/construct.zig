@@ -963,6 +963,10 @@ pub fn lowerIntrinsic(
         .own_storage,
         .drop_storage,
         .export_storage,
+        // Inserted by the MIR builder around stores and scope ends; no
+        // name reaches this builtin-typing table.
+        .retain,
+        .release,
         .copy_object,
         .null_object,
         // Emitted by a mixed comparison; there is no name for it.

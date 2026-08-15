@@ -1526,6 +1526,17 @@ pub const Machine = struct {
                 self.runtime.dropStorage(held);
                 return runtime.Runtime.emptied(held);
             },
+            // ARC: raise or drop one reference to every object the value
+            // names.  The oracle counts exactly as `libluce_rt` does, so
+            // both engines agree on when an object is reclaimed.
+            .retain => {
+                self.runtime.retainValue(registers[arguments[0]]);
+                return .none;
+            },
+            .release => {
+                self.runtime.freeObjectsIn(registers[arguments[0]]);
+                return .none;
+            },
             .index_get => return containers.indexGet(
                 &self.runtime,
                 registers[arguments[0]],
