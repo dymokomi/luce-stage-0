@@ -438,6 +438,12 @@ pub const Field = struct {
     span: Span,
 };
 
+/// Value or reference (docs/MEMORY.md D1).  A `struct` is a value type
+/// (copies); a `class` is a reference type (shared, ARC-freed).  The two
+/// share every bit of declaration grammar, so they share this node and
+/// differ only in the kind the header keyword sets.
+pub const TypeKind = enum { value, reference };
+
 pub const StructDecl = struct {
     name: []const u8,
     name_span: Span,
@@ -448,6 +454,9 @@ pub const StructDecl = struct {
     /// against the completed method table.
     interfaces: []TypeName = &.{},
     visibility: Visibility = .none,
+    /// `struct` → value, `class` → reference.  Ownership work reads this
+    /// once ARC lands; today it is recorded and otherwise inert.
+    kind: TypeKind = .value,
     span: Span,
 };
 

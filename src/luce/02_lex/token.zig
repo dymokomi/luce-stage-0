@@ -29,6 +29,10 @@ pub const Kind = enum {
     /// function rather than a method with an implied `self`.
     keyword_static,
     keyword_struct,
+    /// `class Name:` — a **reference type** (docs/MEMORY.md D1): shared
+    /// identity, heap-allocated, freed by ARC at the last reference.  Its
+    /// declaration grammar is a struct's; only the kind differs.
+    keyword_class,
     /// `interface Name:` — a named set of method contracts that a
     /// struct may explicitly implement.
     keyword_interface,
@@ -184,6 +188,7 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "func", .kind = .keyword_func },
     .{ .word = "static", .kind = .keyword_static },
     .{ .word = "struct", .kind = .keyword_struct },
+    .{ .word = "class", .kind = .keyword_class },
     .{ .word = "interface", .kind = .keyword_interface },
     .{ .word = "enum", .kind = .keyword_enum },
     .{ .word = "union", .kind = .keyword_union },

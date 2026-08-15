@@ -538,7 +538,7 @@ pub const Parser = struct {
                 },
                 .dedent => _ = self.advance(),
                 .keyword_import => try self.importDecl(&imports),
-                .keyword_struct => {
+                .keyword_struct, .keyword_class => {
                     if (try self.structDecl()) |declaration| {
                         try structs.append(self.arena, declaration);
                     } else {
@@ -727,7 +727,7 @@ pub const Parser = struct {
                 );
                 self.recover();
             },
-            .keyword_struct => {
+            .keyword_struct, .keyword_class => {
                 if (try self.structDecl()) |declaration| {
                     var marked = declaration;
                     marked.visibility = visibility;
@@ -1122,7 +1122,8 @@ pub const Parser = struct {
     }
 
     fn structDecl(self: *Parser) Error!?ast.StructDecl {
-        const start = self.advance(); // struct
+        const start = self.advance(); // struct or class
+        const kind: ast.TypeKind = if (start.kind == .keyword_class) .reference else .value;
         const name = (try self.expect(.identifier, "a struct name")) orelse return null;
         try self.refuseWildcardName(name);
         var interfaces: std.ArrayList(ast.TypeName) = .empty;
@@ -1192,6 +1193,7 @@ pub const Parser = struct {
             .fields = try fields.toOwnedSlice(self.arena),
             .functions = try functions.toOwnedSlice(self.arena),
             .interfaces = try interfaces.toOwnedSlice(self.arena),
+            .kind = kind,
             .span = .{ .start = start.span.start, .end = name.span.end },
         };
     }
@@ -2152,7 +2154,7 @@ pub const Parser = struct {
                 );
                 return null;
             },
-            .keyword_func, .keyword_struct, .keyword_interface, .keyword_enum, .keyword_union, .keyword_import => {
+            .keyword_func, .keyword_struct, .keyword_class, .keyword_interface, .keyword_enum, .keyword_union, .keyword_import => {
                 const word = keywordWord(self.peekKind()).?;
                 try self.report(
                     "luce.parse.expected",
@@ -2980,7 +2982,6 @@ fn foreignWord(word: []const u8) ?[]const u8 {
         .{ .word = "fn", .advice = "functions are declared with 'func'" },
         .{ .word = "fun", .advice = "functions are declared with 'func'" },
         .{ .word = "function", .advice = "functions are declared with 'func'" },
-        .{ .word = "class", .advice = "there are no classes; 'struct' declares a value type" },
         .{ .word = "type", .advice = "there are no type aliases; 'struct' declares a value type" },
         .{ .word = "final", .advice = "file-scope constants are declared with 'const'" },
         .{ .word = "from", .advice = import_advice },
@@ -3030,6 +3031,7 @@ pub fn describe(kind: Kind) []const u8 {
         .keyword_func => "the keyword 'func'",
         .keyword_static => "the keyword 'static'",
         .keyword_struct => "the keyword 'struct'",
+        .keyword_class => "the keyword 'class'",
         .keyword_interface => "the keyword 'interface'",
         .keyword_enum => "the keyword 'enum'",
         .keyword_union => "the keyword 'union'",
