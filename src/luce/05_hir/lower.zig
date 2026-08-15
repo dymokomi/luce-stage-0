@@ -445,15 +445,29 @@ const Replay = struct {
     /// the end of the statement no longer releases it (`takeObjects`, the
     /// object half of `takeStorage`).  A value naming no object needs
     /// nothing (docs/MEMORY.md).
-    fn keepReference(self: *Replay, register: Register, value_type: Type) Error!void {
+    fn keepReference(
+        self: *Replay,
+        register: Register,
+        value_type: Type,
+        provenance: nodes.Provenance,
+    ) Error!void {
         if (!try self.carriesObjects(value_type)) return;
-        // A fresh object was parked when it was made; the place adopting it
-        // retracts that park (transfer), so the statement's end no longer
-        // releases it.  A value with no park is a borrow — a name, an
-        // element read, an immortal constant — which the new holder counts
-        // by retaining, leaving the source's reference intact.
-        if (self.takeObjects(register)) return;
-        try self.code.retainObject(register);
+        switch (provenance) {
+            // A fresh object transfers into the place: retract its park so
+            // the statement's end no longer releases what the place now
+            // owns.  A value that crossed a fallible branch is fresh but
+            // was never parked (the fallible machinery owns it), so nothing
+            // is retracted and the transfer is the whole of it.
+            .fresh => _ = self.takeObjects(register),
+            // A borrow of an object something else holds — a name, a field
+            // or element read — which the new holder counts by retaining.
+            .view => try self.code.retainObject(register),
+            // A fresh object that owns no storage — a `[..]` or `{..}`
+            // literal — was parked and now transfers; anything else here is
+            // an immortal constant or a narrowed reload, a borrow the new
+            // holder retains (a retain on a constant is a no-op).
+            .plain => if (!self.takeObjects(register)) try self.code.retainObject(register),
+        }
     }
 
     /// Retract a fresh value's object park: the place that adopts it now
@@ -475,7 +489,7 @@ const Replay = struct {
         value_type: Type,
         provenance: nodes.Provenance,
     ) Error!StoredValue {
-        try self.keepReference(register, value_type);
+        try self.keepReference(register, value_type, provenance);
         if (!self.ownsStorage(value_type)) return .{ .register = register, .kind = .plain };
         if (self.takeStorage(register, provenance)) return .{ .register = register, .kind = .take };
         return .{ .register = try self.code.ownStorage(register), .kind = .copy };
@@ -493,7 +507,7 @@ const Replay = struct {
         recorded: ?nodes.StoreKind,
     ) Error!void {
         if (!self.code.localOwnsStorage(local)) {
-            try self.keepReference(register, value_type);
+            try self.keepReference(register, value_type, provenance);
             try self.code.store(local, register);
             if (recorded) |kind| std.debug.assert(kind == .plain);
             return;
@@ -2063,7 +2077,7 @@ const Replay = struct {
         } else {
             // Retain a borrowed reference the slot will now hold, before
             // the old one below is let go — so `x = x` nets no change.
-            try self.keepReference(stored, local_type);
+            try self.keepReference(stored, local_type, provenance);
             std.debug.assert(recorded == .plain);
         }
         // The slot's old reference and its old storage both go now that a

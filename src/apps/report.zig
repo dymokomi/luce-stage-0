@@ -154,20 +154,18 @@ pub fn printError(
 }
 
 /// The one thing to say about a run that ended without trapping: whether
-/// any object outlived it.
-///
-/// **Sub-cut A (ARC pivot, docs/ROADMAP.md): silent.** The runtime no
-/// longer frees reference objects during a run — they are reclaimed only
-/// by `Runtime.deinit`'s end-of-run sweep — so a nonzero run-end census
-/// is expected, not an engine bug, until Sub-cut B wires retain/release.
-/// This report is re-armed the moment ARC restores deterministic release
-/// (a leak is a bug again then), which is why the function, its `i64`
-/// contract, and its callers all stay in place.
+/// any reference object outlived it.  ARC frees every reference the moment
+/// its last name goes, so a nonzero count is a real leak — a reference the
+/// run never released (an emission gap, or a strong cycle a future `weak`
+/// would break) — and is reported as one.  It takes the `i64` the ABI
+/// hands over rather than a narrowed copy, so no caller has to decide what
+/// a negative count means: a number that is not zero is the leak.
 pub fn printLeaks(err: *std.Io.Writer, indent: []const u8, reporter: []const u8, leaked: i64) void {
-    _ = err;
-    _ = indent;
-    _ = reporter;
-    _ = leaked;
+    if (leaked == 0) return;
+    err.print(
+        "{s}{s}: {d} object{s} leaked — a reference the run never released\n",
+        .{ indent, reporter, leaked, if (leaked == 1) "" else "s" },
+    ) catch {};
 }
 
 // ---------------------------------------------------------------------------
@@ -195,11 +193,9 @@ test "how a run ended is one table, and every ending has its own number" {
     try testing.expectEqual(@as(i32, exit_errored), @intFromEnum(abi.Status.errored));
 }
 
-test "the leak report is silent during the ARC pivot's Sub-cut A" {
-    // Sub-cut A (docs/ROADMAP.md): reference objects are reclaimed only by
-    // Runtime.deinit's end-of-run sweep, so a nonzero run-end census is
-    // expected rather than an engine bug. The report says nothing until
-    // Sub-cut B re-arms it once retain/release makes a leak a bug again.
+test "a run that leaked names the count, and one that did not says nothing" {
+    // ARC frees every reference at its last release, so a nonzero run-end
+    // census is a real leak and is reported; zero says nothing.
     var reported: std.Io.Writer.Allocating = .init(testing.allocator);
     defer reported.deinit();
 
@@ -207,10 +203,17 @@ test "the leak report is silent during the ARC pivot's Sub-cut A" {
     try testing.expectEqualStrings("", reported.written());
 
     printLeaks(&reported.writer, "", "loom", 1);
-    try testing.expectEqualStrings("", reported.written());
+    try testing.expectEqualStrings(
+        "loom: 1 object leaked — a reference the run never released\n",
+        reported.written(),
+    );
 
+    reported.clearRetainingCapacity();
     printLeaks(&reported.writer, "", "luce", 4);
-    try testing.expectEqualStrings("", reported.written());
+    try testing.expectEqualStrings(
+        "luce: 4 objects leaked — a reference the run never released\n",
+        reported.written(),
+    );
 }
 
 test "a trap report cannot smuggle terminal controls either" {
