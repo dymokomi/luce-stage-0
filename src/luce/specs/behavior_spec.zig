@@ -68,6 +68,31 @@ test "integers: the four operations and precedence" {
 // bits with the count as the one thing that traps, and the literals
 // R3 brought in.  Every row runs on both engines.
 
+test "references: sharing, aliasing, and reassignment leave nothing alive" {
+    // Every path the ARC emission counts (docs/MEMORY.md): a fresh
+    // container transferred into a binding, an alias that retains, a `var`
+    // reassigned to another reference, and a shared mutation each engine
+    // must agree on — and the run must end with a zero census, which is
+    // what proves the references were released rather than leaked.
+    try agreeOk(
+        \\func main():
+        \\    let a = [1, 2, 3]
+        \\    let b = a
+        \\    b.append(4)
+        \\    assert(len(a) == 4 and len(b) == 4)
+        \\    var x = [1]
+        \\    var y = [2, 3]
+        \\    x = y
+        \\    assert(len(x) == 2)
+        \\    x.append(9)
+        \\    assert(len(y) == 3)
+        \\    var z = [0]
+        \\    z = x
+        \\    assert(len(z) == 3 and len(y) == 3)
+        \\
+    );
+}
+
 test "the bit set: & | ^ ~ at both widths, in hex and binary spellings" {
     try agreeOk(
         \\func main():

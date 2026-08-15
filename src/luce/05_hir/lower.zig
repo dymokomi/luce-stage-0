@@ -2007,8 +2007,15 @@ const Replay = struct {
             std.debug.assert(owned.kind == recorded);
             store = owned.register;
         } else {
+            // Retain a borrowed reference the slot will now hold, before
+            // the old one below is let go — so `x = x` nets no change.
+            try self.keepReference(stored, local_type, provenance);
             std.debug.assert(recorded == .plain);
         }
+        // The slot's old reference and its old storage both go now that a
+        // new value replaces them; releasing the old object first would
+        // strand a self-assignment, so the retain above comes first.
+        if (carriesObjects(local_type)) try self.code.releaseObject(local);
         try self.code.release(local, owns_storage);
         try self.code.store(local, store);
     }
