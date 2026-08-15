@@ -214,15 +214,49 @@ const Replay = struct {
     }
 
     /// Whether a value of this type names a reference object whose count a
-    /// scope's end must lower — a container or a `file`/`task` resource,
-    /// or an optional of one.  A struct's reference fields are not yet
-    /// counted (they outlive their scope until the value-copy path learns
-    /// to retain them); leaving them uncounted only defers a release, it
-    /// never double-frees.
-    fn carriesObjects(of: Type) bool {
+    /// scope's end must lower — a container or a `file`/`task` resource, an
+    /// optional of one, or a struct or union value that carries one in a
+    /// field.  The walk stops at a `.heap` reference and never enters it,
+    /// so a value struct (which cannot contain itself, only a reference to
+    /// more of its kind) terminates; a function value's captured receiver
+    /// is not counted here yet, so a struct whose only reference is a bound
+    /// method still reads as carrying none.
+    fn carriesObjects(self: *const Replay, of: Type) Error!bool {
+        // Two visited tables, one per aggregate index space, so a value
+        // type that names itself — a `Node?` field on `Node` — is walked
+        // once and terminates.  Modelled on `04_semantics/shapes.zig`,
+        // whose `carriesObjects` this recomputes at the MIR layer.
+        const seen_structs = try self.deps.temporary.alloc(bool, self.code.structs.len);
+        defer self.deps.temporary.free(seen_structs);
+        @memset(seen_structs, false);
+        const seen_variants = try self.deps.temporary.alloc(bool, self.code.variants.len);
+        defer self.deps.temporary.free(seen_variants);
+        @memset(seen_variants, false);
+        return carriesObjectsIn(self, of, seen_structs, seen_variants);
+    }
+
+    fn carriesObjectsIn(self: *const Replay, of: Type, seen_structs: []bool, seen_variants: []bool) bool {
         return switch (of) {
             .heap => true,
-            .optional => |payload| carriesObjects(payload.asType()),
+            .optional => |payload| carriesObjectsIn(self, payload.asType(), seen_structs, seen_variants),
+            .strukt => |layout| {
+                if (seen_structs[layout]) return false;
+                seen_structs[layout] = true;
+                for (self.code.structs[layout].fields) |field| {
+                    if (carriesObjectsIn(self, field.field_type, seen_structs, seen_variants)) return true;
+                }
+                return false;
+            },
+            .variant => |layout| {
+                if (seen_variants[layout]) return false;
+                seen_variants[layout] = true;
+                for (self.code.variants[layout].members) |member| {
+                    for (member.fields) |field| {
+                        if (carriesObjectsIn(self, field.field_type, seen_structs, seen_variants)) return true;
+                    }
+                }
+                return false;
+            },
             else => false,
         };
     }
@@ -413,7 +447,7 @@ const Replay = struct {
         value_type: Type,
         provenance: nodes.Provenance,
     ) Error!void {
-        if (provenance == .view and carriesObjects(value_type))
+        if (provenance == .view and try self.carriesObjects(value_type))
             try self.code.retainObject(register);
     }
 
@@ -1810,7 +1844,7 @@ const Replay = struct {
     /// (`drop_storage`) and drops its reference (`release`).
     fn noteOwned(self: *Replay, local: LocalId) Error!void {
         const owns_storage = self.code.localOwnsStorage(local);
-        const owns_objects = carriesObjects(self.code.localType(local));
+        const owns_objects = try self.carriesObjects(self.code.localType(local));
         if (!owns_storage and !owns_objects) return;
         try self.currentScope().owned.append(self.scratch(), .{
             .local = local,
@@ -2015,7 +2049,7 @@ const Replay = struct {
         // The slot's old reference and its old storage both go now that a
         // new value replaces them; releasing the old object first would
         // strand a self-assignment, so the retain above comes first.
-        if (carriesObjects(local_type)) try self.code.releaseObject(local);
+        if (try self.carriesObjects(local_type)) try self.code.releaseObject(local);
         try self.code.release(local, owns_storage);
         try self.code.store(local, store);
     }

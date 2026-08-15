@@ -93,6 +93,41 @@ test "references: sharing, aliasing, and reassignment leave nothing alive" {
     );
 }
 
+test "references: a struct and a union carry, share, and release their fields" {
+    // A value aggregate's reference fields are counted through its copies
+    // (docs/MEMORY.md): the struct returned below outlives the local its
+    // list came from, two copies share one list, and the union's payload
+    // list is freed with the last binding — the run ends with a zero
+    // census, which is what proves the fields were released.
+    try agreeOk(
+        \\struct Box:
+        \\    items: list(int)
+        \\
+        \\union Node:
+        \\    leaf(value: int)
+        \\    branch(kids: list(int))
+        \\
+        \\func make() -> Box:
+        \\    let xs = [1, 2, 3]
+        \\    return Box(items = xs)
+        \\
+        \\func main():
+        \\    let b = make()
+        \\    b.items.append(4)
+        \\    let c = b
+        \\    c.items.append(5)
+        \\    assert(len(b.items) == 5 and len(c.items) == 5)
+        \\    let n = Node.branch(kids = [7, 8])
+        \\    let m = n
+        \\    match m:
+        \\        leaf(value):
+        \\            assert(false)
+        \\        branch(kids):
+        \\            assert(len(kids) == 2)
+        \\
+    );
+}
+
 test "the bit set: & | ^ ~ at both widths, in hex and binary spellings" {
     try agreeOk(
         \\func main():
