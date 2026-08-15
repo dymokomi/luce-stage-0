@@ -115,6 +115,12 @@ func main():
   ```
 - **`static`.** `static func` and `static const` are type-level members
   with no receiver — the factories and namespace helpers.
+- **Visibility — the same as a struct.** Everything is public by default;
+  `private` written in full marks a field or method; `private:` and
+  `public:` regions open indented blocks inside the class body. The unit
+  of privacy is the file, and a class with a private field is constructed
+  through its own public functions (the factory pattern). This is already
+  in place (`docs/VISIBILITY.md`), the same rules structs use.
 - **Final.** A class is final: it has no subclasses. Polymorphism comes
   from interfaces, not from a hierarchy (see below).
 
