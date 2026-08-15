@@ -33,17 +33,17 @@ const Buffer = @import("buffer.zig");
 
 /// Reserved words that read as control or declaration.
 pub const keywords = [_][]const u8{
-    "func",   "struct", "interface", "enum",     "union", "match", "const",
-    "let",    "var",    "if",        "elif",     "else",  "while", "for",
-    "in",     "return", "break",     "continue", "and",   "or",    "not",
-    "true",   "false",  "import",    "none",     "try",   "catch", "self",
-    "static", "public", "private",
+    "func",  "struct", "class",  "interface", "enum",     "union", "match",
+    "const", "let",    "var",    "if",        "elif",     "else",  "while",
+    "for",   "in",     "return", "break",     "continue", "and",   "or",
+    "not",   "true",   "false",  "import",    "none",     "try",   "catch",
+    "self",  "static", "public", "private",
 };
 
-/// The words that move ownership.  They get a class of their own
-/// because they are the language's one genuinely unusual idea, and a
-/// reader scanning a page should be able to see every one of them.
-pub const verbs = [_][]const u8{ "give", "copy", "free", "new", "spawn" };
+/// The words that make a reference — a heap object, or a worker holding
+/// one.  They keep a class of their own because a reader scanning a page
+/// wants to see where allocation and concurrency enter.
+pub const verbs = [_][]const u8{ "new", "spawn" };
 
 /// Type names the language itself spells.  Any other capitalised
 /// identifier is highlighted as a type too — that is the convention
@@ -301,12 +301,12 @@ fn highlighted(gpa: std.mem.Allocator, source: []const u8) ![]u8 {
 
 test "keywords, verbs, types, builtins and declared names each get their class" {
     const gpa = std.testing.allocator;
-    const html = try highlighted(gpa, "static func total(xs: give List(Int)) -> Int:\n    return len(xs)");
+    const html = try highlighted(gpa, "static func total() -> Int:\n    let xs = new List(Int)\n    return len(xs)");
     defer gpa.free(html);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"k\">static</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"k\">func</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"d\">total</span>") != null);
-    try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"v\">give</span>") != null);
+    try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"v\">new</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"t\">List</span>") != null);
     try std.testing.expect(std.mem.indexOf(u8, html, "<span class=\"b\">len</span>") != null);
 }

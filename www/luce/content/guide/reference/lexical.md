@@ -85,9 +85,9 @@ main.luc:2:9: _ is the array-shape wildcard, not a name (array(long, _)); a bind
 ## Keywords
 
 ```
-and      break    catch    const    continue copy     elif
-else     enum     false    for      func     give     if       interface
-import   in       let      match    new      none     not
+and      break    catch    class    const    continue elif
+else     enum     false    for      func     if       import   in
+interface let     match    new      none     not
 or       private  public   return   self     spawn    static
 struct   true     try      union    var      while
 ```
@@ -111,7 +111,7 @@ abs         min          max          clamp               sqrt
 floor       ceil         trunc        len                 byte_at
 assert      trap         parse_int    parse_float         chr
 ord         append       pop          insert              remove
-has         dim          free         print               file_read
+has         dim          print        file_read
 file_write  path_kind    key_read     key_text            error
 read_line   print_error  clock_ms     sleep_ms            env
 file_append file_delete  file_rename  dir_list            term_rows

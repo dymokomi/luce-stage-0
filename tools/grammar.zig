@@ -5,8 +5,8 @@
 //! **Generated because the hand-written one drifted.**  The committed
 //! grammar spent a release cycle highlighting `create_texel`,
 //! `texel_output` and `read_file` — Fabric and host builtins the
-//! language had deleted — while knowing nothing of `give`, `copy`,
-//! `new`, `try`, `catch`, `none`, or the four heap types.  Nothing
+//! language had deleted — while knowing nothing of `new`, `class`,
+//! `try`, `catch`, `none`, or the four heap types.  Nothing
 //! pinned it to the language, so nothing said.  Every word below is
 //! read from the table the compiler dispatches on, and
 //! `test "the committed grammar is what the generator emits"` fails
@@ -24,7 +24,7 @@
 //! The six classes and what they read:
 //!
 //!   keywords  `02_lex/token.zig`'s `keywords`, by kind
-//!   verbs     the same table's `new`/`give`/`copy`, plus `free`
+//!   ownership the same table's `new` and `spawn`
 //!   symbols   `02_lex/token.zig`'s `Kind`, one row per punctuation
 //!             and operator token — map braces and the bit set included
 //!   types     `support/types.zig`'s `builtin_names`, plus `None`
@@ -83,10 +83,10 @@ const Class = enum {
     exception,
     /// `true`, `false`, `none` — values with no other spelling.
     constant,
-    /// `new`, `give`, `copy` and the `free` builtin: the words that
-    /// move ownership.  They get a class of their own because they are
-    /// the language's one genuinely unusual idea (docs/OWNERSHIP.md),
-    /// and a reader scanning a file should see every one of them.
+    /// `new` and `spawn`: the words that make a reference — a heap
+    /// object, or a worker holding one.  They keep a class of their own
+    /// because a reader scanning a file wants to see where allocation
+    /// and concurrency enter (docs/MEMORY.md, docs/THREADS.md).
     ownership,
     /// `self` — a name the language supplies rather than the program.
     /// `variable.language` is the scope every grammar since TextMate's
@@ -143,6 +143,9 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
 
         .keyword_func,
         .keyword_struct,
+        // `class` declares a reference type beside `struct`'s value type
+        // (docs/MEMORY.md), and wears its class.
+        .keyword_class,
         .keyword_interface,
         // `enum` and `union` declare types beside `struct`, and wear
         // its class.
@@ -161,10 +164,9 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
 
         .keyword_true, .keyword_false, .keyword_none => .constant,
 
-        // `spawn` sits with the ownership verbs because that is what it
-        // is: it makes a resource and moves things into it, and the
-        // arguments it carries wear `give` and `copy` themselves
-        // (docs/THREADS.md D2, D3).
+        // `spawn` sits beside `new` because that is what it is: it makes
+        // a resource — a worker with a heap of its own — the way `new`
+        // makes an object (docs/THREADS.md).
         .keyword_new, .keyword_spawn => .ownership,
 
         .keyword_self => .receiver,

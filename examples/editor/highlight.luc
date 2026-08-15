@@ -53,10 +53,10 @@ func quoted_end(value: string, finish: long, opening: long) -> long:
 # --- the word tables -------------------------------------------------
 
 private const keyword_words = {
-    "and": true, "break": true, "catch": true, "const": true,
-    "continue": true, "copy": true, "elif": true, "else": true,
+    "and": true, "break": true, "catch": true, "class": true,
+    "const": true, "continue": true, "elif": true, "else": true,
     "enum": true, "false": true, "for": true, "func": true,
-    "give": true, "if": true, "import": true, "in": true, "interface": true,
+    "if": true, "import": true, "in": true, "interface": true,
     "let": true, "match": true, "new": true, "none": true,
     "not": true, "or": true, "private": true, "public": true,
     "return": true, "self": true, "spawn": true, "static": true,
@@ -77,7 +77,7 @@ private const builtin_words = {
     "epoch_ms": true, "env": true,
     "error": true, "exit": true, "file_append": true, "file_delete": true,
     "path_kind": true, "file_open": true, "file_read": true,
-    "file_rename": true, "file_write": true, "floor": true, "free": true,
+    "file_rename": true, "file_write": true, "floor": true,
     "key_read": true, "key_text": true, "len": true, "max": true,
     "min": true, "ord": true, "os_available_memory": true,
     "os_cpu_count": true, "os_total_memory": true, "parse_float": true,
