@@ -290,15 +290,6 @@ fn body(argument: ?*anyopaque) callconv(.c) void {
         &worker.result,
         worker.depth,
     );
-    // The arguments were re-owned into this runtime — the worker owns its
-    // copies — and the worker function borrowed them as parameters, which
-    // a borrow never releases.  There is no caller standing in this heap
-    // to free them, so the worker does it here, now that the run which
-    // read them has returned.  A `return` that handed an argument's object
-    // back into the answer retained it first (the return of a borrowed
-    // value), so this releases only the copies, never the answer
-    // (docs/MEMORY.md).
-    for (worker.arguments) |carried| child.freeValue(carried);
     if (worker.outcome != survived and
         worker.outcome != raised_trap and
         worker.outcome != raised_error)
