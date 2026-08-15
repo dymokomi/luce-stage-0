@@ -1,4 +1,4 @@
-//! The statement-temporary ledger (OWNERSHIP.md S3): every fresh,
+//! The statement-temporary ledger (MEMORY.md): every fresh,
 //! unowned object a statement produces is parked in a hidden local,
 //! and the end of the statement releases the ones nothing adopted.
 //!

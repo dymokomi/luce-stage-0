@@ -333,7 +333,7 @@ pub const Intrinsic = enum {
     /// (docs/BYTES.md R4, R5).  `file_open` answers a `file` the
     /// caller's scope owns and whose end closes it — there is no
     /// `close` intrinsic, because `free f` is the close and
-    /// OWNERSHIP.md already said what it means.  `handle_read` fills
+    /// MEMORY.md already said what it means.  `handle_read` fills
     /// an `array(byte, n)` and answers how many bytes landed, zero
     /// being the end of the file; `handle_write` writes the first
     /// `count` bytes of one and answers how many landed;

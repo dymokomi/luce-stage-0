@@ -91,7 +91,7 @@ test "an argument out of range traps, and a refused write is an error" {
 //
 // `args` is *handed to* the program rather than called by it, which is
 // why none of this is behind the host gate and why a host with nothing
-// to offer supplies an empty list rather than a trap (OWNERSHIP.md
+// to offer supplies an empty list rather than a trap (MEMORY.md
 // S44, docs/METHODS.md).  The list is built by `libluce_rt` on both
 // arms, so what is under test here is that the two hosts marshal the
 // same world into the same list — and, through the leak census, that

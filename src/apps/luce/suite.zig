@@ -299,7 +299,7 @@ fn artifactFor(gpa: Allocator, path: []const u8) ![:0]u8 {
 ///
 /// It is a value rather than a branch inside the loop because three of
 /// its arms cannot be reached from Luce source at all: scope ownership
-/// frees everything (OWNERSHIP.md S33), a host that ran out of memory
+/// frees everything (MEMORY.md), a host that ran out of memory
 /// is not a program that went wrong, and an unknown status is an ABI
 /// nobody speaks.  They are guards, and a guard nothing can test is a
 /// guard nobody has read.

@@ -579,7 +579,7 @@ pub const Machine = struct {
         return self.host orelse return self.runtime.fail(.host_unavailable);
     }
 
-    /// The `list(string)` `main`'s parameter receives (OWNERSHIP.md
+    /// The `list(string)` `main`'s parameter receives (MEMORY.md
     /// S44).
     ///
     /// A host with no arguments to offer — including no host at all —
@@ -855,7 +855,7 @@ pub const Machine = struct {
         // shapes stage 4 lets through (docs/METHODS.md).  The list is
         // built the same way the compiled arm builds it — `libluce_rt`
         // owns the semantic and each engine hands it what its own host
-        // spells the arguments in (OWNERSHIP.md S44).
+        // spells the arguments in (MEMORY.md).
         var received: [1]RuntimeValue = .{.none};
         var arguments: []const RuntimeValue = &.{};
         const takes_arguments = self.program.functions[entry].parameter_count == 1;

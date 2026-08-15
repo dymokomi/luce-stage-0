@@ -228,7 +228,7 @@ pub const Expression = union(enum) {
     /// reach its landing type (docs/TYPES.md §1).  A node rather than
     /// a property, so operand trees say where every conversion stands.
     convert: Convert,
-    /// The `T <: T?` widening (OWNERSHIP.md S43) — `convert`'s twin on
+    /// The `T <: T?` widening (MEMORY.md) — `convert`'s twin on
     /// the optional ladder, recorded at `fit`, the one place promotion
     /// is spelled.  A node rather than a property of the place,
     /// because the wrap emits a real instruction whose result is a

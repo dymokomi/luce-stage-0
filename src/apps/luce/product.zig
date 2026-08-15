@@ -738,7 +738,7 @@ test "the standalone binary answers 0 for finished, 1 for a trap, 3 for an uncau
 test "a standalone binary reads the arguments it was given, past its own name" {
     // `args[0]` is the first thing the person typed after the program,
     // which is what `loom run PROGRAM a b` gives too — a program's
-    // behaviour must not depend on who started it (OWNERSHIP.md S44).
+    // behaviour must not depend on who started it (MEMORY.md).
     const gpa = testing.allocator;
     var tree = try installTree(gpa);
     defer tree.deinit(gpa);

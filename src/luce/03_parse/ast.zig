@@ -368,7 +368,7 @@ pub const ExpressionStatement = struct { value: *Expression, span: Span };
 pub const Statement = union(enum) {
     let: Binding,
     /// var name: Type with no value is a late declaration: the slot
-    /// holds the type's zero value until assigned (OWNERSHIP.md S40).
+    /// holds the type's zero value until assigned (MEMORY.md).
     variable: Variable,
     /// let a, b = f() / var a, b = f() — one keyword, two or more
     /// names, one call.

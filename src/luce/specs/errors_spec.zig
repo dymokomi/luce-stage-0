@@ -6949,7 +6949,7 @@ test "luce.sema.method: a task has wait and nothing else" {
 test "luce.sema.const: a constant cannot spawn" {
     // The program root owns materialized constants, not a running
     // worker: a task's death point is a join and only a function scope
-    // can reach one (OWNERSHIP.md S35, S46).
+    // can reach one (MEMORY.md).
     try expectRejected(
         \\func work() -> long:
         \\    return 1

@@ -841,9 +841,9 @@ pub fn fold(
         },
         // The program root owns materialized constants, not running
         // resources: a task's death point is a join, and only a
-        // function scope can arrive at one (OWNERSHIP.md S35, S46).
+        // function scope can arrive at one (MEMORY.md).
         .spawn => {
-            return constantError(analyzer, expression.span(), "a constant is folded at compile time and nothing runs there; spawn belongs in a function [OWNERSHIP.md S35, S46]", .{});
+            return constantError(analyzer, expression.span(), "a constant is folded at compile time and nothing runs there; spawn belongs in a function", .{});
         },
         // A lambda becomes a function value, which is deliberately not
         // one of the initializer forms a file-scope `const` accepts

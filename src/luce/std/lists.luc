@@ -6,8 +6,7 @@
 # half through pop, recursively sort both runs, then merge from their
 # backs. On equal keys the right run moves first into the reversed
 # result, so popping that result restores the earlier left item first.
-# Every object crosses as the fresh result of pop; nothing is copied and
-# no `give`-specific second body is needed.
+# Every element crosses as the fresh result of pop, so nothing is copied.
 private func sort_by_template(values: list(long), before: func(long, long) -> bool):
     if len(values) < 2:
         return

@@ -1,7 +1,7 @@
 //! `libluce_rt` — the Luce runtime library, and re-export barrel.
 //!
 //! Luce's semantics below the instruction level live here: the object
-//! heap and scope ownership (docs/OWNERSHIP.md), lists, maps, arrays,
+//! the object heap and ARC (docs/MEMORY.md), lists, maps, arrays,
 //! `Builder`, string storage and the small String primitive set,
 //! `String`/`parse_int`/`parse_float`/`chr`/`ord`, checked arithmetic, and
 //! the trap channel they all report through.

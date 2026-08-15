@@ -1039,7 +1039,7 @@ fn calledName(self: *FunctionBuilder, expression: *const ast.Expression) Error![
     };
 }
 
-/// var name: Type — a late declaration (OWNERSHIP.md S40): the
+/// var name: Type — a late declaration (MEMORY.md): the
 /// slot starts at the type's zero value; the zero of an object
 /// type is the null object, which traps on use until assigned.
 fn lowerLateDeclaration(

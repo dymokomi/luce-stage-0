@@ -544,7 +544,7 @@ pub const ArgumentFn = *const fn (
 ) callconv(.c) i32;
 
 /// `main`'s `args`: the command line as the `List(String)` the entry
-/// receives, owned by `main`'s scope (OWNERSHIP.md S44).
+/// receives, owned by `main`'s scope (MEMORY.md).
 ///
 /// A third spelling beside `listOfText` and `listOfJoinedText`, and for
 /// the same reason they are two: the host hands its arguments over one

@@ -2199,7 +2199,7 @@ pub const Parser = struct {
             }
         }
         // var name: Type — a late declaration; the slot starts at the
-        // type's zero value (OWNERSHIP.md S40).  let always initializes.
+        // type's zero value (MEMORY.md).  let always initializes.
         if (mutable and annotation != null and self.peekKind() == .newline) {
             _ = self.advance();
             return .{ .variable = .{

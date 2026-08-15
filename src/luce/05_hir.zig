@@ -68,9 +68,9 @@
 //! `-O3`, and `LoopFusePass` is off by default with an in-tree FIXME
 //! about its place in the pipeline.
 //!
-//! `docs/OWNERSHIP.md` S3 already licenses the elimination: an unbound
-//! temporary dies at the end of its statement, so the intermediates in
-//! `a * b + c` are unnamed, statement-scoped, and unobservable.  The
+//! An unbound temporary dies at the end of its statement, so the
+//! intermediates in `a * b + c` are unnamed, statement-scoped, and
+//! unobservable, which is what licenses the elimination.  The
 //! legal precondition exists; only the representation is missing.
 //!
 //! This binds every arm added here, because it is the one decision the

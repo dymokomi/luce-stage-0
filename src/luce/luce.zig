@@ -1,6 +1,6 @@
 //! Luce — a small, statically typed, compiled language.
 //!
-//! `docs/LANGUAGE.md` is the surface, `docs/OWNERSHIP.md` the memory
+//! `docs/LANGUAGE.md` is the surface, `docs/MEMORY.md` the memory
 //! model, and `docs/PIPELINE.md` the stage-by-stage status table.
 //!
 //! `compile.zig` is the driver and the place to start reading: it

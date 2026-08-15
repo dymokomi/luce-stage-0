@@ -32,26 +32,18 @@
 # **parsing what `write` produced gives an equal value, and writing
 # that gives identical text.**
 #
-# **Ownership is scope ownership, with nothing new in it.**  A `Json`
-# carries objects — `list(Json)` and `map(string, Json)` are heap
-# objects — so it takes `give`/`copy` where any carrying value does
-# (OWNERSHIP.md S24, S27) and it dies with the binding that received
-# it.  Freeing a document is freeing one value; the containers inside
-# it go with it, recursively (S20).  There is no arena, no collector
-# and no `deinit` to remember.
+# **Memory is automatic.**  A `Json` carries objects — `list(Json)` and
+# `map(string, Json)` are reference-counted containers — and they are
+# freed when the last reference to them goes away.  There is no arena,
+# no collector and no `deinit` to remember.
 #
 # **Building one reads the way taking one apart does.**  The map and
-# the list *are* the builder, so ownership is taken once, at the
-# outermost value:
+# the list *are* the builder:
 #
 #     var fields = new map(string, Json)
 #     fields["name"] = Json.text(value = "luce")
 #     fields["tags"] = Json.array(items = [Json.integer(value = 1)])
-#     let doc = Json.object(fields = give fields)
-#
-# Every inner value there is fresh and silent (S20); the one `give` is
-# on the last line, because that is the one place a named object moves
-# into a value that outlives the name.
+#     let doc = Json.object(fields = fields)
 #
 # **Written against the normative documents.**  The grammar is RFC
 # 8259 — §2 the structural characters and the four whitespace bytes,
@@ -255,12 +247,10 @@ union Json:
     # that is not there and for a value that is not an object, which
     # are the same news to a caller who was looking for a field.
     #
-    # **The answer is a copy**, and deliberately so: a value read out
-    # of a container has an owner already (OWNERSHIP.md S17, S22), and
-    # the only thing a function can hand back is one of its own.  For
-    # a leaf that is a number or a string; for a subtree it is the
-    # whole subtree.  A walk that only means to *read* should say
-    # `match` and reach the map itself, which copies nothing.
+    # **The answer is a value**, read out of the container: a leaf that
+    # is a number or a string, or a subtree whose inner containers are
+    # references shared with the document.  A walk that only means to
+    # *read* should say `match` and reach the map itself directly.
     func member(name: string) -> Json?:
         match self:
             object(fields):
@@ -359,8 +349,7 @@ private func read_value(content: string, from: long, depth: long) -> (Json, long
         var in_list = skip_blank(content, at + 1)
         # The loop leaves with `in_list` on the closing bracket,
         # whichever way it got there, so the value is built once at the
-        # bottom — which is also what keeps `give items` to the one
-        # place S29 wants it.
+        # bottom, from the list assembled above.
         if in_list >= len(content) or content.byte_at(in_list) != bracket_close:
             var listed = false
             while not listed:

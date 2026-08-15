@@ -37,7 +37,7 @@
 //! value itself and has nothing to free.  Heap objects are neither —
 //! `object` carries a `Handle` into the runtime's object table, and
 //! the table row, not the value, decides who frees it
-//! (docs/OWNERSHIP.md).
+//! (docs/MEMORY.md).
 //!
 //! `view()` exists for Zig callers.  Switching on a tagged union is how
 //! the semantics were written and how they read best; the extern struct
@@ -130,7 +130,7 @@ pub const text_outside: u8 = 0xff;
 /// generation moves on every time its occupant dies, so a handle to a
 /// freed object stays detectably stale even after somebody else has
 /// moved into its row, and using it traps `use_after_free`
-/// (docs/OWNERSHIP.md S9) rather than silently naming the newcomer.
+/// (docs/MEMORY.md) rather than silently naming the newcomer.
 ///
 /// A handle travels whole in `Value.bits` — the index in the low 32
 /// bits, the generation in the high 32 — so resolving one is still

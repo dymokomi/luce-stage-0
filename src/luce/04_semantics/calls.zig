@@ -1703,7 +1703,7 @@ fn receiverPlace(
                 try self.fail(
                     "luce.sema.own",
                     name.span,
-                    "{s} is being iterated; a writing method would change it under the loop [OWNERSHIP.md S5, S9]",
+                    "{s} is being iterated; a writing method would change it under the loop",
                     .{name.text},
                 );
                 return null;
@@ -2458,7 +2458,7 @@ fn objectMethod(
                     try self.fail(
                         "luce.sema.own",
                         method.span,
-                        "fill copies one value into every slot; an array of objects stores each slot separately [OWNERSHIP.md S21, S23]",
+                        "fill copies one value into every slot; an array of objects stores each slot separately",
                         .{},
                     );
                     return null;
@@ -2558,7 +2558,7 @@ fn objectMethod(
         // a count and answers how many landed.  All three are
         // fallible: the world decides.  There is no `close`,
         // because `free f` is one and the end of the owning scope
-        // is the other (OWNERSHIP.md, unchanged).
+        // is the other (MEMORY.md, unchanged).
         .file => {
             if (std.mem.eql(u8, name, "read")) {
                 if (!try methodTakes(self, method, arguments, receiver)) return null;

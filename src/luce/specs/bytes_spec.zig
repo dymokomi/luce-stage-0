@@ -159,7 +159,7 @@ test "a handle opens, reads a count, and its scope closes it" {
 test "a handle returns out of the function that opened it" {
     // `return` moves an object, and a handle is an object: the file
     // stays open across the frame that made it and is closed by the
-    // scope that received it (OWNERSHIP.md S16, unchanged).
+    // scope that received it (MEMORY.md, unchanged).
     const world: agree.World = .withFile("notes.txt", "abcdef");
 
     var session = try agree.compare(

@@ -425,7 +425,7 @@ pub export fn luce_rt_names_list(
 }
 
 /// `main`'s `args`: the command line as the `List(String)` the entry's
-/// parameter receives (OWNERSHIP.md S44).
+/// parameter receives (MEMORY.md).
 ///
 /// The two vtable slots are handed straight over rather than read out
 /// of a `LuceHost` here, because effects travel in that table and

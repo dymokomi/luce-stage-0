@@ -15,7 +15,7 @@
 //! whose scope-end release is `close`, so a file cannot leak by the
 //! same construction that keeps every list from leaking, and a use
 //! after close traps `use_after_free` because it is the same mistake
-//! (docs/OWNERSHIP.md, unchanged).
+//! (docs/MEMORY.md, unchanged).
 //!
 //! **The text conveniences** — `file_read`, `file_write`, `file_append`,
 //! unchanged in surface and meaning — are open-read-close over that

@@ -216,28 +216,25 @@ pub const Object = struct {
         builder: std.ArrayList(u8),
         /// An open file, as the host numbers it (docs/BYTES.md R5).
         ///
-        /// **A resource, owned exactly as memory is.**  The binding
-        /// that received it owns it, the owning scope's end closes it,
-        /// `give`/`return`/`free` mean what OWNERSHIP.md says, and a
-        /// use after close traps `use_after_free` because it is the
-        /// same mistake.  What is different from every other kind is
+        /// **A resource, managed exactly as memory is.**  It is a
+        /// reference-counted object, closed at its last release
+        /// (docs/MEMORY.md).  What is different from every other kind is
         /// only that its release reaches outside the process, which is
         /// why `Runtime` holds the host's channel for the whole run
-        /// (`files`): `freeObject` is where a scope's end arrives, and
+        /// (`files`): `freeObject` is where the last release arrives, and
         /// nothing is standing there to hand a host in.
         file: File,
         /// A running worker (docs/THREADS.md D3).
         ///
         /// A resource on exactly the terms `file` is one, and the same
-        /// sentence covers it: the binding that received it owns it,
-        /// the owning scope's end releases it, and `give`/`return`/
-        /// `free` mean what OWNERSHIP.md says.  What "release" *is* is
-        /// the only thing that differs — for a file it is a close and
-        /// for a task it is a **join**, which is why an orphan thread
-        /// is as unrepresentable in Luce as a leaked list (D5).
+        /// sentence covers it: a reference-counted object released at its
+        /// last reference (docs/MEMORY.md).  What "release" *is* is the
+        /// only thing that differs — for a file it is a close and for a
+        /// task it is a **join**, which is why an orphan thread is as
+        /// unrepresentable in Luce as a leaked list.
         ///
         /// The pointer is null once the worker has been joined and its
-        /// runtime closed, which `wait` does early and the scope's end
+        /// runtime closed, which `wait` does early and the last release
         /// does otherwise; a task whose worker is gone is spent, and
         /// touching it again traps `use_after_free`.
         task: ?*workers.Worker,

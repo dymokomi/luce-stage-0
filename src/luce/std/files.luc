@@ -15,13 +15,13 @@
 # failure to your caller, or with `catch` to answer it here.  There is
 # no exception, `exists` included — see the note above it.
 #
-# **There is no `close` and no `with`.**  A `file` is owned by the
-# binding that received it, so the end of that scope closes it, `free
-# f` closes it early, `give f` and `return f` move it, and using one
-# after it is closed traps like any use after free.  Python's `with`
-# is a per-call-site opt-in to a guarantee this language gives
-# unconditionally: a Luce program cannot leak a file by forgetting a
-# keyword, because there is no keyword to forget.
+# **There is no `close` and no `with`.**  A `file` is a
+# reference-counted resource, closed automatically when the last
+# reference to it goes away, and using one after it is closed traps
+# like any use after free.  Python's `with` is a per-call-site opt-in
+# to a guarantee this language gives unconditionally: a Luce program
+# cannot leak a file by forgetting a keyword, because there is no
+# keyword to forget.
 
 import std.strings
 import std.paths
@@ -176,10 +176,9 @@ func make_directory(path: string) -> !:
 #
 # A file is bytes reached through an open handle, and text is a
 # validation the language performs on the bytes.  `open`, `create` and
-# `append_to` answer a `file` your scope owns: the end of that scope
-# closes it, `free f` closes it early, `give f` and `return f` move it,
-# and using one after it is closed traps like any use after free,
-# because it is the same mistake.
+# `append_to` answer a `file`: a reference-counted resource, closed
+# when its last reference goes away, and using one after it is closed
+# traps like any use after free, because it is the same mistake.
 #
 # The primitive is C-shaped on purpose: a read fills a buffer you own
 # and says how many bytes landed — zero means the file is finished —

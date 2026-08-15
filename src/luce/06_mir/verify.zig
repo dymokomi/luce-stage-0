@@ -152,7 +152,7 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     // The entry takes nothing, or it takes the command line and
     // nothing else — the two shapes stage 4 lets through, said again
     // here because a decoded module is not to be trusted about them
-    // (docs/METHODS.md, OWNERSHIP.md S44).
+    // (docs/METHODS.md, MEMORY.md).
     if (entry.parameter_count > 1) return error.BadFunction;
     if (entry.parameter_count != 0 and entry.locals[0].inout) return error.BadFunction;
     if (entry.parameter_count == 1 and !isCommandLine(program, entry.locals[0].local_type)) {
