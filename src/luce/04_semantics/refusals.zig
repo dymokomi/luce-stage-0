@@ -219,7 +219,7 @@ pub fn failCapturedName(self: *FunctionBuilder, name: []const u8, span: Span) Er
         "luce.sema.name",
         span,
         "a lambda carries no environment, and {s} belongs to the scope around it; " ++
-            "pass it as a parameter, or write a struct with a method — state that travels with behavior is a struct [FUNCTIONS.md S3]",
+            "pass it as a parameter, or write a struct with a method — state that travels with behavior is a struct",
         .{name},
     );
     return true;

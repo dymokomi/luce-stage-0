@@ -1840,7 +1840,7 @@ pub const FunctionBuilder = struct {
             try self.fail(
                 "luce.sema.type",
                 written.span,
-                "a lambda needs a place that expects a function: annotate the binding, or pass it where a func(...) parameter is declared [FUNCTIONS.md S3]",
+                "a lambda needs a place that expects a function: annotate the binding, or pass it where a func(...) parameter is declared",
                 .{},
             );
             return null;

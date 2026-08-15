@@ -469,7 +469,7 @@ fn lowerValueCall(
             try self.fail(
                 "luce.sema.call",
                 argument.span,
-                "a function type has no parameter names, so {s} cannot be named here [FUNCTIONS.md S2]",
+                "a function type has no parameter names, so {s} cannot be named here",
                 .{named},
             );
             return null;

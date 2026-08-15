@@ -4,8 +4,28 @@
 > types with automatic reference counting** (`docs/MEMORY.md`). The model
 > touches every stage, so the honest unit of work is a coordinated
 > build-out of ARC and removal of the legacy ownership subsystem,
-> committed at coherent checkpoints. Phases 0–1 are done and green; the
-> ARC runtime is next. No compatibility is preserved.
+> committed at coherent checkpoints. No compatibility is preserved.
+
+## Where we are
+
+The **ARC engine is built and green.** The built-in reference types —
+`list`, `map`, `array`, `builder`, `file`, `task` — are reference-counted
+with compiler-inserted retain/release, freed at the last release, on both
+engines, with zero leaks across the whole spec suite. The legacy
+ownership subsystem (`give`/`copy`/`free`, the S-rules) is gone, and the
+documentation is rewritten to describe ARC. That is **Phases 0–4 and 7**.
+
+What is **not** built yet is the language surface a user reaches for a
+`class` — **Phase 5**. A `class` parses and type-checks as a reference
+kind, but it still *lowers* as a value: assigning one copies rather than
+shares, so a mutation through one name is not yet seen through another.
+`weak`, capturing closures, and mutating interface dispatch are likewise
+still refused. Phase 5 wires the reference-kind flag through the lowering
+and lifts those refusals; Phase 6 then rewrites the standard library, the
+editor, and termui to use sharing. **Those two phases are the remaining
+distance to "full ARC with classes."** Test coverage tracks the build:
+everything shipped is exercised on both engines; the unbuilt features have
+no specs because they do not exist yet.
 
 ## Guiding cuts
 
@@ -32,7 +52,7 @@ Authoritative `docs/MEMORY.md`, this roadmap, `CLAUDE.md` and
   (value | reference) is the only structural addition to `Type`.
 - Additive and green: assignment and passing still compile as before.
 
-### Phase 2 — ARC in `libluce_rt` and the oracle  (next)
+### Phase 2 — ARC in `libluce_rt` and the oracle  ✓ done
 - A reference object gains a refcount header. `luce_rt_retain`,
   `luce_rt_release` (release frees at zero, running the resource close).
   The interpreter's object table mirrors it exactly.
@@ -41,14 +61,14 @@ Authoritative `docs/MEMORY.md`, this roadmap, `CLAUDE.md` and
 - `abi.version` bumps. Specs added for retain/release, deterministic
   release, and resource close-at-last-reference, on both engines.
 
-### Phase 3 — share/copy semantics; the legacy subsystem removed
+### Phase 3 — share/copy semantics; the legacy subsystem removed  ✓ done (built-in references)
 The big cut. Remove the legacy ownership walk and its diagnostics from
 `04_semantics`, and replace the model with the one rule:
 - assigning/passing a **value** copies; a **reference** shares (a retain).
 - a reference going out of scope → a release.
 - `new`/literals allocate a reference with count 1.
 
-### Phase 4 — MIR & backend: retain/release
+### Phase 4 — MIR & backend: retain/release  ✓ done
 - `06_mir`: the ownership instruction pairs become `retain`/`release`;
   the verifier checks reference-count discipline. `format_version` bumps.
 - `08_llvm`: the ownership-elision pass becomes ARC-elision (drop
@@ -56,7 +76,7 @@ The big cut. Remove the legacy ownership walk and its diagnostics from
   non-escaping references — the SILGen playbook).
 - The interpreter counts identically.
 
-### Phase 5 — Language surface unlocks
+### Phase 5 — Language surface unlocks  ← next
 Now that references are shared and mutable:
 - **Mutating interface methods** — an interface value is a reference.
 - **Capturing closures** — a lambda captures referenced objects; ARC keeps
@@ -64,7 +84,7 @@ Now that references are shared and mutable:
 - **`weak`** references (`weak var parent: Node?`), non-retaining, read as
   `T?`.
 
-### Phase 6 — Rewrite the users of the model
+### Phase 6 — Rewrite the users of the model  (after 5)
 - `std/*` — containers are shared; no verbs.
 - `examples/editor` — the state coordinator shrinks: shared mutable
   buffers, no remember/restore dance.
@@ -73,7 +93,7 @@ Now that references are shared and mutable:
 - `bench/*` — value types keep their speed; re-baseline the graph-heavy
   rows that sharing should improve.
 
-### Phase 7 — Docs sweep
+### Phase 7 — Docs sweep  ✓ done
 Rewrite the remaining docs to the ARC pipeline, feature by feature.
 `GENERICS.md` simplifies (no ownership to price against). Update
 `TESTING.md`, `ENGINE.md`, `CODEGEN.md`, `PIPELINE.md`.
