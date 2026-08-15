@@ -570,7 +570,9 @@ pub const FunctionBuilder = struct {
             try self.fail("luce.sema.duplicate", span, "{s} is already a top-level declaration{s}", .{ name, where });
             return null;
         }
-        const owns_storage = storage_class == .owns and shapes.ownsStorage(self.analyzer, local_type);
+        const owns = storage_class == .owns;
+        const owns_storage = owns and shapes.ownsStorage(self.analyzer, local_type);
+        const owns_objects = owns and shapes.carriesObjects(self.analyzer, local_type);
         const local = try recorder.recordLocal(self, name, local_type, owns_storage, span);
         const scope = &self.scopes.items[self.scopes.items.len - 1];
         try scope.names.put(self.temporary(), name, .{
@@ -578,10 +580,11 @@ pub const FunctionBuilder = struct {
             .mutable = mutable,
             .declared_at = span,
         });
-        if (owns_storage) {
+        if (owns_storage or owns_objects) {
             try scope.owned.append(self.temporary(), .{
                 .local = local,
                 .storage = owns_storage,
+                .objects = owns_objects,
             });
         }
         return local;
@@ -1584,15 +1587,19 @@ pub const FunctionBuilder = struct {
 
         const value = (try self.lowerExpressionInner(expression, as_statement)) orelse return null;
         if (value.value_type == .none) return value;
-        // Freshly allocated storage is parked as a statement temporary
-        // so the statement's end reclaims it (docs/STRINGS.md): a string
-        // `+`, a built struct or union run, a call's fresh result.  A
-        // string slice borrows and allocates nothing, so it parks
-        // nothing.
-        const storage = shapes.ownsStorage(self.analyzer, value.value_type) and
-            value.provenance() == .fresh and
-            !ledger.parkedAlready(self, value.node);
-        if (storage) try ledger.registerTemp(self, value, storage, expression.span());
+        // A freshly made value is parked as a statement temporary so the
+        // statement's end reclaims what nothing adopts (docs/STRINGS.md,
+        // docs/MEMORY.md): its freshly allocated storage — a string `+`, a
+        // built struct run, a call's fresh result — and the reference
+        // object it names — a `new` container, a fresh `Json.array`.  A
+        // borrow (a slice, a reload, a field read) allocates and owns
+        // nothing, so it parks nothing.
+        const parkable = !ledger.parkedAlready(self, value.node);
+        const storage = parkable and value.provenance() == .fresh and
+            shapes.ownsStorage(self.analyzer, value.value_type);
+        const objects = parkable and nodes.freshObject(value.node) and
+            shapes.carriesObjects(self.analyzer, value.value_type);
+        if (storage or objects) try ledger.registerTemp(self, value, storage, objects, expression.span());
         return value;
     }
 

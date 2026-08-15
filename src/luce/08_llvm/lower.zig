@@ -2433,9 +2433,12 @@ const Module = struct {
         // `args` — the command line, built by `libluce_rt` out of the
         // two vtable slots that already carry it, so nothing is added
         // to the published ABI and `luce_main`'s signature does not
-        // move (OWNERSHIP.md S44, docs/METHODS.md).  A host that
-        // supplies neither service yields an empty list; the only way
-        // this can fail is running out of memory for the list itself.
+        // move (docs/METHODS.md).  A host that supplies neither service
+        // yields an empty list; the only way this can fail is running out
+        // of memory for the list itself.  The entry made the list, so the
+        // entry releases it once `main` — which only borrows the
+        // parameter — has returned (docs/MEMORY.md).
+        var args_box: ?Builder.Value = null;
         if (takes_arguments) {
             const box = try wip.alloca(
                 .normal,
@@ -2474,6 +2477,7 @@ const Module = struct {
             _ = try wip.br(ending);
 
             wip.cursor = .{ .block = entering };
+            args_box = box;
             const handle_at = try wip.gepStruct(self.value_type, box, Body.box_bits, "args.at");
             try arguments.append(self.gpa, try wip.load(
                 .normal,
@@ -2504,6 +2508,11 @@ const Module = struct {
             arguments.items,
             "outcome",
         ), outcome_slot, word);
+        // The parameter was a borrow, so `main` left the list alive; the
+        // entry that built it releases it now, before the census is read.
+        if (args_box) |box| {
+            _ = try self.callService(&wip, .luce_rt_release, .void, &.{ started, box }, "");
+        }
         _ = try wip.br(ending);
 
         wip.cursor = .{ .block = ending };

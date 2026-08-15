@@ -124,6 +124,7 @@ const Replay = struct {
         local: LocalId,
         register: Register,
         storage: bool,
+        objects: bool = false,
         disownable: bool = true,
         taken: bool = false,
     };
@@ -375,6 +376,7 @@ const Replay = struct {
         while (index > from) {
             index -= 1;
             const temp = self.temps.items[index];
+            if (temp.objects) try self.code.releaseObject(temp.local);
             try self.code.release(temp.local, temp.storage);
         }
     }
@@ -398,6 +400,7 @@ const Replay = struct {
             .local = local,
             .register = register,
             .storage = parked.storage,
+            .objects = parked.objects,
         });
     }
 
@@ -434,21 +437,36 @@ const Replay = struct {
         return true;
     }
 
-    /// The checker's `ownedForStoreKind`: this register when its
-    /// storage moves into the place, a copy otherwise.
-    /// A borrowed reference kept in a place that outlives the statement
-    /// owes the object a retain, so the source binding and the new holder
-    /// each count.  A fresh reference is transferred untouched — its one
-    /// reference moves into the place — and a value naming no object needs
+    /// The object half of a store: a reference kept in a place that
+    /// outlives the statement must own its own count.  A borrow retains,
+    /// so the source binding and the new holder each count.  A fresh
+    /// reference is transferred untouched — its one reference moves into
+    /// the place — and its statement-temporary park is retracted here so
+    /// the end of the statement no longer releases it (`takeObjects`, the
+    /// object half of `takeStorage`).  A value naming no object needs
     /// nothing (docs/MEMORY.md).
-    fn keepReference(
-        self: *Replay,
-        register: Register,
-        value_type: Type,
-        provenance: nodes.Provenance,
-    ) Error!void {
-        if (provenance == .view and try self.carriesObjects(value_type))
-            try self.code.retainObject(register);
+    fn keepReference(self: *Replay, register: Register, value_type: Type) Error!void {
+        if (!try self.carriesObjects(value_type)) return;
+        // A fresh object was parked when it was made; the place adopting it
+        // retracts that park (transfer), so the statement's end no longer
+        // releases it.  A value with no park is a borrow — a name, an
+        // element read, an immortal constant — which the new holder counts
+        // by retaining, leaving the source's reference intact.
+        if (self.takeObjects(register)) return;
+        try self.code.retainObject(register);
+    }
+
+    /// Retract a fresh value's object park: the place that adopts it now
+    /// owns its one reference, so the statement's end must not release it.
+    /// Answers whether a park was found — a fresh object — or not, a borrow.
+    fn takeObjects(self: *Replay, register: Register) bool {
+        for (self.temps.items) |*temp| {
+            if (temp.register != register) continue;
+            if (!temp.objects) continue;
+            temp.objects = false;
+            return true;
+        }
+        return false;
     }
 
     fn ownedForStore(
@@ -457,7 +475,7 @@ const Replay = struct {
         value_type: Type,
         provenance: nodes.Provenance,
     ) Error!StoredValue {
-        try self.keepReference(register, value_type, provenance);
+        try self.keepReference(register, value_type);
         if (!self.ownsStorage(value_type)) return .{ .register = register, .kind = .plain };
         if (self.takeStorage(register, provenance)) return .{ .register = register, .kind = .take };
         return .{ .register = try self.code.ownStorage(register), .kind = .copy };
@@ -475,7 +493,7 @@ const Replay = struct {
         recorded: ?nodes.StoreKind,
     ) Error!void {
         if (!self.code.localOwnsStorage(local)) {
-            try self.keepReference(register, value_type, provenance);
+            try self.keepReference(register, value_type);
             try self.code.store(local, register);
             if (recorded) |kind| std.debug.assert(kind == .plain);
             return;
@@ -1790,8 +1808,10 @@ const Replay = struct {
             try self.replayStatement(statement);
             try self.flushTemps(floor);
         }
-        // The recorded releases are the scope's own, in emission order.
+        // The recorded releases are the scope's own, in emission order:
+        // the reference first, then the storage, as `emitScopeReleases`.
         for (releases) |release| {
+            if (release.objects) try self.code.releaseObject(release.local);
             try self.code.release(release.local, release.storage);
         }
         self.popScope();
@@ -2043,7 +2063,7 @@ const Replay = struct {
         } else {
             // Retain a borrowed reference the slot will now hold, before
             // the old one below is let go — so `x = x` nets no change.
-            try self.keepReference(stored, local_type, provenance);
+            try self.keepReference(stored, local_type);
             std.debug.assert(recorded == .plain);
         }
         // The slot's old reference and its old storage both go now that a

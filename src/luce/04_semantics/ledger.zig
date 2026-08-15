@@ -70,16 +70,19 @@ pub fn registerTemp(
     self: *FunctionBuilder,
     value: Typed,
     storage: bool,
+    objects: bool,
     span: Span,
 ) Error!void {
     const local = try recorder.recordLocal(self, null, value.value_type, storage, span);
     // The park records at the park (coupling #3): the at-park claim is
     // what the park emits, and the released half settles in place as an
-    // adopting store retracts it.
+    // adopting store retracts it.  The object claim rides along; the
+    // replay re-derives its retraction, so the record needs only the flag.
     setPark(value.node, .{
         .local = local,
         .storage = storage,
         .released_storage = storage,
+        .objects = objects,
     });
     try self.temps.append(self.temporary(), .{
         .local = local,
@@ -305,5 +308,5 @@ pub fn parkFreshStorage(self: *FunctionBuilder, value: Typed, span: Span) Error!
     if (!shapes.ownsStorage(self.analyzer, value.value_type)) return;
     if (value.provenance() != .fresh) return;
     if (parkedForStorage(self, value.node)) return;
-    try registerTemp(self, value, true, span);
+    try registerTemp(self, value, true, false, span);
 }

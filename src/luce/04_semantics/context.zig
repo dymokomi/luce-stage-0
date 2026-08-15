@@ -526,12 +526,14 @@ pub const LocalInfo = struct {
 };
 
 /// One local this scope has to release on the way out: the storage in
-/// its slot (docs/STRINGS.md), freed at scope exit as `drop_storage`.
-/// Objects a scope leaves behind are not released here — they live
-/// until the runtime sweeps at exit.
+/// its slot (docs/STRINGS.md), freed at scope exit as `drop_storage`, and
+/// the reference object it holds (docs/MEMORY.md), whose count scope exit
+/// lowers as `release`.  A binding that owns its value — not a borrow —
+/// carries one or both.
 pub const Release = struct {
     local: LocalId,
     storage: bool = false,
+    objects: bool = false,
 };
 
 pub const Scope = struct {

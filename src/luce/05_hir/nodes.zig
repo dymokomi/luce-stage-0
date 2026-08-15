@@ -99,6 +99,11 @@ pub const Park = struct {
     /// The storage the statement's end still releases, post-retraction
     /// (coupling #3): an adopting store takes it.
     released_storage: bool,
+    /// The value carries a reference object at the park — a fresh
+    /// container or resource, or a struct/union holding one — so the
+    /// statement's end drops the reference unless a store adopts the
+    /// value first, exactly as `storage` governs its bytes (docs/MEMORY.md).
+    objects: bool = false,
 };
 
 /// How a store takes the value's storage (docs/STRINGS.md): `plain`
@@ -118,6 +123,7 @@ pub const StoreKind = enum { plain, take, copy };
 pub const Release = struct {
     local: LocalId,
     storage: bool,
+    objects: bool = false,
 };
 
 /// One slot of `Body.locals`, named or hidden, in declaration order.
@@ -1159,6 +1165,49 @@ pub fn ofIntrinsic(kind: mir.Intrinsic) Provenance {
     return switch (kind) {
         .index_get, .map_get, .key_at, .value_at => .view,
         else => .plain,
+    };
+}
+
+/// Whether a node produces a *fresh reference object* it owns the one
+/// reference to — a `new` container or a literal, a built struct/union or
+/// function value, a slice's deep copy, a spawned task, a call's result —
+/// as against borrowing one (a name, a field or element read, a narrowed
+/// reload) or naming an immortal program constant (docs/MEMORY.md).  This
+/// is to objects what `provenance`'s `.fresh` is to storage, and the two
+/// disagree exactly where a value owns no bytes but does own a row: a
+/// `[..]` list, a `{..}` map, a `new` object are storage-`.plain` yet
+/// object-fresh.  Conservative by construction — every borrow and every
+/// unclassified form answers `false`, which can only under-release (a
+/// leak), never free a value something still holds.
+pub fn freshObject(expression: *const Expression) bool {
+    return switch (expression.*) {
+        .list_literal, .map_literal, .new_object => true,
+        .struct_make, .variant_make, .interface_make => true,
+        .function_value, .lambda_ref, .bound_method => true,
+        .slice, .spawn => true,
+        .call => |payload| switch (payload.callee) {
+            .function, .indirect => true,
+            .intrinsic => |kind| freshObjectIntrinsic(kind),
+            .conversion, .enum_name, .variant_name => false,
+        },
+        // `try f()` hands back the call's own value, so its freshness is
+        // the call's.  The branch-crossing reload (`carried_get`) is *not*
+        // parked here — the fallible machinery already places its store and
+        // release (`replayParkOf` skips it), so parking it again would
+        // record a temporary the replay never consumes.
+        .try_call => |payload| freshObject(payload.call),
+        else => false,
+    };
+}
+
+/// The object an intrinsic answers, when it answers a fresh one: a deep
+/// copy, a slice, a map's freshly built key or value list, or an element
+/// taken out of its container.  A read of an element or a map value is a
+/// *view* of the container's object, not a fresh one.
+fn freshObjectIntrinsic(kind: mir.Intrinsic) bool {
+    return switch (kind) {
+        .copy_object, .list_slice, .map_keys, .map_values, .pop_value => true,
+        else => false,
     };
 }
 

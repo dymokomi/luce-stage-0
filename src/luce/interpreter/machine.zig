@@ -858,11 +858,17 @@ pub const Machine = struct {
         // spells the arguments in (OWNERSHIP.md S44).
         var received: [1]RuntimeValue = .{.none};
         var arguments: []const RuntimeValue = &.{};
-        if (self.program.functions[entry].parameter_count == 1) {
+        const takes_arguments = self.program.functions[entry].parameter_count == 1;
+        if (takes_arguments) {
             received[0] = self.commandLine() catch |mistake| return self.caught(mistake);
             arguments = &received;
         }
-        return self.call(entry, arguments);
+        const outcome = try self.call(entry, arguments);
+        // The parameter was a borrow, so `main` left the list alive; the
+        // entry that built it releases it now, the way the compiled arm
+        // does before the census is read (docs/MEMORY.md).
+        if (takes_arguments) self.runtime.freeObjectsIn(received[0]);
+        return outcome;
     }
 
     /// Run one function with the arguments already in hand — what the
