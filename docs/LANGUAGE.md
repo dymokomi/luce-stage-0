@@ -1867,11 +1867,10 @@ elsewhere is reachable from a worker, so **the ownership model is the
 concurrency model**: races are not detected, they are unrepresentable.
 
 ```luce
-func crunch(chunk: give list(double)) -> double:
+func crunch(chunk: list(double)) -> double:
     var total: double = 0.0
     for value in chunk:
         total += value * value
-    free(chunk)
     return total
 
 func main(args: list(string)):
@@ -1879,7 +1878,7 @@ func main(args: list(string)):
     for part in range(0, 4):
         var chunk = new list(double)
         chunk.append(double(part))
-        tasks.append(spawn crunch(give chunk))
+        tasks.append(spawn crunch(chunk))
     var total: double = 0.0
     for t in tasks:
         total += t.wait()

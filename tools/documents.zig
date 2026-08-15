@@ -20,7 +20,7 @@
 /// not spell a retired type name, and they carry no exemptions.
 pub const living = [_][]const u8{
     "docs/LANGUAGE.md",
-    "docs/OWNERSHIP.md",
+    "docs/MEMORY.md",
     "docs/STD.md",
     "docs/CODEGEN.md",
     "docs/MISSING.md",
@@ -30,7 +30,6 @@ pub const living = [_][]const u8{
     "docs/CODING_GUIDE.md",
     "docs/SOFTWARE_DESIGN.md",
     "docs/INTERFACES.md",
-    "docs/LANGUAGE_AUDIT.md",
     "docs/UX_UI_DESIGN.md",
     "docs/TERMUI_EDITOR_REWRITE.md",
     "docs/ROADMAP.md",
@@ -50,7 +49,6 @@ pub const records = [_][]const u8{
     "docs/NUMERICS.md",
     "docs/STRINGS.md",
     "docs/FAILURE.md",
-    "docs/MEMORY.md",
     "docs/V2.md",
     "docs/TYPES.md",
     "docs/VECTOR.md",
@@ -59,11 +57,8 @@ pub const records = [_][]const u8{
     "docs/BITWISE.md",
     "docs/ENUMS.md",
     "docs/BYTES.md",
-    "docs/CONCURRENCY_RESEARCH.md",
-    "docs/UNION_RESEARCH.md",
     "docs/UNION.md",
     "docs/THREADS.md",
-    "docs/LINKING_RESEARCH.md",
     "docs/FUNCTIONS.md",
     "docs/PACKAGES.md",
     "docs/TESTING.md",
@@ -72,7 +67,6 @@ pub const records = [_][]const u8{
     "docs/TERMUI.md",
     "docs/SELF.md",
     "docs/CONSTANTS.md",
-    "docs/RESOLVED.md",
     "docs/GENERICS.md",
 };
 
@@ -221,8 +215,7 @@ test "no document in docs/ is outside the catalogue" {
     // The check that makes the two above worth having: a new memo
     // dropped into `docs/` is in neither array and so in neither table,
     // and nothing would have noticed.  Sub-directories are deliberately
-    // not walked — `docs/v1/` is the frozen Fabric era and `docs/audit/`
-    // is dated point-in-time review, and neither is catalogued.
+    // not walked; `docs/` holds no catalogued sub-directory today.
     const gpa = testing.allocator;
     var threaded: std.Io.Threaded = .init(gpa, .{});
     defer threaded.deinit();

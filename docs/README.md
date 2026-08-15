@@ -1,15 +1,5 @@
 # The documents
 
-> **Direction change (2026-08-15).** Luce is pivoting from scope
-> ownership to **value types + reference types with ARC** — a compiled,
-> statically typed Python with memory you never think about. The
-> ratified decision is [MEMORY.md](MEMORY.md); the replacement plan is
-> [ROADMAP.md](ROADMAP.md). Until the sweep in ROADMAP Phase 7 lands,
-> many documents below still describe scope ownership (`give`/`copy`/the
-> S-rules); where a doc is already known-superseded it says so at its
-> top. [OWNERSHIP.md](OWNERSHIP.md) is the retired model, kept as the
-> evidence for the change.
-
 One line each, and one thing you cannot tell from a directory listing:
 **whether a file is current or frozen.**  A decision record is written
 in the present tense about the world it was written in, and it stays
@@ -33,8 +23,7 @@ Start with [V2.md](V2.md) for what the project is for, then
 [PIPELINE.md](PIPELINE.md) for the compiler.  If you are about to
 write code, [CODING_GUIDE.md](CODING_GUIDE.md) is not optional.  For
 confirmed incorrect behavior, see [MISSING.md](MISSING.md); proposed
-features and deliberate omissions stay in their decision records and
-[LANGUAGE_AUDIT.md](LANGUAGE_AUDIT.md).
+features and deliberate omissions stay in their decision records.
 
 The prose that faces users lives on the documentation site instead —
 **[luce.luciaos.com](https://luce.luciaos.com)**, built from
@@ -51,7 +40,7 @@ human-reviewed.  These files are the reasoning behind it.
 | File | What it is |
 |---|---|
 | [LANGUAGE.md](LANGUAGE.md) | The language specification: types, values, statements, expressions, the entry point. |
-| [OWNERSHIP.md](OWNERSHIP.md) | **Superseded** by [MEMORY.md](MEMORY.md) (value/reference + ARC). Scope ownership as 46 situations, S1–S46 — kept as the ratified record of the retired model and the evidence for the pivot. Still describes the live compiler until ROADMAP Phase 3. |
+| [MEMORY.md](MEMORY.md) | The memory model: value `struct`s and reference `class`es, ARC, and `weak` for cycles. Memory you never think about. |
 | [ROADMAP.md](ROADMAP.md) | The sequenced plan for the value/reference + ARC pivot: the phases, the big-bang cut, and what "done" looks like. |
 | [PIPELINE.md](PIPELINE.md) | The status table: one row per compiler stage, what it does, and how finished it is. |
 | [CODEGEN.md](CODEGEN.md) | The LLVM backend, the published host ABI, and the benchmark snapshot. The one place a benchmark ratio is written down. |
@@ -60,15 +49,13 @@ human-reviewed.  These files are the reasoning behind it.
 | [STD.md](STD.md) | The standard library, module by module, and what it takes to add one. |
 | [CODING_GUIDE.md](CODING_GUIDE.md) | How Zig is written here. Authoritative and intentionally opinionated. |
 | [SOFTWARE_DESIGN.md](SOFTWARE_DESIGN.md) | How to decide what a module is, what it hides, and what it is called — deep modules, information hiding, and the red flags that say an abstraction is not paying for itself. The guide above wins on anything it covers. |
-| [INTERFACES.md](INTERFACES.md) | The nominal interface contract: explicit conformance, read-only dispatch, effect matching, heterogeneous collections, and receiver ownership. |
-| [LANGUAGE_AUDIT.md](LANGUAGE_AUDIT.md) | The living feature-by-feature review matrix: pipeline seam, positive and adversarial behavior, composition probes, and the test anchor to extend. |
+| [INTERFACES.md](INTERFACES.md) | The nominal interface contract: explicit conformance, effect matching, heterogeneous collections, and dispatch to mutating methods. |
 | [MISSING.md](MISSING.md) | Confirmed bugs only. Feature requests, design questions, coverage campaigns, refactors, optimizations, and deliberate non-goals do not belong here. |
 | [UX_UI_DESIGN.md](UX_UI_DESIGN.md) | How design and coding agents design, implement, and review user experiences: an operational synthesis of Apple's Human Interface Guidelines into software obligations. |
 | [TERMUI_EDITOR_REWRITE.md](TERMUI_EDITOR_REWRITE.md) | The plan of record for the clean termui rewrite and the modular editor that adds undo/redo, in-file search, and crash-safe drafts. |
 
-Where a bug **closes**, its entry leaves MISSING.md for
-[RESOLVED.md](RESOLVED.md) below, so the bug list contains only current
-incorrect behavior rather than history.
+Where a bug **closes**, its entry leaves MISSING.md, so the bug list
+contains only current incorrect behavior rather than history.
 
 ## Decision records — frozen, and true of when they were written
 
@@ -79,7 +66,6 @@ and each says so in its own preamble.
 | File | The decision |
 |---|---|
 | [V2.md](V2.md) | The north star: what v2 is for, what it is made of, and the order the work goes in. Read first. |
-| [MEMORY.md](MEMORY.md) | **The ratified memory model (2026-08-15):** value types + reference types with ARC — the pivot away from scope ownership, the decisions D1–D8, and the evidence (a UI could not be built on ownership) that earned it. |
 | [TYPES.md](TYPES.md) | The seven-number ladder: Java sizing, lowercase names, `byte` as bits, storage-only narrow types. D1–D8 ratified and built. |
 | [NUMERICS.md](NUMERICS.md) | Promotion, true division, the floor pair, `int(x)`-style conversions. Ratified and built. |
 | [METHODS.md](METHODS.md) | `main(args)` and the original explicit-receiver design. The entry half shipped; the receiver half was superseded by SELF before lock. |
@@ -91,12 +77,9 @@ and each says so in its own preamble.
 | [FAILURE.md](FAILURE.md) | The rule that decides trap versus error versus `T?`, and the `T!`/`try`/`catch` design it produced. Ratified and built. |
 | [BITWISE.md](BITWISE.md) | `& \| ^ ~ << >>` at Go's precedence, shifts as checked bit transport, hex/binary/underscore literals. R1–R3 ratified and built. |
 | [ENUMS.md](ENUMS.md) | A name for every number that is secretly a set: C-shaped member values, a chosen backing width, `Method(n) -> Method?`, and the `match` that refuses to compile with a member unaccounted for. R1–R3 ratified and built. |
-| [BYTES.md](BYTES.md) | The binary half of the host boundary: why a `string` cannot carry a JPEG, the C-shaped byte primitive, and a file handle as a scope-owned resource. Ratified and built. |
-| [CONCURRENCY_RESEARCH.md](CONCURRENCY_RESEARCH.md) | **Not a decision.** The nine-model survey that informed the built THREADS design, cited and priced against S8, the no-collector rule and the differential oracle. |
-| [UNION_RESEARCH.md](UNION_RESEARCH.md) | **Not a decision.** Sum types across seven languages, priced against scope ownership: why Luce already boxes without a collector, why payload bindings alias, and the zero-value question that killed Go's sum types twice. |
-| [LINKING_RESEARCH.md](LINKING_RESEARCH.md) | **Not a decision.** What it would take for the toolchain to need no `cc`: fourteen measurements from this tree, vendored LLD and a shipped `libSystem.tbd` proven end-to-end, our own container and loader priced honestly against macOS's hardened runtime. |
-| [UNION.md](UNION.md) | One of these, and the language always knows which: members carrying named payload fields, `match` with alias bindings as the only door, ownership with no new rule, and a value that is a struct-shaped run the runtime never learns exists. Eighteen decisions and three held recommendations, ratified and built; the two departures are recorded in "As built". |
-| [THREADS.md](THREADS.md) | Workers own their world: `spawn f(give x)` onto a second runtime, `task(T)` as a scope-owned resource whose scope-end joins, races unrepresentable because the ownership model is the concurrency model. Ratified and built. |
+| [BYTES.md](BYTES.md) | The binary half of the host boundary: why a `string` cannot carry a JPEG, the C-shaped byte primitive, and a file handle as a reference-counted resource. Ratified and built. |
+| [UNION.md](UNION.md) | One of these, and the language always knows which: members carrying named payload fields, `match` with alias bindings as the only door, and a value that is a struct-shaped run the runtime never learns exists. Eighteen decisions and three held recommendations, ratified and built; the two departures are recorded in "As built". |
+| [THREADS.md](THREADS.md) | Workers own their world: `spawn f(x)` onto a second runtime, `task(T)` as a reference-counted resource whose last release joins, races unrepresentable because a reference never crosses a worker boundary. Ratified and built. |
 | [FUNCTIONS.md](FUNCTIONS.md) | Functions as values, divided at the capture line: named functions and one-expression lambdas whose types come from where they land — and no closures, because state that travels with behavior is a struct with a method. Ratified and built, including stable `std.lists.sort_by` as D6's proving customer. |
 | [PACKAGES.md](PACKAGES.md) | The consuming half of packages: `luce.yaml` roots (a strict YAML subset) and exact-version wants, dotted imports with `as`, probe-every-tier resolution that refuses ambiguity instead of ordering it, the `.luce/` store and compile cache, and the four seam changes package isolation costs the loader. Ratified and built, five steps with as-built notes; authoring, publishing and fetch are deliberately the next memo's. |
 | [BINDING.md](BINDING.md) | **Built, D8 outstanding.** Bound methods — the method travels with its struct: `receiver.method` as a function value whose environment is the receiver, value receivers copied at the bind, carrying receivers **borrowing** it (the owning bind refused, so a function value never owns the objects inside it), `(func(...) -> R)?` as the storable form, union constructors as function values, and anonymous captures refused permanently. Closures with a nominal environment and no new ownership rule. |
@@ -105,23 +88,4 @@ and each says so in its own preamble.
 | [TERMUI.md](TERMUI.md) | **Built.** The terminal-UI package: one renderer owns the screen and event stream, views measure and draw through a small interface, layout is total rectangle arithmetic, and the editor is its end-to-end customer. |
 | [SELF.md](SELF.md) | Self implied, `static` for the functions without one, and a call site that cannot lie: `f(x)` never mutates a value, `x.advance(8)` may — and reads like it. `var self` and `var` parameters retired. Ratified and built. |
 | [CONSTANTS.md](CONSTANTS.md) | Constant containers: file-scope `const`, the program root, `{k: v}` maps, flat lists and rank-1 arrays, and the static line with one runtime trap behind it. Ratified and built; the EOF appendix records where the implementation superseded the proposal prose. |
-| [RESOLVED.md](RESOLVED.md) | **Not a decision — a record of closures.** Historical gaps and bugs, chronologically: what was missing, when and how it closed, and where the detail lives. MISSING.md now keeps only current confirmed bugs. |
-| [GENERICS.md](GENERICS.md) | **Proposal, direction ratified, not built.** Parametric generics: monomorphization, per-instantiation ownership, interface bounds, `[T]` syntax — and the honest note that a declarative UI framework needs generics only to hide the last loop, at a per-event copy. |
-
-## History
-
-[v1/](v1/) preserves the Fabric era — Texels, Fibers, capabilities,
-the C ABI — alongside the `main-v1` branch.  Nothing there describes
-this tree, and nothing here builds toward it.
-
-## Audits
-
-[audit/](audit/) holds point-in-time reviews of the repository against
-itself: [DOCS.md](audit/DOCS.md) checked every prose claim in both
-directions, [STRUCTURE.md](audit/STRUCTURE.md) the seams,
-[NAMING.md](audit/NAMING.md) the names and the in-code documentation.
-The SELF and constants ledgers record implementation closeout; the
-[language-lock](audit/LANGUAGE_LOCK.md) ledger records fixed, open and
-deferred dispositions.  They are dated to the commit they were taken at
-and are not maintained; what they found is fixed in the files above or
-remains recorded in the relevant living reference or decision record.
+| [GENERICS.md](GENERICS.md) | **Proposal, direction ratified, not built.** Parametric generics: monomorphization, interface bounds, `[T]` syntax — and the honest note that a declarative UI framework needs generics only to hide the last loop. |
