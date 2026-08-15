@@ -2173,7 +2173,7 @@ test "a fallible call handing back an object gives it up on both paths" {
 
 test "an argument index out of range traps index_bounds on both engines" {
     // `args` is an ordinary List, so reading past it is the language's
-    // own bounds trap and not a channel of its own (docs/METHODS.md).
+    // own bounds trap and not a channel of its own (docs/LANGUAGE.md).
     try agree(
         \\func main(args: list(string)):
         \\    print(args[0])

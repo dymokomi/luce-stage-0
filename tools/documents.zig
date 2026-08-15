@@ -15,9 +15,11 @@
 //! runs its tests from — the same assumption `tools/grammar.zig`
 //! makes.
 
-/// **Living** documents: a reader may paste any of this into a file
-/// and have it work today.  Their Luce must compile, their prose may
-/// not spell a retired type name, and they carry no exemptions.
+/// Every document, in one present-tense catalogue.  Each describes the
+/// language as it is now: a reader may paste any Luce in them into a
+/// file and have it work today, and their prose may not spell a retired
+/// type name.  There is no frozen tier and no exemption — the history
+/// and the rationale live in the commit log, not in a reference.
 pub const living = [_][]const u8{
     "docs/LANGUAGE.md",
     "docs/MEMORY.md",
@@ -33,18 +35,6 @@ pub const living = [_][]const u8{
     "docs/UX_UI_DESIGN.md",
     "docs/TERMUI_EDITOR_REWRITE.md",
     "docs/ROADMAP.md",
-    "docs/README.md",
-    "README.md",
-    "CLAUDE.md",
-};
-
-/// **Decision records**: what was decided and when.  Their code is
-/// checked too — a memo that shows the language of its day is welcome
-/// to, and says so with `historical`; what it may not do is show code
-/// that reads as current and is not.  The tag is the whole exemption
-/// and one grep lists every use of it.
-pub const records = [_][]const u8{
-    "docs/METHODS.md",
     "docs/RETURNS.md",
     "docs/NUMERICS.md",
     "docs/STRINGS.md",
@@ -68,10 +58,16 @@ pub const records = [_][]const u8{
     "docs/SELF.md",
     "docs/CONSTANTS.md",
     "docs/GENERICS.md",
+    "docs/README.md",
+    "README.md",
+    "CLAUDE.md",
 };
 
-/// Both, living first — so "the living documents carry no exemptions"
-/// is a slice rather than a convention.
+/// No second tier: kept as an empty list so the `all` seam and the
+/// guards that slice it read unchanged.
+pub const records = [_][]const u8{};
+
+/// Every catalogued document.
 pub const all = living ++ records;
 
 // ---------------------------------------------------------------------------
@@ -129,10 +125,9 @@ fn readIndexRows(
     var heading: ?Sense = null;
     var lines = std.mem.splitScalar(u8, text, '\n');
     while (lines.next()) |line| {
-        if (std.mem.startsWith(u8, line, "## Current")) heading = .living;
-        if (std.mem.startsWith(u8, line, "## Decision records")) heading = .record;
-        if (std.mem.startsWith(u8, line, "## History")) heading = null;
-        if (std.mem.startsWith(u8, line, "## Audits")) heading = null;
+        if (std.mem.startsWith(u8, line, "## ")) {
+            heading = if (std.mem.startsWith(u8, line, "## The documents")) .living else null;
+        }
 
         const sense = heading orelse continue;
         if (!std.mem.startsWith(u8, line, "| [")) continue;

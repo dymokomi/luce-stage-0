@@ -3,7 +3,7 @@
 //! `examples/editor/editor.luc` is the largest thing written in Luce, and
 //! until now the only thing standing behind it was a compile test:
 //! nothing said what it *did*.  That is exactly the guarantee a
-//! restructuring needs, and `docs/METHODS.md` named the line where its
+//! restructuring needs, and `docs/SELF.md` named the line where its
 //! absence would have cost something — `editor.luc`'s backspace branch
 //! deliberately measures against the content *before* the erase, and
 //! an implied writing `self` has no second copy to measure against.  A
@@ -96,7 +96,7 @@ const script = [_]agree.World.Key{
     .{ .name = "enter" },
     // **`éxy`, and the cursor left twice, on purpose.**  The backspace
     // below is the branch that measures against the content as it was
-    // *before* the erase (docs/METHODS.md), and the two readings agree
+    // *before* the erase (docs/SELF.md), and the two readings agree
     // on almost everything — `previous_boundary` walks back over UTF-8
     // continuation bytes, and after an erase the byte at the old
     // cursor's left is the *following* character's first byte, which

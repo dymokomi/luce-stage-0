@@ -345,7 +345,7 @@ enforced.
 **Java is the counter-example D7 answers.**  `public static void
 main` — a visibility keyword required on a function nothing imports,
 taught to every beginner as an incantation.  docs/METHODS.md already
-declined Java's mandatory `String[] args` for the entry; this memo
+declined a mandatory argument-type incantation on the entry; Luce
 declines the mandatory `public` for the same reason — and under
 public-by-default the temptation evaporates: `main` is public like
 everything else, an inert `public` may say so, and only `private` on

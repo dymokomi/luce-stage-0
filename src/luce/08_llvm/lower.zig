@@ -2433,7 +2433,7 @@ const Module = struct {
         // `args` — the command line, built by `libluce_rt` out of the
         // two vtable slots that already carry it, so nothing is added
         // to the published ABI and `luce_main`'s signature does not
-        // move (docs/METHODS.md).  A host that supplies neither service
+        // move (docs/SELF.md).  A host that supplies neither service
         // yields an empty list; the only way this can fail is running out
         // of memory for the list itself.  The entry made the list, so the
         // entry releases it once `main` — which only borrows the

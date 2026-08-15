@@ -71,7 +71,7 @@ test "an argument out of range traps, and a refused write is an error" {
     // them: an index no argument could have is the program's mistake,
     // and a write the world would not take is not (docs/FAILURE.md).
     // The command line is an ordinary list now, so the first of those
-    // is the language's own bounds trap (docs/METHODS.md).
+    // is the language's own bounds trap (docs/LANGUAGE.md).
     var session = try agree.compare(
         \\func main(args: list(string)):
         \\    file_write("out.txt", "ignored") catch:
@@ -92,7 +92,7 @@ test "an argument out of range traps, and a refused write is an error" {
 // `args` is *handed to* the program rather than called by it, which is
 // why none of this is behind the host gate and why a host with nothing
 // to offer supplies an empty list rather than a trap (MEMORY.md
-// S44, docs/METHODS.md).  The list is built by `libluce_rt` on both
+// S44, docs/LANGUAGE.md).  The list is built by `libluce_rt` on both
 // arms, so what is under test here is that the two hosts marshal the
 // same world into the same list — and, through the leak census, that
 // `main`'s scope gives it back.

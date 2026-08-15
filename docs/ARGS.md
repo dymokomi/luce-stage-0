@@ -886,13 +886,10 @@ parameters with defaults. Python has the same rule and calls it *"a
 syntactic restriction that is not expressed by the grammar"*; Ruby has
 it and raises a `SyntaxError` (*"arguments with defaults must be
 grouped together"*); Kotlin does **not**, and pays for the difference
-with a case worth looking at:
-
-```kotlin
-fun greeting(userId: Int = 0, message: String) { }
-greeting(message = "Hello!")   // ok — 0 for userId
-greeting("Hello!")             // error: No value passed for parameter 'message'
-```
+with a case worth looking at: give a function a defaulted parameter
+*before* a required one, and the required one can no longer be passed
+positionally — the default ahead of it has already claimed that slot, so
+the required parameter can only be reached by name.
 
 A parameter that must *always* be named, in a language where naming is
 optional. That is PEP 3102's `*` arriving by accident, through a hole
@@ -1041,15 +1038,13 @@ means it (D9).
 
 ### Kotlin's callee-side evaluation, and why its advantage is zero here
 
-Kotlin is the most powerful design in the table and the one this memo
+Kotlin is the most powerful design in the table and the one Luce
 turns down most deliberately. It is the only one both late-bound and
-dependency-capable:
+dependency-capable: a default may reference an earlier parameter, as in
+a `read` whose length parameter defaults to the size of the buffer
+passed as its first argument.
 
-```kotlin
-fun read(b: ByteArray, off: Int = 0, len: Int = b.size) { }
-```
-
-`len: Int = b.size` is genuinely useful and Luce will not have it.
+A default of `len = b.size` is genuinely useful and Luce will not have it.
 Kotlin gets it by evaluating defaults **in the callee**, through a
 synthetic `$default` bridge, and two consequences follow that Luce
 cannot use:
@@ -1649,7 +1644,7 @@ have no labels. A convention this memo endorses and does not enforce:
 name the boolean.
 
 **Distinct external and internal parameter names** (`func f(from
-source: String)`). Two names per parameter earns its cost when the
+source: string)`). Two names per parameter earns its cost when the
 external one is frozen at a package boundary and the internal one is
 free — Swift's situation. Luce's callee is always source the reader
 can open, and the compiler names every affected call site when a
@@ -1683,7 +1678,7 @@ point or a supplied-arguments mask in a MIR whose `call` is one line
 and whose `format_version` would have to move for it. §2.
 
 **Call-time defaults, and defaults referencing earlier parameters**
-(`len: Int = b.size`). Genuinely useful, and refused for now on three
+(`len = b.size`). Genuinely useful, and refused for now on three
 grounds. It makes a signature a program: `f(a: long, b: long =
 expensive(a))` has a cost the call site cannot see and the signature
 does not disclose. It forces the callee-side question above, because a

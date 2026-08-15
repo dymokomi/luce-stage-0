@@ -37,7 +37,7 @@ pub const magic = "LUCE";
 /// pass it and lower against the wrong shape.
 ///
 /// 20 — the command line stopped being an ambient service and became
-/// `main`'s parameter (docs/METHODS.md).  Two intrinsics left the set
+/// `main`'s parameter (docs/LANGUAGE.md).  Two intrinsics left the set
 /// (`arg_count`, `arg_get`) and one trap code with them
 /// (`argument_bounds`), so every instruction tag after them renumbers;
 /// the entry may now carry one parameter, which the verifier checks.

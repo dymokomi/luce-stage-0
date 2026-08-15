@@ -601,7 +601,7 @@ fn enumMemberAccess(self: *FunctionBuilder, field: ast.FieldAccess) Error!Member
     const member = declared.findMember(field.name) orelse {
         // `Method.deflated()` written without its parentheses is a
         // function of the enum, and it is not a value either
-        // (docs/METHODS.md); the shared sentence says so.
+        // (docs/SELF.md); the shared sentence says so.
         const qualified = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ declared.name, field.name });
         const spelling = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ spelled, field.name });
         if (try refusals.failNotAValue(self, spelling, qualified, field.span)) return .reported;
@@ -683,7 +683,7 @@ fn variantMemberAccess(self: *FunctionBuilder, field: ast.FieldAccess) Error!Mem
     const member_index = declared.findMember(field.name) orelse {
         // `Shape.area` written without its parentheses is a
         // function of the union, and it is not a value either
-        // (docs/METHODS.md); the shared sentence says so.
+        // (docs/SELF.md); the shared sentence says so.
         const qualified = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ declared.name, field.name });
         const spelling = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ spelled, field.name });
         if (try refusals.failNotAValue(self, spelling, qualified, field.span)) return .reported;

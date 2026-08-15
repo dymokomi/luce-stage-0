@@ -297,7 +297,7 @@ favour of the design, not against it**: the compiler refuses to let a
 program `match` its way past the absent case, which is exactly the
 guarantee D11's `?` was chosen for.
 
-**24. List literals exist and pass inline.**  `joined(["a", "b", "c"])`
+**24. list literals exist and pass inline.**  `joined(["a", "b", "c"])`
 compiles against `func joined(parts: list(string)) -> string`, with the
 literal owned by the call and released after it.  This is what makes
 D18's multi-part join writable without variadics.

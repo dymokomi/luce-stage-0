@@ -2,7 +2,7 @@
 
 > **Status.** Direction ratified, not built (2026-08-14). This is the
 > design record for parametric generics in Luce. The owner has decided
-> to pursue generics — for typed reusable abstractions (`List[T]`,
+> to pursue generics — for typed reusable abstractions (`Vec[T]`,
 > `Stack[T]`) and to make a UI runtime that fully hides the loop —
 > having weighed the honest alternative below and chosen the fully
 > hidden loop over a minimal explicit one. The decisions **D1–D6** stand
@@ -39,7 +39,7 @@ Three things want the same missing capability:
    `update`'s signatures or hand it back unchanged. Generics let the
    library name the type without knowing it in advance.
 2. **Typed reusable widgets.** A selection list is `func(long) -> string`
-   today because it cannot be `List(T)`. Every widget that reads app data
+   today because it cannot be `Vec(T)`. Every widget that reads app data
    is stringly typed for the same reason.
 3. **Reusable data structures.** A `Stack`, a `Queue`, a `Tree` are
    copy-paste-per-element-type today, or routed through `list`.
@@ -200,7 +200,7 @@ lowering — is a *never*, and it owes a stage-4 refusal like every other.
 
 **In:** generic `func`s and generic `struct`s; monomorphized; interface
 bounds; argument inference. This is exactly
-enough for `termui.app.run[Model]`, a typed `List[T]`/`Stack[T]` widget
+enough for `termui.app.run[Model]`, a typed `Vec[T]`/`Stack[T]` widget
 family, and reusable data structures.
 
 **Deferred, named:** generic `enum`/`union`s (the recursive-union `View`

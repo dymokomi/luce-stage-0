@@ -298,14 +298,14 @@ and then hands the tree to an arena because it has nowhere else to put
 the reclamation (§2.4); here ARC frees the tree at its last reference,
 and `specs/agree.zig`'s leak census is what proves it.
 
-**Direct self-containment is infinite and is refused.**  `union List:
-nil / cons(head: long, tail: List)` is infinite for exactly the reason
+**Direct self-containment is infinite and is refused.**  `union Chain:
+nil / cons(head: long, tail: Chain)` is infinite for exactly the reason
 a struct containing itself is, and D12's counting rule says so through
 the machinery that already exists: `sumShape` and the
 strongly-connected-component walk in `declarations.zig` take union
 nodes in the same graph as struct nodes, and a cycle collapses to the
 same refusal.  The fix is the one `docs/LANGUAGE.md` already
-prescribes — `tail: List?`, *"the recursion stops at absence rather
+prescribes — `tail: Chain?`, *"the recursion stops at absence rather
 than at a layout"* — and D14 is what makes it writable.
 
 **And that is why the zero needs no ordering rule.**  The research

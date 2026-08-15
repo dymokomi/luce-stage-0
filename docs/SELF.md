@@ -1,21 +1,11 @@
 # Self, implied — and a call site that cannot lie
 
-**Ratified by the owner, 2026-08-07**, revising `docs/METHODS.md`'s
-receiver design before the language locks: *"I think it makes
-language less clear.  I also don't think we should do var self
-either.  Self should be implied.  And then I suggest that we
-introduce static keyword to struct member functions which would not
-have access to self.  Being very clear that passing a value into a
-function will not mutate the value is really important."*
-
-The standing offer — a counter-example too awkward to solve with a
-return value or a member function — was checked and **none survived**:
-state threading is `pos, bits = read_bits(data, pos, 5)` once the
-polish run lands multi-return into existing bindings; "reset this
-struct" is a member function or a fresh construction; `swap` is three
-lines once a decade; buffers are reference objects, whose contents
-already mutate through their own methods on the other side of the
-value/reference line, unchanged.
+A method's receiver is `self`, supplied implicitly; a `static func`
+declares a member function with no receiver. State that would otherwise
+be threaded through a mutable value parameter is expressed another way:
+multi-return into existing bindings (`pos, bits = read_bits(data, pos,
+5)`), a member function, a fresh construction, or a reference object
+whose contents mutate through its own methods.
 
 ## The rule the call site keeps
 

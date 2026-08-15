@@ -1,29 +1,20 @@
 # The documents
 
-One line each, and one thing you cannot tell from a directory listing:
-**whether a file is current or frozen.**  A decision record is written
-in the present tense about the world it was written in, and it stays
-that way on purpose — the measurements are the record.  A reference
-describes the tree as it is now and is wrong the moment it drifts.
-
-**The split below is not editorial.**  It is
-[`tools/documents.zig`](../tools/documents.zig), which both guards
-read, and it decides something mechanical: a **living** document's Luce
-must compile as written, with no exemptions, so a reader is entitled to
-paste any of it into a file; a **decision record** may show the
-language of its day and says so with a ```` ```luce historical ````
-fence.  A memo that needs that fence cannot be listed as current, which
-is why [V2.md](V2.md) and [FAILURE.md](FAILURE.md) are records however
-current their content is.  The two tables and those two arrays are
-pinned to each other by a test — a document in one and not the other
+One line each.  Every file here describes the language as it is now, in
+the present tense: there is no frozen tier, no exemption, and no history
+kept in a reference — the reasoning behind a decision lives in the commit
+that made it.  A reference is wrong the moment it drifts, so a guard
+keeps them honest: [`tools/documents.zig`](../tools/documents.zig) is the
+catalogue both guards read, its every Luce sample must compile as
+written, its prose may not spell a retired type name, and the table below
+is pinned to that list by a test — a document in one and not the other
 fails `zig build test`.
 
 Start with [V2.md](V2.md) for what the project is for, then
 [LANGUAGE.md](LANGUAGE.md) for the language and
 [PIPELINE.md](PIPELINE.md) for the compiler.  If you are about to
 write code, [CODING_GUIDE.md](CODING_GUIDE.md) is not optional.  For
-confirmed incorrect behavior, see [MISSING.md](MISSING.md); proposed
-features and deliberate omissions stay in their decision records.
+confirmed incorrect behavior, see [MISSING.md](MISSING.md).
 
 The prose that faces users lives on the documentation site instead —
 **[luce.luciaos.com](https://luce.luciaos.com)**, built from
@@ -35,7 +26,7 @@ results fail the build, as do dead links and anchors and selected
 compiler-to-reference vocabulary gaps.  The surrounding prose remains
 human-reviewed.  These files are the reasoning behind it.
 
-## Current — describes the tree as it is
+## The documents
 
 | File | What it is |
 |---|---|
@@ -53,23 +44,10 @@ human-reviewed.  These files are the reasoning behind it.
 | [MISSING.md](MISSING.md) | Confirmed bugs only. Feature requests, design questions, coverage campaigns, refactors, optimizations, and deliberate non-goals do not belong here. |
 | [UX_UI_DESIGN.md](UX_UI_DESIGN.md) | How design and coding agents design, implement, and review user experiences: an operational synthesis of Apple's Human Interface Guidelines into software obligations. |
 | [TERMUI_EDITOR_REWRITE.md](TERMUI_EDITOR_REWRITE.md) | The plan of record for the clean termui rewrite and the modular editor that adds undo/redo, in-file search, and crash-safe drafts. |
-
-Where a bug **closes**, its entry leaves MISSING.md, so the bug list
-contains only current incorrect behavior rather than history.
-
-## Decision records — frozen, and true of when they were written
-
-Each of these argues its way to a decision and keeps the measurements
-as taken.  Where one disagrees with a file above, the file above wins,
-and each says so in its own preamble.
-
-| File | The decision |
-|---|---|
-| [V2.md](V2.md) | The north star: what v2 is for, what it is made of, and the order the work goes in. Read first. |
-| [TYPES.md](TYPES.md) | The seven-number ladder: Java sizing, lowercase names, `byte` as bits, storage-only narrow types. D1–D8 ratified and built. |
-| [NUMERICS.md](NUMERICS.md) | Promotion, true division, the floor pair, `int(x)`-style conversions. Ratified and built. |
-| [METHODS.md](METHODS.md) | `main(args)` and the original explicit-receiver design. The entry half shipped; the receiver half was superseded by SELF before lock. |
-| [RETURNS.md](RETURNS.md) | Multiple returns without first-class tuples. Ratified and built. |
+| [V2.md](V2.md) | The north star: what v2 is for, what it is made of, and the order the work goes in. |
+| [TYPES.md](TYPES.md) | The seven-rung numeric ladder, `bool`, `string`, and value structs beside reference classes. |
+| [NUMERICS.md](NUMERICS.md) | Promotion, true division, the floor pair, and the `int(x)`-style conversions. |
+| [RETURNS.md](RETURNS.md) | Multiple returns without first-class tuples. |
 | [ARGS.md](ARGS.md) | Named and default arguments: names optional everywhere, defaults as trailing folded constants, struct fields on the same clause, nothing below stage 4 moving. D1–D12 ratified and built. |
 | [VECTOR.md](VECTOR.md) | Vectorizing checked reductions without weakening a single trap: prove, or speculate-and-replay. All three layers ratified. |
 | [STRINGS.md](STRINGS.md) | How `string` stores its bytes, phase by phase, with the timing after each step. |

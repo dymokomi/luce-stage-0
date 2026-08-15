@@ -852,7 +852,7 @@ pub const Machine = struct {
         if (self.materializeConstants()) |failed| return failed;
         // `func main(args: list(string)):` receives the command line;
         // `func main():` receives nothing, and those are the only two
-        // shapes stage 4 lets through (docs/METHODS.md).  The list is
+        // shapes stage 4 lets through (docs/LANGUAGE.md).  The list is
         // built the same way the compiled arm builds it — `libluce_rt`
         // owns the semantic and each engine hands it what its own host
         // spells the arguments in (MEMORY.md).

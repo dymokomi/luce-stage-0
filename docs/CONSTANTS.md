@@ -256,7 +256,7 @@ honest answer for tables that small, and it is also better than what
 ships today.
 
 **Recorded for later, because it is cheaper than it looks:** the
-runtime's `Map` is already a set with a value column, so `set(T)` is a
+runtime's map is already a set with a value column, so `set(T)` is a
 flag on an existing structure rather than a new mechanism.  When a
 corpus bleeds for it, that is the shape.
 
@@ -353,8 +353,7 @@ methods — that is what a reference is."*  Adding a mutability
 dimension to the type system as the last thing before a lock is the
 wrong shape of change at the wrong moment.
 
-**(b) A runtime trap on mutating a frozen object** — Java's
-`List.of(...)` answering `UnsupportedOperationException`, and the
+**(b) A runtime trap on mutating a frozen object** — the
 pattern this language already uses where a static rule cannot reach.
 Cost: one new trap code, one variant on a union that exists, and a
 check at mutation sites.  The cautionary neighbor is JavaScript's

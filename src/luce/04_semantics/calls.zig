@@ -1347,7 +1347,7 @@ pub fn structMethod(self: *FunctionBuilder, receiver: Type, name: []const u8) Er
 /// **The two declaration keywords answer here alike.**  A struct and
 /// an enum both spell their functions `Name.func`, so the whole of
 /// the method machinery needs the name and nothing else
-/// (docs/METHODS.md, docs/ENUMS.md D7); only a sentence that has to
+/// (docs/SELF.md, docs/ENUMS.md D7); only a sentence that has to
 /// say which word was written looks further.
 pub fn declaredName(self: *const FunctionBuilder, of: Type) ?[]const u8 {
     return switch (of) {

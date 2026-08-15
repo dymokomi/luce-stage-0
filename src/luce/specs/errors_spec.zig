@@ -1810,7 +1810,7 @@ test "luce.sema.main: a return type on the entry names the other legal form" {
 }
 
 // The entry's parameter is the command line and its type is fixed
-// (docs/METHODS.md).  The name is free — `args` is a binding like any
+// (docs/LANGUAGE.md).  The name is free — `args` is a binding like any
 // other — so there is no misspelling of it to diagnose, and the three
 // mistakes that are left get one sentence each and a caret on the part
 // that is wrong.
@@ -1854,7 +1854,7 @@ test "luce.sema.main: the entry takes at most the one parameter" {
 test "luce.sema.retired: arg and arg_count name their replacement" {
     // A name the language used to spell is not a typo, and the site
     // still teaches the old one; a bare `unknown function arg` points
-    // nowhere.  One release of a pointer (docs/METHODS.md).
+    // nowhere.  One release of a pointer (docs/LANGUAGE.md).
     try expectHostSaying(
         \\func main():
         \\    print(arg(0))
@@ -1898,7 +1898,7 @@ test "arg is an ordinary word again, and a program that declares one gets its ow
 
 test "luce.sema.main: all four legal entry shapes compile" {
     // `-> !:` is how a program says the world can stop it, and the
-    // command line composes with it (docs/METHODS.md).  The parameter's
+    // command line composes with it (docs/LANGUAGE.md).  The parameter's
     // name is the program's to choose.
     for ([_][]const u8{
         "func main():\n    return\n",

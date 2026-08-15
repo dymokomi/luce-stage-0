@@ -688,7 +688,7 @@ A sketch only; the design belongs to HIR's own memo.
 
 # The neighbours
 
-**Float reductions stay ordered, and that is already parity.**  IEEE
+**float reductions stay ordered, and that is already parity.**  IEEE
 addition is not associative, so a left-to-right float sum cannot be
 reassociated — **by C either**.  `bench/arrays` sits at 1.05× for
 exactly this reason: both sides are scalar.  No fast-math flag will
@@ -699,8 +699,8 @@ ever be emitted; that is a semantics mode wearing a compiler option
 and bit-reproducibility across engines and against the C twins.  Not
 decided here.
 
-**Float `min`/`max` vectorized once, and the licence is parked.**  The
-reason is instructive for this whole memo: `llvm.minimumnum` is exactly
+**float `min`/`max` vectorized once, and the licence is parked.**  The
+reason is instructive throughout: `llvm.minimumnum` is exactly
 associative and exactly commutative because NaN is an identity rather
 than an absorber, so the vectorizer regroups it with no licence needed
 — `math.vmin` over two million elements became `fminnm.2d`, and

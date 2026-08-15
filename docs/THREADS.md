@@ -1,11 +1,7 @@
 # Threads — workers own their world
 
-**Ratified by the owner, 2026-08-07** (*"Ohh this is really good!
-Let's implement it"*), at the end of the deliberation
-`docs/CONCURRENCY_RESEARCH.md` framed and the host-architecture
-conversation sharpened.  The north star, in the owner's words:
-*beautiful and effortless for people, very clean syntax, high
-performance, and save users from race conditions.*  The design answers
+The goal is concurrency that is effortless and race-free: clean syntax,
+high performance, and no data races by construction. The design answers
 with one sentence: **workers share nothing** — races are not detected,
 they are unrepresentable.
 

@@ -68,7 +68,7 @@ fn check(self: *Analyzer) Error!void {
     // loom reports what it raised (docs/FAILURE.md).  A program
     // that never reads a command line says nothing about one, which
     // is why the parameter is optional rather than Java's mandatory
-    // ceremony (docs/METHODS.md).
+    // ceremony (docs/SELF.md).
     //
     // The name is free and the type is fixed: `args` is a binding
     // like any other, so there is no misspelling of it to diagnose.
