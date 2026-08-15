@@ -688,38 +688,41 @@ test "the IR dump has a stable golden shape (short-circuit)" {
     defer testing.allocator.free(dump);
     try testing.expectEqualStrings(
         \\func main() -> None
-        \\    local %0 xs: list(int)
-        \\    local %1 (temporary): bool
+        \\    local %0 (temporary): list(int)
+        \\    local %1 xs: list(int)
+        \\    local %2 (temporary): bool
         \\  b0:
         \\    r0 = const 1
         \\    r1 = const 2
         \\    r2 = heap_new list(int)
         \\    intrinsic append_value, r2, r0
         \\    intrinsic append_value, r2, r1
-        \\    local_set %0, r2
-        \\    r6 = local_get %0
+        \\    local_set %1, r2
+        \\    r6 = local_get %1
         \\    r7 = intrinsic len, r6
         \\    r8 = const 0
         \\    r9 = greater.long r7, r8
-        \\    local_set %1, r9
+        \\    local_set %2, r9
         \\    branch r9, b1, b2
         \\  b1:
-        \\    r12 = local_get %0
+        \\    r12 = local_get %1
         \\    r13 = const 0
         \\    r14 = intrinsic index_get, r12, r13
         \\    r15 = const 1
         \\    r16 = equal.int r14, r15
-        \\    local_set %1, r16
+        \\    local_set %2, r16
         \\    jump b2
         \\  b2:
-        \\    r19 = local_get %1
+        \\    r19 = local_get %2
         \\    branch r19, b3, b4
         \\  b3:
-        \\    r21 = local_get %0
+        \\    r21 = local_get %1
         \\    r22 = const 3
         \\    intrinsic append_value, r21, r22
         \\    jump b4
         \\  b4:
+        \\    r25 = local_get %1
+        \\    intrinsic release, r25
         \\    ret
         \\
     , dump);
@@ -2740,21 +2743,24 @@ test "a plain map store reads nothing; only the compound one defines" {
     defer testing.allocator.free(dump);
     try testing.expectEqualStrings(
         \\func main() -> None
-        \\    local %0 counts: map(string, long)
+        \\    local %0 (temporary): map(string, long)
+        \\    local %1 counts: map(string, long)
         \\  b0:
         \\    r0 = heap_new map(string, long)
-        \\    local_set %0, r0
-        \\    r2 = local_get %0
+        \\    local_set %1, r0
+        \\    r2 = local_get %1
         \\    r3 = const data#0
         \\    r4 = const 7
         \\    intrinsic index_set, r2, r3, r4
-        \\    r6 = local_get %0
+        \\    r6 = local_get %1
         \\    r7 = const data#1
         \\    r8 = const 1
         \\    r9 = const 0
         \\    r10 = intrinsic map_place, r6, r7, r9
         \\    r11 = add.long r10, r8
         \\    intrinsic index_set, r6, r7, r11
+        \\    r13 = local_get %1
+        \\    intrinsic release, r13
         \\    ret
         \\
     , dump);

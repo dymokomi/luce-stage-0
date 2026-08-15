@@ -455,9 +455,8 @@ const Replay = struct {
         switch (provenance) {
             // A fresh object transfers into the place: retract its park so
             // the statement's end no longer releases what the place now
-            // owns.  A value that crossed a fallible branch is fresh but
-            // was never parked (the fallible machinery owns it), so nothing
-            // is retracted and the transfer is the whole of it.
+            // owns.  A value carried out of a fallible call is parked the
+            // same way (`finishFallible`), so its adoption retracts here too.
             .fresh => _ = self.takeObjects(register),
             // A borrow of an object something else holds — a name, a field
             // or element read — which the new holder counts by retaining.
@@ -1442,11 +1441,21 @@ const Replay = struct {
         self.opened = .{ .handler = handler, .temps_floor = self.temps.items.len };
         const slot = carried orelse return call;
         const reload = try self.code.load(slot);
-        if (storage) {
+        // The carried success value is owned here: its storage is this slot's
+        // and its object children are the payload's.  Both must be released by
+        // the statement's end unless a place adopts the value — a single-value
+        // `let x = try f()` retracts the object park through `takeObjects`, a
+        // destructure reads each field out under retain and the park's release
+        // nets against it.  Registering only the storage leaked every object a
+        // fallible result carried — a tuple's `list`, a struct's fields
+        // (docs/MEMORY.md).
+        const objects = try self.carriesObjects(called.result);
+        if (storage or objects) {
             try self.temps.append(self.scratch(), .{
                 .local = slot,
                 .register = reload,
                 .storage = storage,
+                .objects = objects,
                 .disownable = false,
             });
         }
@@ -1884,6 +1893,25 @@ const Replay = struct {
             .local = local,
             .storage = owns_storage,
             .objects = owns_objects,
+        });
+    }
+
+    /// Enter a loop name in its scope's owned list as a storage-only
+    /// borrow.  A `for` name copies its element's *shell* (`ownStorage`
+    /// in `bindLoopName`) but shares that element's heap children with
+    /// the container it iterates — the getter answers a borrow and the
+    /// binding never retains it.  So the name owns its bytes and borrows
+    /// its objects: the scope's end gives the shell back (`drop_storage`)
+    /// and must never release children the container still owns, which
+    /// would corrupt the container from under a later read.  An escape —
+    /// `append(entry)`, `return entry` — retains through its own store,
+    /// as any borrow does (docs/MEMORY.md).
+    fn noteLoopName(self: *Replay, local: LocalId) Error!void {
+        if (!self.code.localOwnsStorage(local)) return;
+        try self.currentScope().owned.append(self.scratch(), .{
+            .local = local,
+            .storage = true,
+            .objects = false,
         });
     }
 
@@ -2391,10 +2419,10 @@ const Replay = struct {
             .position = self.takeSlot(null, .long, false),
         };
         const first = self.takeRecordedSlot(loop.first);
-        try self.noteOwned(first);
+        try self.noteLoopName(first);
         const second: ?LocalId = if (loop.second) |expected| owned: {
             const local = self.takeRecordedSlot(expected);
-            try self.noteOwned(local);
+            try self.noteLoopName(local);
             break :owned local;
         } else null;
         try self.code.startIteration(&shape, sequence);

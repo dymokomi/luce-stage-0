@@ -338,7 +338,12 @@ pub const Lowering = struct {
     /// here on, which the generation guard makes a trap rather than a
     /// double free (docs/MEMORY.md).  A no-op on a value naming no object.
     pub fn releaseObject(self: *Lowering, local: LocalId) Error!void {
-        const value = try self.load(local);
+        try self.releaseRegister(try self.load(local));
+    }
+
+    /// Drop one reference to every object a register names — the register
+    /// form of `releaseObject`, for a value held in no local.
+    pub fn releaseRegister(self: *Lowering, value: Register) Error!void {
         const arguments = try self.arena.alloc(Register, 1);
         arguments[0] = value;
         _ = try self.emit(.{ .intrinsic = .{ .kind = .release, .arguments = arguments } }, .none);
