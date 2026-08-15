@@ -108,3 +108,101 @@ mutated in place; a button's `on_press` closure captures and mutates app
 state directly; `struct` numerics keep their benchmark speed; both
 engines agree on every spec; and the language surface is *smaller* than
 it was with ownership.
+
+## Execution map (where the code lives)
+
+Grounded in the tree so the surgery starts fast. Scope ownership is woven
+through ~22 semantics files, the runtime, MIR, the optimizer, and 18+
+specs — this is a multi-week rip-and-replace, not an afternoon.
+
+**Front end (Phase 1 — additive, green).**
+- `02_lex/token.zig`: add `keyword_class` (keyword table + `Kind`).
+- `03_parse/grammar.zig`: `structDecl` gains a `kind` (reuse the body
+  parse; `class` differs only in the header keyword).
+- `ast`: `StructDecl.kind: value | reference`.
+- `04_semantics/layouts.zig` + `support/types.zig`: a per-layout `kind`
+  so `strukt` indices carry value-vs-reference; the containers and
+  `file`/`task` are reference by construction.
+
+**Semantics deletion (Phase 3 — the break).** The ownership logic lives
+in `04_semantics/`: the dedicated files `ledger.zig` (statement-temporary
+ownership), `flow.zig` (root provenance / narrowing), `effects.zig`,
+`refusals.zig`, and the ownership arms threaded through `assign.zig`,
+`construct.zig`, `calls.zig`, `builder.zig`, `expressions.zig`,
+`statements.zig`, `shapes.zig` (`carriesObjects`), `interfaces.zig`
+(borrow + read-only dispatch), `receiver.zig`, `context.zig`. Delete the
+verbs, the S-rule enforcement, `provenance`, the carrying/fresh/resource
+categories, and the diagnostics (`luce.sema.own`, `use_after_free`,
+`not_owned`, `double_free`). Replace with the one rule: value → copy,
+reference → share.
+
+**Runtime (Phase 2 + 4).** `runtime/heap.zig` + `runtime/value.zig` +
+`runtime/containers.zig`: a reference object gains a refcount header;
+`ownValue`/`dropStorage` become `retain`/`release`; scope-drop becomes
+release. `runtime/exports.zig`: publish `luce_rt_retain`/`_release`;
+`abi.version` bumps. `runtime/workers.zig`: keep "references don't cross a
+worker boundary."
+
+**MIR & backend (Phase 4).** `06_mir.zig` + `06_mir/`: the ownership
+instruction pairs and sealing become `retain`/`release`; the verifier
+checks count discipline; `format_version` bumps. `07_optimize/`: the
+`ownership` pass becomes ARC-elision. `08_llvm/lower.zig` + `roots.zig`:
+emit retain/release; drop the ownership-root guards.
+
+**Oracle (Phase 4).** `interpreter/` mirrors the same retain/release
+counting so both engines agree.
+
+**Specs (Phase 3–4).** `specs/ownership_spec.zig` is deleted/replaced by
+an ARC spec (sharing, deterministic release, `weak`, resource
+close-at-last-reference); the 18 spec files that assert `give`/ownership
+behavior are rewritten. Both engines, as always.
+
+**Users (Phase 6).** `src/luce/std/*.luc`, `examples/editor/*`,
+`packages/termui/*`, `bench/*` drop the verbs and lean on sharing.
+
+The additive front-end scaffolding (Phase 1) is the safe first commit;
+Phases 3–4 are one atomic push to the next green checkpoint.
+
+## Runtime ARC design (grounded in the tree, for Phase 2/4)
+
+What the code actually looks like today, so the surgery is precise:
+
+- `runtime/heap.zig` `Object` carries `generation: u32` (stale-handle
+  detection — keep it), `next_free` (the free list — keep it), and
+  **`owner: Owner`** — the scope-ownership field that decides who frees.
+  There is **no refcount yet**. `Object.release()` and
+  `Runtime.freeObject`/`dropStorage`/`freeValue` are the current
+  scope-drop path.
+- **The one change at the heart of it:** add `references: u32` to
+  `Object`; delete `owner: Owner` and the `Owner` type. `newList`/
+  `newMap`/`newArray`/`newBuilder`/`newFile`/`newTask`/`newResource`
+  (and a new `newClass`) set `references = 1`. `luce_rt_retain(handle)`
+  increments; `luce_rt_release(handle)` decrements and, at zero, runs the
+  existing free path (`freeObject`, which already recycles the row via
+  `generation`+`next_free` and frees `data`/`list`/`array` storage). The
+  free machinery is reused wholesale; only *when* it runs changes.
+- **Value vs reference at the boundary:** a value `struct` and the
+  scalars stay inline in `Value` (no object, no count). A reference —
+  `class`, container, resource — is a `Value` holding a `Handle`, and it
+  is the thing retain/release act on. `StructLayout.reference` (Phase 1b)
+  is the compile-time switch that decides which lowering a `strukt` type
+  gets.
+- **MIR (`06_mir`)** replaces the ownership instruction pairs (bind/
+  unbind/seal) with `retain`/`release`; the verifier checks that every
+  reference produced is released on every path (the discipline the
+  ownership sealer already enforces, recast as counts). `format_version`
+  bumps.
+- **Codegen (`08_llvm/lower.zig`)** emits `luce_rt_retain` on a reference
+  copy/store and `luce_rt_release` at scope end; `07_optimize`'s
+  ownership pass becomes retain/release elision (drop a retain/release
+  pair on a reference that does not escape — the SILGen move). The
+  interpreter (`interpreter/`) counts identically.
+- **What deletes:** `runtime/value.zig`'s `Owner`, the ownership arms in
+  `dropStorage`/`freeValue`/`freeObjectsIn`, and the whole
+  `04_semantics` ownership walk. Resources still close deterministically
+  — `newFile`/`newTask` release at count zero, same instant scope end
+  gave, so `docs/FILESYSTEM.md`/`docs/THREADS.md` keep their guarantee.
+
+The retain/release counting is one screenful in `libluce_rt`; the work is
+in the coordinated removal of the ownership walk from `04_semantics` and
+the MIR/codegen swap, done together so both engines land green at once.
