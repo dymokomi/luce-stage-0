@@ -1,7 +1,9 @@
-# termui — the value vocabulary every consumer needs (docs/TERMUI.md D3, D4).
+# termui — the value vocabulary every consumer needs.
 #
 # Style and Rect are values: they copy, take no verbs, and allocate
-# nothing.  Layout is arithmetic, not a solver.
+# nothing.  Layout is arithmetic, not a solver — the solver that turns a
+# list of constraints into rectangles is `termui.layout`, and it is
+# built out of these operations.
 
 # The sixteen names a program reaches for; the fields stay `long`
 # because 256-colour terminals are why `term_style` takes a number.

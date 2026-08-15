@@ -52,6 +52,8 @@ human-reviewed.  These files are the reasoning behind it.
 | [INTERFACES.md](INTERFACES.md) | The nominal interface contract: explicit conformance, read-only dispatch, effect matching, heterogeneous collections, and receiver ownership. |
 | [LANGUAGE_AUDIT.md](LANGUAGE_AUDIT.md) | The living feature-by-feature review matrix: pipeline seam, positive and adversarial behavior, composition probes, and the test anchor to extend. |
 | [MISSING.md](MISSING.md) | Confirmed bugs only. Feature requests, design questions, coverage campaigns, refactors, optimizations, and deliberate non-goals do not belong here. |
+| [UX_UI_DESIGN.md](UX_UI_DESIGN.md) | How design and coding agents design, implement, and review user experiences: an operational synthesis of Apple's Human Interface Guidelines into software obligations. |
+| [TERMUI_EDITOR_REWRITE.md](TERMUI_EDITOR_REWRITE.md) | The plan of record for the clean termui rewrite and the modular editor that adds undo/redo, in-file search, and crash-safe drafts. |
 
 Where a bug **closes**, its entry leaves MISSING.md for
 [RESOLVED.md](RESOLVED.md) below, so the bug list contains only current

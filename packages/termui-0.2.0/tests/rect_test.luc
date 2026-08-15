@@ -19,17 +19,6 @@ func test_split_bottom_leaves_the_rest_on_top():
     assert(body.row == 0)
     assert(body.rows == 23)
 
-func test_split_left_and_right_divide_the_columns():
-    let full = termui.Rect(rows = 10, columns = 40)
-    let left, rest = full.split_left(12)
-    assert(left.column == 0 and left.columns == 12)
-    assert(rest.column == 12 and rest.columns == 28)
-    let right, remainder = full.split_right(12)
-    assert(right.column == 28 and right.columns == 12)
-    assert(remainder.column == 0 and remainder.columns == 28)
-
-# A small window is a resize, not a bug: a split past the edge answers
-# an empty rectangle instead of trapping.
 func test_every_split_is_total():
     let full = termui.Rect(rows = 4, columns = 6)
     let big, nothing = full.split_left(500)

@@ -1,19 +1,19 @@
 # A key name becomes a member; an event is a value.
 
-import events
+import input
 
 func test_every_host_key_name_has_a_member():
-    assert(events.Events.key_of("ctrl_s") == events.Key.ctrl_s)
-    assert(events.Events.key_of("page_down") == events.Key.page_down)
-    assert(events.Events.key_of("escape") == events.Key.escape)
+    assert(input.Events.key_of("ctrl_s") == input.Key.ctrl_s)
+    assert(input.Events.key_of("page_down") == input.Key.page_down)
+    assert(input.Events.key_of("escape") == input.Key.escape)
 
 func test_a_name_this_version_does_not_know_is_unknown():
-    assert(events.Events.key_of("hyper_meta") == events.Key.unknown)
-    assert(events.Events.key_of("") == events.Key.unknown)
+    assert(input.Events.key_of("hyper_meta") == input.Key.unknown)
+    assert(input.Events.key_of("") == input.Key.unknown)
 
 func test_an_event_carries_its_own_data():
-    let m = events.Mouse(kind = events.Pointer.press, row = 7, column = 2, modifiers = 5)
-    match events.Event.mouse(pointer = m):
+    let m = input.Mouse(kind = input.Pointer.press, row = 7, column = 2, modifiers = 5)
+    match input.Event.mouse(pointer = m):
         mouse(pointer):
             assert(pointer.row == 7)
             assert(pointer.column == 2)
@@ -30,12 +30,12 @@ func test_an_event_carries_its_own_data():
             assert(false)
 
 func test_match_reaches_the_arm_the_value_names():
-    match events.Event.key(pressed = events.Key.ctrl_q):
+    match input.Event.key(pressed = input.Key.ctrl_q):
         key(pressed):
-            assert(pressed == events.Key.ctrl_q)
+            assert(pressed == input.Key.ctrl_q)
         else:
             assert(false)
-    match events.Event.text(typed = "x"):
+    match input.Event.text(typed = "x"):
         text(typed):
             assert(typed == "x")
         else:

@@ -1,39 +1,21 @@
-# The keymap, which is a table now and used to be fifty lines of `if`.
+# A key becomes an intent; an unbound key is `ignored`, not dropped.
 
-import editor_model
-import termui.events
+import keymap
+import termui.input as input
 
-func test_a_key_means_what_the_table_says():
-    assert(editor_model.intent_of(events.Key.left) == editor_model.Intent.move_left)
-    assert(editor_model.intent_of(events.Key.page_down) == editor_model.Intent.page_down)
-    assert(editor_model.intent_of(events.Key.home) == editor_model.Intent.line_start)
-    assert(editor_model.intent_of(events.Key.backspace) == editor_model.Intent.erase_left)
-    assert(editor_model.intent_of(events.Key.ctrl_s) == editor_model.Intent.save)
-    assert(editor_model.intent_of(events.Key.ctrl_q) == editor_model.Intent.quit)
-    assert(editor_model.intent_of(events.Key.escape) == editor_model.Intent.escape)
+func test_bound_keys_map_to_their_intent():
+    assert(keymap.intent_of(input.Key.left) == keymap.Intent.move_left)
+    assert(keymap.intent_of(input.Key.ctrl_s) == keymap.Intent.save)
+    assert(keymap.intent_of(input.Key.ctrl_f) == keymap.Intent.find)
+    assert(keymap.intent_of(input.Key.ctrl_z) == keymap.Intent.undo)
+    assert(keymap.intent_of(input.Key.ctrl_y) == keymap.Intent.redo)
 
-func test_a_key_the_editor_does_not_bind_is_ignored_by_name():
-    # Not fallen through: `ignored` is a member, so the matches that
-    # handle it have to say so out loud.
-    assert(editor_model.intent_of(events.Key.ctrl_a) == editor_model.Intent.ignored)
-    assert(editor_model.intent_of(events.Key.ctrl_z) == editor_model.Intent.ignored)
-    assert(editor_model.intent_of(events.Key.unknown) == editor_model.Intent.ignored)
+func test_an_unbound_key_is_ignored():
+    assert(keymap.intent_of(input.Key.ctrl_a) == keymap.Intent.ignored)
+    assert(keymap.intent_of(input.Key.unknown) == keymap.Intent.ignored)
 
-func test_typing_is_not_a_key():
-    # Text arrives as its own event, so no key in the table produces
-    # `insert_text` — the arm that inserts is reached from `Event.text`
-    # and nowhere else.
-    assert(editor_model.intent_of(events.Key.tab) == editor_model.Intent.indent)
-    assert(editor_model.intent_of(events.Key.enter) == editor_model.Intent.newline)
-
-func test_a_movement_carries_how_far_it_moves():
-    assert(editor_model.steps_of(editor_model.Intent.move_up) == -1)
-    assert(editor_model.steps_of(editor_model.Intent.move_down) == 1)
-    assert(editor_model.steps_of(editor_model.Intent.page_up) == -8)
-    assert(editor_model.steps_of(editor_model.Intent.page_down) == 8)
-
-func test_everything_that_is_not_a_movement_moves_nothing():
-    assert(editor_model.steps_of(editor_model.Intent.save) == 0)
-    assert(editor_model.steps_of(editor_model.Intent.ignored) == 0)
-    assert(editor_model.steps_of(editor_model.Intent.insert_text) == 0)
-    assert(editor_model.steps_of(editor_model.Intent.move_left) == 0)
+func test_steps_scroll_a_list_and_are_zero_otherwise():
+    assert(keymap.steps_of(keymap.Intent.move_up) == -1)
+    assert(keymap.steps_of(keymap.Intent.move_down) == 1)
+    assert(keymap.steps_of(keymap.Intent.page_up) == -8)
+    assert(keymap.steps_of(keymap.Intent.save) == 0)

@@ -2,12 +2,22 @@ const std = @import("std");
 const builtin = @import("builtin");
 const test_suites = @import("tools/test_suites.zig");
 
-/// termui's modules, entry module first (docs/TERMUI.md D12).  The
-/// package is userland, and three things in this file need to name its
+/// termui's modules, entry module first (docs/TERMUI_EDITOR_REWRITE.md).
+/// The package is userland, and three things in this file need to name its
 /// files: the editor's compiles (it imports them), the specs (they
-/// compile the editor), and the package's own test run.
-const termui_version = "0.1.0";
-const termui_modules = [_][]const u8{ "termui", "screen", "events", "border", "rows", "view", "renderer" };
+/// compile the editor), and the package's own test run.  v0.2 is the
+/// clean rewrite (docs/TERMUI_EDITOR_REWRITE.md): the deep core plus the
+/// three modules v0.1 lacked — layout (the constraint solver), text
+/// (styled spans), and frame (junction-aware boxes) — with the widget
+/// layer reduced to the two the editor uses (rows, viewport).
+const termui_version = "0.2.0";
+const termui_modules = [_][]const u8{ "termui", "surface", "text", "layout", "frame", "input", "view", "rows", "viewport", "renderer" };
+
+/// The editor's own modules, its root (`editor`) first.  The specs
+/// compile the editor from these, and both its compile and its test run
+/// name them as inputs so editing one re-runs what depends on it.
+const editor_modules = [_][]const u8{ "editor", "focus", "keymap", "document", "history", "search", "highlight", "theme", "layout", "browser", "console", "session", "state", "paint" };
+const editor_tests = [_][]const u8{ "document", "keymap", "history", "search", "highlight", "layout", "state", "render" };
 
 // LuciaOS v2 builds two executables from one language module:
 //
@@ -331,17 +341,16 @@ pub fn build(b: *std.Build) void {
     // build-system import rather than a relative `@embedFile`, for the
     // reason `loom`'s shell takes one: a spec that pinned its own
     // inline copy of the editor would pin nothing.
-    specs.addAnonymousImport("editor.luc", .{
-        .root_source_file = b.path("examples/editor/editor.luc"),
-    });
-    specs.addAnonymousImport("editor_model.luc", .{
-        .root_source_file = b.path("examples/editor/editor_model.luc"),
-    });
+    for (editor_modules) |module| {
+        specs.addAnonymousImport(b.fmt("{s}.luc", .{module}), .{
+            .root_source_file = b.path(b.fmt("examples/editor/{s}.luc", .{module})),
+        });
+    }
     // …and the package it draws through, which `editor_spec.zig`
     // serves to the compile as a store would (docs/PACKAGES.md D4).
     for (termui_modules) |module| {
         specs.addAnonymousImport(b.fmt("termui/{s}.luc", .{module}), .{
-            .root_source_file = b.path(b.fmt("packages/termui-0.1.0/{s}.luc", .{module})),
+            .root_source_file = b.path(b.fmt("packages/termui-{s}/{s}.luc", .{ termui_version, module })),
         });
     }
 
@@ -798,12 +807,15 @@ pub fn build(b: *std.Build) void {
     // The corpus the grammar is tested against sits above the tool's
     // module root, and `@embedFile` does not leave a module — so it
     // arrives under a name instead.
-    grammar_generator.addAnonymousImport("editor.luc", .{
-        .root_source_file = b.path("examples/editor/editor.luc"),
-    });
-    grammar_generator.addAnonymousImport("editor_model.luc", .{
-        .root_source_file = b.path("examples/editor/editor_model.luc"),
-    });
+    // The editor is a corpus of real Luce for the grammar to be held
+    // against; since it split into modules, its words are spread across
+    // them, so the grammar test concatenates several.  All are offered
+    // here and the test picks which to read.
+    for (editor_modules) |module| {
+        grammar_generator.addAnonymousImport(b.fmt("{s}.luc", .{module}), .{
+            .root_source_file = b.path(b.fmt("examples/editor/{s}.luc", .{module})),
+        });
+    }
     test_tools_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = grammar_generator })).step);
 
     // The suite catalogue is executable policy: a new `*_spec.zig` file
@@ -1259,9 +1271,9 @@ pub fn build(b: *std.Build) void {
         tests: []const []const u8,
     }{
         .{
-            .directory = "termui-0.1.0",
+            .directory = "termui-" ++ termui_version,
             .modules = &termui_modules,
-            .tests = &.{ "layout", "screen", "events", "border", "rows", "view", "renderer" },
+            .tests = &.{ "rect", "surface", "text", "layout", "frame", "input", "view", "rows", "viewport", "renderer" },
         },
     };
     for (packages) |package| {
@@ -1288,8 +1300,10 @@ pub fn build(b: *std.Build) void {
     const test_editor = b.addRunArtifact(compiler);
     test_editor.addArg("test");
     test_editor.setCwd(b.path("examples/editor"));
-    test_editor.addFileInput(b.path("examples/editor/editor_model.luc"));
-    for ([_][]const u8{ "layout", "keymap" }) |one| {
+    for (editor_modules) |module| {
+        test_editor.addFileInput(b.path(b.fmt("examples/editor/{s}.luc", .{module})));
+    }
+    for (editor_tests) |one| {
         test_editor.addFileInput(b.path(b.fmt("examples/editor/tests/{s}_test.luc", .{one})));
     }
     linkAgainstRuntime(test_editor, install_runtime, runtime_directory, runtime_archive);
@@ -1308,7 +1322,13 @@ pub fn build(b: *std.Build) void {
     compile_editor.addArg("--release");
     compile_editor.addArg("-o");
     const editor_executable = compile_editor.addOutputFileArg("editor");
-    compile_editor.addFileInput(b.path("examples/editor/editor_model.luc"));
+    // Every module the editor imports is an input, so editing one
+    // rebuilds the executable instead of leaving a stale copy.  The root
+    // (`editor`) is already the file argument above.
+    for (editor_modules) |module| {
+        if (std.mem.eql(u8, module, "editor")) continue;
+        compile_editor.addFileInput(b.path(b.fmt("examples/editor/{s}.luc", .{module})));
+    }
     compile_editor.addFileInput(b.path("src/luce/std/os.luc"));
     compile_editor.step.dependOn(&install_start.step);
     compile_editor.addFileInput(start_library.getEmittedBin());

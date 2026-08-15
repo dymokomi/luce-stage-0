@@ -1,0 +1,130 @@
+# The coordinator, driven through its key router: editing, undo
+# coalescing, and search all exercised end to end without a terminal.
+
+import state
+import keymap
+import history
+import document
+import focus
+import layout as panes
+import termui
+import termui.input as input
+
+func fresh() -> state.Editor:
+    var buffers = new list(document.Buffer)
+    buffers.append(document.Buffer(path = "f.luc"))
+    var histories = new list(history.Stacks)
+    histories.append(history.Stacks(past = new list(history.Revision), future = new list(history.Revision)))
+    return state.Editor(
+        buffers = give buffers,
+        histories = give histories,
+        names = new list(string),
+        search_matches = new list(long),
+        path = "f.luc",
+    )
+
+func test_typing_then_undo_and_redo():
+    var ed = fresh()
+    ed.key(keymap.Intent.insert_text, "hello", 10)
+    assert(ed.content == "hello")
+    assert(ed.dirty)
+    ed.key(keymap.Intent.undo, "", 10)
+    assert(ed.content == "")
+    ed.key(keymap.Intent.redo, "", 10)
+    assert(ed.content == "hello")
+
+func test_a_run_of_insertions_is_one_undo():
+    var ed = fresh()
+    ed.key(keymap.Intent.insert_text, "a", 10)
+    ed.key(keymap.Intent.insert_text, "b", 10)
+    ed.key(keymap.Intent.insert_text, "c", 10)
+    assert(ed.content == "abc")
+    ed.key(keymap.Intent.undo, "", 10)
+    assert(ed.content == "")
+
+func test_a_movement_breaks_the_undo_run():
+    var ed = fresh()
+    ed.key(keymap.Intent.insert_text, "ab", 10)
+    ed.key(keymap.Intent.move_left, "", 10)
+    ed.key(keymap.Intent.insert_text, "X", 10)
+    assert(ed.content == "aXb")
+    ed.key(keymap.Intent.undo, "", 10)
+    assert(ed.content == "ab")
+    ed.key(keymap.Intent.undo, "", 10)
+    assert(ed.content == "")
+
+func test_newline_reindents_inside_a_block():
+    var ed = fresh()
+    ed.key(keymap.Intent.insert_text, "if x:", 10)
+    ed.key(keymap.Intent.newline, "", 10)
+    # The new line keeps the block's indent plus one level.
+    assert(ed.content == "if x:\n    ")
+
+func test_search_steps_through_matches():
+    var ed = fresh()
+    ed.key(keymap.Intent.insert_text, "one two two", 10)
+    ed.key(keymap.Intent.find, "", 10)
+    assert(ed.focus == focus.Focus.search)
+    ed.key(keymap.Intent.insert_text, "two", 10)
+    assert(ed.cursor == 4)
+    ed.key(keymap.Intent.newline, "", 10)
+    assert(ed.cursor == 8)
+    ed.key(keymap.Intent.escape, "", 10)
+    assert(ed.focus == focus.Focus.editor)
+
+# A search jumps the cursor, so text typed after closing it is a fresh
+# undo group rather than coalescing across the jump.
+func test_search_starts_a_fresh_undo_group():
+    var ed = fresh()
+    ed.key(keymap.Intent.insert_text, "ab", 10)
+    ed.key(keymap.Intent.find, "", 10)
+    ed.key(keymap.Intent.escape, "", 10)
+    ed.key(keymap.Intent.insert_text, "c", 10)
+    assert(ed.content == "abc")
+    ed.key(keymap.Intent.undo, "", 10)
+    assert(ed.content == "ab")
+    ed.key(keymap.Intent.undo, "", 10)
+    assert(ed.content == "")
+
+# The file pane's scroll window is persisted on `self.files`, so a mouse
+# click and the frame read the same `top` — it is not recomputed on a
+# throwaway copy.
+func test_adjust_files_persists_the_scroll_window():
+    var ed = fresh()
+    for i in range(0, 20):
+        ed.names.append("file" + string(i))
+    ed.files.count = 20
+    ed.files.selected = 15
+    ed.adjust_files(5)
+    # Selection 15 with five visible rows puts the window top at 11.
+    assert(ed.files.top == 11)
+
+# Dragging the file-pane divider resizes the pane, and the layout clamps
+# the raw drag so the panes stay usable.
+func test_dragging_the_files_divider_resizes_the_pane():
+    var ed = fresh()
+    ed.file_pane = true
+    let area = termui.Rect(rows = 24, columns = 80)
+    let view = panes.Layout.of(area, true, false, ed.files_width, ed.output_height)
+    let rule = view.split_column()
+    # A press on the rule begins the drag and nothing else.
+    ed.pointer(input.Mouse(kind = input.Pointer.press, row = 3, column = rule, button = 0), view)
+    assert(ed.dragging == state.Drag.files)
+    # Drag it left to column 15; the width follows.
+    ed.pointer(input.Mouse(kind = input.Pointer.drag, row = 3, column = 15), view)
+    assert(ed.files_width == 15)
+    ed.pointer(input.Mouse(kind = input.Pointer.release, row = 3, column = 15), view)
+    assert(ed.dragging == state.Drag.idle)
+    let narrower = panes.Layout.of(area, true, false, ed.files_width, ed.output_height)
+    assert(narrower.files.columns == 16)
+
+func test_a_drag_past_the_minimum_is_clamped():
+    var ed = fresh()
+    ed.file_pane = true
+    ed.dragging = state.Drag.files
+    let area = termui.Rect(rows = 24, columns = 80)
+    let view = panes.Layout.of(area, true, false, 0, 0)
+    # Drag the rule to column 2 — below the usable minimum of 8.
+    ed.pointer(input.Mouse(kind = input.Pointer.drag, row = 3, column = 2), view)
+    let clamped = panes.Layout.of(area, true, false, ed.files_width, ed.output_height)
+    assert(clamped.files.columns == 9)

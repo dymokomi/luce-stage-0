@@ -1,5 +1,17 @@
 # termui
 
+> **Superseded (2026-08-14).**  This describes termui **v0.1**, whose
+> module set (`screen`, `events`, `border`, and the `Panel`/`Split`
+> views) was retired.  The shipping package is **v0.2**
+> (`packages/termui-0.2.0/`): the proven core kept its shape but `Screen`
+> became `Surface` and `events` became `input`, and the shallow view
+> layer was replaced by three deep modules v0.1 lacked — `layout` (a
+> constraint solver), `text` (styled spans), and `frame` (junction-aware
+> boxes whose strokes merge) — plus a `viewport` widget.  The reasoning
+> and the module-by-module design are in
+> [TERMUI_EDITOR_REWRITE.md](TERMUI_EDITOR_REWRITE.md).  This file is
+> kept as the v0.1 record.
+
 `termui` is Luce's terminal-UI package. It turns application state into a
 deterministic cell surface and keeps terminal protocol details at the
 `std.term` boundary. The application still owns its state and event policy;

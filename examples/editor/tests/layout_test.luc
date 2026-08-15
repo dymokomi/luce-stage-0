@@ -1,92 +1,74 @@
 # Where the panes land, at sizes nobody wants to reach by hand.
-#
-# The layout used to be ninety lines inside the frame that drew it, so
-# the only way to ask what it did was to draw a frame and read the
-# screen.  It is arithmetic over rectangles now, which is a thing a
-# test can simply ask.
 
-import editor_model
+import layout as panes
+import focus
 import termui
 
 func screen_of(rows: long, columns: long) -> termui.Rect:
     return termui.Rect(rows = rows, columns = columns)
 
 func test_a_bare_terminal_is_text_and_a_status_bar():
-    let layout = editor_model.Layout.of(screen_of(24, 80), false, false)
-    assert(layout.text.row == 0)
-    assert(layout.text.rows == 23)
-    assert(layout.text.columns == 80)
-    assert(layout.status.row == 23)
-    assert(layout.status.rows == 1)
-    assert(layout.files.is_empty())
-    assert(layout.output.is_empty())
-    # Five columns of line numbers, then the source.
-    assert(layout.source().column == 5)
-    assert(layout.source().columns == 75)
-    assert(layout.text_start() == 5)
-    assert(layout.split_column() == 0)
+    let view = panes.Layout.of(screen_of(24, 80), false, false)
+    assert(view.text.row == 0)
+    assert(view.text.rows == 23)
+    assert(view.text.columns == 80)
+    assert(view.status.row == 23)
+    assert(view.status.rows == 1)
+    assert(view.files.is_empty())
+    assert(view.output.is_empty())
+    assert(view.source().column == 5)
+    assert(view.source().columns == 75)
+    assert(view.text_start() == 5)
+    assert(view.split_column() == 0)
 
 func test_the_file_pane_is_a_quarter_of_the_width_between_18_and_24():
-    let wide = editor_model.Layout.of(screen_of(24, 200), true, false)
-    # A quarter of 200 is 50, and the pane stops at 24.
+    let wide = panes.Layout.of(screen_of(24, 200), true, false)
     assert(wide.files.columns == 25)
-    let ordinary = editor_model.Layout.of(screen_of(24, 80), true, false)
+    let ordinary = panes.Layout.of(screen_of(24, 80), true, false)
     assert(ordinary.files.columns == 21)
     assert(ordinary.text.column == 21)
     assert(ordinary.text_start() == 26)
     assert(ordinary.split_column() == 20)
-    let narrow = editor_model.Layout.of(screen_of(24, 60), true, false)
-    # A quarter of 60 is 15, and the pane starts at 18.
+    let narrow = panes.Layout.of(screen_of(24, 60), true, false)
     assert(narrow.files.columns == 19)
 
 func test_the_file_pane_gives_way_before_the_text_does():
-    # Eighteen columns of pane, one of rule and five of line numbers do
-    # not fit in twenty, so the pane is what shrinks.
-    let cramped = editor_model.Layout.of(screen_of(24, 20), true, false)
+    let cramped = panes.Layout.of(screen_of(24, 20), true, false)
     assert(cramped.files.columns == 15)
     assert(cramped.text.columns == 5)
     assert(cramped.text.column == 15)
 
 func test_the_output_pane_is_a_third_of_the_height_between_3_and_8():
-    let tall = editor_model.Layout.of(screen_of(48, 80), false, true)
+    let tall = panes.Layout.of(screen_of(48, 80), false, true)
     assert(tall.output.rows == 8)
     assert(tall.output.row == 39)
     assert(tall.text.rows == 39)
-    let ordinary = editor_model.Layout.of(screen_of(24, 80), false, true)
+    let ordinary = panes.Layout.of(screen_of(24, 80), false, true)
     assert(ordinary.output.rows == 8)
     assert(ordinary.text.rows == 15)
-    let short = editor_model.Layout.of(screen_of(9, 80), false, true)
-    # A third of nine is three, which is also the floor.
+    let short = panes.Layout.of(screen_of(9, 80), false, true)
     assert(short.output.rows == 3)
     assert(short.text.rows == 5)
 
 func test_a_window_too_small_for_a_pane_is_a_resize_and_not_a_bug():
-    # Two rows: a status bar and one line of text, and no room for an
-    # output pane at all.  Every rectangle is still answerable.
-    let tiny = editor_model.Layout.of(screen_of(2, 40), true, true)
+    let tiny = panes.Layout.of(screen_of(2, 40), true, true)
     assert(tiny.text.rows == 1)
     assert(tiny.output.is_empty())
     assert(tiny.status.rows == 1)
-    # One column: the splits are total, so the panes empty out rather
-    # than trapping or overlapping.
-    let sliver = editor_model.Layout.of(screen_of(1, 1), true, true)
+    let sliver = panes.Layout.of(screen_of(1, 1), true, true)
     assert(sliver.status.rows == 1)
     assert(sliver.text.is_empty())
 
 func test_both_panes_share_the_frame():
-    let layout = editor_model.Layout.of(screen_of(24, 80), true, true)
-    assert(layout.files.columns == 21)
-    assert(layout.output.row == 15)
-    assert(layout.output.columns == 80)
-    assert(layout.text.rows == 15)
-    assert(layout.text.column == 21)
-    # The output pane's top edge meets the file pane's rule here.
-    assert(layout.split_column() == 20)
+    let view = panes.Layout.of(screen_of(24, 80), true, true)
+    assert(view.files.columns == 21)
+    assert(view.output.row == 15)
+    assert(view.output.columns == 80)
+    assert(view.text.rows == 15)
+    assert(view.text.column == 21)
+    assert(view.split_column() == 20)
 
-# Which pane a click landed in, as a word a failing assertion can
-# print.  `pane_at` answers `Focus?`, and an optional is bound and
-# tested before it is matched.
-func pane_name(where: editor_model.Focus?) -> string:
+func pane_name(where: focus.Focus?) -> string:
     if where == none:
         return "none"
     match where:
@@ -96,15 +78,14 @@ func pane_name(where: editor_model.Focus?) -> string:
             return "files"
         output:
             return "output"
+        search:
+            return "search"
 
 func test_a_click_names_the_pane_it_landed_in():
-    let layout = editor_model.Layout.of(screen_of(24, 80), true, true)
-    assert(pane_name(layout.pane_at(3, 40)) == "editor")
-    # The file pane owns its columns, the shared rule excepted.
-    assert(pane_name(layout.pane_at(3, 5)) == "files")
-    assert(pane_name(layout.pane_at(3, 20)) == "editor")
-    # The output pane owns the rows below the text.
-    assert(pane_name(layout.pane_at(18, 40)) == "output")
-    # The status bar belongs to nobody, and neither does off-screen.
-    assert(pane_name(layout.pane_at(23, 10)) == "none")
-    assert(pane_name(layout.pane_at(-1, 10)) == "none")
+    let view = panes.Layout.of(screen_of(24, 80), true, true)
+    assert(pane_name(view.pane_at(3, 40)) == "editor")
+    assert(pane_name(view.pane_at(3, 5)) == "files")
+    assert(pane_name(view.pane_at(3, 20)) == "editor")
+    assert(pane_name(view.pane_at(18, 40)) == "output")
+    assert(pane_name(view.pane_at(23, 10)) == "none")
+    assert(pane_name(view.pane_at(-1, 10)) == "none")

@@ -1247,7 +1247,11 @@ test "the example editor word maps exactly match the compiler" {
     const repository = try open(gpa, std.testing.io);
     defer gpa.free(repository.prefix);
 
-    const editor = try repository.read("examples/editor/editor.luc");
+    // The highlighter's word tables moved out of `editor.luc` into
+    // `highlight.luc` when the editor was split into modules; the tables
+    // are what this test holds to the compiler, so it reads them where
+    // they now live.
+    const editor = try repository.read("examples/editor/highlight.luc");
     defer gpa.free(editor);
 
     var editor_keywords = try editorWordTable(gpa, editor, "keyword_words");

@@ -1,0 +1,150 @@
+# The text buffer and the pure arithmetic over it.
+#
+# Everything here is pure — no host, no terminal, no editing state —
+# so it is the half of the editor a test drives directly.  A cursor is
+# a **byte** offset into UTF-8 content; how wide a string *draws* is
+# `strings.width`, a display question this file never asks.  The
+# functions move a cursor between boundaries, find line starts and
+# columns, and splice or erase text, each answering a value the caller
+# stores.
+
+# The editor's durable per-file state.  A view may switch away from a
+# file, but a buffer keeps its text, cursor and scroll so returning to
+# it does not lose work that is not on disk yet.  Plain data: it carries
+# no container, so the session can hold a list of them and the active
+# one's fields can be cached and restored (OWNERSHIP.md S22 forbids
+# editing a carrying element through its index).
+struct Buffer:
+    path: string = ""
+    content: string = ""
+    message: string = ""
+    cursor: long = 0
+    scroll: long = 0
+    dirty: bool = false
+
+# --- cursor motion over UTF-8 boundaries -----------------------------
+
+func continuation(byte: byte) -> bool:
+    return byte >= 128 and byte < 192
+
+func previous_boundary(value: string, cursor: long) -> long:
+    if cursor <= 0:
+        return 0
+    var at = cursor - 1
+    while at > 0 and continuation(value.byte_at(at)):
+        at = at - 1
+    return at
+
+func next_boundary(value: string, cursor: long) -> long:
+    if cursor >= len(value):
+        return len(value)
+    var at = cursor + 1
+    while at < len(value) and continuation(value.byte_at(at)):
+        at = at + 1
+    return at
+
+# --- lines and columns -----------------------------------------------
+
+func line_start(value: string, cursor: long) -> long:
+    var at = cursor
+    while at > 0 and value.byte_at(at - 1) != 10:
+        at = at - 1
+    return at
+
+func line_end(value: string, cursor: long) -> long:
+    var at = cursor
+    while at < len(value) and value.byte_at(at) != 10:
+        at = at + 1
+    return at
+
+func line_of(value: string, cursor: long) -> long:
+    var line = 0
+    for at in range(0, cursor):
+        if value.byte_at(at) == 10:
+            line = line + 1
+    return line
+
+func count_lines(value: string) -> long:
+    return line_of(value, len(value)) + 1
+
+func column_of(value: string, cursor: long) -> long:
+    var at = line_start(value, cursor)
+    var column = 0
+    while at < cursor:
+        at = next_boundary(value, at)
+        column = column + 1
+    return column
+
+# The byte offset where line `wanted` begins.
+func line_at(value: string, wanted: long) -> long:
+    var at = 0
+    var line = 0
+    while line < wanted and at < len(value):
+        if value.byte_at(at) == 10:
+            line = line + 1
+        at = at + 1
+    return at
+
+# The byte offset at display `column` in the line beginning at `start`.
+func at_column(value: string, start: long, column: long) -> long:
+    var at = start
+    var current = 0
+    let finish = line_end(value, start)
+    while at < finish and current < column:
+        at = next_boundary(value, at)
+        current = current + 1
+    return at
+
+# --- indentation policy ----------------------------------------------
+
+# The leading whitespace of the line at the cursor, borrowed from
+# `value` and safe to use while the caller decides the next line.
+func indentation(value: string, cursor: long) -> string:
+    let start = line_start(value, cursor)
+    var at = start
+    while at < cursor:
+        let byte = value.byte_at(at)
+        if byte != 32 and byte != 9:
+            break
+        at = at + 1
+    return value[start:at]
+
+# Whether the code before the cursor opens an indented block.  A small
+# lexical scan is enough: comments and quoted strings are not layout,
+# but a colon before a trailing comment is.
+func opens_block(value: string, cursor: long) -> bool:
+    let start = line_start(value, cursor)
+    var at = start
+    var quoted = false
+    var escaped = false
+    var last: byte = 0
+    while at < cursor:
+        let byte = value.byte_at(at)
+        if quoted:
+            if escaped:
+                escaped = false
+            elif byte == 92:
+                escaped = true
+            elif byte == 34:
+                quoted = false
+        elif byte == 35:
+            break
+        elif byte == 34:
+            quoted = true
+        elif byte != 32 and byte != 9:
+            last = byte
+        at = at + 1
+    return not quoted and last == 58
+
+# --- editing (string in, string out) ---------------------------------
+
+func splice(value: string, cursor: long, extra: string) -> string:
+    return value[0:cursor] + extra + value[cursor:len(value)]
+
+func erase_before(value: string, cursor: long) -> string:
+    let before = previous_boundary(value, cursor)
+    return value[0:before] + value[cursor:len(value)]
+
+func erase_at(value: string, cursor: long) -> string:
+    let after = next_boundary(value, cursor)
+    return value[0:cursor] + value[after:len(value)]

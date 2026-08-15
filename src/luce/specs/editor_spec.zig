@@ -31,31 +31,58 @@ const testing = std.testing;
 /// The program itself, not a copy of it.  A test that pins a
 /// transcript against its own inline copy of a program pins nothing.
 const editor = @embedFile("editor.luc");
-const editor_model = @embedFile("editor_model.luc");
 
-/// The editor's dependency, served the way a store serves it
-/// (docs/PACKAGES.md D4): the consumer spells `termui.screen`, the
-/// package's own files spell `screen`, and both rows carry the same
-/// root token and the same path, so the two spellings are one module
-/// and `Screen` is one type across the boundary.
+/// The editor's own modules and the package it draws through, served the
+/// way a store serves them (docs/PACKAGES.md D4): the consumer spells
+/// `termui.frame`, the package's files spell `frame`, and both rows
+/// carry the same root token and path, so the two spellings are one
+/// module across the boundary.  The editor's modules come **first**, so
+/// a name it shares with the package (`layout`) resolves to the
+/// editor's when the editor imports it — the loader returns the first
+/// match, and the editor's imports are the ones that ask for it.
 const editor_files = [_]agree.File{
-    .{ .name = "editor_model", .source = editor_model },
+    .{ .name = "focus", .source = @embedFile("focus.luc") },
+    .{ .name = "keymap", .source = @embedFile("keymap.luc") },
+    .{ .name = "document", .source = @embedFile("document.luc") },
+    .{ .name = "history", .source = @embedFile("history.luc") },
+    .{ .name = "search", .source = @embedFile("search.luc") },
+    .{ .name = "highlight", .source = @embedFile("highlight.luc") },
+    .{ .name = "theme", .source = @embedFile("theme.luc") },
+    .{ .name = "layout", .source = @embedFile("layout.luc") },
+    .{ .name = "browser", .source = @embedFile("browser.luc") },
+    .{ .name = "console", .source = @embedFile("console.luc") },
+    .{ .name = "session", .source = @embedFile("session.luc") },
+    .{ .name = "state", .source = @embedFile("state.luc") },
+    .{ .name = "paint", .source = @embedFile("paint.luc") },
 } ++ termui_files;
 
-const termui_root = "termui-0.1.0";
+const termui_root = "termui-0.2.0";
 const termui_files = package("termui", @embedFile("termui/termui.luc")) ++
-    package("screen", @embedFile("termui/screen.luc")) ++
-    package("events", @embedFile("termui/events.luc")) ++
-    package("border", @embedFile("termui/border.luc")) ++
-    package("rows", @embedFile("termui/rows.luc")) ++
+    package("surface", @embedFile("termui/surface.luc")) ++
+    package("text", @embedFile("termui/text.luc")) ++
+    package("layout", @embedFile("termui/layout.luc")) ++
+    package("frame", @embedFile("termui/frame.luc")) ++
+    package("input", @embedFile("termui/input.luc")) ++
     package("view", @embedFile("termui/view.luc")) ++
+    package("rows", @embedFile("termui/rows.luc")) ++
+    package("viewport", @embedFile("termui/viewport.luc")) ++
     package("renderer", @embedFile("termui/renderer.luc"));
 
-/// One package module under both of its spellings.
+/// One package module under both of its spellings.  Every bare spelling
+/// but the entry module's is pinned with `from` to the package's own
+/// root, so a package module's `import surface` reaches it while a
+/// consumer's bare import of the same name does not — the editor and
+/// termui both have a `layout` module, and this keeps them apart the way
+/// the real store's root token does, rather than leaning on file order.
+/// The entry module is the exception: a consumer imports it bare
+/// (`import termui`), so its bare row must resolve from any root — and
+/// `termui` never collides with a consumer module name, so leaving it
+/// open is safe.
 fn package(comptime name: []const u8, comptime source: []const u8) [2]agree.File {
     const at = termui_root ++ "/" ++ name ++ ".luc";
+    const internal: ?[]const u8 = if (std.mem.eql(u8, name, "termui")) null else termui_root;
     return .{
-        .{ .name = name, .source = source, .path = at, .root = termui_root },
+        .{ .name = name, .source = source, .path = at, .root = termui_root, .from = internal },
         .{ .name = "termui." ++ name, .source = source, .path = at, .root = termui_root },
     };
 }
@@ -123,13 +150,13 @@ test "the editor draws the same frames, key for key, on both engines" {
     // Re-recorded when the editor migrated onto termui
     // (docs/TERMUI.md step 5).  **The number itself is the headline**:
     // the same eighteen keys over the same file used to leave 31,856
-    // bytes of terminal traffic and now leave 5,907 — the editor
-    // repainted all 1,920 cells of every frame, and the screen it
+    // bytes of terminal traffic and now leave 5,817 — the editor
+    // repainted all 1,920 cells of every frame, and the surface it
     // draws on now emits only the cells that changed (D2).  If this
     // moves, the program draws something else.
-    try testing.expectEqual(@as(usize, 5907), session.printed().len);
+    try testing.expectEqual(@as(usize, 5817), session.printed().len);
     try testing.expectEqual(
-        @as(u64, 6755786775076388343),
+        @as(u64, 16879993375888331344),
         std.hash.Wyhash.hash(0, session.printed()),
     );
 }
@@ -250,7 +277,7 @@ test "the file pane is optional and receives focus through the pane cycle" {
     defer testing.allocator.free(shown);
     try testing.expect(std.mem.indexOf(u8, shown, "alpha.txt") != null);
     try testing.expect(std.mem.indexOf(u8, shown, "[files]") != null);
-    try testing.expect(std.mem.indexOf(u8, shown, "┌ files") != null);
+    try testing.expect(std.mem.indexOf(u8, shown, "─ files") != null);
 }
 
 test "Ctrl-O opens the output pane, and Escape hands focus back to the text" {

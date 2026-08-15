@@ -1,0 +1,32 @@
+# Views are values behind a small two-method interface.
+
+import surface
+import termui
+import text
+import view
+
+func test_a_text_view_measures_and_draws_styled_lines():
+    var s = surface.Surface.of(3, 10)
+    s.clear()
+    var lines = new list(text.Line)
+    lines.append(text.plain("hello", termui.Style(foreground = 3)))
+    lines.append(text.plain("world", termui.Style(foreground = 3)))
+    let block = view.Text(lines = give lines)
+    let item: view.View = block
+    let rows, columns = item.measure(s.area())
+    assert(rows == 2 and columns == 5)
+    item.draw(s, s.area())
+    s.present()
+    assert(s.front[0, 0].text == "h")
+    assert(s.front[1, 4].text == "d")
+    assert(s.front[0, 0].style.foreground == 3)
+
+func test_fill_paints_a_rectangle_of_one_cell():
+    var s = surface.Surface.of(2, 4)
+    s.clear()
+    let bar: view.View = view.Fill(glyph = "#", style = termui.Style(foreground = 5))
+    bar.draw(s, s.area())
+    s.present()
+    assert(s.front[0, 0].text == "#")
+    assert(s.front[1, 3].text == "#")
+    assert(s.front[0, 0].style.foreground == 5)

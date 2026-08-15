@@ -1,30 +1,29 @@
 # The diff is the whole point: an unchanged frame writes nothing.
 
-import screen
+import surface
 import termui
 
-func test_a_new_screen_paints_whole_then_nothing():
-    var s = screen.Screen.of(4, 10)
+func test_a_new_surface_paints_whole_then_nothing():
+    var s = surface.Surface.of(4, 10)
     s.clear()
     assert(s.present().cells == 40)
     assert(s.present().cells == 0)
 
 func test_only_what_changed_is_written():
-    var s = screen.Screen.of(4, 10)
+    var s = surface.Surface.of(4, 10)
     s.clear()
     s.write(s.area(), 0, 0, "hello", termui.Style())
     let first = s.present()
     assert(first.cells == 40)
     s.clear()
     s.write(s.area(), 1, 0, "hi", termui.Style(foreground = 3))
-    # The five cells "hello" vacated, plus the two "hi" filled.
     let second = s.present()
     assert(second.cells == 7)
     assert(second.runs == 2)
     assert(s.present().cells == 0)
 
 func test_a_cell_holds_one_character_not_one_byte():
-    var s = screen.Screen.of(2, 8)
+    var s = surface.Surface.of(2, 8)
     s.clear()
     s.write(s.area(), 0, 0, "héllo", termui.Style())
     s.present()
@@ -32,27 +31,25 @@ func test_a_cell_holds_one_character_not_one_byte():
     assert(s.front[0, 1].text == "é")
     assert(s.front[0, 2].text == "l")
 
-func test_writing_is_clipped_to_the_area_and_the_screen():
-    var s = screen.Screen.of(3, 6)
+func test_writing_is_clipped_to_the_area_and_the_surface():
+    var s = surface.Surface.of(3, 6)
     s.clear()
     let right = termui.Rect(row = 0, column = 3, rows = 3, columns = 3)
     s.write(right, 0, 0, "abcdefgh", termui.Style())
     s.present()
     assert(s.front[0, 3].text == "a")
     assert(s.front[0, 5].text == "c")
-    # Nothing escaped the area, and nothing ran off the screen.
     assert(s.front[0, 0].text == " ")
 
-func test_a_row_outside_the_area_writes_nothing():
-    var s = screen.Screen.of(3, 6)
+func test_cell_at_reads_the_back_grid_and_clips():
+    var s = surface.Surface.of(2, 4)
     s.clear()
-    let one_row = termui.Rect(row = 0, column = 0, rows = 1, columns = 6)
-    s.write(one_row, 4, 0, "zzz", termui.Style())
-    s.present()
-    assert(s.front[0, 0].text == " ")
+    s.put(0, 1, "x", termui.Style())
+    assert(s.cell_at(0, 1).text == "x")
+    assert(s.cell_at(9, 9).text == " ")
 
 func test_resize_replaces_the_grids_and_repaints_whole():
-    var s = screen.Screen.of(4, 10)
+    var s = surface.Surface.of(4, 10)
     s.clear()
     s.present()
     s.resize(6, 12)

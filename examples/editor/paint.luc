@@ -1,0 +1,156 @@
+# Drawing the editor — every frame, read the state and paint the cells.
+#
+# These are free functions: they read an `Editor` (never changing it)
+# and draw into a `Surface`.  The frames use `termui.frame`, whose
+# strokes merge, so the file pane's rule and the output pane's top edge
+# form their junction with no glyph chosen here — the reason the editor
+# no longer carries its own border compositor.
+
+import std.strings
+import document
+import highlight
+import theme
+import focus
+import layout as panes
+import state
+import termui
+import termui.surface as surface
+import termui.frame as frame
+import termui.text as text
+import termui.rows as rows
+import termui.view as views
+
+# Build one highlighted source line as styled spans.
+func source_line(content: string, from: long, to: long) -> text.Line:
+    var spans = new list(text.Span)
+    for token in highlight.tokens(content, from, to):
+        spans.append(text.Span(text = token.text, style = theme.style_for(theme.palette, token.kind)))
+    return text.Line(spans = give spans)
+
+func pane_style(active: bool) -> termui.Style:
+    if active:
+        return theme.palette.pane_active
+    return theme.palette.pane_border
+
+# Where the terminal's own cursor belongs after the frame.
+func cursor_at(app: state.Editor, view: panes.Layout) -> (long, long):
+    if app.focus == focus.Focus.files:
+        return clamp(app.files.selected - app.files.top + 1, 0, max(view.files.rows - 1, 0)), 0
+    if app.focus == focus.Focus.output:
+        return view.output.row, 0
+    if app.focus == focus.Focus.search:
+        let column = min(7 + app.search_query.width(), max(view.status.columns - 1, 0))
+        return view.status.row, column
+    let line = document.line_of(app.content, app.cursor)
+    let column = document.column_of(app.content, app.cursor)
+    let last_row = max(view.text.rows - 1, 0)
+    let last_column = max(view.text.column + view.text.columns - 1, 0)
+    let landing = clamp(view.text_start() + column, 0, last_column)
+    return clamp(line - app.scroll, 0, last_row), landing
+
+func frame(app: state.Editor, view: surface.Surface, layout: panes.Layout):
+    view.clear()
+    paint_text(app, view, layout)
+    if app.file_pane:
+        paint_files(app, view, layout)
+    if app.output_pane:
+        paint_output(app, view, layout)
+    paint_status(app, view, layout)
+
+func paint_text(app: state.Editor, view: surface.Surface, layout: panes.Layout):
+    let source = layout.source()
+    let cursor_line = document.line_of(app.content, app.cursor)
+    let total = document.count_lines(app.content)
+    let active = app.focus == focus.Focus.editor
+    for row in range(0, layout.text.rows):
+        let line_index = app.scroll + row
+        if line_index >= total:
+            view.write(layout.text, row, 0, "   ~", theme.palette.gutter)
+            continue
+        var gutter_style = theme.palette.gutter
+        if line_index == cursor_line and active:
+            gutter_style = theme.palette.gutter_current
+        view.write(layout.text, row, 0, strings.pad_left(string(line_index + 1), 4) + " ", gutter_style)
+        let start = document.line_at(app.content, line_index)
+        let finish = document.line_end(app.content, start)
+        let line = source_line(app.content, start, finish)
+        line.draw(view, source, row)
+
+func paint_files(app: state.Editor, view: surface.Surface, layout: panes.Layout):
+    let area = layout.files
+    if area.columns < 2 or area.rows < 1:
+        return
+    let active = app.focus == focus.Focus.files
+    # When the output pane is open, extend the file frame one row down so
+    # its rules overlap the output's top edge and merge into junctions.
+    var frame_area = area
+    if app.output_pane:
+        frame_area = termui.Rect(row = area.row, column = area.column, rows = area.rows + 1, columns = area.columns)
+    frame.Frame(title = "files", bottom = false, style = pane_style(active)).draw(view, frame_area)
+    let interior = termui.Rect(row = area.row + 1, column = area.column + 1, rows = max(area.rows - 1, 0), columns = max(area.columns - 2, 0))
+    # The scroll window was settled on `app.files` before the frame (the
+    # editor's `adjust_files`), so read it from there rather than
+    # recompute it here — a mouse click reads the same `top`.
+    let listing: views.View = rows.RowsView(
+        render = app.name_at,
+        count = app.files.count,
+        top = app.files.top,
+        selected = app.files.selected,
+        normal = theme.palette.plain,
+        highlight = theme.palette.selected,
+    )
+    listing.draw(view, interior)
+
+func paint_output(app: state.Editor, view: surface.Surface, layout: panes.Layout):
+    let area = layout.output
+    if area.columns < 2 or area.rows < 1:
+        return
+    let active = app.focus == focus.Focus.output
+    let interior = frame.Frame(title = "output", bottom = false, style = pane_style(active)).draw(view, area)
+    let total = document.count_lines(app.output)
+    for row in range(0, interior.rows):
+        let index = app.output_scroll + row
+        if index >= total:
+            return
+        let start = document.line_at(app.output, index)
+        let finish = document.line_end(app.output, start)
+        view.write(interior, row, 0, app.output[start:finish], theme.palette.plain)
+
+func focus_label(where: focus.Focus) -> string:
+    match where:
+        editor:
+            return "  [editor]"
+        files:
+            return "  [files]"
+        output:
+            return "  [output]"
+        search:
+            return "  [search]"
+
+func paint_status(app: state.Editor, view: surface.Surface, layout: panes.Layout):
+    let area = layout.status
+    view.fill(area, " ", theme.palette.status)
+    if app.focus == focus.Focus.search:
+        var prompt = f" find: {app.search_query}"
+        if len(app.search_matches) > 0:
+            prompt = prompt + f"    {app.search_current + 1} of {len(app.search_matches)}"
+        elif app.search_query != "":
+            prompt = prompt + "    no matches"
+        prompt = prompt + "    Enter next   Esc close"
+        view.write(area, 0, 0, prompt, theme.palette.status)
+        return
+    let line = document.line_of(app.content, app.cursor)
+    let column = document.column_of(app.content, app.cursor)
+    var flag = ""
+    if app.dirty:
+        flag = " +"
+    var left = f" {app.path}{flag}  {line + 1}:{column + 1}"
+    if len(app.message) > 0:
+        left = left + f"  — {app.message}"
+    left = left + focus_label(app.focus)
+    let hint = "^F find  ^B build  ^W focus  ^S save  ^Z undo  ^Q quit "
+    let pad = area.columns - left.width() - hint.width()
+    if pad > 0:
+        view.write(area, 0, 0, left + strings.repeat(" ", pad) + hint, theme.palette.status)
+    else:
+        view.write(area, 0, 0, left, theme.palette.status)

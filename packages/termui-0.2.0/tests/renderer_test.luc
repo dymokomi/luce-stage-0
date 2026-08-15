@@ -1,8 +1,9 @@
 # Renderer owns the repeated frame choreography while a fixed-size
-# constructor keeps the test independent of a real terminal size.
+# constructor keeps the test independent of a real terminal.
 
 import renderer
 import termui
+import text
 import view
 
 func test_begin_at_clears_and_resize_is_observable():
@@ -18,7 +19,10 @@ func test_begin_at_clears_and_resize_is_observable():
 func test_a_view_can_be_painted_on_the_renderer_surface():
     var ui = renderer.Renderer.of(2, 12)
     let area = ui.begin_at(2, 12)
-    let item: view.View = view.Text(content = "ready")
+    var lines = new list(text.Line)
+    lines.append(text.plain("ready", termui.Style()))
+    let block = view.Text(lines = give lines)
+    let item: view.View = block
     item.draw(ui.surface, area)
     let painted = ui.present()
     assert(painted.cells == 24)

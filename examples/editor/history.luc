@@ -1,0 +1,47 @@
+# Undo and redo — a bounded revision stack per buffer.
+#
+# A revision is the minimum that restores a valid prior state: the
+# content and where the cursor was.  The stacks are `list(Revision)`
+# the app owns per buffer; these functions push and pop them, so the
+# logic is pure and testable while the state stays with the buffer it
+# belongs to (Luce scalar state cannot be mutated through a param, but a
+# container can — docs/OWNERSHIP.md).
+
+struct Revision:
+    content: string
+    cursor: long
+
+# The undo and redo stacks for one buffer.  The session holds a list of
+# these parallel to its buffers; the coalescing rule that decides when
+# to `record` lives in the editor, which knows the sequence of keys.
+struct Stacks:
+    past: list(Revision)
+    future: list(Revision)
+
+# Keep undo bounded so a long session over a large file does not grow
+# without limit; the oldest revision is the first to go.
+const depth = 200
+
+# Record the state *before* an edit.  A new edit invalidates redo, so
+# the future stack is cleared.  Call this once per undo group — the app
+# coalesces a run of plain insertions into one group.
+func record(past: list(Revision), future: list(Revision), content: string, cursor: long):
+    past.append(Revision(content = content, cursor = cursor))
+    future.clear()
+    while len(past) > depth:
+        past.remove(0)
+
+# Undo: move the current state onto the redo stack and answer the prior
+# revision to apply, or `none` when there is nothing to undo.
+func undo(past: list(Revision), future: list(Revision), content: string, cursor: long) -> Revision?:
+    if len(past) == 0:
+        return none
+    future.append(Revision(content = content, cursor = cursor))
+    return past.pop()
+
+# Redo: the mirror of undo.
+func redo(past: list(Revision), future: list(Revision), content: string, cursor: long) -> Revision?:
+    if len(future) == 0:
+        return none
+    past.append(Revision(content = content, cursor = cursor))
+    return future.pop()

@@ -1,0 +1,70 @@
+# The file tree behind the left pane — listing and navigation.
+#
+# Pure and IO helpers the editor's coordinator calls: `refresh` fills a
+# listing from a directory, `select_index` finds a path in it, and
+# `classify` says what opening a row means.  The coordinator owns the
+# focus and buffer changes those imply, because those touch editor state
+# a free function cannot reassign (docs/OWNERSHIP.md).
+
+import std.files
+import std.paths
+import std.strings
+
+# The directory one level up from `here`.  `..` rather than a lexical
+# parent, because a lexical one is wrong across a symbolic link.
+func parent_of(here: string) -> string:
+    if here == ".":
+        return ".."
+    if paths.base(here) == "..":
+        return here + "/.."
+    return paths.dir(here)
+
+# `name`, as a path, from a pane showing `here`.  The bare name at the
+# start directory, so "./notes.txt" and "notes.txt" stay one file.
+func under(here: string, name: string) -> string:
+    if here == ".":
+        return name
+    return paths.join(here, name)
+
+# Refill `names` from `directory`: directories marked with a trailing
+# "/", a ".." row when not at the top, and the active file even when it
+# is new and not yet on disk (but only while its directory is shown).
+# Answers an error message, or none.
+func refresh(names: list(string), directory: string, active_path: string) -> string?:
+    names.clear()
+    var found = new list(files.Entry)
+    found = files.entries(directory) catch reason:
+        return reason
+    if directory != ".":
+        names.append("../")
+    for entry in found:
+        match entry.kind:
+            directory:
+                names.append(entry.name + "/")
+            file:
+                names.append(entry.name)
+            other:
+                names.append(entry.name)
+    free(found)
+    if paths.dir(active_path) == directory and not names.contains(paths.base(active_path)):
+        names.append(paths.base(active_path))
+    return none
+
+# The row that names `path`, or 0 when it is not in the listing.
+func select_index(names: list(string), directory: string, path: string) -> long:
+    for index in range(0, len(names)):
+        if under(directory, names[index]) == path:
+            return index
+    return 0
+
+# What opening a row means: walking into a directory, or a file to open.
+union Opened:
+    entered(directory: string)
+    file(path: string)
+
+func classify(row: string, directory: string) -> Opened:
+    if strings.ends_with(row, "/"):
+        if row == "../":
+            return Opened.entered(directory = parent_of(directory))
+        return Opened.entered(directory = under(directory, row[0:len(row) - 1]))
+    return Opened.file(path = under(directory, row))

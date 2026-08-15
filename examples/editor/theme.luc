@@ -1,0 +1,68 @@
+# The editor's colours.
+#
+# termui ships no theme, deliberately (docs/TERMUI.md): a library that
+# owns the palette owns the app's identity.  A theme is a struct of
+# styles the app declares as a constant, and `style_for` is the one map
+# from a highlighter token to a colour — the seam between the pure
+# classifier and the drawn frame.
+
+import termui
+import highlight
+
+struct Theme:
+    keyword: termui.Style
+    type_name: termui.Style
+    builtin: termui.Style
+    text: termui.Style
+    number: termui.Style
+    comment: termui.Style
+    plain: termui.Style
+    punct: termui.Style
+    gutter: termui.Style
+    gutter_current: termui.Style
+    status: termui.Style
+    status_key: termui.Style
+    selected: termui.Style
+    pane_border: termui.Style
+    pane_active: termui.Style
+    match_here: termui.Style
+
+const palette = Theme(
+    keyword = termui.Style(foreground = 176, bold = true),
+    type_name = termui.Style(foreground = 80),
+    builtin = termui.Style(foreground = 74),
+    text = termui.Style(foreground = 114),
+    number = termui.Style(foreground = 215),
+    comment = termui.Style(foreground = 244),
+    plain = termui.Style(foreground = 252),
+    punct = termui.Style(foreground = 249),
+    gutter = termui.Style(foreground = 240),
+    gutter_current = termui.Style(foreground = 250),
+    status = termui.Style(foreground = 252, background = 237),
+    status_key = termui.Style(foreground = 214, background = 237, bold = true),
+    selected = termui.Style(foreground = 252, background = 237, bold = true),
+    pane_border = termui.Style(foreground = 238),
+    pane_active = termui.Style(foreground = 255, background = 236, bold = true),
+    match_here = termui.Style(foreground = 236, background = 179, bold = true),
+)
+
+# The colour for a highlighter token.  Every member has an arm and there
+# is no `else`, so a new token kind is a compile error here.
+func style_for(theme: Theme, kind: highlight.TokenKind) -> termui.Style:
+    match kind:
+        keyword:
+            return theme.keyword
+        type_name:
+            return theme.type_name
+        builtin:
+            return theme.builtin
+        plain:
+            return theme.plain
+        comment:
+            return theme.comment
+        string_literal:
+            return theme.text
+        number:
+            return theme.number
+        punct:
+            return theme.punct

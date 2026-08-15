@@ -1,0 +1,113 @@
+# Where each pane sits this frame.
+#
+# The splits are termui's total Rect arithmetic; the clamps are the
+# editor's policy.  The file pane is a quarter of the width between 18
+# and 24 columns, the output pane a third of the height between 3 and 8
+# rows, and both give way before the text does — which is why this is
+# Rect arithmetic and not `termui.layout`: the generic solver shrinks
+# flexible space toward zero in order, but the editor wants the *panes*
+# to yield so the text keeps its gutter.  A hidden pane is the empty
+# rectangle rather than a flag, because every Rect operation is total.
+
+import termui
+import termui.layout as grid
+import focus
+
+struct Layout:
+    # Line numbers and source, the panes taken out.
+    text: termui.Rect
+    # The file pane, its border columns included.
+    files: termui.Rect
+    # The output pane, its top border row included.
+    output: termui.Rect
+    status: termui.Rect
+    # The line-number column, inside `text`.
+    gutter: long = 5
+
+    # `files_width` and `output_height` are the sizes a person has
+    # dragged the dividers to; zero means "auto", the default a fresh
+    # session opens with.  Either way the size is clamped here, in one
+    # place, so a drag can never starve the gutter or the text.
+    static func of(area: termui.Rect, files_shown: bool, output_shown: bool, files_width: long = 0, output_height: long = 0) -> Layout:
+        var status, body = area.split_bottom(1)
+        # The output pane is taken from the full width first, so it spans
+        # the whole bottom and the file pane's rule meets its top edge.
+        var text = body
+        var output = termui.Rect()
+        if output_shown:
+            var height = output_height
+            if height == 0:
+                height = clamp(long(floor(area.rows / 3)), 3, 8)
+            # At least three rows for the pane, and always two left for
+            # the text above it and its status bar.
+            height = clamp(height, 3, max(area.rows - 3, 3))
+            height = min(height, max(area.rows - 2, 0))
+            output, text = text.split_bottom(height)
+        # The file pane is then taken from the text that remains above.
+        var files = termui.Rect()
+        if files_shown:
+            var width = files_width
+            if width == 0:
+                width = clamp(long(floor(area.columns / 4)), 18, 24)
+            # A dragged pane may be wider or narrower than the default,
+            # but the pane gives way rather than the text: a usable
+            # minimum below, and above it the room the shared rule and
+            # the gutter's five columns always need, so a sliver of text
+            # survives even when the pane is dragged to the edge.
+            width = clamp(width, 8, max(area.columns - 6, 8))
+            files, text = text.split_left(width + 1)
+        return Layout(text = text, files = files, output = output, status = status)
+
+    # The source text, with the line numbers taken off the left.
+    func source() -> termui.Rect:
+        let numbers, rest = self.text.split_left(self.gutter)
+        return rest
+
+    # The screen column the source starts at, which a mouse click is
+    # measured from.
+    func text_start() -> long:
+        return self.text.column + self.gutter
+
+    # The column the file pane's rule stands in, or 0 when hidden — the
+    # junction the output pane's top edge has to meet.
+    func split_column() -> long:
+        if self.files.is_empty():
+            return 0
+        return self.files.columns - 1
+
+    # The draggable divider between the file pane and the text: the
+    # vertical rule down the file pane's right edge, spanning the body.
+    # `none` when the pane is hidden.
+    func files_handle() -> grid.Handle?:
+        if self.files.is_empty():
+            return none
+        return grid.Handle(
+            axis = grid.Axis.horizontal,
+            line = self.files.column + self.files.columns - 1,
+            from = self.files.row,
+            to = self.status.row,
+        )
+
+    # The draggable divider between the text and the output pane: the
+    # horizontal rule along the output pane's top edge.
+    func output_handle() -> grid.Handle?:
+        if self.output.is_empty():
+            return none
+        return grid.Handle(
+            axis = grid.Axis.vertical,
+            line = self.output.row,
+            from = self.output.column,
+            to = self.output.column + self.output.columns,
+        )
+
+    # Which pane a click landed in, or `none` for the status bar.  The
+    # file pane owns its columns for the whole height; the output pane
+    # owns the rows below the text.
+    func pane_at(row: long, column: long) -> focus.Focus?:
+        if row < 0 or row >= self.status.row:
+            return none
+        if not self.files.is_empty() and column >= 0 and column < self.files.columns - 1:
+            return focus.Focus.files
+        if not self.output.is_empty() and row >= self.output.row:
+            return focus.Focus.output
+        return focus.Focus.editor

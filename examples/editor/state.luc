@@ -1,0 +1,545 @@
+# The editor's state, and the operations that change it.
+#
+# This is the coordinator.  It necessarily owns the mutable editing
+# state — content, cursor, scroll — because Luce mutates scalar state
+# only through a method's `self` (a free function cannot, docs/
+# OWNERSHIP.md).  What it does *not* own is logic: text arithmetic is
+# `document`, undo is `history`, search is `search`, file listing is
+# `browser`, build is `console`, drafts are `session`.  Each method here
+# is thin — it calls one of those and stores the answer.
+#
+# The active buffer's fields are cached here for editing; the parked
+# buffers live in `buffers`, kept in step by `remember`/`restore`.  Undo
+# stacks live per buffer in `histories`, parallel to `buffers`, reached
+# by index (a carrying element cannot be cached, S22).
+
+import std.files
+import document
+import history
+import search
+import browser
+import console
+import session
+import keymap
+import focus
+import layout as panes
+import termui.input as input
+import termui.rows as rows
+
+# Luce's lexer steps four columns; the editor writes spaces so what it
+# makes is immediately valid source.
+const indent_unit = "    "
+
+# Which divider a mouse is dragging, between a press on it and release.
+enum Drag:
+    idle
+    files
+    output
+
+struct Editor:
+    buffers: list(document.Buffer)
+    histories: list(history.Stacks)
+    names: list(string)
+    search_matches: list(long)
+    files: rows.Rows = rows.Rows()
+    path: string = ""
+    content: string = ""
+    message: string = ""
+    directory: string = "."
+    output: string = ""
+    search_query: string = ""
+    active: long = 0
+    cursor: long = 0
+    scroll: long = 0
+    output_scroll: long = 0
+    search_current: long = -1
+    last_draft_ms: long = 0
+    # The sizes a person has dragged the pane dividers to; zero is the
+    # auto default the layout picks (editor/layout.luc).
+    files_width: long = 0
+    output_height: long = 0
+    dragging: Drag = Drag.idle
+    file_pane: bool = false
+    output_pane: bool = false
+    dirty: bool = false
+    quit_pending: bool = false
+    coalescing: bool = false
+    quit: bool = false
+    focus: focus.Focus = focus.Focus.editor
+
+    # --- switching between buffers -----------------------------------
+
+    # Park the active view before changing files, so two unsaved files
+    # live in one session without the terminal knowing editor state.
+    func remember():
+        self.buffers[self.active].path = self.path
+        self.buffers[self.active].content = self.content
+        self.buffers[self.active].message = self.message
+        self.buffers[self.active].cursor = self.cursor
+        self.buffers[self.active].scroll = self.scroll
+        self.buffers[self.active].dirty = self.dirty
+
+    func restore():
+        let buffer = self.buffers[self.active]
+        self.path = buffer.path
+        self.content = buffer.content
+        self.message = buffer.message
+        self.cursor = buffer.cursor
+        self.scroll = buffer.scroll
+        self.dirty = buffer.dirty
+        self.quit_pending = false
+        self.coalescing = false
+        # The autosave debounce is per this working buffer, so a switch
+        # clears it: the next edit to the buffer just restored writes its
+        # own draft without waiting on the one before it.
+        self.last_draft_ms = 0
+
+    # The provider the file pane reads its labels through.
+    func name_at(index: long) -> string:
+        if index < 0 or index >= len(self.names):
+            return ""
+        return self.names[index]
+
+    # --- the file pane -----------------------------------------------
+
+    func refresh_files():
+        let failure = browser.refresh(self.names, self.directory, self.path)
+        if failure != none:
+            self.message = failure
+            return
+        self.files.count = len(self.names)
+        self.files.selected = browser.select_index(self.names, self.directory, self.path)
+
+    # Keep the file pane's scroll window on its selection, and persist it
+    # on `self.files` — the frame and a mouse click both read `top` from
+    # there, so it cannot be recomputed on a throwaway copy each frame.
+    func adjust_files(height: long):
+        var pane = self.files
+        pane.count = len(self.names)
+        pane.adjust(height)
+        self.files = pane
+
+    func open_row(index: long):
+        if index < 0 or index >= len(self.names):
+            return
+        match browser.classify(self.names[index], self.directory):
+            entered(directory):
+                self.directory = directory
+                self.refresh_files()
+                self.message = "in " + self.directory
+            file(path):
+                self.open_file(path)
+
+    func open_file(path: string):
+        if path == self.path:
+            self.focus = focus.Focus.editor
+            return
+        self.remember()
+        for other in range(0, len(self.buffers)):
+            if self.buffers[other].path == path:
+                self.active = other
+                self.restore()
+                self.focus = focus.Focus.editor
+                return
+        # `session.load` rather than a bare read, so a file opened from
+        # the pane recovers a draft exactly as one named on the command
+        # line does; a recovered draft seeds undo with the on-disk file
+        # so Ctrl-Z discards the recovery.
+        let loaded = session.load(path)
+        self.buffers.append(loaded.buffer)
+        self.histories.append(history.Stacks(past = new list(history.Revision), future = new list(history.Revision)))
+        if loaded.recovered:
+            self.histories[len(self.histories) - 1].past.append(history.Revision(content = loaded.base, cursor = 0))
+        self.active = len(self.buffers) - 1
+        self.restore()
+        self.focus = focus.Focus.editor
+
+    # --- undo and redo -----------------------------------------------
+
+    # Record the state before an edit.  A run of plain insertions is one
+    # undo group: the first records, the rest coalesce.  Any other edit
+    # records and breaks the run.
+    func begin_edit(coalesce: bool):
+        if coalesce and self.coalescing:
+            return
+        history.record(self.histories[self.active].past, self.histories[self.active].future, self.content, self.cursor)
+        self.coalescing = coalesce
+
+    func undo():
+        let prior = history.undo(self.histories[self.active].past, self.histories[self.active].future, self.content, self.cursor)
+        if prior == none:
+            self.message = "nothing to undo"
+            return
+        self.content = prior.content
+        self.cursor = prior.cursor
+        self.dirty = true
+        self.coalescing = false
+
+    func redo():
+        let ahead = history.redo(self.histories[self.active].past, self.histories[self.active].future, self.content, self.cursor)
+        if ahead == none:
+            self.message = "nothing to redo"
+            return
+        self.content = ahead.content
+        self.cursor = ahead.cursor
+        self.dirty = true
+        self.coalescing = false
+
+    # --- search ------------------------------------------------------
+
+    func open_search():
+        self.focus = focus.Focus.search
+        self.search_query = ""
+        self.search_matches.clear()
+        self.search_current = -1
+        self.message = ""
+        # A search jumps the cursor, so the next typed run is its own undo
+        # group rather than coalescing with text typed before the search.
+        self.coalescing = false
+
+    func close_search():
+        self.focus = focus.Focus.editor
+        self.message = ""
+        self.coalescing = false
+
+    func rescan():
+        search.scan(self.search_matches, self.content, self.search_query)
+        if len(self.search_matches) > 0:
+            self.search_current = 0
+            self.cursor = self.search_matches[0]
+        else:
+            self.search_current = -1
+
+    func jump_match(direction: long):
+        let next = search.step(len(self.search_matches), self.search_current, direction)
+        if next < 0:
+            return
+        self.search_current = next
+        self.cursor = self.search_matches[next]
+
+    func search_key(intent: keymap.Intent, inserted: string):
+        if intent == keymap.Intent.escape:
+            self.close_search()
+        elif intent == keymap.Intent.newline or intent == keymap.Intent.move_down or intent == keymap.Intent.move_right:
+            self.jump_match(1)
+        elif intent == keymap.Intent.move_up or intent == keymap.Intent.move_left:
+            self.jump_match(-1)
+        elif intent == keymap.Intent.erase_left:
+            if len(self.search_query) > 0:
+                let back = document.previous_boundary(self.search_query, len(self.search_query))
+                self.search_query = self.search_query[0:back]
+                self.rescan()
+        elif intent == keymap.Intent.insert_text:
+            self.search_query = self.search_query + inserted
+            self.rescan()
+
+    # --- the other panes ---------------------------------------------
+
+    func file_key(intent: keymap.Intent):
+        if len(self.names) == 0:
+            return
+        if intent == keymap.Intent.newline:
+            self.open_row(self.files.selected)
+            return
+        if intent == keymap.Intent.move_left or intent == keymap.Intent.escape:
+            self.focus = focus.Focus.editor
+            return
+        let steps = keymap.steps_of(intent)
+        if steps == 0:
+            return
+        var pane = self.files
+        pane.count = len(self.names)
+        pane.move_by(steps)
+        self.files = pane
+
+    func output_key(intent: keymap.Intent):
+        let steps = keymap.steps_of(intent)
+        if steps == 0:
+            return
+        let total = document.count_lines(self.output)
+        self.output_scroll = clamp(self.output_scroll + steps, 0, max(total - 1, 0))
+
+    func toggle_files():
+        self.file_pane = not self.file_pane
+        if self.file_pane:
+            self.refresh_files()
+        elif self.focus == focus.Focus.files:
+            self.focus = focus.Focus.editor
+
+    func toggle_output():
+        self.output_pane = not self.output_pane
+        if self.output_pane:
+            self.focus = focus.Focus.output
+        elif self.focus == focus.Focus.output:
+            self.focus = focus.Focus.editor
+
+    func next_pane():
+        if self.focus == focus.Focus.editor:
+            if self.file_pane:
+                self.focus = focus.Focus.files
+            elif self.output_pane:
+                self.focus = focus.Focus.output
+        elif self.focus == focus.Focus.files:
+            if self.output_pane:
+                self.focus = focus.Focus.output
+            else:
+                self.focus = focus.Focus.editor
+        else:
+            if self.file_pane:
+                self.focus = focus.Focus.files
+            else:
+                self.focus = focus.Focus.editor
+
+    func pointer(mouse: input.Mouse, view: panes.Layout):
+        if mouse.kind == input.Pointer.wheel:
+            if self.focus == focus.Focus.output:
+                self.output_scroll = max(self.output_scroll - mouse.wheel, 0)
+            elif self.focus == focus.Focus.editor:
+                self.scroll = max(self.scroll - mouse.wheel, 0)
+            return
+        # A release ends any drag; a drag in progress moves the divider it
+        # started on.  The layout clamps the raw size next frame, so the
+        # rule cannot be dragged past where the panes stay usable.
+        if mouse.kind == input.Pointer.release:
+            self.dragging = Drag.idle
+            return
+        if mouse.kind == input.Pointer.drag:
+            if self.dragging == Drag.files:
+                self.files_width = mouse.column
+            elif self.dragging == Drag.output:
+                self.output_height = view.status.row - mouse.row
+            return
+        if mouse.kind != input.Pointer.press or mouse.button != 0:
+            return
+        # A press on a divider begins a resize and does nothing else.
+        let files_divider = view.files_handle()
+        if files_divider != none:
+            if files_divider.hit(mouse.row, mouse.column):
+                self.dragging = Drag.files
+                return
+        let output_divider = view.output_handle()
+        if output_divider != none:
+            if output_divider.hit(mouse.row, mouse.column):
+                self.dragging = Drag.output
+                return
+        let where = view.pane_at(mouse.row, mouse.column)
+        if where == none:
+            return
+        match where:
+            files:
+                self.focus = focus.Focus.files
+                if mouse.row > 0:
+                    let index = self.files.top + mouse.row - 1
+                    if index < len(self.names):
+                        self.files.selected = index
+                        self.open_row(index)
+                        self.focus = focus.Focus.files
+            output:
+                self.focus = focus.Focus.output
+                let line = mouse.row - view.output.row - 1
+                if line >= 0:
+                    self.output_scroll = max(line, 0)
+            editor:
+                self.focus = focus.Focus.editor
+                let line_index = self.scroll + mouse.row
+                if line_index < document.count_lines(self.content):
+                    let start = document.line_at(self.content, line_index)
+                    let wanted = max(mouse.column - view.text_start(), 0)
+                    self.cursor = document.at_column(self.content, start, wanted)
+                    # A click moves the cursor, so a run typed after it is
+                    # its own undo group, as a keyboard move already is.
+                    self.coalescing = false
+            search:
+                self.focus = focus.Focus.search
+
+    # --- build and save ----------------------------------------------
+
+    func build():
+        self.save()
+        if self.dirty:
+            self.output = "build skipped: " + self.message + "\n"
+        else:
+            self.output = console.run(console.build_command(self.path))
+            self.message = "build/run finished"
+        self.output_scroll = 0
+        self.output_pane = true
+        self.focus = focus.Focus.output
+
+    func save():
+        files.write(self.path, self.content) catch reason:
+            self.message = reason
+            return
+        self.dirty = false
+        self.message = f"saved {self.path}"
+        session.discard_draft(self.path)
+        self.remember()
+        # A save closes the current undo group, so edits after it start a
+        # fresh one rather than coalescing across the saved boundary.
+        self.coalescing = false
+
+    # Write a draft when the buffer has been dirty past a short idle, so
+    # a crash loses at most a second or two of edits.
+    func autosave(now: long):
+        if not self.dirty:
+            return
+        if now - self.last_draft_ms < 1500:
+            return
+        self.last_draft_ms = now
+        session.save_draft(self.path, self.content)
+
+    # --- scrolling ---------------------------------------------------
+
+    func adjust(visible: long):
+        let cursor_line = document.line_of(self.content, self.cursor)
+        if cursor_line < self.scroll:
+            self.scroll = cursor_line
+        elif cursor_line >= self.scroll + visible:
+            self.scroll = cursor_line - visible + 1
+
+    func vertical(target_line: long):
+        let total = document.count_lines(self.content)
+        let wanted = document.column_of(self.content, self.cursor)
+        let landing = clamp(target_line, 0, total - 1)
+        let start = document.line_at(self.content, landing)
+        self.cursor = document.at_column(self.content, start, wanted)
+
+    # --- the keystroke router ----------------------------------------
+
+    func key(intent: keymap.Intent, inserted: string, visible: long):
+        if intent == keymap.Intent.quit:
+            if self.dirty and not self.quit_pending:
+                self.quit_pending = true
+                self.message = "unsaved changes; Ctrl-Q again to discard"
+            else:
+                self.quit = true
+            return
+        if intent == keymap.Intent.save:
+            self.save()
+            return
+        if intent == keymap.Intent.build:
+            self.build()
+            return
+        if intent == keymap.Intent.toggle_files:
+            self.toggle_files()
+            return
+        if intent == keymap.Intent.toggle_output:
+            self.toggle_output()
+            return
+        if intent == keymap.Intent.next_pane:
+            self.next_pane()
+            return
+        if intent == keymap.Intent.find:
+            self.open_search()
+            return
+        if intent == keymap.Intent.undo:
+            self.undo()
+            return
+        if intent == keymap.Intent.redo:
+            self.redo()
+            return
+        if intent == keymap.Intent.escape:
+            # Escape always returns to the text; in search it closes the
+            # find bar first.  Handled before pane dispatch so a pane that
+            # ignores movement still gives focus back (an earlier version
+            # let Escape fall into the output pane, which dropped it).
+            if self.focus == focus.Focus.search:
+                self.close_search()
+            else:
+                self.focus = focus.Focus.editor
+            return
+        if self.focus == focus.Focus.search:
+            self.search_key(intent, inserted)
+            return
+        if self.focus == focus.Focus.files:
+            self.file_key(intent)
+            return
+        if self.focus == focus.Focus.output:
+            self.output_key(intent)
+            return
+        self.edit(intent, inserted, visible)
+
+    # The editor pane's own keys.  Movement breaks an insert run; each
+    # text change records undo first.
+    func edit(intent: keymap.Intent, inserted: string, visible: long):
+        let line = document.line_of(self.content, self.cursor)
+        self.quit_pending = false
+        if len(self.message) > 0:
+            self.message = ""
+        match intent:
+            move_left:
+                self.cursor = document.previous_boundary(self.content, self.cursor)
+                self.coalescing = false
+            move_right:
+                self.cursor = document.next_boundary(self.content, self.cursor)
+                self.coalescing = false
+            move_up:
+                self.vertical(line - 1)
+                self.coalescing = false
+            move_down:
+                self.vertical(line + 1)
+                self.coalescing = false
+            page_up:
+                self.vertical(line - visible)
+                self.coalescing = false
+            page_down:
+                self.vertical(line + visible)
+                self.coalescing = false
+            line_start:
+                self.cursor = document.line_start(self.content, self.cursor)
+                self.coalescing = false
+            line_end:
+                self.cursor = document.line_end(self.content, self.cursor)
+                self.coalescing = false
+            erase_left:
+                if self.cursor > 0:
+                    self.begin_edit(false)
+                    let before = self.content
+                    self.content = document.erase_before(self.content, self.cursor)
+                    self.cursor = document.previous_boundary(before, self.cursor)
+                    self.dirty = true
+            erase_right:
+                if self.cursor < len(self.content):
+                    self.begin_edit(false)
+                    self.content = document.erase_at(self.content, self.cursor)
+                    self.dirty = true
+            newline:
+                self.begin_edit(false)
+                let current_indent = document.indentation(self.content, self.cursor)
+                var line_break = "\n" + current_indent
+                if document.opens_block(self.content, self.cursor):
+                    line_break = line_break + indent_unit
+                self.content = document.splice(self.content, self.cursor, line_break)
+                self.cursor = self.cursor + len(line_break)
+                self.dirty = true
+            indent:
+                self.begin_edit(false)
+                self.content = document.splice(self.content, self.cursor, indent_unit)
+                self.cursor = self.cursor + len(indent_unit)
+                self.dirty = true
+            insert_text:
+                self.begin_edit(true)
+                self.content = document.splice(self.content, self.cursor, inserted)
+                self.cursor = self.cursor + len(inserted)
+                self.dirty = true
+            save:
+                return
+            build:
+                return
+            toggle_files:
+                return
+            toggle_output:
+                return
+            next_pane:
+                return
+            find:
+                return
+            undo:
+                return
+            redo:
+                return
+            escape:
+                self.focus = focus.Focus.editor
+            quit:
+                return
+            ignored:
+                return

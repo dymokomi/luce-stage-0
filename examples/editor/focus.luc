@@ -1,0 +1,11 @@
+# Which pane the keyboard is talking to.
+#
+# A shared vocabulary type: the layout says which region a click lands
+# in, the paint marks the active pane, and the app routes keys.  Search
+# is a mode over the status line rather than a tiled region, so a click
+# never lands in it — but the keyboard can.
+enum Focus:
+    editor
+    files
+    output
+    search

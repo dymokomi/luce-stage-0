@@ -582,7 +582,7 @@ test "a bound method carries a union callback into another struct's function" {
 }
 
 test "a field narrowed into a local is still called through the local" {
-    // The path `packages/termui-0.1.0/rows.luc` takes, and the one a
+    // The path `packages/termui-0.2.0/rows.luc` takes, and the one a
     // storable function value will always take: a field cannot be
     // narrowed, so the value is bound first.
     try agree.prints(

@@ -1,33 +1,27 @@
-# The scrolling list (docs/TERMUI.md D8, D9).
+# A scrolling selection list — state and its view projection.
 #
-# `Rows` shows data it does not own.  It holds no container: a
-# provider answers what row `index` says, so the widget reads app data
-# without owning it and without a type parameter.  Handing it the list
-# instead would make the widget the owner of app state, which S21
-# would then make the app give away — and the app still needs it.
+# This is the uniform widget pattern: `Rows` is the app-owned **state**
+# (a window and a selection over data it does not own — it holds no
+# container, only counters), and `RowsView` is the read-only **View**
+# built from that state each frame.  The app moves `Rows` in response to
+# a key, then hands a snapshot to `RowsView` to paint.  Nothing here
+# owns the app's list, so replacing that list is the app's business.
 
 import termui
-import screen
+import surface
 import view as views
 
-# What a key did to the list.  A widget's events are a small closed
-# set the widget owns, which is exactly what a union is for; the app
-# matches this and decides what "chosen" means.
+# What a key did to the list.  A widget's events are a small closed set
+# the widget owns — exactly what a union is for — and the app matches
+# this and decides what "chosen" means.
 union RowsEvent:
     moved(index: long)
     chosen(index: long)
 
 struct Rows:
-    render: (func(long) -> string)?
     count: long = 0
     top: long = 0
     selected: long = 0
-
-    func label(index: long) -> string:
-        let provider = self.render
-        if provider == none:
-            return ""
-        return provider(index)
 
     # Keep the selection on the list and the window on the selection.
     func adjust(height: long):
@@ -49,21 +43,11 @@ struct Rows:
     func choose() -> RowsEvent:
         return RowsEvent.chosen(index = self.selected)
 
-    func draw(into: screen.Screen, area: termui.Rect, normal: termui.Style, highlight: termui.Style):
-        self.adjust(area.rows)
-        for row in range(0, area.rows):
-            let index = self.top + row
-            if index >= self.count:
-                return
-            var style = normal
-            if index == self.selected:
-                style = highlight
-            into.write(area, row, 0, self.label(index), style)
-
-# A read-only view of Rows for interface composition.  Interaction remains
-# with `Rows` above: the app moves that value in response to events, then
-# snapshots its position into this adapter for painting.  The adapter never
-# mutates its receiver, so it satisfies View's read-only contract.
+# The read-only projection.  The provider answers what row `index` reads
+# — a bound method, so the view reads app data without owning it — and
+# the selected row is drawn in `highlight`.  Names are plain text; the
+# selection is a style, not a Line, because a file list has one colour
+# per row and a bar across the width says "selected" better than markup.
 struct RowsView: views.View:
     render: (func(long) -> string)?
     count: long = 0
@@ -81,7 +65,7 @@ struct RowsView: views.View:
             return ""
         return provider(index)
 
-    func draw(into: screen.Screen, area: termui.Rect):
+    func draw(into: surface.Surface, area: termui.Rect):
         if self.count <= 0 or area.rows <= 0:
             return
         var selected = clamp(self.selected, 0, self.count - 1)
@@ -97,5 +81,8 @@ struct RowsView: views.View:
                 return
             var style = self.normal
             if index == selected:
+                # A selected row is a bar across the pane: fill first,
+                # then write the label over it.
+                into.fill(termui.Rect(row = area.row + row, column = area.column, rows = 1, columns = area.columns), " ", self.highlight)
                 style = self.highlight
             into.write(area, row, 0, self.label(index), style)

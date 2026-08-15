@@ -1,0 +1,73 @@
+# Opening files, and the drafts that survive a crash.
+#
+# `load` reads a file for a buffer, recovering a draft if one is on disk
+# (UX_UI_DESIGN.md §56).  `save_draft` writes that draft atomically as
+# the editor edits, and `discard_draft` deletes it on a clean save.  The
+# editor owns the buffer list and the timing; these are the file
+# operations it calls.
+
+import std.files
+import document
+
+func draft_path(path: string) -> string:
+    return path + ".draft"
+
+# What `load` answers: the buffer to open, the file's on-disk content,
+# and whether a draft was recovered.  `base` lets the editor seed undo
+# with the file so recovering a draft is reversible — Ctrl-Z returns to
+# exactly what is on disk, which is the safety net for a draft that is
+# offered but not wanted.
+struct Loaded:
+    buffer: document.Buffer
+    base: string
+    recovered: bool
+
+# Open `path`.  A file that will not read is a new file, not an error.
+# A draft that differs from the file is offered as recovered unsaved
+# work, marked dirty so the person decides whether to keep it.
+#
+# There is no modification-time check — `std.files` exposes none — so a
+# draft is recovered on content difference alone.  Recovery is made safe
+# by being reversible (`base` seeds undo) rather than by guessing which
+# is newer; a real "newer than the file" test waits on a host mtime
+# service.
+func load(path: string) -> Loaded:
+    var content = ""
+    var message = ""
+    content = files.read(path) catch:
+        message = "new file"
+    let base = content
+    let draft = draft_path(path)
+    var has_draft = false
+    has_draft = files.exists(draft) catch:
+        has_draft = false
+    var recovered = false
+    if has_draft:
+        var draft_content = ""
+        var ok = true
+        draft_content = files.read(draft) catch:
+            ok = false
+        if ok and draft_content != content:
+            content = draft_content
+            message = "recovered unsaved changes — Ctrl-Z to discard, Ctrl-S to keep"
+            recovered = true
+    let buffer = document.Buffer(path = path, content = content, message = message, dirty = recovered)
+    return Loaded(buffer = buffer, base = base, recovered = recovered)
+
+# Write the working content to a draft beside the file, so a crash loses
+# at most the edits since the last write.  Written to a temporary and
+# renamed into place, so a crash mid-write cannot corrupt the draft or
+# destroy the previous good one — the rename is atomic on one
+# filesystem.  A draft that cannot be written is silently skipped: it is
+# a safety net, not the save itself.
+func save_draft(path: string, content: string):
+    let draft = draft_path(path)
+    let temporary = draft + ".tmp"
+    files.write(temporary, content) catch:
+        return
+    files.rename(temporary, draft) catch:
+        return
+
+func discard_draft(path: string):
+    files.delete(draft_path(path)) catch:
+        return

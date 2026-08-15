@@ -1,0 +1,89 @@
+# What a keystroke means to the editor, as data.
+#
+# termui ships no keymap, deliberately: a keymap maps a key to *the
+# app's* intent, and no library can name that type.  So the app writes
+# the table, and an enum keys a map, so it is written the way it reads.
+# The host's key names never reach the editor — termui.input answers a
+# `Key`, and the table below is the whole translation.
+
+import termui.input as input
+
+# What a key does.  A key the editor does not bind is `ignored` — a
+# member, so the `match` that handles it must say so out loud, and an
+# intent added later is a compile error at every match that missed it.
+enum Intent:
+    move_left
+    move_right
+    move_up
+    move_down
+    page_up
+    page_down
+    line_start
+    line_end
+    erase_left
+    erase_right
+    newline
+    indent
+    # `insert_text` rather than `insert`: `insert` is a list method, and
+    # the language reserves method names for their receivers.
+    insert_text
+    save
+    build
+    toggle_files
+    toggle_output
+    next_pane
+    find
+    undo
+    redo
+    escape
+    quit
+    ignored
+
+const INTENTS = {
+    input.Key.left: Intent.move_left,
+    input.Key.right: Intent.move_right,
+    input.Key.up: Intent.move_up,
+    input.Key.down: Intent.move_down,
+    input.Key.page_up: Intent.page_up,
+    input.Key.page_down: Intent.page_down,
+    input.Key.home: Intent.line_start,
+    input.Key.end: Intent.line_end,
+    input.Key.backspace: Intent.erase_left,
+    input.Key.delete: Intent.erase_right,
+    input.Key.enter: Intent.newline,
+    input.Key.tab: Intent.indent,
+    input.Key.ctrl_s: Intent.save,
+    input.Key.ctrl_b: Intent.build,
+    input.Key.ctrl_e: Intent.toggle_files,
+    input.Key.ctrl_o: Intent.toggle_output,
+    input.Key.ctrl_w: Intent.next_pane,
+    input.Key.ctrl_f: Intent.find,
+    input.Key.ctrl_z: Intent.undo,
+    input.Key.ctrl_y: Intent.redo,
+    input.Key.escape: Intent.escape,
+    input.Key.ctrl_q: Intent.quit,
+}
+
+# How far a movement intent scrolls a list: one row, or a page of eight.
+# A key that moves nothing is not in the table, read as zero.
+const STEPS = {
+    Intent.move_up: -1,
+    Intent.move_down: 1,
+    Intent.page_up: -8,
+    Intent.page_down: 8,
+}
+
+# What a key means.  A key the editor does not bind is `ignored`.
+func intent_of(pressed: input.Key) -> Intent:
+    let found = INTENTS.get(pressed)
+    if found == none:
+        return Intent.ignored
+    return found
+
+# How far this intent scrolls a list of rows; zero for every intent
+# that is not a movement.
+func steps_of(intent: Intent) -> long:
+    let steps = STEPS.get(intent)
+    if steps == none:
+        return 0
+    return steps

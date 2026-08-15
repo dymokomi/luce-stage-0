@@ -1,0 +1,49 @@
+# Undo/redo round-trips content and cursor; a new edit clears redo.
+
+import history
+
+func test_undo_returns_the_prior_revision():
+    var past = new list(history.Revision)
+    var future = new list(history.Revision)
+    # Record the state before typing " world".
+    history.record(past, future, "hello", 5)
+    # Now the live state is the edited one; undo hands back the prior.
+    let prior = history.undo(past, future, "hello world", 11)
+    if prior == none:
+        assert(false)
+        return
+    assert(prior.content == "hello")
+    assert(prior.cursor == 5)
+    # Redo hands back the state undo moved onto the future stack.
+    let ahead = history.redo(past, future, "hello", 5)
+    if ahead == none:
+        assert(false)
+        return
+    assert(ahead.content == "hello world")
+    assert(ahead.cursor == 11)
+
+func test_undo_on_an_empty_stack_answers_none():
+    var past = new list(history.Revision)
+    var future = new list(history.Revision)
+    assert(history.undo(past, future, "x", 1) == none)
+    assert(history.redo(past, future, "x", 1) == none)
+
+func test_a_new_edit_invalidates_redo():
+    var past = new list(history.Revision)
+    var future = new list(history.Revision)
+    history.record(past, future, "a", 1)
+    let undone = history.undo(past, future, "ab", 2)
+    assert(undone != none)
+    assert(len(future) == 1)
+    # A fresh edit records over the top and drops the redo history.
+    history.record(past, future, "a", 1)
+    assert(len(future) == 0)
+
+func test_the_stack_is_bounded():
+    var past = new list(history.Revision)
+    var future = new list(history.Revision)
+    for i in range(0, history.depth + 50):
+        history.record(past, future, "s" + string(i), i)
+    assert(len(past) == history.depth)
+    # The oldest went first, so the bottom is revision 50, not 0.
+    assert(past[0].cursor == 50)

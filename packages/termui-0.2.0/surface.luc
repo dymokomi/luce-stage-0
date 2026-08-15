@@ -1,10 +1,17 @@
-# The cell grid and its diff (docs/TERMUI.md D2).
+# The cell grid and its diff.
 #
 # Two grids: `back` is what the next frame should be, `front` is what
 # the terminal is showing.  `present` writes only where they differ,
 # coalescing a horizontal run of changed cells that share a style into
-# one `term.write` and moving only when a run does not continue where
-# the last one ended.  That is the whole of the output optimisation.
+# one `term.write`, preceded by one `term.move` to its start.  Adjacent
+# runs are always separated by an unchanged cell or a row, so each is
+# addressed on its own — `moves` therefore equals `runs`, and both are
+# reported so a test can hold the diff to its promise.  Skipping only
+# the changed cells is the whole of the output optimisation.
+#
+# The type is called Surface because views draw *into* it: it is the
+# drawable, never the terminal.  Only `present` claims to know what the
+# terminal shows, and it says so by copying `back` onto `front`.
 
 import std.strings
 import std.term
@@ -21,23 +28,23 @@ struct Painted:
     runs: long = 0
     moves: long = 0
 
-struct Screen:
+struct Surface:
     back: array(Cell, _, _)
     front: array(Cell, _, _)
     # The terminal's contents after a resize are not knowable, so the
-    # first frame after one is written whole.
-    # Stored in a one-element list so presenting a frame mutates the
-    # surface's owned front grid without making the whole Screen a
-    # writing receiver.  That lets Renderer own a Screen field and call
-    # present directly; replacing the grids on resize remains a writer.
+    # first frame after one is written whole.  Stored in a one-element
+    # list so presenting a frame mutates the owned front grid without
+    # making the whole Surface a writing receiver — the Renderer can own
+    # a Surface field and call present directly, while replacing the
+    # grids on resize stays a writer.
     stale: list(bool)
     rows: long = 0
     columns: long = 0
 
-    static func of(rows: long, columns: long) -> Screen:
+    static func of(rows: long, columns: long) -> Surface:
         let high = max(rows, 1)
         let wide = max(columns, 1)
-        return Screen(
+        return Surface(
             back = new array(Cell, high, wide),
             front = new array(Cell, high, wide),
             rows = high,
@@ -71,7 +78,16 @@ struct Screen:
             return
         self.back[row, column] = Cell(text = text, style = style)
 
-    # Write `text` inside `area`, clipped to it and to the screen.  The
+    # Read one cell of the frame being built, by absolute coordinates.
+    # An out-of-range cell reads as a blank one, so a caller that merges
+    # onto the surface (a frame joining a neighbour's rule) never has to
+    # guard the edges itself.
+    func cell_at(row: long, column: long) -> Cell:
+        if row < 0 or row >= self.rows or column < 0 or column >= self.columns:
+            return Cell()
+        return self.back[row, column]
+
+    # Write `text` inside `area`, clipped to it and to the surface.  The
     # offsets are relative to the area, which is what makes a widget
     # able to draw without knowing where it sits.
     func write(area: termui.Rect, row: long, column: long, text: string, style: termui.Style):

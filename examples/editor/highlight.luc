@@ -1,0 +1,181 @@
+# Luce syntax highlighting — a source line becomes a list of tokens.
+#
+# Pure classification: no terminal, no styles.  It walks a byte range
+# and answers what each run *is* (a keyword, a string, a number, a
+# comment, …); `theme` turns a kind into a colour and `paint` turns the
+# tokens into a drawable line.  Keeping the classifier free of colour is
+# what lets a test assert the tokens of a line directly.
+#
+# The word tables are the language's own words, held against the
+# compiler's tables (`02_lex/token.zig` keywords, `support/types.zig`
+# builtin types, `04_semantics/builtins.zig` builtins).  A method name
+# is not here: it is only a name after a receiver and a dot, and this
+# highlighter colours words, not receivers.
+
+import document
+
+# --- one byte, before anything decides what it means -----------------
+
+func is_digit(byte: byte) -> bool:
+    return byte >= 48 and byte <= 57
+
+func is_hex_digit(byte: byte) -> bool:
+    return is_digit(byte) or (byte >= 65 and byte <= 70) or (byte >= 97 and byte <= 102)
+
+func is_upper(byte: byte) -> bool:
+    return byte >= 65 and byte <= 90
+
+func is_alpha(byte: byte) -> bool:
+    return is_upper(byte) or (byte >= 97 and byte <= 122)
+
+func is_word_start(byte: byte) -> bool:
+    return is_alpha(byte) or byte == 95 or byte >= 194
+
+func is_word(byte: byte) -> bool:
+    return is_word_start(byte) or is_digit(byte) or document.continuation(byte)
+
+# Where a quoted string that opens at `opening` closes, bounded by
+# `finish`.  A backslash escapes the next byte.
+func quoted_end(value: string, finish: long, opening: long) -> long:
+    var close = opening + 1
+    var closed = false
+    while close < finish and not closed:
+        let byte = value.byte_at(close)
+        if byte == 92:
+            close = close + 2
+        elif byte == 34:
+            closed = true
+            close = close + 1
+        else:
+            close = close + 1
+    return min(close, finish)
+
+# --- the word tables -------------------------------------------------
+
+private const keyword_words = {
+    "and": true, "break": true, "catch": true, "const": true,
+    "continue": true, "copy": true, "elif": true, "else": true,
+    "enum": true, "false": true, "for": true, "func": true,
+    "give": true, "if": true, "import": true, "in": true, "interface": true,
+    "let": true, "match": true, "new": true, "none": true,
+    "not": true, "or": true, "private": true, "public": true,
+    "return": true, "self": true, "spawn": true, "static": true,
+    "struct": true, "true": true, "try": true, "union": true,
+    "var": true, "while": true,
+}
+
+private const type_words = {
+    "bool": true, "byte": true, "short": true, "int": true,
+    "long": true, "half": true, "float": true, "double": true,
+    "string": true, "list": true, "map": true, "array": true,
+    "builder": true, "file": true, "task": true,
+}
+
+private const builtin_words = {
+    "abs": true, "assert": true, "ceil": true, "chr": true,
+    "clamp": true, "clock_ms": true, "dir_create": true, "dir_list": true,
+    "epoch_ms": true, "env": true,
+    "error": true, "exit": true, "file_append": true, "file_delete": true,
+    "path_kind": true, "file_open": true, "file_read": true,
+    "file_rename": true, "file_write": true, "floor": true, "free": true,
+    "key_read": true, "key_text": true, "len": true, "max": true,
+    "min": true, "ord": true, "os_available_memory": true,
+    "os_cpu_count": true, "os_total_memory": true, "parse_float": true,
+    "parse_int": true, "parse_string": true, "print": true,
+    "print_error": true, "range": true, "read_line": true,
+    "shell_run": true, "sleep_ms": true, "sqrt": true, "term_clear": true, "term_cols": true,
+    "term_event_data": true, "term_flush": true, "term_move": true,
+    "term_rows": true, "term_style": true, "term_write": true,
+    "trap": true, "trunc": true,
+    "gpu_backend": true, "ui_window_open": true, "ui_window_surface": true,
+    "gpu_surface_size": true, "gpu_surface_clear": true,
+    "gpu_surface_fill_rect": true, "gpu_surface_present": true,
+}
+
+# What a run of source is.  A `match` on this in `theme` and `paint`
+# has an arm for every member and no `else`, so a new kind cannot be
+# added without the compiler naming those sites.
+enum TokenKind:
+    keyword
+    type_name
+    builtin
+    plain
+    comment
+    string_literal
+    number
+    punct
+
+struct Token:
+    text: string
+    kind: TokenKind
+
+# Which of the four word kinds a word is.  The order is the language's:
+# a reserved word is a keyword before anything else, and a capitalized
+# name is a type before a builtin (no builtin is capitalized).
+func classify_word(text: string) -> TokenKind:
+    if keyword_words.has(text):
+        return TokenKind.keyword
+    if type_words.has(text):
+        return TokenKind.type_name
+    if len(text) > 0 and is_upper(text.byte_at(0)):
+        return TokenKind.type_name
+    if builtin_words.has(text):
+        return TokenKind.builtin
+    return TokenKind.plain
+
+# Tokenize the byte range `[from, to)` of `content`.  Whole tokens are
+# produced without clipping — display clipping is the surface's job at
+# draw time — so a token may be wider than the pane it lands in.
+func tokens(content: string, from: long, to: long) -> list(Token):
+    var out = new list(Token)
+    var at = from
+    while at < to:
+        let byte = content.byte_at(at)
+        if byte == 35:
+            out.append(Token(text = content[at:to], kind = TokenKind.comment))
+            at = to
+        elif byte == 102 and at + 1 < to and content.byte_at(at + 1) == 34 and (at == from or not is_word(content.byte_at(at - 1))):
+            let close = quoted_end(content, to, at + 1)
+            out.append(Token(text = content[at:close], kind = TokenKind.string_literal))
+            at = close
+        elif byte == 34:
+            let close = quoted_end(content, to, at)
+            out.append(Token(text = content[at:close], kind = TokenKind.string_literal))
+            at = close
+        elif is_digit(byte):
+            var stop = at + 1
+            if stop < to and (content.byte_at(stop) == 120 or content.byte_at(stop) == 88):
+                stop = stop + 1
+                while stop < to and (is_hex_digit(content.byte_at(stop)) or content.byte_at(stop) == 95):
+                    stop = stop + 1
+            elif stop < to and (content.byte_at(stop) == 98 or content.byte_at(stop) == 66):
+                stop = stop + 1
+                while stop < to and (content.byte_at(stop) == 48 or content.byte_at(stop) == 49 or content.byte_at(stop) == 95):
+                    stop = stop + 1
+            else:
+                while stop < to and (is_digit(content.byte_at(stop)) or content.byte_at(stop) == 95):
+                    stop = stop + 1
+                if stop < to and content.byte_at(stop) == 46:
+                    stop = stop + 1
+                    while stop < to and (is_digit(content.byte_at(stop)) or content.byte_at(stop) == 95):
+                        stop = stop + 1
+                if stop < to and (content.byte_at(stop) == 101 or content.byte_at(stop) == 69):
+                    stop = stop + 1
+                    if stop < to and (content.byte_at(stop) == 43 or content.byte_at(stop) == 45):
+                        stop = stop + 1
+                    while stop < to and (is_digit(content.byte_at(stop)) or content.byte_at(stop) == 95):
+                        stop = stop + 1
+            out.append(Token(text = content[at:stop], kind = TokenKind.number))
+            at = stop
+        elif is_word_start(byte):
+            var stop = at + 1
+            while stop < to and is_word(content.byte_at(stop)):
+                stop = stop + 1
+            out.append(Token(text = content[at:stop], kind = classify_word(content[at:stop])))
+            at = stop
+        else:
+            var stop = document.next_boundary(content, at)
+            stop = min(stop, to)
+            out.append(Token(text = content[at:stop], kind = TokenKind.punct))
+            at = stop
+    return out

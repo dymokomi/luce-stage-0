@@ -1,0 +1,171 @@
+# The constraint solver — a list of lengths becomes a list of rectangles.
+#
+# This is the module the editor's hand-clamped layout and termui v0.1's
+# single-percentage Split both wanted and neither had.  A caller states
+# each region as a `Length` and the solver divides one axis so the sum
+# never exceeds what is available and no region is ever negative — a
+# small terminal is a normal, total resize, not a special case.
+
+import termui
+
+# What one region asks of an axis.
+union Length:
+    # Exactly `count` cells.  A gutter, a one-row status bar.
+    cells(count: long)
+    # Share the leftover space in proportion to `weight`.  The text
+    # body of an editor: it takes whatever the fixed and clamped
+    # regions leave.
+    grow(weight: long)
+    # `ratio` percent of the whole axis, clamped to [`low`, `high`].
+    # A sidebar that is a quarter of the width but never below 18 nor
+    # above 24, and that gives way before its grow sibling starves.
+    between(low: long, high: long, ratio: long)
+
+# Integer floor division.  Luce's `/` is true division and `long()`
+# rounds to nearest, so a solver that must never over-allocate floors
+# every quotient itself.  Terminal dimensions are far below the range
+# where a double loses integer precision.
+func floor_div(numerator: long, denominator: long) -> long:
+    return long(floor(numerator / denominator))
+
+# Solve one axis: `total` cells, `gap` blank cells between neighbours,
+# one size per item in order.  Total and non-negative by construction.
+func resolve(total: long, gap: long, items: list(Length)) -> list(long):
+    let region_count = len(items)
+    var sizes = new list(long)
+    if region_count == 0:
+        return sizes
+    let usable = max(total - gap * (region_count - 1), 0)
+
+    # Preferred pass.  `sizes` starts at each region's wish; `weights`
+    # remembers the grows; `floors` is how far a region may be shrunk
+    # before it protests.
+    var weights = new list(long)
+    var floors = new list(long)
+    var claimed: long = 0
+    var grow_total: long = 0
+    for item in items:
+        match item:
+            cells(count):
+                let size = max(count, 0)
+                sizes.append(size)
+                weights.append(0)
+                floors.append(size)
+                claimed = claimed + size
+            grow(weight):
+                let share = max(weight, 0)
+                sizes.append(0)
+                weights.append(share)
+                floors.append(0)
+                grow_total = grow_total + share
+            between(low, high, ratio):
+                let lo = max(low, 0)
+                let want = clamp(floor_div(usable * ratio, 100), lo, max(high, lo))
+                sizes.append(want)
+                weights.append(0)
+                floors.append(lo)
+                claimed = claimed + want
+
+    let remaining = usable - claimed
+    if remaining >= 0:
+        # Room to spare: hand it to the grows by weight, the rounding
+        # remainder to the first of them, so the axis is filled exactly.
+        if grow_total > 0:
+            var given: long = 0
+            var first_grow: long = -1
+            for index in range(0, region_count):
+                if weights[index] > 0:
+                    let share = floor_div(remaining * weights[index], grow_total)
+                    sizes[index] = share
+                    given = given + share
+                    if first_grow < 0:
+                        first_grow = index
+            if first_grow >= 0:
+                sizes[first_grow] = sizes[first_grow] + (remaining - given)
+    else:
+        # Oversubscribed: first shrink each region toward its floor, in
+        # order.  Grows are already at zero; a `between` gives back down
+        # to its `low`; a fixed `cells` region has no slack and so is
+        # left untouched here — that is how a gutter holds its width
+        # while a sidebar beside it yields.
+        var over = -remaining
+        for index in range(0, region_count):
+            if over <= 0:
+                break
+            let slack = max(sizes[index] - floors[index], 0)
+            let cut = min(slack, over)
+            sizes[index] = sizes[index] - cut
+            over = over - cut
+        # If even every region's floor does not fit — a terminal too
+        # small for the sum of the minimums — cut from the back until it
+        # does.  Whatever is rearmost gives way, which keeps the result
+        # total and non-negative when there is simply not enough room.
+        var back = region_count - 1
+        while over > 0 and back >= 0:
+            let cut = min(sizes[back], over)
+            sizes[back] = sizes[back] - cut
+            over = over - cut
+            back = back - 1
+    return sizes
+
+# Divide `area`'s columns left to right; each item becomes a full-height
+# rectangle.  A zero-length item is an empty rectangle, which draws
+# nothing — a hidden pane is a length, never a flag.
+struct Row:
+    static func solve(area: termui.Rect, gap: long, items: list(Length)) -> list(termui.Rect):
+        let widths = resolve(area.columns, gap, items)
+        var rects = new list(termui.Rect)
+        var column = area.column
+        for index, width in widths:
+            rects.append(termui.Rect(row = area.row, column = column, rows = area.rows, columns = width))
+            column = column + width + gap
+        return rects
+
+# Divide `area`'s rows top to bottom; each item becomes a full-width
+# rectangle.
+struct Column:
+    static func solve(area: termui.Rect, gap: long, items: list(Length)) -> list(termui.Rect):
+        let heights = resolve(area.rows, gap, items)
+        var rects = new list(termui.Rect)
+        var row = area.row
+        for index, height in heights:
+            rects.append(termui.Rect(row = row, column = area.column, rows = height, columns = area.columns))
+            row = row + height + gap
+        return rects
+
+# Which way a divider runs, and which size a drag on it changes.
+enum Axis:
+    # A vertical rule at a column; dragging it left or right is a width.
+    horizontal
+    # A horizontal rule at a row; dragging it up or down is a height.
+    vertical
+
+# A draggable boundary between two regions.  The rule sits on `line` — a
+# column when horizontal, a row when vertical — and spans `[from, to)`
+# on the other axis.  An application builds one from its layout each
+# frame, hit-tests a mouse press against it with `hit`, and reads
+# `track` on a drag to get the divider's new position, from which the
+# application derives the new size.  The geometry is the whole of it:
+# the sizes, and the policy that clamps them, stay with the application.
+struct Handle:
+    axis: Axis
+    line: long
+    from: long
+    to: long
+
+    # Is the mouse cell on this divider?
+    func hit(row: long, column: long) -> bool:
+        match self.axis:
+            horizontal:
+                return column == self.line and row >= self.from and row < self.to
+            vertical:
+                return row == self.line and column >= self.from and column < self.to
+
+    # The divider's position implied by a drag to this cell: the column
+    # for a vertical rule, the row for a horizontal one.
+    func track(row: long, column: long) -> long:
+        match self.axis:
+            horizontal:
+                return column
+            vertical:
+                return row

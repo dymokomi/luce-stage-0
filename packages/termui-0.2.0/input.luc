@@ -1,4 +1,4 @@
-# Terminal input as one union of values (docs/TERMUI.md D5, D6).
+# Terminal input as one union of values.
 #
 # The host answers a key *name* and keeps the numbers belonging to it
 # in mutable state that the next read overwrites.  `next()` reads that
@@ -8,9 +8,9 @@
 import std.term
 
 # One member per name the host can produce.  `src/apps/key.zig`'s own
-# union is the thirteen below plus `control: u8`, which the host
-# renders as "ctrl_" and the letter; `unknown` is every name a later
-# host learns before this enum does.
+# union is the thirteen navigation names plus `control: u8`, which the
+# host renders as "ctrl_" and the letter; `unknown` is every name a
+# later host learns before this enum does.
 enum Key:
     unknown
     enter
