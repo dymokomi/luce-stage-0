@@ -80,14 +80,39 @@ func main():
 - **Stored and computed properties.** A stored property holds a value in
   the object (`var`/`let`). A computed property has no storage and gives a
   value from a body — the `@property` a "compiled Python" needs.
-- **Construction.** The memberwise form `Counter(count = 0)` is always
-  available. A class may also declare an initializer that runs setup, and
-  it must assign every stored property before the object is used.
-- **`deinit`.** A class may declare a `deinit` that runs at the last
-  release — deterministic, driven by the count. This is where a class
+- **Construction — `init`, optional.** A class (or struct) with no
+  constructor gets the memberwise form `Counter(count = 0)`. It may
+  instead declare one or more `init` constructors that take their own
+  arguments and run setup; an `init` must assign every stored property
+  before the object is used, and it is called by the same
+  `TypeName(args)` syntax with its own parameter names. Writing an `init`
+  is optional — the memberwise form is what you get for free.
+
+  ```text
+  class Temperature:
+      celsius: double
+
+      init(fahrenheit: double):
+          self.celsius = (fahrenheit - 32.0) / 1.8
+
+  func main():
+      let t = Temperature(fahrenheit = 98.6)
+      print(string(t.celsius))
+  ```
+- **`deinit`, optional.** A class may declare a `deinit` that runs at the
+  last release — deterministic, driven by the count. It is where a class
   cleans up what ARC's automatic free does not cover; a `file` field, for
-  instance, closes on its own, but a `deinit` is where a user-level "on
-  teardown" belongs.
+  instance, closes on its own, but a `deinit` is the user-level "on
+  teardown" hook. A class without one needs nothing — ARC frees the
+  object and its reference fields on its own.
+
+  ```text
+  class Session:
+      log: file
+
+      deinit():
+          print("session closed")
+  ```
 - **`static`.** `static func` and `static const` are type-level members
   with no receiver — the factories and namespace helpers.
 - **Final.** A class is final: it has no subclasses. Polymorphism comes
@@ -299,8 +324,8 @@ Each step is additive and can land green on its own.
   layout whose kind is `reference` allocates a heap object and lowers
   through the container path — assigning shares and retains, scope end
   releases, a method mutates the shared object (legal through a `let`).
-  Add `===` and `deinit` (release-time hook). After 5a, the `Counter`
-  example above prints `5`.
+  Add `===`, optional `init` constructors, and an optional `deinit`
+  release-time hook. After 5a, the `Counter` example above prints `5`.
 - **5b — interfaces carry implementation.** Default methods; the
   class-only marker; conformance for classes as well as structs; remove
   the read-only-dispatch rule so an interface method may mutate.
