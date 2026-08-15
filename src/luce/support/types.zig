@@ -686,6 +686,10 @@ pub const StructLayout = struct {
     /// function field is valid. Source structs keep the ordinary rule that
     /// function fields must be optional.
     interface: bool = false,
+    /// A `class` is a **reference type** (docs/MEMORY.md D1): shared
+    /// identity, heap-allocated, ARC-freed. A plain `struct` is a value.
+    /// Recorded from stage 3; read by the runtime and MIR once ARC lands.
+    reference: bool = false,
 
     pub fn findField(self: StructLayout, name: []const u8) ?u32 {
         for (self.fields, 0..) |field, index| {

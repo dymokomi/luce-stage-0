@@ -457,6 +457,7 @@ pub fn collectStructs(self: *Analyzer) Error!void {
             try self.structs.append(self.arena, .{
                 .name = try self.arena.dupe(u8, qualified),
                 .fields = &.{},
+                .reference = declaration.kind == .reference,
             });
         }
     }
