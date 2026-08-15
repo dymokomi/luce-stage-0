@@ -1,5 +1,15 @@
 # The documents
 
+> **Direction change (2026-08-15).** Luce is pivoting from scope
+> ownership to **value types + reference types with ARC** — a compiled,
+> statically typed Python with memory you never think about. The
+> ratified decision is [MEMORY.md](MEMORY.md); the replacement plan is
+> [ROADMAP.md](ROADMAP.md). Until the sweep in ROADMAP Phase 7 lands,
+> many documents below still describe scope ownership (`give`/`copy`/the
+> S-rules); where a doc is already known-superseded it says so at its
+> top. [OWNERSHIP.md](OWNERSHIP.md) is the retired model, kept as the
+> evidence for the change.
+
 One line each, and one thing you cannot tell from a directory listing:
 **whether a file is current or frozen.**  A decision record is written
 in the present tense about the world it was written in, and it stays
@@ -41,7 +51,8 @@ human-reviewed.  These files are the reasoning behind it.
 | File | What it is |
 |---|---|
 | [LANGUAGE.md](LANGUAGE.md) | The language specification: types, values, statements, expressions, the entry point. |
-| [OWNERSHIP.md](OWNERSHIP.md) | Scope ownership as 46 ratified situations, S1–S46. The compiler's diagnostics quote these by number. |
+| [OWNERSHIP.md](OWNERSHIP.md) | **Superseded** by [MEMORY.md](MEMORY.md) (value/reference + ARC). Scope ownership as 46 situations, S1–S46 — kept as the ratified record of the retired model and the evidence for the pivot. Still describes the live compiler until ROADMAP Phase 3. |
+| [ROADMAP.md](ROADMAP.md) | The sequenced plan for the value/reference + ARC pivot: the phases, the big-bang cut, and what "done" looks like. |
 | [PIPELINE.md](PIPELINE.md) | The status table: one row per compiler stage, what it does, and how finished it is. |
 | [CODEGEN.md](CODEGEN.md) | The LLVM backend, the published host ABI, and the benchmark snapshot. The one place a benchmark ratio is written down. |
 | [MODES.md](MODES.md) | Debug and release, which differ in exactly one thing: what a trap can tell you. |
@@ -68,7 +79,7 @@ and each says so in its own preamble.
 | File | The decision |
 |---|---|
 | [V2.md](V2.md) | The north star: what v2 is for, what it is made of, and the order the work goes in. Read first. |
-| [MEMORY.md](MEMORY.md) | Why scope ownership won over reference counting, tracing GC, arenas and borrow checking. |
+| [MEMORY.md](MEMORY.md) | **The ratified memory model (2026-08-15):** value types + reference types with ARC — the pivot away from scope ownership, the decisions D1–D8, and the evidence (a UI could not be built on ownership) that earned it. |
 | [TYPES.md](TYPES.md) | The seven-number ladder: Java sizing, lowercase names, `byte` as bits, storage-only narrow types. D1–D8 ratified and built. |
 | [NUMERICS.md](NUMERICS.md) | Promotion, true division, the floor pair, `int(x)`-style conversions. Ratified and built. |
 | [METHODS.md](METHODS.md) | `main(args)` and the original explicit-receiver design. The entry half shipped; the receiver half was superseded by SELF before lock. |
@@ -95,6 +106,7 @@ and each says so in its own preamble.
 | [SELF.md](SELF.md) | Self implied, `static` for the functions without one, and a call site that cannot lie: `f(x)` never mutates a value, `x.advance(8)` may — and reads like it. `var self` and `var` parameters retired. Ratified and built. |
 | [CONSTANTS.md](CONSTANTS.md) | Constant containers: file-scope `const`, the program root, `{k: v}` maps, flat lists and rank-1 arrays, and the static line with one runtime trap behind it. Ratified and built; the EOF appendix records where the implementation superseded the proposal prose. |
 | [RESOLVED.md](RESOLVED.md) | **Not a decision — a record of closures.** Historical gaps and bugs, chronologically: what was missing, when and how it closed, and where the detail lives. MISSING.md now keeps only current confirmed bugs. |
+| [GENERICS.md](GENERICS.md) | **Proposal, direction ratified, not built.** Parametric generics: monomorphization, per-instantiation ownership, interface bounds, `[T]` syntax — and the honest note that a declarative UI framework needs generics only to hide the last loop, at a per-event copy. |
 
 ## History
 

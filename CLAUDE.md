@@ -2,6 +2,18 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+> **⚠️ DIRECTION CHANGE IN PROGRESS (2026-08-15) — READ FIRST.** Luce is
+> pivoting from **scope ownership** to **value types + reference types
+> with ARC**: a compiled, statically typed Python with memory you never
+> think about. The ratified decision is [docs/MEMORY.md](docs/MEMORY.md);
+> the sequenced replacement plan is [docs/ROADMAP.md](docs/ROADMAP.md).
+> Everything below this banner that describes `give`/`copy`/`free`, the
+> S1–S46 situations, borrowing, capture-free lambdas, read-only interface
+> dispatch, or "no ARC/no GC" is **being retired** and will be rewritten
+> feature by feature (ROADMAP Phase 7). When guidance here conflicts with
+> MEMORY.md, MEMORY.md wins. Do not build new work toward scope
+> ownership.
+
 ## Guiding principle
 
 **Always decide for long-term success. No short-term stopgaps.** When a fix is available in two forms — a quick patch that makes the symptom go away, or the correct change that costs more now — take the correct change. Skipping a test, gating a capability off, hard-coding around a case, or "we'll clean it up later" are debts this codebase does not take on; they hide problems and rot the architecture. If the right fix is genuinely large, say so and scope it rather than papering over it. Cleanliness and organization are load-bearing here: the project is a language and its runtime, and every engine, stage, and tool must stay legible and honest. When in doubt, choose the option a careful maintainer would still be glad of a year from now.

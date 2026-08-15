@@ -1,5 +1,13 @@
 # Ownership: the canonical situations
 
+> **SUPERSEDED (2026-08-15).** Scope ownership is retired. Luce's memory
+> model is now value types + reference types with ARC — see
+> [MEMORY.md](MEMORY.md) (the decision and the reasons) and
+> [ROADMAP.md](ROADMAP.md) (the replacement plan). This file is kept as
+> the ratified record of the model that was, and as the evidence — every
+> S-rule below that a UI could not satisfy is why the pivot happened. Do
+> not build toward `give`/`copy`/`free` or the S-rules from here.
+
 This is the specification of Luce's memory model — every situation
 that defines the rules, numbered, with the decision and example
 code.  **Ratified 2026-07-30: S1–S43 approved as written and

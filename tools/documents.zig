@@ -33,6 +33,7 @@ pub const living = [_][]const u8{
     "docs/LANGUAGE_AUDIT.md",
     "docs/UX_UI_DESIGN.md",
     "docs/TERMUI_EDITOR_REWRITE.md",
+    "docs/ROADMAP.md",
     "docs/README.md",
     "README.md",
     "CLAUDE.md",
@@ -72,6 +73,7 @@ pub const records = [_][]const u8{
     "docs/SELF.md",
     "docs/CONSTANTS.md",
     "docs/RESOLVED.md",
+    "docs/GENERICS.md",
 };
 
 /// Both, living first — so "the living documents carry no exemptions"
