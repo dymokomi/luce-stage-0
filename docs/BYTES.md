@@ -1,260 +1,304 @@
-# Bytes — the binary half of the host boundary, done as language
+# Bytes — the binary half of the host boundary
 
-**Owner directive, 2026-08-06**: *"we need to fix this and not patch —
-fix so that it's done correctly … it has to be part of the language and
-we need to update std.io it seems as well."*  "This" is the std.zip
-run's headline finding, measured rather than assumed: **Luce cannot
-read or write an arbitrary binary file in either direction.**
-`src/apps/host.zig`'s `loadFile` rejects anything that is not valid
-UTF-8 (deliberately — a half-read JPEG pretending to be a `string`
-would make every string guarantee a lie), and the writing direction is
-closed by construction, because a `string` *is* valid UTF-8 and nothing
-can build one that is not: `chr(200)` is a codepoint encoder answering
-two bytes, and `builder.append_ascii` traps past 127.  So `std.zip`
-shipped as a complete byte-buffer library that no real archive can
-reach.  This memo is the fix, in three parts that are each the
-long-term shape rather than the least change.
+A Luce `string` is validated UTF-8 by construction: nothing can build a
+`string` that is not, so a `string` cannot carry a half-read JPEG or a
+raw archive without making every string guarantee a lie. Binary data
+therefore travels a path of its own — a packed byte buffer, a file
+reached through an open handle, and text recovered from bytes by an
+explicit validation. This document is the reference for that path.
 
-## What the zip run measured
+The whole binary surface is built and runs identically on both engines
+(the compiled path and the interpreter oracle, `docs/ENGINE.md`).
 
-- `list(byte)` costs **24 bytes per element** — `docs/TYPES.md`
-  ("`list` and `map` stay boxed, and this is said rather than hidden")
-  records the price and names the alternative: *"a packed `list` is a
-  genuinely new mechanism — growable, boxed API."*  The zip module
-  used `list(long)` as the honest least-bad buffer, at 24× the payload.
-- `array(byte, n)` is already packed — the `ElementKind` machinery
-  stores array elements at real width — but an array cannot grow, and
-  a file being read does not announce its length in advance.
-- The host gap is exactly **one service each way**: a read that does
-  not validate, a write that takes bytes rather than text.  Everything
-  else — the memory model, slices, the checked arithmetic a CRC needs —
-  already exists and was proven by the zip run itself.
+## The byte buffer
 
-## Part one — the buffer: unbox `list` element storage
+Bytes live in the container vocabulary every program already knows.
+There is no separate `bytes` type and no byte-literal grammar.
 
-**The proposal is not a new type.**  `list(byte)` is already the right
-surface: growable, reference-counted, indexable, sliceable, iterable, and
-spelled with the vocabulary every Luce program already knows.  What is
-wrong with it is only the storage, so the fix is storage: **`list(T)`
-adopts the `ElementKind` mechanism arrays already have**, storing
-scalar elements at their real width — `list(byte)` at one byte per
-element, `list(long)` at eight instead of twenty-four — with `Value`
-remaining the boundary type at `at`/`put` exactly as it is for arrays
-today.  Strings, structs and objects keep the tagged slot, as they do
-in arrays, and `map` is untouched (its cost is the entry, not the
-element, and nothing here needs it).
+- **`list(byte)`** is the growable byte buffer: reference-counted,
+  indexable, sliceable, iterable, and grown with `append`. Its storage
+  is packed — one byte per element — so a `list(byte)` costs its bytes
+  and not a boxed cell each.
+- **`array(byte, n)`** is the fixed-length, packed buffer. It cannot
+  grow, so it is what a read fills: you hand it to a file's `read` and
+  the file says how many bytes landed.
 
-This is the fix a maintainer is glad of in a year: no second buffer
-type to teach, no `bytes` literal grammar, no conversion surface
-between "the byte container" and "the list of bytes" — and every
-scalar list in every program gets three times smaller as a side
-effect.  The compiled path loads and stores elements with one
-instruction either way; the interpreter calls the same `libluce_rt`
-accessors it calls now.
+Packing is general to scalar lists, not special to bytes: `list(T)` uses
+the same `ElementKind` storage an `array(T, _)` uses, so `list(long)`
+costs eight bytes per element and every scalar list is smaller for it.
+Strings, structs, and reference objects keep a tagged slot inside a
+`list`, exactly as they do inside an `array`; `map` is unchanged, since
+its cost is the entry rather than the element. A `Value` remains the
+boundary type at `at`/`put`, so indexing reads and writes look the same
+whatever the element width.
 
-## Part two — the host channel: handles, buffers, and text as a reading
+A `list(byte)` grows and iterates like any list:
 
-Today the host's file services *are text*, whole-file, and
-path-addressed: `file_read` validates UTF-8 inside the host and
-answers everything at once.  The honest architecture (R4, R5) inverts
-all three: **a file is bytes reached through an open handle, a read
-fills a caller-owned buffer and says how much landed, and text is a
-validation the language performs on the bytes.**
+```luce
+func main():
+    var buffer = new list(byte)
+    buffer.append(72)
+    buffer.append(105)
+    print(f"{len(buffer)} bytes")
+    for b in buffer:
+        print(string(b))
+```
 
-- **The handle is a reference-counted resource** — a new object kind
-  whose create is `open` and whose close happens at its last reference,
-  so a file cannot leak by the same construction that keeps every list
-  from leaking, and using a closed file traps.  A file is a reference;
-  assignment shares it, and it is closed at its last reference (no
-  ownership verbs).  The run's design decides the type's spelling and
-  where it sits in `types.HeapType`; the memory model is docs/MEMORY.md's,
-  unchanged.
-- `LuceHost` gains appended handle-channel slots — open, read into a
-  buffer answering the count, write from a buffer, flush, close —
-  carrying raw bytes with no opinion about encoding.  Fail-closed
-  like every service, `yes`/`no`/`exhausted` like every fallible one;
-  `abi.version` bumps once for the whole movement.
-- **UTF-8 validation moves out of the hosts and into `libluce_rt`**,
-  the one implementation of every semantic: `file_read` (the
-  whole-file text convenience, unchanged in surface and meaning)
-  becomes open-read-close over the byte channel followed by the
-  runtime's own validation, so the interpreter, the compiled
-  artifact, and every future host agree byte-for-byte on what "not
-  text" means — today that sentence lives in `host.zig` where only
-  loom can say it.
-- The existing whole-file text slots are retired from use in the same
-  movement (the vtable stays append-only and nothing reorders; a
-  version-bumped artifact never indexes them, and the version is
-  already how a stale artifact is refused by name).
-- The gate is unchanged in principle: the handle builtins sit behind
-  `allow_host` like every effect, and fallibility follows
-  `docs/FAILURE.md` — `open` and `read` answer `T!`, because the
-  world decides.
+Because it is a reference type (`docs/MEMORY.md`), a buffer is shared,
+not copied, when you assign or pass it, and it is freed automatically
+when the last reference to it goes away:
 
-## Part three — the std surface
+```luce
+func main():
+    var a = new list(byte)
+    a.append(1)
+    let b = a
+    b.append(2)
+    print(f"{len(a)}")     # 2 — a and b name one buffer
+```
 
-The owner's "std.io" is today spelled `std.files`, and it grows the
-binary half plus the bridges:
+A `byte` widens to `int` in an arithmetic or bitwise operator, so code
+that assembles a wider integer from bytes must lift each byte to the
+target width before shifting — otherwise the top byte's high bit would
+land in a sign position:
 
-- `files.open(path)` and the handle's own surface — read into an
-  `array(byte, n)` answering the count, write from one — plus the
-  whole-file conveniences `files.read_bytes(path) -> list(byte)!`,
-  `files.write_bytes`, `files.append_bytes`, each a loop over the
-  primitive the way Go's `os.ReadFile` is a loop over `Read`.
-- `strings.to_bytes(s) -> list(byte)` (a string always has bytes) and
-  `strings.from_bytes(xs) -> string?` — the parse direction: "not
-  UTF-8" is the same reason every time, so absence carries all the
-  information, the `parse_int` precedent.
-- `std.zip` then does what it was always for: `zip.read(path)`,
-  `zip.write(path, ...)` over real archives on disk, and its
-  `list(long)` buffers become `list(byte)` at a quarter the memory.
-  The five collapsed "not text" reasons in `zip.text` become one
-  honest `string?`.
+```luce
+func read_u32(data: list(byte), at: long) -> long:
+    let b0 = long(data[at])
+    let b1 = long(data[at + 1])
+    let b2 = long(data[at + 2])
+    let b3 = long(data[at + 3])
+    return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
 
-## Ratified (owner, 2026-08-06)
+func main():
+    print("ok")
+```
 
-All three questions answered with the memo's recommendation, the same
-sitting as the directive itself:
+## The file resource
 
-| | ruling |
-|---|---|
-| **R1** | **Unbox `list` scalar storage.**  `list(byte)` is the byte buffer; no new type.  Part one is the design. |
-| **R2** | **Bytes underneath, text as validation in `libluce_rt`.**  Host file slots carry raw bytes; the text builtins are defined over them; the old text slots retire behind the `abi.version` bump.  Part two is the design. |
-| **R3** | **`strings.from_bytes` answers `string?`** — the parse case, the `parse_int` precedent. |
-| **R4** | **The primitive is C-shaped: read into a caller-owned buffer, answering the count** (*"generally we want reading bytes into array and write just like real languages like C"* — owner, same sitting).  `array(byte, n)` is the buffer — already packed, already fixed — and whole-file read/write demote to `std.files` conveniences built over the primitive, the Go/Rust layering.  The same shape serves sockets in `std.network`, where whole-read does not exist. |
-| **R5** | **File handles enter the language in this run, as reference-counted resources.**  `files.open(path)` answers a handle; reads advance it; its last reference going away closes it — deterministic close at the last reference is exactly what ARC gives, and sharing a handle shares the reference.  Doing the channel path-shaped now and handle-shaped again for sockets would have been the patch-shaped choice; this run bumps the ABI once, and `std.network` reuses the resource pattern for sockets. |
+A `file` is a reference-counted resource, not a container: it has no
+element type, no `new`, and the only door in is `files.open` (and its
+`create`/`append_to` siblings, `docs/FILESYSTEM.md`). It sits in the
+runtime's `types.HeapType` as `.file`, beside the container kinds rather
+than among them, because a socket is meant to arrive later wearing the
+same shape.
 
-## The questions, as they were argued
+A file carries **raw bytes with no opinion about encoding**. It answers
+three methods, and there is deliberately no `close`:
 
-**Q1 — the buffer type.**  Unboxing `list` scalar storage
-(recommended, part one above) keeps one container vocabulary and
-fixes every scalar list; the alternative is a dedicated `bytes` heap
-type (Python's `bytearray` shape) — a smaller diff now, a second
-buffer type forever after.
+| method | shape | meaning |
+|---|---|---|
+| `read(buffer)` | `read(array(byte, n)) -> long!` | fills the buffer you own, answers how many bytes landed; `0` means the file is finished |
+| `write(buffer, count)` | `write(array(byte, n), long) -> long!` | writes `count` bytes from the buffer, answers how many landed, which may be fewer than asked |
+| `flush()` | `flush() -> !` | pushes buffered writes to the host |
 
-**Q2 — the host channel.**  Bytes-underneath with text-as-validation
-in `libluce_rt` (recommended, part two) makes hosts dumber and both
-engines agree on "not text" by construction; the alternative appends
-binary slots *beside* the text slots and leaves validation in each
-host — less movement, two channels forever, and loom's opinion of
-UTF-8 stays loom's.
+The primitive is C-shaped on purpose: a read fills a caller-owned buffer
+and reports a count, and a short write is ordinary rather than a
+failure, which is why `write` answers a count. All three are fallible —
+the world decides whether a read or write lands — so a call site writes
+`try` to pass the failure on or `catch` to handle it, and a site that
+says neither is a `luce.sema.fallible` error. (`read`, `write`, and
+`flush` are the first fallible *methods*; every earlier fallible thing
+was a free builtin.)
 
-**Q3 — `from_bytes`'s answer.**  `string?` (recommended — one failure
-reason, the parse case) or `string!` (the files shape, a reason
-carried, for symmetry with the module it lives beside).
+Reading a file to its end is a loop over `read`:
 
-## As built (2026-08-07)
+```luce
+import std.files
 
-Built in two verticals, both engines, one run.  R1 is storage and
-moves nothing a program can see; R2, R4 and R5 are one movement and
-spend one `abi.version` between them.  The rulings left several
-questions open that the code had to answer; each is here with the
-reason, and each has a spec in `specs/bytes_spec.zig`.
+func stream(path: string) -> long!:
+    var f = try files.open(path)
+    var buffer = new array(byte, 4096)
+    var total: long = 0
+    var filled = try f.read(buffer)
+    while filled > 0:
+        total += filled
+        filled = try f.read(buffer)
+    return total
 
-| | decision, and where it is proved |
-|---|---|
-| **B1** | **The shape a list and an array share is `Object.Elements`, hoisted to a row field.**  A `list` adopts the `ElementKind` mechanism; where that mechanism lives matters, because duplicating a nine-arm `at`/`put` switch would have been two places for one storage semantic.  So `kind`, `bytes` and `count` are one struct, and the row holds it beside `dims` — a *row* field for the reason an array's storage already was one: generated code walks it at a measured `@offsetOf`, and Zig promises nothing about a tagged union's payload.  The only difference between the two containers is that a list's `bytes` runs ahead of its `count` and an array's does not, because an array never grows.  `Data.list` and `Data.array` are payload-free tags now. |
-| **B2** | **`new list(T)` is handed the element zero, exactly as `new array` is.**  The runtime deliberately does not know the program's type table, and the zero's tag *is* the type — the sentence `ElementKind.of` already stood on.  Nothing new crosses the boundary; `luce_rt_new_list` takes one more `Value` and both engines pass it. |
-| **B3** | ~~**A list the *runtime* builds is a `.value` list, whatever its element type.**~~  `m.keys()`, `m.values()`, `dir_list` and `args` are built out of stored `Value`s and the runtime has no type to read a kind from.  A boxed cell holds anything and hands back exactly what was put in it, so this is always correct and only ever costs memory.  **Superseded 2026-08-07** — correct is not the same as *knowable*, and this made a `list(T)`'s storage depend on which code built it.  The moment generated code wanted to read a cell inline it had to know the width from the type alone (`docs/CODEGEN.md`, "Inline access"), and the alternative — a branch on the object's kind at every access — would have hidden the problem rather than fixed it.  So B2's answer was extended to the two operations that had a choice: `m.keys()` and `m.values()` take the element zero, `dir_list` and `args` can only ever build a `list(string)` and say `.value` in full, and `list_slice` and `copy` preserve the source's kind as they always did.  **A `list(T)` is packed whoever built it.** |
-| **B4** | **`capacity()` is not on the hot path.**  Element arithmetic in `ensureCapacity` divides by a width the compiler does not know, and one integer division per `append` measured as a real cost on the `strings` benchmark.  The growth arithmetic is in bytes; the division survives only where a reader asks for a capacity. |
-| **B5** | **The handle's type is spelled `file`, and it sits in `types.HeapType` as `.file`.**  A reference type because ARC gives a resource a deterministic close at its last reference, and it is the resource half of `HeapType` rather than a fifth container: no element type, no `new`, and the only door in is `files.open`.  `file_methods` in stage 4 is `read`/`write`/`flush`, and there is deliberately no `close` method — the close happens automatically at the last reference.  `std.network`'s sockets are meant to arrive beside it wearing the same pattern, which is the whole reason the shape carries no container vocabulary. |
-| **B6** | **The channel is installed into `libluce_rt`, not read at each call.**  This is the decision the close forces, and it is the one that decided the whole architecture of part two: the last reference going away arrives inside the ARC release path, where no generated code is standing to hand a host table in.  So `luce_rt_files_install` takes the five pointers once, `Runtime.files` holds them for the run, and the runtime calls them.  The consequence is better than the requirement: both engines install *literally the same five function pointers*, so the interpreter and a compiled artifact reach one implementation of what an open answers, what a short read means and when a close happens — and the four intrinsics lower to plain `luce_rt_*` calls rather than to host-slot code. |
-| **B7** | **The five slots are `handle_open`, `handle_read`, `handle_write`, `handle_flush`, `handle_close`**, appended in that order at `abi.version` 12.  Named for the handle rather than for the file, because the same five serve a socket; `file_read` and its siblings kept their names and their positions and are simply not filled any more.  Mode is a number on the slot (0 read, 1 write, 2 append) and a named door in `std.files`: a builtin speaks what the host slot speaks, and the library is where it gets a name. |
-| **B8** | **A handle remembers the path it was opened at.**  "The read failed" without saying which file is a message that helps nobody, and a handle two hundred lines from its `open` is exactly where a reader has stopped being able to supply the name themselves.  The bytes are the object's and go back with it.  `FileAct` gains `open` and `flush`, appended. |
-| **B9** | **The runtime raises the `io_failed` itself.**  It is the side that knows the path, so the exports take the raise site (`function`, `instruction`) and record the error; what reaches generated code is one flag to branch on.  `emitFileRead` went from a host call, a branch and an intern to one call. |
-| **B10** | **A method can be fallible.**  Nothing before the byte channel needed one — every fallible thing was a free builtin — so `lowerMethod` simply never opened an outcome.  `f.read(buffer)` needs `try` or `catch` for the same reason `file_read` does, and a site that says neither is `luce.sema.fallible` rather than a silently dropped outcome. |
-| **B11** | **`parse_string(xs) -> string?` is the primitive R3 needs.**  `strings.to_bytes` is an ordinary Luce loop over `byte_at`, but `from_bytes` is a *validator*, and a second UTF-8 validator written in Luce would be a second implementation of a semantic.  So the parse family takes a third member, named for what it produces exactly as `parse_int` and `parse_float` are, and `strings.from_bytes` is its one-line surface.  A packed `list(byte)` *is* its bytes, so the validator reads the run in place — which is R1 paying for R3. |
-| **B12** | **`new file` is refused by name, in stage 4** — the only door is `files.open`.  A `file` is a reference type, so naming it in a second binding shares the same handle; a `file` with no file behind it is the one state the type must never hold.  The refusal has a wall behind it in the runtime and the verifier for IR that arrived some other way — a `.lcm` reaches the backend without passing the analyzer. |
+func main():
+    print("ok")
+```
 
-**The folded ruling, and what survived of the cap.**  The flat
-`max_array_elements = 1 << 24` is gone: it was a policy number
-denominated in the wrong unit, and what limits an array is the machine.
-`heap.maxElements(kind)` keeps only the ceilings docs/VECTOR.md's
-reduction proof is load-bearing on, computed from the proof's own
-obligation in `i128` — because `i64` is the width the arithmetic is
-*about* and a wrapped bound reports that everything fits.  Past that,
-RAM decides and says so: `allocation_failed`, a trap at the site that
-asked, located and traced like every other.  The Linux overcommit
-caveat is written where the trap code is defined, because it is the
-one case this trap honestly does not catch.
+Writing goes through `write` and `flush`:
 
-**What did not move.**  The memory model is docs/MEMORY.md's,
-unchanged, and the handle specs are written against it rather than new
-clauses.  `map` is untouched.  `file_read`,
-`file_write` and `file_append` have the surface and the meaning they
-had.  No keyword arrived.
+```luce
+import std.files
 
-**`std.zip` collected the payoff, and it is larger than the two doors
-it gained.**  `zip.read(path)` and `zip.write(path, archive)` are one
-line each over `std.files`, and they are what the module was written
-for — but the interesting part is what the run *deleted*:
+func save(path: string) -> !:
+    var f = try files.create(path)
+    var buffer = new array(byte, 3)
+    buffer[0] = 72
+    buffer[1] = 105
+    buffer[2] = 10
+    let sent = try f.write(buffer, 3)
+    try f.flush()
 
-- Its buffers are `list(byte)`, a quarter of what they were, and not
-  one line of the algorithms changed to make it so.  The module's
-  header used to explain at length why `list(long)` was the honest
-  least-bad choice; that paragraph is now a record of what R1 fixed.
-- `zip.bytes` and `zip.text` are `strings.to_bytes` and
-  `strings.from_bytes`.  `text` was a **hand-written UTF-8 decoder**
-  with nine distinct "those bytes are not text" sentences — a second
-  implementation of a validator, written there only because nothing
-  exposed the first one — and R2 put it out of a job.  Its spec went
-  from five expectations to one, which is R3's `string?` doing exactly
-  what R3 said it would.
-- One thing the narrower element made **explicit rather than
-  changed**: a `byte` widens to `int` in an operator, so `read_u32`'s
-  top byte would shift into a sign bit.  It lifts its four bytes to
-  `long` and says why.  Nothing else in the module needed it, and the
-  Info-ZIP fixtures are what found the one that did.
+func main():
+    print("ok")
+```
 
-**The end-to-end proof is Info-ZIP's own bytes through a real file, and
-not a shell-out to `unzip`.**  The suite already embeds five archives
-written by Info-ZIP and Python, on the principle that a library which
-only reads what it wrote has proven nothing about ZIP; the two new
-rows carry those same bytes out through `zip.write` and back through
-`zip.read` and then read them *as an archive*, on both engines, against
-a host that accepts three bytes per write on purpose.  Running the
-system `unzip` would have added a test-time dependency on a tool
-`build.zig` does not require, to prove something the embedded bytes
-already prove — and it would have proven it on one machine's `unzip`
-rather than on the format.
+### No close, no leak
 
-**And then a person had to be able to do it, which is `examples/zipper/zipper.luc`.**
-A library nobody can run is a claim rather than a capability, so the
-byte path came with a userland program over it — `zipper list`,
-`zipper unzip`, `zipper zip` — and a product suite that drives the
-*installed* pair the way a person does
-(`src/apps/loom/zipping.zig`): an Info-ZIP archive is written to a real
-directory, listed, extracted to files whose contents are checked byte
-for byte, zipped again from those files, and extracted a second time to
-the same bytes.  Read, write, read, every step a process.  Three things
-that run found nothing in `std.zip` and one thing in the language, and
-the one thing was an absence already written down: there was **no
-directory-creating builtin** (docs/MISSING.md), so an entry under a
-directory could be extracted only where that directory already existed,
-and zipper said exactly that instead of flattening a name or writing
-half an archive.  That absence is **closed**: `dir_create` arrived at
-`abi.version` 16 with `files.make_directory` over it, and zipper makes
-each entry's directory as it reaches it.
+There is no `close()` method and no `with` statement. The file closes
+deterministically the instant its last reference is released — for a
+plain local, the end of the scope that holds it — which is the same
+reference-counting machinery that frees a `list`. A program cannot leak
+a file by forgetting a keyword, because there is no keyword to remember.
+An explicit `close()` is refused rather than offered, because it would
+add a "closed but not closed-yet" state beside the reference count — a
+second lifetime story the type must never carry:
 
-The paragraph above still holds and is the reason the floor is where it
-is: the unconditional rows are the embedded bytes.  What was added
-beside them is a *cross-check*, gated on the machine having Info-ZIP's
-own `zip` and `unzip` and saying out loud when it does not — `unzip -t`
-accepts what zipper writes, deflate and all, and an archive `zip` wrote
-reads back through zipper byte for byte.  It is allowed to be there
-because it can never be the thing that proves the format; it is the
-thing that catches the format being right and the *world* disagreeing.
+```text
+f.close()
+# luce.sema.method: file has no method close: the file closes when its
+#   last reference is released — the end of the scope that holds it —
+#   which is why there is no 'with' either
+```
 
-## Sequencing
+Naming `file` in a `new` is likewise refused, because a file with no
+file behind it is the one state the type must never hold; the only door
+is `files.open`:
 
-After run four (enums + match) merges **(done)**: both runs move
-`format_version` and this one moves `abi.version`; racing two runs
-through the same seams is the one way to lose both (the BITWISE.md
-lesson, again).  Then: part one (runtime + codegen, no surface
-change, benchmarked — `bench/` has the harness and `list` rows will
-move) **(done)**, part two (ABI + runtime + hosts + both engines)
-**(done)**, part three (std + zip's payoff) **(done)**, specs at every
-step **(done — `specs/bytes_spec.zig`)** — two-engine rows for byte
-round-trips including bytes that are not text, and the artifact-refusal
-row for the version bump.  The As built section above (2026-08-07) is
-the record.
+```text
+var f = new file
+# luce.sema.new: a file is opened, not made; write files.open(path)
+```
+
+## Text as a validation
+
+Because a `string` is validated UTF-8, turning bytes into a `string` is
+a *validation*, and it may fail. That validation lives in `libluce_rt` —
+the one implementation of every semantic — so the compiled path, the
+interpreter, and every future host agree byte-for-byte on what "not
+text" means.
+
+- `strings.to_bytes(s) -> list(byte)` — a string always has bytes, so
+  this never fails.
+- `strings.from_bytes(xs) -> string?` — the parse direction. "Not UTF-8"
+  is the same reason every time, so absence carries all the information:
+  `none` means the bytes are not text. It is a one-line surface over the
+  primitive `parse_string(xs) -> string?`, named for what it produces
+  exactly as `parse_int` and `parse_float` are.
+
+```luce
+import std.strings
+
+func roundtrip(s: string) -> string:
+    let raw = strings.to_bytes(s)
+    let back = strings.from_bytes(raw)
+    if back == none:
+        return "not text"
+    return back
+
+func main():
+    print(roundtrip("hi"))
+```
+
+`strings.to_bytes` is an ordinary Luce loop over `byte_at`; `from_bytes`
+is a validator, and a packed `list(byte)` *is* its bytes, so the
+validator reads the buffer in place.
+
+The whole-file text conveniences build on the same seam: `files.read`
+(the whole-file text read) is open-read-close over the byte channel
+followed by the runtime's own UTF-8 validation, so a file that is not
+text is refused in one place for one reason.
+
+## Whole-file byte conveniences
+
+`std.files` layers whole-file byte operations over the handle primitive,
+the way Go's `os.ReadFile` is a loop over `Read`:
+
+| function | shape | meaning |
+|---|---|---|
+| `files.read_bytes(path)` | `-> list(byte)!` | the whole file as bytes; asks nothing about whether they are text |
+| `files.write_bytes(path, bytes)` | `-> !` | replaces the file's contents with the bytes |
+| `files.append_bytes(path, bytes)` | `-> !` | adds the bytes to the end, creating the file if absent |
+
+```luce
+import std.files
+import std.strings
+
+func save(path: string, text: string) -> !:
+    try files.write_bytes(path, strings.to_bytes(text))
+
+func main():
+    print("ok")
+```
+
+## The host byte channel
+
+Under the language, a file is five appended `LuceHost` slots —
+`handle_open`, `handle_read`, `handle_write`, `handle_flush`,
+`handle_close` — carrying raw bytes with no encoding opinion. They are
+named for the handle rather than the file because the same five are
+meant to serve a socket. Like every host service they are fail-closed;
+like every fallible one they answer `yes`/`no`/`exhausted`.
+
+Two facts about the seam matter to a reader of the runtime:
+
+- **The channel is installed into `libluce_rt`, not read at each call.**
+  A file's close happens inside the reference-counting release path,
+  where no generated code is standing to hand a host table in, so the
+  runtime is handed the five function pointers once (`luce_rt_files_install`)
+  and calls them itself. Both engines install the *same* five pointers,
+  which is why the interpreter and a compiled artifact agree on what an
+  open answers, what a short read means, and when a close happens.
+- **The mode is a number on the slot and a name in the library.** The
+  open slot takes `0` read, `1` write, `2` append; `std.files` is where
+  those numbers get the names `open`, `create`, and `append_to`. A
+  builtin speaks what the host slot speaks, and the library is where it
+  gets a name.
+
+A handle remembers the path it was opened at, so the runtime — the side
+that knows the path — raises `io_failed` itself and names the file in
+the message; what reaches generated code is one flag to branch on.
+
+## std.zip over real archives
+
+`std.zip` is the proving customer for the byte path. `zip.read(path)`
+and `zip.write(path, archive)` read and write real archives on disk;
+its buffers are `list(byte)`; and its byte/text bridges are
+`strings.to_bytes` and `strings.from_bytes`, so a module that once
+carried a hand-written UTF-8 decoder now defers to the one validator.
+
+```luce
+import std.zip
+
+func list_names(path: string) -> !:
+    let archive = try zip.read(path)
+    let items = try zip.entries(archive)
+    for entry in items:
+        print(entry.name())
+
+func main():
+    print("ok")
+```
+
+The end-to-end proof is Info-ZIP's own bytes carried through a real
+file: archives written by Info-ZIP and Python are read, extracted,
+re-zipped, and re-extracted to the same bytes on both engines, and
+`examples/zipper/zipper.luc` drives the installed toolchain the way a
+person does. A cross-check against the system `zip`/`unzip` runs when the
+machine has them and says so when it does not, but the unconditional
+proof is the embedded bytes, so no build-time dependency on an external
+tool is added.
+
+## Traps and limits
+
+- **`io_failed`** is raised by the runtime, at the site that asked, with
+  the path named — a read from a file the world will not give, a write
+  the host refused.
+- **`allocation_failed`** is the trap when a buffer outgrows the
+  machine's memory. There is no flat element cap; `heap.maxElements(kind)`
+  keeps only the ceilings a vectorized reduction proof is load-bearing
+  on (`docs/VECTOR.md`), computed in `i128` so a wrapped bound cannot
+  report that everything fits. Past those, RAM decides and says so at
+  the site that asked, located and traced like every other trap. (On
+  Linux, overcommit means a write can still fault after the allocation
+  succeeded — the one case this trap does not catch, noted where the
+  trap code is defined.)
+
+The serialized-module `format_version` and the host `abi.version` both
+moved when the byte channel landed; a stale or foreign artifact is
+refused by name rather than run, and modules recompile from source.

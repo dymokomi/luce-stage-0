@@ -1,62 +1,72 @@
 # termui
 
-> **Superseded (2026-08-14).**  This describes termui **v0.1**, whose
-> module set (`screen`, `events`, `border`, and the `Panel`/`Split`
-> views) was retired.  The shipping package is **v0.2**
-> (`packages/termui-0.2.0/`): the proven core kept its shape but `Screen`
-> became `Surface` and `events` became `input`, and the shallow view
-> layer was replaced by three deep modules v0.1 lacked — `layout` (a
-> constraint solver), `text` (styled spans), and `frame` (junction-aware
-> boxes whose strokes merge) — plus a `viewport` widget.  The reasoning
-> and the module-by-module design are in
-> [TERMUI_EDITOR_REWRITE.md](TERMUI_EDITOR_REWRITE.md).  This file is
-> kept as the v0.1 record.
-
 `termui` is Luce's terminal-UI package. It turns application state into a
 deterministic cell surface and keeps terminal protocol details at the
-`std.term` boundary. The application still owns its state and event policy;
-termui owns the mechanics that every terminal program otherwise repeats:
-frame preparation, clipping, layout rectangles, rendering composition, and
-presenting a changed frame. The shipped package and editor are covered by 35
-package tests plus the editor's differential transcript tests.
+`std.term` boundary. The application owns its state and event policy;
+termui owns the mechanics every terminal program otherwise repeats:
+frame preparation, clipping, constraint layout, styled text, junction-aware
+frames, rendering composition, and presenting only the cells that changed.
 
-The package is deliberately a deep module, not a framework that takes over
-`main`. Its public surface is small enough to learn in one sitting:
+The package is a layered kernel, not a framework that takes over `main`.
+Each module hides real complexity behind a small interface, is testable
+in memory with no terminal, and is used by the example editor. It ships as
+`packages/termui-0.2.0/`:
 
 ```text
-packages/termui-0.1.0/
-├── termui.luc       # Color, Style, Rect
-├── screen.luc       # Cell, Screen, Painted
-├── events.luc       # Event, Key, Mouse, Events
-├── border.luc       # Border
-├── rows.luc         # Rows and the read-only RowsView adapter
-├── view.luc         # View, Text, Panel, Split
-└── renderer.luc     # Renderer
+packages/termui-0.2.0/
+├── termui.luc     # Color, Style, Rect            — the value vocabulary
+├── surface.luc    # Cell, Painted, Surface        — the cell grid + diff
+├── text.luc       # Span, Line                    — styled text runs
+├── layout.luc     # Length, Row, Column, Handle   — the constraint solver
+├── frame.luc      # Frame                         — junction-aware boxes
+├── input.luc      # Key, Pointer, Mouse, Event, Events
+├── view.luc       # View, Text, Fill              — the read-only view interface
+├── rows.luc       # Rows, RowsView                — selection list
+├── viewport.luc   # Viewport, ViewportView        — scrollable window
+└── renderer.luc   # Renderer                      — the lifecycle owner
 ```
+
+Each module is tested per boundary in memory, and the editor drives the
+whole package through a differential transcript that runs on both engines.
+
+## The design discipline
+
+There are no generics yet, so termui does not build OpenTUI's retained
+tree of mutable widgets reconciled from a VNode description — that would
+be a large abstraction surface with no consumer that needs it. termui
+commits to the alternative and applies it uniformly:
+
+> **The app holds the state; a View is a projection of the current state,
+> drawn once.** A widget is a *pair*: a small app-held **state struct**
+> with the logic (movement, selection, scroll offset) and a **View** built
+> from that state each frame. The View draws; it does not reconcile a
+> persistent tree.
+
+`Rows`/`RowsView` and `Viewport`/`ViewportView` are that pattern. State
+lives in one place, and the render path is a pure function of it, so there
+is no retained list or mutable receiver hidden inside a long-lived
+interface value.
 
 ## The smallest useful program
 
-The application creates one renderer, begins a frame, paints views into its
+The application creates one renderer, begins a frame, paints into its
 surface, presents the changed cells, places the cursor, and reads the next
 event. It decides what the events mean.
 
 ```text
 import termui
-import termui.events
-import termui.screen as screen
-import termui.renderer as renderer
-import termui.view as views
+import input
+import renderer as renderer
+import text
+import frame as frame
 
 func main():
     var ui = renderer.Renderer.open()
     var quit = false
     while not quit:
         let area = ui.begin()
-        let title: views.View = views.Panel(
-            title = "hello",
-            child = views.Text(content = "Luce", style = termui.Style()),
-        )
-        title.draw(ui.surface, area)
+        let interior = frame.Frame(title = " hello ").draw(ui.surface, area)
+        text.plain("Luce", termui.Style()).draw(ui.surface, interior, 0)
         ui.present()
         ui.cursor(0, 0)
         ui.flush()
@@ -64,94 +74,110 @@ func main():
             closed:
                 quit = true
             key(pressed):
-                if pressed == events.Key.ctrl_q:
+                if pressed == input.Key.ctrl_q:
                     quit = true
             else:
                 continue
 ```
 
 `Renderer.open()` reads the current terminal size. `Renderer.of(rows,
-columns)` and `begin_at(rows, columns)` are the host-free forms used by tests
-and by programs that already have a size. `begin()` resizes when necessary,
-clears the next frame, and returns the available `Rect`.
+columns)` and `begin_at(rows, columns)` are the host-free forms used by
+tests and by programs that already have a size. `begin()` resizes when
+necessary, clears the next frame, and returns the available `Rect`.
 
-`present()` diffs the next frame against the last presented frame. It returns a
-`Painted` value (`cells`, `runs`, and `moves`) and does not flush: put the
-cursor where the application wants it, then call `flush()`. That order makes
-cursor placement part of the same terminal commit and is easy to assert in a
-fake host.
+`present()` diffs the next frame against the last presented frame. It
+returns a `Painted` value (`cells`, `runs`, `moves`) and does not flush:
+put the cursor where the application wants it, then call `flush()`. That
+order makes cursor placement part of the same terminal commit and is easy
+to assert against a fake host.
 
-## Views and interfaces
+## The value vocabulary — `termui.luc`
 
-`View` is a small, read-only interface:
+`Color` names the sixteen terminal colours as an enum; `Style`
+(`foreground`, `background`, `bold`) is a value that copies and allocates
+nothing — there is no global theme. `Rect` is total arithmetic:
+`is_empty`, `split_top`/`split_bottom`/`split_left`/`split_right` clamp a
+requested size to the available dimension and return the taken rectangle
+plus the remainder, and `inset` shrinks and stops at an empty rectangle. A
+small terminal is therefore a normal resize, never a trap.
+
+## Surfaces, cells, and the diff — `surface.luc`
+
+`Surface` holds two grids: `back` is the frame being built, `front` is what
+termui last told the terminal to show. `clear`, `put`, `write`, and `fill`
+write only the back grid, and `write` treats its row and column as offsets
+inside a supplied rectangle, clipped to it and to the screen. `Cell` is a
+text unit and a `Style`.
+
+`present()` writes only where the two grids differ, coalescing a horizontal
+run of changed cells that share a style into one `term.write` preceded by
+one `term.move`. It returns a `Painted` report (`cells`, `runs`, `moves`)
+so a test can hold the diff to its promise without a terminal. The first
+frame after a resize is unknowable and is painted in full; an unchanged
+frame paints zero cells. The type is called Surface because views draw
+*into* it — it is the drawable, never the terminal.
+
+## Styled text — `text.luc`
+
+A `Span` is the smallest styled thing (a `text` and a `Style`); a `Line` is
+a row of spans drawn left to right. This is what a syntax highlighter
+produces — one `Line` per source row, its keywords, strings, and comments
+each their own `Span` — and what a label or status bar is. Drawing measures
+**display width** (`std.strings.width`), not byte length, so a multi-byte
+character takes the one column it occupies and the surface clips an
+over-long line rather than trapping. `Line.width()` measures; `text.plain`
+spells the one-span common case short. A `Line` is built for a frame and
+drawn once; it does not retain the surface.
+
+## Layout — `layout.luc`
+
+The constraint solver divides one axis so the sum never exceeds what is
+available and no region is ever negative. Each region states what it wants
+as a `Length`:
 
 ```text
-interface View:
-    func measure(area: termui.Rect) -> (long, long)
-    func draw(into: screen.Screen, area: termui.Rect)
+union Length:
+    cells(count: long)                          # exactly count cells
+    grow(weight: long)                          # share the leftover by weight
+    between(low: long, high: long, ratio: long) # ratio% of the axis, clamped [low, high]
 ```
 
-The receiver is read-only. A view changes only the `Screen` value supplied by
-the caller. This is intentional: termui keeps application state in the
-application and passes a drawing surface into a view, rather than retaining a
-tree of mutable widgets, so state and replacement stay in one place. Views can
-be heterogeneous:
+`between` is what a sidebar or output pane wants: a quarter of the axis,
+but never below a minimum nor above a maximum, giving way before a `grow`
+sibling starves. Pure ratio and pure min/max are special cases of it, so
+the surface stays three members.
 
-```text
-var children = new list(views.View)
-children.append(views.Text(content = "files"))
-children.append(views.Panel(title = "output", child = views.Text(content = "ready")))
-```
+`resolve(total, gap, items) -> list(long)` solves one axis and is total: a
+preferred pass fixes `cells` and clamps `between`, then any surplus is
+shared among `grow` items and any deficit is taken from flexible space
+first — so an oversubscribed axis (a small terminal) shrinks in a
+min-respecting order rather than going negative. `Row.solve(area, gap,
+items)` walks columns left to right and `Column.solve(...)` walks rows top
+to bottom, each answering a `list(Rect)`. A hidden pane is a zero-length
+item that yields an empty `Rect`, which draws nothing — never a flag and
+never a branch, because every `Rect` operation is total.
 
-`Text` draws newline-separated lines and measures the largest line. `Panel`
-draws a clipped border and delegates to an optional child. `Split` composes
-two views horizontally or vertically; its `ratio` is the first child's
-percentage and its `gap` is blank space between them. All dimensions are
-clamped, so a resize produces empty rectangles rather than a trap.
+`Handle` is the small hit-testable region a caller uses for a draggable
+splitter: `hit(row, column)` tests a point and `track(row, column)` maps a
+drag to a new size.
 
-`Rows` remains the stateful selection model: the application moves it in
-response to an event. `RowsView` is its read-only `View` adapter. Construct the
-adapter from the current `render`, `count`, `top`, and `selected` values when
-painting; it never changes the `Rows` value while drawing.
+## Junction-aware frames — `frame.luc`
 
-This split between state and rendering is the important interface pattern in
-termui. It supports heterogeneous composition without hiding a retained list
-or a mutable receiver inside a long-lived interface value.
+A `Frame` draws any subset of its four edges (`top`, `right`, `bottom`,
+`left`, each a bool, all true by default) as box-drawing strokes, with an
+optional `title` on the top edge and a `Style`. The one idea that makes it
+composable: **a stroke laid over a stroke merges**. Where a frame's edge
+crosses a rule already on the surface — its own corner, or a neighbouring
+pane's border — the two glyphs combine into the correct `┼`/`├`/`┴`/…
+through `std.term`'s `term.ui.junction`, rather than one overwriting the
+other. So a caller tiles framed panes and never picks a junction glyph; the
+geometry it drew decides. `Frame.draw(into, area) -> Rect` draws the
+requested edges and the clipped title and answers the **interior**
+rectangle. A three-sided pane that shares an edge with its neighbour is
+`Frame(bottom = false, ...)`, and the shared corner becomes a `┬`
+automatically.
 
-## Surfaces, cells, and clipping
-
-`Screen` is an in-memory surface. Its `back` grid is the frame being built and
-its `front` grid is what termui last told the terminal to show. `clear`, `put`,
-`write`, and `fill` write only the back grid. `write` treats its row and column
-as offsets inside the supplied rectangle and clips both to that rectangle and
-the screen.
-
-`Cell` stores a text unit and a `Style`. `Style` is a value: foreground,
-background, and bold are chosen by the application. termui has no global theme.
-`Screen.present()` groups adjacent changed cells with the same style into
-runs. The first frame after `resize` is stale and is painted in full; an
-unchanged frame paints zero cells.
-
-The current text-width rule is the one in `std.strings`: it walks UTF-8
-characters. It does not yet implement terminal grapheme clusters or a full
-East Asian width table. Code that needs precise cursor columns should keep its
-editing offsets separate from display drawing, as the editor does.
-
-## Layout
-
-`Rect` is total arithmetic. `split_top`, `split_bottom`, `split_left`, and
-`split_right` clamp their requested size to the available dimension and return
-the taken rectangle plus the remainder. `inset` shrinks both dimensions and
-stops at an empty rectangle. A small terminal is therefore a normal resize,
-not an exceptional path.
-
-`Split` builds on those operations instead of introducing a hidden layout
-solver. This is the first useful subset of the flex-style layout that inspired
-OpenTUI: fixed rectangles, a percentage split, and a gap. A later layout
-module can add grow/fixed constraints without changing the surface or view
-contract.
-
-## Events
+## Input — `input.luc`
 
 `Events.next()` snapshots one host event into the closed `Event` union:
 
@@ -163,72 +189,90 @@ text(typed: string)
 mouse(pointer: Mouse)
 ```
 
-Mouse coordinates, buttons, modifiers, wheel direction, and text are copied
-into the event value. A key name not yet in `Key` becomes `Key.unknown`; the
-stream's `last_name` preserves its raw spelling for applications that need to
-handle a newer host event. termui does not ship a keymap: mapping keys to an
-editor command or an application's intent belongs to that application.
+`Key` is an enum with one member per host name (the navigation names and
+the `ctrl_*` set), plus `unknown` for a name a later host learns before the
+enum does; the stream's `last_name` preserves the raw spelling for a
+program that wants to handle a newer event. `Mouse`/`Pointer` copy the
+coordinates, button, modifiers, and wheel value out of the host at event
+time, so an event held across a later read still says what it said. termui
+ships no keymap: mapping a key to an application command is the
+application's business.
+
+## Views — `view.luc`
+
+`View` is a small, read-only interface:
+
+```text
+interface View:
+    func measure(area: termui.Rect) -> (long, long)
+    func draw(into: surface.Surface, area: termui.Rect)
+```
+
+Under Luce's read-only interface rule a view may change the surface handed
+to it but cannot hide a mutable receiver, so composition stays honest — the
+app keeps the model and hands a fresh projection to `draw`. Two plain
+concretes ship: `Text` (a block of `text.Line`s, so one line may carry many
+styles) and `Fill` (a rectangle of one repeated cell — a selection bar, a
+cleared pane). There is no `Panel` or `Split`: their jobs are `frame.Frame`
+and `layout` respectively.
+
+## The two widgets — `rows.luc` and `viewport.luc`
+
+Both follow the state/view pattern exactly. `Rows` is the app-owned
+selection state (`count`, `top`, `selected`, with `adjust`, `move_by`,
+`choose`) — it holds no container, only counters — and `RowsView` is the
+read-only projection that draws a `func(long) -> string` provider,
+highlighting the selected row. The provider is a bound method, so the
+widget reads app data through the receiver without owning it. `Rows`
+answers a small `RowsEvent` union (`moved`/`chosen`) that the app matches
+to decide what "chosen" means.
+
+`Viewport` is the same pattern without a selection: an app-owned scroll
+position over `total` lines (`scroll_by`, `to`), and `ViewportView` paints
+the visible window `[top, top + rows)` from a provider. This is the
+output/log pane an editor scrolls because a person said "down", where
+`Rows` scrolls to follow a selection.
+
+## The lifecycle owner — `renderer.luc`
+
+`Renderer` owns a `Surface` and an `Events` and centralizes the
+resize → begin → present → cursor → flush choreography:
+`open`/`of`/`begin`/`begin_at`/`present`/`cursor`/`flush`/`next`.
+`present` returns `Painted` and does not flush, so the app places the
+cursor inside the same terminal commit. Applications still own their event
+loop and state; this type only removes the repeated terminal choreography.
 
 ## State and lifecycle
 
 - The application holds its model, providers, and event loop.
-- `Renderer` holds its `Screen` and `Events` and centralizes resize,
+- `Renderer` holds its `Surface` and `Events` and centralizes resize,
   presentation, cursor placement, and flush sequencing.
 - Views draw into the surface for one call; they do not retain it.
-- A provider such as `Rows.render` reads the application's state without
-  retaining it: mutate the provider's existing container in place, or keep
-  the state it reads alive.
+- A provider reads the application's state through a bound method without
+  retaining it: mutate the provider's own container in place, or keep the
+  state it reads alive.
 - Do not put a mutable application model behind `View` merely to get
   dynamic dispatch. Keep that model in the app and make the view a
   projection of the current state.
 
-These rules avoid the shallow-wrapper and temporal-coupling problems described
-in `docs/SOFTWARE_DESIGN.md`: terminal lifecycle sits in one place, layout and
-painting have explicit inputs, and the caller can see where mutation and
-failure occur.
+Terminal lifecycle sits in one place, layout and painting have explicit
+inputs, and the caller can see where mutation and failure occur.
 
-## Why this shape
+## The editor
 
-OpenTUI's useful ideas are the ones that survive Luce's type and memory
-model: one renderer holding terminal state, a retained surface made of cells,
-structured input, shared layout geometry, explicit destruction/cleanup, and a
-deterministic in-memory renderer for tests. Luce intentionally does not copy
-OpenTUI's TypeScript VNodes, proxy-based constructs, or a universal mutable
-widget interface. Those would be a large abstraction surface Luce's current
-lack of generics and inheritance does not call for.
+The example editor (`examples/editor/`) is the end-to-end consumer: a
+modular Luce program whose panes lay out through `layout`, whose borders
+are `frame.Frame`s that share edges, whose file list and output pane are
+`RowsView` and `ViewportView`, and whose syntax highlighting produces
+`text.Line`s. Its differential specification (`specs/editor_spec.zig`)
+drives both engines and compares the complete terminal transcript, so a
+visual or lifecycle regression cannot hide behind a unit test that only
+checks a helper.
 
-The comparison used OpenTUI's [renderer and lifecycle
-documentation](https://opentui.com/docs/core-concepts/renderer/), its
-[renderables and layout model](https://opentui.com/docs/core-concepts/layout/),
-and its [deterministic testing guidance](https://opentui.com/docs/core-concepts/testing/),
-alongside the [Zig renderer](https://raw.githubusercontent.com/anomalyco/opentui/main/packages/core/src/zig/renderer.zig)
-and [cell buffer](https://raw.githubusercontent.com/anomalyco/opentui/main/packages/core/src/zig/buffer.zig).
+## Deliberately deferred
 
-The result is a compositional kernel. Applications can build their own state
-machines and policies, while `Text`, `Panel`, `Split`, and `RowsView` remove
-the repeated drawing code. A future retained tree, focus manager, scrollable
-viewport, or richer layout engine can be added as another deep module without
-making `Renderer` own application state.
-
-## Tests and the editor
-
-The package tests are grouped by boundary:
-
-- layout totality (`layout_test.luc`);
-- cell clipping and diffing (`screen_test.luc`);
-- input snapshots (`events_test.luc`);
-- borders and rows (`border_test.luc`, `rows_test.luc`);
-- view/interface composition (`view_test.luc`); and
-- renderer lifecycle (`renderer_test.luc`).
-
-The editor is the end-to-end consumer. Its loop now uses `Renderer`; its file
-listing and status bar paint through `View` values, while syntax highlighting,
-editing state, key policy, and pane-specific layout remain editor-owned. The
-editor differential specification drives both the interpreter and compiled
-paths and compares the complete terminal transcript, so a visual or lifecycle
-regression cannot hide behind a unit test that only checks a helper.
-
-Deferred deliberately: a mutable retained widget tree, focus traversal,
-scrollbars, mouse hit-testing policy, grapheme-aware terminal width, and a
-global theme. Each needs its own ownership and testing decision before it
-belongs in the core package.
+A mutable retained widget tree, focus traversal beyond what the editor
+needs, scrollbars, full mouse hit-testing policy, grapheme-aware terminal
+width (the width rule is `std.strings`' code-point count, not terminal
+cells or East Asian widths), and a global theme. Each needs its own
+ownership and testing decision before it belongs in the core package.

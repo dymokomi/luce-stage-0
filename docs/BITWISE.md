@@ -1,59 +1,152 @@
-# Bits are values too — `& | ^ << >> ~`, hex, binary, and the underscore
+# Bitwise operators and integer literals
 
-Run three of the ratified roadmap (`docs/MISSING.md` item 11: *"No
-bitwise operators, no hex literals, no digit separators"*), sequenced
-after visibility exactly as the visibility memo's `Order` said it
-would be — both runs touch stage 2, and racing them would have been
-the one way to lose both.
+Luce has the six C-family bit operators — binary `&`, `|`, `^`, `<<`,
+`>>` and unary `~` — their compound-assignment forms, and the integer
+literals `0xFF`, `0b1010`, and `1_000` with digit separators. They spell
+the bit-level work that CRC tables, Huffman coders, and little-endian
+fields are made of.
 
-The warrant sharpened the day before this memo landed: the owner
-asked for `std.zip`, and a ZIP file is CRC-32 tables, Huffman bit
-readers, and little-endian fields — code that without these operators
-is division-and-modulo soup wearing well-chosen names.  The owner's
-sequencing ruling is the memo's first line: *"probably we need to do
-bitwise ops before zip."*
+## The operators
 
----
-
-## Ratified (owner, 2026-08-06)
-
-Three questions were put to the owner; all three answered:
-
-| | ruling |
+| operator | meaning |
 |---|---|
-| **R1** | **Go's fixed precedence.**  `&`, `<<`, `>>` bind at the multiply level; `\|`, `^` at the add level.  C's mistake — `x & 1 == 0` parsing as `x & (1 == 0)` — is fixed the way Go fixed it, so `flags & mask != 0` means what it reads as. |
-| **R2** | **Shifts are bit transport, and the count is checked.**  `x << n` discards high bits without trapping — a shift moves bits, it does not multiply — but a count out of range (`n < 0` or `n >= width`) **traps** `shift_out_of_range`.  C leaves that undefined and Go silently masks; Luce says it out loud, which is the house posture on every boundary. |
-| **R3** | **The full literal set**: `0xFF`, `0b1010`, and `_` digit separators (`1_000_000`).  No octal — `0o17` stays refused by name, and C's bare-`0` octal is not honored even as a refusal shape (a leading zero stays `luce.lex.number`). |
+| `a & b` | bitwise and |
+| `a \| b` | bitwise or |
+| `a ^ b` | bitwise xor |
+| `~a` | bitwise not (`~a` is `-a - 1`) |
+| `a << n` | left shift by `n` bits |
+| `a >> n` | right shift by `n` bits (arithmetic) |
 
-## Decisions (consensus, recorded once)
+```luce
+func main():
+    let flags = 0b1010
+    let mask = 0b0110
+    print(string(flags & mask))   # 2
+    print(string(flags | mask))   # 14
+    print(string(flags ^ mask))   # 12
+    print(string(~flags))         # -11
+    print(string(flags << 2))     # 40
+    print(string(flags >> 1))     # 5
+```
 
-| | decision |
-|---|---|
-| **D1** | Six operators: binary `&`, `\|`, `^`, `<<`, `>>` and unary `~`.  Spelled as every C-family language spells them; no keyword forms. |
-| **D2** | **Integers only**: `int` and `long` operate; `byte`, `short` widen to `int` first, exactly as arithmetic widens them (docs/TYPES.md D5) — no expression ever has an 8- or 16-bit type, so there is no 8-bit `&` to define.  Floats are refused with a sentence naming the fact (`double` has no bits a program may see). |
-| **D3** | **Two's complement, signed.**  `&`, `\|`, `^` operate on the representation; `~x` is `-x - 1`; `>>` is an **arithmetic** shift (sign-extending) because the operands are signed — a logical shift on a signed value would manufacture a positive number out of a negative one silently.  Code that wants logical-shift behavior masks first, which under R2 it can. |
-| **D4** | The result type is the unified operand type (`int` op `int` is `int`, anything with a `long` is `long`) — the arithmetic unification rule, reused whole.  A shift's *count* may be any integer type and does not widen the shifted operand. |
-| **D5** | **Compound forms**: `&=`, `\|=`, `^=`, `<<=`, `>>=` — the assignment sugar every other operator has.  Same places, same rules. |
-| **D6** | **Constants fold**, with identical semantics: a `let` of `0xFF & mask` folds in stage 4's folder, count-trap included (a constant shift with a bad count is a compile error naming the trap it would have been). |
-| **D7** | Separator rules: `_` between digits only — `1_000`, `0xFF_FF`, `0b1010_1010` — never leading, trailing, doubled, or beside the base prefix or the point.  A misplaced one is `luce.lex.number` naming the rule. |
-| **D8** | Hex and binary literals are **integers** (`int` until they land somewhere, like every integer literal); there are no hex floats.  Case-insensitive digits, lowercase canonical prefix (`0x`, `0b`); `0X`/`0B` are accepted — refusing a case would be the one place the language cared. |
-| **D9** | One new trap code, `shift_out_of_range`, in the shared vocabulary — both engines, one sentence: `shift count out of range` with the count and the width.  `format_version` bumps for it. |
-| **D10** | Comparison stays non-associative and the refusal extends: `a & b == c` parses as `(a & b) == c` under R1 and is fine; what stays refused is mixing *comparisons* (`a < b < c`), untouched by this memo. |
+**Integers only.** `int` and `long` operate directly; `byte` and `short`
+widen to `int` first, exactly as they do under arithmetic
+(`docs/TYPES.md`), so no expression ever has an 8- or 16-bit type. A
+float has no bits a program may see, and a bitwise operator on one is
+refused:
 
-## Where it lands
+```text
+let y = 1.5 & 1   # refused:
+# & works on int and long; float has no bits a program may see
+```
 
-Stage 2: five operator tokens (plus compound forms), `~`, hex/binary
-scanning, separators.  Stage 3: precedence rows at the two levels R1
-names; unary `~` beside `-`.  Stage 4: integer typing, widening,
-folding.  MIR: `BinaryOp` gains five, `UnaryOp` gains one, the
-verifier and printer learn them, `format_version` moves.  Engines:
-LLVM lowers to `and`/`or`/`xor`/`shl`/`ashr` with the count check in
-front; the interpreter calls the same `libluce_rt` arithmetic
-helpers everything else calls.  The specs run every operator on both
-engines, count-traps included, and the site's lexical page stops
-saying "no hexadecimal" — a claim the build has been verifying, so
-the fences move in the same commit.
+**Two's complement, signed.** `&`, `|`, and `^` operate on the two's
+complement representation; `>>` is an **arithmetic** shift that
+sign-extends, because the operands are signed — a logical shift on a
+negative value would silently manufacture a positive number. Code that
+wants logical-shift behavior masks first.
 
----
+**Result type.** A binary bit operator's result is the unified operand
+type — `int` with `int` is `int`, anything with a `long` is `long` — the
+same unification arithmetic uses. A shift's **count** may be any integer
+type and does not widen the shifted operand; the result type is the type
+of the value being shifted.
 
-*Built the day it was ratified, in one vertical: every guard named its site, the compound-assign path's `unreachable` died to the spec that found it, and 1,300+ tests including the two-engine bit-set rows and the count-trap rows are green.  The zip run this memo unblocks is next.*
+Precedence follows Go rather than C: `&`, `<<`, and `>>` bind at the
+multiplication level, and `|` and `^` at the addition level. This fixes
+C's classic trap — `flags & mask != 0` means `(flags & mask) != 0`, as
+it reads.
+
+```luce
+func main():
+    let flags = 0b1100
+    let mask = 0b0100
+    if flags & mask != 0:
+        print("set")
+```
+
+Comparison stays non-associative, and mixing comparisons (`a < b < c`)
+remains refused; the change here is only that `a & b == c` groups as
+`(a & b) == c`.
+
+## Shifts are checked bit transport
+
+A shift moves bits; it does not multiply, so high bits shifted out of an
+`int` or `long` are discarded without trapping. The shift **count**,
+however, is checked: a count that is negative or at least the operand's
+bit width traps `shift_out_of_range` (`shift count out of range`, with
+the count and the width), on both engines.
+
+```luce
+func main():
+    let width = 40
+    let n = width - 8
+    print(string(1 << n))   # ok: 32 < 64 for a long shift
+```
+
+A `1 << 64` on a `long`, or a negative count, traps at run time. In a
+constant context — a file-scope `const` or a folded default — a bad
+shift count is caught at compile time instead:
+
+```text
+const bad: long = 1 << 99   # refused:
+# constant shift count out of range
+```
+
+## Compound assignment
+
+Each binary operator has a compound-assignment form — `&=`, `|=`, `^=`,
+`<<=`, `>>=` — with the same typing and the same count check on the
+shifts:
+
+```luce
+func main():
+    var x = 0b1010
+    x &= 0b0110
+    x |= 0b0001
+    x ^= 0b0011
+    x <<= 2
+    x >>= 1
+    print(string(x))
+```
+
+## Constant folding
+
+Bitwise expressions over constants fold in stage 4 with identical
+semantics, the shift-count check included. A folded bitwise constant is
+a value that inlines wherever it is used:
+
+```luce
+const read_mask: long = 0xFF
+const write_flag = 1 << 4
+
+func main():
+    print(string(read_mask & write_flag))
+```
+
+## Literals
+
+- **Hexadecimal** `0xFF` and **binary** `0b1010`. Hex and binary
+  literals are integers — `int` until they land on a wider type, like
+  any integer literal — and there are no hex floats. Digits are
+  case-insensitive; the canonical prefix is lowercase (`0x`, `0b`), and
+  `0X`/`0B` are also accepted.
+- **Digit separators.** A `_` may sit between digits — `1_000`,
+  `0xFF_FF`, `0b1010_1010` — but never leading, trailing, doubled, or
+  beside the base prefix. A misplaced separator is `luce.lex.number`.
+- **No octal.** There is no octal literal: `0o17` is refused by name,
+  and a bare leading zero is a malformed number rather than a C-style
+  octal.
+
+```luce
+func main():
+    let a = 0xFF_FF
+    let b = 0b1010_1010
+    let c = 1_000_000
+    print(string(a + b + c))
+```
+
+`shift_out_of_range` is the one trap code these operators add, shared by
+both engines. Everything else reuses the arithmetic machinery: the LLVM
+backend lowers to `and`/`or`/`xor`/`shl`/`ashr` with the count check in
+front, and the interpreter calls the same runtime helpers.

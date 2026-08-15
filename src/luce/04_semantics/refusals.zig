@@ -550,7 +550,7 @@ pub fn failIncomparable(
                 try self.fail(
                     "luce.sema.union",
                     span,
-                    "two {s} values are not compared with {s}; match on each and compare what the arms carry [UNION.md D16]",
+                    "two {s} values are not compared with {s}; match on each and compare what the arms carry",
                     .{ try self.analyzer.typeName(compared), operator },
                 );
                 return;
@@ -559,7 +559,7 @@ pub fn failIncomparable(
                 "luce.sema.union",
                 span,
                 "{s} is compared field by field and it reaches {s}, which is a union; match is the only door into one, " ++
-                    "so {s} is refused here too — match on the member and compare what the arms carry [UNION.md D16]",
+                    "so {s} is refused here too — match on the member and compare what the arms carry",
                 .{ try self.analyzer.typeName(compared), try self.analyzer.typeName(found.part), operator },
             );
         },
@@ -570,7 +570,7 @@ pub fn failIncomparable(
                     span,
                     "a function value is the function it names and the receiver it may carry, and its type cannot say which; " ++
                         "two values of one method with different receivers are different workers, so {s} has no honest answer — " ++
-                        "compare string(f) if the name is what you meant [BINDING.md D6]",
+                        "compare string(f) if the name is what you meant",
                     .{operator},
                 );
                 return;
@@ -580,7 +580,7 @@ pub fn failIncomparable(
                 span,
                 "{s} is compared field by field and it reaches {s}: a function value has no equality, because its type " ++
                     "cannot say which receiver it carries, so {s} has no honest answer — compare string(f) of the field " ++
-                    "if the name is what you meant [BINDING.md D6]",
+                    "if the name is what you meant",
                 .{ try self.analyzer.typeName(compared), try self.analyzer.typeName(found.part), operator },
             );
         },
@@ -618,7 +618,7 @@ pub fn failUnsearchable(
                     span,
                     "{s} compares elements with ==, and {s} is a union: match is the only door into one, so a list or an " ++
                         "array of them cannot be searched — keep what identifies the member beside it, a name or an enum, " ++
-                        "and search that [UNION.md D16]",
+                        "and search that",
                     .{ method_name, element_name },
                 );
                 return;
@@ -628,7 +628,7 @@ pub fn failUnsearchable(
                 span,
                 "{s} compares elements with ==, and {s} reaches {s}, which is a union: match is the only door into one, " ++
                     "so a list or an array of them cannot be searched — keep what identifies the member beside it, a name " ++
-                    "or an enum, and search that [UNION.md D16]",
+                    "or an enum, and search that",
                 .{ method_name, element_name, part_name },
             );
         },
@@ -638,7 +638,7 @@ pub fn failUnsearchable(
                     "luce.sema.method",
                     span,
                     "a function value has no equality, so a list or an array of them cannot be searched; " ++
-                        "keep what you meant to look for beside them — a name, an enum — and search that [BINDING.md D6]",
+                        "keep what you meant to look for beside them — a name, an enum — and search that",
                     .{},
                 );
                 return;
@@ -648,7 +648,7 @@ pub fn failUnsearchable(
                 span,
                 "{s} compares elements with ==, and {s} reaches {s}: a function value has no equality, because a function " ++
                     "type cannot say which receiver a value carries — keep what you meant to look for beside them, a name " ++
-                    "or an enum, and search that [BINDING.md D6]",
+                    "or an enum, and search that",
                 .{ method_name, element_name, part_name },
             );
         },

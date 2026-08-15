@@ -11,4 +11,13 @@ that context.
 
 Resolved bugs are removed from this file once the fix and its proof land.
 
-No known bugs.
+## A `try` inside a `match` arm inside a `for-in` loop panics the compiler
+
+A fallible call written directly as the iterable of a `for-in` loop and then
+used with a `try` inside a `match` arm — the shape
+`for e in files.entries(...)` where the body `match`es `e` and calls `try`
+in an arm — reaches `unreachable` in `src/luce/05_hir/lower.zig` (`replayTry`,
+a `temps_floor` assertion) rather than compiling or reporting a diagnostic.
+Binding the fallible result to a `let` before the loop is a working
+rewrite. The lowering must handle a `try` whose temporary floor is opened
+inside a loop-and-match nest.

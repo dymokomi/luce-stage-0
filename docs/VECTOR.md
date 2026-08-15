@@ -1,25 +1,24 @@
 # Vectorizing checked reductions
 
-A decision record, written against the tree at `80c5ba3`, after the
-seven-type ladder and the benchmark snapshot that priced it.  Nothing
-here is built.  This is the design; the plan at the end is what it
-would cost.
+> **Status: designed, not built.** This document is the design for
+> vectorizing Luce's checked integer reductions and the plan for what
+> building it would cost. Nothing here is in the tree; where a piece has
+> since shipped on its own, it is marked. When the work lands, this file
+> becomes its reference.
 
-The occasion is one row.  `bench/arrays32` sits at **8.14× its C twin
-on the compute column** (`docs/CODEGEN.md` is the one place that
-number is written down) [7.92× in that table as of 2026-08-10 — the
-row has drifted with the tree, the cause has not], and the cause is not the 32-bit width, not
-the row resolution, and not allocation.  It is that every `+` and
-every `*` in Luce carries an overflow test, a checked reduction
-therefore has a value-dependent exit on every element, and a loop with
-a value-dependent exit does not vectorize.  C's `int32_t` wraps —
-undefined behaviour it is free to assume never happens — so LLVM
-reassociates the sum and fills four lanes.  Luce is scalar at *both*
-integer widths (41.8 ms at `int`, 41.1 ms at `long`); C is vectorized
-at both (6.2 and 18.1 ms).
+The occasion is one row. `bench/arrays32` sits at roughly **8× its C
+twin on the compute column** (`docs/CODEGEN.md` is the one place that
+number is written down), and the cause is not the 32-bit width, not the
+row resolution, and not allocation. It is that every `+` and every `*`
+in Luce carries an overflow test, a checked reduction therefore has a
+value-dependent exit on every element, and a loop with a value-dependent
+exit does not vectorize. C's `int32_t` wraps — undefined behaviour it is
+free to assume never happens — so LLVM reassociates the sum and fills
+four lanes. Luce is scalar at *both* integer widths; C is vectorized at
+both.
 
-The instruction this memo answers is: *all of it should be vectorized,
-and nothing may be sacrificed to get there.*
+The goal is to vectorize all of it while sacrificing nothing: the traps
+the language owes must be preserved exactly.
 
 ## The constraint, stated once
 
@@ -39,7 +38,7 @@ that look most like engineering and are not.
 
 ## What the measurement actually says
 
-The seeded framing of this problem — and the sentence in
+The obvious framing of this problem — and the sentence in
 `docs/CODEGEN.md` that gestures at the fix — is "a `long` accumulator
 over `int` elements cannot overflow, so prove the check away".  That
 is true, and it is **not what `bench/arrays32` is**.  The row reads:
@@ -68,7 +67,7 @@ The hot loop is a **multiply-accumulate with an `int` accumulator over
 **A dot product over `int` elements is genuinely unprovable at every
 accumulator width Luce has.**  That is arithmetic, not a limitation of
 the analysis, and it means Layer 1 does nothing whatsoever for the row
-that motivated this memo.  It also means Layer 2 is not the optional
+that motivated this design.  It also means Layer 2 is not the optional
 sophisticated half of the design — it is the half that pays.
 
 The rest of what the tree says, checked rather than assumed:
@@ -145,7 +144,7 @@ identical value.
 
 ## Where the proof lives, and why not where it was expected to
 
-The seeded question was "07_optimize with the type and bound facts, or
+The natural question is "07_optimize with the type and bound facts, or
 the lowering?".  The answer is **the lowering**, and it is not a close
 call.
 
@@ -167,7 +166,7 @@ argue its way past that, and it would be arguing for a lattice this
 design does not need.
 
 **Lowering-only is strictly more testable.**  This is the argument
-that settles it, and it inverts the worry in the brief.  If the proof
+that settles it, and it inverts the natural worry.  If the proof
 lives in MIR and deletes the check, *both* engines skip it — and a
 wrong proof is then invisible, because there is no arm left that would
 have trapped.  If the proof lives in the lowering, **the oracle keeps
@@ -611,9 +610,10 @@ Per element, in vector operations (AArch64, 128-bit lanes):
 
 Against `arrays32`'s numbers — C 6.2 ms, Luce 41.8 ms — a 3× ratio on
 vector work predicts **≈18–20 ms, or ≈3× C on the compute column,
-down from 8.14×**.  That is a 2.2× speedup and it is *not* parity, and
-the memo says so plainly: a checked reduction pays for its guarantee,
-and after this design it pays roughly 3× instead of roughly 8×.
+down from about 8×**.  That is roughly a 2× speedup and it is *not*
+parity, and this design says so plainly: a checked reduction pays for
+its guarantee, and after this design it pays roughly 3× instead of
+roughly 8×.
 
 A cheaper witness exists and is deliberately not the design.
 `max|aᵢ| · max|bᵢ| · N ≤ A` needs only two 4-lane magnitude-max
@@ -657,7 +657,7 @@ are never expanded into a scalar loop.**  When `math.sum` and
 `reduce.zig`'s recognizer is not needed for them — the node *is* the
 recognition — and the same emitter serves both entries.
 
-A sketch only; the design belongs to HIR's own memo.
+A sketch only; the full design belongs to HIR's own reference.
 
 - **The intrinsic carries the accumulator type explicitly**, rather
   than inferring it from the element type.  `sum(array(int, _))` into
@@ -884,16 +884,11 @@ has read only the benchmark.
 
 # The plan
 
-Sized honestly, and placed against the queue: map-upsert (a
-`V?`-returning `m.get`, `docs/MISSING.md` item 6) is in flight, the
-host surface still owes `exit` and `std.paths` [both shipped since
-this was written — the queue moved, the ranking below did not], and
-cross-compilation (item 8) is the largest backend item outstanding.  This work goes
-**after the two small in-flight items and before cross-compilation**,
-because `docs/MISSING.md`'s own summary says the runtime's outstanding
-item is speed and names `strings` at 2.74× — and `arrays32` at 8.14×
-is now the worse row by a factor of three [2.75× and 7.92× in the
-2026-08-10 table; the ranking stands].
+Sized honestly, and placed against the queue in `docs/MISSING.md`: this
+work goes after the small in-flight items and before cross-compilation,
+because the runtime's outstanding item is speed — `strings` sits at
+roughly 2.75× its C twin, and `arrays32` at roughly 8× is the worse row
+by a factor of three.
 
 **Step 0 — the ceiling. Half a day. Gates everything.**
 Remove the overflow checks from `emitIntArithmetic` in a throwaway
@@ -906,9 +901,9 @@ Extract `08_llvm/cfg.zig` from `loops.zig` (`Graph`, `Loop`, `loops`,
 `preheader`; a pure move, `loops.zig`'s five tests must stay green).
 Add `08_llvm/reduce.zig`: the recognizer, the comptime width table
 computed in `i128` from `heap.maxElements(element)`, and the
-table-recomputation test.  Add `heap.maxElements` [shipped since this
-was written — `runtime/heap.zig`'s `maxElements` is the allocation
-ceiling; the rest of this step is not].  Teach `lower.zig`
+table-recomputation test.  Add `heap.maxElements` (already shipped —
+`runtime/heap.zig`'s `maxElements` is the allocation ceiling; the rest
+of this step is not).  Teach `lower.zig`
 to emit plain arithmetic for a planned reduction (~40 lines).  Add
 `specs/vector_spec.zig` with the qualifying and refusal specs.  Add
 `bench/arrays16.{luc,c}` and a `docs/CODEGEN.md` row, because
@@ -932,7 +927,7 @@ to Step 2's emitter, and the first integer whole-array operations in
 `std.math` become worth writing.
 
 **What success is.**  `arrays32` at ≈3× its C twin on the compute
-column instead of 8.14× [7.92× today]; `arrays16` at parity; every other row inside
-2% under `bench/compare.sh`; 1187 tests plus the new specs green; and
-the oracle still trapping on every element it traps on today, which is
-the only number that was never negotiable.
+column instead of ≈8×; `arrays16` at parity; every other row inside
+2% under `bench/compare.sh`; the whole suite plus the new specs green;
+and the oracle still trapping on every element it traps on today, which
+is the only number that was never negotiable.

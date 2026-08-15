@@ -1,99 +1,48 @@
-# Packages: using and loading (design)
+# Packages: finding and loading code you did not write
 
-**Status: BUILT — the consuming half this memo designs is complete, and the
-local authoring commands (`luce package new` and `luce package version`) now
-cover the source-tree workflow.
-All five implementation-order steps landed (each with its as-built
-note below): the manifest, discovery and the D7 seam; subfolder
-imports and `import ... as`; the store, `LUCE_LIB`, `path:`, hashes,
-diamonds + `override:`, and root-qualified serialized names; the
-`.luce/cache/` compile cache; and the closing spec sweep.  What this
-memo deliberately stops before — publishing, fetching, `luce install`/
-`luce update`/`luce init`, and the registry — remains unbuilt and is the next
-memo's, as designed.**  This memo designs the
-consuming half of packages — how a program *finds and loads* code it
-did not write — and deliberately stops before registry publishing and
-fetching.  The machinery for using packages has to be solid before a
-registry, a manifest format for publishing, or a fetch protocol means
-anything: every one of those produces files that this memo's resolver
-has to load, so this memo comes first.  The durable direction was set
-in conversation on 2026-08-10: subfolder-aware imports, a search path
-for installed packages (`LUCE_LIB`), a `.luce/` directory inside the
-project for the compile cache and downloaded packages, and versions
-carried by packages from day one.  A first draft was adversarially
-reviewed the same day; the review's two blockers (a self-contradictory
-resolution rule, and isolation promised of a seam that could not
-deliver it) and its should-fixes are incorporated below, each at the
-decision it changed.
+A Luce project can depend on packages: named, versioned bundles of Luce
+source resolved from a store on disk. This is the *consuming* half of
+packages — how a program finds and loads code — and it is complete. The
+*publishing* half — a registry, a fetch protocol, and the `luce
+install`/`update`/`init` client — is not yet built; a package store is
+filled by hand today (copy a checkout, add a git submodule, or point at a
+source directory).
 
-The prior art this leans on is named per decision, because every
-mistake below has been made publicly by somebody: Python's `sys.path`
-(order-dependent shadowing), Node's `node_modules` (resolution by
-directory crawling), Go's modules (exact versions, minimal version
-selection, walk-to-root discovery), Rust's Cargo (one lockfile,
-`[patch]` overrides, packages immutable once downloaded), and Zig's
-`build.zig.zon` (content hashes, no registry).
+## Two import namespaces
 
----
-
-## Where imports stand today, and what holds
-
-Two namespaces, disjoint (`01_source/load.zig`):
+Imports live in two disjoint namespaces:
 
 1. `import std.NAME` — the standard library, embedded in the compiler.
-2. `import NAME` — the host's `Loader`: `NAME.luc` in the root file's
-   directory, exact-case, regular files only.
+   `std.` is reserved: nothing shadows it and it shadows nothing, and a
+   package named `std` is refused.
+2. `import NAME` and `import NAME.SUB` — the host loader, resolving to a
+   file in the project tree or inside a declared package.
 
-What holds, unchanged, after this design:
+A single directory of `.luc` files with no project file behaves exactly
+as it always has: `import geo` finds a sibling `geo.luc`. Everything below
+activates only when a project file is present.
 
-- **The two-namespace rule.**  `std.` stays reserved and embedded;
-  nothing shadows it and it shadows nothing.  A *package* named `std`
-  is refused by name in the want list and in every store.
-- **The `Loader` seam's contract**: names in, bytes out, everything
-  about *how* is the host's.  The seam grows one dimension (D7) and
-  keeps both obligations (exact-case at every segment, regular files).
-- **`luce.import.collision`** — one binding meaning two modules is
-  refused; package resolution adds new ways for that to happen, each
-  named below, and D2 adds the remedy.
+## The project file: `luce.yaml`
 
-## D1. The project file: `luce.yaml` marks the root and names the needs
+A file named `luce.yaml` in the project root anchors resolution. It is
+found by walking up from the *lexical* directory of the source file the
+user named — never a resolved symlink target — to the filesystem root, the
+way `go.mod` is found. There is no `$HOME` special case: a stop condition
+that depends on the environment would resolve differently on different
+machines. A program compiled from standard input, having no path, gets no
+discovery and compiles rootless wherever it is piped from.
 
-Resolution needs an anchor better than "the directory of the file the
-user typed" the moment subfolders exist.  A file named **`luce.yaml`**
-in the project root is that anchor.
+When a `luce.yaml` governs, *every* project-tree import is
+project-root-relative: `import geo` means the same file whether it is
+written in `src/main.luc` or `src/tools/x.luc`. Sibling-relative
+resolution survives only for rootless programs.
 
-- **Found by walking up** from the root source file's directory — the
-  *lexical* directory of the path as typed, never a `realpath`, so a
-  symlink shim resolves against the tree the author addressed — to the
-  filesystem root, the way `go.mod` is found.  No `$HOME` special
-  case: a stop condition that depends on an environment variable is a
-  resolution that differs between machines.  The discovered root is
-  printed in every resolution diagnostic (D6), so an accidental
-  capture by a stray `luce.yaml` is observable the moment it changes
-  anything.
-- **A pathless root gets no discovery.**  `luce build -` (stdin)
-  anchors to the cwd only if a `luce.yaml` is found by walking from the
-  cwd.  (This clause once continued into the in-memory loader loom
-  used for the embedded editor; that loader and that editor are both
-  gone — owner, 2026-08-12 — and the rule it illustrated is the
-  general one: a root with no path gets no discovery.)
-- **Absent is fine and means the current behaviour**: no project file,
-  no subfolder imports, no packages — a single directory of `.luc`
-  files stays exactly as cheap as it is today.
-- **One anchor per mode.**  When a `luce.yaml` governs, *every*
-  project-tree import is project-root-relative — `import geo` from
-  `src/tools/x.luc` and from `src/main.luc` mean the same file, which
-  is the point of having a root.  Sibling-relative resolution survives
-  only for rootless programs.  (First-draft blocker: two anchors in
-  one mode reintroduced the disagreement the root exists to kill.)
-- **Shape** (owner's call, 2026-08-10: YAML — but a **strictly
-  defined subset**, not the specification.  Scalars, one level of
-  nesting, string values, `#` comments; no anchors, no aliases, no
-  flow style, no multi-document, no type tags.  The subset fits a
-  ~200-line hand-written Zig parser in the toolchain, and `std.yaml`
-  will later speak the same subset from Luce plus whatever more it
-  wants; a manifest that uses YAML the subset refuses is refused by
-  name, never half-read):
+The manifest is a strictly defined subset of YAML — scalars, one level of
+nesting, string values, `#` comments; no anchors, aliases, flow style,
+multiple documents, or type tags. A manifest that uses YAML the subset
+refuses is refused by name, never half-read. The toolchain parses it in
+Zig, because the manifest configures import resolution and so is read
+before any Luce code could run.
 
 ```yaml
 name: atlas
@@ -102,83 +51,75 @@ version: 0.3.0
 packages:
   geo: 1.2.0
   ansi: 0.4.1 sha256:9f2a...        # hash verified when present
-  mathx: 1.1.0 path:../mathx       # development override (D3)
+  mathx: 1.1.0 path:../mathx        # development override
 ```
 
-- `name`/`version` are the project's own identity — required.
-- `packages` is the *want list*: **a version is exact**.  No ranges,
-  no `^`/`~`: ranges are a solver, a solver needs registry metadata,
-  and both belong to the publishing half.  Upgrading is editing the
-  number.
-- The hash is optional and **verified when present** — the content hash
-  of the package directory, computed the way `artifact.zig` already
-  hashes (one algorithm, stated in the manifest value's prefix).
-  Hand-vendoring stays cheap without it; with it, `luce.yaml` + a
-  populated store *is* reproducible.  Without it the build is
-  reproducible only as far as the store's bytes are — said plainly
-  here because the first draft claimed more than it checked.  The
-  publishing half will make hashes mandatory for fetched packages;
-  the field exists from day one so it never has to be retrofitted.
-- The path entry is the development override, Cargo's `[patch]` / Go's
-  `replace` in Luce shape: resolve this package from a directory
-  instead of the store, loudly (D6).  It keeps every resolution
-  decision in the one file — an environment variable is not allowed
-  to decide what a program means (D3).
+- `name` and `version` are the project's own identity — both required.
+- `packages` is the *want list*. **A version is exact** — no ranges, no
+  `^`/`~`. Upgrading a dependency is editing the number. A package not
+  named here is unresolvable from any store, so a stray install cannot
+  change what a program means.
+- The optional `sha256:` hash is the SHA-256 content hash of the package
+  directory — every regular file in sorted relative-path order, each
+  contributing its path, a NUL, its length, and its bytes. It is verified
+  when present; a mismatch is refused. With it, `luce.yaml` plus a
+  populated store is reproducible; without it, the build is reproducible
+  only as far as the store's bytes are.
+- The optional `path:` entry is a development override: resolve this
+  package from a directory instead of the store, and say so on every
+  build. It keeps every resolution decision in the one file — an
+  environment variable is not allowed to decide what a program means.
 
-## D2. Subfolder imports: `import geo.shapes` maps dots to directories
+An `override:` section, in the same row shape, resolves a disagreeing
+diamond by the consumer's stated decision (below). `path:` and `override:`
+belong to the root manifest alone; a package's own manifest carrying
+either is refused.
 
-- `import geo` — under a `luce.yaml`: `geo.luc` under the project root,
-  or the entry module of package `geo` (D4).  Rootless: a sibling
-  `geo.luc`, as today.
-- `import geo.shapes` — `geo/shapes.luc` under the project root, or
-  `shapes.luc` inside package `geo`.  The binding is the last segment
-  (`shapes`), matching `import std.math` binding `math`.
-- **`import geo.shapes as gs`** binds the module under a chosen name.
-  This ships in the same step as subfolder imports, not later: two
-  packages will independently contain `shapes`, `util`, `json` in
-  week one, last-segment collisions are certain, and without aliasing
-  the only remedy is forking a package — a fork the D4 agreement
-  check deliberately makes painful.  One grammar rule, the binding
-  machinery unchanged, and `luce.import.collision`'s message gains
-  the alias as its named remedy.  (First-draft deferral, reversed by
-  review: an escape hatch the design's own collision rule needs may
-  not be deferred.)
-- **Dots map to directories and nothing else** — no `__init__`
-  protocol, no index files, no implicit re-export.  A directory is
-  not a module; only files are.
-- Case-exact at **every** segment — the directory scan `files.zig`
-  does per file happens per directory level, with listings cached per
-  compile (Python's `_fill_cache`, cited there, does exactly this).
+## Imports: dots map to directories
 
-## D3. Resolution: probe everything, one answer or refuse
+- `import geo` reads `geo.luc` under the project root, or the entry module
+  of package `geo`.
+- `import geo.shapes` reads `geo/shapes.luc` under the project root, or
+  `shapes.luc` inside package `geo`. The binding is the last segment,
+  `shapes` — matching `import std.math` binding `math`.
+- `import geo.shapes as gs` binds the module under a chosen name. Two
+  packages will independently contain a `util` or a `shapes`; aliasing is
+  how a program uses both without forking one. (`as` is not available for
+  `std.` imports, whose names are language surface.)
+
+Dots map to directories and nothing else — no index files, no implicit
+re-export; a directory is not a module, only a file is. Every path segment
+is matched case-exactly, per directory level. A module is one module
+however it was spelled: a file reached as `geo.shapes` by a consumer and
+as `shapes` from inside `geo` unifies to one type across the boundary.
+
+## Resolution: probe everything, one answer or refuse
 
 For each import under a `luce.yaml`, the loader probes **all** of:
 
-1. the project's own tree (root-relative file or directory),
-2. the store: `<project>/.luce/packages/<name>-<version>/` for a
-   `name` in the want list, at exactly the version the want list
-   states (a `.path` override replaces this probe for that package),
-3. every directory in `LUCE_LIB` (colon-separated; semicolon on
-   Windows), same `name-version` layout, same want-list gate.
+1. the project's own tree — a root-relative file or directory;
+2. the store, `<project>/.luce/packages/<name>-<version>/`, for a `name`
+   in the want list at exactly the version stated (a `path:` override
+   replaces this probe for that package);
+3. every directory on `LUCE_LIB` (colon-separated; semicolon on Windows),
+   same `name-version` layout, same want-list gate.
 
-**Exactly one probe may answer.**  Two answers — project file vs.
-declared package, two `LUCE_LIB` shelves, anything — is
-`luce.import.ambiguous`, with every answering path named.  There is
-no precedence and no first-hit: precedence is silent shadowing with a
-table, `sys.path`'s mistake, and the first draft contradicted itself
-here by claiming both an order and an ambiguity rule.  Probing every
-tier is a handful of directory stats per import, cached per compile.
+**Exactly one probe may answer.** Two answers — a project file versus a
+declared package, two `LUCE_LIB` shelves, a shelf and a `path:` override —
+is `luce.import.ambiguous`, naming every answering path. There is no
+precedence and no first-hit: precedence would be silent shadowing behind a
+lookup order. Probing every tier is a handful of directory stats per
+import.
 
-A package resolved from `LUCE_LIB` or through `.path` says so, one
-line to standard error, every build: those bytes are outside the
-project's control, and a resolution the project file alone cannot
-predict must at least be visible.  The want list stays the gate
-everywhere: a package not named in `luce.yaml` is unresolvable from
-any store or shelf, so a stray install cannot change what a program
-means — and neither can a stray file, because a stray file that
-collides with a declared package is refused, not preferred.
+A package resolved from `LUCE_LIB` or through `path:` prints one line to
+standard error on every build: those bytes are outside the project's
+control, and a resolution the project file alone cannot predict is at
+least made visible.
 
-## D4. What a package is on disk: a directory with its own `luce.yaml`
+## What a package is on disk
+
+A package is a directory whose name carries `name-version`, holding its
+own `luce.yaml`:
 
 ```text
 geo-1.2.0/
@@ -187,47 +128,31 @@ geo-1.2.0/
 └── shapes.luc        # `import geo.shapes` reads this
 ```
 
-- **The directory name carries `name-version`**, and the `luce.yaml`
-  inside must agree with both halves, or the package is refused by
-  name — the artifact tag's tell-the-truth-or-be-refused rule.
-- A package's own internal imports resolve **inside the package
-  first** (its files, then its own dependencies), never in the
-  consumer's project: two packages each carrying a private `util.luc`
-  never collide, because each one's `import util` is answered inside
-  its own root.  What this costs the seam is stated honestly in D7 —
-  the first draft claimed it "falls out of the loader"; it does not.
-- **Visibility, v1**: every file in a package is importable and every
-  public declaration in it is consumer surface.  Said out loud
-  because the publishing half inherits it: semver over "the entire
-  file tree" is fiction, so a package-level export boundary
-  (entry-file-only, or a module-level `private`) is a *named
-  deferral* to the publishing memo, not an oversight.
-- A package's `luce.yaml` may name its own `.packages`.  **v1 resolves
-  the transitive set with exact versions and refuses diamonds that
-  disagree** — with the remedy in the *consumer's* hands: an
-  `override:` section in the root `luce.yaml` resolves a named
-  diamond by stated decision, loudly
-  (D6).  No auto-pick, no highest-wins — but no fork-to-fix either,
-  because the person hitting the refusal owns neither manifest.
-  (First-draft gap: refusal with no consumer remedy breaks the first
-  time two packages share a lagging dependency.)
-- **Major versions do not coexist.**  One `name`, one version in the
-  whole build — the diamond rule with no exception.  Go's `/v2`
-  import-path answer is deliberately not taken and the road back is
-  open (a future major could rename); this is a decision, recorded,
-  not an omission.
-- **Source only.**  A package ships `.luc` files; compiled `.lc`
-  artifacts stay programs.  Compiled library artifacts join the
-  shared-`libluce_rt` question (MISSING.md), not this memo.
-- **Flat single-identifier names, v1.**  No scopes (`@user/geo`).
-  The registry half inherits the squatting and coordination questions
-  flat names carry; scoped names would change import spelling, so if
-  scoping is ever wanted, it is wanted *before* a public registry —
-  recorded here so the publishing memo starts from the question.
+- The directory name and the inner `luce.yaml` must agree on both `name`
+  and `version`, or the package is refused.
+- A package's own internal imports resolve **inside the package first** —
+  its files, then its own declared dependencies, with the same
+  no-precedence rule (two answers is ambiguous). Two packages each
+  carrying a private `util.luc` never collide, because each one's `import
+  util` is answered inside its own root.
+- **Source only.** A package ships `.luc` files; a package links into its
+  consumer by source.
+- **Flat, single-identifier names.** No scopes.
+- **One version of a name in a whole build.** Major versions do not
+  coexist. A package may name its own dependencies; the transitive set
+  resolves at exact versions, and a diamond whose two requiring edges
+  disagree is refused (`luce.import.diamond`, naming both edges). The
+  remedy is in the consumer's hands: an `override:` row in the root
+  `luce.yaml` resolves the named diamond by decision — no auto-pick, no
+  highest-wins, and no fork-to-fix.
+- **Every file is importable and every public declaration is consumer
+  surface.** A package-level export boundary belongs to the publishing
+  half, not here.
 
-## D5. `.luce/`: the project's own dot-directory
+## The `.luce` directory
 
-`<project>/.luce/` (gitignored by convention, created on demand):
+`<project>/.luce/` (gitignored by convention, created on demand) holds two
+things:
 
 ```text
 .luce/
@@ -235,274 +160,84 @@ geo-1.2.0/
 └── cache/            # compile cache, keyed as artifacts already are
 ```
 
-- **`packages/` is the store** D3 probes.  In this memo it is filled
-  by hand — `cp -r` a checkout, a git submodule; vendoring is just
-  the store with no tooling — which is how the machinery stays
-  testable before any fetch protocol exists.
-- **Authoring is not the store.** A project keeps a package in a direct
-  source directory such as `geo/` beside `main.luc` and names it with a
-  root want's `path:geo` development override.  That directory
-  is edited and committed with the project; it does not carry the
-  `NAME-VERSION` store suffix.  Promotion to `.luce/packages/NAME-VERSION/`
-  is the installed/published boundary.  Both forms carry the package's
-  `luce.yaml`, so the source form can be checked with the same name/version
-  identity before a registry or downloader exists.
-- **The local authoring commands own this edit.** `luce package new NAME
-  [VERSION]` creates the direct source folder, its `luce.yaml`, its entry
-  module, and the root `path:` want (and bootstraps a root manifest when the
-  tree is still rootless).  `luce package version NAME VERSION` updates the
-  package manifest and root want together.  `luce package publish NAME`
-  validates the source boundary but refuses until a registry and upload
-  protocol exist; a refusal is preferable to claiming a package was
-  published when no server was contacted.
-- **`cache/` takes over the compile cache** for projects.  The keying
-  already works unchanged: `artifact.sourceHash` hashes the encoded
-  module, which the front end rebuilds from *all* loaded sources —
-  so a changed package file, or a `luce.yaml` edit that changes
-  resolution, changes the key.  Beside-the-source caching survives
-  for rootless programs, and loom's distinct-name-per-writer
-  discipline (`runner.zig`) carries over to the shared directory.
-- One consequence named now: `bench/compare.sh` checks out an old ref
-  whose gitignored store is empty — the moment a benchmark imports a
-  package, the authoritative A/B breaks.  Benchmarks therefore import
-  nothing outside the project tree, stated in `bench/`'s README the
-  day step 3 lands.
+- **`packages/` is the store** the resolver probes. Today it is filled by
+  hand — vendoring is just the store with no tooling — which is how the
+  machinery stays testable before any fetch protocol exists.
+- **`cache/` is the project compile cache.** Under a governing `luce.yaml`,
+  loom keeps a program's artifact at the program's own relative spot,
+  mirrored under the cache: `src/tools/x.luc` caches at
+  `.luce/cache/src/tools/x.lc`, so one program has one artifact and a
+  rebuild replaces it by name. The key is the source hash over the encoded
+  module, which the front end rebuilds from *every* loaded source under
+  its root-qualified names — so an edited package file misses the cache,
+  and so does a `luce.yaml` edit that changes resolution. `luce build`
+  itself is unchanged: `-o` and the beside-the-source default are the
+  compiler's deliverable, not loom's cache.
 
-## D6. Diagnostics name the resolution, not the mechanism
+## Authoring a package
 
-Every refusal says what was looked for, every place probed, and what
-was found — verbatim paths, and the project root that governed the
-probe.  `luce.import.*` gains: `ambiguous` (every answering path
-named), `version` (store/`luce.yaml`/manifest disagreement, all
-numbers named), `diamond` (both requiring edges named, `.override`
-named as the remedy).  The collision family stays, its message
-growing the alias remedy (D2) and a package-aware variant (a package
-file cannot be renamed by the consumer).  The first draft's
-`luce.import.outside` is dropped: import segments are identifiers, so
-nothing can spell a path that escapes the root, and a code nothing
-can fire is a lie in the taxonomy.
+A package under active authorship is ordinary source in a direct child
+directory of the project — `geo/` beside `main.luc` — named by a root want
+with a `path:geo` override. That directory is edited and committed with
+the project and does not carry the `NAME-VERSION` store suffix; promotion
+to `.luce/packages/NAME-VERSION/` is the installed boundary. Both forms
+carry the package's `luce.yaml`, so a source-form package can be checked
+against its own name/version identity before any registry exists.
 
-## D7. What the seam pays: four changes, named
+Two local commands own this workflow:
 
-The review's second blocker, adopted as the implementation contract:
+- `luce package new NAME [VERSION]` creates the source folder, its
+  `luce.yaml`, its entry module, and the root `path:` want (bootstrapping a
+  root manifest if the tree is still rootless).
+- `luce package version NAME VERSION` updates the package manifest and the
+  root want together.
+- `luce package publish NAME` validates the source boundary but refuses,
+  because no registry or upload protocol exists — a refusal is preferable
+  to reporting a publish that contacted no server.
 
-1. **The `Loader` signature grows a root token.**  `Found.text`
-   gains an opaque, host-chosen root identifier; stage 1 records it
-   per `FileId` and hands it back on every `load` that file causes:
-   `load(context, arena, name, from_root)`.  The compiler never
-   learns what a root *is*; names-in-bytes-out holds.
-2. **The module registry keys `(root, name)`, not `name`.**  Today
-   `sources.find(name)` is program-global, which under D4 would
-   answer package A's `util` to package B's import — silent
-   cross-package aliasing.  Dedup, cycle termination, self-import,
-   and `luce.import.collision` all move to the pair key; collision
-   becomes per-importing-namespace.
-3. **`Found` gains `.ambiguous`**, carrying every answering path, so
-   D3's refusal arrives as a stable code with structured content
-   rather than free text through `.unreadable`.
-4. **The serialized module qualifies internal names by root**, so two
-   `util` modules from two packages cannot merge in a `.lcm`.  This
-   is a `format_version` bump, taken in step 3 below.
+## Diagnostics
 
-## Deliberately absent from this memo
+Package resolution reports what was looked for, every place probed, and
+what was found — verbatim paths, and the project root that governed the
+probe. The `luce.import.*` family carries: `ambiguous` (every answering
+path named), `version` (a store, `luce.yaml`, or manifest disagreement, or
+a hash mismatch, all numbers named), `diamond` (both requiring edges
+named, `override:` named as the remedy), `collision` (one binding meaning
+two modules, the alias named as a remedy where the consumer can rename),
+plus the existing `reserved`, `standard`, `self`, `missing`, `limit`, and
+`unreadable`.
 
-- **Fetching** — no network, no registry, no lockfile (exact versions
-  plus optional hashes in `luce.yaml` are the lock until transitive
-  ranges exist).  The direction is on record (owner, 2026-08-10):
-  the client is **`luce install` / `luce update` / `luce init`** —
-  toolchain subcommands in the `luce` binary's own Zig, so fetching,
-  hashing and unpacking need no Luce networking and no TLS story —
-  and the registry speaks a static-file protocol first (Go's proxy
-  precedent), so packages.luciaos.com can begin as files behind the
-  edge server and be replaced by the Luce-written registry server
-  with no client change.  That memo is written when this one is
-  built.
-- **Registry publishing** — manifests beyond the fields above,
-  mandatory hashes, signatures, yanking, scoped names, the package
-  export boundary: each named above at the decision that defers it.
-- **Version ranges and a solver** — after a registry with metadata
-  exists, if the exact-version corpus demands them.
+## The loader seam
 
-## The first packages, and the yaml split (owner's calls, 2026-08-10)
+The compiler never learns what a package is; all of it lives behind the
+host loader, names in and bytes out. Four properties make that hold:
 
-- **The toolchain parses `luce.yaml` itself, in Zig, by necessity**:
-  the manifest configures import resolution, so it is read before any
-  Luce code could run — a `std.yaml` written in Luce cannot sit under
-  the compiler that compiles it.  `std.yaml` still lands in std (the
-  ecosystem's own format deserves first-party support), scheduled
-  beside the registry server, its first real customer; it may speak
-  more than the subset, but on the subset the two parsers are held
-  together by a **shared fixture corpus** — one directory of valid
-  and refused manifests that the toolchain's Zig tests and
-  `std_spec`'s Luce tests both consume, so divergence fails the suite
-  rather than surfacing as an install reading a manifest differently
-  than a program does.
-- **The first packages, in order**: the `geo` fixture (this memo's
-  worked example, vendored into the machinery specs); **`cli`**
-  (argument parsing over `main(args)` — pure, several files, real
-  consumers in the examples, and the first `tests/` tree `luce test`
-  meets inside a package); **`termui`** as the flagship — the
-  retained terminal UI that was deliberately discarded from std
-  returns as a package, designed in its own memo (Elm-shaped app
-  loop owned by the app, widget event unions instead of generic
-  messages, a pure cell buffer diffed in Luce with the host keeping
-  every escape byte) — followed by **the editor migrating onto it**,
-  which makes the editor the first dependency-carrying program.  `semver` joins as the registry server's first dependency
-  (the first real transitive chain), and `datetime` follows the
-  wall-clock host slot.
-- **The embedded editor must keep working pathlessly** — *retired by
-  the owner, 2026-08-12, and kept here because it was a named
-  requirement on step 3's resolution work and a record should say what
-  was dropped.*  The requirement was that once the editor imported
-  `termui`, loom would embed the dependency's sources beside the
-  editor's own and `files.MemoryLoader` would serve them as a static
-  package set — "the proof that a vendored store can ride inside a
-  binary".  It was built, and then reversed the same day with the
-  embedded editor itself: **packages link statically and by source, and
-  loom carries no editor**, because an editor is a program a person
-  installs and `loom edit` was a second way to start one.  So there is
-  no `loom edit`, no `LOOM_EDITOR`, and no `MemoryLoader` — the editor
-  resolves `termui` the way any program resolves any package, from a
-  want list in its own `luce.yaml` against a `LUCE_LIB` shelf (D3), and
-  `build.zig` puts `packages/` on that path.  What the reversal costs
-  is named: nothing proves a store can ride inside a binary, and
-  nothing needs to until something wants one.
+1. **Every loaded file carries an opaque root token** — for a package,
+   `name-version` (`geo-1.2.0`), never a filesystem path, so the same
+   program hashes identically across machines and across
+   store/shelf/`path:` locations. The token is recorded per file and
+   handed back on every load that file causes.
+2. **The module registry keys `(root, name)`**, so package A's `util` is
+   never answered to package B's `import util`; deduplication, cycle
+   termination, self-import, and collision are all per-importing-root.
+3. **A refusal travels as a stable code**, not free text: an ambiguous or
+   version refusal arrives with structured content the diagnostics render.
+4. **Serialized module names are qualified by root token** (a package
+   module serializes as `geo-1.2.0/util.twice`), so two `util` modules
+   from two packages cannot merge in a serialized module, and the source
+   hash the cache keys on is stable across machines.
 
-## Implementation order (each step lands green on its own)
+## Not yet built
 
-1. `luce.yaml` discovery + parse; the D7 seam changes land **first and
-   alone** — root tokens threaded, registry re-keyed, `.ambiguous`
-   added — with today's behaviour proven unchanged for rootless
-   programs (the whole existing suite is that proof) plus new
-   `files.zig` tests for discovery edges (symlinked root, stdin, no
-   project file).
-   *As built (2026-08-10): stdin gets no discovery at all.  D1's
-   cwd-walk clause for `luce build -` contradicted its own "a pathless
-   root gets no discovery" sentence, and the stricter reading won — a
-   piped program compiles rootless wherever it is piped from.  The
-   manifest parser is `src/apps/manifest.zig`, discovery is
-   `files.discoverProject`, and a found manifest establishes only the
-   root token in this step; resolution is unchanged until steps 2–3.*
-2. Subfolder imports + `import ... as` (D2) inside the project tree,
-   with the collision/ambiguity diagnostics and site/docs pages.
-   *As built (2026-08-10), three decisions D2 left open:* **std is
-   excluded from `as`** — `import std.math as m` is refused at parse
-   time, because the library's names are language surface (`s.split`
-   routes to `std.strings` by name, `sort_by` to `std.lists`) and the
-   collision that motivates aliasing always has a sibling side to
-   alias; `as` itself is contextual, not a keyword.  **One module,
-   one binding**: a module's binding is the prefix its qualified
-   declaration names carry, so a program importing `geo.shapes` under
-   two spellings is refused (`luce.import.collision` naming the
-   binding that holds) rather than analysed twice under two prefixes.
-   The registry keys modules by their spelled name (`std.math`,
-   `geo.shapes`) and collision is decided on the binding, one rule
-   for the std/sibling and dotted/dotted fights alike.  The
-   per-level directory listings are scanned per import, not cached
-   per compile: the loader's answer arena is per-load scratch, a
-   cache would add owned state and a deinit to the host loader, and
-   at ≤64 modules a compile the scan is not measurable — revisit
-   with step 3's tiers, where one resolution probes several roots.
-3. The store, `LUCE_LIB`, `.path` and `.hash` (D3/D4): hand-vendored
-   packages resolve end to end, package-internal isolation proven by
-   two packages shipping same-named files, diamond + `.override`,
-   the format_version bump for root-qualified names.
-   *As built (2026-08-10), deviations and decisions D3/D4 left open:*
-   **a package's root token is `name-version`** ("geo-1.2.0") — never
-   a filesystem path — so the serialized names it qualifies, and with
-   them `artifact.sourceHash`, are identical across machines and
-   across store/shelf/`path:` locations; a package module serializes
-   as `root/binding.name` (`geo-1.2.0/util.twice`), format_version 39.
-   **One file is one module whatever spelled it**: a package module
-   reached as `geo.shapes` by the consumer and as `shapes` from inside
-   the package unifies on the (root, opened-path) pair, so its structs
-   are one type across the boundary — which extends step 2's
-   one-binding rule across namespaces (the registry remembers each
-   resolution as a *claim*, and stage 4 reads the claims back to
-   resolve reference sites against the right root); std likewise loads
-   once per program rather than once per root.  **The hash is
-   SHA-256**, as the manifest value's prefix states — D1's "the way
-   `artifact.zig` hashes" was read as *content hash, refused by name*,
-   not as its algorithm, because `sourceHash` is a 64-bit cache key
-   and `sha256:` must not lie — over every regular file in sorted
-   relative-path order, each contributing path, NUL, length, bytes.
-   **`path:` replaces only the store probe**, exactly as D3 says, so a
-   shelf and a `path:` both answering is `luce.import.ambiguous` —
-   no precedence anywhere, the override included.  **`path:` and
-   `override:` are the root manifest's alone**: a package manifest
-   carrying either is refused.  **Inside a package the no-precedence
-   rule holds too**: a package file and a package dependency both
-   answering one name is ambiguous (D4's "its files, then its own
-   dependencies" reads as the anchor's contents, not as an order).
-   **Hash mismatches and directory/manifest disagreements share
-   `luce.import.version`** — D6 defines it as store/`luce.yaml`/
-   manifest disagreement, which a wrong digest is — and the store
-   machinery's refusals travel through a new `Found.refused` channel
-   carrying the stable code and the whole sentence, since only the
-   host knows the paths and the numbers.  **The transitive set
-   resolves eagerly** at the first import that consults the want list,
-   so a diamond is refused with both edges named wherever it hides.
-   **`LUCE_LIB` became a search path** (colon-separated; semicolon on
-   Windows) serving both of its meanings: the directories holding
-   `libluce_rt.a` for the link, and the package shelves.
-4. `.luce/cache/` (D5) for project builds; loom keeps beside-source
-   caching for rootless files.
-   *As built (2026-08-10): under a governing `luce.yaml`, loom keeps a
-   program's artifact at the program's own relative spot in the tree,
-   mirrored under `<root>/.luce/cache/` — `src/tools/x.luc` caches at
-   `.luce/cache/src/tools/x.lc` — so one program has one artifact, a
-   rebuild replaces it by name, and `rm -rf .luce/cache` costs one
-   recompile and nothing else; the directory is made on demand, and a
-   tree where it cannot be made falls back to the hash-named temp
-   place exactly as an unwritable source directory always has.  The
-   key is D5's, unchanged: `artifact.sourceHash` over the encoded
-   module, which carries every loaded source under its root-qualified
-   names — so an edited package file misses, and so does a `luce.yaml`
-   edit that re-roots the same bytes, both proven down to the encoded
-   bytes in `compile/test.zig`.  The `.lcm` writer discipline derives
-   its scratch names from the artifact path and so followed it into
-   the shared directory; two looms warming one cache still cannot
-   cross.  **`luce build` did not change**: `-o` and the
-   beside-the-source default are the compiler's deliverable, not
-   loom's cache — D5's "takes over the compile cache" is loom's
-   convenience only.  For the same reason loom does not read a
-   deliverable `main.lc` a build left beside a governed source: under
-   a root it reads and writes `.luce/cache/` alone, so a shipped warm
-   artifact is named with `-o` and run directly.*
-5. Specs throughout: `modules_spec.zig` grows a packages section;
-   `product.zig` drives a vendored package the way a person would.
-   *As built (2026-08-10): the packages section proves on both engines
-   everything a running program can observe of D1–D7 — two packages'
-   same-named internals apart, one module reached by two spellings as
-   one type, subfolder bindings with `as`, a transitive dependency
-   chain the consumer never names, and a trap inside a package whose
-   frames both engines report identically and root-qualified — while
-   the store machinery keeps its proofs in `src/apps/files.zig` and
-   `src/apps/manifest.zig` and the refusals theirs in
-   `compile/test.zig` and `01_source/load.zig`.  `product.zig` drives
-   the vendored store the way a person would: cold through `luce
-   build` and through loom's own front end, warm with the compiler
-   renamed away — a cache hit invokes nothing external, so running
-   without a compiler is the honest observable — and invalidated by
-   editing one file in the store.  D5's benchmark consequence is
-   recorded in `bench/run.sh`'s header.*
+- **Fetching** — no network, no registry, no lockfile. Exact versions plus
+  optional hashes are the lock until transitive version ranges exist. The
+  intended client is `luce install` / `luce update` / `luce init` in the
+  `luce` binary's own Zig, against a registry that speaks a static-file
+  protocol first.
+- **Registry publishing** — mandatory hashes, signatures, yanking, scoped
+  names, and a package-level export boundary.
+- **Version ranges and a solver** — a solver needs registry metadata, so
+  it waits on the registry.
 
-**As built, closing note (2026-08-10).**  The five steps became: a
-~400-line hand-written manifest parser and a lexical walk-to-root
-discovery (`src/apps/manifest.zig`, `files.discoverProject`); dots
-mapped to directories under one anchor with `as` as the collision
-remedy and one-binding-per-module; a store the want list gates, probed
-beside every `LUCE_LIB` shelf and `path:` override with no precedence
-anywhere, packages holding their directory names and manifests to
-agreement, SHA-256 content hashes verified when stated, diamonds
-refused with both edges named and `override:` as the consumer's
-remedy, and serialized names qualified by root token
-(`format_version` 39) so the same program hashes the same on every
-machine; a project compile cache at `<root>/.luce/cache/` addressed by
-the program's place in the tree and keyed on the hash of the encoded
-module; and the spec sweep above.  The compiler still never learns
-what a package is — every D7 obligation lives behind the `Loader`
-seam, names in, bytes out, each answer stamped with the root token it
-belongs to.  The registry, the fetch protocol and `luce
-install`/`update`/`init` are deliberately still absent; when they are
-designed, this memo's resolver is what their files must load.
+Whatever those become, the resolver described here is what their files must
+load.

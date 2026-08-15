@@ -1,14 +1,12 @@
-# TERMUI_EDITOR_REWRITE.md — plan of record
+# TERMUI_EDITOR_REWRITE.md — the termui v0.2 and modular-editor design
 
-> **Status.** Built (adopted and executed 2026-08-14).  `termui` v0.2
-> ships as `packages/termui-0.2.0/` (10 modules, 42 tests) and the
-> editor is a modular Luce program under `examples/editor/` (14 modules,
-> 38 `luce test` tests) with undo/redo, in-file search, and crash-safe
-> drafts.  Both engines agree on it (`specs/editor_spec.zig`).  termui
-> v0.1 and the old single-file editor are retired.  This document is the
-> north star for that work; [TERMUI.md](TERMUI.md) is the v0.1 record it
-> supersedes.  The one deferred piece is the published site page
-> (`www/luce/content/library/termui.md`), which still describes v0.1.
+> **State.** `termui` v0.2 ships as `packages/termui-0.2.0/` (10 modules)
+> and the editor is a modular Luce program under `examples/editor/` with
+> undo/redo, in-file search, and crash-safe drafts.  Both engines agree
+> on it (`specs/editor_spec.zig`).  This document is the design record for
+> that work; [TERMUI.md](TERMUI.md) is the package reference.  The
+> published site page (`www/luce/content/library/termui.md`) is the
+> follow-up piece.
 
 This plan is written against [SOFTWARE_DESIGN.md](SOFTWARE_DESIGN.md)
 (deep modules, information hiding, no shallow wrappers, no god objects)
@@ -16,7 +14,7 @@ and [UX_UI_DESIGN.md](UX_UI_DESIGN.md) (reversible actions, preserved
 work, honest state, recovery). Where the two pull, correctness and
 preserved user work win.
 
-## Decisions taken (2026-08-14)
+## The decisions
 
 1. **termui: clean rewrite from scratch.** A new package,
    `packages/termui-0.2.0/`, designed as one coherent layered kernel.
@@ -61,7 +59,7 @@ evidence is in the editor:
   panes are three-sided and share edges, so the editor reimplements
   borders in `Draw.pane_frame`/`output_frame` — hand-selecting
   `term.ui.junction` glyphs. That junction-merging is exactly what
-  TERMUI.md D12 *deferred*.
+  TERMUI.md *deferred*.
 - `Rows` is **half-used**: the editor keeps the state value but then
   hand-fills the selection bar and hand-draws the frame around it.
 - The output pane is a scrolling viewport the library has no type for,

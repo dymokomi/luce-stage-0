@@ -30,7 +30,7 @@ Every type is one of two kinds, and the line between them is deliberate
   them to `int` and `float` before it does anything, so no expression
   ever has one and there is no arithmetic at 8 or 16 bits to define.
   What they are for is `array(byte, _)` at one byte an element, with
-  the extent supplied at construction (docs/TYPES.md D5).
+  the extent supplied at construction (docs/TYPES.md).
 - **References** — a `class`, the container objects `list(T)`,
   `map(K, V)`, `array(T, ...)` and `builder`, and the resources `file`
   and `task(...)`.  A reference is a shared, reference-counted object:
@@ -144,7 +144,7 @@ It may not be a container element or a map value, and there is no
 The one optional that *is* a container element is a **function value**:
 `(func(...) -> R)?` is the form a function value takes in any slot
 that exists before something fills it, because a function value has no
-zero and absence is that zero (docs/BINDING.md D7).  The parentheses
+zero and absence is that zero (docs/BINDING.md).  The parentheses
 are the general rule below.
 
 A struct field typed `Struct?` is how a value struct holds one of
@@ -686,7 +686,7 @@ Function values copy freely.  There is
 neither ordering nor **equality**: a function type cannot say which of
 its values carries a receiver, so `f == g` would call two binds of one
 method equal whatever they carry, and `==`/`!=` are refused saying so
-(docs/BINDING.md D6).  `string(f)` gives a declared function's
+(docs/BINDING.md).  `string(f)` gives a declared function's
 qualified name and a lambda's distinct compiler-generated name, and is
 how a program asks what a value names.  Visibility gates the reference
 site, and a public signature may not hide a private type inside a
@@ -1345,7 +1345,7 @@ methods: `f.read(buffer) -> long!`, `f.write(buffer, count) -> long!`,
 and `f.flush() -> !`, where the buffer is an `array(byte, _)`.  There
 is deliberately no `close`: the last reference to a `file` closes it
 the instant it drops, which is also why there is no `with`
-(docs/FILESYSTEM.md D9).  `parse_string(bytes) -> string?` is the pure
+(docs/FILESYSTEM.md).  `parse_string(bytes) -> string?` is the pure
 boundary in the other direction — bytes that are not UTF-8 are absent,
 not an I/O error.
 
@@ -1604,7 +1604,7 @@ counts["k"] += 1    # the key is evaluated once, and defined at 0
 ```
 
 A **storage-width place combines at its arithmetic type and narrows
-back** (docs/TYPES.md D5): no operator computes at 8 or 16 bits, so
+back** (docs/TYPES.md): no operator computes at 8 or 16 bits, so
 `b += 1` on a `byte` is `b = byte(b + 1)` exactly — promoted to `int`,
 added, and narrowed through the same checked conversion.  Nothing is
 narrowed silently: at 255 it traps `conversion_range` rather than
@@ -1742,7 +1742,7 @@ const version = "2"
 const banner = "loom " + version
 const theme = Theme(keyword = 176, comment = 244)  # value structs too
 const missing: long? = none   # a typed absence: the annotation says
-                              # what is absent (docs/ARGS.md D9)
+                              # what is absent (docs/ARGS.md)
 ```
 
 Initializers fold at compile time.  Foldable forms include literals,
@@ -1951,7 +1951,7 @@ checked rather than the open: a program that builds on a Mac builds
 on the machine that ships it.  Deliberately absent: conditional
 imports and re-exports.
 
-**Projects** (docs/PACKAGES.md D1–D2, built): a `luce.yaml` above the
+**Projects** (docs/PACKAGES.md–D2, built): a `luce.yaml` above the
 root source file marks the project root, and under one, dots map to
 folders — `import geo.shapes` reads `geo/shapes.luc` under the root,
 binds `shapes`, and resolves the same from every file in the tree,
@@ -1965,7 +1965,7 @@ one binding per program, and a standard module keeps its own name
 the sibling behaviour, single segment only, with the dotted form
 refused naming `luce.yaml` as what enables it.
 
-**Packages** (docs/PACKAGES.md D3–D4, built through the store half):
+**Packages** (docs/PACKAGES.md–D4, built through the store half):
 `luce.yaml`'s `packages:` want list names each package at one exact
 version, vendored by hand as `.luce/packages/NAME-VERSION/` — a
 directory with a `luce.yaml` of its own that must agree with its name
@@ -2039,7 +2039,7 @@ via ARC — docs/MEMORY.md), operator overloading,
 and **positional-only and keyword-only parameter
 markers** (Python's `/` and `*`, Dart's `{}` section): one kind of
 parameter, and the trailing-defaults rule is what keeps a
-must-be-named parameter from arriving by accident (docs/ARGS.md D6).
+must-be-named parameter from arriving by accident (docs/ARGS.md).
 (string interpolation shipped: see f-strings above; named and default
 arguments shipped: see "Calls" above; tagged unions shipped: see
 "Unions" above.)

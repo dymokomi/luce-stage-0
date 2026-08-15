@@ -8,7 +8,7 @@
 > placement, when a file may be split.  The two agree on the substance
 > — deep modules, no ceremony, no splitting for length, comments that
 > say why — so where this file is general, read the guide for the
-> local form.  Adopted 2026-08-11.
+> local form.
 
 ## Purpose
 

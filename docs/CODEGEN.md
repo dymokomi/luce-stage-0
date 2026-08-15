@@ -265,11 +265,9 @@ compiler is not beside /usr/local/bin and not on PATH" — rather than
 running the program some other way.
 
 Measured on the bundled programs and the benchmark set (M4 Max, best
-of several).  **A dated snapshot, like every table in this file**:
-taken just after the loom/luce split below, and not re-measured since.
-Absolute times mean nothing off this host; what the table is for is
-the *shape* — warm is two orders of magnitude under cold, and cold is
-paid once per change to the program.
+of several).  Absolute times mean nothing off this host; what the
+table is for is the *shape* — warm is two orders of magnitude under
+cold, and cold is paid once per change to the program.
 
 | program | warm | cold (compile + link + first load) |
 |---------|------|------------------------------------|
@@ -283,7 +281,7 @@ Warm startup is process start and `dlopen`, and nothing else.  A cold
 run — a source file loom has not compiled before — pays one `luce`
 process, LLVM at `-O3`, one link, and the first `dlopen` of a binary
 the OS has never seen, which on macOS is the largest single term of
-the four (89 ms of `sort.luc`'s 155; docs/ENGINE.md Hat 3).  It is
+the four (89 ms of `sort.luc`'s 155).  It is
 paid once per change to the program.
 
 ### loom does not carry a code generator
@@ -675,9 +673,8 @@ Three things make it pay, and all three are needed together:
   that attaches an object, frees one, or replaces a container's
   storage (`optimize.effects.viewStable`).
 
-  **The metadata exists now, and the honest number is: it moved
-  nothing this suite measures** (task #45, ruled and executed
-  2026-08-06).  The IR builder is vendored (`08_llvm/builder/`, three
+  **The metadata exists, and the honest number is: it moves nothing
+  this suite measures.**  The IR builder is vendored (`08_llvm/builder/`, three
   files, `LUCE:`-marked deviations only) and attaches `!alias.scope`
   and `!noalias` on every row-fact load and every scalar cell access
   — two scopes, rows and elements, that never overlap by
@@ -1299,11 +1296,9 @@ change moves.  Absolute times mean nothing off this host — for a
 before/after, use `bench/compare.sh GIT-REF`, which interleaves the
 two on the machine in front of you.
 
-**Taken 2026-08-10, after the compiler-rt bundling regression was
-found and confined.**  One run, all nine rows: a table is one
-measurement or it is not a table.  This is the one number — where a
-document quotes a benchmark row it quotes the `compute` column here,
-and says which column it is.
+One run, all nine rows: a table is one measurement or it is not a
+table.  This is the one number — where a document quotes a benchmark
+row it quotes the `compute` column here, and says which column it is.
 
 | benchmark | C        | luce     | luce/C | compute |
 |-----------|----------|----------|--------|---------|
@@ -1318,123 +1313,41 @@ and says which column it is.
 | lists     |   8.1 ms |  16.7 ms |  2.05x |   2.53x |
 | floor     |   3.0 ms |   3.7 ms |      - |       - |
 
-Two stories separate this snapshot from 2026-08-07's, and both are
-worth keeping.  First, "Fix linux compile" (`c2fa6ae`) set
-`bundle_compiler_rt` on `libluce_rt` unconditionally, and the bundled
-object defines the C library's public names — `memcpy`, `memset`,
-`bcmp`, the whole libm surface — which won the `cc`-driven static
-link over the platform's optimized ones: measured at +52% on
-`strings`, +58% on `lists`, +65% on `stats` and +15–23% on the
-matmuls on macOS (interleaved A/B against `545b028`), and the same
-shape on Linux the day the `tools/linux-check` rig ran the first
-Linux benchmark (strings 9.27x → 6.91x, stats 1.63x → 1.23x, lists
-3.97x → 2.49x, matmul 1.13x → 0.98x, unconfined vs confined).  It
-sat undetected for a day because the commit ran no benchmark.  The
-fix is one mechanism on every OS: bundling stays wherever the link
-needs Zig's compiler-ABI symbols (`__zig_probe_stack`, the
-half-float conversions — Linux, where the unbundled link is simply
-broken), and `tools/localize_rt.zig` confines the bundled object to
-the compiler's namespace, so `memcpy` stays an undefined reference
-that binds to the real libc at load.  macOS needs no bundle and
-carries none.  One Linux observation is parked for its own
-investigation: the `strings` row's C twin is ~28% faster against
-glibc than against libSystem while the Luce side is slower, so that
-row reads 6.91x there — a baseline difference that predates
-everything above.  Second, the one row still off its 2026-08-07
-value here: **`stats` (1.05x → 1.32x) is the recorded price of the
-parked `llvm.minimumnum` vectorization** ("The extrema, and a
-vectorization that is parked" above) — the extremum reduction is
-scalar compare/select again until the intrinsic's x86-64 lowering
-can be trusted, and the two extremum passes are a third of the
-row's work.
+Two rows carry a story worth keeping.  **`stats` (1.32x compute) is
+the price of the parked `llvm.minimumnum` vectorization** ("The
+extrema, and a vectorization that is parked" above): the extremum
+reduction is scalar compare/select until the intrinsic's x86-64
+lowering can be trusted, and the two extremum passes are a third of
+the row's work.  **`arrays32` (7.92x) is the price of checked integer
+arithmetic in a reduction** — the section below shows it is not a
+32-bit problem.
 
-**The interleaved A/B, twice, against `822382a`** — the authoritative
-form, because absolute times move with the host.  `compute`:
+The link line matters to these numbers, and the rule is one mechanism
+on every OS.  `libluce_rt`'s bundled compiler-rt object defines the C
+library's public names — `memcpy`, `memset`, the libm surface — and if
+it wins the `cc`-driven static link over the platform's optimized ones
+it costs tens of percent on the allocation-bound rows.  So bundling
+stays only where the link genuinely needs Zig's compiler-ABI symbols
+(`__zig_probe_stack`, the half-float conversions — Linux, where the
+unbundled link is simply broken), and `tools/localize_rt.zig` confines
+the bundled object to the compiler's namespace, so `memcpy` stays an
+undefined reference that binds to the real libc at load.  macOS needs
+no bundle and carries none.
 
-| benchmark | run 1  | run 2  |
-|-----------|--------|--------|
-| loops     |  -2.1% |  -0.1% |
-| math      |  +6.7% |  +0.5% |
-| strings   |  -2.5% |  -6.7% |
-| arrays    |  +3.7% |  -1.4% |
-| arrays32  |  -0.3% |  -1.9% |
-| matmul    |  +4.0% |  -5.0% |
-| matmul32  |  +3.4% |  -2.3% |
-| stats     |  -4.7% |  -0.4% |
-| **lists** | **-92.2%** | **-92.1%** |
+`strings` and `lists` are allocation-bound rather than
+code-generation-bound.  Everything else at 64 bits is at parity or
+ahead, and `math` is ahead because Luce's transcendental calls land in
+the same libm C's do while the surrounding loop vectorizes.
 
-**One row moved and the rest is the machine.**  `math` holds no list
-and cannot be touched by any of this; it read +6.7% and then +0.5%,
-which is the size of this host's floor and the reason a single run of
-a single row proves nothing.  Every other row changes sign between the
-two.  `lists` reads the same number twice, to a tenth of a point, and
-it is a factor of thirteen.
-
-**The bytes run (docs/BYTES.md) left every row where it found it**, and
-that is worth recording rather than assuming.  `list(T)` gave up the
-24-byte boxed slot for packed element storage — a `list(byte)` is one
-byte an element now and a `list(long)` eight — which is a large change
-to the container every program uses.  Four interleaved A/Bs against
-`c4d172f` on this host, taken at three points in the run; the `compute`
-column, which is the one a storage change moves:
-
-| benchmark | R1 only | + the fix | at HEAD | again |
-|-----------|---------|-----------|---------|-------|
-| loops     |   -0.7% |     +0.4% |   +0.2% | -0.5% |
-| math      |   +0.2% |     -0.4% |   -0.3% | -0.4% |
-| strings   |   +2.9% |     +0.7% |   +5.4% | +3.8% |
-| arrays    |   -0.3% |     -0.8% |   -1.9% | -0.7% |
-| arrays32  |   -1.0% |     -1.7% |   +3.0% | +1.1% |
-| matmul    |   -1.1% |     -0.6% |   -1.1% | +0.5% |
-| matmul32  |   -1.9% |     -2.6% |   -1.9% | -5.7% |
-| stats     |   -0.1% |     -0.4% |   -1.1% | -0.0% |
-
-**Nothing here is a win, and nothing here should be.**  Not one row in
-the suite *at the time of that run* was list-bound: `loops` and `math`
-are scalar, the four array rows use `array`, which was already packed,
-and `strings` uses a `list(string)` — whose elements are still the
-boxed slot, because a `string` is exactly the kind that keeps one.
-The one thing this table had to show is that the mechanism costs
-nothing where it buys nothing.  What it could not show is what it
-bought, and the gap is closed below.
-
-**Read the noise floor off `arrays32` before reading `strings`.**  That
-row holds no list at all, so nothing in this run can touch it, and it
-answered -1.0%, -1.7%, +3.0% and +1.1% across the four — a spread of
-four points on a row whose true delta is zero.  `matmul32` spread six.
-So the honest sentence about `strings` is that it sits somewhere in
-+0.7% to +5.4% on a machine whose floor is ±3%, and that four runs did
-not resolve it.  It is not resolvable by running a fifth: what would
-settle it is a benchmark that is actually list-bound, and the suite
-did not have one.  It does now — `bench/lists`, below, and it answered
-in one run.
-
-One thing the runs *did* resolve.  The first measurement put `strings`
-at +2.9%, and the cause was one line: `ensureCapacity` compared
-*element* counts, so every `append` divided a byte length by a width
-the compiler does not know — a division on the hot path of the
-most-called container operation there is.  Doing the arithmetic in
-bytes took the same row to +0.7% on the very next run.  A change that
-survives the noise in one direction and then in the other is a change
-the noise did not invent, and the row that measured it is not the row
-the work was for.
-
-`strings` is allocation-bound rather than code-generation-bound.
-Everything else at 64 bits is at parity or ahead, and `math` is ahead
-because Luce's transcendental calls land in the same libm C's do while
-the surrounding loop vectorizes.
-
-### What the two new rows measured
+### The 32-bit rows
 
 **`matmul32` is the good news and it is unremarkable, which is the
-point.**  1.07x compute against 1.03x for the `double` twin as
-measured that day (1.09x and 1.07x in the 2026-08-10 table above): the
+point.**  1.09x compute against 1.07x for the `double` twin: the
 binary32 inner loop vectorizes on both sides, four lanes where the
-64-bit one got two, and Luce keeps pace.  Whatever the resize cost, it
-did not cost this.
+64-bit one got two, and Luce keeps pace.
 
-**`arrays32` is 8.14x — of its day; 7.92x in the current table —
-and it is not a 32-bit problem.**  The measurement that says so:
+**`arrays32` is 7.92x, and it is not a 32-bit problem.**  The
+measurement that says so:
 
 | dot product | C       | luce    |
 |-------------|---------|---------|
@@ -1468,21 +1381,9 @@ are the ordinary ones: prove the bound and drop the check, or offer a
 reduction that is allowed to reassociate.  Neither is in this step,
 and both are language decisions rather than code-generation ones.
 
-> **What the previous snapshot said, and why it was replaced.**  The
-> table here read `20.6 / 47.4 ms, 2.31x / 2.49x` for `strings` and
-> had done since `48453a4` — fifty-one commits back, and *before*
-> copy-on-store, small-string optimisation and `T!` all landed.  Two
-> runs at `f333e12` put Luce's `strings` at 53.5 and 53.7 ms with
-> every other row and the do-nothing floor unmoved, so the difference
-> is that row and not the host.  `docs/STRINGS.md`'s own closing
-> measurement — `2.71× C → 2.68× C` — was the figure that had stayed
-> honest, and it agrees with today's within noise.  A stale row in
-> the table every other document quotes is the expensive kind, so it
-> is refreshed here rather than annotated.
+### `bench/lists`, and what packed storage buys
 
-### `bench/lists`, and what packed storage actually bought
-
-The gap the bytes run found is filled.  `bench/lists.luc` is nothing
+`bench/lists.luc` is nothing
 but `list`: three million `append`s into a `list(byte)` that starts
 empty, a sequential read, a strided read at a prime stride that visits
 every element in an order no prefetcher follows, an in-place
@@ -1496,40 +1397,22 @@ elements, then 1.5x plus one) so that neither side is copying its
 buffer a different number of times than the other; both print the same
 eight numbers and `bench/run.sh` refuses to time them otherwise.
 
-**Packed storage is worth 22% of this program, and 5.7x of its
-memory.**  `bench/compare.sh` cannot measure it — the benchmark does
-not exist at the base ref, and each side of that script compiles its
-own sources — so the A/B was done by hand and the method is: build
-`c4d172f` (the commit before `list(T)` gave up its 24-byte boxed cell)
-in a scratch worktree, copy *this* `bench/lists.luc` into it, compile
-it with **that** toolchain, and time the two artifacts interleaved on
-this host, best of seven, each side's own do-nothing floor subtracted.
-Both printed the same line before anything was timed.  Two independent
-runs:
+**Packed storage — a `list(byte)` at one byte an element, a
+`list(long)` at eight, where every element was once a 24-byte boxed
+slot — is worth about 22% of this program's compute and 5.7x of its
+memory** (measured by hand against the commit before `list(T)` gave up
+the boxed cell, since the benchmark does not exist at that ref for
+`bench/compare.sh` to build).  Peak RSS falls from 113 MB to 20 MB.
 
-| lists     | base `c4d172f` | head    | compute delta |
-|-----------|----------------|---------|---------------|
-| run 1     |       227.4 ms | 176.5 ms |       -22.4% |
-| run 2     |       226.9 ms | 175.4 ms |       -22.7% |
-| peak RSS  |       113.3 MB |  19.9 MB |        -82.5% |
-
-Read that against the noise floor established above: `arrays32`, a row
-packed storage cannot touch, spread four points across four runs on
-this machine.  22% twice, in the same direction, is not that.  The
-`strings` row's +0.7% to +5.4% is still unresolved and still does not
-matter; **this** is the row the work was for, and it answered.
-
-**What that row did not say is that a `list` was fast.**  It was
-29.10x its C twin, the worst number in the table by a factor of three,
-and the reason was structural rather than storage: `index_get`,
-`index_set` and `append_value` were each an out-of-line `luce_rt_*`
-call over boxed `Value`s.  Packed storage made each cell one byte
-instead of twenty-four; it did not remove the call.
+Packed storage alone did not make a `list` fast, though: element
+access was still an out-of-line `luce_rt_*` call over boxed `Value`s
+for `index_get`, `index_set` and `append_value`.  Making each cell one
+byte did not remove the call.
 
 ### What removing the call bought
 
-**2.60x, from 29.10x** — the interleaved A/B above, twice, at -92%.
-The three changes are read in "Inline access": a `list(T)`'s storage
+**2.53x compute, where element access through boxed `Value` calls was
+29.10x.** The three changes are read in "Inline access": a `list(T)`'s storage
 kind became a fact of `T` rather than of whoever built the object,
 element access joined the inline path under the invalidation rule the
 tree already enforced, and `append` became a store and a count bump
@@ -1630,8 +1513,8 @@ made here.
 
 The interpreter's dispatch loop does not go anywhere.  It is the
 differential oracle the specs run every program against, it ships in
-nothing, and its cost is the ~0.3 s of interpreted arms inside a
-four-minute suite (docs/ENGINE.md Hat 1).
+nothing, and its interpreted arms are a fraction of a second across the
+whole suite (docs/ENGINE.md).
 
 One smaller thing this path leaves open on purpose:
 

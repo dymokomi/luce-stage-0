@@ -173,7 +173,7 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
                 try self.fail(
                     "luce.sema.type",
                     written.arguments[1].span,
-                    "a map value is written bare: get already answers {s}, and a second '?' would be a V?? [BINDING.md D7]",
+                    "a map value is written bare: get already answers {s}, and a second '?' would be a V??",
                     .{try self.typeName(value)},
                 );
                 return null;
@@ -359,7 +359,7 @@ pub fn refuseFunctionPart(
     try self.fail(
         "luce.sema.type",
         span,
-        "a {s} starts before anything fills it and a function value has no zero: write ({s})? [BINDING.md D7]",
+        "a {s} starts before anything fills it and a function value has no zero: write ({s})?",
         .{ role, try self.typeName(part) },
     );
     return true;

@@ -447,7 +447,7 @@ fn lowerValueCall(
                 try self.fail(
                     "luce.sema.call",
                     span,
-                    "{s} is {s} and may hold none; test it first (if {s} != none:) or supply a fallback ({s} else …) [BINDING.md D7]",
+                    "{s} is {s} and may hold none; test it first (if {s} != none:) or supply a fallback ({s} else …)",
                     .{ written, try self.analyzer.typeName(callee_type), written, written },
                 );
                 return null;
@@ -656,7 +656,7 @@ fn failAbsentCallee(
         "luce.sema.call",
         span,
         "{s} is {s} and may hold none; only a local or a parameter narrows, so bind it first " ++
-            "(let {s} = {s}), test it (if {s} != none:), then call {s}(…) [BINDING.md D7]",
+            "(let {s} = {s}), test it (if {s} != none:), then call {s}(…)",
         .{ written, try self.analyzer.typeName(held), bound, written, bound, bound },
     );
 }
@@ -715,7 +715,7 @@ pub fn lowerSpawn(self: *FunctionBuilder, worker: ast.Spawn, as_statement: bool)
                     "luce.sema.self",
                     method.span,
                     "a method's receiver is a place in this frame and a worker cannot reach it; " ++
-                        "move the work into a function and spawn that [THREADS.md D2]",
+                        "move the work into a function and spawn that",
                     .{},
                 );
                 return null;
@@ -802,7 +802,7 @@ fn lowerUserCall(
             try self.fail(
                 "luce.sema.call",
                 span,
-                "{s} answers {d} values, and a task carries one; wrap them in a struct [THREADS.md D3]",
+                "{s} answers {d} values, and a task carries one; wrap them in a struct",
                 .{ name, info.results.len },
             );
             return null;
@@ -825,7 +825,7 @@ fn lowerUserCall(
             try self.fail(
                 "luce.sema.own",
                 span,
-                "{s} answers {s}, which carries a function value, and a function value borrows the receiver it may carry; a borrow cannot cross back through wait, and a function type cannot say whether this one carries anything [THREADS.md D4, BINDING.md D4]",
+                "{s} answers {s}, which carries a function value, and a function value borrows the receiver it may carry; a borrow cannot cross back through wait, and a function type cannot say whether this one carries anything",
                 .{ name, try self.analyzer.typeName(info.return_type) },
             );
             return null;
@@ -839,7 +839,7 @@ fn lowerUserCall(
                 try self.fail(
                     "luce.sema.own",
                     span,
-                    "parameter {s} of {s} is {s}, which carries a function value, and a function value borrows the receiver it may carry; a borrow cannot cross a worker boundary, and a function type cannot say whether this one carries anything — name the function the worker should call instead [THREADS.md D2, BINDING.md D4]",
+                    "parameter {s} of {s} is {s}, which carries a function value, and a function value borrows the receiver it may carry; a borrow cannot cross a worker boundary, and a function type cannot say whether this one carries anything — name the function the worker should call instead",
                     .{ parameter.name, name, try self.analyzer.typeName(held) },
                 );
                 return null;
@@ -1799,7 +1799,7 @@ fn failFieldIsNotAMethod(
         try self.fail(
             "luce.sema.call",
             method.span,
-            "{s} is a field holding {s}, not a method; call the value it holds: ({s})(…) [BINDING.md D7]",
+            "{s} is a field holding {s}, not a method; call the value it holds: ({s})(…)",
             .{ written, try self.analyzer.typeName(field_type), written },
         );
         return true;
@@ -2503,7 +2503,7 @@ fn objectMethod(
                         method.span,
                         "map.values() would answer list({s}), and a bare function type is not a list element — the storable " ++
                             "form is ({s})?, which a map value is deliberately not written as; walk m.keys() and read m.get(k) " ++
-                            "instead [BINDING.md D7]",
+                            "instead",
                         .{ try self.analyzer.typeName(pair.value), try self.analyzer.typeName(pair.value) },
                     );
                     return null;

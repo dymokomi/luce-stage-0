@@ -930,7 +930,7 @@ pub const FunctionBuilder = struct {
                     "luce.sema.call",
                     span,
                     "{s} writes its implicit self and is not a function value; " ++
-                        "move the operation into a top-level or static function that receives and returns the value [SELF.md D3, FUNCTIONS.md D1]",
+                        "move the operation into a top-level or static function that receives and returns the value",
                     .{written},
                 );
             } else {
@@ -939,7 +939,7 @@ pub const FunctionBuilder = struct {
                         "luce.sema.call",
                         span,
                         "{s} is a method, and a method reference would carry its receiver; " ++
-                            "write a lambda that takes the receiver — (x) -> x.{s}() [FUNCTIONS.md D1]",
+                            "write a lambda that takes the receiver — (x) -> x.{s}()",
                         .{ written, info.declaration.name },
                     );
                 } else {
@@ -947,7 +947,7 @@ pub const FunctionBuilder = struct {
                         "luce.sema.call",
                         span,
                         "{s} is a method, and a method reference would carry its receiver; " ++
-                            "write a lambda whose first parameter receives the value and whose remaining parameters forward the method arguments [FUNCTIONS.md D1]",
+                            "write a lambda whose first parameter receives the value and whose remaining parameters forward the method arguments",
                         .{written},
                     );
                 }
@@ -1142,7 +1142,7 @@ pub const FunctionBuilder = struct {
                 "luce.sema.call",
                 field.span,
                 "{s}.{s} writes its receiver, and a writing method is not a function value; " ++
-                    "bind a reading method, or call this one on the binding that owns it [BINDING.md D9]",
+                    "bind a reading method, or call this one on the binding that owns it",
                 .{ declared, field.name },
             );
             return .reported;
@@ -1155,7 +1155,7 @@ pub const FunctionBuilder = struct {
                 "luce.sema.fallible",
                 field.span,
                 "{s}.{s} can fail, and a function type carries no '!'; " ++
-                    "a fallible method is not a value yet [BINDING.md D8]",
+                    "a fallible method is not a value yet",
                 .{ declared, field.name },
             );
             return .reported;

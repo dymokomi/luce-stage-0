@@ -1061,7 +1061,7 @@ fn lowerLateDeclaration(
         try self.fail(
             "luce.sema.type",
             written.span,
-            "a function value has no zero: write {s} = the function it names, or var {s}: ({s})? for a slot that starts empty [BINDING.md D7]",
+            "a function value has no zero: write {s} = the function it names, or var {s}: ({s})? for a slot that starts empty",
             .{ name, name, try self.analyzer.typeName(declared) },
         );
         return refusals.forgetName(self, name);

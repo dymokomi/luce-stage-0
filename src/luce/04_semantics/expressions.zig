@@ -253,7 +253,7 @@ pub fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Typed {
             try self.fail(
                 "luce.sema.new",
                 new.span,
-                "a task is spawned, not made; write spawn f(…) [THREADS.md D3]",
+                "a task is spawned, not made; write spawn f(…)",
                 .{},
             );
             return null;
@@ -1127,7 +1127,7 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
             try self.fail(
                 "luce.sema.type",
                 binary.span,
-                "a function value has no order, and no equality either; compare string(f) if the name is what you meant [FUNCTIONS.md D3, BINDING.md D6]",
+                "a function value has no order, and no equality either; compare string(f) if the name is what you meant",
                 .{},
             );
             return null;

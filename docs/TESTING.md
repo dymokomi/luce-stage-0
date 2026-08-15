@@ -1,42 +1,184 @@
 # `luce test`: the test runner
 
-**Status: BUILT — 2026-08-11.**  The design below is as ratified; what
-shipped, and every departure from it, is in *As built* at the end.
-Direction set in
-conversation on 2026-08-10: tests are ordinary Luce in `tests/`
-subfolders, driven by `luce test`, asserting with the `assert` the
-language already has; the working directory is wherever the command
-was typed, like every other `luce` invocation.  A first draft was
-adversarially reviewed the same day; its central mechanism (worker
-runtimes for per-test isolation) was found structurally unable to
-keep its own promise — a worker's trap is final at the join
-(THREADS.md D6/T7), so the first failing test would have killed the
-run — and the review's replacement is adopted throughout: **the CLI
-drives, the artifact answers one test per call.**  It uses strictly
-less machinery than the draft did.
+`luce test` runs the project's tests. A test is a named block of
+ordinary Luce code — no framework, no assertion library — discovered by
+the tool, passing by finishing and failing by trapping. The precedent
+is Zig's, and Luce already has every semantic piece it needs: `assert`
+traps `assertion_failed` with `file:line:column` and a call trace in
+debug builds, a compiled artifact reports a trap through the host's
+`trap` channel, and the runtime answers a leak census. What `luce test`
+adds is only discovery, a synthesized entry, and a report.
 
-The precedent is Zig's: a test is a named block of ordinary code, no
-framework, discovered by the tool, passing by finishing and failing
-by trapping.  Luce already has every semantic piece — `assert` traps
-`assertion_failed` with `file:line:column` and a call trace in debug
-builds, a compiled artifact reports a trap through the host's `trap`
-channel, and `luce_rt_leaked` answers the census.  What is missing is
-discovery, a synthesized entry, and a report — and no new semantic.
+## A test is `func test_*()` in an ordinary `.luc` file
 
-## Engineering lanes for the compiler
+A test is a **top-level, public, zero-parameter `func test_*()`** whose
+return shape is nothing or `!`:
 
-The repository's tests have a second layer below `luce test`.  Ownership is by
-the claim a test makes, not by incidental dependencies in its fixture: a
-binding test may call `std.lists.sort_by` to exercise a callback and still be a
-language test; a test of `sort_by`'s ordering and stability is a standard-
-library test.  That distinction keeps the core language, standard library,
-host, products, and tools independently diagnosable.
+```text
+import geo
+
+func test_area_of_unit_square():
+    assert(geo.area(1.0, 1.0) == 1.0)
+
+func test_open_refuses_missing_file() -> !:
+    ...
+```
+
+- **Discovery is by name.** Every top-level, public, zero-parameter
+  `func test_*()` in the file is a test.
+- **A malformed `test_*` is refused by name, never silently skipped.**
+  A `test_*` that takes parameters, sits inside a `struct`/`enum`/
+  `union`, or answers a value other than nothing or `!` is refused, and
+  so — above all — is a **`private`** `test_*`, which would otherwise be
+  a test that never ran. Each refusal names its `path:line:column` and
+  the fix (for a private one: drop `private`, or rename the helper). A
+  test that cannot run is a mistake, not an absence.
+- **A test file is otherwise an ordinary module.** It imports the code
+  under test the ordinary way, obeys the host gate, and may define
+  helpers — a helper is any function not named `test_*`.
+- **A `main` is neither required nor run.** A test file may declare one;
+  `luce test` treats it as an ordinary function and, since nothing calls
+  it, drops it before the artifact is written.
+
+## Invocation: paths in, one report out
+
+```text
+luce test                        # ./tests, the convention
+luce test tests/geo_test.luc     # explicit files
+luce test tests/geo tests/io     # directories, recursively
+```
+
+- Bare `luce test` means the `tests/` directory under the current
+  working directory — the cwd is wherever the command was typed, exactly
+  as `luce build FILE` resolves. No `tests/` and no arguments is a plain
+  failure naming what it looked for, never a green "0 tests".
+- Named files are taken as written; directories are walked recursively
+  for `*.luc`, **sorted bytewise at every level**, so the report order
+  is a property of the tree rather than of the filesystem. Entries
+  beginning with a dot are left alone, so a `.luce/cache` of artifacts
+  is never mistaken for a suite.
+- A **named** file with zero discovered tests is refused; so is a swept
+  file matching `*_test.luc` with zero tests — a file that claims the
+  name and delivers none is a mistake. Any other swept file without
+  tests is a helper module, skipped, and counted in the summary
+  ("2 files without tests") so a wrongly-silent file is one glance away.
+- `luce test` takes **no build options and always builds debug**,
+  because the report leans on trap origins and `--release` would strip
+  them. An unknown option is refused the way `luce build` refuses a
+  repeated `-o`.
+
+## Execution: the CLI drives, one runtime per test
+
+Discovery is the runner's job, not the compiler's. `luce test` reads
+each file's AST, decides which functions are tests, and hands the names
+to the compiler as the entry to synthesize. The zero-test rules above
+are answered *before* anything is compiled — otherwise a helper module
+would be compiled only to discover that it is a helper, and a syntax
+error in one would fail a run it is not part of. What keeps "what is a
+test" from living in two places is that the compiler validates the names
+by *calling* them: a name that does not exist, or is private, or takes a
+parameter, refuses itself through ordinary name resolution.
+
+- **Anchoring.** A test file compiles with imports anchored at the
+  project root (`luce.yaml` discovery, `docs/PACKAGES.md`), so
+  `tests/geo_test.luc` importing `geo` reaches the project's `geo`, not
+  a phantom `tests/geo.luc`. Without a `luce.yaml`, imports resolve
+  beside the test file, and that limitation is reported when an import
+  actually fails.
+- **The entry is synthesized.** Each test file compiles once with a
+  compiler-written `func main(args: list(string)) -> !` — the fourth of
+  the four entry shapes, built as real AST and checked, lowered,
+  verified, optimized and emitted like any other function, so no source
+  may declare it. The entry reads the test name from `args` and runs
+  exactly that test **by direct call** — a static dispatch, one `if
+  args[0] == "test_x": test_x(); return` per test, each carrying the
+  span of the test's own declaration so a trap reports the entry frame
+  at the line the test is written on. The entry also checks the command
+  line it was handed, so a person who runs the artifact by hand with no
+  name, or a name that matches nothing, gets a clear message rather than
+  an index trap.
+- **One call per test.** The CLI calls the artifact once per test: one
+  `dlopen` per file, one `luce_main` per test, and each call a fresh
+  `Runtime` — so per-test heap, scopes, depth budget, leak census and
+  trap report all fall out of machinery that already exists. A trap
+  fails *that call*; the loop is in `luce test`, so every failure in the
+  file is still reported. Luce has no undefined behaviour to escape a
+  runtime, and call depth is policy rather than a native-stack limit, so
+  process-per-test would buy nothing.
+- **The host is the real host** (`src/apps/host.zig`), given to the
+  `luce` binary for this command the way loom wields it — including the
+  screen-restore-before-report duty, so a full-screen test that traps
+  does not leave the terminal raw, and the worker slots, so a test may
+  itself `spawn`.
+- **The artifact is a scratch file.** It is written beside the source
+  under a name distinct per writer (`NAME.luc.<pid>-<tid>.test.lc`),
+  claimed exclusively before it is built, and removed when the file's
+  tests are done. It is never `NAME.lc` — that is the name `luce build`
+  writes, and a test runner must not be able to delete a built artifact
+  — and never the project's `.luce/cache/`, which is loom's warm-run
+  path. `luce test` leaves a directory exactly as it found it.
+- Tests run in declaration order within a file, files in sorted order.
+
+## The report, and what fails a test
+
+The whole report goes to standard output — trap renderings and compile
+diagnostics included — because it is one document a person reads top to
+bottom. A test's own `print` lands on the same stream, in order,
+bracketed by the per-call loop; its `print_error` is its own and still
+goes to standard error. Output is the shell palette's when writing to a
+terminal, plain otherwise.
+
+Per file, per test: the name, `ok` or `FAIL`, and on failure the
+rendering indented under the name. A test fails by:
+
+- **trap** — rendered as every trap is: code, message,
+  `file:line:column`, and call trace;
+- **raise** — a `-> !` test's error, rendered with its message and
+  origin;
+- **leak** — a nonzero per-run census, because a leaking test is a
+  failing program even when its asserts held (this is a guard against an
+  engine bug: ARC frees everything, so no Luce source can reach it);
+- **`exit`** — a test that calls `exit` fails whatever status it chose,
+  because a test's job is to return and an early exit is the one way
+  generated code could skip the census.
+
+A file that fails to *compile*, or a discovery refusal, is reported and
+makes the run red, and the remaining files still run. One summary line —
+`7 passed, 1 failed, 8 tests in 3 files` — closes it, and the exit
+status is 0 when everything passed and 1 for anything else, so a build
+script needs no parsing.
+
+## Deliberately absent
+
+- **No assertion library** — `assert(x == y)` with the language's own
+  diagnostics. If bare messages prove thin, the fix is the compiler
+  rendering the failing comparison's operands, not a matcher DSL.
+- **No setup/teardown, no fixtures** — a helper called first thing is a
+  fixture, and ARC already guarantees cleanup.
+- **No filtering, tags, or skips** — run a file.
+- **No mocking** — the host table is the seam; a scripted host is the
+  honest version and waits for a customer.
+
+Parallel test *files* and a per-call scripted host are the two
+extensions this architecture was chosen to allow; neither is built yet.
+
+---
+
+## The repository's own release gate
+
+The tests that prove Luce itself have a second layer below `luce test`.
+Ownership is by the claim a test makes, not by incidental dependencies
+in its fixture: a test that calls `std.lists.sort_by` to exercise a
+callback is still a language test, while a test of `sort_by`'s ordering
+and stability is a standard-library test. That distinction keeps the
+core language, standard library, host, products, and tools
+independently diagnosable.
 
 ```text
 zig build test
 ```
 
-This is the one deterministic release gate.  It runs these owner lanes:
+is the one deterministic release gate. It runs these owner lanes:
 
 | lane | owns |
 |---|---|
@@ -49,10 +191,11 @@ This is the one deterministic release gate.  It runs these owner lanes:
 | `test-benchmarks` | Every benchmark compiled, but never timed as part of correctness testing. |
 | `test-tools` | Documentation and site guards, grammar generation, test-suite ownership, and the VS Code extension's JavaScript tests. |
 
-`test-specs` is one fused binary on purpose.  Splitting it physically would
-compile and load the LLVM-backed harness repeatedly and would let several
-memory-heavy copies compete.  Its tests still have exactly one logical owner,
-enforced by `tools/test_suites.zig` and its directory audit:
+`test-specs` is one fused binary on purpose: splitting it physically
+would compile and load the LLVM-backed harness repeatedly and let
+several memory-heavy copies compete. Its tests still have exactly one
+logical owner, enforced by `tools/test_suites.zig` and its directory
+audit:
 
 | focused lane | specification owner |
 |---|---|
@@ -64,266 +207,56 @@ enforced by `tools/test_suites.zig` and its directory audit:
 | `test-examples` | The adventure's scripted differential behavior plus every bundled example build. |
 | `test-spec-harness` | The comparison harness and scripted host used by all specification owners. |
 
-The focused specification lanes are developer feedback commands; the release
-gate uses the fused run, so no specification is executed twice.  A new
-`src/luce/specs/*_spec.zig` file without exactly one suite fails
-`test-tools`, and the full runner also refuses an unclassified or overlapping
-test name before executing the corpus.
+The focused specification lanes are developer-feedback commands; the
+release gate uses the fused run, so no specification is executed twice.
+A new `src/luce/specs/*_spec.zig` file without exactly one suite fails
+`test-tools`, and the full runner refuses an unclassified or overlapping
+test name before executing the corpus. The fused roster is ordered by
+those same owners — language, standard library, host, backend, editor,
+then examples — so its progress reads as a sequence of phases. Harness
+guards bracket the run because every phase imports the shared
+comparator, and the two memory-heavy release-gate binaries are
+serialized to keep their memory use predictable.
 
-The fused roster is ordered by those same owners—language, standard library,
-host, backend, editor, then examples—so its progress is a sequence of phases,
-not merely a set of labels over an interleaved legacy import order.  Harness
-guards bracket the run because every phase imports the shared comparator.
-Test-only comptime rosters register imported modules without adding anonymous,
-zero-work rows to every focused lane, so a focused count is its owner count.
+### Where a test belongs
 
-The internal corpus, fused specification, and focused specification lanes
-inherit their output.  They report bounded completion progress and, while one
-test is long-running, a 15-second heartbeat with the exact test name.  The two
-memory-heavy release-gate binaries are also serialized, keeping their memory
-use predictable.  Smaller targets retain Zig's normal concise reporting.
-
-### Placement audit
-
-The 2026-08-13 whole-tree audit applied these boundaries:
-
-- A test of observable Luce behavior belongs in `src/luce/specs/` and runs on
-  both engines.  Compiler refusals live there too; a rejected program has no
-  engine run to compare.
+- A test of observable Luce behavior belongs in `src/luce/specs/` and
+  runs on both engines. Compiler refusals live there too; a rejected
+  program has no engine run to compare.
 - Standard-library behavior lives in `std_spec.zig`, `json_spec.zig`, or
-  `zip_spec.zig`.  The `std.lists.sort_by` ordering, stability, object, and
-  resource cases and the `std.files`, `std.paths`, `std.os`, and `std.term`
-  wrapper cases were consolidated there, and the older duplicate string-
-  method rows were removed from the core behavior file.  Language tests that
-  merely use a std function to construct the feature under test remain with
-  that feature.
-- The editor has three deliberate layers: scripted behavior on both engines,
-  pure model/keymap tests through `luce test`, and a standalone executable
-  build.  None is part of the core-language lane.
-- Product, package, example, benchmark, site, documentation, grammar, and
-  extension tests have their own lanes.  They remain in the release gate but
-  cannot inflate or obscure the core-language result.
+  `zip_spec.zig`. A language test that merely *uses* a std function to
+  construct the feature under test stays with that feature.
+- The editor has three deliberate layers: scripted behavior on both
+  engines, pure model/keymap tests through `luce test`, and a standalone
+  executable build. None is part of the core-language lane.
+- Product, package, example, benchmark, site, documentation, grammar,
+  and extension tests have their own lanes. They remain in the release
+  gate but cannot inflate or obscure the core-language result.
 - A beside-the-code test may drive a program only to inspect an internal
-  structure the program cannot observe—for example the interpreter's reusable
-  frame storage.  Damaged serialized MIR is likewise a decoder/verifier input,
-  not a Luce program.  The LLVM end-to-end tests stay beside the backend but
-  are imported only by the executable-specification module.  These are narrow,
+  structure the program cannot observe — the interpreter's reusable
+  frame storage, for example. Damaged serialized MIR is likewise a
+  decoder/verifier input, not a Luce program. These are narrow,
   documented structural seams, not alternate semantic suites.
 
-Compiler-stage property targets are named `fuzz:` so the build can run them as
-a coherent hardening lane:
+### Hardening and fuzzing
+
+Compiler-stage property targets are named `fuzz:` so the build can run
+them as a coherent hardening lane:
 
 ```text
 zig build test-hardening
 ```
 
-This focused lane runs the property corpus and the fixed-seed near-miss
-parser stress test.  It is the quick feedback loop for changes at the source,
-front-end, verifier, or module boundaries.
+runs the property corpus and the fixed-seed near-miss parser stress
+test — the quick feedback loop for changes at the source, front-end,
+verifier, or module boundaries.
 
 ```text
 zig build test-fuzz --fuzz=10000
 ```
 
-Zig's coverage-guided test fuzzer explores the same `fuzz:` targets from
-their checked-in seeds.  A generated failure is a reproducible input to
-minimize, promote into the corpus, and pin with a normal regression test;
-the corpus is not a substitute for semantic examples or differential specs.
-
-## D1. A test is `func test_*()` in an ordinary `.luc` file
-
-```text
-import geo
-
-func test_area_of_unit_square():
-    assert(geo.area(1.0, 1.0) == 1.0)
-
-func test_open_refuses_missing_file() -> !:
-    ...
-```
-
-- **Discovery is by name**: every top-level, public, zero-parameter
-  `func test_*():` in the file is a test.  Refused by name, never
-  skipped: a `test_*` with parameters, inside a struct or enum, with
-  a return shape other than nothing or `!` — and a **`private`**
-  `test_*`, which would otherwise be a silently-never-run test (the
-  diagnostic names the fix: drop `private`, or rename the helper).
-  A test that cannot run is a mistake, not an absence.
-- **A test file is otherwise an ordinary module**: it imports the
-  code under test the ordinary way, obeys the host gate, and may
-  define helpers — a helper is any function not named `test_*`.
-- **No `main` required or run.**  A test file may have one; `luce
-  test` ignores it.
-
-## D2. Invocation: paths in, one report out
-
-```sh
-luce test                  # ./tests, the convention
-luce test tests/geo_test.luc     # explicit files
-luce test tests/geo tests/io     # directories, recursively
-```
-
-- Bare `luce test` means the `tests/` directory under the current
-  working directory — **the cwd is where the user typed the
-  command** — and explicit paths resolve against it, exactly like
-  `luce build FILE`.  Directory walks are sorted bytewise, so the
-  report order is a property of the tree, not the filesystem.
-- No `tests/` and no arguments is a plain failure naming what it
-  looked for, not a green "0 tests".  A *named* file with zero
-  discovered tests is refused; so is a swept file matching
-  `*_test.luc` with zero tests — a file that claims the name and
-  delivers no tests is a mistake.  Any other swept file without
-  tests is a helper module, skipped, and the summary counts them
-  ("2 files without tests") so a wrongly-silent file is one glance
-  away.
-- **`luce test` takes no build options and always builds debug**:
-  the report leans on trap origins, and `--release` would strip
-  them.  Unknown options are refused the way `luce build` refuses a
-  repeated `-o`.
-
-## D3. Execution: the CLI drives, one runtime per test
-
-- **Anchoring**: a test file compiles with imports anchored at the
-  project root (`luce.yaml` discovery, PACKAGES.md D1), so
-  `tests/geo_test.luc` importing `geo` reaches the project's `geo`,
-  not a phantom `tests/geo.luc`.  Rootless (no `luce.yaml`): the test
-  file's own directory, today's rule, and the limitation is reported
-  when an import fails ("tests without a luce.yaml resolve imports
-  beside the test file").  **This makes `luce test` depend on
-  PACKAGES.md step 1**, and the two memos name each other here on
-  purpose.
-- **The entry is synthesized in a blessed shape.**  Each test file
-  compiles once, with a compiler-synthesized
-  `func main(args: list(string)) -> !` — the fourth of the four
-  entry shapes, the way lambdas are already compiler-synthesized
-  functions, so the entry gate stays literally true and gains one
-  sentence: no source may declare it.  The entry reads the test
-  name from `args` (the command-line channel, unchanged) and runs
-  exactly that test **by direct call** — a static dispatch like the
-  worker table, never a runtime list of function values, which the
-  type system could not even hold (`func()` and `func() -> !` are
-  distinct value types).
-- **The CLI calls the artifact once per test**: one `dlopen` per
-  file, one `luce_main` call per test, each call a fresh `Runtime` —
-  per-test heap, scopes, depth budget, leak census and trap report
-  all fall out of machinery that exists.  A trap fails *that call*;
-  the loop is in `luce test`, so every failure in the file is
-  reported.  Luce has no undefined behaviour to escape a runtime,
-  and call depth is policy, so process-per-test buys nothing; this
-  is one load per file, stated plainly.
-- **The host is the real host** (`src/apps/host.zig`), given to the
-  `luce` binary for this command the way loom already wields it —
-  including the screen-restore-before-trap-report duty, so a
-  full-screen test that traps does not leave the terminal raw, and
-  the worker slots, so a test may itself `spawn`.
-- Tests run in declaration order within a file, files in sorted
-  order; no parallelism in v1.  Parallel *files* later keep this
-  surface (per-file output buffered, then flushed in order); a
-  scripted-host mode later gets a fresh host per call for free —
-  both are reasons for this architecture, not accidents of it.
-
-## D4. The report, and what fails a test
-
-Per file, per test: name, pass/fail, and on failure the rendering
-indented under the name.  A test fails by:
-
-- **trap** — rendered as every trap is: code, message,
-  `file:line:column`, call trace;
-- **raise** — a `-> !` test's error, rendered with its message;
-- **leak** — a nonzero per-run census fails the test ("leaked 3
-  objects"), because a leaking test is a failing program even when
-  its asserts held;
-- **`exit`** — a test that calls `exit` fails by name, whatever
-  status it chose: a test's job is to return, and an early exit is
-  the one way generated code could skip the census.
-
-A file that fails to *compile*, or a discovery refusal, is reported
-and makes the run red, and the remaining files still run.  One
-summary line — `7 passed, 1 failed, 8 tests in 3 files` — and the
-exit status is 0 green, 1 anything else, so a build script needs no
-parsing.  Output is the shell palette's when a tty, plain otherwise.
-Test stdout is the test's own and passes through, naturally
-bracketed by the per-call loop.
-
-## Deliberately absent
-
-- **No assertion library** — `assert(x == y)` with the language's
-  own diagnostics.  If bare messages prove thin, the fix is the
-  compiler rendering the failing comparison's operands (it has the
-  spans), not a matcher DSL.
-- **No setup/teardown, no fixtures** — a helper called first thing
-  is a fixture; ARC already guarantees cleanup.
-- **No filtering, tags, or skips in v1** — run a file.  (The
-  zero-discovered refusal applies to *discovery*, so a later filter
-  flag can answer "no match" in its own gentler words.)
-- **No mocking** — the host table is the seam; a scripted host is
-  the honest version and waits for a customer.
-
-## Implementation order
-
-1. Discovery + refusals (`apps/luce`): walk, collect `test_*`
-   through the front end, refuse the malformed by name.
-2. The synthesized `main(args) -> !` entry (compiler), proven to
-   round-trip the ordinary pipeline by a spec.
-3. The per-call driver loop + host wiring + report + exit status;
-   `product.zig` drives a real `tests/` tree end to end, including
-   a trapping, a raising, a leaking, and an exiting test.
-4. Site: a `luce test` page under the toolchain guide.
-
-Step 1 of PACKAGES.md (project-root anchoring) precedes step 3's
-import story for `tests/` directories; it has landed, and `luce test`
-anchors on the `luce.yaml` it finds.  A rootless test file whose
-compile fails is told the limitation rather than left to guess at it.
-
----
-
-## As built (2026-08-11)
-
-Built in one vertical, in the order the memo gives.  D1–D4 shipped as
-written; the memo left seven things the code had to decide, and each is
-here with its forcing reason and where it is proved.
-
-| | decision, and where it is proved |
-|---|---|
-| **A1** | **Discovery is the runner's, and the compiler is told the answer.**  D1's rules are a *policy about which functions this tool will call*, not a language rule, so `src/apps/luce/discover.zig` decides them over the parsed AST and hands the names down as `luce.types.Entry.tests`.  The forcing reason is D2: the zero-test rules — a named file refused, a `*_test.luc` refused, any other swept file a helper — have to be answered **before** anything is compiled, or a helper module would be compiled to discover that it is a helper and a syntax error in one would fail a run it is not part of.  What keeps this from being knowledge in two places is that the compiler validates the names by *calling* them: a name that does not exist, or is private, or takes a parameter, refuses itself through ordinary name resolution rather than through a second copy of D1. |
-| **A2** | **The entry is real AST, not hand-built IR.**  `04_semantics/entry.zig` writes `func main(args: list(string)) -> !` as `ast` nodes in the analyzer's arena and appends the settled signature to the ordinary function table, so the body is checked by `builder.zig`, lowered by `05_hir`, verified, optimized and emitted like any other function.  Hand-building MIR would have meant re-deriving `try`'s error propagation and the ownership of `args` in a second place; this way "round-trips the ordinary pipeline" is not a claim to test but the only path there is.  `specs/testing_spec.zig` runs it on both engines. |
-| **A3** | **The dispatch is flat, and every call is spanned at its test's own declaration.**  `if args[0] == "test_x": test_x(); return`, one statement per test, rather than an `elif` chain — a hundred tests would otherwise be a hundred levels of nesting for every later walk to descend.  Each conditional carries the span of the test's `name_span`, so a trap inside a test reports the entry frame at the line the test is written on (`at main (tests/geo_test.luc:10:6)`) rather than at a position nobody wrote. |
-| **A4** | **The entry checks the command line it was handed.**  `if len(args) != 1: error(...)` opens the body, and an unmatched name ends it with `error("luce test: no test named " + args[0])`.  Neither can happen when the runner is the caller; both are what the artifact says to a person who ran it by hand, and without the first that person meets `index_bounds` on the next line and reads a trap about the runner's contract as though it were the program's bug. |
-| **A5** | **A source `main` is not the entry, and is not merely ignored.**  `is_entry` is computed as `options.entry == .declared and …`, so under `luce test` a declared `main` is an ordinary function: it is not refused, its shape is not checked against the four, and — since nothing calls it — stage 7 drops it before the artifact is written.  `Analyzer.entry_function` is the one field that says which row the runtime starts, filled by whichever of the two rules applied; `checkEntry` moved out of `signatures.zig` into `entry.zig` beside its sibling, so the entry is decided in one file. |
-| **A6** | **The whole report goes to standard output, trap renderings included.**  It is one document a person reads top to bottom, and a failing test's trap is part of the report rather than a side channel; splitting it across two streams would make the interleaving of a test's own `print` with its verdict unpredictable.  A test's `print_error` is still its own and still goes to standard error.  `report.printTrap`, `printError` and `printLeaks` gained a leading `indent` — one rendering, positioned by whoever is reporting — and loom and `apps/start.zig` pass `""`. |
-| **A7** | **The artifact is written beside the source and removed.**  `tests/geo_test.luc.<pid>-<tid>.test.lc`, deleted when the file's tests are done.  Not `NAME.lc`: that is the name `luce build` writes, and a test runner must not be able to delete a built artifact.  Not the project's `.luce/cache/` either — that is loom's warm-run path, keyed on content for a program that will be run again, and a test artifact is used once by the process that built it.  The name is also **claimed** before it is built (`apps/native.zig`'s `Scratch`): created exclusively, so a file already wearing it stops the run instead of being emptied and then deleted.  `luce test` therefore leaves a directory exactly as it found it. |
-
-Three smaller calls.  `luce.zon` in D3 is `luce.yaml` throughout: that
-is what PACKAGES.md D1 shipped as, and the memo was written before it
-landed.  `apps/loom/palette.zig` moved up to `apps/palette.zig` with
-two styles added (`pass`, `fail`), because whether a stream is a
-terminal is one decision and it is not loom's.  And a leaking test is
-reported with `report.printLeaks`'s words — "N objects escaped
-ownership — please report this" — rather than D4's illustrative
-"leaked 3 objects": it is the same fact said once, by the file that
-already says it for loom and for a standalone binary, and it asks for
-the thing a reader should actually do about an engine bug.
-
-D3's rootless note is conditional, which the memo's "reported when an
-import fails" asks for and a naive reading would not have given: it is
-printed only when the failure actually named an import.  That is why
-`front.compilePath` answers an `Outcome` rather than an optional —
-`refused.import_failed` travels as the fact it is, because reading it
-back out of the rendered diagnostics would be parsing our own output,
-which is the shape this whole design refuses.
-
-**What a leaking test is, and why nothing in the corpus is one.**  D4's
-leak arm is real and is checked on every call, but ARC
-frees everything (docs/MEMORY.md), so no Luce source can reach it: it
-is a guard against an engine bug, not against a program.  It is proved
-where a guard nothing can reach has to be — `suite.verdictOf` is a pure
-function from `abi.Status` plus the census plus the exit status to a
-verdict, and its unit test reads all six arms including the three
-(`leaked`, `exhausted`, `unknown`) that no program can produce.  The
-product suite drives the four that a program can: passing, trapping,
-raising, and exiting.
-
-**Not built, and still deliberately absent**: everything under
-*Deliberately absent* above, unchanged.  Parallel files and a scripted
-host remain the two extensions this architecture was chosen to allow,
-and neither has a customer yet.
+lets Zig's coverage-guided fuzzer explore the same `fuzz:` targets from
+their checked-in seeds. A generated failure is a reproducible input to
+minimize, promote into the corpus, and pin with a normal regression
+test; the corpus is not a substitute for semantic examples or
+differential specs.

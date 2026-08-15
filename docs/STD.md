@@ -18,7 +18,7 @@ records where the module came from (Rust's `use std::fs;` then
 `fs::read`).  A program that writes both `import std.math` and
 `import math` therefore has two modules under one binding and is
 refused (`luce.import.collision`); the remedy is aliasing the sibling
-(`import math as m2`, docs/PACKAGES.md D2) — a standard module keeps
+(`import math as m2`, docs/PACKAGES.md) — a standard module keeps
 its own name, so `import std.math as m` is refused at parse time.
 `import std.nope` lists the modules that do exist
 (`luce.import.standard`), and `import std` is refused because the
@@ -263,7 +263,7 @@ time, and a carried message adds nothing the name did not.  The
 validator behind it is `libluce_rt`'s — the same one `files.read` uses
 — so there is one answer to what "not text" means.
 
-### Characters (docs/TERMUI.md D11)
+### Characters
 
 Everything else in this module counts **bytes**, because the
 primitives do.  These four count **characters**, because a person
@@ -316,7 +316,7 @@ There is no exception, `exists` included — see below.  Asking is still
 never a guard for the call after it: read the file and handle what the
 read says.
 
-**There is no `close` and no `with`** (docs/FILESYSTEM.md D9).  A
+**There is no `close` and no `with`** (docs/FILESYSTEM.md).  A
 `file` is a reference-counted resource, so it closes automatically
 when its last reference goes away (docs/MEMORY.md).  Python's `with`
 is a per-call-site opt-in to a guarantee this language gives
@@ -700,7 +700,7 @@ width the arithmetic happens at.  The buffers are a quarter of what
 they were and not a line of the algorithms changed.
 
 One thing the narrower element made explicit rather than changed: a
-`byte` widens to `int` in an operator (docs/TYPES.md D5), so a 32-bit
+`byte` widens to `int` in an operator (docs/TYPES.md), so a 32-bit
 field's top byte would shift into a sign bit.  `read_u32` lifts its
 four bytes to `long` and says so; everything else fits.
 
@@ -741,10 +741,8 @@ nothing here touches the world: `parse` takes a string and answers a
 **A JSON value is a union, because that is what a JSON value is.**
 RFC 8259 says a value is one of six things and two of the six contain
 more values; `union Json` says the same sentence in Luce.  This module
-is the customer `docs/UNION.md` was argued from, and since 2026-08-12
-it is written on top of it — the `enum Kind` + `struct Node` +
-document-of-indices design it used to have existed only because
-unions did not.
+is the customer `docs/UNION.md` was argued from, and it is written on
+top of unions.
 
 **Written against RFC 8259**, and every rule in the source names the
 clause it implements — §2 the structural characters and the four

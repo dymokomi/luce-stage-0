@@ -1,78 +1,143 @@
 # Self, implied — and a call site that cannot lie
 
-A method's receiver is `self`, supplied implicitly; a `static func`
-declares a member function with no receiver. State that would otherwise
-be threaded through a mutable value parameter is expressed another way:
-multi-return into existing bindings (`pos, bits = read_bits(data, pos,
-5)`), a member function, a fresh construction, or a reference object
-whose contents mutate through its own methods.
+A method's receiver is `self`, supplied implicitly. A plain member
+function is a method with a receiver; a `static func` member has none.
+This is the reference for how the two are declared, how a method reads
+or writes its receiver, and the rule the call site keeps.
 
 ## The rule the call site keeps
 
-**`f(x)` never mutates a value.  `x.advance(8)` may — and reads like
-it.**  Mutation's whole grammar becomes *a method on a receiver you
-hold as `var`*, which is how containers already read (`xs.sort()`),
-so structs and containers stop having different mutation stories.
+**`f(x)` never mutates a value. `x.advance(8)` may — and reads like
+it.** Mutation's whole grammar is *a method on a receiver you hold*, the
+way containers already read (`xs.sort()`), so structs and containers
+share one mutation story. A free call cannot change a value under the
+caller's feet; a method call on a receiver can, and the syntax shows it.
 
-## Decisions
+## `self` is implied
 
-| | decision |
-|---|---|
-| **D1** | **`self` is implied.**  A struct's member function declares no `self` parameter; its body may name `self` (and `self.field`) directly.  The signature lists only the arguments a caller passes. |
-| **D2** | **`static` marks the member functions with no `self`** — the factories and namespace functions.  `static func start() -> Cursor` is called `Cursor.start()`, exactly the namespace-call shape already built; what changes is only how the two kinds are told apart (a keyword instead of a first parameter). |
-| **D3** | **Writing `self` requires the receiver to be a `var` place**, checked at the call site — `frozen.advance(8)` on a `let` binding is refused by the sentence `let` refusals already use.  Reading `self` needs nothing.  There is no per-method mutation marker: the receiver's own mutability is the whole permission, as it is for `xs.append`. |
-| **D4** | **`var self` is retired**, and with it the copy-in/copy-out write-back and the "receiver is result zero" convention.  A member function that writes `self` simply writes the receiver in place — one mutation story, no hidden travel in returns. |
-| **D5** | **`var` parameters do not enter the language.**  A value passed to a function is never mutated by it, with no exception to learn.  (The near-miss was value-only copy-in/copy-out; refused for the clarity cost the ratification names.) |
-| **D6** | The value/reference line is untouched: a reference argument is the same object the caller holds, and its contents mutate through the object's own methods — that is what a reference is.  What this memo removes is any way for a *value* to change under a caller's feet. |
-| **D7** | **Migration is mechanical and total**: every method in `std/`, `examples/` and every doc/site sample drops its `self` parameter; namespace functions gain `static`; `var self` methods (the rng, zip's writer) become plain writing methods.  The suite, the site build and the doc guards verify every one.  The old spellings are refused with sentences that teach the new (`self is implied; remove the parameter`, `a namespace function says static`). |
+A struct's, class's, or enum's member function declares no `self`
+parameter. Its body names `self` and `self.field` directly, and the
+written signature lists only the arguments a caller passes:
 
-## Where it lands
+```luce
+struct Counter:
+    value: long
 
-Parser: `static` before `func` inside structs (dissolved like
-visibility markers, or carried — the build decides and records);
-`self` leaves the parameter grammar.  Stage 4: method-vs-namespace
-resolution keys on `static`; receiver mutability checked where
-`self` is written.  MIR unchanged in shape (a method still lowers
-with the receiver as the hidden first operand — the *language* stops
-spelling it, the IR never did differently).  Both engines by
-construction.  Sequenced **after** threads → lambdas → polish, on a
-quiet tree, as the final surface change before the lock.
+    func read() -> long:
+        return self.value
 
-## As built — 2026-08-08
+    func bump():
+        self.value += 1
 
-The surface landed exactly as D1–D7: every plain struct or enum member
-has implied `self`, and `static func` is the member with none.  One
-detail was deliberately narrowed at implementation time: a writing
-method accepts a **bare mutable binding**, not every nested place.
-Reading methods still accept lets and temporaries.  A receiver may be
-replaced only through the bare mutable binding that names it; mutating
-a referenced object's contents through a field remains a reading method
-under D6.
+func main():
+    var counter = Counter(value = 4)
+    print(string(counter.read()))
+    counter.bump()
+    print(string(counter.read()))
+```
 
-The write effect is inferred to a fixed point.  A direct store to
-`self`, a store to one of its value fields, or a call to another writer
-on `self` makes a method a writer, even through forward declarations
-and several wrappers.  A call on a referenced field such as
-`self.items.append(value)` does not.  Writers may declare zero, one, or
-several ordinary results; the receiver is not one of them.
+`counter.read()` and `counter.bump()` are the call shape: the receiver
+in front of the dot, the passed arguments in the parentheses.
 
-The call surface stays honest in both directions.  A method is called
-only as `value.method(...)`: it cannot be called through its type, made
-into a function value, or spawned.  A static member is called through
-its type and may be both a value and a worker target.
+## `static func` — a member with no receiver
 
-The prediction that MIR would not change was the one part that did not
-survive implementation.  A writing call needs the caller's slot itself,
-not merely its current value, so MIR gained
-`call_inout` and an `inout` local zero.  The interpreter aliases that
-slot; LLVM passes an internal place descriptor and forwards it
-through nested writers.  Replacing a receiver that holds references
-rebinds them in place and creates no second reference.  This moved the
-serialized module to **format 32** and added no host service at that
-point.  (The host ABI has since moved on its own schedule — later
-slots such as `shell_run` and `term_event_data` carried it past this
-memo; `08_llvm/abi.zig`'s `version` is the one authoritative number.)
+`static func` declares a member function with no `self` — the factories
+and namespace helpers. It is called through the type, not through a
+value:
 
-That representation also fixes the failure rule: mutation is in place,
-so every write completed before an error remains visible while the
-error unwinds.  There is no returning-edge copy-out to roll it back.
+```luce
+struct Cursor:
+    pos: long
+
+    static func start() -> Cursor:
+        return Cursor(pos = 0)
+
+    func advance(by: long):
+        self.pos += by
+
+func main():
+    var c = Cursor.start()
+    c.advance(8)
+    print(string(c.pos))
+```
+
+`Cursor.start()` is a namespace call; `c.advance(8)` is a method call.
+The keyword is the only thing that tells the two kinds apart — where a
+first `self` parameter once would have.
+
+State that a mutable value parameter might otherwise have threaded
+through is expressed another way: multi-return into existing bindings,
+
+```luce
+func read_bits(data: long, pos: long, count: long) -> (long, long):
+    let value = data >> pos & ((1 << count) - 1)
+    return value, pos + count
+
+func main():
+    var pos: long = 3
+    var bits: long = 0
+    bits, pos = read_bits(255, pos, 5)
+    print(string(bits))
+    print(string(pos))
+```
+
+a member function, a fresh construction, or a reference object whose
+contents change through its own methods.
+
+## Reader methods and writer methods
+
+Whether a method **writes** its receiver is inferred from its body, to a
+fixed point. A method is a **writer** when it stores to `self`, stores to
+one of `self`'s value fields, or calls another writer on `self` — and the
+inference follows those calls through forward declarations and several
+wrappers. A method that only reads `self`, or that mutates the contents
+of a referenced field such as `self.items.append(value)`, is a
+**reader**. There is no per-method mutation marker: the receiver's own
+mutability is the whole permission, exactly as it is for `xs.append`.
+
+- A **reader** may be called on any binding — a `let`, a `var`, or a
+  temporary.
+- A **writer** requires the receiver to be a **bare mutable binding** — a
+  `var` that names the value directly. Calling a writer on a `let` is
+  refused with the sentence `let` refusals already use, and calling one
+  on a nested place is not accepted; a receiver is replaced only through
+  the bare `var` that names it.
+
+```luce
+struct Cursor:
+    pos: long
+
+    func advance(by: long):
+        self.pos += by
+
+func main():
+    let frozen = Cursor(pos = 0)
+    print(string(frozen.pos))     # reading a let is fine
+    var moving = Cursor(pos = 0)
+    moving.advance(8)             # a writer needs a var
+    print(string(moving.pos))
+```
+
+A writer may declare zero, one, or several ordinary results; the receiver
+is never one of them. Because mutation is in place, every write completed
+before an error remains visible while the error unwinds — there is no
+hidden copy-back to undo it.
+
+## The call surface stays honest in both directions
+
+A method is called only as `value.method(...)`. It cannot be called
+through its type, and a **writing** method cannot become a function value
+(see `docs/BINDING.md`). A `static func` is called through its type, may
+become a function value, and may be a `spawn` target.
+
+## Where it lands in the pipeline
+
+The parser accepts `static` before `func` inside a type and drops `self`
+from the parameter grammar. Stage 4 keys method-versus-namespace
+resolution on `static` and checks receiver mutability where `self` is
+written. In MIR a method still lowers with the receiver as a hidden first
+operand; a writing call needs the caller's slot itself rather than its
+current value, so a writer lowers through `call_inout` with an `inout`
+local zero. The interpreter aliases that slot and the LLVM backend
+forwards an internal place descriptor through nested writers, so both
+engines refuse and accept the same calls by construction.

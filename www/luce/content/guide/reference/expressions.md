@@ -290,7 +290,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:9:11: rows.render is (func(long) -> string)? and may hold none; only a local or a parameter narrows, so bind it first (let render = rows.render), test it (if render != none:), then call render(…) [BINDING.md D7] [luce.sema.call]
+main.luc:9:11: rows.render is (func(long) -> string)? and may hold none; only a local or a parameter narrows, so bind it first (let render = rows.render), test it (if render != none:), then call render(…) [luce.sema.call]
         print(rows.render(3))
               ^~~~~~~~~~~~~~
 ```

@@ -483,7 +483,7 @@ test "array shape wildcards parse in annotations" {
 test "the bare underscore is refused as a declared name, everywhere one declares" {
     // The wildcard keeps its one home — type-argument position, the
     // test above — and every declaring production answers with the
-    // same sentence [VISIBILITY.md D9].  The declaration still parses,
+    // same sentence.  The declaration still parses,
     // so each program yields exactly the one diagnostic.
     const wildcard = "_ is the array-shape wildcard";
     try expectDiagnostics("const _ = 1\n\nfunc main():\n    return\n", &.{

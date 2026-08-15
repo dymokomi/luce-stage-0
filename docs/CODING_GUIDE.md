@@ -74,7 +74,7 @@ Files start with a `//!` doc comment saying what the file is for.
 Sections inside a file use short dashed headers.  Public types and
 methods get `///` comments that explain assumptions and ownership,
 not narration of obvious code.  Compiler and interpreter code that
-implements a ratified rule cites its number (`(D3)`) so the reader
+implements a numbered rule cites its number (`(D3)`) so the reader
 can find the contract.
 
 **Every published symbol answers three questions: what it does, who
@@ -183,7 +183,7 @@ IR internals.
 - Tests are `test` blocks beside the code they prove, named after
   what they prove: `test "truncated, oversold, and damaged modules
   are rejected"`
-- Ratified specifications get an executable form under `specs/`, named
+- Language rules get an executable form under `specs/`, named
   after the decision they prove (`docs/MEMORY.md`'s numbering), each
   proven both ways where it applies — the behavior works, and misuse is
   a compile error with a stable code

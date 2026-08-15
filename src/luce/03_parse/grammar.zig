@@ -857,7 +857,7 @@ pub const Parser = struct {
         });
     }
 
-    /// A declared name may not be the bare `_` [VISIBILITY.md D9].  The
+    /// A declared name may not be the bare `_`.  The
     /// wildcard has exactly one home — array-shape position, where the
     /// type parser recognises it — and the sentence teaches that one
     /// place.  The declaration still parses under the refused name, so
