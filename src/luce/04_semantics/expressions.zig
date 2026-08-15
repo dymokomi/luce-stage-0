@@ -42,197 +42,6 @@ const Landing = builder.Landing;
 const RecordedOperand = recorder.RecordedOperand;
 const Typed = builder.Typed;
 
-/// give NAME — the named object transfers to whatever receives it;
-/// the name is poisoned to the end of its scope (S10, S13, S29).
-pub fn lowerGive(self: *FunctionBuilder, give: ast.Give) Error!?Typed {
-    if (give.operand.* != .name) {
-        try self.fail(
-            "luce.sema.own",
-            give.span,
-            "give moves a bare owning name; pass a fresh expression without give, or copy a resource-free borrowed expression [OWNERSHIP.md S10, S21, S31]",
-            .{},
-        );
-        return null;
-    }
-    const name = give.operand.name.text;
-    switch (try flow.writtenConstant(self, give.operand)) {
-        .not_constant => {},
-        .reported => return null,
-        .root => |state| {
-            _ = try flow.refuseConstantEscape(self, state, give.span, "give");
-            return null;
-        },
-    }
-    const found = self.findLocal(name) orelse {
-        try refusals.failUnknownName(self, name, give.operand.name.span);
-        return null;
-    };
-    const info = found.info;
-    if (try flow.refuseConstantEscape(self, info.root, give.span, "give")) return null;
-    const local = info.local;
-    const local_type = recorder.localType(self, local);
-    if (!info.carries) {
-        try self.fail(
-            "luce.sema.own",
-            give.span,
-            "give applies to containers and resources (list, map, array, builder, file, task) and structs that carry them, not values [OWNERSHIP.md S32]",
-            .{},
-        );
-        return null;
-    }
-    if (try self.checkPoisoned(info, name, give.span)) return null;
-    const carries_resource = try shapes.carries(self.analyzer, local_type, .resource);
-    if (local_type == .optional and !flow.isNarrowed(self, local)) {
-        if (carries_resource) {
-            try self.fail(
-                "luce.sema.own",
-                give.span,
-                "{s} may be absent and its payload carries a file or task that cannot be copied; prove the binding is present first — a borrowing site then removes give, while an ownership-taking site must receive the narrowed live owner [OWNERSHIP.md S13, S31, S43]",
-                .{try self.analyzer.typeName(local_type)},
-            );
-        } else {
-            try refusals.failAbsence(self, give.span, "give", local_type, give.operand);
-        }
-        return null;
-    }
-    if ((info.class == .owned or info.class == .borrow_param) and
-        self.declaredOutsideActiveLoop(found.depth))
-    {
-        if (carries_resource) {
-            try self.fail(
-                "luce.sema.own",
-                give.span,
-                "{s} is declared outside this loop; giving it would poison the next iteration — remove give to keep borrowing it, or create or receive a distinct owned resource inside each iteration for an ownership-taking site [OWNERSHIP.md S13, S30, S31]",
-                .{name},
-            );
-        } else {
-            try self.fail(
-                "luce.sema.own",
-                give.span,
-                "{s} is declared outside this loop; the next iteration would use a given-away name — create it fresh inside the loop, or copy [OWNERSHIP.md S30]",
-                .{name},
-            );
-        }
-        return null;
-    }
-    if (info.class == .borrow_param) {
-        if (carries_resource) {
-            try self.fail(
-                "luce.sema.own",
-                give.span,
-                "{s} is a borrowed parameter carrying a file or task — remove give to keep borrowing it; if this site must take ownership, change the parameter to give and make every caller pass ownership (give NAME for an owning name; fresh values need no verb) [OWNERSHIP.md S11, S12, S13, S14, S31]",
-                .{name},
-            );
-            return null;
-        }
-        try self.fail(
-            "luce.sema.own",
-            give.span,
-            "{s} is a borrowed parameter and cannot be given; replace this with copy {s}, or change it to a give parameter and make each call site pass ownership (give or copy for an owning name; fresh values need no verb) [OWNERSHIP.md S12, S13, S14]",
-            .{ name, name },
-        );
-        return null;
-    }
-    if (info.class == .inout_receiver) {
-        if (carries_resource) {
-            if (self.declaredOutsideActiveLoop(found.depth)) {
-                try self.fail(
-                    "luce.sema.own",
-                    give.span,
-                    "self comes from outside this loop and carries a file or task — remove give to keep borrowing self; an ownership-taking site needs a distinct owned value created or received inside each iteration [SELF.md D4, OWNERSHIP.md S11, S12, S13, S30, S31]",
-                    .{},
-                );
-            } else {
-                try self.fail(
-                    "luce.sema.own",
-                    give.span,
-                    "self is the caller's receiver and carries a file or task — remove give to keep borrowing self; if this site must take ownership, pass a separate give parameter [SELF.md D4, OWNERSHIP.md S11, S12, S13, S31]",
-                    .{},
-                );
-            }
-            return null;
-        }
-        try self.fail(
-            "luce.sema.own",
-            give.span,
-            "self is the caller's receiver and cannot be given away; pass it to a borrowing parameter, or use copy self [SELF.md D4, OWNERSHIP.md S12]",
-            .{},
-        );
-        return null;
-    }
-    // An alias owns nothing, so it has nothing to hand over (S8).
-    // This used to be left to the runtime, which trapped
-    // `not_owned` at the give; the class is known right here, so
-    // the answer is given here instead (S23).
-    if (info.class == .alias) {
-        if (self.giveableOwnerNameFor(info)) |owner| {
-            if (carries_resource) {
-                try self.fail(
-                    "luce.sema.own",
-                    give.span,
-                    "{s} aliases a resource graph it does not own — remove give to keep borrowing this view; if this site must take ownership, write give {s}, the live owning binding [OWNERSHIP.md S8, S11, S13, S23, S31]",
-                    .{ name, owner },
-                );
-                return null;
-            }
-            try self.fail(
-                "luce.sema.own",
-                give.span,
-                "{s} aliases an object it does not own; give {s} (the owner), or copy {s} [OWNERSHIP.md S8, S23]",
-                .{ name, owner, name },
-            );
-        } else {
-            if (carries_resource) {
-                try self.fail(
-                    "luce.sema.own",
-                    give.span,
-                    "{s} aliases a resource graph it does not own — remove give only if this still names a live borrowed view; if its owner was replaced or this site must take ownership, obtain an owned value from an ownership-returning operation or redesign the handoff [OWNERSHIP.md S8, S11, S13, S23, S31]",
-                    .{name},
-                );
-                return null;
-            }
-            try self.fail(
-                "luce.sema.own",
-                give.span,
-                "{s} aliases an object it does not own; give the owning name, or copy {s} [OWNERSHIP.md S8, S23]",
-                .{ name, name },
-            );
-        }
-        return null;
-    }
-    info.poisoned = .given;
-    // A narrowed `T?` hands over the `T` it was proved to hold.
-    const given_type = local_type.held() orelse local_type;
-    // The operand is a bare owning name by the refusals above —
-    // read as its narrowed payload where the binding is a proved
-    // `T?` (`narrowed_get`'s shape).  Built here rather than
-    // through `lowerExpression`, because the give reads its
-    // binding itself; the hidden owning-binding argument the
-    // intrinsic takes is lower's to re-derive from this operand's
-    // own local, the `free_object` convention.
-    const operand: nodes.NodeRef = if (local_type == .optional)
-        try recorder.recordNode(self, .{ .narrowed_get = .{
-            .local = local,
-            .payload = given_type,
-            .result = given_type,
-            .span = give.operand.name.span,
-        } })
-    else
-        try recorder.recordNode(self, .{ .local_get = .{
-            .local = local,
-            .result = local_type,
-            .span = give.operand.name.span,
-        } });
-    return .{
-        .node = try recorder.recordNode(self, .{ .give = .{
-            .operand = operand,
-            .result = given_type,
-            .span = give.span,
-        } }),
-        .value_type = given_type,
-    };
-}
-
 /// Every string a folded constant will materialize, interned here
 /// rather than where it materializes.
 ///
@@ -282,10 +91,6 @@ pub fn emitConstant(self: *FunctionBuilder, index: u32, span: Span) Error!?Typed
             .span = span,
         } }),
         .value_type = info.value_type,
-        .root = if (info.value == .container)
-            .{ .constant = .{ .row = info.value.container, .name = info.declaration.name } }
-        else
-            .mutable,
     };
 }
 
@@ -394,95 +199,6 @@ pub fn emitConstantValue(self: *FunctionBuilder, value: ConstantValue, value_typ
     };
 }
 
-/// copy EXPR — a deep, independent duplicate of a readable object.
-/// Resources have one owner and cannot occur anywhere in that copy.
-pub fn lowerCopy(self: *FunctionBuilder, copied: ast.Copy) Error!?Typed {
-    const value = (try self.lowerExpression(copied.operand, false)) orelse return null;
-    const carries_resource = try shapes.carries(self.analyzer, value.value_type, .resource);
-    // The ordinary optional diagnostic says to test and continue,
-    // but that would only reveal the next refusal here: a present
-    // resource graph is still non-copyable.  Say both facts once
-    // and give only a move/restructure repair.
-    if (value.value_type == .optional and carries_resource) {
-        const advice = try refusals.resourceCopyAdvice(self, copied.operand);
-        try self.fail(
-            "luce.sema.own",
-            copied.span,
-            "{s} may be absent and, when present, carries a file or task that cannot be copied; prove the owning binding is present, then {s} [OWNERSHIP.md S31, S43]",
-            .{ try self.analyzer.typeName(value.value_type), advice },
-        );
-        return null;
-    }
-    // Copying a question makes no sense: there may be nothing to
-    // duplicate.  Test it first.
-    if (try refusals.refusesAbsence(self, value, "copy", copied.span, copied.operand)) return null;
-    if (!shapes.carriesObjects(self.analyzer, value.value_type)) {
-        try self.fail(
-            "luce.sema.own",
-            copied.span,
-            "copy applies to resource-free containers and carrying structs; values copy by themselves, and resources move with give [OWNERSHIP.md S31, S32]",
-            .{},
-        );
-        return null;
-    }
-    // **A file cannot be copied** (docs/BYTES.md R5).  A copy is a
-    // second object that owns its own contents, and there is only
-    // one open file behind a handle: two Luce handles on it would
-    // be two owners of one resource, which is the thing scope
-    // ownership exists to make impossible.  `give` is the verb
-    // that moves one.
-    if (value.value_type == .heap and
-        self.analyzer.heap_types.items[value.value_type.heap] == .file)
-    {
-        const advice = try refusals.resourceCopyAdvice(self, copied.operand);
-        try self.fail(
-            "luce.sema.own",
-            copied.span,
-            "a file cannot be copied; there is one open file behind a handle — {s} [BYTES.md R5]",
-            .{advice},
-        );
-        return null;
-    }
-    // And a task cannot be copied, for the same reason one step
-    // out: there is one worker behind it, and a second handle
-    // would be two joiners of one thread (docs/THREADS.md D3).
-    if (value.value_type == .heap and
-        self.analyzer.heap_types.items[value.value_type.heap] == .task)
-    {
-        const advice = try refusals.resourceCopyAdvice(self, copied.operand);
-        try self.fail(
-            "luce.sema.own",
-            copied.span,
-            "a task cannot be copied; there is one worker behind it — {s} [THREADS.md D3]",
-            .{advice},
-        );
-        return null;
-    }
-    // The same rule is transitive.  A container or struct owns the
-    // resources nested inside it; copying the outer object would
-    // still manufacture a second Luce owner for the one file or
-    // worker.  The type graph may be cyclic through containers, so
-    // the analyzer answers this with its iterative visited walk.
-    if (carries_resource) {
-        const advice = try refusals.resourceCopyAdvice(self, copied.operand);
-        try self.fail(
-            "luce.sema.own",
-            copied.span,
-            "{s} contains a file or task and cannot be copied; resources have one owner — {s} [OWNERSHIP.md S31, BYTES.md R5, THREADS.md D3]",
-            .{ try self.analyzer.typeName(value.value_type), advice },
-        );
-        return null;
-    }
-    return .{
-        .node = try recorder.recordNode(self, .{ .copy = .{
-            .operand = value.node,
-            .result = value.value_type,
-            .span = copied.span,
-        } }),
-        .value_type = value.value_type,
-    };
-}
-
 pub fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Typed {
     var object_type: Type = undefined;
     // The recorded dimension run — empty for everything but an
@@ -503,7 +219,7 @@ pub fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Typed {
         object_type = try resolve.internHeapType(self.analyzer, .{
             .array = .{ .element = element, .rank = @intCast(new.dims.len) },
         });
-        const run = (try self.lowerOperandsIntoTracking(new.dims, .nothing, null)) orelse return null;
+        const run = (try self.lowerOperandsIntoTracking(new.dims, .nothing)) orelse return null;
         const dimensions = run.values;
         for (dimensions, new.dims) |*dimension, expression| {
             if (!try self.widensInto(dimension, .long)) {
@@ -599,7 +315,7 @@ pub fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted
         @memset(places, element);
         break :places .{ .places = places };
     } else .nothing;
-    const run = (try self.lowerOperandsIntoTracking(literal.elements, landing, null)) orelse
+    const run = (try self.lowerOperandsIntoTracking(literal.elements, landing)) orelse
         return null;
     const elements = run.values;
     const element_type = wanted_element orelse unified: {
@@ -616,7 +332,7 @@ pub fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted
         }
         break :unified meeting;
     };
-    for (elements, literal.elements, 0..) |*element, expression, index| {
+    for (elements, literal.elements) |*element, expression| {
         // A `list(double)` takes narrower elements by widening
         // them, and so does a list the fold above landed on
         // (docs/TYPES.md §2): `[1.5, 2]` is a `list(double)`.
@@ -628,23 +344,6 @@ pub fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted
                 try self.analyzer.typeName(element_type),
                 try self.analyzer.typeName(element.value_type),
             });
-            return null;
-        }
-        // A literal is a container door like any other (S20, S21):
-        // object elements must be fresh, given, or copied.
-        if (shapes.carriesObjects(self.analyzer, element.value_type) and
-            try flow.refuseConstantEscape(self, element.root, expression.span(), "a container store")) return null;
-        if (shapes.carriesObjects(self.analyzer, element.value_type) and !(try self.yieldsOwnership(expression))) {
-            try refusals.failNeedsOwnershipBatch(
-                self,
-                expression.span(),
-                "a container literal keeps its owned elements",
-                expression,
-                element.value_type,
-                "S21",
-                literal.elements,
-                index,
-            );
             return null;
         }
     }
@@ -693,7 +392,7 @@ pub fn lowerMapLiteral(self: *FunctionBuilder, literal: ast.MapLiteral, wanted_c
         places[index * 2] = wanted_key orelse .long;
         places[index * 2 + 1] = wanted_value;
     }
-    const run = (try self.lowerOperandsIntoTracking(expressions, .{ .maybe_places = places }, null)) orelse return null;
+    const run = (try self.lowerOperandsIntoTracking(expressions, .{ .maybe_places = places })) orelse return null;
     const lowered = run.values;
 
     const key_type: Type = wanted_key orelse inferred: {
@@ -738,20 +437,6 @@ pub fn lowerMapLiteral(self: *FunctionBuilder, literal: ast.MapLiteral, wanted_c
             });
             return null;
         }
-        if (shapes.carriesObjects(self.analyzer, value_type) and !(try self.yieldsOwnership(entry.value))) {
-            if (try flow.refuseConstantEscape(self, value.root, entry.value.span(), "a map store")) return null;
-            try refusals.failNeedsOwnershipBatch(
-                self,
-                entry.value.span(),
-                "a map literal keeps its owned values",
-                entry.value,
-                value.value_type,
-                "S21",
-                expressions,
-                index * 2 + 1,
-            );
-            return null;
-        }
     }
 
     const object_type = expected_container orelse
@@ -790,7 +475,7 @@ pub fn lowerIndex(self: *FunctionBuilder, index: ast.Index) Error!?Typed {
     const expressions = try self.arena().alloc(*ast.Expression, index.indices.len + 1);
     expressions[0] = index.target;
     @memcpy(expressions[1..], index.indices);
-    const run = (try self.lowerOperandsIntoTracking(expressions, .subscripts, null)) orelse return null;
+    const run = (try self.lowerOperandsIntoTracking(expressions, .subscripts)) orelse return null;
     const values = run.values;
     const element_type = (try assign.checkIndex(self, values[0].value_type, values[1..], index.span)) orelse return null;
     // The whole read is one operand run, so each position carries
@@ -819,7 +504,7 @@ pub fn lowerSliceRange(self: *FunctionBuilder, slice: ast.SliceRange) Error!?Typ
     try whole_sequence.append(self.temporary(), slice.target);
     if (slice.start) |expression| try whole_sequence.append(self.temporary(), expression);
     if (slice.end) |expression| try whole_sequence.append(self.temporary(), expression);
-    const run = (try self.lowerOperandsIntoTracking(whole_sequence.items, .subscripts, null)) orelse return null;
+    const run = (try self.lowerOperandsIntoTracking(whole_sequence.items, .subscripts)) orelse return null;
     const sequence = run.values;
     const target = sequence[0];
     const is_string = target.value_type == .string;
@@ -837,40 +522,6 @@ pub fn lowerSliceRange(self: *FunctionBuilder, slice: ast.SliceRange) Error!?Typ
             return null;
         }
     }
-    // A list slice owns a deep copy of every element it traverses
-    // (S31), so a resource-carrying element type normally cannot
-    // take this path.  Equal constant bounds are the narrow proof
-    // that the runtime loop executes zero times: this is both a
-    // useful empty-list constructor for std.lists' closed
-    // specialization and genuinely performs no copy.  Dynamic or
-    // unequal bounds retain the type-driven refusal.  Bounds are
-    // checked first so `xs["a":"b"]` still teaches their type
-    // before ownership can matter.  A defaulted start is the
-    // constant 0; a defaulted end is `len` and never constant.
-    var next_bound: usize = 0;
-    const start_constant: ?i64 = if (slice.start != null) constant: {
-        const bound = recorder.constantLong(self, lowered_bounds[next_bound].node);
-        next_bound += 1;
-        break :constant bound;
-    } else 0;
-    const end_constant: ?i64 = if (slice.end != null)
-        recorder.constantLong(self, lowered_bounds[next_bound].node)
-    else
-        null;
-    const empty = if (start_constant) |from|
-        if (end_constant) |to| from == to else false
-    else
-        false;
-    if (!is_string and !empty and try shapes.carries(self.analyzer, target.value_type, .resource)) {
-        try self.fail(
-            "luce.sema.own",
-            slice.span,
-            "a list slice deep-copies its elements, but {s} carries a file or task; only equal compile-time bounds make a resource-safe empty slice [OWNERSHIP.md S31, S32]",
-            .{try self.analyzer.typeName(target.value_type)},
-        );
-        return null;
-    }
-
     // A null bound is the defaulted end (nodes.Slice); the 0 and
     // `len` a defaulted bound materializes as are re-derived by
     // lower.
@@ -1275,7 +926,6 @@ fn lowerBinaryOperands(
         const run = (try self.lowerOperandsIntoTracking(
             &.{ binary.left, binary.right },
             .nothing,
-            null,
         )) orelse return null;
         return .{ .values = run.values, .sides = .{
             .left_copied = run.copied[0],
@@ -1301,17 +951,6 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
     }
     if (binary.left.* == .none_literal or binary.right.* == .none_literal) {
         return lowerAbsenceTest(self, binary);
-    }
-    // Operators borrow their operands (S11); a give here would
-    // hand the object to nobody.
-    if (binary.left.* == .give or binary.right.* == .give) {
-        try self.fail(
-            "luce.sema.own",
-            binary.span,
-            "operators only borrow their operands; give needs an owning destination [OWNERSHIP.md S13]",
-            .{},
-        );
-        return null;
     }
     const pair = (try lowerBinaryOperands(self, binary, wanted)) orelse return null;
     var left = pair.values[0];
@@ -1693,7 +1332,6 @@ fn lowerCoalesce(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
     // The hidden merge slot both arms store into; the answer is
     // its reload — a view of what the slot holds.
     _ = try recorder.recordLocal(self, null, payload, false, binary.span);
-    var root = left.root;
     var fallback: ?nodes.Expression.Coalesce.Fallback = null;
     if (isLeavingCall(binary.right)) {
         // `x else trap("…")` is the assert-unwrap, and it is
@@ -1706,36 +1344,10 @@ fn lowerCoalesce(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
             fallback = .{ .leaving = gone.node };
         }
     } else if (try self.lowerTyped(binary.right, payload, binary.span, "the else fallback")) |landed| {
-        root = flow.joinedRoot(left.root, landed.value.root);
         fallback = .{ .value = landed.value.node };
     }
     const filed = fallback orelse return null;
 
-    // Both arms must agree on ownership: the binding that receives
-    // the result either owns an object or does not, and that is
-    // one static fact, not one per branch (S1, S8, S16).
-    //
-    // **Asked of both arms only once both have lowered.**  A question
-    // about what an expression hands over presumes the expression
-    // exists, and `yieldsOwnership` is a reading of the written tree
-    // that answers "no" for a name nobody declared just as it does for
-    // a borrow.  Asked before the fallback lowered, `f() else
-    // Json.null` with no `Json` in scope reported a disagreement about
-    // ownership of a thing that is not there; asked here, the unknown
-    // name refuses itself and a type mistake is not described as an
-    // ownership mistake either — the same order the argument batch
-    // keeps (`calls.zig`).
-    if (shapes.carriesObjects(self.analyzer, payload) and
-        (try self.yieldsOwnership(binary.left)) != (try self.yieldsOwnership(binary.right)))
-    {
-        try self.fail(
-            "luce.sema.own",
-            binary.span,
-            "the two sides of else must agree on ownership: either both hand over a fresh object, or neither does [OWNERSHIP.md S1, S8]",
-            .{},
-        );
-        return null;
-    }
     return .{
         .node = try recorder.recordNode(self, .{ .coalesce = .{
             .value = left.node,
@@ -1744,7 +1356,6 @@ fn lowerCoalesce(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
             .span = binary.span,
         } }),
         .value_type = payload,
-        .root = root,
     };
 }
 

@@ -153,20 +153,21 @@ pub fn printError(
     err.writeAll("\n") catch {};
 }
 
-/// The one thing to say about a run that ended without trapping.
-/// Scope ownership frees everything (OWNERSHIP.md S33), so a nonzero
-/// count is an engine bug rather than a program's.
+/// The one thing to say about a run that ended without trapping: whether
+/// any object outlived it.
 ///
-/// It takes the `i64` the ABI hands over rather than a narrowed copy,
-/// so no caller has to decide what a negative count would mean — a
-/// number that is not zero is the bug, whatever its sign.  `indent`
-/// opens the line, as in `printTrap`.
+/// **Sub-cut A (ARC pivot, docs/ROADMAP.md): silent.** The runtime no
+/// longer frees reference objects during a run — they are reclaimed only
+/// by `Runtime.deinit`'s end-of-run sweep — so a nonzero run-end census
+/// is expected, not an engine bug, until Sub-cut B wires retain/release.
+/// This report is re-armed the moment ARC restores deterministic release
+/// (a leak is a bug again then), which is why the function, its `i64`
+/// contract, and its callers all stay in place.
 pub fn printLeaks(err: *std.Io.Writer, indent: []const u8, reporter: []const u8, leaked: i64) void {
-    if (leaked == 0) return;
-    err.print(
-        "{s}{s}: internal error: {d} object{s} escaped ownership — please report this\n",
-        .{ indent, reporter, leaked, if (leaked == 1) "" else "s" },
-    ) catch {};
+    _ = err;
+    _ = indent;
+    _ = reporter;
+    _ = leaked;
 }
 
 // ---------------------------------------------------------------------------
@@ -194,10 +195,11 @@ test "how a run ended is one table, and every ending has its own number" {
     try testing.expectEqual(@as(i32, exit_errored), @intFromEnum(abi.Status.errored));
 }
 
-test "a run that leaked says so, and one that did not says nothing" {
-    // Scope ownership frees everything (OWNERSHIP.md S33), so a nonzero
-    // census is an engine bug rather than a program's — which is why it
-    // is reported as one, in words that ask for it to be reported on.
+test "the leak report is silent during the ARC pivot's Sub-cut A" {
+    // Sub-cut A (docs/ROADMAP.md): reference objects are reclaimed only by
+    // Runtime.deinit's end-of-run sweep, so a nonzero run-end census is
+    // expected rather than an engine bug. The report says nothing until
+    // Sub-cut B re-arms it once retain/release makes a leak a bug again.
     var reported: std.Io.Writer.Allocating = .init(testing.allocator);
     defer reported.deinit();
 
@@ -205,23 +207,10 @@ test "a run that leaked says so, and one that did not says nothing" {
     try testing.expectEqualStrings("", reported.written());
 
     printLeaks(&reported.writer, "", "loom", 1);
-    try testing.expectEqualStrings(
-        "loom: internal error: 1 object escaped ownership — please report this\n",
-        reported.written(),
-    );
+    try testing.expectEqualStrings("", reported.written());
 
-    reported.clearRetainingCapacity();
     printLeaks(&reported.writer, "", "luce", 4);
-    try testing.expectEqualStrings(
-        "luce: internal error: 4 objects escaped ownership — please report this\n",
-        reported.written(),
-    );
-
-    // A negative count is the same bug seen from the other side, and
-    // is not silently a success.
-    reported.clearRetainingCapacity();
-    printLeaks(&reported.writer, "", "loom", -2);
-    try testing.expect(std.mem.indexOf(u8, reported.written(), "-2 objects") != null);
+    try testing.expectEqualStrings("", reported.written());
 }
 
 test "a trap report cannot smuggle terminal controls either" {

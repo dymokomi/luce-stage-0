@@ -45,11 +45,9 @@ const builder = @import("builder.zig");
 const construct = @import("construct.zig");
 const effects = @import("effects.zig");
 const expressions = @import("expressions.zig");
-const flow = @import("flow.zig");
 const ledger = @import("ledger.zig");
 const recorder = @import("recorder.zig");
 const refusals = @import("refusals.zig");
-const statements = @import("statements.zig");
 const naming = @import("naming.zig");
 const resolve = @import("resolve.zig");
 const shapes = @import("shapes.zig");
@@ -492,22 +490,6 @@ fn lowerValueCall(
         );
         return null;
     }
-    // A borrowing parameter refuses `give` before the expression
-    // lowers: lowering the verb would otherwise poison an owned
-    // name before reporting that nobody receives it.  The other
-    // half of the verb rule waits until after fitting below, so a
-    // type mistake is not described as an ownership mistake.
-    for (arguments, signature.parameters) |argument, parameter| {
-        if (!parameter.gives and argument.value.* == .give) {
-            try self.fail(
-                "luce.sema.own",
-                argument.span,
-                "{s} only borrows this argument; give needs a give parameter in the signature [OWNERSHIP.md S11, S13]",
-                .{written},
-            );
-            return null;
-        }
-    }
     // The residual hazard copy-on-store leaves open (docs/STRINGS.md),
     // asked of the **callee**: it may be a borrow of an element's or a
     // field's two-slot run, and an argument still to come could free
@@ -531,7 +513,7 @@ fn lowerValueCall(
         expression.* = argument.value;
         place.* = parameter.value_type;
     }
-    const run = (try self.lowerOperandsIntoTracking(operand_expressions, .{ .places = places }, null)) orelse return null;
+    const run = (try self.lowerOperandsIntoTracking(operand_expressions, .{ .places = places })) orelse return null;
     const values = run.values;
     const entries = try self.arena().alloc(RecordedOperand, values.len);
     for (values, signature.parameters, 0..) |value, parameter, index| {
@@ -545,19 +527,6 @@ fn lowerValueCall(
             });
             return null;
         };
-        if (parameter.gives and !(try self.yieldsOwnership(operand_expressions[index]))) {
-            try refusals.failNeedsOwnershipBatch(
-                self,
-                arguments[index].span,
-                try std.fmt.allocPrint(self.arena(), "this argument of {s} takes ownership", .{written}),
-                operand_expressions[index],
-                value.value_type,
-                "S13, S14",
-                operand_expressions,
-                index,
-            );
-            return null;
-        }
         // A function type has no names and no defaults, so the
         // batch is positional whole: slot i is operand i.
         entries[index] = .{
@@ -838,21 +807,6 @@ fn lowerUserCall(
             );
             return null;
         }
-        // `Runtime.copyFrom` is the worker boundary.  It can re-own
-        // ordinary object graphs, but a file belongs to the runtime
-        // that opened it and a task owns a worker allocated by the
-        // runtime that spawned it.  Refuse those types here rather
-        // than letting `spawn` or `wait` reach the runtime's
-        // defensive `not_owned` trap.
-        if (info.results.len == 1 and try shapes.carries(self.analyzer, info.return_type, .resource)) {
-            try self.fail(
-                "luce.sema.own",
-                span,
-                "{s} answers {s}, which carries a file or task; a resource stays in the worker Runtime that created it and cannot cross back through wait [THREADS.md D1, D4]",
-                .{ name, try self.analyzer.typeName(info.return_type) },
-            );
-            return null;
-        }
         // A function value borrows its receiver and never owns it
         // (docs/BINDING.md D4), and a borrow is exactly what cannot
         // cross — the sentence below about `give` says so for every
@@ -876,9 +830,11 @@ fn lowerUserCall(
             );
             return null;
         }
-        // A borrow cannot cross: the callee's runtime is not this
-        // one, so there is nothing here for it to borrow *from*.
-        for (info.parameter_types, info.parameter_modes, info.declaration.parameters) |held, mode, parameter| {
+        // A borrow cannot cross a worker boundary: a function value
+        // borrows the receiver it may carry, the type cannot say
+        // whether a given value carries one, so the boundary refuses
+        // the type outright (docs/THREADS.md D2, BINDING.md D4).
+        for (info.parameter_types, info.declaration.parameters) |held, parameter| {
             if (try shapes.carries(self.analyzer, held, .function)) {
                 try self.fail(
                     "luce.sema.own",
@@ -888,25 +844,6 @@ fn lowerUserCall(
                 );
                 return null;
             }
-            if (try shapes.carries(self.analyzer, held, .resource)) {
-                try self.fail(
-                    "luce.sema.own",
-                    span,
-                    "parameter {s} of {s} is {s}, which carries a file or task; a resource stays in the Runtime that created it and cannot cross a worker boundary [THREADS.md D1, D2]",
-                    .{ parameter.name, name, try self.analyzer.typeName(held) },
-                );
-                return null;
-            }
-            if (mode == .give) continue;
-            if (!shapes.carriesObjects(self.analyzer, held)) continue;
-            try self.fail(
-                "luce.sema.own",
-                span,
-                "{s} borrows {s}, and a worker cannot borrow from another runtime; " ++
-                    "declare it 'give {s}' [THREADS.md D2]",
-                .{ name, parameter.name, try self.analyzer.typeName(held) },
-            );
-            return null;
         }
     }
     // Which slot each argument fills is settled before any of them
@@ -927,22 +864,6 @@ fn lowerUserCall(
     const slots = (try resolveSlots(self, name, "luce.sema.call", surface, 0, call_arguments, seen, span)) orelse
         return null;
     if (!(try checkRequiredSlots(self, name, "luce.sema.call", surface, seen, span))) return null;
-    // Refuse a `give` to a borrowing parameter before lowering it,
-    // so an owned name is not poisoned on an already-invalid call.
-    // A give parameter's ownership check follows fitting below:
-    // type errors take precedence, and any advice describes the
-    // argument's real type rather than the destination type.
-    for (call_arguments, slots) |argument, slot| {
-        if (info.parameter_modes[slot] != .give and argument.value.* == .give) {
-            try self.fail(
-                "luce.sema.own",
-                argument.span,
-                "{s} only borrows this argument; give needs a give parameter in the signature [OWNERSHIP.md S11, S13]",
-                .{name},
-            );
-            return null;
-        }
-    }
     // Arguments are evaluated in the order they are written and
     // bound to the slots they name (D5): the batch runs in source
     // order, and only the destination index is permuted.
@@ -952,7 +873,7 @@ fn lowerUserCall(
         expression.* = argument.value;
         place.* = info.parameter_types[slot];
     }
-    const run = (try self.lowerOperandsIntoTracking(operand_expressions, .{ .places = places }, null)) orelse return null;
+    const run = (try self.lowerOperandsIntoTracking(operand_expressions, .{ .places = places })) orelse return null;
     const values = run.values;
     var defaulted: usize = 0;
     for (seen) |given| {
@@ -983,21 +904,6 @@ fn lowerUserCall(
             }
             return null;
         };
-        if (info.parameter_modes[slot] == .give and
-            !(try self.yieldsOwnership(operand_expressions[index])))
-        {
-            try refusals.failNeedsOwnershipBatch(
-                self,
-                call_arguments[index].span,
-                try std.fmt.allocPrint(self.arena(), "argument {d} of {s} takes ownership", .{ slot + 1, name }),
-                operand_expressions[index],
-                value.value_type,
-                "S13, S14",
-                operand_expressions,
-                index,
-            );
-            return null;
-        }
         entries[index] = .{
             .node = fitted.node,
             .slot = slot,
@@ -1253,7 +1159,7 @@ fn lowerValueMethod(
     for (method.arguments, 0..) |argument, index| {
         operand_expressions[index + 1] = argument.value;
     }
-    const run = (try self.lowerOperandsIntoTracking(operand_expressions, .{ .method = method }, null)) orelse return null;
+    const run = (try self.lowerOperandsIntoTracking(operand_expressions, .{ .method = method })) orelse return null;
     const values = run.values;
     const receiver = values[0];
     const arguments = values[1..];
@@ -1295,7 +1201,6 @@ fn lowerValueMethod(
             // list method sugar and specialized at the receiver's
             // monomorphic element type (FUNCTIONS.md D6).
             if (descriptor == .list and std.mem.eql(u8, method.name, "sort_by")) {
-                if (try flow.refuseConstantWrite(self, receiver.root, method.span, "sort_by")) return null;
                 return listsCall(self, method, run, descriptor.list, as_statement);
             }
             if (try refuseNamedMethodArguments(self, method)) return null;
@@ -1323,7 +1228,6 @@ fn lowerValueMethod(
                 self,
                 method,
                 run,
-                operand_expressions,
                 as_statement,
                 fallible_allowed,
                 shape_position,
@@ -1338,65 +1242,6 @@ fn lowerValueMethod(
     if (found.result == .none and !as_statement) {
         try self.fail("luce.sema.method", method.span, "{s} returns nothing", .{method.name});
         return null;
-    }
-    if (methodWritesReceiver(found.kind) and
-        try flow.refuseConstantWrite(self, receiver.root, method.span, method.name)) return null;
-    if (found.kind == .handle_read and arguments.len != 0 and
-        try flow.refuseConstantWrite(self, arguments[0].root, method.arguments[0].span, "file.read")) return null;
-    // Containers own their object elements: append/insert take a
-    // fresh value, a give, or a copy (S20, S21).
-    if (found.kind == .append_value or found.kind == .insert_value) {
-        if (self.analyzer.heapOf(receiver.value_type)) |descriptor| {
-            if (descriptor == .list and shapes.carriesObjects(self.analyzer, descriptor.list)) {
-                const value_index: usize = if (found.kind == .append_value) 0 else 1;
-                if (try flow.refuseConstantEscape(
-                    self,
-                    arguments[value_index].root,
-                    method.arguments[value_index].span,
-                    "a container store",
-                )) return null;
-                if (!(try self.yieldsOwnership(method.arguments[value_index].value))) {
-                    try refusals.failNeedsOwnershipBatch(
-                        self,
-                        method.arguments[value_index].span,
-                        "a container keeps its owned elements",
-                        method.arguments[value_index].value,
-                        arguments[value_index].value_type,
-                        "S21",
-                        operand_expressions[1..],
-                        value_index,
-                    );
-                    return null;
-                }
-                // Resolve the method, its arity and argument type,
-                // then enforce the ordinary handoff spelling
-                // before asking the ancestry question.  A direct
-                // owner-into-descendant append/insert is therefore
-                // `luce.sema.own` without masking an earlier
-                // method, type or ownership diagnostic (S20, S33).
-                if (try statements.refuseVisibleOwnershipCycle(
-                    self,
-                    method.target,
-                    method.arguments[value_index].value,
-                )) return null;
-            }
-        }
-    }
-    // Every other method argument is a borrow (S11): a give there
-    // would hand the object to nobody.
-    for (method.arguments, 0..) |argument, position| {
-        if (argument.value.* != .give) continue;
-        const adopting = (found.kind == .append_value and position == 0) or
-            (found.kind == .insert_value and position == 1);
-        if (!adopting) {
-            try self.fail(
-                "luce.sema.own",
-                argument.span,
-                "{s} only borrows its arguments; give needs an owning destination [OWNERSHIP.md S11, S13]",
-                .{method.name},
-            );
-            return null;
-        }
     }
     // A list keeps what it is appended, so the element is a store
     // and takes or copies its storage; a builder copies bytes
@@ -1423,16 +1268,6 @@ fn lowerValueMethod(
     // site says which of `try` and `catch` it means, and a site
     // that says neither is `luce.sema.fallible` rather than a
     // silently dropped outcome (docs/FAILURE.md).
-    // A wait **consumes** its task: there is one answer and the
-    // caller now has it, so a second wait is refused the way a
-    // second `give` is (docs/THREADS.md D4).  Poisoning is the
-    // same machinery and the same bluntness — source-order and
-    // branch-insensitive, to the end of the scope (S29).
-    if (found.kind == .task_wait and method.target.* == .name) {
-        if (self.findLocal(method.target.name.text)) |held| {
-            held.info.poisoned = .given;
-        }
-    }
     // `wait` is the one whose fallibility is not a fact about the
     // method: it comes back errored exactly when the function the
     // task carries could, so the answer is read off the receiver's
@@ -1571,8 +1406,6 @@ fn lowerInterfaceCall(
         return null;
     if (!(try checkRequiredSlots(self, method.name, "luce.sema.method", surface, seen, method.span))) return null;
 
-    const argument_expressions = try self.arena().alloc(*ast.Expression, method.arguments.len);
-    for (method.arguments, argument_expressions) |argument, *expression| expression.* = argument.value;
     const entries = try self.arena().alloc(RecordedOperand, run.values.len - 1);
     for (method.arguments, slots, 0..) |argument, slot, index| {
         const value = run.values[index + 1];
@@ -1586,30 +1419,6 @@ fn lowerInterfaceCall(
             });
             return null;
         };
-        if (info.parameter_modes[slot] != .give and argument.value.* == .give) {
-            try self.fail(
-                "luce.sema.own",
-                argument.span,
-                "{s} only borrows this argument; give needs a give parameter in the signature [OWNERSHIP.md S11, S13]",
-                .{method.name},
-            );
-            return null;
-        }
-        if (info.parameter_modes[slot] == .give and
-            !(try self.yieldsOwnership(argument.value)))
-        {
-            try refusals.failNeedsOwnershipBatch(
-                self,
-                argument.span,
-                try std.fmt.allocPrint(self.arena(), "argument {d} of {s} takes ownership", .{ index + 1, method.name }),
-                argument.value,
-                value.value_type,
-                "S13, S14",
-                argument_expressions,
-                index,
-            );
-            return null;
-        }
         entries[index] = .{
             .node = fitted.node,
             .slot = slot,
@@ -1664,7 +1473,6 @@ fn lowerReceiverCall(
     self: *FunctionBuilder,
     method: ast.Method,
     run: OperandRun,
-    operand_expressions: []const *ast.Expression,
     as_statement: bool,
     fallible_allowed: bool,
     shape_position: ShapePosition,
@@ -1726,22 +1534,6 @@ fn lowerReceiverCall(
         return null;
     if (!(try checkRequiredSlots(self, method.name, "luce.sema.method", surface, seen, method.span))) return null;
 
-    // The receiver never takes a verb — it is a struct value.  A
-    // written `give` to a borrowing parameter is refused before
-    // fitting; the give-parameter half waits until after fitting
-    // below so a type mistake wins and advice names the real type.
-    for (method.arguments, slots) |argument, slot| {
-        if (info.parameter_modes[slot] != .give and argument.value.* == .give) {
-            try self.fail(
-                "luce.sema.own",
-                argument.span,
-                "{s} only borrows this argument; give needs a give parameter in the signature [OWNERSHIP.md S11, S13]",
-                .{method.name},
-            );
-            return null;
-        }
-    }
-
     // The inout call carries the receiver's *place* separately;
     // its argument run contains only the values written between
     // parentheses.  A read method remains an ordinary call with
@@ -1782,25 +1574,6 @@ fn lowerReceiverCall(
             }
             return null;
         };
-        if (info.parameter_modes[slot] == .give and
-            !(try self.yieldsOwnership(argument.value)))
-        {
-            try refusals.failNeedsOwnershipBatch(
-                self,
-                argument.span,
-                try std.fmt.allocPrint(
-                    self.arena(),
-                    "argument {d} of {s} takes ownership",
-                    .{ slot, method.name },
-                ),
-                argument.value,
-                value.value_type,
-                "S13, S14",
-                operand_expressions[1..],
-                index,
-            );
-            return null;
-        }
         // A writing method may replace its receiver while this
         // ordinary argument is still live in the callee.  If the
         // argument borrows string or struct storage from that
@@ -1860,18 +1633,6 @@ fn lowerReceiverCall(
     if (info.receiver == .writes) {
         _ = (try receiverPlace(self, method, info.parameter_types[0])) orelse return null;
     }
-    // A writing method may replace the whole struct in its caller's
-    // slot.  Aliases made before the call still name the old graph;
-    // keeping their collapsed owner name would make a later refusal
-    // recommend moving the unrelated replacement (S8, SELF D3-D4).
-    if (info.receiver == .writes and method.target.* == .name) {
-        if (self.findLocal(method.target.name.text)) |receiver| {
-            if (shapes.carriesObjects(self.analyzer, receiver_type)) {
-                self.forgetAliasesOwnedBy(method.target.name.text);
-            }
-            receiver.info.revision +%= 1;
-        }
-    }
     const node = try recorder.recordCallNode(
         self,
         .{ .function = function_index },
@@ -1922,7 +1683,6 @@ fn receiverPlace(
                 );
                 return null;
             }
-            if (try self.checkPoisoned(found.info, name.text, name.span)) return null;
             const place_type = recorder.localType(self, found.info.local);
             if (!place_type.eql(receiver_type)) {
                 try self.fail(
@@ -1944,17 +1704,6 @@ fn receiverPlace(
                     "luce.sema.own",
                     name.span,
                     "{s} is being iterated; a writing method would change it under the loop [OWNERSHIP.md S5, S9]",
-                    .{name.text},
-                );
-                return null;
-            }
-            if (found.info.carries and found.info.class != .owned and
-                found.info.class != .inout_receiver)
-            {
-                try self.fail(
-                    "luce.sema.own",
-                    name.span,
-                    "{s} does not own its objects, so a writing method cannot replace its receiver; call it on the owning var [OWNERSHIP.md S8, S25]",
                     .{name.text},
                 );
                 return null;
@@ -2337,18 +2086,6 @@ fn stringsCall(
         );
         return null;
     }
-    // strings takes borrows only; a give here has no owner (S11).
-    for (method.arguments) |argument| {
-        if (argument.value.* == .give) {
-            try self.fail(
-                "luce.sema.own",
-                argument.span,
-                "{s} only borrows its arguments; give needs an owning destination [OWNERSHIP.md S11, S13]",
-                .{method.name},
-            );
-            return null;
-        }
-    }
     const qualified = try std.fmt.allocPrint(self.arena(), "strings.{s}", .{method.name});
     const function_index = self.analyzer.function_names.get(qualified) orelse {
         var suggestion = helpers.Suggestion.init(method.name);
@@ -2414,17 +2151,6 @@ fn listsCall(
         );
         return null;
     }
-    for (method.arguments) |argument| {
-        if (argument.value.* != .give) continue;
-        try self.fail(
-            "luce.sema.own",
-            argument.span,
-            "sort_by only borrows its comparator; give needs an owning destination [OWNERSHIP.md S11, S13]",
-            .{},
-        );
-        return null;
-    }
-
     const comparator = (try sequenceParameters(self, "sort_by", element, true)).?[0];
     const receiver_type = run.values[0].value_type;
     const element_name = try self.analyzer.typeName(element);
@@ -2623,13 +2349,11 @@ fn failNoObjectMethod(self: *FunctionBuilder, method: ast.Method, descriptor: ty
             // The one name a Python programmer will certainly type,
             // answered in full rather than left to a did-you-mean
             // (docs/FILESYSTEM.md D9).  It is **refused** and not
-            // merely absent: a working `close` would have to poison
-            // the receiver exactly as `free` does, which is `free`
-            // under a second name for one concept, and an idempotent
-            // one would need a "closed but not poisoned" state — the
-            // one state a resource must never hold.  Both halves of
-            // the answer are here, because a reader who wanted
-            // `close` also wanted `with`.
+            // merely absent: `free f` already closes it and so does
+            // the end of the owning scope, so a working `close` would
+            // be a second name for one concept.  Both halves of the
+            // answer are here, because a reader who wanted `close`
+            // also wanted `with`.
             if (std.mem.eql(u8, name, "close")) {
                 try self.fail(
                     "luce.sema.method",
@@ -2762,19 +2486,6 @@ fn objectMethod(
             }
             if (std.mem.eql(u8, name, "values")) {
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
-                // `values()` answers a fresh list that independently
-                // owns a deep copy of every map value.  A resource
-                // has one owner, so no resource-carrying value type
-                // can take that copying path (S31, S32).
-                if (try shapes.carries(self.analyzer, pair.value, .resource)) {
-                    try self.fail(
-                        "luce.sema.own",
-                        method.span,
-                        "map.values() deep-copies every value, but {s} carries a file or task; access those values through the map instead [OWNERSHIP.md S31, S32]",
-                        .{try self.analyzer.typeName(pair.value)},
-                    );
-                    return null;
-                }
                 // **`values()` manufactures a list type, and a bare
                 // function type is not a list element** (docs/BINDING.md
                 // D7).  A map value is the one slot written bare, because

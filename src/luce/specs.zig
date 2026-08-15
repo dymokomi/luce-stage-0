@@ -29,8 +29,6 @@ pub const agree = @import("specs/agree.zig");
 
 /// The language, feature by feature (docs/LANGUAGE.md).
 pub const behavior = @import("specs/behavior_spec.zig");
-/// Scope ownership, clause by ratified clause (docs/OWNERSHIP.md).
-pub const ownership = @import("specs/ownership_spec.zig");
 /// Enums and the match statement, decision by decision
 /// (docs/ENUMS.md).
 pub const enums = @import("specs/enums_spec.zig");
@@ -100,7 +98,6 @@ comptime {
     if (builtin.is_test) {
         _ = agree;
         _ = behavior;
-        _ = ownership;
         _ = enums;
         _ = unions;
         _ = errors;

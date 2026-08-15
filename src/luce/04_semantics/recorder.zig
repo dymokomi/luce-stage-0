@@ -238,7 +238,7 @@ pub fn closeStatementFrame(self: *FunctionBuilder, span: Span) Error!nodes.Block
     const releases = try self.arena().alloc(nodes.Release, owned.len);
     for (releases, 0..) |*slot, index| {
         const release = owned[owned.len - 1 - index];
-        slot.* = .{ .local = release.local, .objects = release.objects, .storage = release.storage };
+        slot.* = .{ .local = release.local, .storage = release.storage };
     }
     return .{
         .statements = try self.arena().dupe(nodes.Statement, frame.statements.items),

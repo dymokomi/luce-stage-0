@@ -283,8 +283,6 @@ fn collect(
             switch (function.instructions[item]) {
                 .local_set => |set| assigned[set.local] = true,
                 .call_inout => |call| assigned[call.receiver] = true,
-                .object_bind => |bind| assigned[bind.local] = true,
-                .object_unbind => |unbind| assigned[unbind.local] = true,
                 .intrinsic => |call| {
                     switch (call.kind) {
                         .index_get, .index_set, .len, .dim_size => {},

@@ -58,47 +58,6 @@ test "the entry point is exported and every Luce function is internal" {
     try std.testing.expect(std.mem.indexOf(u8, rendered, "define internal i32 @luce.") != null);
 }
 
-test "inout calls lower as an internal slot and owner descriptor" {
-    const gpa = std.testing.allocator;
-    const rendered = (try render(
-        \\struct Counter:
-        \\    value: long
-        \\
-        \\    func step():
-        \\        self.value += 1
-        \\
-        \\    func twice():
-        \\        self.step()
-        \\        self.step()
-        \\
-        \\func main():
-        \\    var counter = Counter(value = 0)
-        \\    counter.twice()
-        \\    assert(counter.value == 2)
-        \\
-    )).?;
-    defer gpa.free(rendered);
-
-    // The descriptor is one internal logical parameter. Its pointer
-    // becomes local zero's slot, and the two owner fields follow it;
-    // the nested writer forwards that same aggregate.
-    for ([_][]const u8{
-        "{ ptr, i64, i32 }",
-        "extractvalue { ptr, i64, i32 }",
-        "insertvalue { ptr, i64, i32 }",
-    }) |wanted| {
-        if (std.mem.indexOf(u8, rendered, wanted) == null) {
-            std.debug.print("missing {s} in:\n{s}\n", .{ wanted, rendered });
-            return error.NotGenerated;
-        }
-    }
-    try std.testing.expect(std.mem.count(
-        u8,
-        rendered,
-        "extractvalue { ptr, i64, i32 }",
-    ) >= 3);
-}
-
 test "checked integer arithmetic lowers to the overflow intrinsics" {
     const gpa = std.testing.allocator;
     const rendered = (try render(
@@ -224,8 +183,6 @@ test "the runtime library is called, not reimplemented" {
         \\    let counts = new map(string, long)
         \\    xs.append(1)
         \\    print(string(len(counts)) + string(xs.pop()))
-        \\    free(counts)
-        \\    free(xs)
         \\
     )).?;
     defer gpa.free(rendered);
@@ -235,8 +192,6 @@ test "the runtime library is called, not reimplemented" {
         "declare i32 @luce_rt_pop",
         "declare i32 @luce_rt_len",
         "declare i32 @luce_rt_str",
-        "declare i32 @luce_rt_free",
-        "declare void @luce_rt_bind",
         "declare noalias ptr @luce_rt_open",
     }) |wanted| {
         if (std.mem.indexOf(u8, rendered, wanted) == null) {
@@ -624,71 +579,6 @@ test "every worker runtime materializes its own constant roots" {
     );
 }
 
-test "inline scalar mutations through an unknown alias retain the constant owner guard" {
-    const gpa = std.testing.allocator;
-    const rendered = (try render(
-        \\func mutate(values: list(long)):
-        \\    values[0] = 9
-        \\    values.append(10)
-        \\
-        \\func main():
-        \\    var values: list(long) = [1]
-        \\    mutate(values)
-        \\
-    )).?;
-    defer gpa.free(rendered);
-    errdefer std.debug.print("rendered IR:\n{s}\n", .{rendered});
-
-    // Both operations are scalar fast paths, so neither reaches the
-    // runtime mutator that normally calls resolveMutable.  A parameter
-    // can hide a program root, so each must load Object.owner.kind and
-    // keep the immutable trap.
-    const owner_offset = try std.fmt.allocPrint(
-        gpa,
-        "i64 {d}",
-        .{luce.runtime.layout.owner_kind},
-    );
-    defer gpa.free(owner_offset);
-    try std.testing.expect(std.mem.count(u8, rendered, owner_offset) >= 2);
-    const immutable_code = try std.fmt.allocPrint(
-        gpa,
-        "i32 {d}",
-        .{@intFromEnum(mir.TrapCode.immutable_object)},
-    );
-    defer gpa.free(immutable_code);
-    try std.testing.expect(std.mem.count(u8, rendered, immutable_code) >= 2);
-    try std.testing.expect(std.mem.indexOf(u8, rendered, "constant container is immutable") != null);
-}
-
-test "inline scalar mutations of proven fresh locals omit the constant owner guard" {
-    const gpa = std.testing.allocator;
-    const source =
-        \\func main():
-        \\    var values: list(long) = [1]
-        \\    values[0] = 9
-        \\    values.append(10)
-        \\    var grid = new array(double, 2)
-        \\    grid[0] = 1.5
-        \\
-    ;
-
-    // `roots.zig` derives this from the final MIR rather than trusting
-    // a front-end flag: both locals originate at heap_new and every
-    // assignment to them stays non-root.  The fast paths therefore
-    // retain their null/generation/bounds checks but need no owner walk
-    // or immutable trap.  Release stripping changes no semantic check.
-    for ([_]spec.Mode{ .debug, .release }) |mode| {
-        const rendered = (try spec.renderBuilt(source, mode)).?;
-        defer gpa.free(rendered);
-        errdefer std.debug.print("rendered IR:\n{s}\n", .{rendered});
-
-        try std.testing.expect(std.mem.indexOf(u8, rendered, "owner.at") == null);
-        try std.testing.expect(
-            std.mem.indexOf(u8, rendered, "constant container is immutable") == null,
-        );
-    }
-}
-
 test "constant declaration origins survive only in debug artifacts" {
     const gpa = std.testing.allocator;
     const source =
@@ -715,48 +605,12 @@ test "constant declaration origins survive only in debug artifacts" {
 // Running the machine code
 // ---------------------------------------------------------------------------
 
-test "a constant passed through a parameter still traps an inline mutation" {
-    try agree(
-        \\const seeds: list(long) = [3, 1, 2]
-        \\
-        \\func overwrite(values: list(long)):
-        \\    values[0] = 9
-        \\
-        \\func main():
-        \\    overwrite(seeds)
-        \\
-    );
-}
-
 test "compiled constant materialization preserves every flat container shape" {
     try agree(flat_constants_source);
 }
 
 test "a compiled worker reads its runtime-local constant root" {
     try agree(worker_constants_source);
-}
-
-test "compiled inline constant mutations guard list growth and array cells" {
-    try agree(
-        \\const TABLE: list(long) = [1, 2]
-        \\
-        \\func grow(values: list(long)):
-        \\    values.append(3)
-        \\
-        \\func main():
-        \\    grow(TABLE)
-        \\
-    );
-    try agree(
-        \\const TABLE: array(long, _) = [1, 2]
-        \\
-        \\func overwrite(values: array(long, _)):
-        \\    values[0] = 9
-        \\
-        \\func main():
-        \\    overwrite(TABLE)
-        \\
-    );
 }
 
 test "inout calls mutate the caller on return, error, and nested forwarding" {
@@ -1434,32 +1288,6 @@ test "a reused row is refused by every door, and the newcomer by none" {
         \\    rows.append(give fresh)
         \\    print(string(rows[0][0]))
         \\    print(string(stale[0]))
-        \\
-    );
-}
-
-test "give names its binding, and the two engines read it the same way" {
-    // This was the alias-dodge program, agreeing on `not_owned`.  S23
-    // became a compile error on 2026-08-04, so the dodge no longer
-    // reaches an engine and the trap is proven on a forged module
-    // instead (`specs/ownership_spec.zig`).  What is still worth
-    // agreeing on here is the operand that refusal left behind: every
-    // give now carries the binding it moves from, `lower.zig` passes
-    // it to `luce_rt_give` as two scalars while the oracle reads it off
-    // a register, and a give that moved the wrong thing would show up
-    // as a differing census rather than a differing print.
-    try agree(
-        \\func main():
-        \\    var a = new list(list(long))
-        \\    var b = new list(list(long))
-        \\    var first = new list(long)
-        \\    first.append(2)
-        \\    var second = new list(long)
-        \\    second.append(3)
-        \\    a.append(give first)
-        \\    print("adopted")
-        \\    b.append(give second)
-        \\    print(string(a[0][0] + b[0][0]))
         \\
     );
 }

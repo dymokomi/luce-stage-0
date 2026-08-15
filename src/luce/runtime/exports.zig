@@ -499,8 +499,9 @@ pub export fn luce_rt_export_storage(
 }
 
 /// Give back the storage a value owns, and answer the emptied value
-/// the place should hold from here on.  Objects are untouched: they
-/// are freed by `luce_rt_unbind`, which is a different question.
+/// the place should hold from here on.  Objects are untouched: an
+/// object row is not freed while a program runs, which is a different
+/// question.
 pub export fn luce_rt_drop_storage(
     runtime: *Runtime,
     held: [*c]const Value,
@@ -1137,57 +1138,21 @@ pub export fn luce_rt_discard_loose(runtime: *Runtime, held: [*c]const Value) ca
 }
 
 // ---------------------------------------------------------------------------
-// Objects and ownership
+// Objects
 // ---------------------------------------------------------------------------
 //
-// The `new_*` four **create**: each writes a fresh object into `out`,
-// owned by nothing yet, and answers 1 only when there was no memory.
-// `luce_rt_new_array` reads `rank` dimensions from `dims` and copies
-// `zero` into every cell; both arguments are borrowed for the call.
+// The `new_*` four **create**: each writes a fresh object into `out`
+// and answers 1 only when there was no memory.  `luce_rt_new_array`
+// reads `rank` dimensions from `dims` and copies `zero` into every
+// cell; both arguments are borrowed for the call.  An object row is not
+// freed while a program runs — it lives until the runtime's final sweep
+// — so creation is the whole of the object lifecycle a program drives.
 //
-// The other six are scope ownership itself (docs/OWNERSHIP.md), and
-// three of their arguments are one idea:
-//
-//   * `serial` — the frame, as `luce_rt_serial` handed it out.  One per
-//     call, so two live frames of the same function never collide.
-//   * `local` — which binding in that frame, as stage 6 numbered it.
-//   * `owned` — whether the caller is claiming to *be* that binding.
-//     Nonzero means "I am the owner named by (serial, local), check
-//     me"; zero means the verb was written on something with no name to
-//     check — a temporary, a field, an element.
-//
-// So `(owned, serial, local)` is one optional answer to "who says so",
-// and a mismatch is not a technicality: `free x` where `x` is not the
-// owner is the `not_owned` trap (S6, S23), which is what stops a borrow
-// from ending an object the lender still holds.
-//
-// All six walk a value's *top* objects — the object a handle names, or
-// a struct's object fields recursively — and never descend into an
-// object's elements, which already belong to it.
-//
-//   `bind`               the objects in `held` now belong to
-//                        (serial, local).  Nothing is freed.
-//   `unbind`             free the objects in `held` still bound to
-//                        (serial, local); scope exit is a run of these.
-//                        Anything owned elsewhere by now is left alone,
-//                        which is what makes a release safe on every
-//                        path, including a path that already gave.
-//   `loosen_from_frame`  drop frame `serial`'s claim without freeing —
-//                        what `return` does to what it hands back, so
-//                        the value leaves loose and the caller owns it
-//                        (S16).
-//   `free`               end the object now.
-//   `give`               check that giving is legal and answer the
-//                        object to hold from here.  It is the same
-//                        object: what stops the old name being used
-//                        again is the compiler (S10), and what this
-//                        checks is that the giver had it to give.
-//   `copy`               answer a fresh deep copy the caller owns,
-//                        leaving the original alone.
-//
-// `free`, `give` and `copy` are the three a program writes, so all
-// three trap rather than proceed on a freed object, an unfilled slot
-// (S42), or an owner that is not the one named.
+// `luce_rt_copy` answers a fresh deep copy the caller owns, leaving the
+// original alone; it walks a value's *top* objects — the object a
+// handle names, or a struct's object fields recursively — and never
+// descends into an object's elements, which already belong to it.  It
+// traps rather than proceed on a freed object or an unfilled slot (S42).
 
 pub export fn luce_rt_new_list(
     runtime: *Runtime,
@@ -1224,69 +1189,6 @@ pub export fn luce_rt_new_array(
     const dimension_count = checkedCount(runtime, rank) catch |mistake|
         return failed(runtime, mistake);
     out.* = runtime.newArray(dims[0..dimension_count], zero.*) catch |mistake|
-        return failed(runtime, mistake);
-    return survived;
-}
-
-pub export fn luce_rt_bind(
-    runtime: *Runtime,
-    held: [*c]const Value,
-    serial: u64,
-    local: u32,
-) callconv(.c) void {
-    if (!requireValueInput(runtime, held)) return;
-    runtime.bind(held.*, serial, local);
-}
-
-pub export fn luce_rt_unbind(
-    runtime: *Runtime,
-    held: [*c]const Value,
-    serial: u64,
-    local: u32,
-) callconv(.c) void {
-    if (!requireValueInput(runtime, held)) return;
-    runtime.unbind(held.*, serial, local);
-}
-
-pub export fn luce_rt_loosen_from_frame(
-    runtime: *Runtime,
-    held: [*c]const Value,
-    serial: u64,
-) callconv(.c) void {
-    if (!requireValueInput(runtime, held)) return;
-    runtime.loosenFromFrame(held.*, serial);
-}
-
-pub export fn luce_rt_free(
-    runtime: *Runtime,
-    held: [*c]const Value,
-    owned: i32,
-    serial: u64,
-    local: u32,
-) callconv(.c) i32 {
-    if (!requireValueInput(runtime, held)) return raised_trap;
-    const names_owner = checkedPresence(runtime, owned) catch |mistake|
-        return failed(runtime, mistake);
-    const expected: ?heap.OwnedBy = if (names_owner) .{ .serial = serial, .local = local } else null;
-    containers.freeVerb(runtime, held.*, expected) catch |mistake|
-        return failed(runtime, mistake);
-    return survived;
-}
-
-pub export fn luce_rt_give(
-    runtime: *Runtime,
-    held: [*c]const Value,
-    owned: i32,
-    serial: u64,
-    local: u32,
-    out: [*c]Value,
-) callconv(.c) i32 {
-    if (!requireValueOut(runtime, out)) return raised_trap;
-    if (!requireValueInput(runtime, held)) return raised_trap;
-    const names_owner = checkedPresence(runtime, owned) catch |mistake|
-        return failed(runtime, mistake);
-    const expected: ?heap.OwnedBy = if (names_owner) .{ .serial = serial, .local = local } else null;
-    out.* = containers.giveVerb(runtime, held.*, expected) catch |mistake|
         return failed(runtime, mistake);
     return survived;
 }

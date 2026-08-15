@@ -106,19 +106,7 @@ const StructShape = context.StructShape;
 const InterfaceDeclInfo = context.InterfaceDeclInfo;
 const InterfaceConformance = context.InterfaceConformance;
 const ConstantInfo = context.ConstantInfo;
-const OwnershipClass = context.OwnershipClass;
 const isReserved = context.isReserved;
-
-/// A `give` written inside a function type can be resolved while a
-/// struct field is still being collected.  Its ownership legality is
-/// intentionally checked after the complete containment graph has
-/// settled, so declaration order cannot turn a real object-carrying
-/// type into an empty, half-collected layout (OWNERSHIP.md S32).
-const DeferredGiveCheck = struct {
-    module: usize,
-    span: Span,
-    value_type: Type,
-};
 
 /// Reporting cap, matching stages 2 and 3.  One broken declaration
 /// can make every line after it wrong; a reader wants the first
@@ -216,11 +204,6 @@ pub const Analyzer = struct {
     /// unconditional expansion — one for the tag plus the largest
     /// member's (D12).
     variant_shapes: std.ArrayList(StructShape) = .empty,
-    /// Function-type parameters are resolved while layouts are still
-    /// being collected.  Keep their source sites until the shape pass
-    /// has made `carriesObjects` a settled table lookup.
-    deferred_give_checks: std.ArrayList(DeferredGiveCheck) = .empty,
-    shapes_settled: bool = false,
     functions: std.ArrayList(FunctionDeclInfo) = .empty,
     function_names: std.StringHashMapUnmanaged(u32) = .empty,
     /// Which row the runtime starts, once `entry.settle` has decided:
@@ -269,7 +252,6 @@ pub const Analyzer = struct {
         self.variant_decls.deinit(self.temporary);
         self.variant_names.deinit(self.temporary);
         self.variant_shapes.deinit(self.temporary);
-        self.deferred_give_checks.deinit(self.temporary);
         self.function_names.deinit(self.temporary);
         self.pool.deinit();
         self.constant_infos.deinit(self.temporary);
@@ -310,8 +292,6 @@ pub const Analyzer = struct {
         try layouts.collectStructs(self);
         try layouts.settleVariantMembers(self);
         try shapes.settleTypeShapes(self);
-        self.shapes_settled = true;
-        try resolve.settleDeferredGiveChecks(self);
         try self.registerConstants();
         try layouts.settleEnumMembers(self);
         try constants.foldAll(self);
@@ -488,25 +468,16 @@ pub const Analyzer = struct {
             const index = written_index + hidden;
             if (index >= info.parameter_types.len) break;
             const parameter_type = info.parameter_types[index];
-            // The entry's `args` arrived owning its list: the runtime
-            // built it and nobody else names it, so `main`'s scope
-            // frees it on the way out, exactly as a `give` parameter's
-            // scope does (OWNERSHIP.md S44, S15).
-            const owns = info.parameter_modes[index] == .give or info.is_entry;
-            const class: OwnershipClass = if (owns) .owned else .borrow_param;
-            // A parameter borrows its caller's storage, whichever
-            // way the object goes: the caller's binding outlives
-            // the call and gives the bytes back itself
+            // A parameter borrows its caller's storage: the caller's
+            // binding outlives the call and gives the bytes back itself
             // (docs/STRINGS.md).
-            const local = (try builder.declareLocalAs(
+            _ = (try builder.declareLocalAs(
                 parameter.name,
                 parameter_type,
                 false,
-                class,
                 .borrows,
                 parameter.name_span,
             )) orelse continue;
-            builder.setRoot(local, if (owns) .mutable else .unknown);
         }
 
         try builder.lowerBlock(info.declaration.body);
@@ -539,15 +510,8 @@ pub const Analyzer = struct {
         bodies: []const ?hir.nodes.Body,
         lowered: *std.ArrayList(mir.build.Lowering),
     ) Error!void {
-        // Lower's view of the settled tables, derived once: which
-        // struct and union layouts transitively carry objects, and
-        // every folded constant's typed value.
-        const struct_carries = try self.temporary.alloc(bool, self.struct_shapes.items.len);
-        defer self.temporary.free(struct_carries);
-        for (self.struct_shapes.items, struct_carries) |shape, *slot| slot.* = shape.carries;
-        const variant_carries = try self.temporary.alloc(bool, self.variant_shapes.items.len);
-        defer self.temporary.free(variant_carries);
-        for (self.variant_shapes.items, variant_carries) |shape, *slot| slot.* = shape.carries;
+        // Lower's view of the settled tables, derived once: every
+        // folded constant's typed value.
         const folded = try self.temporary.alloc(context.TypedConstant, self.constant_infos.items.len);
         defer self.temporary.free(folded);
         for (self.constant_infos.items, folded) |constant, *slot| {
@@ -559,10 +523,6 @@ pub const Analyzer = struct {
             // could only mean the walk was diagnosed, and the caller
             // gates on that before coming here.
             const body = &(recorded orelse unreachable);
-            const parameter_gives = try self.arena.alloc(bool, info.parameter_modes.len);
-            for (info.parameter_modes, parameter_gives) |mode, *gives| {
-                gives.* = mode == .give;
-            }
             var code: mir.build.Lowering = .{
                 .arena = self.arena,
                 .pool = self.pool,
@@ -571,7 +531,6 @@ pub const Analyzer = struct {
                 .variants = self.variants.items,
                 .name = info.name,
                 .parameter_count = @intCast(info.parameter_types.len),
-                .parameter_gives = parameter_gives,
                 .return_type = info.return_type,
                 .fallible = info.fallible,
                 .file = self.modules[info.module].file,
@@ -582,8 +541,6 @@ pub const Analyzer = struct {
                 .heap_types = self.heap_types.items,
                 .signatures = self.signatures.items,
                 .functions = self.functions.items,
-                .struct_carries = struct_carries,
-                .variant_carries = variant_carries,
                 .constants = folded,
                 .function = info,
             }, body, &code);

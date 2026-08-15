@@ -31,14 +31,12 @@ const Type = types.Type;
 const builder = @import("builder.zig");
 const calls = @import("calls.zig");
 const expressions = @import("expressions.zig");
-const flow = @import("flow.zig");
 const ledger = @import("ledger.zig");
 const recorder = @import("recorder.zig");
 const refusals = @import("refusals.zig");
 const defaults = @import("defaults.zig");
 const naming = @import("naming.zig");
 const resolve = @import("resolve.zig");
-const shapes = @import("shapes.zig");
 const FunctionBuilder = builder.FunctionBuilder;
 const RecordedOperand = recorder.RecordedOperand;
 const Typed = builder.Typed;
@@ -110,7 +108,7 @@ pub fn lowerConstruct(
         field.* = field_index;
         wanted.* = layout.fields[field_index].field_type;
     }
-    const run = (try self.lowerOperandsIntoTracking(operand_expressions, .{ .places = expected_types }, null)) orelse return null;
+    const run = (try self.lowerOperandsIntoTracking(operand_expressions, .{ .places = expected_types })) orelse return null;
     const values = run.values;
     // The recorded batch: written fields in evaluation order with
     // the field slot each fills, then defaults in materialization
@@ -134,28 +132,6 @@ pub fn lowerConstruct(
             .slot = field_index,
             .copied = run.copied[index],
         };
-        // Object fields follow the verb rule at construction
-        // (S24): the binding that receives the struct owns them.
-        // `none` owns nothing, so it is always a legal filling.
-        if (shapes.carriesObjects(self.analyzer, expected) and
-            argument.value.* != .none_literal and
-            try flow.refuseConstantEscape(self, value.root, argument.span, "a struct field")) return null;
-        if (shapes.carriesObjects(self.analyzer, expected) and
-            argument.value.* != .none_literal and
-            !(try self.yieldsOwnership(argument.value)))
-        {
-            try refusals.failNeedsOwnershipBatch(
-                self,
-                argument.span,
-                try std.fmt.allocPrint(self.arena(), "{s}.{s} keeps its owned value", .{ layout.name, name }),
-                argument.value,
-                expected,
-                "S21, S24",
-                operand_expressions,
-                index,
-            );
-            return null;
-        }
         // A struct owns its field run and every value in it, so
         // construction is a store like any other (docs/STRINGS.md).
         ledger.ownedForStore(self, fitted);
@@ -337,7 +313,7 @@ pub fn lowerVariantConstruct(
         field.* = field_index;
         wanted.* = member.fields[field_index].field_type;
     }
-    const run = (try self.lowerOperandsIntoTracking(operand_expressions, .{ .places = expected_types }, null)) orelse return null;
+    const run = (try self.lowerOperandsIntoTracking(operand_expressions, .{ .places = expected_types })) orelse return null;
     const values = run.values;
     // The recorded batch is `lowerConstruct`'s exactly: a union
     // member is built the way a struct is (docs/UNION.md D4).
@@ -360,32 +336,6 @@ pub fn lowerVariantConstruct(
             .slot = field_index,
             .copied = run.copied[index],
         };
-        // Object fields follow the verb rule at construction
-        // (S24): the binding that receives the union owns them.
-        // `none` owns nothing, so it is always a legal filling.
-        if (shapes.carriesObjects(self.analyzer, expected) and
-            argument.value.* != .none_literal and
-            try flow.refuseConstantEscape(self, value.root, argument.span, "a union payload field")) return null;
-        if (shapes.carriesObjects(self.analyzer, expected) and
-            argument.value.* != .none_literal and
-            !(try self.yieldsOwnership(argument.value)))
-        {
-            try refusals.failNeedsOwnershipBatch(
-                self,
-                argument.span,
-                try std.fmt.allocPrint(self.arena(), "{s}.{s}.{s} keeps its owned value", .{
-                    declared.name,
-                    member.name,
-                    name,
-                }),
-                argument.value,
-                expected,
-                "S21, S24",
-                operand_expressions,
-                index,
-            );
-            return null;
-        }
         // A union owns its run and every value in it, so
         // construction is a store like any other (docs/STRINGS.md).
         ledger.ownedForStore(self, fitted);
@@ -865,27 +815,8 @@ pub fn lowerIntrinsic(
     const slots = (try calls.resolveSlots(self, matched.name, "luce.sema.call", surface, 0, call.arguments, seen, call.span)) orelse
         return .failed;
     if (!(try calls.checkRequiredSlots(self, matched.name, "luce.sema.call", surface, seen, call.span))) return .failed;
-    if (matched.kind == .free_object and call.arguments.len == 1 and
-        try refusals.refuseFreeVerb(self, call.arguments[0].value, call.arguments[0].span))
-    {
-        return .failed;
-    }
     const argument_expressions = try self.arena().alloc(*ast.Expression, call.arguments.len);
-    for (call.arguments, 0..) |argument, index| {
-        // Builtins borrow (S11); a give with no owner to receive
-        // it would silently become an early free (free's operand
-        // is a name and gets its own diagnosis).
-        if (argument.value.* == .give and matched.kind != .free_object) {
-            try self.fail(
-                "luce.sema.own",
-                argument.span,
-                "{s} only borrows its arguments; give needs an owning destination [OWNERSHIP.md S11, S13]",
-                .{matched.name},
-            );
-            return .failed;
-        }
-        argument_expressions[index] = argument.value;
-    }
+    for (call.arguments, 0..) |argument, index| argument_expressions[index] = argument.value;
     const operand_expressions = argument_expressions[0..call.arguments.len];
     // **The builtins that answer their operand's own type land
     // their operands where the whole call lands** (docs/TYPES.md
@@ -902,10 +833,10 @@ pub fn lowerIntrinsic(
         if (landing) |place| {
             const places = try self.arena().alloc(Type, operand_expressions.len);
             @memset(places, place);
-            break :written (try self.lowerOperandsIntoTracking(operand_expressions, .{ .places = places }, null)) orelse
+            break :written (try self.lowerOperandsIntoTracking(operand_expressions, .{ .places = places })) orelse
                 return .failed;
         }
-        break :written (try self.lowerOperandsIntoTracking(operand_expressions, .nothing, null)) orelse return .failed;
+        break :written (try self.lowerOperandsIntoTracking(operand_expressions, .nothing)) orelse return .failed;
     };
     const written = run.values;
     // Written values land on the slots they resolved to, and a
@@ -999,133 +930,6 @@ pub fn lowerIntrinsic(
             }
             result = .long;
         },
-        .free_object => {
-            if (try flow.refuseConstantEscape(self, arguments[0].root, call.span, "free")) return .failed;
-            // `self` is a caller-owned place even when its value is
-            // a struct rather than a heap handle.  Diagnose that
-            // ownership boundary before free's ordinary type gate,
-            // or the dedicated inout-receiver rule below would be
-            // unreachable for the only spelling that can name it.
-            const operand = call.arguments[0].value;
-            if (operand.* == .name) {
-                if (self.findLocal(operand.name.text)) |found| {
-                    if (found.info.class == .inout_receiver) {
-                        try self.fail(
-                            "luce.sema.own",
-                            call.span,
-                            "self is the caller's receiver and cannot be freed; replace its fields or let the caller's scope release it [SELF.md D4]",
-                            .{},
-                        );
-                        return .failed;
-                    }
-                }
-            }
-            if (arguments[0].value_type != .heap) {
-                if (arguments[0].value_type == .optional) {
-                    try refusals.failAbsence(self, call.span, "free", arguments[0].value_type, call.arguments[0].value);
-                    return .failed;
-                }
-                return failIntrinsic(self, call, "free releases a list, map, array, builder, file, or task");
-            }
-            // free is deliberate early release of an owned name,
-            // and poisons the name like give does (S6).
-            if (operand.* != .name) {
-                if (operand.* == .copy) {
-                    // Reaching this point proves the inner copy was
-                    // itself legal and produced a direct heap handle.
-                    // Diagnose free's binding requirement only after
-                    // preserving every earlier copy/name/type error.
-                    try self.fail(
-                        "luce.sema.own",
-                        call.span,
-                        "free releases an owned name; bind this copy result to a name, then write free(NAME) [OWNERSHIP.md S6, S31]",
-                        .{},
-                    );
-                } else {
-                    try self.fail(
-                        "luce.sema.own",
-                        call.span,
-                        "free releases an owned name; containers free their own elements [OWNERSHIP.md S6, S22]",
-                        .{},
-                    );
-                }
-                return .failed;
-            }
-            const found = self.findLocal(operand.name.text) orelse return .failed;
-            switch (found.info.class) {
-                .borrow_param => {
-                    try self.fail(
-                        "luce.sema.own",
-                        call.span,
-                        "{s} is a borrowed parameter and cannot be freed; only owners free [OWNERSHIP.md S12]",
-                        .{operand.name.text},
-                    );
-                    return .failed;
-                },
-                .alias => {
-                    if (self.ownerNameFor(found.info)) |owner| {
-                        const owning = self.findLocal(owner).?;
-                        const owner_type = recorder.localType(self, owning.info.local);
-                        if (self.declaredOutsideActiveLoop(owning.depth)) {
-                            try self.fail(
-                                "luce.sema.own",
-                                call.span,
-                                "{s} is only an alias and its owner {s} lives outside this loop; neither may be freed per iteration — let the outer scope release it [OWNERSHIP.md S6, S8, S30]",
-                                .{ operand.name.text, owner },
-                            );
-                        } else if (owner_type == .optional and !flow.isNarrowed(self, owning.info.local)) {
-                            try self.fail(
-                                "luce.sema.own",
-                                call.span,
-                                "{s} is only an alias and its owner {s} is not proven present — prove the owning binding is present, then write free({s}) [OWNERSHIP.md S6, S8, S43]",
-                                .{ operand.name.text, owner, owner },
-                            );
-                        } else {
-                            // Preserve the established resource-free
-                            // wording; the two refinements above are
-                            // exactly the cases where that advice would
-                            // lead to another refusal.
-                            try self.fail(
-                                "luce.sema.own",
-                                call.span,
-                                "{s} aliases an object it does not own; free the owning name [OWNERSHIP.md S6, S8]",
-                                .{operand.name.text},
-                            );
-                        }
-                    } else {
-                        try self.fail(
-                            "luce.sema.own",
-                            call.span,
-                            "{s} is a borrowed or stale view with no live owner to free here; let its owner or scope release it [OWNERSHIP.md S6, S8, S23]",
-                            .{operand.name.text},
-                        );
-                    }
-                    return .failed;
-                },
-                // Handled before free's heap-type gate above.  Keep
-                // this exhaustive arm as a compiler assertion that
-                // the early check remains the sole route.
-                .inout_receiver => unreachable,
-                .owned => {},
-            }
-            if (self.loops.items.len > 0 and
-                found.depth < self.loops.items[self.loops.items.len - 1].scope_depth)
-            {
-                try self.fail(
-                    "luce.sema.own",
-                    call.span,
-                    "{s} is declared outside this loop; the next iteration would use a freed name [OWNERSHIP.md S30]",
-                    .{operand.name.text},
-                );
-                return .failed;
-            }
-            found.info.poisoned = .freed;
-            // Free names its binding so the runtime can verify
-            // this name still owns the object (S6, S23) — the
-            // hidden trailing argument lower re-derives from the
-            // operand's own `local_get`.
-            result = .none;
-        },
         .parse_int, .parse_float => {
             if (arguments[0].value_type != .string)
                 return failIntrinsic(self, call, "this builtin parses a string");
@@ -1159,7 +963,6 @@ pub fn lowerIntrinsic(
         .own_storage,
         .drop_storage,
         .export_storage,
-        .give_object,
         .copy_object,
         .null_object,
         // Emitted by a mixed comparison; there is no name for it.

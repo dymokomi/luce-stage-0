@@ -81,17 +81,7 @@ fn check(self: *Analyzer) Error!void {
         );
     } else if (declaration.parameters.len == 1) {
         const parameter = declaration.parameters[0];
-        if (parameter.mode == .give) {
-            // S13 says `give` appears at both ends, and the entry
-            // has one end: the runtime is the caller and there is
-            // no call site to say it back.
-            try self.fail(
-                "luce.sema.main",
-                parameter.span,
-                "main's parameter takes no verb; the runtime hands the list to main's scope [OWNERSHIP.md S44]",
-                .{},
-            );
-        } else if (info.parameter_types.len == 1 and
+        if (info.parameter_types.len == 1 and
             !isCommandLine(self, info.parameter_types[0]))
         {
             try self.fail(
@@ -258,7 +248,6 @@ fn synthesize(self: *Analyzer, names: []const []const u8) Error!void {
         .name = written.name,
         .module = module,
         .parameter_types = try one(self, Type, command_line),
-        .parameter_modes = try one(self, ast.ParameterMode, .borrow),
         .parameter_defaults = try one(self, ?context.TypedConstant, null),
         .receiver = .not,
         .enclosing = null,

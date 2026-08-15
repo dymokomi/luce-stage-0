@@ -40,10 +40,8 @@ pub const TempSlot = struct {
     /// compound concatenation and the writing-receiver keep-copy —
     /// which `hir.lower` re-derives (its `parkDerivedStorage`).
     node: ?nodes.NodeRef,
-    /// Whether this temporary owns the objects in its value, its
-    /// storage, or both — the same two questions `context.Release`
-    /// answers for a named binding.
-    objects: bool,
+    /// Whether this temporary owns its value's storage — the question
+    /// `context.Release` answers for a named binding.
     storage: bool,
     /// Whether the park may be retracted so a store can take the
     /// storage instead of copying it (`takeStorage`).  True of
@@ -71,25 +69,21 @@ pub const TempSlot = struct {
 pub fn registerTemp(
     self: *FunctionBuilder,
     value: Typed,
-    objects: bool,
     storage: bool,
     span: Span,
 ) Error!void {
     const local = try recorder.recordLocal(self, null, value.value_type, storage, span);
-    // The park records at the park (coupling #3): the at-park
-    // claims are what the park emits, and the released halves
-    // settle in place as adopting stores retract them.
+    // The park records at the park (coupling #3): the at-park claim is
+    // what the park emits, and the released half settles in place as an
+    // adopting store retracts it.
     setPark(value.node, .{
         .local = local,
-        .objects = objects,
         .storage = storage,
-        .released_objects = objects,
         .released_storage = storage,
     });
     try self.temps.append(self.temporary(), .{
         .local = local,
         .node = value.node,
-        .objects = objects,
         .storage = storage,
     });
 }
@@ -140,7 +134,6 @@ pub fn flushTemps(self: *FunctionBuilder, from: usize) void {
             const node = temp.node orelse continue;
             const parked = node.park().?;
             std.debug.assert(parked.local == temp.local);
-            std.debug.assert(parked.released_objects == temp.objects);
             std.debug.assert(parked.released_storage == temp.storage);
         }
     }
@@ -158,7 +151,6 @@ pub fn parkDerivedTemp(self: *FunctionBuilder, value_type: Type, span: Span) Err
     try self.temps.append(self.temporary(), .{
         .local = local,
         .node = null,
-        .objects = false,
         .storage = true,
     });
     return self.temps.items.len - 1;
@@ -187,15 +179,14 @@ pub fn setPark(node: nodes.NodeRef, parked: nodes.Park) void {
     }
 }
 
-/// Settle one retraction onto a parked node — the recording half
-/// of `takeStorage`, `disownShape` and `disownTemp`.  A derived
-/// park has no node and nothing to settle.
-fn settlePark(node: ?nodes.NodeRef, objects: bool, storage: bool) void {
+/// Settle one storage retraction onto a parked node — the recording
+/// half of `takeStorage`.  A derived park has no node and nothing to
+/// settle.
+fn settlePark(node: ?nodes.NodeRef, storage: bool) void {
     const parked_node = node orelse return;
     switch (parked_node.*) {
         inline else => |*payload| {
             if (payload.park) |*parked| {
-                if (!objects) parked.released_objects = false;
                 if (!storage) parked.released_storage = false;
             }
         },
@@ -224,14 +215,11 @@ fn parkedForStorage(self: *const FunctionBuilder, node: nodes.NodeRef) bool {
 /// copy, and it is why this is not a question — asking it hands
 /// the storage over (docs/STRINGS.md).
 ///
-/// Two parks are kept rather than retracted.  A slot that is read
-/// back cannot stop owning storage, because a borrowing slot hands
-/// a reload the register shape and a string's form does not
-/// survive that — which is exactly the slot a fallible call's
-/// result crosses its branch in.  And a temporary that also owns
-/// *objects* keeps its slot, because that ownership is settled at
-/// run time by `object_bind` and the release still has to load the
-/// slot to ask.
+/// One park is kept rather than retracted: a slot that is read back
+/// cannot stop owning storage, because a borrowing slot hands a
+/// reload the register shape and a string's form does not survive
+/// that — which is exactly the slot a fallible call's result crosses
+/// its branch in.
 fn takeStorage(self: *FunctionBuilder, value: Typed) bool {
     if (value.provenance() != .fresh) return false;
     const anchor = parkAnchor(value.node);
@@ -240,7 +228,7 @@ fn takeStorage(self: *FunctionBuilder, value: Typed) bool {
         if (parkAnchor(held) != anchor) continue;
         if (temp.taken) return false;
         if (!temp.storage) continue;
-        if (!temp.disownable or temp.objects) return false;
+        if (!temp.disownable) return false;
         // The tree's locals table carries the retraction: the
         // settled answer is that the place, not the slot, owns the
         // storage (coupling #3), and `hir.lower` reads exactly
@@ -249,10 +237,9 @@ fn takeStorage(self: *FunctionBuilder, value: Typed) bool {
         // Emptied rather than forgotten: the record is what keeps
         // one value from being parked twice, and every index into
         // this list is a floor some other unwinding path recorded.
-        // A temporary that owns neither releases nothing.
         temp.storage = false;
         temp.taken = true;
-        settlePark(temp.node, true, false);
+        settlePark(temp.node, false);
         return true;
     }
     return true;
@@ -318,48 +305,5 @@ pub fn parkFreshStorage(self: *FunctionBuilder, value: Typed, span: Span) Error!
     if (!shapes.ownsStorage(self.analyzer, value.value_type)) return;
     if (value.provenance() != .fresh) return;
     if (parkedForStorage(self, value.node)) return;
-    try registerTemp(self, value, false, true, span);
-}
-
-/// A destructured call's struct temporary hands its objects to the
-/// names and keeps only its own field run, which the statement's
-/// end still reclaims (docs/STRINGS.md).
-pub fn disownShape(self: *FunctionBuilder, node: nodes.NodeRef) void {
-    const anchor = parkAnchor(node);
-    var index = self.temps.items.len;
-    while (index > 0) {
-        index -= 1;
-        const held = self.temps.items[index].node orelse continue;
-        if (parkAnchor(held) != anchor) continue;
-        if (self.temps.items[index].storage) {
-            self.temps.items[index].objects = false;
-            settlePark(self.temps.items[index].node, false, true);
-        } else {
-            settlePark(self.temps.items[index].node, false, false);
-            _ = self.temps.orderedRemove(index);
-        }
-        return;
-    }
-}
-
-/// A fresh value this return is handing over: the object moves to
-/// the caller, so the statement's unwinding must not free it.  Its
-/// *storage* still goes back — the return took a copy of that
-/// (docs/STRINGS.md).
-pub fn disownTemp(self: *FunctionBuilder, node: nodes.NodeRef) void {
-    const anchor = parkAnchor(node);
-    var index = self.temps.items.len;
-    while (index > 0) {
-        index -= 1;
-        const held = self.temps.items[index].node orelse continue;
-        if (parkAnchor(held) != anchor) continue;
-        if (self.temps.items[index].storage) {
-            self.temps.items[index].objects = false;
-            settlePark(self.temps.items[index].node, false, true);
-        } else {
-            settlePark(self.temps.items[index].node, false, false);
-            _ = self.temps.orderedRemove(index);
-        }
-        return;
-    }
+    try registerTemp(self, value, true, span);
 }

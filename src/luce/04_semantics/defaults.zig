@@ -32,8 +32,6 @@ const helpers = @import("helpers.zig");
 // (`constants.zig`).
 const constants = @import("constants.zig");
 
-const shapes = @import("shapes.zig");
-
 const context = @import("context.zig");
 const Error = context.Error;
 const Type = types.Type;
@@ -54,20 +52,6 @@ pub fn foldDefault(
     resolved: Type,
     written: *const ast.Expression,
 ) Error!?TypedConstant {
-    // A give parameter takes ownership, while a program-root
-    // container has no ownership to transfer.  Borrowed defaults
-    // may be container constants: every omitted call then borrows
-    // the same per-runtime root (docs/CONSTANTS.md, Surface
-    // interactions).
-    if (parameter.mode == .give) {
-        try self.fail(
-            "luce.sema.own",
-            parameter.span,
-            "a give parameter takes ownership, so its default cannot be a shared constant container [OWNERSHIP.md S13, S32, S46]",
-            .{},
-        );
-        return null;
-    }
     if (helpers.deeperThan(written, helpers.max_expression_depth)) {
         try self.fail(
             "luce.sema.nesting",
@@ -209,19 +193,6 @@ fn foldFieldDefault(
 ) Error!?TypedConstant {
     const layout = self.structs.items[layout_index];
     const field = layout.fields[field_index];
-    // S24: the binding that receives the struct owns its object
-    // fields, and a defaulted field is one nobody wrote at the
-    // construction site — there is no owner a constant could
-    // stand in for (docs/ARGS.md §5).
-    if (shapes.carriesObjects(self, field.field_type)) {
-        try self.fail(
-            "luce.sema.own",
-            written.span(),
-            "{s}.{s} keeps its object, so its default cannot be a shared object [OWNERSHIP.md S21, S24, S46]",
-            .{ layout.name, field.name },
-        );
-        return null;
-    }
     if (helpers.deeperThan(written, helpers.max_expression_depth)) {
         try self.fail(
             "luce.sema.nesting",
@@ -327,9 +298,8 @@ pub fn variantFieldDefault(
     return result;
 }
 
-/// The checking half of `variantFieldDefault`: ownership, depth,
-/// the fold at the field's type, and the landing check — S24's
-/// struct-field rule verbatim, because a payload field is a place
+/// The checking half of `variantFieldDefault`: depth, the fold at the
+/// field's type, and the landing check — a payload field is a place
 /// that stores (docs/UNION.md).  Null after reporting.
 fn foldVariantFieldDefault(
     self: *Analyzer,
@@ -339,15 +309,6 @@ fn foldVariantFieldDefault(
     field: types.StructField,
     written: *const ast.Expression,
 ) Error!?TypedConstant {
-    if (shapes.carriesObjects(self, field.field_type)) {
-        try self.fail(
-            "luce.sema.own",
-            written.span(),
-            "{s}.{s}.{s} keeps its object, so its default cannot be a shared object [OWNERSHIP.md S21, S24, S46]",
-            .{ declared.name, member.name, field.name },
-        );
-        return null;
-    }
     if (helpers.deeperThan(written, helpers.max_expression_depth)) {
         try self.fail(
             "luce.sema.nesting",
@@ -452,8 +413,6 @@ fn parameterRead(declaration: *const ast.FuncDecl, expression: *const ast.Expres
             }
             return null;
         },
-        .give => |verb| return parameterRead(declaration, verb.operand),
-        .copy => |verb| return parameterRead(declaration, verb.operand),
         .try_call => |tried| return parameterRead(declaration, tried.operand),
     }
 }

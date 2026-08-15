@@ -120,7 +120,6 @@ pub const Service = enum {
     luce_rt_close,
     luce_rt_leaked,
     luce_rt_status,
-    luce_rt_serial,
     luce_rt_exhaust,
 
     // -- constant-container roots (docs/CONSTANTS.md R-C) -----------
@@ -178,16 +177,11 @@ pub const Service = enum {
     luce_rt_effects_enter,
     luce_rt_effects_leave,
 
-    // -- objects and ownership ----------------------------------------
+    // -- objects ------------------------------------------------------
     luce_rt_new_list,
     luce_rt_new_map,
     luce_rt_new_builder,
     luce_rt_new_array,
-    luce_rt_bind,
-    luce_rt_unbind,
-    luce_rt_loosen_from_frame,
-    luce_rt_free,
-    luce_rt_give,
     luce_rt_copy,
 
     // -- struct values ------------------------------------------------
@@ -417,8 +411,6 @@ pub fn describe(service: Service) Effect {
         },
         .luce_rt_leaked => .{ .memory = reads_run, .parameters = &.{.run} },
         .luce_rt_status => .{ .memory = reads_run, .parameters = &.{ .run, .plain } },
-        // Reads the counter and bumps it.
-        .luce_rt_serial => .{ .memory = touches_run, .parameters = &.{.run} },
         // One store into the runtime, on the way out of a run that ran
         // out of memory.
         .luce_rt_exhaust => .{
@@ -768,28 +760,6 @@ pub fn describe(service: Service) Effect {
             .memory = touches_heap,
             .parameters = &.{ .run, .numbers_in, .plain, .value_in, .value_out },
         },
-        .luce_rt_bind => .{
-            .memory = touches_heap,
-            .parameters = &.{ .run, .value_in, .plain, .plain },
-        },
-        .luce_rt_unbind => .{
-            .memory = touches_heap,
-            .parameters = &.{ .run, .value_in, .plain, .plain },
-            .willreturn = false,
-        },
-        .luce_rt_loosen_from_frame => .{
-            .memory = touches_heap,
-            .parameters = &.{ .run, .value_in, .plain },
-        },
-        .luce_rt_free => .{
-            .memory = touches_heap,
-            .parameters = &.{ .run, .value_in, .plain, .plain, .plain },
-            .willreturn = false,
-        },
-        .luce_rt_give => .{
-            .memory = touches_heap,
-            .parameters = &.{ .run, .value_in, .plain, .plain, .plain, .value_out },
-        },
         .luce_rt_copy => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in, .value_out },
@@ -1131,8 +1101,6 @@ test "exactly callbacks, waits, deep copies, and release-reachable services with
             .luce_rt_close,
             .luce_rt_constants_abort,
             .luce_rt_discard_loose,
-            .luce_rt_unbind,
-            .luce_rt_free,
             .luce_rt_copy,
             .luce_rt_index_set,
             .luce_rt_list_slice,

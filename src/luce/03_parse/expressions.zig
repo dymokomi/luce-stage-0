@@ -76,8 +76,6 @@ pub fn startsExpression(kind: Kind) bool {
         .keyword_self,
         .keyword_new,
         .keyword_not,
-        .keyword_give,
-        .keyword_copy,
         .keyword_spawn,
         .keyword_try,
         .minus,
@@ -351,8 +349,8 @@ fn chainedComparison(
 }
 
 /// The prefix operators, right-associative and all at one precedence:
-/// `give`, `copy`, `not`, and unary `-`.  Guarded, because a chain of
-/// them recurses once per operator.
+/// `not` and unary `-`.  Guarded, because a chain of them recurses once
+/// per operator.
 fn unaryExpression(self: *Parser) Error!?*ast.Expression {
     if (!try self.enter("expression")) return null;
     defer self.leave();
@@ -364,20 +362,6 @@ fn unaryExpression(self: *Parser) Error!?*ast.Expression {
         return null;
     }
 
-    if (self.accept(.keyword_give)) |keyword| {
-        const operand = (try unaryExpression(self)) orelse return null;
-        return make(self, .{ .give = .{
-            .operand = operand,
-            .span = .{ .start = keyword.span.start, .end = operand.span().end },
-        } });
-    }
-    if (self.accept(.keyword_copy)) |keyword| {
-        const operand = (try unaryExpression(self)) orelse return null;
-        return make(self, .{ .copy = .{
-            .operand = operand,
-            .span = .{ .start = keyword.span.start, .end = operand.span().end },
-        } });
-    }
     if (self.accept(.keyword_try)) |keyword| {
         const operand = (try unaryExpression(self)) orelse return null;
         return make(self, .{ .try_call = .{

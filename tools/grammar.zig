@@ -165,19 +165,12 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
         // is: it makes a resource and moves things into it, and the
         // arguments it carries wear `give` and `copy` themselves
         // (docs/THREADS.md D2, D3).
-        .keyword_new, .keyword_give, .keyword_copy, .keyword_spawn => .ownership,
+        .keyword_new, .keyword_spawn => .ownership,
 
         .keyword_self => .receiver,
 
         else => null,
     };
-}
-
-/// The one free builtin that is an ownership verb rather than a call
-/// to colour like `len`.  Matched on what it lowers to and not on its
-/// spelling, so renaming it in the language renames it here.
-fn isOwnershipBuiltin(builtin: luce.semantics.Builtin) bool {
-    return builtin.kind == .free_object;
 }
 
 /// The two builtins that end a run, and the scope each gets.
@@ -417,11 +410,6 @@ fn keywordsOf(gpa: Allocator, class: Class) Error!Words {
         const found = keywordClass(keyword.kind) orelse return Error.UnclassifiedKeyword;
         if (found == class) try words.add(keyword.word);
     }
-    if (class == .ownership) {
-        for (luce.semantics.builtins) |builtin| {
-            if (isOwnershipBuiltin(builtin)) try words.add(builtin.name);
-        }
-    }
     return words;
 }
 
@@ -453,15 +441,14 @@ fn typeNames(gpa: Allocator) Allocator.Error!Words {
     return words;
 }
 
-/// The free builtins, host-gated or not.  Three are left out and each
-/// has a rule of its own: `free` is an ownership verb, and `error` and
-/// `trap` are the two ways a program stops.
+/// The free builtins, host-gated or not.  Two are left out and each
+/// has a rule of its own: `error` and `trap` are the two ways a program
+/// stops.
 fn builtinNames(gpa: Allocator, host: bool) Allocator.Error!Words {
     var words: Words = .{ .gpa = gpa };
     errdefer words.deinit();
     if (!host) try words.addAll(&reserved_syntax);
     for (luce.semantics.builtins) |builtin| {
-        if (isOwnershipBuiltin(builtin)) continue;
         if (stoppingScope(builtin) != null) continue;
         if (builtin.host == host) try words.add(builtin.name);
     }

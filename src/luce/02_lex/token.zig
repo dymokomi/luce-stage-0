@@ -71,8 +71,6 @@ pub const Kind = enum {
     keyword_false,
     keyword_new,
     keyword_import,
-    keyword_give,
-    keyword_copy,
     /// `spawn f(args)` — run `f` on a worker with its own runtime and
     /// answer the `task` that owns it (docs/THREADS.md D2, D3).  A
     /// keyword rather than a builtin because its operand is a *call*
@@ -212,8 +210,6 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "false", .kind = .keyword_false },
     .{ .word = "new", .kind = .keyword_new },
     .{ .word = "import", .kind = .keyword_import },
-    .{ .word = "give", .kind = .keyword_give },
-    .{ .word = "copy", .kind = .keyword_copy },
     .{ .word = "spawn", .kind = .keyword_spawn },
     .{ .word = "none", .kind = .keyword_none },
     .{ .word = "try", .kind = .keyword_try },

@@ -1,8 +1,8 @@
 //! Does this method write its receiver?
 //!
 //! The one receiver fact source no longer spells (docs/SELF.md D3):
-//! a method is a writer if its body assigns `self`, gives it, frees
-//! it, or calls a method of its own type that is one.  Everything
+//! a method is a writer if its body assigns `self`, or calls a method
+//! of its own type that is one.  Everything
 //! below is that walk — statement by statement and expression by
 //! expression over the *untyped* tree, because it runs before any
 //! body is checked and its answer is part of the signature the check
@@ -132,12 +132,6 @@ fn expressionWritesReceiver(
             break :blk false;
         },
         .call => |call| blk: {
-            if (std.mem.eql(u8, call.callee, "free") and
-                call.arguments.len == 1 and
-                expressionIsSelf(call.arguments[0].value))
-            {
-                break :blk true;
-            }
             for (call.arguments) |argument| {
                 if (expressionWritesReceiver(self, info, argument.value)) break :blk true;
             }
@@ -188,9 +182,6 @@ fn expressionWritesReceiver(
             }
             break :blk false;
         },
-        .give => |give| expressionIsSelf(give.operand) or
-            expressionWritesReceiver(self, info, give.operand),
-        .copy => |copy| expressionWritesReceiver(self, info, copy.operand),
         .try_call => |attempt| expressionWritesReceiver(self, info, attempt.operand),
         .spawn => |spawn| expressionWritesReceiver(self, info, spawn.call),
         // A lambda cannot carry self.  Its body is checked in its
@@ -264,8 +255,4 @@ fn expressionRootIsSelf(expression: *const ast.Expression) bool {
         .field => |field| expressionRootIsSelf(field.target),
         else => false,
     };
-}
-
-fn expressionIsSelf(expression: *const ast.Expression) bool {
-    return expression.* == .name and std.mem.eql(u8, expression.name.text, "self");
 }

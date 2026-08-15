@@ -162,7 +162,17 @@ pub const magic = "LUCE";
 /// function fields remain distinct from source struct fields, and bound
 /// witnesses plus indirect calls record fallibility. Ordinary function
 /// values remain non-fallible because their source type has no `!` spelling.
-pub const format_version: u32 = 45;
+///
+/// 46 — scope ownership is retired for objects (docs/MEMORY.md): objects
+/// live until the runtime sweeps at exit, so the `object_bind` and
+/// `object_unbind` instructions leave `Instruction`, the `free_object` and
+/// `give_object` intrinsics leave `Intrinsic`, and `mir.Function` drops the
+/// per-parameter `parameter_gives` wire it carried since 43.  Names left
+/// the middle of two unions, so every tag after them renumbers — safe for
+/// exactly one reason and it is this line: the version moved with them, so
+/// a module written under 45 is refused by name instead of decoded against
+/// the wrong tags.
+pub const format_version: u32 = 46;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -239,7 +249,6 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
         try writer.int(u32, @intCast(signature.parameters.len));
         for (signature.parameters) |parameter| {
             try writer.valueType(parameter.value_type);
-            try writer.int(u8, @intFromBool(parameter.gives));
         }
         try writer.valueType(signature.result);
     }
@@ -354,8 +363,6 @@ const Writer = struct {
     fn function(self: *Writer, of: *const mir.Function) error{OutOfMemory}!void {
         try self.blob(of.name);
         try self.int(u32, of.parameter_count);
-        try self.int(u32, @intCast(of.parameter_gives.len));
-        for (of.parameter_gives) |gives| try self.int(u8, @intFromBool(gives));
         try self.valueType(of.return_type);
         try self.int(u8, @intFromBool(of.fallible));
 
@@ -466,14 +473,6 @@ const Writer = struct {
                 try self.int(u32, new.heap);
                 try self.registers(new.dims);
             },
-            .object_bind => |bind| {
-                try self.int(u32, bind.local);
-                try self.int(u32, bind.value);
-            },
-            .object_unbind => |unbind| {
-                try self.int(u32, unbind.local);
-                try self.int(u32, unbind.value);
-            },
             .jump => |target| try self.int(u32, target),
             .branch => |branch| {
                 try self.int(u32, branch.condition);
@@ -580,7 +579,6 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
         const parameters = try arena.alloc(types.Signature.Parameter, parameter_count);
         for (parameters) |*parameter| {
             parameter.value_type = try reader.valueType();
-            parameter.gives = (try reader.int(u8)) != 0;
         }
         signature.parameters = parameters;
         signature.result = try reader.valueType();
@@ -766,9 +764,6 @@ const Reader = struct {
     fn function(self: *Reader, arena: Allocator, out: *mir.Function) DecodeError!void {
         out.name = try arena.dupe(u8, try self.blob());
         out.parameter_count = try self.int(u32);
-        const parameter_gives = try arena.alloc(bool, try self.count());
-        for (parameter_gives) |*gives| gives.* = (try self.int(u8)) != 0;
-        out.parameter_gives = parameter_gives;
         out.return_type = try self.valueType();
         out.fallible = (try self.int(u8)) != 0;
 
@@ -898,14 +893,6 @@ const Reader = struct {
             .heap_new => .{ .heap_new = .{
                 .heap = try self.int(u32),
                 .dims = try self.registers(arena),
-            } },
-            .object_bind => .{ .object_bind = .{
-                .local = try self.int(u32),
-                .value = try self.int(u32),
-            } },
-            .object_unbind => .{ .object_unbind = .{
-                .local = try self.int(u32),
-                .value = try self.int(u32),
             } },
             .jump => .{ .jump = try self.int(u32) },
             .branch => .{ .branch = .{
@@ -1180,9 +1167,6 @@ test "a compiled program round-trips through the module format" {
         \\    grid[1, 2] = total
         \\    for value in points:
         \\        total = total + long(value)
-        \\    free(points)
-        \\    free(counts)
-        \\    free(grid)
         \\
     ;
     var program = try compileScript(source);
@@ -1207,115 +1191,6 @@ test "a compiled program round-trips through the module format" {
     const again = try encode(testing.allocator, &loaded);
     defer testing.allocator.free(again);
     try testing.expectEqualSlices(u8, encoded, again);
-}
-
-test "function value give modes round-trip with the callee" {
-    const source =
-        \\func consume(values: give list(long)) -> long:
-        \\    var total: long = 0
-        \\    for value in values:
-        \\        total = total + value
-        \\    return total
-        \\
-        \\func main():
-        \\    var values: list(long) = [1, 2, 3]
-        \\    let consume_values: func(give list(long)) -> long = consume
-        \\    print(string(consume_values(give values)))
-        \\
-    ;
-    var program = try compileScript(source);
-    defer program.deinit();
-
-    var saw_give = false;
-    for (program.functions) |function| {
-        if (function.parameter_gives.len != function.parameter_count) return error.TestUnexpectedResult;
-        for (function.parameter_gives) |gives| saw_give = saw_give or gives;
-    }
-    try testing.expect(saw_give);
-
-    const encoded = try encode(testing.allocator, &program);
-    defer testing.allocator.free(encoded);
-    var loaded = try decode(testing.allocator, encoded);
-    defer loaded.deinit();
-
-    try testing.expectEqual(program.functions.len, loaded.functions.len);
-    for (program.functions, loaded.functions) |original, decoded| {
-        try testing.expectEqualSlices(bool, original.parameter_gives, decoded.parameter_gives);
-    }
-}
-
-test "decoded indirect calls reject mismatched ownership verbs" {
-    const source =
-        \\func consume(values: give list(long)) -> long:
-        \\    var total: long = 0
-        \\    for value in values:
-        \\        total = total + value
-        \\    return total
-        \\
-        \\func main():
-        \\    var values: list(long) = [1, 2, 3]
-        \\    let consume_values: func(give list(long)) -> long = consume
-        \\    print(string(consume_values(give values)))
-        \\
-    ;
-    var program = try compileScript(source);
-    defer program.deinit();
-
-    const SignatureSite = struct { signature: usize, parameter: usize };
-    var signature_site: ?SignatureSite = null;
-    for (program.signatures, 0..) |signature, signature_index| {
-        for (signature.parameters, 0..) |parameter, parameter_index| {
-            if (!parameter.gives) continue;
-            signature_site = .{
-                .signature = signature_index,
-                .parameter = parameter_index,
-            };
-            break;
-        }
-        if (signature_site != null) break;
-    }
-    try testing.expect(signature_site != null);
-
-    const FunctionSite = struct { function: usize, parameter: usize };
-    var function_site: ?FunctionSite = null;
-    for (program.functions, 0..) |function, function_index| {
-        for (function.parameter_gives, 0..) |gives, parameter_index| {
-            if (!gives) continue;
-            function_site = .{
-                .function = function_index,
-                .parameter = parameter_index,
-            };
-            break;
-        }
-        if (function_site != null) break;
-    }
-    try testing.expect(function_site != null);
-
-    // A function value carries the signature's ownership verb.  Flipping
-    // only that side must be refused before an indirect call can hand a
-    // borrowed list to a callee that binds it.
-    const signature = signature_site.?;
-    program.signatures[signature.signature].parameters[signature.parameter].gives = false;
-    {
-        const encoded = try encode(testing.allocator, &program);
-        defer testing.allocator.free(encoded);
-        try testing.expectError(error.InvalidModule, decode(testing.allocator, encoded));
-    }
-    program.signatures[signature.signature].parameters[signature.parameter].gives = true;
-
-    // The converse is equally dangerous: a stale function row that says
-    // the parameter is borrowed would skip the callee's ownership handoff.
-    const function = function_site.?;
-    const original_gives = program.functions[function.function].parameter_gives;
-    const forged_gives = try program.arena.allocator().dupe(bool, original_gives);
-    program.functions[function.function].parameter_gives = forged_gives;
-    forged_gives[function.parameter] = false;
-    {
-        const encoded = try encode(testing.allocator, &program);
-        defer testing.allocator.free(encoded);
-        try testing.expectError(error.InvalidModule, decode(testing.allocator, encoded));
-    }
-    program.functions[function.function].parameter_gives = original_gives;
 }
 
 test "an inout receiver and call round-trip through the current format" {
@@ -1752,7 +1627,7 @@ test "a damaged register reference fails verification, not execution" {
 }
 
 // A compact program touching every interesting wire shape: structs,
-// heap types, intrinsics, calls, branches, ownership instructions.
+// heap types, intrinsics, calls, branches, value-storage instructions.
 //
 // **Loop-free on purpose.**  The mutation test below runs what it
 // decodes, and a run has to end for the suite to end.  Nothing bounds
@@ -1997,8 +1872,14 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // after `path_kind`.
     // 44 -> 45: compiler-generated interface witness entries record whether
     // their concrete target is fallible.
-    try testing.expectEqual(@as(u32, 45), format_version);
-    try testing.expectEqual(@as(u64, 7247777384699053929), hasher.final());
+    // 45 -> 46: scope ownership is retired for objects (docs/MEMORY.md).
+    // `object_bind`/`object_unbind` leave `Instruction` and
+    // `free_object`/`give_object` leave `Intrinsic`, both from the middle
+    // of their unions, so the hash moves with the four names *and* every
+    // tag after them renumbers; `mir.Function` drops `parameter_gives`,
+    // which moves the hash again.
+    try testing.expectEqual(@as(u32, 46), format_version);
+    try testing.expectEqual(@as(u64, 228527925163474494), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

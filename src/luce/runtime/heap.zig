@@ -1,20 +1,21 @@
-//! The object heap and its ownership machinery — the heart of
-//! `libluce_rt`.
+//! The object heap — the heart of `libluce_rt`.
 //!
-//! Luce's heap objects (`List`, `Map`, `Array`, `Builder`) are freed by
-//! scope ownership, ratified S1–S43 in docs/OWNERSHIP.md and proven by
-//! `specs/ownership_spec.zig`.  Every rule those specs describe lives
-//! in this file, once: the binding that received a fresh object owns
-//! it, containers own what they adopt, `give`/`copy`/`free` move or end
-//! ownership, and a use after free traps rather than reading freed
-//! memory.
+//! Luce's heap objects (`List`, `Map`, `Array`, `Builder`) are not
+//! freed while a program runs: a row lives from the `new` that made it
+//! until `Runtime.deinit` sweeps the whole table at the end of the run.
+//! What a program does not reclaim is a number in the leak census, and
+//! the final sweep gives the memory back regardless.  Value storage — a
+//! String's bytes and a struct value's field run — keeps its own owner
+//! and death point (`ownValue`/`dropStorage`); only object rows leak
+//! until exit.  The one lifetime distinction left between rows is
+//! `Object.constant`, a materialized program constant the sweep and a
+//! failed prologue treat specially.
 //!
 //! `Runtime` is the whole of a running program's state that is not the
 //! program: the two allocators a run draws on (`Memory`), the object
 //! table handles index, the frame-serial counter, and the trap channel.
 //! It is what a compiled artifact holds a pointer to for its whole run.
 
-const builtin = @import("builtin");
 const std = @import("std");
 const vocabulary = @import("../support/vocabulary.zig");
 const files = @import("files.zig");
@@ -69,14 +70,10 @@ pub const MapEntry = struct { key: Value, value: Value };
 
 /// One pending value in the deep-copy walk.  The destination points
 /// into a stable value run: a caller's result slot, a copied struct,
-/// or a fully-sized list/array/map buffer.  The parent is the copied
-/// container that will own an object found at that slot; it is absent
-/// for a standalone struct, whose objects remain loose until its caller
-/// adopts the completed value.
+/// or a fully-sized list/array/map buffer.
 const CopyTask = struct {
     source: Value,
     destination: *Value,
-    parent: ?Handle = null,
 };
 
 /// Where a run's memory comes from.  Luce has two kinds of data with
@@ -117,55 +114,9 @@ pub const Memory = struct {
     objects: Allocator,
 };
 
-/// Who frees an object (OWNERSHIP.md): `loose` — a fresh value or
-/// statement temporary; `container` — an element some container
-/// adopted and frees with itself; `binding` — a named local of one
-/// specific call frame, released when that scope exits; `program` — a
-/// constant container held until the runtime ends (CONSTANTS.md R-C).
 // ---------------------------------------------------------------------------
-// Objects, and who owns one
+// Objects
 // ---------------------------------------------------------------------------
-
-pub const OwnedBy = struct { serial: u64, local: u32 };
-
-/// An explicitly laid-out ownership discriminator and identity payload.
-/// Generated code checks `kind` before an inline mutation, so it is a
-/// plain measured field rather than a tagged-union detail.
-pub const Owner = struct {
-    /// The owner class generated code may inspect through `layout`.
-    kind: Kind = .loose,
-    /// The identity meaningful for this owner class.  A binding names
-    /// one local in one frame; a container names the exact object row
-    /// and generation that adopted this one.  The two are mutually
-    /// exclusive, so they share storage and keep an object row the size
-    /// generated code already measures.
-    details: Details = .{ .binding = .{ .serial = 0, .local = 0 } },
-
-    pub const Kind = enum(u32) {
-        loose,
-        container,
-        binding,
-        program,
-    };
-
-    pub const Details = union {
-        binding: OwnedBy,
-        parent: Handle,
-    };
-
-    pub const loose: Owner = .{};
-    pub const program: Owner = .{ .kind = .program };
-
-    /// The exact container object that owns this object.
-    pub fn containedBy(parent: Handle) Owner {
-        return .{ .kind = .container, .details = .{ .parent = parent } };
-    }
-
-    /// The owner naming one local in one live call frame.
-    pub fn bound(binding: OwnedBy) Owner {
-        return .{ .kind = .binding, .details = .{ .binding = binding } };
-    }
-};
 
 /// The generation a row is retired at: reached, it is never handed
 /// out again. Even generations name live occupants; odd generations
@@ -211,7 +162,14 @@ pub const Object = struct {
     /// a row already had, so it is the 128 bytes it always was.
     next_free: u32 = value.null_index,
 
-    owner: Owner = .loose,
+    /// True only for a materialized program constant (CONSTANTS.md
+    /// R-C): a row published into `Runtime.constant_roots` and held
+    /// until the runtime ends.  It is the one lifetime distinction the
+    /// runtime still draws between rows — a constant is immutable, is
+    /// excluded from the ordinary leak census, and is reclaimed only by
+    /// the final sweep or a materialization abort.  Every other row
+    /// simply lives until `Runtime.deinit` sweeps it.
+    constant: bool = false,
 
     /// The elements of a List or an Array — a field of the row rather
     /// than a payload inside `data`, which is a deliberate exception
@@ -862,13 +820,6 @@ pub const layout = struct {
     /// test generated code emits is this one load and one compare,
     /// and a reused row fails it for every handle but the newest.
     pub const generation = @offsetOf(Object, "generation");
-    /// `Object.owner.kind` — the `u32` generated code compares before
-    /// an inline mutation whose receiver may have come through a
-    /// parameter (CONSTANTS.md R-D).
-    pub const owner_kind = @offsetOf(Object, "owner") + @offsetOf(Owner, "kind");
-    /// The value of `Owner.Kind.program`, beside the measured offset
-    /// so generated code never writes down either half of the check.
-    pub const owner_program: u32 = @intFromEnum(Owner.Kind.program);
     /// `Object.dims.ptr` — `[*]i64`, one entry per axis.  An Array's
     /// alone: a List has no shape but its length.  The rank is a
     /// compile-time fact, so the length is not read, and only a
@@ -1118,15 +1069,12 @@ pub const Runtime = struct {
     /// object ownership already released reclaims nothing, because
     /// `Object.release` left the empty value of its kind behind.
     pub fn deinit(self: *Runtime) void {
-        // The program root is the last owner to die (CONSTANTS.md
-        // R-C).  Ordinary leaks and resources are reclaimed first;
-        // constant rows follow in a separate, explicit pass.
-        for (self.table.items) |*object| {
-            if (object.owner.kind != .program) self.sweep(object);
-        }
-        for (self.table.items) |*object| {
-            if (object.owner.kind == .program) self.sweep(object);
-        }
+        // Nothing is freed while a program runs, so the final sweep is
+        // where every live row's storage and resources come back.  A
+        // constant row holds no more than any other and is swept in the
+        // same pass; releasing an empty row reclaims nothing, so the
+        // order does not matter.
+        for (self.table.items) |*object| self.sweep(object);
         self.table.deinit(self.objects);
         if (self.constant_roots.len != 0) self.objects.free(self.constant_roots);
         self.unwound.deinit(self.objects);
@@ -1150,218 +1098,8 @@ pub const Runtime = struct {
             self.inherited_leaks;
     }
 
-    /// Check the runtime's ownership-table invariants in checked builds.
-    ///
-    /// This is deliberately an assertion rather than a recoverable runtime
-    /// error: reaching a disagreement between a row's owner field and the
-    /// retaining edge that names it means the implementation has already
-    /// lost the one fact that makes release safe.  It allocates nothing and
-    /// is not called on production hot paths; the runtime owner-graph corpus
-    /// calls it after every transition while running in Debug mode.
-    pub fn debugAssertInvariants(self: *const Runtime) void {
-        if (builtin.mode != .Debug) return;
-
-        var live: u32 = 0;
-        var program_roots: u32 = 0;
-        var retired_rows: usize = 0;
-        for (self.table.items, 0..) |*object, index| {
-            if (object.generation == retired) {
-                retired_rows += 1;
-                std.debug.assert(!self.debugOnFreeList(@intCast(index)));
-                continue;
-            }
-            if (self.debugOnFreeList(@intCast(index))) {
-                std.debug.assert(object.generation & 1 == 1);
-                std.debug.assert(object.next_free == value.null_index or
-                    object.next_free < self.table.items.len);
-                continue;
-            }
-
-            std.debug.assert(object.generation & 1 == 0);
-
-            live += 1;
-            switch (object.owner.kind) {
-                .loose, .binding => {},
-                .program => program_roots += 1,
-                .container => {
-                    const parent = object.owner.details.parent;
-                    const parent_object = self.debugLiveObject(parent) orelse {
-                        std.debug.assert(false);
-                        continue;
-                    };
-                    var occurrences: usize = 0;
-                    switch (parent_object.data) {
-                        .list, .array => if (parent_object.elements.kind == .value) {
-                            for (parent_object.elements.cells(Value)) |item| {
-                                occurrences += self.debugValueEdgeCount(
-                                    item,
-                                    .{ .index = @intCast(index), .generation = object.generation },
-                                    0,
-                                );
-                            }
-                        },
-                        .map => |map| for (map.entries.items) |entry| {
-                            occurrences += self.debugValueEdgeCount(
-                                entry.key,
-                                .{ .index = @intCast(index), .generation = object.generation },
-                                0,
-                            );
-                            occurrences += self.debugValueEdgeCount(
-                                entry.value,
-                                .{ .index = @intCast(index), .generation = object.generation },
-                                0,
-                            );
-                        },
-                        .builder, .file, .task => std.debug.assert(false),
-                    }
-                    std.debug.assert(occurrences == 1);
-
-                    // The exact-parent check above catches a wrong edge;
-                    // this bounded walk catches a cycle in otherwise
-                    // self-consistent owner metadata.
-                    var ancestor = parent;
-                    var steps: usize = 0;
-                    while (true) : (steps += 1) {
-                        std.debug.assert(steps <= self.table.items.len);
-                        const ancestor_object = self.debugLiveObject(ancestor) orelse {
-                            std.debug.assert(false);
-                            break;
-                        };
-                        const owner = ancestor_object.owner;
-                        if (owner.kind != .container) break;
-                        ancestor = owner.details.parent;
-                        std.debug.assert(!ancestor.same(.{
-                            .index = @intCast(index),
-                            .generation = object.generation,
-                        }));
-                    }
-                },
-            }
-
-            switch (object.data) {
-                .list, .array => {
-                    std.debug.assert(object.elements.count <= object.elements.capacity());
-                    std.debug.assert(object.elements.bytes.len % object.elements.kind.width() == 0);
-                    if (object.elements.kind == .value) {
-                        for (object.elements.cells(Value)) |item| {
-                            self.debugAssertValueEdge(item, .{
-                                .index = @intCast(index),
-                                .generation = object.generation,
-                            }, 0);
-                        }
-                    }
-                },
-                .map => |map| for (map.entries.items) |entry| {
-                    self.debugAssertValueEdge(entry.key, .{
-                        .index = @intCast(index),
-                        .generation = object.generation,
-                    }, 0);
-                    self.debugAssertValueEdge(entry.value, .{
-                        .index = @intCast(index),
-                        .generation = object.generation,
-                    }, 0);
-                },
-                .builder => {},
-                .file => |open| {
-                    // A live file row always names an acquired host
-                    // handle.  `Object.release` writes `no_file` only
-                    // after the row has been marked dead, so observing it
-                    // here means a close happened without the ownership
-                    // walk retiring the row as one operation.
-                    std.debug.assert(open.handle != no_file);
-                },
-                .task => |held| if (held) |worker| {
-                    // A live task row is the sole owning edge to a Worker
-                    // until `wait`/release detaches it.  The child runtime
-                    // may still be running, so its graph is checked by
-                    // the nursery close hook after the join; the link
-                    // itself must nevertheless be valid while the task is
-                    // live and must never point back at this runtime.
-                    const child = worker.runtime orelse {
-                        std.debug.assert(false);
-                        return;
-                    };
-                    std.debug.assert(child != self);
-                },
-            }
-        }
-
-        std.debug.assert(live == self.live);
-        std.debug.assert(program_roots == self.program_root_count);
-        std.debug.assert(live + @as(u32, @intCast(retired_rows)) <= self.table.items.len);
-        if (!self.materializing_constants) {
-            for (self.constant_roots) |root| {
-                std.debug.assert(root.tag == .object);
-                const object = self.debugLiveObject(root.asObject()) orelse {
-                    std.debug.assert(false);
-                    continue;
-                };
-                std.debug.assert(object.owner.kind == .program);
-            }
-        }
-    }
-
-    fn debugOnFreeList(self: *const Runtime, wanted: u32) bool {
-        var row = self.free_row;
-        var steps: usize = 0;
-        while (row != value.null_index) : (steps += 1) {
-            std.debug.assert(steps < self.table.items.len);
-            std.debug.assert(row < self.table.items.len);
-            if (row == wanted) return true;
-            row = self.table.items[row].next_free;
-        }
-        return false;
-    }
-
-    fn debugLiveObject(self: *const Runtime, handle: Handle) ?*const Object {
-        if (handle.index >= self.table.items.len or handle.index == value.null_index) return null;
-        const object = &self.table.items[handle.index];
-        if (object.generation != handle.generation or
-            object.generation == retired or
-            object.generation & 1 != 0 or
-            self.debugOnFreeList(handle.index)) return null;
-        return object;
-    }
-
-    fn debugAssertValueEdge(self: *const Runtime, held: Value, parent: Handle, depth: usize) void {
-        std.debug.assert(depth < 4096);
-        switch (held.view()) {
-            .object => |child| {
-                if (child.index == value.null_index) return;
-                const object = self.debugLiveObject(child) orelse {
-                    std.debug.assert(false);
-                    return;
-                };
-                std.debug.assert(object.owner.kind == .container);
-                if (object.owner.kind == .container) {
-                    std.debug.assert(object.owner.details.parent.same(parent));
-                }
-            },
-            .strukt => |fields| for (fields) |field| {
-                self.debugAssertValueEdge(field, parent, depth + 1);
-            },
-            .function => {},
-            else => {},
-        }
-    }
-
-    fn debugValueEdgeCount(self: *const Runtime, held: Value, wanted: Handle, depth: usize) usize {
-        std.debug.assert(depth < 4096);
-        return switch (held.view()) {
-            .object => |child| if (child.index != value.null_index and child.same(wanted)) 1 else 0,
-            .strukt => |fields| blk: {
-                var count: usize = 0;
-                for (fields) |field| count += self.debugValueEdgeCount(field, wanted, depth + 1);
-                break :blk count;
-            },
-            .function => 0,
-            else => 0,
-        };
-    }
-
-    /// Release one row during the final sweep.  The caller decides the
-    /// owner order; this gives storage back directly because every row
-    /// is swept and no ownership walk may run twice at teardown.
+    /// Release one row during the final sweep.  This gives storage back
+    /// directly because every row is swept exactly once at teardown.
     fn sweep(self: *Runtime, object: *Object) void {
         switch (object.data) {
             // Only a `Value` element can be holding storage; a packed
@@ -1617,8 +1355,8 @@ pub const Runtime = struct {
         if (!self.constant_roots[slot].isNone()) return self.fail(.not_owned);
         if (held.tag != .object) return self.fail(.not_owned);
         const object = try self.resolve(held);
-        if (object.owner.kind != .loose) return self.fail(.not_owned);
-        object.owner = .program;
+        if (object.constant) return self.fail(.not_owned);
+        object.constant = true;
         self.constant_roots[slot] = held;
         self.program_root_count += 1;
     }
@@ -1652,14 +1390,14 @@ pub const Runtime = struct {
         self.materializing_constants = false;
     }
 
-    /// Destroy an unpublished, partially filled loose container.  It
-    /// consumes only that construction; a bound, adopted, stale, or
-    /// already published handle is deliberately left alone.
+    /// Destroy an unpublished, partially filled container under
+    /// construction.  A stale handle or an already-published constant
+    /// is deliberately left alone.
     pub fn discardLoose(self: *Runtime, held: Value) void {
         if (held.tag != .object) return;
         const handle = held.asObject();
         const object = self.liveObject(handle) orelse return;
-        if (object.owner.kind != .loose) return;
+        if (object.constant) return;
         self.destroyObject(handle);
     }
 
@@ -1834,7 +1572,7 @@ pub const Runtime = struct {
         return self.attach(.{ .data = .list, .elements = elements });
     }
 
-    /// Put `storage` in a table row and hand back a loose handle.
+    /// Put `storage` in a table row and hand back its handle.
     ///
     /// A row a previous object vacated is taken in preference to a
     /// fresh one; its free generation is advanced to the next even
@@ -1855,31 +1593,12 @@ pub const Runtime = struct {
             row.* = storage;
             row.generation = generation;
             self.live += 1;
-            const held = Value.ofObject(.{ .index = index, .generation = generation });
-            self.adoptContents(held.asObject());
-            return held;
+            return Value.ofObject(.{ .index = index, .generation = generation });
         }
         const index: u32 = @intCast(self.table.items.len);
         try self.table.append(self.objects, storage);
         self.live += 1;
-        const held = Value.ofObject(.{ .index = index });
-        self.adoptContents(held.asObject());
-        return held;
-    }
-
-    /// Give every top object already stored in a newly attached row its
-    /// exact parent.  Builders such as `listSlice`, `mapValues`, and
-    /// `copyFrom` cannot name that parent until the outer row exists, so
-    /// attachment is the single commit point for all of them.
-    fn adoptContents(self: *Runtime, parent: Handle) void {
-        const object = &self.table.items[parent.index];
-        switch (object.data) {
-            .list, .array => if (object.elements.kind == .value) {
-                for (object.elements.cells(Value)) |item| self.adoptInto(parent, item);
-            },
-            .map => |map| for (map.entries.items) |entry| self.adoptInto(parent, entry.value),
-            .builder, .file, .task => {},
-        }
+        return Value.ofObject(.{ .index = index });
     }
 
     // -- value storage ---------------------------------------------------
@@ -2083,11 +1802,6 @@ pub const Runtime = struct {
             self.dropStorage(to);
             return self.fail(.index_bounds);
         }
-        // The caller normally proves this at the semantic stage.  Keep the
-        // runtime door transactional as well: a hostile module must not
-        // smuggle a container-owned or stale object into the fresh run,
-        // and a rejected value must remain the caller's to clean up.
-        try self.checkGivable(to, null);
         const stored = self.objects.alloc(Value, source.len) catch |mistake| {
             self.freeValue(to);
             return mistake;
@@ -2137,30 +1851,28 @@ pub const Runtime = struct {
         return found;
     }
 
-    /// Resolve a live object for a write, trapping when the program
-    /// root owns it.  Every boxed mutation reaches the shared
-    /// `requireMutable` owner gate through this wrapper or after its
-    /// own first resolution; generated inline writes perform the same
-    /// measured owner-kind check (`layout.owner_kind`, CONSTANTS.md
-    /// R-D).  This wrapper carries `resolve`'s null/stale traps and
-    /// pointer lifetime, and adds the `immutable_object` trap before
-    /// returning a program-owned row.
+    /// Resolve a live object for a write, trapping when it is a program
+    /// constant.  Every boxed mutation reaches the shared
+    /// `requireMutable` gate through this wrapper or after its own first
+    /// resolution.  This wrapper carries `resolve`'s null/stale traps
+    /// and pointer lifetime, and adds the `immutable_object` trap before
+    /// returning a constant row.
     pub inline fn resolveMutable(self: *Runtime, held: Value) Error!*Object {
         const found = try self.resolve(held);
         try self.requireMutable(found);
         return found;
     }
 
-    /// The owner half of `resolveMutable`, for a caller which already
+    /// The constant half of `resolveMutable`, for a caller which already
     /// resolved the row to establish another operation-specific
     /// contract.  Kept inline with its wrapper so ordinary mutators pay
-    /// for one handle walk and one owner comparison, not two calls.
+    /// for one handle walk and one constant test, not two calls.
     pub inline fn requireMutable(self: *Runtime, found: *Object) Error!void {
-        if (found.owner.kind == .program) return self.fail(.immutable_object);
+        if (found.constant) return self.fail(.immutable_object);
     }
 
     /// The live object behind a handle, or null when the handle is null,
-    /// out of range, or already freed.  Ownership walks use this: they
+    /// out of range, or already freed.  The release walks use this: they
     /// must never trap, because they run on paths that are already
     /// unwinding or already correct.
     ///
@@ -2178,146 +1890,20 @@ pub const Runtime = struct {
         return object;
     }
 
-    // -- ownership walks ------------------------------------------------
+    // -- releasing an object --------------------------------------------
     //
-    // Bind/adopt/release walk a value's top objects: the object a
-    // handle names, or a struct's object fields recursively.  They
-    // never descend into an object's elements — those already belong
-    // to it.  Nesting depth is bounded by the (finite) type shape.
+    // Nothing frees objects while a program runs; a row lives until the
+    // final sweep (`Runtime.deinit`).  What remains here is the release
+    // machinery the two exceptions still need — a failed constant
+    // prologue (`abortConstants`, `discardLoose`) and a rolled-back deep
+    // copy (`copyFrom`), both of which must give back objects they built
+    // before the run continues.  A release walks a value's top objects
+    // — the object a handle names, or a struct's object fields
+    // recursively — and never descends into an object's elements, which
+    // already belong to it.
 
-    /// The objects in `held` now belong to `local` of frame `serial`.
-    pub fn bind(self: *Runtime, held: Value, serial: u64, local: u32) void {
-        if (!held.hasValidRepresentation()) return;
-        switch (held.view()) {
-            .object => |handle| {
-                const object = self.liveObject(handle) orelse return;
-                if (object.owner.kind != .program) {
-                    object.owner = .bound(.{ .serial = serial, .local = local });
-                }
-            },
-            .strukt => |fields| for (fields) |field| self.bind(field, serial, local),
-            // **A function value's run stops every object walk.**  It
-            // owns the run and never the objects inside it: the
-            // receiver is borrowed (docs/BINDING.md D4), so re-owning
-            // what it names would take a graph away from the binding
-            // that has it, with no verb written anywhere.  This arm is
-            // the only place that fact can be enforced, because a walk
-            // cannot tell a borrowed run from an owning one by looking.
-            .function => {},
-            else => {},
-        }
-    }
-
-    /// Refuse an adoption that would put an object above itself in the
-    /// ownership tree.  `parent` is the live container about to store
-    /// `held`; callers resolve it and settle their own immutable/bounds
-    /// errors first, so this adds only the cycle backstop and mutates
-    /// nothing.
-    ///
-    /// Walking parents rather than descendants makes the answer exact
-    /// and allocation-free: adopting `child` under `parent` cycles iff
-    /// `child` already appears on `parent`'s ancestry.  Exact handles,
-    /// including generations, keep a reused row from impersonating an
-    /// ancestor.  A damaged pre-existing parent cycle consumes the
-    /// bounded walk and is refused rather than looping forever.
-    pub fn ensureAcyclicAdoption(self: *Runtime, parent: Handle, held: Value) Error!void {
-        if (!held.hasValidRepresentation()) return self.fail(.not_owned);
-        switch (held.view()) {
-            .object => |child| {
-                if (child.index == value.null_index or self.liveObject(child) == null) return;
-                var ancestor = parent;
-                var remaining = self.table.items.len + 1;
-                while (remaining != 0) : (remaining -= 1) {
-                    if (child.same(ancestor)) return self.fail(.ownership_cycle);
-                    const object = self.liveObject(ancestor) orelse return;
-                    if (object.owner.kind != .container) return;
-                    ancestor = object.owner.details.parent;
-                }
-                return self.fail(.ownership_cycle);
-            },
-            .strukt => |fields| for (fields) |field| {
-                try self.ensureAcyclicAdoption(parent, field);
-            },
-            .function => {}, // a borrowed run: see `bind` (docs/BINDING.md D4)
-            else => {},
-        }
-    }
-
-    /// The objects in `held` now belong to the exact container `parent`
-    /// (S20).  A retaining caller has already passed
-    /// `ensureAcyclicAdoption` and completed the store; `attach` instead
-    /// knows its parent is a brand-new row.  Either way this commit
-    /// cannot fail or leave a half-mutated container behind.
-    pub fn adoptInto(self: *Runtime, parent: Handle, held: Value) void {
-        if (!held.hasValidRepresentation()) return;
-        switch (held.view()) {
-            .object => |handle| {
-                const object = self.liveObject(handle) orelse return;
-                if (object.owner.kind != .program) object.owner = .containedBy(parent);
-            },
-            .strukt => |fields| for (fields) |field| self.adoptInto(parent, field),
-            .function => {}, // a borrowed run: see `bind` (docs/BINDING.md D4)
-            else => {},
-        }
-    }
-
-    /// The objects in `held` belong to nobody yet: pop results and
-    /// returned values (the receiver adopts or binds them next).
-    pub fn loosen(self: *Runtime, held: Value) void {
-        if (!held.hasValidRepresentation()) return;
-        switch (held.view()) {
-            .object => |handle| {
-                const object = self.liveObject(handle) orelse return;
-                if (object.owner.kind != .program) object.owner = .loose;
-            },
-            .strukt => |fields| for (fields) |field| self.loosen(field),
-            .function => {}, // a borrowed run: see `bind` (docs/BINDING.md D4)
-            else => {},
-        }
-    }
-
-    /// On return, everything the finished frame still owned in the
-    /// returned value moves out loose; the caller owns it (S16).
-    pub fn loosenFromFrame(self: *Runtime, held: Value, serial: u64) void {
-        if (!held.hasValidRepresentation()) return;
-        switch (held.view()) {
-            .object => |handle| {
-                const object = self.liveObject(handle) orelse return;
-                if (object.owner.kind == .binding and
-                    object.owner.details.binding.serial == serial)
-                {
-                    object.owner = .loose;
-                }
-            },
-            .strukt => |fields| for (fields) |field| self.loosenFromFrame(field, serial),
-            .function => {}, // a borrowed run: see `bind` (docs/BINDING.md D4)
-            else => {},
-        }
-    }
-
-    /// Free the objects in `held` still bound to (serial, local); the
-    /// scope-exit release.  Objects owned elsewhere by now are left
-    /// alone, which makes releases safe on every path.
-    pub fn unbind(self: *Runtime, held: Value, serial: u64, local: u32) void {
-        if (!held.hasValidRepresentation()) return;
-        switch (held.view()) {
-            .object => |handle| {
-                const object = self.liveObject(handle) orelse return;
-                if (object.owner.kind == .binding and
-                    object.owner.details.binding.serial == serial and
-                    object.owner.details.binding.local == local)
-                {
-                    self.freeObject(handle);
-                }
-            },
-            .strukt => |fields| for (fields) |field| self.unbind(field, serial, local),
-            .function => {}, // a borrowed run: see `bind` (docs/BINDING.md D4)
-            else => {},
-        }
-    }
-
-    /// Free one object and everything it owns (S20), give its storage
-    /// back, and offer its row to the next `new`.
+    /// Free one object and everything it owns, give its storage back,
+    /// and offer its row to the next `new`.
     ///
     /// The release walk is iterative.  A row's `next_free` field is
     /// temporarily the link in a private worklist while that row is
@@ -2328,16 +1914,16 @@ pub const Runtime = struct {
     /// pressure.
     pub fn freeObject(self: *Runtime, handle: Handle) void {
         const object = self.liveObject(handle) orelse return;
-        // The program root is sticky: releases reached through an
-        // alias, a damaged module, or an unwinding ownership walk are
-        // safe no-ops.  The source front line refuses them by name.
-        if (object.owner.kind == .program) return;
+        // A program constant is sticky: it is reclaimed only by the
+        // final sweep or a materialization abort, never by an ordinary
+        // release reached through a rollback walk.
+        if (object.constant) return;
         self.destroyObject(handle);
     }
 
-    /// End a live object regardless of whether its owner is the
-    /// program root.  Ordinary releases enter through `freeObject`;
-    /// only failed materialization uses this on `.program` rows.
+    /// End a live object regardless of whether it is a program
+    /// constant.  Ordinary releases enter through `freeObject`; only
+    /// failed materialization uses this on constant rows.
     fn destroyObject(self: *Runtime, handle: Handle) void {
         var pending = value.null_index;
         self.scheduleDestroy(handle, &pending, true);
@@ -2346,8 +1932,8 @@ pub const Runtime = struct {
 
     /// Mark one live row dead and put it on a release worklist.
     /// `allow_program` is used only by constant-materialization abort,
-    /// where the root itself must be destroyed; children still obey the
-    /// ordinary program-root boundary.
+    /// where the constant itself must be destroyed; children still obey
+    /// the ordinary program-constant boundary.
     fn scheduleDestroy(
         self: *Runtime,
         handle: Handle,
@@ -2355,12 +1941,12 @@ pub const Runtime = struct {
         allow_program: bool,
     ) void {
         const object = self.liveObject(handle) orelse return;
-        if (!allow_program and object.owner.kind == .program) return;
+        if (!allow_program and object.constant) return;
 
         // Mark the row dead before examining its children.  Besides
         // making a damaged cycle harmless, this prevents two aliases
         // in one container from putting the same row on the worklist.
-        const was_program = object.owner.kind == .program;
+        const was_program = object.constant;
         object.generation += 1;
         self.live -= 1;
         if (was_program) self.program_root_count -= 1;
@@ -2442,39 +2028,6 @@ pub const Runtime = struct {
         var pending = value.null_index;
         self.scheduleValue(held, &pending);
         self.releaseScheduled(&pending);
-    }
-
-    /// give/free verification (S23): never an object a container
-    /// owns, and — when the verb names an owned binding — only an
-    /// object that binding still owns (an alias may have moved it).
-    /// Struct values check every filled field; unfilled fields are
-    /// simply carried along.
-    pub fn checkGivable(self: *Runtime, held: Value, expected: ?OwnedBy) Error!void {
-        if (!held.hasValidRepresentation()) return self.fail(.not_owned);
-        if (held.tag == .string and !held.hasValidStringRepresentation()) {
-            return self.fail(.not_owned);
-        }
-        switch (held.view()) {
-            .object => |handle| {
-                if (handle.index == value.null_index) return;
-                const found = self.liveObject(handle) orelse
-                    return self.fail(.use_after_free);
-                if (found.owner.kind == .container or found.owner.kind == .program) {
-                    return self.fail(.not_owned);
-                }
-                if (expected) |owner| {
-                    if (!(found.owner.kind == .binding and
-                        found.owner.details.binding.serial == owner.serial and
-                        found.owner.details.binding.local == owner.local))
-                    {
-                        return self.fail(.not_owned);
-                    }
-                }
-            },
-            .strukt => |fields| for (fields) |field| try self.checkGivable(field, expected),
-            .function => {}, // a borrowed run: see `bind` (docs/BINDING.md D4)
-            else => {},
-        }
     }
 
     /// Deep copy (S31): duplicate the object and everything it owns,
@@ -2692,7 +2245,6 @@ pub const Runtime = struct {
                     return mistake;
                 };
                 task.destination.* = duplicate;
-                if (task.parent) |parent| self.adoptInto(parent, duplicate);
 
                 const destination = &self.table.items[duplicate.asObject().index];
                 // `attach` may move `source.table` when both runtimes are
@@ -2707,7 +2259,6 @@ pub const Runtime = struct {
                             try tasks.append(self.objects, .{
                                 .source = item,
                                 .destination = &cells[at],
-                                .parent = duplicate.asObject(),
                             });
                         }
                     },
@@ -2717,7 +2268,6 @@ pub const Runtime = struct {
                             try tasks.append(self.objects, .{
                                 .source = entry.value,
                                 .destination = &copied_map.entries.items[at].value,
-                                .parent = duplicate.asObject(),
                             });
                         }
                     },
@@ -2733,12 +2283,10 @@ pub const Runtime = struct {
                 @memset(copied, Value.none);
                 const duplicate = Value.ofStruct(copied);
                 task.destination.* = duplicate;
-                if (task.parent) |parent| self.adoptInto(parent, duplicate);
                 for (fields, copied) |field, *destination| {
                     try tasks.append(self.objects, .{
                         .source = field,
                         .destination = destination,
-                        .parent = task.parent,
                     });
                 }
             },
@@ -2753,12 +2301,10 @@ pub const Runtime = struct {
                 if (self != source) return self.fail(.not_owned);
                 const duplicate = try self.ownValue(task.source);
                 task.destination.* = duplicate;
-                if (task.parent) |parent| self.adoptInto(parent, duplicate);
             },
             else => {
                 const duplicate = try self.ownValue(task.source);
                 task.destination.* = duplicate;
-                if (task.parent) |parent| self.adoptInto(parent, duplicate);
             },
         }
     }

@@ -221,20 +221,20 @@ pub const reserved_names = [_][]const u8{
     // and a struct of that name is refused where it is declared —
     // reserving them as callables buys nothing and costs `files.list`,
     // which is the right name for what it does.
-    "range",             "long",                  "double",              "string",              "None",
-    "abs",               "min",                   "max",                 "clamp",               "sqrt",
-    "floor",             "ceil",                  "trunc",               "len",                 "byte_at",
-    "assert",            "trap",                  "parse_int",           "parse_float",         "chr",
-    "ord",               "append",                "pop",                 "insert",              "remove",
-    "has",               "dim",                   "free",                "print",               "file_read",
-    "file_write",        "path_kind",             "key_read",            "key_text",            "error",
-    "read_line",         "print_error",           "clock_ms",            "sleep_ms",            "env",
-    "file_append",       "file_delete",           "file_rename",         "dir_list",            "term_rows",
-    "term_cols",         "term_clear",            "term_move",           "term_style",          "term_write",
-    "term_flush",        "exit",                  "os_total_memory",     "os_available_memory", "os_cpu_count",
-    "file_open",         "parse_string",          "shell_run",           "term_event_data",     "dir_create",
-    "epoch_ms",          "gpu_backend",           "ui_window_open",      "ui_window_surface",   "gpu_surface_size",
-    "gpu_surface_clear", "gpu_surface_fill_rect", "gpu_surface_present",
+    "range",                 "long",                "double",              "string",           "None",
+    "abs",                   "min",                 "max",                 "clamp",            "sqrt",
+    "floor",                 "ceil",                "trunc",               "len",              "byte_at",
+    "assert",                "trap",                "parse_int",           "parse_float",      "chr",
+    "ord",                   "append",              "pop",                 "insert",           "remove",
+    "has",                   "dim",                 "print",               "file_read",        "file_write",
+    "path_kind",             "key_read",            "key_text",            "error",            "read_line",
+    "print_error",           "clock_ms",            "sleep_ms",            "env",              "file_append",
+    "file_delete",           "file_rename",         "dir_list",            "term_rows",        "term_cols",
+    "term_clear",            "term_move",           "term_style",          "term_write",       "term_flush",
+    "exit",                  "os_total_memory",     "os_available_memory", "os_cpu_count",     "file_open",
+    "parse_string",          "shell_run",           "term_event_data",     "dir_create",       "epoch_ms",
+    "gpu_backend",           "ui_window_open",      "ui_window_surface",   "gpu_surface_size", "gpu_surface_clear",
+    "gpu_surface_fill_rect", "gpu_surface_present",
 };
 
 pub fn isReserved(name: []const u8) bool {
@@ -320,7 +320,6 @@ pub const FunctionDeclInfo = struct {
     name: []const u8,
     module: usize,
     parameter_types: []Type,
-    parameter_modes: []ast.ParameterMode,
     /// One entry per parameter: the folded default where the
     /// declaration wrote one (docs/ARGS.md D2), null where the
     /// parameter is required.  Defaults are trailing (D3), so the
@@ -418,12 +417,11 @@ pub const StructDeclInfo = struct {
 };
 
 /// The settled contract of one interface method.  The parameter names stay
-/// in the AST for diagnostics; these are the resolved types and ownership
-/// modes used by dispatch and conformance checks.
+/// in the AST for diagnostics; these are the resolved types used by
+/// dispatch and conformance checks.
 pub const InterfaceMethodInfo = struct {
     declaration: *const ast.InterfaceMethod,
     parameter_types: []Type,
-    parameter_modes: []ast.ParameterMode,
     results: []Type,
     return_type: Type,
     fallible: bool,
@@ -462,8 +460,8 @@ pub const FieldDefault = struct {
 
 /// What a struct layout costs and carries, computed once for all.
 pub const StructShape = struct {
-    /// The struct transitively holds a heap object, so the ownership
-    /// rules apply to it (S27's "object-carrying").
+    /// The struct transitively holds a heap object ("object-carrying"):
+    /// the carries graph walk (`shapes.carriesObjects`) settles this.
     carries: bool = false,
     /// How many values the struct flattens to — one per scalar or
     /// object field, summed through nested structs.  Saturates just
@@ -512,42 +510,8 @@ pub const ConstantInfo = struct {
 //
 // Pass two's working state.  It is named here rather than inside
 // `builder.zig` because `FunctionBuilder` is not the only thing that
-// has to speak about a local's ownership class — the two passes agree
-// on what "owned" means, and this is where they agree.
-
-/// How a binding relates to the object it holds (OWNERSHIP.md):
-/// `owned` bindings received something fresh, a give, or a give
-/// parameter — their scope frees the object; `alias` bindings are just
-/// another name (S8); `borrow_param` marks a borrowed parameter, which
-/// may never keep, give, free, or return its object (S12, S17).
-/// `inout_receiver` is the caller's owning binding seen through an
-/// implicit writing `self`: it may replace/rebind that place, but the
-/// callee may neither move it nor release it at scope exit.
-/// Bindings of value types are all `.alias` — the class never matters.
-pub const OwnershipClass = enum { owned, alias, borrow_param, inout_receiver };
-
-pub const Poison = enum { given, freed };
-
-/// What stage 4 knows about the root object behind an object-typed
-/// value.  A direct constant and every plain alias retain its written
-/// declaration name; a control-flow join of visible roots keeps a
-/// `maybe_constant` taint even when no one declaration remains exact;
-/// fresh/copy/give results are mutable; and a borrow crossing a function
-/// boundary is unknown.  Unknown is not permission: `libluce_rt`'s
-/// program-root owner remains the dynamic backstop (docs/CONSTANTS.md
-/// R-C, R-D).
-pub const RootState = union(enum) {
-    mutable,
-    unknown,
-    maybe_constant,
-    constant: struct {
-        /// Pool-row identity, not merely the written declaration name:
-        /// aliases of one construction share it, while equal literals
-        /// in distinct declarations remain distinct objects (C5).
-        row: u32,
-        name: []const u8,
-    },
-};
+// has to speak about a local — the two passes agree on what a scope,
+// a local and a loop frame are, and this is where they agree.
 
 pub const LocalInfo = struct {
     local: LocalId,
@@ -555,54 +519,30 @@ pub const LocalInfo = struct {
     /// Where the name was written, so a second declaration of it can
     /// say where the first one is.
     declared_at: Span = .{ .start = 0, .end = 0 },
-    class: OwnershipClass = .alias,
-    /// The local's type is an object or an object-carrying struct.
-    carries: bool = false,
-    /// For an `.alias` binding written as `let y = x`, the name that
-    /// actually owns the object — resolved through a chain of aliases
-    /// to its root, so a refusal can say which name to give instead
-    /// (S23).  Null when the alias came from something with no name to
-    /// offer: a container read, a field, a call.
-    owner_name: ?[]const u8 = null,
-    /// Set by give/free in lowering (= source) order; any later use in
-    /// this scope is a compile error (S10, S29).
-    poisoned: ?Poison = null,
-    /// Successful whole-value replacement count.  A shaped return
-    /// snapshots this for an owned bare-name result before lowering the
-    /// operands to its right; a later writing method must not leave the
-    /// already-staged old value escaping beside the replacement.
-    revision: u32 = 0,
     /// True while a for-loop iterates this name: reassignment would
-    /// free the collection under the loop's feet (S5 meets S9).
+    /// invalidate the collection under the loop's feet (the
+    /// iterator-invalidation guard).
     iterating: bool = false,
-    /// Static knowledge about a container's ultimate root.  Meaningful
-    /// only when `carries` is true; value locals keep the harmless
-    /// `.mutable` default.
-    root: RootState = .mutable,
 };
 
-/// One local this scope has to release on the way out, and in which of
-/// the two senses it owns something: the objects bound to it (S1-S43),
-/// the storage in its slot (docs/STRINGS.md), or both.  They are
-/// separate questions — `let b = a` aliases a's objects and copies its
-/// string fields — so they are answered separately.
+/// One local this scope has to release on the way out: the storage in
+/// its slot (docs/STRINGS.md), freed at scope exit as `drop_storage`.
+/// Objects a scope leaves behind are not released here — they live
+/// until the runtime sweeps at exit.
 pub const Release = struct {
     local: LocalId,
-    objects: bool = false,
     storage: bool = false,
 };
 
 pub const Scope = struct {
     names: std.StringHashMapUnmanaged(LocalInfo) = .empty,
-    /// Locals this scope releases, in declaration order; scope exit
-    /// releases them in reverse.
+    /// Locals whose storage this scope releases, in declaration order;
+    /// scope exit releases them in reverse.
     owned: std.ArrayList(Release) = .empty,
 };
 
 pub const FoundLocal = struct {
     info: *LocalInfo,
-    /// Index of the scope that declared the name (S30 loop guard).
-    depth: usize,
 };
 
 /// Where `break` and `continue` go, and how much of the body they have

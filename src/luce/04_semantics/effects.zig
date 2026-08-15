@@ -24,14 +24,13 @@ const builtins = @import("builtins.zig");
 /// globals, so the only way an expression reaches a container the
 /// surrounding statement is also reading is by being handed one.
 /// That means a call to a declaration or any method — a method's
-/// receiver is the container in `xs.remove(0)`.  Every builtin but
-/// `free` moves no ownership at all (`07_optimize/effects.zig`
-/// answers the same question about instructions), so `string(i)` and
-/// `len(xs)` beside a container read cost nothing.
+/// receiver is the container in `xs.remove(0)`.  The free builtins
+/// move nothing (`07_optimize/effects.zig` answers the same question
+/// about instructions), so `string(i)` and `len(xs)` beside a
+/// container read cost nothing.
 pub fn mayMutateContainers(expression: *const ast.Expression) bool {
     return switch (expression.*) {
         .method => true,
-        .give, .copy => true,
         // A spawn moves every object argument out of this runtime,
         // which is the largest disturbance there is (docs/THREADS.md).
         .spawn => true,

@@ -333,13 +333,8 @@ pub const Frame = struct {
     position: usize = 0,
     /// The caller register receiving this frame's return value.
     destination: mir.Register = 0,
-    /// Unique per call; minted by the runtime so ownership bindings
-    /// from two frames of the same function never collide.
-    serial: u64 = 0,
     /// The caller slot aliased by logical local zero.  The slot is an
-    /// index because `frame_storage` may move while calls deepen; the
-    /// owner pair is inherited so bind/unbind still name the binding
-    /// that actually owns the receiver.
+    /// index because `frame_storage` may move while calls deepen.
     inout: ?Inout = null,
 };
 
@@ -347,13 +342,6 @@ const Register = mir.Register;
 
 const Inout = struct {
     slot: usize,
-    serial: u64,
-    local: mir.LocalId,
-};
-
-const Owner = struct {
-    serial: u64,
-    local: mir.LocalId,
 };
 
 // ---------------------------------------------------------------------------
@@ -573,21 +561,12 @@ pub const Machine = struct {
         return &self.frame_storage.items[frame.slots_at + frame.register_count + local];
     }
 
-    fn localOwner(frame: *const Frame, local: mir.LocalId) Owner {
-        if (local == 0) {
-            if (frame.inout) |inout| return .{ .serial = inout.serial, .local = inout.local };
-        }
-        return .{ .serial = frame.serial, .local = local };
-    }
-
     fn inoutFrom(frame: *const Frame, receiver: mir.LocalId) Inout {
         if (receiver == 0) {
             if (frame.inout) |inout| return inout;
         }
         return .{
             .slot = frame.slots_at + frame.register_count + receiver,
-            .serial = frame.serial,
-            .local = receiver,
         };
     }
 
@@ -862,7 +841,6 @@ pub const Machine = struct {
             .register_count = @intCast(register_count),
             .local_count = @intCast(local_count),
             .destination = destination,
-            .serial = self.runtime.takeSerial(),
             .inout = inout,
         });
         return null;
@@ -1035,14 +1013,6 @@ pub const Machine = struct {
                         registers[item] = self.allocateObject(new, registers) catch |mistake|
                             return self.caught(mistake);
                     },
-                    .object_bind => |bind| {
-                        const owner = localOwner(frame, bind.local);
-                        self.runtime.bind(registers[bind.value], owner.serial, owner.local);
-                    },
-                    .object_unbind => |unbind| {
-                        const owner = localOwner(frame, unbind.local);
-                        self.runtime.unbind(registers[unbind.value], owner.serial, owner.local);
-                    },
                     .call => |called| {
                         // Reused scratch, not a fresh arena slice per
                         // call: pushFrame copies it into the callee's
@@ -1132,7 +1102,6 @@ pub const Machine = struct {
                         registers[item] = self.intrinsic(
                             operation,
                             registers,
-                            frame.serial,
                             .{ .function = frame.function, .instruction = item },
                         ) catch |mistake| return self.caught(mistake);
                     },
@@ -1152,10 +1121,6 @@ pub const Machine = struct {
                     .ret => |value| {
                         const returned: RuntimeValue = if (value) |register| registers[register] else .none;
                         const finished = self.stack.pop().?;
-                        // Whatever the finished frame still owned in
-                        // the returned value moves to the caller
-                        // (S16): loose until something there binds it.
-                        self.runtime.loosenFromFrame(returned, finished.serial);
                         // `returned` is this frame's own — `ret` copies
                         // out anything it borrowed (docs/STRINGS.md) —
                         // so whatever the slots still hold dies here,
@@ -1470,7 +1435,6 @@ pub const Machine = struct {
         self: *Machine,
         operation: mir.Instruction.IntrinsicCall,
         registers: []const RuntimeValue,
-        serial: u64,
         site: Site,
     ) EvalError!RuntimeValue {
         // The effect lock, around exactly the intrinsics that call a
@@ -1482,16 +1446,15 @@ pub const Machine = struct {
         if (operation.kind.reachesHost()) {
             self.runtime.enterEffects();
             defer self.runtime.leaveEffects();
-            return self.effect(operation, registers, serial, site);
+            return self.effect(operation, registers, site);
         }
-        return self.effect(operation, registers, serial, site);
+        return self.effect(operation, registers, site);
     }
 
     fn effect(
         self: *Machine,
         operation: mir.Instruction.IntrinsicCall,
         registers: []const RuntimeValue,
-        serial: u64,
         site: Site,
     ) EvalError!RuntimeValue {
         const arguments = operation.arguments;
@@ -1629,19 +1592,6 @@ pub const Machine = struct {
                 &self.runtime,
                 registers[arguments[0]],
                 registers[arguments[1]].asLong(),
-            ),
-            .free_object => {
-                try containers.freeVerb(
-                    &self.runtime,
-                    registers[arguments[0]],
-                    namedBinding(registers, arguments, serial),
-                );
-                return .none;
-            },
-            .give_object => return containers.giveVerb(
-                &self.runtime,
-                registers[arguments[0]],
-                namedBinding(registers, arguments, serial),
             ),
             .copy_object => return containers.copyVerb(&self.runtime, registers[arguments[0]]),
             .list_sort => {
@@ -2188,17 +2138,6 @@ fn emptyValue(of: types.Type) RuntimeValue {
     };
 }
 
-/// Only the named owner frees (S6, S23): a second argument carries the
-/// binding `free`/`give` must verify against.
-fn namedBinding(
-    registers: []const RuntimeValue,
-    arguments: []const Register,
-    serial: u64,
-) ?runtime.OwnedBy {
-    if (arguments.len != 2) return null;
-    return .{ .serial = serial, .local = @intCast(registers[arguments[1]].asLong()) };
-}
-
 test "the constant prologue materializes every flat shape with declaration identity" {
     const testing = std.testing;
     const long_label = "a label whose bytes must belong to the constant container";
@@ -2309,9 +2248,9 @@ test "the constant prologue materializes every flat shape with declaration ident
 
     const same_entries = machine.runtime.constant(3);
     try testing.expect(!entries.asObject().same(same_entries.asObject()));
-    try testing.expectEqual(runtime.Owner.Kind.program, (try machine.runtime.resolve(entries)).owner.kind);
-    try testing.expectEqual(runtime.Owner.Kind.program, (try machine.runtime.resolve(bytes)).owner.kind);
-    try testing.expectEqual(runtime.Owner.Kind.program, (try machine.runtime.resolve(weights)).owner.kind);
+    try testing.expect((try machine.runtime.resolve(entries)).constant);
+    try testing.expect((try machine.runtime.resolve(bytes)).constant);
+    try testing.expect((try machine.runtime.resolve(weights)).constant);
 }
 
 test "const_container loads the runtime root and mutation reaches the immutable backstop" {

@@ -28,21 +28,10 @@
 //! pruning and reads the same settled block items without changing
 //! instruction shape.
 //!
-//! **The local table is deliberately not compacted, and cannot be.**
-//! Each local is another slot in every frame, so dropping the hidden
-//! temporaries this stage empties out would be worth a little — but
-//! `give` and `free` on an owned name pass the *local id* to the
-//! runtime as an ordinary `const_long` operand of `give_object` /
-//! `free_object` (`04_semantics/builder.zig`), which is how the
-//! runtime checks that the name still owns the object (S23).  A local
-//! id that travels as an integer value is invisible to renumbering:
-//! worse, value numbering will happily fold that `const 3` together
-//! with an unrelated `const 3` that means the number three, and then
-//! no rewrite could tell them apart even in principle.  Renumbering
-//! locals is therefore unsafe until those two intrinsics carry the
-//! owner in a field of their own — a change in `06_mir/defs.zig`, not
-//! here.  It was written, it broke `free(xs)` into a `not_owned`
-//! trap, and it is not coming back until the representation changes.
+//! **The local table is deliberately not compacted.**  Each local is
+//! another slot in every frame, so dropping the hidden temporaries this
+//! stage empties out would be worth a little — but renumbering the
+//! local table is not this stage's job, and nothing here relies on it.
 
 const std = @import("std");
 const defs = @import("../06_mir/defs.zig");
@@ -108,9 +97,7 @@ fn sweep(arena: Allocator, function: *Function) Allocator.Error!void {
 fn isDead(function: *const Function, used: []const bool, read: []const bool, item: Register) bool {
     const instruction = function.instructions[item];
     return switch (instruction) {
-        // A store nobody loads.  `object_bind`/`object_unbind` name a
-        // local without reading its slot, so they do not keep a store
-        // alive — the runtime only needs the id, not the value.
+        // A store nobody loads.
         //
         // A slot that owns its storage is the exception, and it is not
         // an optimization question.  A trap unwinds past every release
@@ -197,7 +184,6 @@ test "inout stores and the receiver value reaching a call survive dead-code elim
     functions[1] = .{
         .name = "writer",
         .parameter_count = 1,
-        .parameter_gives = &.{false},
         .return_type = .none,
         .locals = try arena.dupe(defs.Local, &.{.{
             .name = "self",

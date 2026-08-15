@@ -69,8 +69,6 @@ pub fn mapOperands(
         },
         .intrinsic => |*call| call.arguments = try mapSlice(arena, call.arguments, map),
         .heap_new => |*new| new.dims = try mapSlice(arena, new.dims, map),
-        .object_bind => |*bind| bind.value = map[bind.value],
-        .object_unbind => |*unbind| unbind.value = map[unbind.value],
         .branch => |*branch| branch.condition = map[branch.condition],
         .ret => |*value| if (value.*) |returned| {
             value.* = map[returned];
@@ -140,8 +138,6 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
         .heap_new => |new| for (new.dims) |dimension| {
             used[dimension] = true;
         },
-        .object_bind => |bind| used[bind.value] = true,
-        .object_unbind => |unbind| used[unbind.value] = true,
         .branch => |branch| used[branch.condition] = true,
         .ret => |value| if (value) |returned| {
             used[returned] = true;
@@ -153,16 +149,12 @@ pub fn markOperands(instruction: Instruction, used: []bool) void {
 /// means the slot's *value* is read: `local_get` does that directly,
 /// and `call_inout` reads then may replace its receiver.  That is what
 /// makes a store to an otherwise never-read receiver live across the
-/// call.  `object_bind` and `object_unbind` name a local without
-/// reading its slot — they pass the id to the runtime as half of an
-/// owner's identity — so they keep the local alive but do not keep
-/// stores to it alive.
+/// call.
 pub const LocalUse = union(enum) {
     none,
     read: defs.LocalId,
     write: defs.LocalId,
     read_write: defs.LocalId,
-    name: defs.LocalId,
 };
 
 pub fn localUse(instruction: Instruction) LocalUse {
@@ -170,8 +162,6 @@ pub fn localUse(instruction: Instruction) LocalUse {
         .local_get => |local| .{ .read = local },
         .local_set => |set| .{ .write = set.local },
         .call_inout => |call| .{ .read_write = call.receiver },
-        .object_bind => |bind| .{ .name = bind.local },
-        .object_unbind => |unbind| .{ .name = unbind.local },
         // Everything else works in registers.  Listed rather than
         // defaulted, as `markOperands` lists its own: an instruction
         // added later that names a local would otherwise answer "no
@@ -232,8 +222,6 @@ test "every operand of every instruction shape is rewritten" {
         .{ .call_inout = .{ .function = 0, .receiver = 7, .arguments = &arguments } },
         .{ .intrinsic = .{ .kind = .len, .arguments = &arguments } },
         .{ .heap_new = .{ .heap = 0, .dims = &dims } },
-        .{ .object_bind = .{ .local = 0, .value = 2 } },
-        .{ .object_unbind = .{ .local = 0, .value = 3 } },
         .{ .branch = .{ .condition = 4, .then_block = 0, .else_block = 0 } },
         .{ .ret = 5 },
     };
@@ -255,10 +243,8 @@ test "every operand of every instruction shape is rewritten" {
     try testing.expectEqual(@as(defs.LocalId, 7), shapes[8].call_inout.receiver);
     try testing.expectEqualSlices(Register, &.{ 3, 4 }, shapes[9].intrinsic.arguments);
     try testing.expectEqualSlices(Register, &.{5}, shapes[10].heap_new.dims);
-    try testing.expectEqual(@as(Register, 3), shapes[11].object_bind.value);
-    try testing.expectEqual(@as(Register, 4), shapes[12].object_unbind.value);
-    try testing.expectEqual(@as(Register, 5), shapes[13].branch.condition);
-    try testing.expectEqual(@as(Register, 6), shapes[14].ret.?);
+    try testing.expectEqual(@as(Register, 5), shapes[11].branch.condition);
+    try testing.expectEqual(@as(Register, 6), shapes[12].ret.?);
     // Rewriting hands each instruction its own slice, so the two that
     // shared `arguments` above did not map it twice.
     try testing.expectEqualSlices(Register, &.{ 2, 3 }, &arguments);

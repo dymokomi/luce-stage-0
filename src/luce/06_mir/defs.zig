@@ -176,8 +176,6 @@ pub const Intrinsic = enum {
     key_at,
     value_at,
     dim_size,
-    free_object,
-    give_object,
     copy_object,
     list_sort,
     list_reverse,
@@ -393,7 +391,8 @@ pub const Intrinsic = enum {
     /// outlives the statement needs, and `drop_storage` is the death
     /// point — it answers the emptied value, which the caller writes
     /// back, so releasing a place twice frees nothing the second time.
-    /// Neither touches objects: those are `object_bind`'s business.
+    /// Neither touches objects: an object's lifetime is the runtime's,
+    /// not a store's.
     own_storage,
     drop_storage,
     /// The third: what `ret` does to a value on its way out of the
@@ -525,8 +524,6 @@ pub const Intrinsic = enum {
             .key_at,
             .value_at,
             .dim_size,
-            .free_object,
-            .give_object,
             .copy_object,
             .list_sort,
             .list_reverse,
@@ -630,8 +627,6 @@ pub const Intrinsic = enum {
             .key_at,
             .value_at,
             .dim_size,
-            .free_object,
-            .give_object,
             .copy_object,
             .list_sort,
             .list_reverse,
@@ -750,8 +745,6 @@ pub const Intrinsic = enum {
             .key_at,
             .value_at,
             .dim_size,
-            .free_object,
-            .give_object,
             .list_sort,
             .list_reverse,
             .list_find,
@@ -855,8 +848,6 @@ pub const Intrinsic = enum {
             .key_at,
             .value_at,
             .dim_size,
-            .free_object,
-            .give_object,
             .copy_object,
             .list_sort,
             .list_reverse,
@@ -1025,8 +1016,6 @@ pub const Instruction = union(enum) {
     call_indirect: IndirectCall,
     intrinsic: IntrinsicCall,
     heap_new: HeapNew,
-    object_bind: struct { local: LocalId, value: Register },
-    object_unbind: struct { local: LocalId, value: Register },
     jump: BlockId,
     branch: struct { condition: Register, then_block: BlockId, else_block: BlockId },
     ret: ?Register,
@@ -1153,13 +1142,6 @@ pub const ContainerConstant = struct {
 pub const Function = struct {
     name: []const u8,
     parameter_count: u32,
-    /// Whether each logical parameter takes ownership of the object graph
-    /// it receives.  Storage ownership is deliberately separate and stays
-    /// on `Local.owns_storage`: a `give` parameter borrows its caller's
-    /// bytes while taking its object handles.  Keeping the verb here makes
-    /// a function value's `Signature.Parameter.gives` checkable after the
-    /// semantic analyzer is gone (docs/FUNCTIONS.md D5).
-    parameter_gives: []const bool = &.{},
     return_type: Type,
     /// Written `-> T!` or `-> !`: this function may come back errored
     /// instead of returning, and every caller has to say which of

@@ -28,17 +28,12 @@
 //!
 //! What is left is narrow, and this stage should stay small:
 //!
-//!  1. **What LLVM structurally cannot see.**  Ownership is two opaque
-//!     `luce_rt_*` calls that LLVM must assume read and write the
-//!     world; MIR names them, knows the owner field is one field, and
-//!     can prove a store to it dead.  That is the one pass here with an
-//!     argument nothing downstream can replace.
-//!  2. **Not handing the back end work that will be thrown away.**
-//!     A std import brings its whole module in; `prune` drops what the
-//!     entry cannot reach before LLVM ever sees it, and `dead` sweeps
-//!     what `ownership` orphaned.  Both are about the *size of the
-//!     input*, which is the one thing a front end can hand a back end
-//!     cheaply.
+//!  * **Not handing the back end work that will be thrown away.**
+//!    A std import brings its whole module in; `prune` drops what the
+//!    entry cannot reach before LLVM ever sees it, and `dead` sweeps
+//!    the unread instructions it leaves behind.  Both are about the
+//!    *size of the input*, which is the one thing a front end can hand
+//!    a back end cheaply.
 //!
 //! There used to be a third reason — "whatever measurably helps the
 //! interpreter" — and it is gone with the engine it named.
@@ -48,12 +43,8 @@
 //! `run` applies them in this order, and `Passes` turns each one off by
 //! itself so a bisect can name the one that broke something.
 //!
-//!   ownership.zig — delete `object_bind`s a later bind overwrites and
-//!                   `object_unbind`s that provably free nothing.
 //!   dead.zig      — sweep instructions nothing reads, then compact the
-//!                   instruction pool.  Must run after the instruction
-//!                   pass above: it leaves orphans on purpose rather than
-//!                   renumbering.
+//!                   instruction pool.
 //!   prune.zig     — drop functions the entry cannot reach after dead
 //!                   compaction, then compact constant-container rows and
 //!                   the shared strings they and `const_string` retain.
@@ -118,21 +109,6 @@
 //! and inside a block a container is read once.  The opportunity is a
 //! property of source code we do not write.
 //!
-//! *Eliding a whole `bind`/`unbind` pair.*  Tempting by analogy with
-//! Swift's ARC, and wrong here.  `object_unbind` is the deallocation,
-//! not a release of a reference count: an object nothing unbinds is
-//! never freed, and `ownership_spec`'s S33 counts that as a leak.  Only
-//! stores that are provably overwritten and unbinds that are provably
-//! inert come out; see ownership.zig.  The cleaner fix is upstream —
-//! `04_semantics/builder.zig` could stop emitting the hidden
-//! temporary's bind when the value is adopted in the same statement,
-//! and then this pass would have nothing to do.
-//!
-//! *Renumbering locals.*  Cannot be done at all today: `give` and
-//! `free` pass the owner's local id to the runtime as an ordinary
-//! integer constant, so a local id is a *value* and no rewrite can find
-//! it.  dead.zig's header has the full account.
-//!
 //! Flat pieces beside this file:
 //!
 //!   effects.zig   — what an instruction may be assumed about: the one
@@ -142,7 +118,7 @@
 //!                   disagree about the same instruction.
 //!   registers.zig — where an instruction keeps its register operands,
 //!                   written once so no rewrite can miss one.
-//!   prune.zig, ownership.zig, dead.zig — the passes, each with its own
+//!   prune.zig, dead.zig — the passes, each with its own
 //!                   header arguing for itself.
 //!   test.zig      — the stage's own proofs: each pass driven alone,
 //!                   and the rewrite it claims checked by name.
@@ -152,7 +128,6 @@ const mir = @import("06_mir.zig");
 const prune_pass = @import("07_optimize/prune.zig");
 
 pub const prune = prune_pass.prune;
-pub const ownership = @import("07_optimize/ownership.zig").ownership;
 pub const dead = @import("07_optimize/dead.zig").dead;
 
 pub const effects = @import("07_optimize/effects.zig");
@@ -169,7 +144,6 @@ pub const effects = @import("07_optimize/effects.zig");
 /// selected instruction passes have settled those block items.
 pub const Passes = struct {
     prune: bool = true,
-    ownership: bool = true,
     dead: bool = true,
 
     /// Everything on: what the compiler does.
@@ -178,7 +152,6 @@ pub const Passes = struct {
     /// prints.
     pub const none: Passes = .{
         .prune = false,
-        .ownership = false,
         .dead = false,
     };
 };
@@ -190,7 +163,6 @@ pub const Passes = struct {
 /// Call on verified programs only, and verify again afterwards — the
 /// driver does both (`compile.zig`).
 pub fn run(arena: std.mem.Allocator, program: *mir.Program, passes: Passes) std.mem.Allocator.Error!void {
-    if (passes.ownership) try ownership(arena, program);
     if (passes.dead) try dead(arena, program);
     // Function reachability is defined by the final instruction pool:
     // an unread const_function must not keep its target alive.  Run this
@@ -204,7 +176,6 @@ pub fn run(arena: std.mem.Allocator, program: *mir.Program, passes: Passes) std.
 test {
     _ = @import("07_optimize/dead.zig");
     _ = @import("07_optimize/effects.zig");
-    _ = @import("07_optimize/ownership.zig");
     _ = @import("07_optimize/prune.zig");
     _ = @import("07_optimize/registers.zig");
     _ = @import("07_optimize/test.zig");

@@ -1,12 +1,11 @@
 //! Assignment, and the three shapes of place it can name: a bare name,
 //! a field, an index — and the chain that is any run of the last two.
 //!
-//! One statement, but the hardest one in the language, because a store
-//! is where every other question this walk asks lands at once: what
-//! the place's root is and whether the program may write it, what the
-//! value's ownership is and whether the store takes its storage or
-//! copies it, what a compound operator combines before it stores, and
-//! what the old contents were owed.  Written together so the four
+//! One statement, but among the hardest in the language, because a
+//! store is where several of this walk's questions land at once: what
+//! type the place holds and whether the value fits it, whether the
+//! store takes the value's storage or copies it, and what a compound
+//! operator combines before it stores.  Written together so the
 //! answers stay one answer.
 //!
 //! Its interface is `lowerAssign`, the arm `statements.zig` calls, and
@@ -29,7 +28,6 @@ const flow = @import("flow.zig");
 const ledger = @import("ledger.zig");
 const recorder = @import("recorder.zig");
 const refusals = @import("refusals.zig");
-const statements = @import("statements.zig");
 const naming = @import("naming.zig");
 const shapes = @import("shapes.zig");
 const FunctionBuilder = builder.FunctionBuilder;
@@ -108,14 +106,6 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
         try self.fail("luce.sema.name", root.span, "ports are not nested places", .{});
         return;
     }
-    switch (try flow.constantPlaceRoot(self, chain.place)) {
-        .not_constant => {},
-        .reported => return,
-        .root => |state| {
-            _ = try flow.refuseConstantWrite(self, state, chain.span, "a nested store");
-            return;
-        },
-    }
     const found = self.findLocal(root.text) orelse {
         const qualified = try naming.qualify(self.analyzer, self.prefix, root.text);
         if (self.analyzer.constant_names.contains(qualified)) {
@@ -126,12 +116,10 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
         return;
     };
     const info = found.info;
-    if (try flow.refuseConstantWrite(self, info.root, chain.span, "a nested store")) return;
     if (!info.mutable and writes_root) {
         try self.fail("luce.sema.let", root.span, "{s} is let-bound; use var for reassignment", .{root.text});
         return;
     }
-    if (try self.checkPoisoned(info, root.text, root.span)) return;
     const root_local = info.local;
     const root_type = recorder.localType(self, root_local);
 
@@ -157,7 +145,7 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
     }
     try operand_list.append(self.temporary(), assign.value);
     const landing: builder.Landing = .{ .chain = .{ .root = root_type, .steps = steps.items } };
-    const run = (try self.lowerOperandsIntoTracking(operand_list.items, landing, null)) orelse return;
+    const run = (try self.lowerOperandsIntoTracking(operand_list.items, landing)) orelse return;
     const operands = run.values;
     const value = operands[operands.len - 1];
     var next_operand: usize = 0;
@@ -192,14 +180,6 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
                 const lowered = operands[next_operand .. next_operand + index.indices.len];
                 next_operand += index.indices.len;
                 const element_type = (try checkIndex(self, current_type, lowered, index.span)) orelse return;
-                // Writing the element back frees the old one, so a
-                // container of object-carrying structs can't be a
-                // nested-place step (it would free objects the
-                // rebuilt struct still shares).
-                if (shapes.carriesObjects(self.analyzer, element_type)) {
-                    try self.fail("luce.sema.own", index.span, "cannot assign through an index into object-carrying elements; rebuild the element and store it whole [OWNERSHIP.md S22]", .{});
-                    return;
-                }
                 const subscript_nodes = try self.arena().alloc(nodes.Operand, lowered.len);
                 recorded_step.* = .{ .index = subscript_nodes };
                 for (lowered, 0..) |value_operand, at_subscript| {
@@ -227,12 +207,6 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
         }
     }
 
-    // The leaf must be a value; nesting object ownership through a
-    // chain is not supported here.
-    if (shapes.carriesObjects(self.analyzer, current_type)) {
-        try self.fail("luce.sema.own", chain.span, "a nested place assigns a value; replace the whole object slot with the single-level form [OWNERSHIP.md S21, S25]", .{});
-        return;
-    }
     // The value was lowered before the chain named a type for it,
     // so `fit` applies the language's two implicit conversions here —
     // a wider number widens, and a `T` reaching a `T?` wraps, which is
@@ -413,103 +387,25 @@ fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign:
         try self.fail("luce.sema.let", span, "{s} is let-bound; use var for reassignment", .{base});
         return;
     }
-    if (try self.checkPoisoned(info, base, span)) return;
     if (info.iterating) {
         try self.fail(
             "luce.sema.own",
             span,
-            "{s} is being iterated; reassigning it would free the collection under the loop [OWNERSHIP.md S5, S9]",
+            "{s} is being iterated; reassigning it would invalidate the collection under the loop",
             .{base},
         );
         return;
     }
     const local = info.local;
-    const class = info.class;
     const local_type = recorder.localType(self, local);
-    // Compound assignment is value-only arithmetic, so an object
-    // place gets a clear message here instead of the ownership
-    // check firing on the (non-fresh) right-hand side.
-    if (assign.compound != null and info.carries) {
-        try self.fail("luce.sema.type", assign.span, "{s} has no compound assignment (numbers, or += on string)", .{
-            try self.analyzer.typeName(local_type),
-        });
-        return;
-    }
     // A compound assignment works on the value the place holds, so
     // a narrowed `T?` combines at `T` and widens the result back.
     const narrowed_place = local_type == .optional and flow.isNarrowed(self, local);
     const combine_type = if (narrowed_place) local_type.held().? else local_type;
     const wanted = if (assign.compound != null) combine_type else local_type;
 
-    // Refuse `tasks = give tasks` and the alias spelling before
-    // lowering `give`: lowering would poison the destination name
-    // itself and then rebind it, leaving a live slot marked dead.
-    // The same-root bare spelling is handled after fitting below;
-    // this early form is needed because an alias give otherwise
-    // reports without knowing the enclosing destination (S5, S8).
-    if (info.carries and assign.compound == null and assign.value.* == .give) {
-        const source_root = try statements.visibleOwnershipRoot(self, assign.value);
-        if (source_root != null and source_root.? == local) {
-            try self.fail(
-                "luce.sema.own",
-                assign.span,
-                "{s} already owns the object graph named by this give; a binding cannot give its graph back to itself — remove the redundant assignment, or assign a distinct owned graph [OWNERSHIP.md S5, S8, S21, S23]",
-                .{base},
-            );
-            return;
-        }
-    }
-
     const fitted = (try self.lowerTyped(assign.value, wanted, assign.span, base)) orelse return;
     const value = fitted.value;
-    if (info.carries) {
-        // Assigning `none` is a legitimate way for an owner to let
-        // go: the release below frees what was there and the slot
-        // then owns nothing (S5, S43).
-        const yields = assign.value.* == .none_literal or
-            try self.yieldsOwnership(assign.value);
-        const owns_place = class == .owned or class == .inout_receiver;
-        if (owns_place and !yields) {
-            if (try flow.refuseConstantEscape(self, value.root, assign.span, "assignment")) return;
-            // A resource graph has no copying escape hatch.  In
-            // particular, telling `tasks = tasks` to write
-            // `tasks = give tasks` would ask one binding to poison
-            // itself while it is also the destination, and an alias
-            // of `tasks` is the same graph with the same problem.
-            // Name that no-op/ownership conflict directly instead
-            // of manufacturing a second error (S5, S8, S21).
-            if (try shapes.carries(self.analyzer, value.value_type, .resource) and assign.value.* == .name) {
-                const source_root = try statements.visibleOwnershipRoot(self, assign.value);
-                if (source_root != null and source_root.? == local) {
-                    try self.fail(
-                        "luce.sema.own",
-                        assign.span,
-                        "{s} already owns the resource graph named by {s}; it cannot take the same graph back through itself or an alias — remove a redundant self-assignment, or assign a distinct owned graph [OWNERSHIP.md S5, S8, S21, S31]",
-                        .{ base, assign.value.name.text },
-                    );
-                    return;
-                }
-            }
-            try refusals.failNeedsOwnership(
-                self,
-                assign.span,
-                try std.fmt.allocPrint(self.arena(), "{s} owns its value", .{base}),
-                assign.value,
-                value.value_type,
-                "S5, S21",
-            );
-            return;
-        }
-        if (!owns_place and yields) {
-            try self.fail(
-                "luce.sema.own",
-                assign.span,
-                "{s} aliases another binding's object and cannot own a fresh one; declare a new name [OWNERSHIP.md S8]",
-                .{base},
-            );
-            return;
-        }
-    }
     // What the slot now holds decides whether the name reads as
     // its payload from here on: a plain `T` is present, a `T?` or
     // a `none` is back to being a question.  A compound assignment
@@ -526,24 +422,12 @@ fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign:
         if (narrowed_place) combined.provenance = .plain;
         if (owns_storage) store_kind = storedKindOf(self, local_type, combined);
     } else if (owns_storage) {
-        // The copy is decided before the release the store rides
-        // with, because the value being stored may be a view of
-        // the storage the release gives back: `s = s[1:]` is
-        // legal (docs/STRINGS.md).
+        // The value being stored may be a view of the storage in
+        // this same slot, so the take-or-copy decision is made
+        // before the store overwrites it: `s = s[1:]` is legal
+        // (docs/STRINGS.md).
         store_kind = ledger.ownedForStoreKind(self, value);
     }
-    // Reassigning an owning var frees the old object immediately
-    // (S5); the very first assignment finds only the null object.
-    // Compound assignment is value-only, so `carries` is false.
-    const owns_objects = info.carries and
-        (class == .owned or class == .inout_receiver);
-    if (owns_objects) self.forgetAliasesOwnedBy(base);
-    if (class == .alias) {
-        info.owner_name = null;
-        if (assign.value.* == .name) self.rememberOwnerName(base, assign.value.name.text);
-    }
-    info.root = value.root;
-    info.revision +%= 1;
     // The recorded statement: the sugar as written — the compound
     // form keeps its operator and its right side, and lower spells
     // the read-combine-narrow (05_hir.zig's own picture).
@@ -580,7 +464,6 @@ fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast
         try self.fail("luce.sema.let", target.span, "{s} is let-bound; use var for reassignment", .{target.base});
         return;
     }
-    if (try self.checkPoisoned(info, target.base, target.span)) return;
     const local = info.local;
     const local_type = recorder.localType(self, local);
     if (local_type != .strukt) {
@@ -598,65 +481,16 @@ fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast
     };
     if (!try refusals.fieldReachable(self, layout_index, field_index, target.span)) return;
     const expected = layout.fields[field_index].field_type;
-    // An object field follows the verb rule and its owner drops
-    // the old value (S25); only the owning binding can restock it.
-    const field_carries = shapes.carriesObjects(self.analyzer, expected);
-    if (field_carries) {
-        if (info.class != .owned and info.class != .inout_receiver) {
-            try self.fail(
-                "luce.sema.own",
-                target.span,
-                "{s} does not own its objects; assign the field through the owning name [OWNERSHIP.md S25, S26]",
-                .{target.base},
-            );
-            return;
-        }
-    }
     const named = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ target.base, target.field });
     const value = ((try self.lowerTyped(assign.value, expected, assign.span, named)) orelse return).value;
-    // The right-hand side is evaluated before this assignment
-    // reloads and rebuilds the base struct.  It may therefore have
-    // given the base away even though the place was live when the
-    // statement began (`root.field = consume(give root)`).  That
-    // is the ordinary S10 use-after-give rule, not an ownership
-    // cycle: a fresh replacement can legally reshape the graph,
-    // but the poisoned binding cannot be touched to install it.
-    if (try self.checkPoisoned(info, target.base, target.span)) return;
-    // `none` owns nothing, so emptying an optional object field is
-    // always legal.  Otherwise the field retains the object: a
-    // program root must be copied first, and an ordinary value must
-    // arrive fresh/given/copied under the existing ownership rule.
-    if (field_carries and assign.value.* != .none_literal) {
-        if (try flow.refuseConstantEscape(self, value.root, assign.span, "a field store")) return;
-        if (!(try self.yieldsOwnership(assign.value))) {
-            try refusals.failNeedsOwnership(
-                self,
-                assign.span,
-                "this field keeps its owned value",
-                assign.value,
-                value.value_type,
-                "S21, S25",
-            );
-            return;
-        }
-    }
-    // The new field is a store into the run `struct_set` builds
-    // (fields that carry objects can't be compound-assigned —
-    // value-only), decided here and spelled by lower.
+    // The new field is a store into the run `struct_set` builds,
+    // decided here and spelled by lower.  A field that carries
+    // objects stores the reference plainly; only value storage — a
+    // string's bytes, a nested struct's run — is taken or copied.
     const store_kind = if (assign.compound) |op| kind: {
         const combined = (try compoundCombine(self, op, expected, value, assign.span)) orelse return;
         break :kind storedKindOf(self, expected, combined);
     } else ledger.ownedForStoreKind(self, value);
-    if (info.carries) {
-        self.forgetAliasesOwnedBy(target.base);
-        // A mutable alias owns its struct storage but not the object
-        // fields inside it.  Writing even a scalar field makes that
-        // copied value differ from the recorded owner's struct, so
-        // later advice must not redirect the whole value to that
-        // owner (S8, S26).
-        if (info.class == .alias) info.owner_name = null;
-    }
-    info.revision +%= 1;
     if (assign.compound) |op| {
         try recorder.recordStatement(self, .{ .compound_assign = .{
             .place = .{ .field = .{ .base = local, .layout = layout_index, .field = field_index } },
@@ -683,13 +517,12 @@ fn lowerAssignIndex(self: *FunctionBuilder, target: ast.IndexTarget, assign: ast
     operand_expressions[0] = target.base;
     @memcpy(operand_expressions[1 .. 1 + target.indices.len], target.indices);
     operand_expressions[operand_expressions.len - 1] = assign.value;
-    const run = (try self.lowerOperandsIntoTracking(operand_expressions, .stored_element, null)) orelse return;
+    const run = (try self.lowerOperandsIntoTracking(operand_expressions, .stored_element)) orelse return;
     const values = run.values;
 
     const object = values[0];
     const indices = values[1 .. values.len - 1];
     const value = &values[values.len - 1];
-    if (try flow.refuseConstantWrite(self, object.root, target.span, "an indexed store")) return;
     const element_type = (try checkIndex(self, object.value_type, indices, target.span)) orelse return;
     // The value was lowered before the container named a type for
     // it, so `fit` applies both implicit conversions here — a wider
@@ -704,28 +537,6 @@ fn lowerAssignIndex(self: *FunctionBuilder, target: ast.IndexTarget, assign: ast
         });
         return;
     }
-    // Containers own their object elements: storing one takes a
-    // fresh value, a give, or a copy (S20, S21).
-    if (shapes.carriesObjects(self.analyzer, element_type) and
-        try flow.refuseConstantEscape(self, value.root, assign.span, "a container store")) return;
-    if (shapes.carriesObjects(self.analyzer, element_type) and !(try self.yieldsOwnership(assign.value))) {
-        try refusals.failNeedsOwnership(
-            self,
-            assign.span,
-            "a container keeps its owned elements",
-            assign.value,
-            value.value_type,
-            "S21",
-        );
-        return;
-    }
-    // Index shape, element type, constant ownership and the verb
-    // rule all precede the cycle question.  A valid adopting store
-    // is the first point at which destination ancestry matters
-    // (S20, S33).
-    if (assign.compound == null and
-        shapes.carriesObjects(self.analyzer, element_type) and
-        try statements.refuseVisibleOwnershipCycle(self, target.base, assign.value)) return;
     // The element is a store; the key beside it is not — a map
     // looks a key up before it keeps one (docs/STRINGS.md).  The
     // compound form reads the element once and combines; lower

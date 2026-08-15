@@ -78,33 +78,26 @@ pub const Provenance = enum {
     plain,
 };
 
-/// A statement temporary this expression's value was parked in (S3):
-/// the hidden slot, the claims the park itself made, and the claims
-/// the statement's end still releases.  Null on an expression nothing
-/// parked.  Recording it is what lets lower emit the park without
-/// re-deriving the ownership walk (05_hir.zig, coupling #3: the
-/// ledger of statement temporaries becomes this).
+/// A statement temporary this expression's value's storage was parked
+/// in (docs/STRINGS.md): the hidden slot, whether the park owns the
+/// value's storage, and whether the statement's end still releases it.
+/// Null on an expression whose storage nothing parked.  Recording it is
+/// what lets lower emit the park's owning slot and its scope-exit
+/// `drop_storage` without re-deriving the walk (05_hir.zig, coupling
+/// #3: the ledger of statement temporaries becomes this).
 ///
-/// **Both halves of the ledger's history are recorded**, because both
-/// are emissions.  `objects`/`storage` are the claims at the park —
-/// they decide what the park emits (an `object_bind` exactly when
-/// `objects`, an owning hidden slot exactly when `storage`) and what
-/// an unwinding path *between* the park and any adopting store
-/// releases (a `try`'s failing side).  The `released_*` pair is the
-/// settled answer after adopting stores retracted their halves — what
-/// the statement's end releases.  A park nothing retracted records the
-/// two pairs equal.
+/// `storage` is the claim at the park — the hidden slot was made owning
+/// storage exactly when it is set, and an unwinding path between the
+/// park and any adopting store releases that storage.  `released_storage`
+/// is the settled answer after an adopting store retracted it — what the
+/// statement's end still releases.  A park nothing retracted records the
+/// two equal.
 pub const Park = struct {
     local: LocalId,
-    /// The claims at the park: an `object_bind` was emitted exactly
-    /// when `objects`; the hidden slot was made owning storage exactly
-    /// when `storage`.
-    objects: bool,
+    /// The hidden slot was made owning storage exactly when set.
     storage: bool,
-    /// The claims the statement's end still releases, post-retraction
-    /// (coupling #3): an adopting store takes the storage half; a
-    /// destructure or a return move takes the objects half.
-    released_objects: bool,
+    /// The storage the statement's end still releases, post-retraction
+    /// (coupling #3): an adopting store takes it.
     released_storage: bool,
 };
 
@@ -117,13 +110,13 @@ pub const Park = struct {
 /// coupling #3).
 pub const StoreKind = enum { plain, take, copy };
 
-/// One slot a scope releases on the way out, and which of its two
-/// claims — the objects in its value, the storage under it — the
-/// release gives back.  The recorded home for scope-exit releases:
-/// every `Block` carries its own, in emission order.
+/// One slot a scope releases on the way out — the storage under it that
+/// the release gives back (`drop_storage`).  The recorded home for
+/// scope-exit storage releases: every `Block` carries its own, in
+/// emission order.  Objects a scope leaves behind are not released here:
+/// they live until the runtime sweeps at exit.
 pub const Release = struct {
     local: LocalId,
-    objects: bool,
     storage: bool,
 };
 
@@ -288,10 +281,6 @@ pub const Expression = union(enum) {
     /// `new list(T)`, `new array(T, n, ...)`, `new map(K, V)`,
     /// `new builder` — a fresh container object.
     new_object: NewObject,
-    /// `give x` — the owner hands over and is poisoned (S10).
-    give: Give,
-    /// `copy x` — a deep duplicate nobody owns yet (S21).
-    copy: Copy,
     /// `spawn f(args)` — the call, made on a worker's own runtime
     /// (docs/THREADS.md); answers the `task` this scope owns.
     spawn: Spawn,
@@ -640,20 +629,6 @@ pub const Expression = union(enum) {
         heap_type: u32,
         /// Dimension sizes for an array; empty otherwise.
         operands: []const Operand,
-        result: Type,
-        span: Span,
-        park: ?Park = null,
-    };
-
-    pub const Give = struct {
-        operand: NodeRef,
-        result: Type,
-        span: Span,
-        park: ?Park = null,
-    };
-
-    pub const Copy = struct {
-        operand: NodeRef,
         result: Type,
         span: Span,
         park: ?Park = null,
@@ -1027,10 +1002,6 @@ pub const Statement = union(enum) {
 
     pub const Return = struct {
         values: []const NodeRef,
-        /// The recorded home for return unwinding's moved set: the
-        /// slots whose value leaves with the return, so the unwind
-        /// releases every open scope *except* what these carry.
-        moved: []const LocalId,
         /// The per-value store decisions, parallel to `values` — how
         /// the return channel took each value's storage
         /// (`ownedForStore`, coupling #3).
@@ -1159,10 +1130,6 @@ pub fn provenance(expression: *const Expression) Provenance {
         // A slice answers a view or a fresh object, never fresh
         // storage (`string_slice`/`list_slice` in the tape's tables).
         .slice => .plain,
-        // `give` hands over the object; the storage stays borrowed.
-        .give => .plain,
-        // The duplicate is storage nobody owns yet (S21).
-        .copy => .fresh,
         // A task is a resource, not storage.
         .spawn => .plain,
         // Built whole, exactly as a struct value is: a function value
@@ -1272,8 +1239,6 @@ pub fn splitsBlocks(expression: *const Expression, declared: Declarations) bool 
             (sliced.start != null and splitsBlocks(sliced.start.?.node, declared)) or
             (sliced.stop != null and splitsBlocks(sliced.stop.?.node, declared)),
         .new_object => |made| splitsRun(made.operands, declared),
-        .give => |given| splitsBlocks(given.operand, declared),
-        .copy => |copied| splitsBlocks(copied.operand, declared),
         // A spawn emits one instruction and no branch; what it is
         // *given* is lowered here, so ask the arguments — and only
         // them, because the call itself runs on the worker's runtime
@@ -1354,9 +1319,7 @@ test "nodes build, and the accessors answer every payload" {
         .span = test_span,
         .park = .{
             .local = 5,
-            .objects = false,
             .storage = true,
-            .released_objects = false,
             .released_storage = true,
         },
     } };
@@ -1383,20 +1346,17 @@ test "nodes build, and the accessors answer every payload" {
     const statements = try arena.alloc(Statement, 3);
     statements[0] = .{ .declare = .{ .local = 3, .value = element, .store = .take, .span = test_span } };
     statements[1] = .{ .break_ = .{ .unwind = 2, .temps_floor = 1, .span = test_span } };
-    const moved = try arena.alloc(LocalId, 1);
-    moved[0] = 3;
     const returned = try arena.alloc(NodeRef, 1);
     returned[0] = narrowed;
     const returned_stores = try arena.alloc(StoreKind, 1);
     returned_stores[0] = .copy;
     statements[2] = .{ .return_ = .{
         .values = returned,
-        .moved = moved,
         .stores = returned_stores,
         .span = test_span,
     } };
     const releases = try arena.alloc(Release, 1);
-    releases[0] = .{ .local = 3, .objects = true, .storage = false };
+    releases[0] = .{ .local = 3, .storage = true };
     const block: Statement = .{ .block = .{
         .statements = statements,
         .releases = releases,
@@ -1407,7 +1367,6 @@ test "nodes build, and the accessors answer every payload" {
     try testing.expectEqual(@as(u32, 2), statements[1].break_.unwind);
     try testing.expectEqual(@as(u32, 1), statements[1].break_.temps_floor);
     try testing.expectEqual(@as(LocalId, 3), block.block.releases[0].local);
-    try testing.expectEqual(@as(LocalId, 3), statements[2].return_.moved[0]);
     try testing.expectEqual(StoreKind.copy, statements[2].return_.stores[0]);
 
     // The guarded statement wraps its attempt whole, and a match's
@@ -1572,10 +1531,6 @@ test "provenance mirrors the storage categories the walk stamps" {
     try testing.expectEqual(Provenance.plain, provenance(fresh_object));
     const sliced = try node(arena, .{ .slice = .{ .target = .{ .node = name }, .start = null, .stop = null, .result = .string, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(sliced));
-    const given = try node(arena, .{ .give = .{ .operand = name, .result = .{ .heap = 0 }, .span = test_span } });
-    try testing.expectEqual(Provenance.plain, provenance(given));
-    const copied = try node(arena, .{ .copy = .{ .operand = name, .result = .string, .span = test_span } });
-    try testing.expectEqual(Provenance.fresh, provenance(copied));
     const worker = try node(arena, .{ .spawn = .{ .call = called, .result = .{ .heap = 1 }, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(worker));
     // A function value is built whole and owns the run holding the

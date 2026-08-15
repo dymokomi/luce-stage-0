@@ -154,10 +154,6 @@ pub const Lowering = struct {
 
     name: []const u8,
     parameter_count: u32 = 0,
-    /// The object-ownership verb on each logical parameter.  This is
-    /// separate from `Local.owns_storage`: a `give` parameter takes its
-    /// object graph but still borrows the caller's storage.
-    parameter_gives: []const bool = &.{},
     return_type: Type,
     /// Written `-> T!` or `-> !` (docs/FAILURE.md).
     fallible: bool = false,
@@ -320,31 +316,20 @@ pub const Lowering = struct {
         _ = try self.emit(.{ .local_set = .{ .local = local, .value = value } }, .none);
     }
 
-    // Ownership plumbing ----------------------------------------------------
+    // Value-storage plumbing ------------------------------------------------
     //
-    // Which binding owns which object is stage 4's to decide; saying it
-    // in instructions is mechanical.
+    // Objects live until the runtime sweeps at exit, so nothing binds or
+    // frees them here; a local's *storage* — its string bytes and struct
+    // field runs — is what a scope still gives back.
 
-    pub fn bind(self: *Lowering, local: LocalId, value: Register) Error!void {
-        _ = try self.emit(.{ .object_bind = .{ .local = local, .value = value } }, .none);
-    }
-
-    pub fn unbind(self: *Lowering, local: LocalId, value: Register) Error!void {
-        _ = try self.emit(.{ .object_unbind = .{ .local = local, .value = value } }, .none);
-    }
-
-    /// Release one owned local, in whichever of the two senses it
-    /// owns something: `objects` frees whatever object in its slot is
-    /// still bound to it, `storage` gives its string bytes and struct
-    /// field runs back.  Safe on any path and safe twice over — an
-    /// object given away or adopted elsewhere is skipped at run time,
-    /// and a storage release writes the emptied value back, so a
-    /// second one frees nothing (docs/STRINGS.md).
-    pub fn release(self: *Lowering, local: LocalId, objects: bool, storage: bool) Error!void {
-        if (!objects and !storage) return;
+    /// Release one owned local's storage: its string bytes and struct
+    /// field runs.  Safe on any path and safe twice over — a storage
+    /// release writes the emptied value back, so a second one frees
+    /// nothing (docs/STRINGS.md).
+    pub fn release(self: *Lowering, local: LocalId, storage: bool) Error!void {
+        if (!storage) return;
         const value = try self.load(local);
-        if (objects) try self.unbind(local, value);
-        if (storage) try self.store(local, try self.dropStorage(value));
+        try self.store(local, try self.dropStorage(value));
     }
 
     /// A copy of `value` whose storage nothing else owns — what a
@@ -527,7 +512,7 @@ pub const Lowering = struct {
         }
         // The root's old value is what every parent register above was
         // read out of, so it can only go once the rebuild is complete.
-        try self.release(root, false, self.locals.items[root].owns_storage);
+        try self.release(root, self.locals.items[root].owns_storage);
         try self.store(root, updated);
     }
 
@@ -826,7 +811,6 @@ pub fn build(
         function.* = .{
             .name = lowering.name,
             .parameter_count = lowering.parameter_count,
-            .parameter_gives = try arena.dupe(bool, lowering.parameter_gives),
             .return_type = lowering.return_type,
             .fallible = lowering.fallible,
             .locals = try lowering.locals.toOwnedSlice(arena),

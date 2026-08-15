@@ -122,8 +122,6 @@ pub fn deeperThan(expression: *const ast.Expression, budget: u32) bool {
         .int_literal, .float_literal, .bool_literal, .string_literal, .none_literal, .name => false,
         .field => |field| deeperThan(field.target, left),
         .unary => |unary| deeperThan(unary.operand, left),
-        .give => |give| deeperThan(give.operand, left),
-        .copy => |copied| deeperThan(copied.operand, left),
         .try_call => |attempt| deeperThan(attempt.operand, left),
         .spawn => |worker| deeperThan(worker.call, left),
         .lambda => |written| deeperThan(written.body, left),

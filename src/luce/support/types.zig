@@ -548,13 +548,8 @@ pub const HeapType = union(enum) {
 /// The shape of one function type: what it takes and what it answers
 /// (docs/FUNCTIONS.md S2).
 ///
-/// **Parameter types, and the verb each one receives objects with** —
-/// no names, because a name is documentation of a declaration and a
-/// type is not a declaration.  The verb is here because it is not
-/// documentation: `func(give list(long))` and `func(list(long))` differ
-/// in who owns the list afterwards, and a call through a value checks
-/// its arguments' verbs exactly as a direct call does (D5).  Two
-/// signatures that differ only in a verb are two types.
+/// **Parameter types, and no names**, because a name is documentation of
+/// a declaration and a type is not a declaration.
 ///
 /// A function type carries no `!`: there is no spelling for one in this
 /// run, so a fallible function is refused where a value is wanted
@@ -569,16 +564,12 @@ pub const Signature = struct {
 
     pub const Parameter = struct {
         value_type: Type,
-        /// Written `give T`: the callee takes ownership (OWNERSHIP.md
-        /// S13).
-        gives: bool = false,
     };
 
     pub fn eql(self: Signature, other: Signature) bool {
         if (self.parameters.len != other.parameters.len) return false;
         if (!self.result.eql(other.result)) return false;
         for (self.parameters, other.parameters) |mine, theirs| {
-            if (mine.gives != theirs.gives) return false;
             if (!mine.value_type.eql(theirs.value_type)) return false;
         }
         return true;
@@ -913,7 +904,6 @@ fn writeTypeName(
             try written.appendSlice(allocator, "func(");
             for (signature.parameters, 0..) |parameter, at| {
                 if (at != 0) try written.appendSlice(allocator, ", ");
-                if (parameter.gives) try written.appendSlice(allocator, "give ");
                 try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, parameter.value_type);
             }
             try written.appendSlice(allocator, ")");

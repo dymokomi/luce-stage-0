@@ -69,12 +69,6 @@ fn expectStale(runtime: *Runtime, mistake: anytype) !void {
     runtime.pending = null;
 }
 
-fn expectContainerParent(runtime: *Runtime, child: Value, parent: Value) !void {
-    const owner = (try runtime.resolve(child)).owner;
-    try testing.expectEqual(heap.Owner.Kind.container, owner.kind);
-    try testing.expect(owner.details.parent.same(parent.asObject()));
-}
-
 fn expectBorrowedFunctionReceiver(function: Value, receiver: Value) !void {
     try testing.expectEqual(value.Tag.function, function.tag);
     const slots = function.asStruct();
@@ -87,1000 +81,6 @@ fn expectBorrowedFunctionReceiver(function: Value, receiver: Value) !void {
 /// seed and the transition count are part of the test contract: when a
 /// sequence finds a bad edge, the same trace can be replayed without a
 /// process-global random source changing the failure.
-const OwnerGraphRng = struct {
-    state: u64,
-
-    fn init(seed: u64) @This() {
-        return .{ .state = seed };
-    }
-
-    fn next(self: *@This()) u64 {
-        self.state = self.state *% 6_364_136_223_846_793_005 +% 1_442_695_040_888_963_407;
-        return self.state;
-    }
-
-    fn below(self: *@This(), upper: usize) usize {
-        std.debug.assert(upper != 0);
-        return @intCast(self.next() % upper);
-    }
-};
-
-/// The reference side of the randomized ownership proof.  It deliberately
-/// models only object identity and parent edges; list contents remain in the
-/// runtime and are audited after every transition, so the model cannot agree
-/// with a bug merely because it repeated the implementation's storage walk.
-const OwnerGraph = struct {
-    const capacity = 96;
-
-    const Node = struct {
-        handle: Value,
-        parent: ?usize = null,
-        live: bool = true,
-    };
-
-    nodes: [capacity]Node = undefined,
-    count: usize = 0,
-
-    fn add(self: *@This(), handle: Value) !usize {
-        if (self.count == capacity) return error.TestExpected;
-        const index = self.count;
-        self.nodes[index] = .{ .handle = handle };
-        self.count += 1;
-        return index;
-    }
-
-    fn findLive(self: *const @This(), handle: Value) ?usize {
-        if (handle.tag != .object) return null;
-        const wanted = handle.asObject();
-        for (self.nodes[0..self.count], 0..) |node, index| {
-            if (node.live and node.handle.asObject().same(wanted)) return index;
-        }
-        return null;
-    }
-
-    fn chooseLive(self: *const @This(), random: *OwnerGraphRng) ?usize {
-        var choices: usize = 0;
-        for (self.nodes[0..self.count]) |node| {
-            if (node.live) choices += 1;
-        }
-        if (choices == 0) return null;
-        var wanted = random.below(choices);
-        for (self.nodes[0..self.count], 0..) |node, index| {
-            if (!node.live) continue;
-            if (wanted == 0) return index;
-            wanted -= 1;
-        }
-        unreachable;
-    }
-
-    fn chooseLoose(self: *const @This(), random: *OwnerGraphRng) ?usize {
-        var choices: usize = 0;
-        for (self.nodes[0..self.count]) |node| {
-            if (node.live and node.parent == null) choices += 1;
-        }
-        if (choices == 0) return null;
-        var wanted = random.below(choices);
-        for (self.nodes[0..self.count], 0..) |node, index| {
-            if (!node.live or node.parent != null) continue;
-            if (wanted == 0) return index;
-            wanted -= 1;
-        }
-        unreachable;
-    }
-
-    fn chooseContained(self: *const @This(), random: *OwnerGraphRng) ?usize {
-        var choices: usize = 0;
-        for (self.nodes[0..self.count]) |node| {
-            if (node.live and node.parent != null) choices += 1;
-        }
-        if (choices == 0) return null;
-        var wanted = random.below(choices);
-        for (self.nodes[0..self.count], 0..) |node, index| {
-            if (!node.live or node.parent == null) continue;
-            if (wanted == 0) return index;
-            wanted -= 1;
-        }
-        unreachable;
-    }
-
-    /// Whether `node` is at or below `ancestor` in the reference tree.
-    fn descendsFrom(self: *const @This(), node: usize, ancestor: usize) bool {
-        var current: ?usize = node;
-        var remaining = self.count + 1;
-        while (current) |at| {
-            if (at == ancestor) return true;
-            if (remaining == 0) return true;
-            remaining -= 1;
-            current = self.nodes[at].parent;
-        }
-        return false;
-    }
-
-    fn wouldCycle(self: *const @This(), parent: usize, child: usize) bool {
-        return parent == child or self.descendsFrom(parent, child);
-    }
-
-    fn retireSubtree(self: *@This(), root: usize) void {
-        for (self.nodes[0..self.count], 0..) |*node, index| {
-            if (node.live and self.descendsFrom(index, root)) node.live = false;
-        }
-    }
-
-    fn retireChildren(self: *@This(), parent: usize) void {
-        for (self.nodes[0..self.count], 0..) |node, index| {
-            if (node.live and node.parent == parent) self.retireSubtree(index);
-        }
-    }
-
-    fn liveCount(self: *const @This()) u32 {
-        var count: u32 = 0;
-        for (self.nodes[0..self.count]) |node| {
-            if (node.live) count += 1;
-        }
-        return count;
-    }
-};
-
-fn ownerGraphExpect(condition: bool, seed: u64, step: usize, fact: []const u8) !void {
-    if (condition) return;
-    std.debug.print("owner graph seed 0x{x}, step {d}: {s}\n", .{ seed, step, fact });
-    return error.TestExpected;
-}
-
-fn ownerGraphLength(runtime: *Runtime, held: Value) !usize {
-    const measured = (try containers.length(runtime, held)).asLong();
-    if (measured < 0) return error.TestExpected;
-    return @intCast(measured);
-}
-
-fn chooseNonemptyOwnerGraph(
-    runtime: *Runtime,
-    graph: *const OwnerGraph,
-    random: *OwnerGraphRng,
-) !?usize {
-    var choices: [OwnerGraph.capacity]usize = undefined;
-    var count: usize = 0;
-    for (graph.nodes[0..graph.count], 0..) |node, index| {
-        if (!node.live) continue;
-        if (try ownerGraphLength(runtime, node.handle) == 0) continue;
-        choices[count] = index;
-        count += 1;
-    }
-    if (count == 0) return null;
-    return choices[random.below(count)];
-}
-
-/// Check both halves of the invariant after every state-machine operation:
-/// the runtime's census and owner metadata, then every object edge as seen
-/// through the public container API.  This catches a wrong owner field even
-/// when the list still appears to contain the expected handle, and catches a
-/// duplicate edge even when the table's live count happens to match.
-fn auditOwnerGraph(
-    runtime: *Runtime,
-    graph: *const OwnerGraph,
-    seed: u64,
-    step: usize,
-) !void {
-    runtime.debugAssertInvariants();
-    try ownerGraphExpect(runtime.live == graph.liveCount(), seed, step, "live census");
-
-    for (graph.nodes[0..graph.count], 0..) |node, index| {
-        if (!node.live) continue;
-        const object = try runtime.resolve(node.handle);
-        if (node.parent) |parent| {
-            try ownerGraphExpect(graph.nodes[parent].live, seed, step, "live parent");
-            try ownerGraphExpect(object.owner.kind == .container, seed, step, "container owner kind");
-            try ownerGraphExpect(
-                object.owner.details.parent.same(graph.nodes[parent].handle.asObject()),
-                seed,
-                step,
-                "exact container parent",
-            );
-        } else {
-            try ownerGraphExpect(object.owner.kind == .loose, seed, step, "loose root owner kind");
-        }
-
-        const length = try ownerGraphLength(runtime, node.handle);
-        for (0..length) |at| {
-            const item = try containers.indexGet(runtime, node.handle, &.{Value.ofLong(@intCast(at))});
-            if (item.tag != .object) continue;
-            const child = graph.findLive(item) orelse {
-                std.debug.print("owner graph seed 0x{x}, step {d}: unknown child in node {d}\n", .{ seed, step, index });
-                return error.TestExpected;
-            };
-            try ownerGraphExpect(
-                graph.nodes[child].parent == index,
-                seed,
-                step,
-                "edge agrees with child parent",
-            );
-        }
-    }
-
-    // Every model edge must occur exactly once in its parent's list.  The
-    // first loop checks that every runtime edge points into the model; this
-    // reverse check catches a missing edge and a duplicate edge as well.
-    for (graph.nodes[0..graph.count]) |node| {
-        if (!node.live) continue;
-        const child = graph.findLive(node.handle) orelse unreachable;
-        const parent = node.parent orelse continue;
-        var occurrences: usize = 0;
-        const length = try ownerGraphLength(runtime, graph.nodes[parent].handle);
-        for (0..length) |at| {
-            const item = try containers.indexGet(
-                runtime,
-                graph.nodes[parent].handle,
-                &.{Value.ofLong(@intCast(at))},
-            );
-            if (item.tag == .object and item.asObject().same(node.handle.asObject())) {
-                occurrences += 1;
-            }
-        }
-        _ = child;
-        try ownerGraphExpect(occurrences == 1, seed, step, "one edge per owned child");
-    }
-}
-
-fn runOwnerGraphSeed(runtime: *Runtime, seed: u64) !void {
-    var graph: OwnerGraph = .{};
-    var random = OwnerGraphRng.init(seed);
-
-    // Start with several independent roots so the first transitions can
-    // build both shallow and deep forests without depending on allocation
-    // order or one particular row index.
-    for (0..8) |_| {
-        _ = try graph.add(try runtime.newList(Value.none));
-    }
-
-    const transitions = 700;
-    var step: usize = 0;
-    while (step < transitions) : (step += 1) {
-        runtime.pending = null;
-        switch (random.below(100)) {
-            // New loose roots exercise row reuse after the release cases
-            // below, and eventually hit the fixed model capacity harmlessly.
-            0...13 => if (graph.count < OwnerGraph.capacity) {
-                _ = try graph.add(try runtime.newList(Value.none));
-            },
-
-            // Append and insert are the two growing ownership doors.
-            14...27 => {
-                const parent = graph.chooseLive(&random) orelse continue;
-                const child = graph.chooseLoose(&random) orelse continue;
-                if (graph.wouldCycle(parent, child)) {
-                    try expectTrap(
-                        .ownership_cycle,
-                        runtime,
-                        containers.append(runtime, graph.nodes[parent].handle, graph.nodes[child].handle),
-                    );
-                    runtime.pending = null;
-                } else {
-                    try containers.append(runtime, graph.nodes[parent].handle, graph.nodes[child].handle);
-                    graph.nodes[child].parent = parent;
-                }
-            },
-            28...39 => {
-                const parent = graph.chooseLive(&random) orelse continue;
-                const child = graph.chooseLoose(&random) orelse continue;
-                const length = try ownerGraphLength(runtime, graph.nodes[parent].handle);
-                const at = random.below(length + 1);
-                if (graph.wouldCycle(parent, child)) {
-                    try expectTrap(
-                        .ownership_cycle,
-                        runtime,
-                        containers.insert(runtime, graph.nodes[parent].handle, @intCast(at), graph.nodes[child].handle),
-                    );
-                    runtime.pending = null;
-                } else {
-                    try containers.insert(
-                        runtime,
-                        graph.nodes[parent].handle,
-                        @intCast(at),
-                        graph.nodes[child].handle,
-                    );
-                    graph.nodes[child].parent = parent;
-                }
-            },
-
-            // Pop detaches one direct child and leaves its own subtree
-            // intact, which is the transition most likely to expose a
-            // forgotten loosen step.
-            40...49 => {
-                const parent = try chooseNonemptyOwnerGraph(runtime, &graph, &random) orelse continue;
-                const length = try ownerGraphLength(runtime, graph.nodes[parent].handle);
-                const item = try containers.indexGet(
-                    runtime,
-                    graph.nodes[parent].handle,
-                    &.{Value.ofLong(@intCast(length - 1))},
-                );
-                const taken = try containers.pop(runtime, graph.nodes[parent].handle);
-                try ownerGraphExpect(
-                    std.meta.eql(item, taken),
-                    seed,
-                    step,
-                    "pop returns the stored value",
-                );
-                if (taken.tag == .object) {
-                    const child = graph.findLive(taken) orelse return error.TestExpected;
-                    try ownerGraphExpect(graph.nodes[child].parent == parent, seed, step, "pop child parent");
-                    graph.nodes[child].parent = null;
-                }
-            },
-            50...58 => {
-                const parent = try chooseNonemptyOwnerGraph(runtime, &graph, &random) orelse continue;
-                const length = try ownerGraphLength(runtime, graph.nodes[parent].handle);
-                const at = random.below(length);
-                const item = try containers.indexGet(
-                    runtime,
-                    graph.nodes[parent].handle,
-                    &.{Value.ofLong(@intCast(at))},
-                );
-                try containers.remove(runtime, graph.nodes[parent].handle, Value.ofLong(@intCast(at)));
-                if (item.tag == .object) {
-                    const child = graph.findLive(item) orelse return error.TestExpected;
-                    try ownerGraphExpect(graph.nodes[child].parent == parent, seed, step, "removed child parent");
-                    graph.retireSubtree(child);
-                }
-            },
-
-            // Replace an element with either a scalar, absence, or a loose
-            // subtree.  The old object dies at the overwrite point.
-            59...70 => {
-                const parent = try chooseNonemptyOwnerGraph(runtime, &graph, &random) orelse continue;
-                const length = try ownerGraphLength(runtime, graph.nodes[parent].handle);
-                const at = random.below(length);
-                const old = try containers.indexGet(
-                    runtime,
-                    graph.nodes[parent].handle,
-                    &.{Value.ofLong(@intCast(at))},
-                );
-                var incoming = Value.none;
-                var incoming_node: ?usize = null;
-                if (random.below(3) == 0) {
-                    incoming = Value.ofLong(@intCast(random.next() & 0x7f));
-                } else if (random.below(3) == 0) {
-                    if (graph.chooseLoose(&random)) |candidate| {
-                        incoming = graph.nodes[candidate].handle;
-                        incoming_node = candidate;
-                    }
-                }
-                if (incoming_node) |child| {
-                    if (graph.wouldCycle(parent, child)) {
-                        try expectTrap(
-                            .ownership_cycle,
-                            runtime,
-                            containers.indexSet(
-                                runtime,
-                                graph.nodes[parent].handle,
-                                &.{Value.ofLong(@intCast(at))},
-                                incoming,
-                            ),
-                        );
-                        runtime.pending = null;
-                        continue;
-                    }
-                }
-                try containers.indexSet(
-                    runtime,
-                    graph.nodes[parent].handle,
-                    &.{Value.ofLong(@intCast(at))},
-                    incoming,
-                );
-                if (old.tag == .object) {
-                    const replaced = graph.findLive(old) orelse return error.TestExpected;
-                    graph.retireSubtree(replaced);
-                }
-                if (incoming_node) |child| graph.nodes[child].parent = parent;
-            },
-
-            // Clear is a bulk subtree release and is deliberately separate
-            // from remove so the model checks both iteration shapes.
-            71...76 => {
-                const parent = graph.chooseLive(&random) orelse continue;
-                graph.retireChildren(parent);
-                try containers.clear(runtime, graph.nodes[parent].handle);
-            },
-
-            // A contained child is a hostile second-owner attempt.  Probe
-            // all three retaining list doors; none may mutate the target or
-            // move the child's owner field.
-            77...82 => if (graph.chooseContained(&random)) |child| {
-                const parent = graph.chooseLive(&random) orelse continue;
-                switch (random.below(3)) {
-                    0 => try expectTrap(
-                        .not_owned,
-                        runtime,
-                        containers.append(runtime, graph.nodes[parent].handle, graph.nodes[child].handle),
-                    ),
-                    1 => try expectTrap(
-                        .not_owned,
-                        runtime,
-                        containers.insert(runtime, graph.nodes[parent].handle, 0, graph.nodes[child].handle),
-                    ),
-                    2 => {
-                        const target = try chooseNonemptyOwnerGraph(runtime, &graph, &random) orelse continue;
-                        const length = try ownerGraphLength(runtime, graph.nodes[target].handle);
-                        try expectTrap(
-                            .not_owned,
-                            runtime,
-                            containers.indexSet(
-                                runtime,
-                                graph.nodes[target].handle,
-                                &.{Value.ofLong(@intCast(random.below(length)))},
-                                graph.nodes[child].handle,
-                            ),
-                        );
-                    },
-                    else => unreachable,
-                }
-                runtime.pending = null;
-            },
-
-            // Free a loose root, then immediately exercise double release
-            // and later generation reuse through the stale-handle lane.
-            83...88 => if (graph.chooseLoose(&random)) |root| {
-                const held = graph.nodes[root].handle;
-                runtime.freeValue(held);
-                runtime.freeObject(held.asObject());
-                runtime.freeValue(held);
-                graph.retireSubtree(root);
-            },
-
-            // Bind/return/unbind a loose subtree.  Both paths must preserve
-            // all descendants and only the matching binding may destroy it.
-            89...94 => if (graph.chooseLoose(&random)) |root| {
-                const held = graph.nodes[root].handle;
-                const serial = runtime.takeSerial();
-                const local: u32 = @intCast(random.below(16));
-                runtime.bind(held, serial, local);
-                const owner = (try runtime.resolve(held)).owner;
-                try ownerGraphExpect(owner.kind == .binding, seed, step, "binding transition");
-                runtime.unbind(held, serial + 1, local);
-                try ownerGraphExpect(runtime.live == graph.liveCount(), seed, step, "wrong binding leaves graph");
-                if (random.below(2) == 0) {
-                    runtime.loosenFromFrame(held, serial);
-                } else {
-                    runtime.unbind(held, serial, local);
-                    graph.retireSubtree(root);
-                }
-            },
-
-            // Stale handles must remain stale through resolution, copying,
-            // ownership checks, and a mutating receiver path.
-            else => if (graph.count != 0) {
-                var dead: [OwnerGraph.capacity]usize = undefined;
-                var count: usize = 0;
-                for (graph.nodes[0..graph.count], 0..) |node, index| {
-                    if (!node.live) {
-                        dead[count] = index;
-                        count += 1;
-                    }
-                }
-                if (count != 0) {
-                    const stale = graph.nodes[dead[random.below(count)]].handle;
-                    try expectTrap(.use_after_free, runtime, runtime.resolve(stale));
-                    runtime.pending = null;
-                    try expectTrap(.use_after_free, runtime, runtime.deepCopy(stale));
-                    runtime.pending = null;
-                    try expectTrap(.use_after_free, runtime, runtime.checkGivable(stale, null));
-                    runtime.pending = null;
-                }
-            },
-        }
-        try auditOwnerGraph(runtime, &graph, seed, step);
-    }
-
-    // Teardown is part of the state-machine contract, not merely a defer in
-    // the test harness: every graph root must be explicitly released before
-    // the runtime itself closes.
-    for (graph.nodes[0..graph.count], 0..) |node, index| {
-        if (node.live and node.parent == null) {
-            runtime.freeValue(node.handle);
-            graph.retireSubtree(index);
-        }
-    }
-    try auditOwnerGraph(runtime, &graph, seed, transitions);
-    try ownerGraphExpect(runtime.live == 0, seed, transitions, "zero live objects after graph teardown");
-}
-
-const MixedKind = enum { list, map, array };
-
-const MixedNode = struct {
-    handle: Value,
-    kind: MixedKind,
-    parent: ?usize = null,
-    live: bool = true,
-};
-
-const MixedOwnerGraph = struct {
-    const capacity = 64;
-
-    nodes: [capacity]MixedNode = undefined,
-    count: usize = 0,
-
-    fn add(self: *@This(), handle: Value, kind: MixedKind) !usize {
-        if (self.count == capacity) return error.TestExpected;
-        const index = self.count;
-        self.nodes[index] = .{ .handle = handle, .kind = kind };
-        self.count += 1;
-        return index;
-    }
-
-    fn findLive(self: *const @This(), handle: Value) ?usize {
-        if (handle.tag != .object) return null;
-        for (self.nodes[0..self.count], 0..) |node, index| {
-            if (node.live and node.handle.asObject().same(handle.asObject())) return index;
-        }
-        return null;
-    }
-
-    fn chooseLive(self: *const @This(), random: *OwnerGraphRng) ?usize {
-        var choices: usize = 0;
-        for (self.nodes[0..self.count]) |node| {
-            if (node.live) choices += 1;
-        }
-        if (choices == 0) return null;
-        var wanted = random.below(choices);
-        for (self.nodes[0..self.count], 0..) |node, index| {
-            if (!node.live) continue;
-            if (wanted == 0) return index;
-            wanted -= 1;
-        }
-        unreachable;
-    }
-
-    fn chooseLoose(self: *const @This(), random: *OwnerGraphRng) ?usize {
-        var choices: usize = 0;
-        for (self.nodes[0..self.count]) |node| {
-            if (node.live and node.parent == null) choices += 1;
-        }
-        if (choices == 0) return null;
-        var wanted = random.below(choices);
-        for (self.nodes[0..self.count], 0..) |node, index| {
-            if (!node.live or node.parent != null) continue;
-            if (wanted == 0) return index;
-            wanted -= 1;
-        }
-        unreachable;
-    }
-
-    fn chooseContained(self: *const @This(), random: *OwnerGraphRng) ?usize {
-        var choices: usize = 0;
-        for (self.nodes[0..self.count]) |node| {
-            if (node.live and node.parent != null) choices += 1;
-        }
-        if (choices == 0) return null;
-        var wanted = random.below(choices);
-        for (self.nodes[0..self.count], 0..) |node, index| {
-            if (!node.live or node.parent == null) continue;
-            if (wanted == 0) return index;
-            wanted -= 1;
-        }
-        unreachable;
-    }
-
-    fn descendsFrom(self: *const @This(), node: usize, ancestor: usize) bool {
-        var current: ?usize = node;
-        var remaining = self.count + 1;
-        while (current) |at| {
-            if (at == ancestor) return true;
-            if (remaining == 0) return true;
-            remaining -= 1;
-            current = self.nodes[at].parent;
-        }
-        return false;
-    }
-
-    fn wouldCycle(self: *const @This(), parent: usize, child: usize) bool {
-        return parent == child or self.descendsFrom(parent, child);
-    }
-
-    fn retireSubtree(self: *@This(), root: usize) void {
-        for (self.nodes[0..self.count], 0..) |*node, index| {
-            if (node.live and self.descendsFrom(index, root)) node.live = false;
-        }
-    }
-
-    fn retireChildren(self: *@This(), parent: usize) void {
-        for (self.nodes[0..self.count], 0..) |node, index| {
-            if (node.live and node.parent == parent) self.retireSubtree(index);
-        }
-    }
-
-    fn liveCount(self: *const @This()) u32 {
-        var count: u32 = 0;
-        for (self.nodes[0..self.count]) |node| {
-            if (node.live) count += 1;
-        }
-        return count;
-    }
-};
-
-fn mixedLength(runtime: *Runtime, graph: *const MixedOwnerGraph, index: usize) !usize {
-    return ownerGraphLength(runtime, graph.nodes[index].handle);
-}
-
-fn mixedItem(runtime: *Runtime, graph: *const MixedOwnerGraph, index: usize, at: usize) !Value {
-    const node = graph.nodes[index];
-    return switch (node.kind) {
-        .map => containers.valueAt(runtime, node.handle, @intCast(at)),
-        .list, .array => containers.indexGet(runtime, node.handle, &.{Value.ofLong(@intCast(at))}),
-    };
-}
-
-fn mixedAudit(runtime: *Runtime, graph: *const MixedOwnerGraph, seed: u64, step: usize) !void {
-    runtime.debugAssertInvariants();
-    try ownerGraphExpect(runtime.live == graph.liveCount(), seed, step, "mixed live census");
-
-    for (graph.nodes[0..graph.count], 0..) |node, index| {
-        if (!node.live) continue;
-        const object = try runtime.resolve(node.handle);
-        if (node.parent) |parent| {
-            try ownerGraphExpect(graph.nodes[parent].live, seed, step, "mixed live parent");
-            try ownerGraphExpect(object.owner.kind == .container, seed, step, "mixed container owner kind");
-            try ownerGraphExpect(
-                object.owner.details.parent.same(graph.nodes[parent].handle.asObject()),
-                seed,
-                step,
-                "mixed exact container parent",
-            );
-        } else {
-            try ownerGraphExpect(object.owner.kind == .loose, seed, step, "mixed loose root owner kind");
-        }
-
-        const length = try mixedLength(runtime, graph, index);
-        for (0..length) |at| {
-            const item = try mixedItem(runtime, graph, index, at);
-            if (item.tag != .object) continue;
-            const child = graph.findLive(item) orelse return error.TestExpected;
-            try ownerGraphExpect(graph.nodes[child].parent == index, seed, step, "mixed edge parent");
-        }
-    }
-
-    for (graph.nodes[0..graph.count], 0..) |node, child| {
-        if (!node.live) continue;
-        const parent = node.parent orelse continue;
-        var occurrences: usize = 0;
-        const length = try mixedLength(runtime, graph, parent);
-        for (0..length) |at| {
-            const item = try mixedItem(runtime, graph, parent, at);
-            if (item.tag == .object and item.asObject().same(node.handle.asObject())) occurrences += 1;
-        }
-        try ownerGraphExpect(occurrences == 1, seed, step, "mixed one edge per child");
-        _ = child;
-    }
-}
-
-fn mixedNew(runtime: *Runtime, kind: MixedKind) !Value {
-    return switch (kind) {
-        .list => runtime.newList(Value.none),
-        .map => runtime.newMap(),
-        .array => runtime.newArray(&.{4}, Value.none),
-    };
-}
-
-fn mixedEmptyArraySlot(runtime: *Runtime, graph: *const MixedOwnerGraph, index: usize) !?usize {
-    const length = try mixedLength(runtime, graph, index);
-    for (0..length) |at| {
-        if ((try mixedItem(runtime, graph, index, at)).tag != .object) return at;
-    }
-    return null;
-}
-
-fn runMixedOwnerGraphSeed(runtime: *Runtime, seed: u64) !void {
-    var graph: MixedOwnerGraph = .{};
-    var random = OwnerGraphRng.init(seed);
-    for ([_]MixedKind{ .list, .map, .array, .list, .map }) |kind| {
-        _ = try graph.add(try mixedNew(runtime, kind), kind);
-    }
-
-    const transitions = 1_200;
-    var step: usize = 0;
-    while (step < transitions) : (step += 1) {
-        runtime.pending = null;
-        switch (random.below(100)) {
-            0...11 => if (graph.count < MixedOwnerGraph.capacity) {
-                const kind: MixedKind = @enumFromInt(random.below(3));
-                _ = try graph.add(try mixedNew(runtime, kind), kind);
-            },
-
-            // Every container kind gets a retaining door: append/insert for
-            // lists, map_place for maps, and an indexed store for arrays.
-            12...36 => {
-                const parent = graph.chooseLive(&random) orelse continue;
-                const child = graph.chooseLoose(&random) orelse continue;
-                if (parent == child) continue;
-                if (graph.wouldCycle(parent, child)) {
-                    switch (graph.nodes[parent].kind) {
-                        .list => try expectTrap(
-                            .ownership_cycle,
-                            runtime,
-                            containers.append(runtime, graph.nodes[parent].handle, graph.nodes[child].handle),
-                        ),
-                        .map => _ = try expectTrap(
-                            .ownership_cycle,
-                            runtime,
-                            containers.mapPlace(
-                                runtime,
-                                graph.nodes[parent].handle,
-                                Value.ofLong(@intCast(10_000 + step * 100 + child)),
-                                graph.nodes[child].handle,
-                            ),
-                        ),
-                        .array => {
-                            const at = try mixedEmptyArraySlot(runtime, &graph, parent) orelse continue;
-                            try expectTrap(
-                                .ownership_cycle,
-                                runtime,
-                                containers.indexSet(
-                                    runtime,
-                                    graph.nodes[parent].handle,
-                                    &.{Value.ofLong(@intCast(at))},
-                                    graph.nodes[child].handle,
-                                ),
-                            );
-                        },
-                    }
-                    runtime.pending = null;
-                    continue;
-                }
-                switch (graph.nodes[parent].kind) {
-                    .list => {
-                        if (random.below(2) == 0) {
-                            try containers.append(runtime, graph.nodes[parent].handle, graph.nodes[child].handle);
-                        } else {
-                            const length = try mixedLength(runtime, &graph, parent);
-                            try containers.insert(
-                                runtime,
-                                graph.nodes[parent].handle,
-                                @intCast(random.below(length + 1)),
-                                graph.nodes[child].handle,
-                            );
-                        }
-                    },
-                    .map => {
-                        _ = try containers.mapPlace(
-                            runtime,
-                            graph.nodes[parent].handle,
-                            Value.ofLong(@intCast(10_000 + step * 100 + child)),
-                            graph.nodes[child].handle,
-                        );
-                    },
-                    .array => {
-                        const at = try mixedEmptyArraySlot(runtime, &graph, parent) orelse continue;
-                        try containers.indexSet(
-                            runtime,
-                            graph.nodes[parent].handle,
-                            &.{Value.ofLong(@intCast(at))},
-                            graph.nodes[child].handle,
-                        );
-                    },
-                }
-                graph.nodes[child].parent = parent;
-            },
-
-            // Replace a direct value with a scalar or a loose child.  The
-            // old subtree must die exactly at the overwrite, while a new
-            // child must acquire precisely this parent.
-            37...59 => {
-                const parent = graph.chooseLive(&random) orelse continue;
-                const length = try mixedLength(runtime, &graph, parent);
-                if (length == 0) continue;
-                const at = random.below(length);
-                const old = try mixedItem(runtime, &graph, parent, at);
-                var incoming = if (random.below(2) == 0) Value.none else Value.ofLong(@intCast(random.next() & 0x7f));
-                var incoming_node: ?usize = null;
-                if (random.below(3) == 0) if (graph.chooseLoose(&random)) |candidate| {
-                    incoming = graph.nodes[candidate].handle;
-                    incoming_node = candidate;
-                };
-                if (incoming_node) |child| if (graph.wouldCycle(parent, child)) {
-                    try expectTrap(
-                        .ownership_cycle,
-                        runtime,
-                        switch (graph.nodes[parent].kind) {
-                            .map => containers.indexSet(
-                                runtime,
-                                graph.nodes[parent].handle,
-                                &.{Value.ofLong(@intCast(at))},
-                                incoming,
-                            ),
-                            .list, .array => containers.indexSet(
-                                runtime,
-                                graph.nodes[parent].handle,
-                                &.{Value.ofLong(@intCast(at))},
-                                incoming,
-                            ),
-                        },
-                    );
-                    runtime.pending = null;
-                    continue;
-                };
-
-                switch (graph.nodes[parent].kind) {
-                    .map => try containers.indexSet(
-                        runtime,
-                        graph.nodes[parent].handle,
-                        &.{try containers.keyAt(runtime, graph.nodes[parent].handle, @intCast(at))},
-                        incoming,
-                    ),
-                    .list, .array => try containers.indexSet(
-                        runtime,
-                        graph.nodes[parent].handle,
-                        &.{Value.ofLong(@intCast(at))},
-                        incoming,
-                    ),
-                }
-                if (old.tag == .object) graph.retireSubtree(graph.findLive(old) orelse return error.TestExpected);
-                if (incoming_node) |child| graph.nodes[child].parent = parent;
-            },
-
-            // Detach a list value, remove a map value, or bulk-fill an array
-            // with a scalar.  These are intentionally different lifetime
-            // transitions for the same owner graph.
-            60...74 => {
-                const parent = graph.chooseLive(&random) orelse continue;
-                const length = try mixedLength(runtime, &graph, parent);
-                if (length == 0) continue;
-                switch (graph.nodes[parent].kind) {
-                    .list => {
-                        const at = length - 1;
-                        const taken = try containers.pop(runtime, graph.nodes[parent].handle);
-                        if (taken.tag == .object) {
-                            const child = graph.findLive(taken) orelse return error.TestExpected;
-                            graph.nodes[child].parent = null;
-                        }
-                        _ = at;
-                    },
-                    .map => {
-                        const key = try containers.keyAt(runtime, graph.nodes[parent].handle, @intCast(random.below(length)));
-                        const old = try containers.mapGet(runtime, graph.nodes[parent].handle, key);
-                        try containers.remove(runtime, graph.nodes[parent].handle, key);
-                        if (old.tag == .object) graph.retireSubtree(graph.findLive(old) orelse return error.TestExpected);
-                    },
-                    .array => {
-                        for (0..length) |at| {
-                            const old = try mixedItem(runtime, &graph, parent, at);
-                            if (old.tag == .object) graph.retireSubtree(graph.findLive(old) orelse return error.TestExpected);
-                        }
-                        try containers.arrayFill(runtime, graph.nodes[parent].handle, Value.none);
-                    },
-                }
-            },
-
-            75...82 => {
-                const parent = graph.chooseLive(&random) orelse continue;
-                if (graph.nodes[parent].kind == .array) continue;
-                graph.retireChildren(parent);
-                try containers.clear(runtime, graph.nodes[parent].handle);
-            },
-
-            // A contained alias must be rejected before a new edge is
-            // published; using a root as its own child must reach the cycle
-            // wall after the ownership proof.
-            83...89 => {
-                const parent = graph.chooseLive(&random) orelse continue;
-                const child = if (random.below(2) == 0)
-                    graph.chooseContained(&random) orelse parent
-                else
-                    parent;
-                const expected: vocabulary.TrapCode = if (graph.nodes[child].parent != null)
-                    .not_owned
-                else
-                    .ownership_cycle;
-                switch (graph.nodes[parent].kind) {
-                    .list => try expectTrap(
-                        expected,
-                        runtime,
-                        containers.append(runtime, graph.nodes[parent].handle, graph.nodes[child].handle),
-                    ),
-                    .map => _ = try expectTrap(
-                        expected,
-                        runtime,
-                        containers.mapPlace(
-                            runtime,
-                            graph.nodes[parent].handle,
-                            Value.ofLong(@intCast(80_000 + step)),
-                            graph.nodes[child].handle,
-                        ),
-                    ),
-                    .array => {
-                        const at = try mixedEmptyArraySlot(runtime, &graph, parent) orelse continue;
-                        try expectTrap(
-                            expected,
-                            runtime,
-                            containers.indexSet(
-                                runtime,
-                                graph.nodes[parent].handle,
-                                &.{Value.ofLong(@intCast(at))},
-                                graph.nodes[child].handle,
-                            ),
-                        );
-                    },
-                }
-                runtime.pending = null;
-            },
-
-            90...94 => if (graph.chooseLive(&random)) |root| {
-                const duplicate = try runtime.deepCopy(graph.nodes[root].handle);
-                runtime.freeValue(duplicate);
-            },
-
-            else => if (graph.count != 0) {
-                var dead: [MixedOwnerGraph.capacity]usize = undefined;
-                var count: usize = 0;
-                for (graph.nodes[0..graph.count], 0..) |node, index| {
-                    if (!node.live) {
-                        dead[count] = index;
-                        count += 1;
-                    }
-                }
-                if (count != 0) {
-                    const stale = graph.nodes[dead[random.below(count)]].handle;
-                    try expectTrap(.use_after_free, runtime, runtime.resolve(stale));
-                    runtime.pending = null;
-                    try expectTrap(.use_after_free, runtime, runtime.deepCopy(stale));
-                    runtime.pending = null;
-                }
-            },
-        }
-        try mixedAudit(runtime, &graph, seed, step);
-    }
-
-    for (graph.nodes[0..graph.count], 0..) |node, index| {
-        if (node.live and node.parent == null) {
-            runtime.freeValue(node.handle);
-            graph.retireSubtree(index);
-        }
-    }
-    try mixedAudit(runtime, &graph, seed, transitions);
-    try ownerGraphExpect(runtime.live == 0, seed, transitions, "mixed zero live objects after teardown");
-}
-
-test "fixed mixed owner-graph seeds keep lists maps and arrays coherent" {
-    for ([_]u64{
-        0xA11CE_0001,
-        0xA11CE_0021,
-        0xA11CE_00A5,
-        0xA11CE_F00D,
-    }) |seed| {
-        var bench: Bench = undefined;
-        bench.setup();
-        defer bench.deinit();
-        try runMixedOwnerGraphSeed(&bench.runtime, seed);
-    }
-}
-
-test "fuzz: mixed owner graphs preserve one owner across container kinds" {
-    try testing.fuzz({}, fuzzMixedOwnerGraph, .{ .corpus = &.{
-        "mixed list map array owner graph",
-        "map replacement and array fill",
-        "nested mixed owner row reuse",
-    } });
-}
-
-fn fuzzMixedOwnerGraph(_: void, smith: *testing.Smith) !void {
-    var bytes: [24]u8 = undefined;
-    const length = smith.sliceWeightedBytes(&bytes, &.{
-        .rangeAtMost(u8, 0x00, 0xff, 1),
-        .value(u8, 0x00, 3),
-        .value(u8, 0xff, 3),
-        .value(u8, '\n', 2),
-    });
-    var seed: u64 = 0xC0DE_5EED_0011_0001;
-    for (bytes[0..length], 0..) |byte, at| {
-        seed = seed *% 6_364_136_223_846_793_005 +%
-            (@as(u64, byte) +% @as(u64, at) +% 1);
-        seed ^= seed >> 31;
-    }
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    try runMixedOwnerGraphSeed(&bench.runtime, seed);
-}
-
-/// One run for `checkAllAllocationFailures`: rollback must be visible
-/// before teardown, and teardown must return every target byte.
 fn copyWithAllocator(allocator: std.mem.Allocator, source: *Runtime, held: Value) !void {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     var target: Runtime = .init(.{ .arena = arena.allocator(), .objects = allocator });
@@ -1089,12 +89,10 @@ fn copyWithAllocator(allocator: std.mem.Allocator, source: *Runtime, held: Value
         arena.deinit();
     }
     const duplicate = target.copyFrom(source, held) catch |mistake| {
-        target.debugAssertInvariants();
         try testing.expectEqual(@as(u32, 0), target.live);
         return mistake;
     };
     target.freeValue(duplicate);
-    target.debugAssertInvariants();
     try testing.expectEqual(@as(u32, 0), target.live);
 }
 
@@ -1111,11 +109,9 @@ fn copyFunctionWithAllocator(allocator: std.mem.Allocator, held: Value) !void {
         arena.deinit();
     }
     const duplicate = target.ownValue(held) catch |mistake| {
-        target.debugAssertInvariants();
         return mistake;
     };
     target.dropStorage(duplicate);
-    target.debugAssertInvariants();
 }
 
 fn newArrayWithOwnedFill(allocator: std.mem.Allocator) !void {
@@ -1137,19 +133,14 @@ fn newArrayWithOwnedFill(allocator: std.mem.Allocator) !void {
             runtime.pending != null and
             runtime.pending.?.code == .allocation_failed)
         {
-            runtime.debugAssertInvariants();
             return error.OutOfMemory;
         }
-        runtime.debugAssertInvariants();
         return mistake;
     };
     runtime.freeValue(array);
-    runtime.debugAssertInvariants();
 }
 
 const CopyShape = enum { list, map, array, strukt };
-
-const RetainingDoor = enum { append, insert, map_index_set };
 
 const CAllocationDoor = enum {
     new_list,
@@ -1286,77 +277,6 @@ const CFileState = struct {
         };
     }
 };
-
-fn expectRetainingDoorFailure(door: RetainingDoor) !void {
-    var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    var runtime: Runtime = .init(.{
-        .arena = arena.allocator(),
-        .objects = objects.allocator(),
-    });
-    var cleaned = false;
-    defer if (!cleaned) {
-        runtime.deinit();
-        arena.deinit();
-    };
-
-    const target = switch (door) {
-        .append, .insert => blk: {
-            const list = try runtime.newList(Value.none);
-            // The first eight values establish the initial capacity.  The
-            // failing operation is therefore forced to allocate its next
-            // element run rather than merely exercising a no-grow write.
-            for (0..8) |number| {
-                try containers.append(&runtime, list, Value.ofLong(@intCast(number)));
-            }
-            break :blk list;
-        },
-        .map_index_set => try runtime.newMap(),
-    };
-    const held = try runtime.newList(Value.none);
-    const baseline_live = runtime.live;
-    try testing.expectEqual(@as(u32, 2), baseline_live);
-
-    // `held` has passed through construction as a loose object.  Once the
-    // retaining door has accepted its ownership proof, a later allocation
-    // failure must consume it as well as a string or struct run.  Otherwise
-    // the object becomes a live row with no owner and the next generation
-    // audit reports a leak that ordinary scope cleanup cannot explain.
-    objects.fail_index = objects.alloc_index;
-    const outcome = switch (door) {
-        .append => containers.append(&runtime, target, held),
-        .insert => containers.insert(&runtime, target, 4, held),
-        .map_index_set => containers.indexSet(
-            &runtime,
-            target,
-            &.{Value.ofString("new key")},
-            held,
-        ),
-    };
-    try testing.expectError(error.OutOfMemory, outcome);
-    try testing.expect(objects.has_induced_failure);
-    try testing.expectEqual(baseline_live - 1, runtime.live);
-    try expectTrap(.use_after_free, &runtime, runtime.resolve(held));
-    runtime.pending = null;
-
-    switch (door) {
-        .append, .insert => try testing.expectEqual(
-            @as(i64, 8),
-            (try containers.length(&runtime, target)).asLong(),
-        ),
-        .map_index_set => try testing.expectEqual(
-            @as(i64, 0),
-            (try containers.length(&runtime, target)).asLong(),
-        ),
-    }
-
-    runtime.freeValue(target);
-    try testing.expectEqual(@as(u32, 0), runtime.live);
-    runtime.deinit();
-    arena.deinit();
-    cleaned = true;
-    try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
-}
 
 fn expectNestedListIntact(runtime: *Runtime, held: Value) !void {
     try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, held)).asLong());
@@ -1558,26 +478,6 @@ fn expectUnionOptionalSourceIntact(
     );
 }
 
-fn expectBindingRoots(runtime: *Runtime, held: Value, serial: u64, local: u32) !void {
-    switch (held.view()) {
-        .object => {
-            const owner = (try runtime.resolve(held)).owner;
-            try testing.expectEqual(heap.Owner.Kind.binding, owner.kind);
-            try testing.expectEqual(serial, owner.details.binding.serial);
-            try testing.expectEqual(local, owner.details.binding.local);
-        },
-        .strukt => |fields| for (fields) |field| {
-            try expectBindingRoots(runtime, field, serial, local);
-        },
-        .function => {},
-        else => {},
-    }
-}
-
-/// Copy a value-shaped union/optional graph through every destination
-/// allocation failure.  The source is checked semantically on each failure,
-/// not only after the allocator sweep, so a temporary source mutation cannot
-/// hide behind a later cleanup path.
 fn copyUnionOptionalWithAllocator(
     allocator: std.mem.Allocator,
     source: *Runtime,
@@ -1592,17 +492,12 @@ fn copyUnionOptionalWithAllocator(
     }
 
     const duplicate = target.copyFrom(source, held) catch |mistake| {
-        target.debugAssertInvariants();
-        source.debugAssertInvariants();
         try expectUnionOptionalSourceIntact(source, held, optional_present);
         try testing.expectEqual(@as(u32, 0), target.live);
         return mistake;
     };
-    target.debugAssertInvariants();
-    source.debugAssertInvariants();
     try expectUnionOptionalSourceIntact(source, held, optional_present);
     target.freeValue(duplicate);
-    target.debugAssertInvariants();
     try testing.expectEqual(@as(u32, 0), target.live);
 }
 
@@ -2244,7 +1139,6 @@ const BlockedResourceTeardown = struct {
         for (&self.children, 0..) |*child, index| {
             if (!child.active or runtime != &child.runtime) continue;
             self.child_live_at_close[index] = runtime.live;
-            runtime.debugAssertInvariants();
             runtime.deinit();
             child.arena.deinit();
             child.active = false;
@@ -2499,7 +1393,6 @@ test "blocked worker resource calls unwind through normal and exceptional cleanu
     // remained owned by its child runtime and was swept exactly once.
     try testing.expectEqual(@as(u32, 1), live_at_close);
     for (state.children) |child| try testing.expect(!child.active);
-    runtime.debugAssertInvariants();
 
     runtime.deinit();
     arena.deinit();
@@ -2553,7 +1446,6 @@ const NestedWorkerRace = struct {
         for (&self.children, 0..) |*child, index| {
             if (runtime != &child.runtime) continue;
             self.child_live_at_close[index] = runtime.live;
-            runtime.debugAssertInvariants();
             runtime.deinit();
             child.arena.deinit();
             child.active = false;
@@ -2746,7 +1638,6 @@ fn runNestedWorkerRace(wait_first: bool) !void {
     try testing.expectEqual(@as(i64, 0), runtime.leaked());
     for (state.child_live_at_close) |live| try testing.expectEqual(@as(u32, 0), live);
     for (state.children) |child| try testing.expect(!child.active);
-    runtime.debugAssertInvariants();
 
     runtime.deinit();
     arena.deinit();
@@ -2801,7 +1692,6 @@ fn runBlockedParentStop(stop: ParentStop) !void {
         .trap => try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code),
         .exit => try testing.expectEqual(@as(i64, 77), runtime.exit_status.?),
     }
-    runtime.debugAssertInvariants();
 
     runtime.deinit();
     arena.deinit();
@@ -2860,7 +1750,6 @@ test "worker channel exhaustion rejects without orphaning a child" {
     try testing.expectEqual(ConcurrentTeardown.capacity, state.joins);
     try testing.expectEqual(ConcurrentTeardown.capacity + 1, state.closes);
     for (state.children) |child| try testing.expect(!child.active);
-    runtime.debugAssertInvariants();
 
     runtime.deinit();
     arena.deinit();
@@ -2941,7 +1830,6 @@ const LifecycleState = struct {
         const self: *@This() = @ptrCast(@alignCast(context.?));
         for (&self.slots) |*slot| {
             if (!slot.active or runtime != &slot.runtime) continue;
-            runtime.debugAssertInvariants();
             self.child_live_at_close = runtime.live;
             runtime.deinit();
             slot.arena.deinit();
@@ -3351,8 +2239,6 @@ fn lifecycleAudit(
     resources: Value,
     resource_records: []const LifecycleResource,
 ) !void {
-    runtime.debugAssertInvariants();
-
     const active_tasks = lifecycleActiveTasks(task_records);
     const active_resources = lifecycleActiveResources(resource_records);
     try testing.expectEqual(@as(i64, @intCast(active_tasks)), (try containers.length(runtime, tasks)).asLong());
@@ -3402,6 +2288,28 @@ fn lifecycleAudit(
     );
 }
 
+/// A tiny deterministic generator for the lifecycle fuzzer.  The seed and
+/// the transition count are part of the test contract: when a sequence
+/// finds a bad edge, the same trace replays without a process-global
+/// random source changing the failure.
+const SeedRng = struct {
+    state: u64,
+
+    fn init(seed: u64) @This() {
+        return .{ .state = seed };
+    }
+
+    fn next(self: *@This()) u64 {
+        self.state = self.state *% 6_364_136_223_846_793_005 +% 1_442_695_040_888_963_407;
+        return self.state;
+    }
+
+    fn below(self: *@This(), upper: usize) usize {
+        std.debug.assert(upper != 0);
+        return @intCast(self.next() % upper);
+    }
+};
+
 fn runLifecycleSeed(seed: u64) !void {
     var state = LifecycleState.init();
     var parent_objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
@@ -3428,7 +2336,7 @@ fn runLifecycleSeed(seed: u64) !void {
     var resource_records: [lifecycle_record_capacity]LifecycleResource = undefined;
     var task_used: usize = 0;
     var resource_used: usize = 0;
-    var random = OwnerGraphRng.init(seed);
+    var random = SeedRng.init(seed);
 
     const transitions = 180;
     for (0..transitions) |_| {
@@ -3769,24 +2677,6 @@ fn expectWorkerGraphFailures() !usize {
 // The object heap and the census
 // ---------------------------------------------------------------------------
 
-test "a fresh object is loose, and the census counts what was not freed" {
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    const runtime = &bench.runtime;
-
-    const first = try runtime.newList(Value.none);
-    const second = try runtime.newMap();
-    try testing.expectEqual(@as(u32, 2), runtime.live);
-    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(first)).owner.kind);
-
-    runtime.freeObject(first.asObject());
-    try testing.expectEqual(@as(u32, 1), runtime.live);
-    // The freed handle stays detectably dead.
-    try expectTrap(.use_after_free, runtime, runtime.resolve(first));
-    _ = second;
-}
-
 test "a freed row is reused, so the table follows live objects and not allocations" {
     var bench: Bench = undefined;
     bench.setup();
@@ -3834,7 +2724,6 @@ test "a forged handle using a freed row generation still traps" {
     runtime.pending = null;
     runtime.freeObject(forged.asObject());
     try testing.expectEqual(@as(u32, 0), runtime.live);
-    runtime.debugAssertInvariants();
 
     const replacement = try runtime.newList(Value.none);
     try testing.expect((replacement.asObject().generation & 1) == 0);
@@ -3906,7 +2795,6 @@ test "a stale handle to a reused row names nobody, not the newcomer" {
     try expectTrap(.use_after_free, runtime, containers.length(runtime, first));
     try expectTrap(.use_after_free, runtime, containers.indexGet(runtime, first, &.{Value.ofLong(0)}));
     try expectTrap(.use_after_free, runtime, runtime.deepCopy(first));
-    try expectTrap(.use_after_free, runtime, runtime.checkGivable(first, null));
     try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, second)).asLong());
 
     // Identity is the object, not the row: the two handles are not
@@ -3943,7 +2831,6 @@ test "stale handles reject every container operation after row reuse" {
     try expectStale(runtime, containers.reverse(runtime, stale_list));
     try expectStale(runtime, containers.listSlice(runtime, stale_list, 0, 0));
     try expectStale(runtime, runtime.deepCopy(stale_list));
-    try expectStale(runtime, runtime.checkGivable(stale_list, null));
     runtime.freeValue(stale_list);
     runtime.freeValue(live_list);
 
@@ -3965,7 +2852,6 @@ test "stale handles reject every container operation after row reuse" {
         containers.mapPlace(runtime, stale_map, Value.ofString("k"), Value.ofLong(0)),
     );
     try expectStale(runtime, runtime.deepCopy(stale_map));
-    try expectStale(runtime, runtime.checkGivable(stale_map, null));
     runtime.freeValue(stale_map);
     runtime.freeValue(live_map);
 
@@ -3982,7 +2868,6 @@ test "stale handles reject every container operation after row reuse" {
     try expectStale(runtime, containers.arrayFill(runtime, stale_array, Value.none));
     try expectStale(runtime, containers.listSlice(runtime, stale_array, 0, 0));
     try expectStale(runtime, runtime.deepCopy(stale_array));
-    try expectStale(runtime, runtime.checkGivable(stale_array, null));
     runtime.freeValue(stale_array);
     runtime.freeValue(live_array);
 
@@ -3994,7 +2879,6 @@ test "stale handles reject every container operation after row reuse" {
     try expectStale(runtime, containers.appendAscii(runtime, stale_builder, 'x'));
     try expectStale(runtime, containers.clear(runtime, stale_builder));
     try expectStale(runtime, runtime.deepCopy(stale_builder));
-    try expectStale(runtime, runtime.checkGivable(stale_builder, null));
     runtime.freeValue(stale_builder);
     runtime.freeValue(live_builder);
     try testing.expectEqual(@as(u32, 0), runtime.live);
@@ -4069,7 +2953,6 @@ test "stale file operations trap before touching the host" {
     try expectStale(runtime, files.write(runtime, stale, bytes, 0));
     try expectStale(runtime, files.flush(runtime, stale));
     try expectStale(runtime, runtime.deepCopy(stale));
-    try expectStale(runtime, runtime.checkGivable(stale, null));
     try testing.expectEqualStrings("", files.pathOf(runtime, stale));
     runtime.freeValue(stale);
     runtime.freeValue(replacement);
@@ -4187,44 +3070,6 @@ test "the null handle traps before it touches anything" {
     try expectTrap(.null_object, &bench.runtime, bench.runtime.resolve(Value.null_object));
 }
 
-test "a binding frees at scope exit, and only its own binding does" {
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    const runtime = &bench.runtime;
-
-    const held = try runtime.newList(Value.none);
-    const serial = runtime.takeSerial();
-    runtime.bind(held, serial, 3);
-
-    // A different local of the same frame, and the same local of a
-    // different frame, both leave it alone.
-    runtime.unbind(held, serial, 4);
-    runtime.unbind(held, serial + 1, 3);
-    try testing.expectEqual(@as(u32, 1), runtime.live);
-
-    runtime.unbind(held, serial, 3);
-    try testing.expectEqual(@as(u32, 0), runtime.live);
-}
-
-test "a container owns what it adopts and frees it with itself (S20, S22)" {
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    const runtime = &bench.runtime;
-
-    const outer = try runtime.newList(Value.none);
-    const inner = try runtime.newList(Value.none);
-    try containers.append(runtime, outer, inner);
-    try expectContainerParent(runtime, inner, outer);
-
-    // Giving away what a container owns would forge a second owner.
-    try expectTrap(.not_owned, runtime, containers.giveVerb(runtime, inner, null));
-
-    runtime.freeObject(outer.asObject());
-    try testing.expectEqual(@as(u32, 0), runtime.live);
-}
-
 test "scope release uses a worklist for a deep object graph" {
     var bench: Bench = undefined;
     bench.setup();
@@ -4246,345 +3091,6 @@ test "scope release uses a worklist for a deep object graph" {
     try testing.expectEqual(@as(u32, 0), runtime.live);
 }
 
-test "every adopting door refuses a direct ownership cycle without changing its target" {
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    const runtime = &bench.runtime;
-
-    const appended = try runtime.newList(Value.none);
-    defer runtime.freeValue(appended);
-    try expectTrap(.ownership_cycle, runtime, containers.append(runtime, appended, appended));
-    runtime.pending = null;
-    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, appended)).asLong());
-    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(appended)).owner.kind);
-
-    const inserted = try runtime.newList(Value.none);
-    defer runtime.freeValue(inserted);
-    try expectTrap(.ownership_cycle, runtime, containers.insert(runtime, inserted, 0, inserted));
-    runtime.pending = null;
-    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, inserted)).asLong());
-
-    const indexed = try runtime.newList(Value.none);
-    defer runtime.freeValue(indexed);
-    try containers.append(runtime, indexed, Value.none);
-    try expectTrap(
-        .ownership_cycle,
-        runtime,
-        containers.indexSet(runtime, indexed, &.{Value.ofLong(0)}, indexed),
-    );
-    runtime.pending = null;
-    try testing.expect((try containers.indexGet(runtime, indexed, &.{Value.ofLong(0)})).isNone());
-
-    const mapped = try runtime.newMap();
-    defer runtime.freeValue(mapped);
-    try expectTrap(
-        .ownership_cycle,
-        runtime,
-        containers.indexSet(runtime, mapped, &.{Value.ofString("self")}, mapped),
-    );
-    runtime.pending = null;
-    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, mapped)).asLong());
-
-    const placed = try runtime.newMap();
-    defer runtime.freeValue(placed);
-    try expectTrap(
-        .ownership_cycle,
-        runtime,
-        containers.mapPlace(runtime, placed, Value.ofString("self"), placed),
-    );
-    runtime.pending = null;
-    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, placed)).asLong());
-
-    const array = try runtime.newArray(&.{1}, Value.none);
-    defer runtime.freeValue(array);
-    try expectTrap(
-        .ownership_cycle,
-        runtime,
-        containers.indexSet(runtime, array, &.{Value.ofLong(0)}, array),
-    );
-    runtime.pending = null;
-    try testing.expect((try containers.indexGet(runtime, array, &.{Value.ofLong(0)})).isNone());
-
-    // A struct is value storage, but every object field in it is still
-    // a top ownership root.  Hiding the receiver one value deep cannot
-    // evade the same check.
-    const through_struct = try runtime.newList(Value.none);
-    defer runtime.freeValue(through_struct);
-    const safe_field = try runtime.newList(Value.none);
-    defer runtime.freeValue(safe_field);
-    const record = try runtime.makeStruct(&.{ safe_field, through_struct });
-    try expectTrap(
-        .ownership_cycle,
-        runtime,
-        containers.append(runtime, through_struct, record),
-    );
-    runtime.pending = null;
-    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, through_struct)).asLong());
-    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(safe_field)).owner.kind);
-}
-
-test "the runtime refuses an object-carrying array fill before replacing any cell" {
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    const runtime = &bench.runtime;
-
-    const array = try runtime.newArray(&.{1}, Value.none);
-    defer runtime.freeValue(array);
-    const kept = try runtime.newList(Value.none);
-    try containers.indexSet(runtime, array, &.{Value.ofLong(0)}, kept);
-    try expectContainerParent(runtime, kept, array);
-
-    const incoming = try runtime.newList(Value.none);
-    defer runtime.freeValue(incoming);
-    try expectTrap(.not_owned, runtime, containers.arrayFill(runtime, array, incoming));
-    runtime.pending = null;
-    const after_direct = try containers.indexGet(runtime, array, &.{Value.ofLong(0)});
-    try testing.expect(after_direct.asObject().same(kept.asObject()));
-    try expectContainerParent(runtime, kept, array);
-    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(incoming)).owner.kind);
-
-    const record = try runtime.makeStruct(&.{incoming});
-    defer runtime.dropStorage(record);
-    try expectTrap(.not_owned, runtime, containers.arrayFill(runtime, array, record));
-    runtime.pending = null;
-    const after_struct = try containers.indexGet(runtime, array, &.{Value.ofLong(0)});
-    try testing.expect(after_struct.asObject().same(kept.asObject()));
-    try expectContainerParent(runtime, kept, array);
-
-    // A null object is still an object-typed fill, and the same hostile
-    // MIR wall applies without first trying to resolve it.
-    try expectTrap(.not_owned, runtime, containers.arrayFill(runtime, array, Value.null_object));
-    runtime.pending = null;
-    const after_null = try containers.indexGet(runtime, array, &.{Value.ofLong(0)});
-    try testing.expect(after_null.asObject().same(kept.asObject()));
-}
-
-test "the cycle backstop preserves receiver, mutability, and bounds trap precedence" {
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    const runtime = &bench.runtime;
-
-    const list = try runtime.newList(Value.none);
-    defer runtime.freeValue(list);
-    try expectTrap(
-        .index_bounds,
-        runtime,
-        containers.indexSet(runtime, list, &.{Value.ofLong(0)}, list),
-    );
-    runtime.pending = null;
-    try expectTrap(.index_bounds, runtime, containers.insert(runtime, list, 1, list));
-    runtime.pending = null;
-    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, list)).asLong());
-
-    const stale = try runtime.newList(Value.none);
-    runtime.freeValue(stale);
-    try expectTrap(.use_after_free, runtime, containers.append(runtime, stale, stale));
-    runtime.pending = null;
-
-    try runtime.beginConstants(1);
-    const rooted = try runtime.newList(Value.none);
-    try runtime.publishConstant(0, rooted);
-    runtime.finishConstants();
-    try expectTrap(.immutable_object, runtime, containers.append(runtime, rooted, rooted));
-    runtime.pending = null;
-    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, rooted)).asLong());
-}
-
-test "an ancestor cannot move into its descendant and a rejected overwrite stays intact" {
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    const runtime = &bench.runtime;
-
-    const root = try runtime.newList(Value.none);
-    defer runtime.freeValue(root);
-    const middle = try runtime.newList(Value.none);
-    const leaf = try runtime.newList(Value.none);
-    try containers.append(runtime, leaf, Value.none);
-    try containers.append(runtime, middle, leaf);
-    try containers.append(runtime, root, middle);
-    try expectContainerParent(runtime, middle, root);
-    try expectContainerParent(runtime, leaf, middle);
-
-    try expectTrap(
-        .ownership_cycle,
-        runtime,
-        containers.indexSet(runtime, leaf, &.{Value.ofLong(0)}, root),
-    );
-    runtime.pending = null;
-    try testing.expect((try containers.indexGet(runtime, leaf, &.{Value.ofLong(0)})).isNone());
-    try expectContainerParent(runtime, middle, root);
-    try expectContainerParent(runtime, leaf, middle);
-
-    try expectTrap(.ownership_cycle, runtime, containers.append(runtime, leaf, root));
-    runtime.pending = null;
-    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, leaf)).asLong());
-    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(root)).owner.kind);
-}
-
-test "a damaged parent cycle is bounded and refused rather than walked forever" {
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    const runtime = &bench.runtime;
-
-    const first = try runtime.newList(Value.none);
-    defer runtime.freeValue(first);
-    const second = try runtime.newList(Value.none);
-    defer runtime.freeValue(second);
-    const child = try runtime.newList(Value.none);
-    defer runtime.freeValue(child);
-
-    (try runtime.resolve(first)).owner = .containedBy(second.asObject());
-    (try runtime.resolve(second)).owner = .containedBy(first.asObject());
-    try expectTrap(
-        .ownership_cycle,
-        runtime,
-        runtime.ensureAcyclicAdoption(first.asObject(), child),
-    );
-    runtime.pending = null;
-    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(child)).owner.kind);
-
-    // Restore the deliberately damaged metadata before the ordinary
-    // teardown path proves all three rows still have one death point.
-    (try runtime.resolve(first)).owner = .loose;
-    (try runtime.resolve(second)).owner = .loose;
-}
-
-test "pop, bind, and reinsertion keep one exact acyclic owner tree" {
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    const runtime = &bench.runtime;
-
-    const root = try runtime.newList(Value.none);
-    defer runtime.freeValue(root);
-    const branch = try runtime.newList(Value.none);
-    const leaf = try runtime.newList(Value.none);
-    try containers.append(runtime, branch, leaf);
-    try containers.append(runtime, root, branch);
-    try expectContainerParent(runtime, branch, root);
-    try expectContainerParent(runtime, leaf, branch);
-
-    const taken = try containers.pop(runtime, root);
-    try testing.expect(taken.asObject().same(branch.asObject()));
-    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(branch)).owner.kind);
-    // The subtree stays a tree while its root changes owner.
-    try expectContainerParent(runtime, leaf, branch);
-
-    const serial = runtime.takeSerial();
-    runtime.bind(branch, serial, 7);
-    const bound = (try runtime.resolve(branch)).owner;
-    try testing.expectEqual(heap.Owner.Kind.binding, bound.kind);
-    try testing.expectEqual(serial, bound.details.binding.serial);
-    try testing.expectEqual(@as(u32, 7), bound.details.binding.local);
-    runtime.loosenFromFrame(branch, serial);
-    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(branch)).owner.kind);
-
-    try containers.insert(runtime, root, 0, branch);
-    try expectContainerParent(runtime, branch, root);
-    try expectContainerParent(runtime, leaf, branch);
-
-    // Growing below an existing ancestry is the ordinary, legal
-    // direction: only moving an ancestor down below itself is refused.
-    const twig = try runtime.newList(Value.none);
-    try containers.append(runtime, leaf, twig);
-    try expectContainerParent(runtime, twig, leaf);
-}
-
-test "fixed owner-graph seeds keep one owner through hostile transitions" {
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-
-    // These seeds are intentionally stable corpus entries rather than a
-    // time-based fuzz source.  Each run builds and tears down a fresh forest
-    // on the same runtime, so row generations are exercised across seeds as
-    // well as within each sequence.
-    for ([_]u64{
-        0x0A_0300_0001,
-        0x0A_0300_0002,
-        0x0A_0300_00A5,
-        0x0A_0300_F00D,
-    }) |seed| {
-        try runOwnerGraphSeed(&bench.runtime, seed);
-        try testing.expectEqual(@as(u32, 0), bench.runtime.live);
-    }
-}
-
-// The fixed corpus above is the readable regression set.  This target makes
-// the same reference model a coverage-guided property: the fuzzer mutates a
-// byte trace into a seed, and every seed still has to preserve exact owner
-// edges, stale generations, and zero-live teardown.  Keeping the generator
-// deterministic is important here; a failing seed can be copied directly
-// into the fixed corpus without depending on a process-global random source.
-test "fuzz: owner graphs preserve one owner through arbitrary traces" {
-    try testing.fuzz({}, fuzzOwnerGraph, .{ .corpus = &.{
-        "owner graph list/map/array seed",
-        "\x00\x00\x00\x01\xA5\x5A\xF0\x0D",
-        "\xFF\xFF\xFF\xFF\x00\x13\x37\x42",
-    } });
-}
-
-fn fuzzOwnerGraph(_: void, smith: *testing.Smith) !void {
-    var bytes: [32]u8 = undefined;
-    const length = smith.sliceWeightedBytes(&bytes, &.{
-        .rangeAtMost(u8, 0x00, 0xff, 1),
-        .value(u8, 0x00, 3),
-        .value(u8, 0xff, 3),
-        .value(u8, '\n', 2),
-    });
-
-    // A small mixing step prevents short inputs from exercising only the
-    // low bits of the LCG while retaining a one-number replay contract.
-    var seed: u64 = 0x9E37_79B9_7F4A_7C15;
-    for (bytes[0..length], 0..) |byte, at| {
-        seed = seed *% 6_364_136_223_846_793_005 +%
-            (@as(u64, byte) +% @as(u64, at) +% 1);
-        seed ^= seed >> 29;
-    }
-
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    try runOwnerGraphSeed(&bench.runtime, seed);
-    try testing.expectEqual(@as(u32, 0), bench.runtime.live);
-}
-
-test "give demands the binding it names still owns the object (S23)" {
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    const runtime = &bench.runtime;
-
-    const held = try runtime.newList(Value.none);
-    const serial = runtime.takeSerial();
-    runtime.bind(held, serial, 0);
-
-    _ = try containers.giveVerb(runtime, held, .{ .serial = serial, .local = 0 });
-    try expectTrap(
-        .not_owned,
-        runtime,
-        containers.giveVerb(runtime, held, .{ .serial = serial, .local = 1 }),
-    );
-}
-
-test "a return moves what the finished frame owned out loose (S16)" {
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    const runtime = &bench.runtime;
-
-    const held = try runtime.newList(Value.none);
-    const serial = runtime.takeSerial();
-    runtime.bind(held, serial, 0);
-    runtime.loosenFromFrame(held, serial);
-    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(held)).owner.kind);
-}
-
 test "copy duplicates what an object owns, recursively (S31)" {
     var bench: Bench = undefined;
     bench.setup();
@@ -4602,7 +3108,6 @@ test "copy duplicates what an object owns, recursively (S31)" {
     // The copy's element is a different object that holds equal data.
     const copied_inner = try containers.indexGet(runtime, duplicate, &.{Value.ofLong(0)});
     try testing.expect(!copied_inner.asObject().same(inner.asObject()));
-    try expectContainerParent(runtime, copied_inner, duplicate);
     const element = try containers.indexGet(runtime, copied_inner, &.{Value.ofLong(0)});
     try testing.expectEqual(@as(i64, 7), element.asLong());
 
@@ -4631,62 +3136,6 @@ test "deep copy uses a worklist for a deep object graph" {
     runtime.freeValue(duplicate);
     runtime.freeValue(root);
     try testing.expectEqual(@as(u32, 0), runtime.live);
-}
-
-test "deep copies and derived lists name the exact parent they build" {
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    const runtime = &bench.runtime;
-
-    const list_source = try nestedCopySource(runtime, .list);
-    defer runtime.freeValue(list_source);
-    const list_copy = try runtime.deepCopy(list_source);
-    defer runtime.freeValue(list_copy);
-    const sliced = try containers.listSlice(runtime, list_source, 0, 2);
-    defer runtime.freeValue(sliced);
-    for (0..2) |at| {
-        const index = Value.ofLong(@intCast(at));
-        try expectContainerParent(
-            runtime,
-            try containers.indexGet(runtime, list_copy, &.{index}),
-            list_copy,
-        );
-        try expectContainerParent(
-            runtime,
-            try containers.indexGet(runtime, sliced, &.{index}),
-            sliced,
-        );
-    }
-
-    const map_source = try nestedCopySource(runtime, .map);
-    defer runtime.freeValue(map_source);
-    const map_copy = try runtime.deepCopy(map_source);
-    defer runtime.freeValue(map_copy);
-    for (0..2) |at| {
-        try expectContainerParent(runtime, try containers.valueAt(runtime, map_copy, @intCast(at)), map_copy);
-    }
-    const values = try containers.mapValues(runtime, map_source, Value.none);
-    defer runtime.freeValue(values);
-    for (0..2) |at| {
-        try expectContainerParent(
-            runtime,
-            try containers.indexGet(runtime, values, &.{Value.ofLong(@intCast(at))}),
-            values,
-        );
-    }
-
-    const array_source = try nestedCopySource(runtime, .array);
-    defer runtime.freeValue(array_source);
-    const array_copy = try runtime.deepCopy(array_source);
-    defer runtime.freeValue(array_copy);
-    for (0..2) |at| {
-        try expectContainerParent(
-            runtime,
-            try containers.indexGet(runtime, array_copy, &.{Value.ofLong(@intCast(at))}),
-            array_copy,
-        );
-    }
 }
 
 test "a packed list copy ignores retained spare capacity" {
@@ -4774,135 +3223,8 @@ test "failed union and optional-shaped copies preserve every source field" {
             copyUnionOptionalWithAllocator,
             .{ &bench.runtime, source, optional_present },
         );
-        bench.runtime.debugAssertInvariants();
         try expectUnionOptionalSourceIntact(&bench.runtime, source, optional_present);
     }
-}
-
-test "inout replacement failures preserve the bound union and optional receiver" {
-    for ([_]bool{ false, true }) |optional_present| {
-        var objects: std.testing.FailingAllocator = .init(testing.allocator, .{});
-        var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-        var runtime: Runtime = .init(.{
-            .arena = arena.allocator(),
-            .objects = objects.allocator(),
-        });
-        var receiver: Value = .none;
-        var serial: u64 = 0;
-        const local: u32 = 0;
-        var receiver_owned = false;
-        var cleaned = false;
-        defer {
-            if (!cleaned) {
-                if (receiver_owned) {
-                    runtime.unbind(receiver, serial, local);
-                    runtime.dropStorage(receiver);
-                }
-                runtime.deinit();
-                arena.deinit();
-            }
-        }
-
-        receiver = try nestedUnionOptionalSource(&runtime, optional_present);
-        receiver_owned = true;
-        serial = runtime.takeSerial();
-        runtime.bind(receiver, serial, local);
-        const baseline_live = runtime.live;
-        const baseline_bytes = objects.allocated_bytes - objects.freed_bytes;
-        runtime.debugAssertInvariants();
-        try expectUnionOptionalSourceIntact(&runtime, receiver, optional_present);
-        try expectBindingRoots(&runtime, receiver, serial, local);
-
-        var failures: usize = 0;
-        var completed = false;
-        for (0..128) |failure_offset| {
-            objects.fail_index = objects.alloc_index + failure_offset;
-            const replacement = nestedUnionOptionalSource(&runtime, optional_present);
-            objects.fail_index = std.math.maxInt(usize);
-
-            if (replacement) |fresh| {
-                // This is the inout write-back sequence: only after the
-                // replacement exists may the caller's old receiver be
-                // released and the new graph be bound to that same slot.
-                runtime.unbind(receiver, serial, local);
-                runtime.dropStorage(receiver);
-                receiver_owned = false;
-                receiver = fresh;
-                receiver_owned = true;
-                runtime.bind(fresh, serial, local);
-                try expectUnionOptionalSourceIntact(&runtime, fresh, optional_present);
-                try expectBindingRoots(&runtime, fresh, serial, local);
-                runtime.debugAssertInvariants();
-                runtime.unbind(fresh, serial, local);
-                runtime.dropStorage(fresh);
-                receiver_owned = false;
-                runtime.debugAssertInvariants();
-                try testing.expectEqual(@as(u32, 0), runtime.live);
-                completed = true;
-                break;
-            } else |mistake| {
-                failures += 1;
-                if (mistake == error.Trap) {
-                    try testing.expect(runtime.pending != null);
-                    try testing.expectEqual(
-                        vocabulary.TrapCode.allocation_failed,
-                        runtime.pending.?.code,
-                    );
-                    runtime.pending = null;
-                } else {
-                    try testing.expectEqual(error.OutOfMemory, mistake);
-                }
-                try testing.expect(objects.has_induced_failure);
-                try testing.expectEqual(baseline_live, runtime.live);
-                // A failed nested construction may retain a larger
-                // reusable table capacity; it must never give back bytes
-                // that belong to the still-bound receiver.  Full teardown
-                // below checks that the retained capacity is reclaimable.
-                try testing.expect(
-                    objects.allocated_bytes - objects.freed_bytes >= baseline_bytes,
-                );
-                try testing.expect(runtime.pending == null);
-                runtime.debugAssertInvariants();
-                try expectUnionOptionalSourceIntact(&runtime, receiver, optional_present);
-                try expectBindingRoots(&runtime, receiver, serial, local);
-            }
-        }
-        try testing.expect(completed);
-        try testing.expect(failures >= 4);
-        runtime.deinit();
-        arena.deinit();
-        cleaned = true;
-        try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
-    }
-}
-
-test "failed retaining stores consume accepted objects without damaging rejected aliases" {
-    for ([_]RetainingDoor{ .append, .insert, .map_index_set }) |door| {
-        try expectRetainingDoorFailure(door);
-    }
-
-    // The ownership proof is deliberately before the release arm: a
-    // container-owned alias must remain attached when the backstop refuses
-    // it, and a self-adoption must leave its target untouched.  These are
-    // the two failures that make an unconditional `freeValue(held)` just as
-    // wrong as the old storage-only cleanup.
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    const runtime = &bench.runtime;
-
-    const target = try runtime.newList(Value.none);
-    const child = try runtime.newList(Value.none);
-    try containers.append(runtime, target, child);
-    try expectTrap(.not_owned, runtime, containers.append(runtime, target, child));
-    runtime.pending = null;
-    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, target)).asLong());
-    _ = try runtime.resolve(child);
-
-    try expectTrap(.ownership_cycle, runtime, containers.append(runtime, target, target));
-    runtime.pending = null;
-    try testing.expectEqual(@as(i64, 1), (try containers.length(runtime, target)).asLong());
-    _ = try runtime.resolve(target);
 }
 
 test "map place rolls every key value and entry allocation back" {
@@ -5191,7 +3513,6 @@ test "rank-zero arrays are rejected before allocation" {
     try testing.expectEqual(@as(i64, 99), out.asLong());
     try testing.expectEqual(vocabulary.TrapCode.index_bounds, runtime.pending.?.code);
     runtime.pending = null;
-    runtime.debugAssertInvariants();
     try testing.expectEqual(@as(u32, 0), runtime.live);
 }
 
@@ -5453,8 +3774,6 @@ test "worker inputs fail closed before allocation or start" {
     try testing.expectEqual(@as(usize, 0), state.joins);
     try testing.expectEqual(@as(usize, 0), state.closes);
     try testing.expectEqual(@as(u32, 0), parent.live);
-    parent.debugAssertInvariants();
-    child.debugAssertInvariants();
 }
 
 test "a failed spawn joins a callback-published thread before child close" {
@@ -5523,160 +3842,6 @@ test "worker arena exhaustion crosses the join as out of memory" {
     try testing.expect(parent.pending == null);
     parent.freeValue(task);
     try testing.expectEqual(@as(u32, 0), parent.live);
-}
-
-test "a worker result copies and releases a nested object graph" {
-    var parent_arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer parent_arena.deinit();
-    var parent: Runtime = .init(.{
-        .arena = parent_arena.allocator(),
-        .objects = testing.allocator,
-    });
-    defer parent.deinit();
-
-    var child_arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer child_arena.deinit();
-    var child: Runtime = .init(.{
-        .arena = child_arena.allocator(),
-        .objects = testing.allocator,
-    });
-    var state: WorkerFailureState = .{
-        .child = &child,
-        .produce_graph = true,
-    };
-    state.install(&parent);
-
-    var task: Value = .none;
-    try workers.spawn(&parent, 0, &.{}, &task);
-    var answer: Value = .none;
-    try testing.expectEqual(workers.survived, try workers.wait(&parent, task, &answer));
-    try testing.expect(state.ran);
-    try testing.expectEqual(@as(usize, 1), state.joins);
-    try testing.expectEqual(@as(usize, 1), state.closes);
-    try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
-
-    const fields = answer.asStruct();
-    try testing.expectEqual(@as(usize, 2), fields.len);
-    try testing.expectEqualStrings("worker graph result has outside storage", fields[1].asString());
-    const branch = fields[0];
-    try testing.expectEqual(@as(i64, 1), (try containers.length(&parent, branch)).asLong());
-    const leaf = try containers.indexGet(&parent, branch, &.{Value.ofLong(0)});
-    try expectContainerParent(&parent, leaf, branch);
-    try testing.expectEqual(@as(i64, 11), (try containers.indexGet(&parent, leaf, &.{Value.ofLong(0)})).asLong());
-    try testing.expectEqual(heap.Owner.Kind.loose, (try parent.resolve(branch)).owner.kind);
-
-    parent.freeValue(answer);
-    parent.freeValue(task);
-    try testing.expectEqual(@as(u32, 0), parent.live);
-}
-
-test "nested tasks wait and release through value-shaped containers" {
-    var state = LifecycleState.init();
-    var parent_arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer parent_arena.deinit();
-    var parent: Runtime = .init(.{
-        .arena = parent_arena.allocator(),
-        .objects = testing.allocator,
-    });
-    defer parent.deinit();
-    state.install(&parent);
-
-    const map = try parent.newMap();
-    const list = try parent.newList(Value.none);
-    const array = try parent.newArray(&.{1}, Value.none);
-
-    var rejected_task: Value = .none;
-    try workers.spawn(
-        &parent,
-        @intFromEnum(LifecycleAction.result_resource),
-        &.{},
-        &rejected_task,
-    );
-    const rejected_packet = try parent.makeStruct(&.{ rejected_task, Value.none });
-    try containers.indexSet(
-        &parent,
-        map,
-        &.{Value.ofInlineText(.string, "resource-result")},
-        rejected_packet,
-    );
-
-    var released_task: Value = .none;
-    try workers.spawn(
-        &parent,
-        @intFromEnum(LifecycleAction.clean),
-        &.{},
-        &released_task,
-    );
-    const released_packet = try parent.makeStruct(&.{ released_task, Value.none });
-    try containers.append(&parent, list, released_packet);
-
-    var waited_task: Value = .none;
-    try workers.spawn(
-        &parent,
-        @intFromEnum(LifecycleAction.clean),
-        &.{},
-        &waited_task,
-    );
-    const waited_packet = try parent.makeStruct(&.{ waited_task, Value.none });
-    try containers.indexSet(&parent, array, &.{Value.ofLong(0)}, waited_packet);
-
-    const map_packet = try containers.mapGet(
-        &parent,
-        map,
-        Value.ofInlineText(.string, "resource-result"),
-    );
-    try expectContainerParent(&parent, map_packet.asStruct()[0], map);
-    const list_packet = try containers.indexGet(&parent, list, &.{Value.ofLong(0)});
-    try expectContainerParent(&parent, list_packet.asStruct()[0], list);
-    const array_packet = try containers.indexGet(&parent, array, &.{Value.ofLong(0)});
-    try expectContainerParent(&parent, array_packet.asStruct()[0], array);
-    try testing.expectEqual(@as(usize, 3), state.spawns);
-    try testing.expectEqual(@as(usize, 3), state.opens);
-    parent.debugAssertInvariants();
-
-    // A resource-bearing child result cannot cross into the parent runtime.
-    // The task is already detached, so the failed copy must still close its
-    // file and child exactly once while leaving the nested task row for the
-    // enclosing map to release later.
-    var answer = Value.ofLong(99);
-    try expectTrap(
-        .not_owned,
-        &parent,
-        workers.wait(&parent, map_packet.asStruct()[0], &answer),
-    );
-    try testing.expectEqual(@as(i64, 99), answer.asLong());
-    parent.pending = null;
-    try testing.expectEqual(@as(usize, 1), state.joins);
-    try testing.expectEqual(@as(usize, 1), state.closes);
-    try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
-    parent.debugAssertInvariants();
-
-    // Releasing the list joins its nested task without observing its result;
-    // waiting the array's task does the observing path.  All three task rows
-    // remain in their value-shaped holders until those holders are freed.
-    parent.freeValue(list);
-    try testing.expectEqual(@as(usize, 2), state.joins);
-    try testing.expectEqual(@as(usize, 2), state.closes);
-
-    var second_answer = Value.ofLong(98);
-    try testing.expectEqual(
-        workers.survived,
-        try workers.wait(&parent, array_packet.asStruct()[0], &second_answer),
-    );
-    try testing.expect(second_answer.isNone());
-    try testing.expectEqual(@as(usize, 3), state.joins);
-    try testing.expectEqual(@as(usize, 3), state.closes);
-    parent.pending = null;
-
-    parent.freeValue(array);
-    parent.freeValue(map);
-    try testing.expectEqual(@as(usize, 3), state.file_opens);
-    try testing.expectEqual(@as(usize, 3), state.file_closes);
-    try testing.expectEqual(@as(usize, 0), state.activeChildren());
-    try testing.expect(!state.duplicate_close);
-    try testing.expect(!state.unknown_close);
-    try testing.expectEqual(@as(u32, 0), parent.live);
-    try testing.expectEqual(@as(i64, 0), parent.leaked());
 }
 
 test "failed worker graph construction closes every partial child allocation" {
@@ -6082,52 +4247,6 @@ test "cross-runtime moves reject function receiver handles" {
     _ = try source.resolve(nested_receiver);
     source.freeValue(record);
     source.freeValue(nested_receiver);
-}
-
-test "program roots stay rooted, leave the census, and copy into mutable ownership" {
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    const runtime = &bench.runtime;
-
-    try runtime.beginConstants(1);
-    const rooted = try runtime.newList(Value.ofLong(0));
-    try containers.append(runtime, rooted, Value.ofLong(7));
-    try runtime.publishConstant(0, rooted);
-    runtime.finishConstants();
-
-    try testing.expect(runtime.constant(0).asObject().same(rooted.asObject()));
-    try testing.expectEqual(heap.Owner.Kind.program, (try runtime.resolve(rooted)).owner.kind);
-    try testing.expectEqual(@as(u32, 1), runtime.live);
-    try testing.expectEqual(@as(u32, 1), runtime.program_root_count);
-    try testing.expectEqual(@as(i64, 0), runtime.leaked());
-
-    // Every ordinary ownership transition leaves the program root in
-    // place, including the defensive release paths damaged IR can
-    // reach.  The source front line refuses give/free by name; the
-    // runtime keeps them safe and reports not-owned.
-    const serial = runtime.takeSerial();
-    runtime.bind(rooted, serial, 4);
-    const parent = try runtime.newList(Value.none);
-    try runtime.ensureAcyclicAdoption(parent.asObject(), rooted);
-    runtime.adoptInto(parent.asObject(), rooted);
-    runtime.freeValue(parent);
-    runtime.loosen(rooted);
-    runtime.loosenFromFrame(rooted, serial);
-    runtime.unbind(rooted, serial, 4);
-    runtime.freeObject(rooted.asObject());
-    try testing.expectEqual(heap.Owner.Kind.program, (try runtime.resolve(rooted)).owner.kind);
-    try expectTrap(.not_owned, runtime, containers.giveVerb(runtime, rooted, null));
-    try expectTrap(.not_owned, runtime, containers.freeVerb(runtime, rooted, null));
-
-    // Copy is the sanctioned door back to ordinary mutable ownership.
-    const copied = try containers.copyVerb(runtime, rooted);
-    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(copied)).owner.kind);
-    try containers.append(runtime, copied, Value.ofLong(8));
-    try testing.expectEqual(@as(i64, 2), (try containers.length(runtime, copied)).asLong());
-    try testing.expectEqual(@as(i64, 1), runtime.leaked());
-    runtime.freeObject(copied.asObject());
-    try testing.expectEqual(@as(i64, 0), runtime.leaked());
 }
 
 test "every boxed container mutation refuses a program root without consuming a borrow" {
@@ -6940,62 +5059,6 @@ test "failed materialization discards its partial object and every published roo
     try expectTrap(.use_after_free, runtime, runtime.resolve(partial));
 }
 
-test "runtime teardown releases ordinary rows before the program root" {
-    const Host = struct {
-        handles: [2]i64 = undefined,
-        count: usize = 0,
-
-        fn close(context: ?*anyopaque, handle: i64) callconv(.c) i32 {
-            const self: *@This() = @ptrCast(@alignCast(context.?));
-            self.handles[self.count] = handle;
-            self.count += 1;
-            return files.yes;
-        }
-    };
-
-    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
-    defer arena.deinit();
-    var runtime: Runtime = .init(.{
-        .arena = arena.allocator(),
-        .objects = testing.allocator,
-    });
-    var host: Host = .{};
-    runtime.files = .{ .context = &host, .close = Host.close };
-
-    // A file cannot be a source-level constant.  It makes destruction
-    // order observable, though, so this hand-made runtime state proves
-    // the two teardown passes rather than merely reading their code.
-    try runtime.beginConstants(1);
-    const rooted = try runtime.newFile(11, "root");
-    try runtime.publishConstant(0, rooted);
-    runtime.finishConstants();
-    _ = try runtime.newFile(22, "ordinary");
-    try testing.expectEqual(@as(i64, 1), runtime.leaked());
-
-    runtime.deinit();
-    try testing.expectEqual(@as(usize, 2), host.count);
-    try testing.expectEqual(@as(i64, 22), host.handles[0]);
-    try testing.expectEqual(@as(i64, 11), host.handles[1]);
-}
-
-test "objects inside a struct value are walked, not skipped" {
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    const runtime = &bench.runtime;
-
-    var fields = [_]Value{ Value.ofLong(1), try runtime.newList(Value.none) };
-    const record = Value.ofStruct(&fields);
-    const serial = runtime.takeSerial();
-    runtime.bind(record, serial, 0);
-    const owner = (try runtime.resolve(fields[1])).owner;
-    try testing.expectEqual(heap.Owner.Kind.binding, owner.kind);
-    try testing.expectEqual(serial, owner.details.binding.serial);
-    try testing.expectEqual(@as(u32, 0), owner.details.binding.local);
-    runtime.unbind(record, serial, 0);
-    try testing.expectEqual(@as(u32, 0), runtime.live);
-}
-
 test "freeing an object gives its storage back, during the run" {
     // The census says an object was freed; this says the memory it
     // held came back *while the program was still running*, which is
@@ -7119,140 +5182,6 @@ test "map keys hash as they compare, for long and for String" {
     runtime.freeObject(numbers.asObject());
 }
 
-test "maps and struct values preserve one owner across retaining doors" {
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    const runtime = &bench.runtime;
-
-    const first = try runtime.newMap();
-    const second = try runtime.newMap();
-    const child = try runtime.newList(Value.none);
-    const placed = try containers.mapPlace(runtime, first, Value.ofString("item"), child);
-    try testing.expect(placed.asObject().same(child.asObject()));
-    try expectContainerParent(runtime, child, first);
-
-    // A map's missing-key path is an ownership door just like list append:
-    // a second map cannot publish the same child or change its first owner.
-    try expectTrap(
-        .not_owned,
-        runtime,
-        containers.mapPlace(runtime, second, Value.ofString("item"), child),
-    );
-    runtime.pending = null;
-    try testing.expectEqual(@as(i64, 0), (try containers.length(runtime, second)).asLong());
-    try expectContainerParent(runtime, child, first);
-
-    // Indexed map replacement releases the old child before the new one is
-    // adopted, and keeps the exact key's map owner in the metadata.
-    const replacement = try runtime.newList(Value.none);
-    try containers.indexSet(runtime, first, &.{Value.ofString("item")}, replacement);
-    try expectTrap(.use_after_free, runtime, runtime.resolve(child));
-    runtime.pending = null;
-    try expectContainerParent(runtime, replacement, first);
-
-    try expectTrap(
-        .not_owned,
-        runtime,
-        containers.mapPlace(runtime, second, Value.ofString("replacement"), replacement),
-    );
-    runtime.pending = null;
-
-    // Struct runs own their value storage, while the object fields remain
-    // graph roots.  Nest two runs before storing the outer value so the walk
-    // must cross both layers and still assign the container as the owner.
-    const nested_child = try runtime.newList(Value.none);
-    const inner = try runtime.makeStruct(&.{nested_child});
-    const record = try runtime.makeStruct(&.{inner});
-    const outer = try runtime.newList(Value.none);
-    try containers.append(runtime, outer, record);
-    try expectContainerParent(runtime, nested_child, outer);
-
-    // The same second-owner wall must walk through both value runs, not
-    // merely inspect a direct object argument.
-    const forged_record = try runtime.makeStruct(&.{nested_child});
-    const other = try runtime.newList(Value.none);
-    try expectTrap(.not_owned, runtime, containers.append(runtime, other, forged_record));
-    runtime.pending = null;
-    try expectContainerParent(runtime, nested_child, outer);
-
-    runtime.freeValue(first);
-    runtime.freeValue(second);
-    runtime.freeValue(other);
-    runtime.freeValue(outer);
-    try testing.expectEqual(@as(u32, 0), runtime.live);
-}
-
-test "checked owner invariants cover maps arrays structs and borrowed functions" {
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    const runtime = &bench.runtime;
-
-    const mapped = try runtime.newMap();
-    const map_child = try runtime.newList(Value.none);
-    const map_record = try runtime.makeStruct(&.{map_child});
-    try containers.indexSet(runtime, mapped, &.{Value.ofString("record")}, map_record);
-
-    const array = try runtime.newArray(&.{1}, Value.none);
-    const array_child = try runtime.newList(Value.none);
-    const array_record = try runtime.makeStruct(&.{array_child});
-    try containers.indexSet(runtime, array, &.{Value.ofLong(0)}, array_record);
-
-    // A function run owns its field storage but borrows the receiver graph.
-    // The checked walk must follow the struct wrapper and stop at the
-    // function value rather than inventing a second edge to `receiver`.
-    const receiver = try runtime.newList(Value.none);
-    const callback = try runtime.makeFunction(&.{ Value.ofLong(0), receiver });
-    const callback_record = try runtime.makeStruct(&.{callback});
-    try containers.indexSet(runtime, mapped, &.{Value.ofString("callback")}, callback_record);
-
-    runtime.debugAssertInvariants();
-    runtime.freeValue(mapped);
-    runtime.freeValue(array);
-    runtime.freeValue(receiver);
-    runtime.debugAssertInvariants();
-    try testing.expectEqual(@as(u32, 0), runtime.live);
-}
-
-test "a union-shaped optional callback keeps borrowed receivers out of ownership walks" {
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    const runtime = &bench.runtime;
-
-    // The runtime deliberately sees a union as a struct-shaped value.  This
-    // shape carries an optional callback, an owned object payload, and an
-    // absent optional slot all at once; only the callback's run is owned by
-    // the value, while its receiver remains a borrow.
-    const receiver = try runtime.newList(Value.none);
-    try containers.append(runtime, receiver, Value.ofLong(5));
-    const callback = try runtime.makeFunction(&.{ Value.ofLong(0), receiver });
-    const payload = try runtime.newList(Value.none);
-    try containers.append(runtime, payload, Value.ofLong(9));
-    const packet = try runtime.makeStruct(&.{ callback, payload, Value.none });
-    const bag = try runtime.newList(Value.none);
-    try containers.append(runtime, bag, packet);
-    try expectContainerParent(runtime, payload, bag);
-    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(receiver)).owner.kind);
-
-    const copied_bag = try runtime.deepCopy(bag);
-    const copied_packet = try containers.indexGet(runtime, copied_bag, &.{Value.ofLong(0)});
-    const copied_fields = copied_packet.asStruct();
-    try testing.expectEqual(@as(usize, 3), copied_fields.len);
-    try testing.expectEqual(value.Tag.function, copied_fields[0].tag);
-    try testing.expect(copied_fields[2].isNone());
-    const copied_payload = copied_fields[1];
-    try testing.expect(!copied_payload.asObject().same(payload.asObject()));
-    try expectContainerParent(runtime, copied_payload, copied_bag);
-    try testing.expectEqual(heap.Owner.Kind.loose, (try runtime.resolve(receiver)).owner.kind);
-
-    runtime.freeValue(bag);
-    runtime.freeValue(copied_bag);
-    runtime.freeValue(receiver);
-    try testing.expectEqual(@as(u32, 0), runtime.live);
-}
-
 test "function values stay receiver-borrowed through every value container" {
     var bench: Bench = undefined;
     bench.setup();
@@ -7307,7 +5236,6 @@ test "function values stay receiver-borrowed through every value container" {
         );
     }
     try expectBorrowedFunctionReceiver(record.asStruct()[0], receiver);
-    runtime.debugAssertInvariants();
 
     // Copying every holder duplicates only the function run.  The receiver
     // handle must remain the same borrowed handle in each copy.
@@ -7330,14 +5258,12 @@ test "function values stay receiver-borrowed through every value container" {
         );
     }
     try expectBorrowedFunctionReceiver(copied_record.asStruct()[0], receiver);
-    runtime.debugAssertInvariants();
 
     // Function values are not a hidden owner.  Retiring the receiver while
     // the holders still contain stale borrowed handles must be safe, and
     // releasing those holders must return only their own runs.
     runtime.freeValue(receiver);
     try expectStale(runtime, runtime.resolve(receiver));
-    runtime.debugAssertInvariants();
 
     runtime.freeValue(copied_list);
     runtime.freeValue(copied_map);
@@ -7347,7 +5273,6 @@ test "function values stay receiver-borrowed through every value container" {
     runtime.freeValue(map);
     runtime.freeValue(array);
     runtime.freeValue(record);
-    runtime.debugAssertInvariants();
     try testing.expectEqual(@as(u32, 0), runtime.live);
     try testing.expectEqual(@as(i64, 0), runtime.leaked());
 }
@@ -7461,9 +5386,7 @@ test "array fill keeps its old values through every copy allocation failure" {
                 );
             }
         }
-        runtime.debugAssertInvariants();
         runtime.freeValue(array);
-        runtime.debugAssertInvariants();
         try testing.expectEqual(@as(u32, 0), runtime.live);
         runtime.deinit();
         arena.deinit();
@@ -7536,14 +5459,12 @@ test "array fill rolls borrowed function runs back at every allocation failure" 
             failures += 1;
         }
 
-        runtime.debugAssertInvariants();
         // The receiver is never adopted by a function run.  Retire it before
         // releasing the array so stale borrowed handles exercise the same
         // no-object-walk rule on both successful and rollback paths.
         runtime.freeValue(receiver);
         try expectStale(&runtime, runtime.resolve(receiver));
         runtime.freeValue(array);
-        runtime.debugAssertInvariants();
         try testing.expectEqual(@as(u32, 0), runtime.live);
         runtime.deinit();
         arena.deinit();
@@ -7825,8 +5746,7 @@ test "compiled code's byte offsets find the fields they name" {
     try testing.expectEqual(@intFromPtr(runtime.table.items.ptr), @intFromPtr(table));
 
     // The other direct walk generated code makes: a constant-pool
-    // slot through the runtime's program-root table, followed by the
-    // owner-kind check used at inline writes.
+    // slot through the runtime's program-root table.
     const roots: [*]const Value = @ptrCast(@alignCast(@as(*const [*]const u8, @ptrCast(@alignCast(
         base + heap.layout.constant_roots_pointer,
     ))).*));
@@ -7835,9 +5755,6 @@ test "compiled code's byte offsets find the fields they name" {
         base + heap.layout.constant_roots_count,
     ))).*);
     try testing.expect(roots[0].asObject().same(rooted.asObject()));
-    const rooted_row = table + heap.layout.row_size * rooted.asObject().index;
-    const owner_kind: *const u32 = @ptrCast(@alignCast(rooted_row + heap.layout.owner_kind));
-    try testing.expectEqual(heap.layout.owner_program, owner_kind.*);
 
     const row = table + heap.layout.row_size * grid.asObject().index;
     const generation: *const u32 = @ptrCast(@alignCast(row + heap.layout.generation));
@@ -8269,24 +6186,6 @@ extern fn luce_rt_function_make(
 extern fn luce_rt_own_storage(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32;
 extern fn luce_rt_export_storage(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32;
 extern fn luce_rt_copy(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32;
-extern fn luce_rt_bind(runtime: *Runtime, held: [*c]const Value, serial: u64, local: u32) callconv(.c) void;
-extern fn luce_rt_unbind(runtime: *Runtime, held: [*c]const Value, serial: u64, local: u32) callconv(.c) void;
-extern fn luce_rt_loosen_from_frame(runtime: *Runtime, held: [*c]const Value, serial: u64) callconv(.c) void;
-extern fn luce_rt_free(
-    runtime: *Runtime,
-    held: [*c]const Value,
-    owned: i32,
-    serial: u64,
-    local: u32,
-) callconv(.c) i32;
-extern fn luce_rt_give(
-    runtime: *Runtime,
-    held: [*c]const Value,
-    owned: i32,
-    serial: u64,
-    local: u32,
-    out: [*c]Value,
-) callconv(.c) i32;
 extern fn luce_rt_drop_storage(
     runtime: *Runtime,
     held: [*c]const Value,
@@ -8901,59 +6800,6 @@ fn expectCNullValueTrap(runtime: *Runtime, status: i32) !void {
     runtime.pending = null;
 }
 
-test "C ownership verbs reject forged value tags without releasing a live row" {
-    var bench: Bench = undefined;
-    bench.setup();
-    defer bench.deinit();
-    const runtime = &bench.runtime;
-
-    var live: Value = .none;
-    try testing.expectEqual(@as(i32, 0), luce_rt_new_list(runtime, &Value.none, &live));
-    try testing.expectEqual(@as(u32, 1), runtime.live);
-
-    // The first object row is index zero with generation zero.  A scalar
-    // carrying zero therefore looks like a tempting forged object handle
-    // to code that forgets to check the tag before resolving it.
-    const forged = Value.ofLong(0);
-    var out = Value.ofLong(99);
-
-    try testing.expectEqual(@as(i32, 1), luce_rt_free(runtime, &forged, 0, 0, 0));
-    try testing.expectEqual(vocabulary.TrapCode.not_owned, runtime.pending.?.code);
-    try testing.expectEqual(@as(u32, 1), runtime.live);
-    runtime.pending = null;
-
-    try testing.expectEqual(@as(i32, 1), luce_rt_give(runtime, &forged, 0, 0, 0, &out));
-    try testing.expectEqual(vocabulary.TrapCode.not_owned, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
-    try testing.expectEqual(@as(u32, 1), runtime.live);
-    runtime.pending = null;
-
-    try testing.expectEqual(@as(i32, 1), luce_rt_copy(runtime, &forged, &out));
-    try testing.expectEqual(vocabulary.TrapCode.not_owned, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
-    try testing.expectEqual(@as(u32, 1), runtime.live);
-    runtime.pending = null;
-
-    const bogus_fields = [_]Value{Value.ofLong(1)};
-    const malformed_record = Value{
-        .tag = .long,
-        .bits = @intFromPtr(&bogus_fields),
-        .length = 1,
-    };
-    try testing.expectEqual(@as(i32, 1), luce_rt_struct_set(runtime, &malformed_record, 0, &forged, &out));
-    try testing.expectEqual(vocabulary.TrapCode.not_owned, runtime.pending.?.code);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
-    try testing.expectEqual(@as(u32, 1), runtime.live);
-    runtime.pending = null;
-
-    // An invalid Boolean is rejected before the ownership verb can even
-    // inspect its binding identity.
-    try testing.expectEqual(@as(i32, 1), luce_rt_free(runtime, &live, 2, 0, 0));
-    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
-    try testing.expectEqual(@as(u32, 1), runtime.live);
-    runtime.pending = null;
-}
-
 fn expectCNullValueVoid(runtime: *Runtime) !void {
     try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
     runtime.pending = null;
@@ -9084,8 +6930,6 @@ test "C container doors reject wrong tags and object shapes before mutation" {
     const malformed_struct: Value = .{ .tag = .strukt, .length = 1 };
     try expectCTrapCode(runtime, luce_rt_copy(runtime, &malformed_struct, &out), .not_owned);
     try testing.expectEqual(@as(i64, 99), out.asLong());
-    try expectCTrapCode(runtime, luce_rt_give(runtime, &malformed_struct, 0, 0, 0, &out), .not_owned);
-    try testing.expectEqual(@as(i64, 99), out.asLong());
     const malformed_function: Value = .{ .tag = .function, .length = 2 };
     try expectCTrapCode(runtime, luce_rt_copy(runtime, &malformed_function, &out), .not_owned);
     try testing.expectEqual(@as(i64, 99), out.asLong());
@@ -9128,7 +6972,6 @@ test "C Value output pointers reject null before work" {
 
     try expectCNullValueTrap(runtime, luce_rt_own_storage(runtime, &text_value, null_out));
     try expectCNullValueTrap(runtime, luce_rt_export_storage(runtime, &text_value, null_out));
-    try expectCNullValueTrap(runtime, luce_rt_give(runtime, &held, 0, 0, 0, null_out));
     luce_rt_drop_storage(runtime, &held, null_out);
     try expectCNullValueVoid(runtime);
     try expectCNullValueTrap(runtime, luce_rt_copy(runtime, &held, null_out));
@@ -9174,7 +7017,6 @@ test "C Value output pointers reject null before work" {
     try expectCNullValueTrap(runtime, luce_rt_ord(runtime, &text_value, null_out));
 
     try testing.expectEqual(@as(u32, 0), runtime.live);
-    runtime.debugAssertInvariants();
 }
 
 test "C status output pointers reject null before host file work" {
@@ -9254,7 +7096,6 @@ test "C status output pointers reject null before host file work" {
     );
 
     try testing.expectEqual(@as(u32, 0), runtime.live);
-    runtime.debugAssertInvariants();
 }
 
 test "C borrowed Value and array pointers reject null before work" {
@@ -9283,14 +7124,6 @@ test "C borrowed Value and array pointers reject null before work" {
     try expectCNullValueTrap(runtime, luce_rt_struct_make(runtime, null_values, 1, &out));
     try expectCNullValueTrap(runtime, luce_rt_function_make(runtime, null_values, 1, &out));
 
-    luce_rt_bind(runtime, null_value, 1, 0);
-    try expectCNullValueVoid(runtime);
-    luce_rt_unbind(runtime, null_value, 1, 0);
-    try expectCNullValueVoid(runtime);
-    luce_rt_loosen_from_frame(runtime, null_value, 1);
-    try expectCNullValueVoid(runtime);
-    try expectCNullValueTrap(runtime, luce_rt_free(runtime, null_value, 0, 0, 0));
-    try expectCNullValueTrap(runtime, luce_rt_give(runtime, null_value, 0, 0, 0, &out));
     try expectCNullValueTrap(runtime, luce_rt_own_storage(runtime, null_value, &out));
     try expectCNullValueTrap(runtime, luce_rt_export_storage(runtime, null_value, &out));
     luce_rt_drop_storage(runtime, null_value, &out);
@@ -9387,7 +7220,6 @@ test "C borrowed Value and array pointers reject null before work" {
     try testing.expectEqual(@as(i64, 29), filled);
     try testing.expectEqual(@as(i64, 31), written);
     try testing.expectEqual(@as(u32, 0), runtime.live);
-    runtime.debugAssertInvariants();
 }
 
 test "C callbacks fail closed on null report and argument buffers" {
@@ -9435,7 +7267,6 @@ test "C callbacks fail closed on null report and argument buffers" {
     luce_rt_report_error(runtime, null, null);
     try testing.expectEqual(raised_code, runtime.raised.?.code);
     runtime.raised = null;
-    runtime.debugAssertInvariants();
 }
 
 test "allocating C doors preserve outputs and rows at every failure point" {
@@ -9509,7 +7340,6 @@ test "allocating C doors preserve outputs and rows at every failure point" {
             }
 
             try testing.expectEqual(@as(u32, 0), runtime.live);
-            runtime.debugAssertInvariants();
             runtime.deinit();
             arena.deinit();
             try testing.expectEqual(objects.allocated_bytes, objects.freed_bytes);
@@ -9570,7 +7400,6 @@ test "a function value allocation failure preserves its borrowed receiver graph"
         }
 
         try testing.expectEqual(@as(u32, 0), runtime.live);
-        runtime.debugAssertInvariants();
         runtime.deinit();
         arena.deinit();
         cleaned = true;
@@ -9690,9 +7519,7 @@ test "allocating C value doors preserve graphs and slots at every failure point"
                 failures += 1;
             }
 
-            runtime.debugAssertInvariants();
             if (source.tag == .object) runtime.freeValue(source);
-            runtime.debugAssertInvariants();
             try testing.expectEqual(@as(u32, 0), runtime.live);
             runtime.deinit();
             arena.deinit();
@@ -9803,7 +7630,6 @@ test "C file acquisition closes raw handles through every allocation failure" {
             try testing.expect(!state.duplicate_close);
             try testing.expect(!state.unknown_close);
             try testing.expectEqual(@as(u32, 0), runtime.live);
-            runtime.debugAssertInvariants();
             runtime.deinit();
             arena.deinit();
             cleaned = true;
@@ -9871,7 +7697,6 @@ test "the C spawn door rolls worker acquisition back before publishing a task" {
         try testing.expectEqual(state.joins, state.closes);
         if (state.closes != 0) try testing.expectEqual(@as(u32, 0), state.child_live_at_close);
         try testing.expectEqual(@as(u32, 0), parent.live);
-        parent.debugAssertInvariants();
         parent.deinit();
         parent_arena.deinit();
         child_arena.deinit();
@@ -9973,7 +7798,6 @@ test "C task wait rolls nested result transfer back and detaches exactly once" {
             parent.pending = null;
 
             parent.freeValue(task);
-            parent.debugAssertInvariants();
             try testing.expectEqual(@as(u32, 0), parent.live);
             parent.deinit();
             parent_arena.deinit();
@@ -10172,13 +7996,11 @@ test "C compound value doors preserve destinations through every allocation fail
                 failures += 1;
             }
 
-            runtime.debugAssertInvariants();
             if (source_owned) switch (source.tag) {
                 .object => runtime.freeValue(source),
                 else => runtime.dropStorage(source),
             };
             source_owned = false;
-            runtime.debugAssertInvariants();
             try testing.expectEqual(@as(u32, 0), runtime.live);
             runtime.deinit();
             arena.deinit();

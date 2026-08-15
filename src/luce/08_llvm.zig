@@ -24,7 +24,7 @@
 //! **The lowering is total over the instruction set.**  Everything a
 //! program can say lowers: integers, floats, strings, structs, all
 //! four container kinds, file/task resources and worker operations,
-//! `T?`, `T!`, ownership, the math builtins, and every host service.
+//! `T?`, `T!`, the math builtins, and every host service.
 //! There is no list of gaps here because there are none.
 //!
 //! **What that sentence rests on, stated once because it was once
@@ -80,8 +80,6 @@
 //!   lower.zig  — typed MIR to LLVM IR, built with the pure-Zig
 //!                `std.zig.llvm.Builder`.  No libLLVM, no `else` arms.
 //!   loops.zig  — where a container resolution may be lifted to.
-//!   roots.zig  — which heap registers may name immutable program
-//!                roots, derived conservatively from final MIR.
 //!   runtime_effects.zig
 //!             — what the artifact tells LLVM about `libluce_rt`:
 //!               one arm per entry point saying what it does to
@@ -111,6 +109,5 @@ test {
     _ = artifact;
     _ = effects;
     _ = @import("08_llvm/loops.zig");
-    _ = @import("08_llvm/roots.zig");
     _ = @import("08_llvm/builder.zig");
 }

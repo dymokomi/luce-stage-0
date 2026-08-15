@@ -232,10 +232,10 @@ test "as is a word, not a keyword: a binding named as still parses" {
     try testing.expectEqual(@as(usize, 1), parsed.program.functions.len);
 }
 
-test "parameter modes, return types, and dotted type names parse" {
+test "return types and dotted type names parse" {
     var parsed = try expectClean(
-        \\func stash(index: map(string, list(long)), hits: give list(long), origin: shapes.Point) -> list(long):
-        \\    return give hits
+        \\func stash(index: map(string, list(long)), hits: list(long), origin: shapes.Point) -> list(long):
+        \\    return hits
         \\
         \\func main():
         \\    return
@@ -243,8 +243,6 @@ test "parameter modes, return types, and dotted type names parse" {
     );
     defer parsed.deinit();
     const stash = parsed.program.functions[0];
-    try testing.expectEqual(ast.ParameterMode.borrow, stash.parameters[0].mode);
-    try testing.expectEqual(ast.ParameterMode.give, stash.parameters[1].mode);
     try testing.expectEqualStrings("shapes.Point", stash.parameters[2].type_name.name);
     try testing.expectEqualStrings("list", stash.returns[0].name);
     try testing.expectEqualStrings("long", stash.returns[0].arguments[0].name);
@@ -705,38 +703,6 @@ test "return, break, and continue parse with and without a value" {
     try testing.expect(parsed.program.functions[1].body.statements[0].return_statement.values[0].* == .binary);
 }
 
-test "ownership verbs parse: give/copy expressions, free calls, give parameters" {
-    var parsed = try expectClean(
-        \\func stash(index: map(string, list(long)), hits: give list(long)):
-        \\    index["latest"] = give hits
-        \\
-        \\func main():
-        \\    var mine = [1, 2]
-        \\    let moved = give mine
-        \\    let doubled = copy moved
-        \\    var index = new map(string, list(long))
-        \\    stash(index, give doubled)
-        \\    free(index)
-        \\
-    );
-    defer parsed.deinit();
-
-    const stash = parsed.program.functions[0];
-    try testing.expectEqual(ast.ParameterMode.borrow, stash.parameters[0].mode);
-    try testing.expectEqual(ast.ParameterMode.give, stash.parameters[1].mode);
-    try testing.expect(stash.body.statements[0].assign.value.* == .give);
-
-    const body = parsed.program.functions[1].body;
-    const moved = body.statements[1].let.value;
-    try testing.expect(moved.* == .give);
-    try testing.expectEqualStrings("mine", moved.give.operand.name.text);
-    try testing.expect(body.statements[2].let.value.* == .copy);
-    const call_arguments = body.statements[4].expression.value.call.arguments;
-    try testing.expect(call_arguments[1].value.* == .give);
-    // free is an ordinary builtin call, not a keyword.
-    try testing.expectEqualStrings("free", body.statements[5].expression.value.call.callee);
-}
-
 // ---------------------------------------------------------------------------
 // Expressions
 // ---------------------------------------------------------------------------
@@ -1187,7 +1153,7 @@ test "f-strings expand to string()-wrapped concatenation" {
         \\    let c = f""
         \\    let d = f"{a + b}"
         \\    let e = f"{m["key"]}"
-        \\    let f = f"{copy {"a": 1}}"
+        \\    let f = f"{ {"a": 1} }"
         \\    let g = f"{ a + "!" }"
         \\    let h = f"{ len({ "key": a }) }"
         \\
@@ -1206,8 +1172,8 @@ test "f-strings expand to string()-wrapped concatenation" {
     try testing.expect(body.statements[3].let.value.call.arguments[0].value.* == .binary);
     try testing.expect(body.statements[4].let.value.call.arguments[0].value.* == .index);
     // A map's colon is nested syntax, not an f-string format specifier.
-    const copied_map = body.statements[5].let.value.call.arguments[0].value.copy.operand;
-    try testing.expect(copied_map.* == .map_literal);
+    const mapped = body.statements[5].let.value.call.arguments[0].value;
+    try testing.expect(mapped.* == .map_literal);
     try testing.expect(body.statements[6].let.value.call.arguments[0].value.* == .binary);
     try testing.expect(body.statements[7].let.value.call.arguments[0].value.* == .call);
     try testing.expect(body.statements[7].let.value.call.arguments[0].value.call.arguments[0].value.* == .map_literal);
@@ -1723,8 +1689,6 @@ test "every recursive construct is bounded, and hitting the bound is one clean d
     const cases = [_]Case{
         .{ .name = "unary minus", .head = "func main():\n    let x = ", .unit = "-", .tail = "1\n" },
         .{ .name = "not", .head = "func main():\n    let x = ", .unit = "not ", .tail = "true\n" },
-        .{ .name = "give", .head = "func main():\n    let x = ", .unit = "give ", .tail = "y\n" },
-        .{ .name = "copy", .head = "func main():\n    let x = ", .unit = "copy ", .tail = "y\n" },
         .{ .name = "parentheses", .head = "func main():\n    let x = ", .unit = "(", .tail = "1\n" },
         .{ .name = "list literals", .head = "func main():\n    let x = ", .unit = "[", .tail = "1\n" },
         .{ .name = "calls", .head = "func main():\n    let x = ", .unit = "f(", .tail = "1\n" },
@@ -1835,11 +1799,11 @@ test "truncated input at every prefix terminates and stays inside the source" {
         \\        if x % 2 == 0 and x > width:
         \\            m[f"k{i}"] += x
         \\        elif not x:
-        \\            xs.append(copy x)
+        \\            xs.append(x)
         \\        else:
         \\            return
         \\    while len(xs) > 0:
-        \\        xs[0:1] = give m
+        \\        xs[0:1] = m
         \\
     ;
     for (0..whole.len + 1) |cut| {
@@ -1864,12 +1828,12 @@ const fragments = [_][]const u8{
     "if ",                   "elif ",                    "else:",                 "while ",
     "for i in range(0, 3):", "for x in xs:",             "break",                 "continue",
     "print(x)",              "xs.append(",               "new map(string, long)", "new list(",
-    "new array(long, 2, 2)", "give ",                    "copy ",                 "not ",
-    "and ",                  "or ",                      "==",                    "<",
-    "+",                     "(",                        ")",                     "[",
-    "]",                     ",",                        ":",                     ".",
-    "=",                     "f\"{x}\"",                 "\"text\"",              "1",
-    "2.5",                   "true",                     "xs",                    "Point(x = 1)",
+    "new array(long, 2, 2)", "not ",                     "and ",                  "or ",
+    "==",                    "<",                        "+",                     "(",
+    ")",                     "[",                        "]",                     ",",
+    ":",                     ".",                        "=",                     "f\"{x}\"",
+    "\"text\"",              "1",                        "2.5",                   "true",
+    "xs",                    "Point(x = 1)",
 };
 
 /// The indentation a generated line may carry — the layout dimension
@@ -1879,7 +1843,7 @@ const indents = [_][]const u8{ "", "    ", "        ", "            ", "  " };
 test "fuzz: parsing any bytes terminates with spans inside the source" {
     try testing.fuzz({}, parseAnything, .{ .corpus = &.{
         "func main():\n    let x = 1 + 2\n",
-        "func f(a: give list(long)) -> long:\n    return len(a)\n",
+        "func f(a: list(long)) -> long:\n    return len(a)\n",
         "struct P:\n    x: double\n    static func zero() -> P:\n        return P(x = 0.0)\n",
         "enum Method:\n    stored\n    func compressed() -> bool:\n        return self != Method.stored\n",
         "let k = 3\n",

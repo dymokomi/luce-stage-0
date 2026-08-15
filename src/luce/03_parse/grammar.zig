@@ -1042,9 +1042,7 @@ pub const Parser = struct {
     /// declaration is documentation the call site can use; in a type it
     /// is documentation nothing reads, and a grammar that admits it has
     /// to say what `func(long)` means — the type `long` or a parameter
-    /// called `long`.  The one word that may stand in front of a
-    /// parameter type is `give`, which is not documentation: it says who
-    /// owns the object afterwards (D5).
+    /// called `long`.
     fn functionTypeName(self: *Parser) Error!?ast.TypeName {
         const start = self.advance(); // func
         const opener = (try self.expect(.left_paren, "'(' with the parameter types")) orelse return null;
@@ -1052,9 +1050,7 @@ pub const Parser = struct {
         defer parameters.deinit(self.arena);
         var previous_end = opener.span.end;
         while (!expr.endsList(self.peekKind(), .right_paren)) {
-            const gives = self.accept(.keyword_give) != null;
-            var parameter = (try self.typeName()) orelse return null;
-            parameter.gives = gives;
+            const parameter = (try self.typeName()) orelse return null;
             try parameters.append(self.arena, parameter);
             previous_end = parameter.span.end;
             if (self.accept(.comma) == null) break;
@@ -1276,7 +1272,6 @@ pub const Parser = struct {
                     self.recover();
                     break;
                 }
-                const mode: ast.ParameterMode = if (self.accept(.keyword_give) != null) .give else .borrow;
                 const parameter_type = (try self.typeName()) orelse {
                     self.recover();
                     break;
@@ -1300,7 +1295,6 @@ pub const Parser = struct {
                 try parameters.append(self.arena, .{
                     .name = self.text(parameter_name),
                     .name_span = parameter_name.span,
-                    .mode = mode,
                     .type_name = parameter_type,
                     .default = default_value,
                     .span = .{ .start = parameter_name.span.start, .end = written_end },
@@ -1944,7 +1938,6 @@ pub const Parser = struct {
                 return null;
             try self.refuseWildcardName(parameter_name);
             if ((try self.expect(.colon, "':' after the parameter name")) == null) return null;
-            const mode: ast.ParameterMode = if (self.accept(.keyword_give) != null) .give else .borrow;
             const parameter_type = (try self.typeName()) orelse return null;
             // `= EXPRESSION` — the parameter's default, one new
             // production in the one place a parameter is parsed
@@ -1961,7 +1954,6 @@ pub const Parser = struct {
             try parameters.append(self.arena, .{
                 .name = self.text(parameter_name),
                 .name_span = parameter_name.span,
-                .mode = mode,
                 .type_name = parameter_type,
                 .default = default_value,
                 .span = .{ .start = parameter_name.span.start, .end = written_end },
@@ -3056,8 +3048,6 @@ pub fn describe(kind: Kind) []const u8 {
         .keyword_false => "'false'",
         .keyword_new => "the keyword 'new'",
         .keyword_import => "the keyword 'import'",
-        .keyword_give => "the keyword 'give'",
-        .keyword_copy => "the keyword 'copy'",
         .keyword_spawn => "the keyword 'spawn'",
         .keyword_none => "'none'",
         .keyword_try => "the keyword 'try'",

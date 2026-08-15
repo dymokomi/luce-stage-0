@@ -61,7 +61,6 @@ const effects = @import("effects.zig");
 // from the editor grammar that is generated out of them.
 const builtins_mod = @import("builtins.zig");
 const builtins = builtins_mod.builtins;
-const fresh_object_methods = builtins_mod.fresh_object_methods;
 
 // Pass one, for the one thing this walk needs from it: the collected
 // project it runs against.
@@ -75,8 +74,6 @@ const signatures = @import("signatures.zig");
 const context = @import("context.zig");
 const FunctionDeclInfo = context.FunctionDeclInfo;
 const EnclosingLocal = context.EnclosingLocal;
-const OwnershipClass = context.OwnershipClass;
-const RootState = context.RootState;
 const LocalInfo = context.LocalInfo;
 const Scope = context.Scope;
 const FoundLocal = context.FoundLocal;
@@ -110,10 +107,6 @@ pub const Typed = struct {
     /// the walk records, and what `hir.lower` consumes.
     node: nodes.NodeRef,
     value_type: Type,
-    /// Static knowledge of the root behind an object value.  Most
-    /// producers are fresh/mutable; names and borrowed reads override
-    /// the default where the distinction matters (CONSTANTS R-C/R-D).
-    root: RootState = .mutable,
     /// The batch-rewrite override (docs/STRINGS.md): a defensive
     /// borrow copy leaves the value *fresh* whatever the borrow was,
     /// and a spill reload leaves it a *view* of its slot — facts the
@@ -248,16 +241,6 @@ pub const Landing = union(enum) {
     /// be a rule about which side of the equals sign a literal
     /// sits on.
     subscripts,
-};
-
-/// A bare owning operand is staged at one exact point in a batch.
-/// Its revision at that point distinguishes a later write, which
-/// invalidates the staged value, from an earlier write whose new
-/// value is precisely what the operand loads.
-pub const StagedOperandOwner = struct {
-    local: LocalId,
-    revision: u32,
-    name: []const u8,
 };
 
 /// One lowered operand batch: the values in written order, and the
@@ -477,78 +460,10 @@ pub const FunctionBuilder = struct {
         while (index > 0) {
             index -= 1;
             if (self.scopes.items[index].names.getPtr(name)) |found| {
-                return .{ .info = found, .depth = index };
+                return .{ .info = found };
             }
         }
         return null;
-    }
-
-    // Who owns what an alias names (S8, S23) --------------------------------
-    //
-    // `let y = x` makes y another name for x's object.  Refusing
-    // `give y` is only half an answer; the other half is `give x`, and
-    // these two keep enough to say it.
-
-    /// Record, on the alias just declared, the name that owns its
-    /// object.  Chains collapse to their root: after `let a = xs` and
-    /// `let b = a`, both name `xs`, because that is the name a reader
-    /// would have to write.
-    pub fn rememberOwnerName(self: *FunctionBuilder, alias: []const u8, source: []const u8) void {
-        const from = self.findLocal(source) orelse return;
-        const root = from.info.owner_name orelse source;
-        const declared = self.findLocal(alias) orelse return;
-        declared.info.owner_name = root;
-    }
-
-    /// Replacing an owning binding does not make its old aliases point
-    /// at the replacement.  They still hold the old (now released)
-    /// handle, so retaining `owner_name` would make later diagnostics
-    /// recommend moving an unrelated new graph.  Alias chains are
-    /// collapsed to the written root in `rememberOwnerName`, making a
-    /// linear visible-scope invalidation both complete and rare (S8,
-    /// S23).
-    pub fn forgetAliasesOwnedBy(self: *FunctionBuilder, owner: []const u8) void {
-        for (self.scopes.items) |*scope| {
-            var locals = scope.names.valueIterator();
-            while (locals.next()) |info| {
-                const remembered = info.owner_name orelse continue;
-                if (std.mem.eql(u8, remembered, owner)) info.owner_name = null;
-            }
-        }
-    }
-
-    /// The owner to name in a refusal, or null when there is none worth
-    /// naming.  A recorded name is only useful advice while it is still
-    /// the owner: one that has since been given away or freed would
-    /// send the reader to a second diagnostic, so it is withheld and
-    /// the refusal falls back to saying that an owner exists.
-    pub fn ownerNameFor(self: *FunctionBuilder, info: *const LocalInfo) ?[]const u8 {
-        const owner = info.owner_name orelse return null;
-        const found = self.findLocal(owner) orelse return null;
-        if (found.info.class != .owned) return null;
-        if (found.info.poisoned != null) return null;
-        return owner;
-    }
-
-    /// True when giving this binding here would poison a name that a
-    /// later iteration can reach (S30).  Returns and other terminating
-    /// moves ask their own question; this is for handoff advice and
-    /// the `give` expression itself.
-    pub fn declaredOutsideActiveLoop(self: *const FunctionBuilder, depth: usize) bool {
-        if (self.loops.items.len == 0) return false;
-        return depth < self.loops.items[self.loops.items.len - 1].scope_depth;
-    }
-
-    /// A live owner that may actually be given at this source point.
-    /// An outer-loop owner is still the alias's owner, but naming it as
-    /// a repair would immediately earn S30's next diagnostic.
-    pub fn giveableOwnerNameFor(self: *FunctionBuilder, info: *const LocalInfo) ?[]const u8 {
-        const owner = self.ownerNameFor(info) orelse return null;
-        const found = self.findLocal(owner) orelse return null;
-        if (self.declaredOutsideActiveLoop(found.depth)) return null;
-        const owner_type = recorder.localType(self, found.info.local);
-        if (owner_type == .optional and !flow.isNarrowed(self, found.info.local)) return null;
-        return owner;
     }
 
     // Name resolution ------------------------------------------------------
@@ -626,10 +541,9 @@ pub const FunctionBuilder = struct {
         name: []const u8,
         local_type: Type,
         mutable: bool,
-        class: OwnershipClass,
         span: Span,
     ) Error!?LocalId {
-        return self.declareLocalAs(name, local_type, mutable, class, .owns, span);
+        return self.declareLocalAs(name, local_type, mutable, .owns, span);
     }
 
     pub fn declareLocalAs(
@@ -637,7 +551,6 @@ pub const FunctionBuilder = struct {
         name: []const u8,
         local_type: Type,
         mutable: bool,
-        class: OwnershipClass,
         storage_class: StorageClass,
         span: Span,
     ) Error!?LocalId {
@@ -657,7 +570,6 @@ pub const FunctionBuilder = struct {
             try self.fail("luce.sema.duplicate", span, "{s} is already a top-level declaration{s}", .{ name, where });
             return null;
         }
-        const carries = shapes.carriesObjects(self.analyzer, local_type);
         const owns_storage = storage_class == .owns and shapes.ownsStorage(self.analyzer, local_type);
         const local = try recorder.recordLocal(self, name, local_type, owns_storage, span);
         const scope = &self.scopes.items[self.scopes.items.len - 1];
@@ -665,14 +577,10 @@ pub const FunctionBuilder = struct {
             .local = local,
             .mutable = mutable,
             .declared_at = span,
-            .class = if (carries) class else .alias,
-            .carries = carries,
         });
-        const owns_objects = carries and class == .owned;
-        if (owns_objects or owns_storage) {
+        if (owns_storage) {
             try scope.owned.append(self.temporary(), .{
                 .local = local,
-                .objects = owns_objects,
                 .storage = owns_storage,
             });
         }
@@ -681,11 +589,10 @@ pub const FunctionBuilder = struct {
 
     /// Install the implicit receiver as logical parameter zero.
     ///
-    /// A reader borrows an ordinary value parameter.  A writer is an
-    /// alias of the caller's mutable binding: its MIR slot owns the
-    /// *representation* needed to drop replaced strings/struct runs,
-    /// but its lifetime and object-owner identity remain the caller's,
-    /// so this scope must never release it (docs/SELF.md D3-D6).
+    /// A reader borrows an ordinary value parameter.  A writer's MIR
+    /// slot owns the *representation* needed to drop replaced
+    /// strings/struct runs, but this scope never releases it — its
+    /// storage belongs to the caller's binding (docs/SELF.md D3-D6).
     pub fn declareReceiver(
         self: *FunctionBuilder,
         receiver_type: Type,
@@ -698,19 +605,11 @@ pub const FunctionBuilder = struct {
         }
         const owns_storage = writes and shapes.ownsStorage(self.analyzer, receiver_type);
         const local = try recorder.recordLocal(self, "self", receiver_type, owns_storage, span);
-        const carries = shapes.carriesObjects(self.analyzer, receiver_type);
         const scope = &self.scopes.items[self.scopes.items.len - 1];
         try scope.names.put(self.temporary(), "self", .{
             .local = local,
             .mutable = writes,
             .declared_at = span,
-            .class = if (!carries)
-                .alias
-            else if (writes)
-                .inout_receiver
-            else
-                .borrow_param,
-            .carries = carries,
         });
         return local;
     }
@@ -744,129 +643,6 @@ pub const FunctionBuilder = struct {
         return false;
     }
 
-    // Ownership classification ---------------------------------------------
-
-    /// True when evaluating this expression yields an object the
-    /// receiver may own: something fresh (new, a literal, a slice, a
-    /// call result, pop/split/keys), a give, or a copy.  Names and
-    /// element/field reads are borrows (S8, S22).  Only consulted for
-    /// object-carrying types, so value-typed calls answering true is
-    /// harmless.
-    pub fn yieldsOwnership(self: *FunctionBuilder, expression: *const ast.Expression) Error!bool {
-        return switch (expression.*) {
-            // A spawn makes a task nobody has named, exactly as `new`
-            // makes a list nobody has named (docs/THREADS.md D3).
-            .new_object, .list_literal, .map_literal, .slice_range, .call, .value_call, .give, .copy, .spawn => true,
-            // `try f()` hands over exactly what `f()` does: the value
-            // crosses a block boundary through a slot, and a slot
-            // carrying an object changes nothing about who owns it.
-            .try_call => |attempt| try self.yieldsOwnership(attempt.operand),
-            // `a else b` and `a catch b` hand over an object exactly
-            // when both sides do; both lowerings refuse the case where
-            // they differ.
-            .binary => |binary| (binary.op == .coalesce or binary.op == .catch_error) and
-                try self.yieldsOwnership(binary.left) and
-                try self.yieldsOwnership(binary.right),
-            .method => |method| blk: {
-                if (try self.methodIsNamespaced(method)) break :blk true;
-                for (fresh_object_methods) |name| {
-                    if (std.mem.eql(u8, method.name, name)) break :blk true;
-                }
-                if (self.structMethodYieldsObject(method.name)) break :blk true;
-                break :blk self.routedMethodYieldsObject(method.name);
-            },
-            // `Json.null` — a bare union member is a construction, and
-            // a construction is fresh (docs/UNION.md D4).
-            .field => |field| blk: {
-                const chain = helpers.dottedChain(field.target) orelse break :blk false;
-                if (self.findLocal(chain.head()) != null) break :blk false;
-                var parts_buffer: [8][]const u8 = undefined;
-                if (chain.count + 1 > parts_buffer.len) break :blk false;
-                parts_buffer[0] = field.name;
-                for (chain.parts[0..chain.count], 1..) |part, at| parts_buffer[at] = part;
-                break :blk self.namesVariantParts(parts_buffer[0 .. chain.count + 1]);
-            },
-            else => false,
-        };
-    }
-
-    /// Whether a dotted chain, written inner-to-outer, spells a
-    /// **union** member: `Json.null`, `zip.Shape.circle`.  The last
-    /// part is the member and everything in front of it names the
-    /// union — `namesMember`'s shape, narrowed to one table, for the
-    /// caller that has to know which kind it found.
-    fn namesVariantParts(self: *FunctionBuilder, parts: []const []const u8) bool {
-        var written: std.ArrayList(u8) = .empty;
-        defer written.deinit(self.temporary());
-        var at = parts.len;
-        while (at > 1) {
-            at -= 1;
-            written.appendSlice(self.temporary(), parts[at]) catch return false;
-            if (at > 1) written.append(self.temporary(), '.') catch return false;
-        }
-        const spelled = written.items;
-        const head = if (parts.len == 2)
-            naming.qualify(self.analyzer, self.prefix, spelled) catch return false
-        else
-            spelled;
-        const index = self.analyzer.variant_names.get(head) orelse return false;
-        return self.analyzer.variants.items[index].findMember(parts[0]) != null;
-    }
-
-    /// True when `name` is a standard-library function that method
-    /// sugar routes to and that hands back an object — `s.split(",")`
-    /// is `strings.split(s, ",")`, and a call's result belongs to the
-    /// caller (S16).
-    ///
-    /// Asked of the declaration rather than of a hand-kept list on
-    /// purpose: a list is a thing that goes stale, and the way it
-    /// would go stale here is a new object-returning `strings`
-    /// function whose result nobody owns and nobody frees.  A method
-    /// with no such routing answers false, and a routed one returning
-    /// a value answers false too, so this only ever says yes where an
-    /// object really comes out.
-    fn routedMethodYieldsObject(self: *const FunctionBuilder, name: []const u8) bool {
-        var qualified: [64]u8 = undefined;
-        const written = std.fmt.bufPrint(&qualified, "strings.{s}", .{name}) catch return false;
-        const index = self.analyzer.function_names.get(written) orelse return false;
-        return shapes.carriesObjects(self.analyzer, self.analyzer.functions.items[index].return_type);
-    }
-
-    /// True when some struct in this program declares a **method** by
-    /// this name whose result carries objects — `p.spread()` answering
-    /// a fresh `list(long)`, which the caller owns like any other call
-    /// result (S16, docs/METHODS.md).
-    ///
-    /// Asked of the name rather than of the receiver, and for the same
-    /// reason `routedMethodYieldsObject` is: this question is put
-    /// *before* a give argument is lowered, so the receiver's type is
-    /// not yet known and cannot be.  Answering yes for a name some
-    /// other struct also spells costs nothing — every caller has
-    /// already established that the value in hand carries objects, and
-    /// a call's result is owned whenever it does.
-    fn structMethodYieldsObject(self: *const FunctionBuilder, name: []const u8) bool {
-        for (self.analyzer.functions.items) |candidate| {
-            if (candidate.receiver == .not) continue;
-            const dot = std.mem.lastIndexOfScalar(u8, candidate.name, '.') orelse continue;
-            if (!std.mem.eql(u8, candidate.name[dot + 1 ..], name)) continue;
-            if (shapes.carriesObjects(self.analyzer, candidate.return_type)) return true;
-        }
-        return false;
-    }
-
-    /// Side-effect-free twin of methodNamespace: does target.name(...)
-    /// resolve to a declaration (whose result the caller owns, S16)
-    /// rather than a builtin method on a value?
-    fn methodIsNamespaced(self: *FunctionBuilder, method: ast.Method) Error!bool {
-        const chain = helpers.dottedChain(method.target) orelse return false;
-        const head = chain.head();
-        if (self.findLocal(head) != null) return false;
-        if (refusals.capturesName(self, head)) return false;
-        const head_qualified = try naming.qualify(self.analyzer, self.prefix, head);
-        if (self.analyzer.struct_names.contains(head_qualified)) return true;
-        if (self.analyzer.variant_names.contains(head_qualified)) return true;
-        return naming.importsModule(self.analyzer, self.module, head);
-    }
     // Landing ---------------------------------------------------------------
     //
     // Getting a checked value into the place that expects it: the
@@ -895,35 +671,6 @@ pub const FunctionBuilder = struct {
         if (value.value_type == .strukt and expected == .strukt) {
             if (self.analyzer.interfaceForLayout(expected.strukt)) |interface_index| {
                 if (self.analyzer.conformance(value.value_type.strukt, interface_index)) |conformance| {
-                    // Interface dispatch borrows the concrete receiver's
-                    // object graph, just like a read-only bound method.
-                    // A resource graph can never be borrowed by a value
-                    // that may outlive its owner, and a fresh carrying
-                    // receiver has no owner beyond this statement.  Refuse
-                    // both at the conversion boundary instead of allowing
-                    // a retained interface to become a delayed
-                    // use-after-free.
-                    if (shapes.carriesObjects(self.analyzer, value.value_type)) {
-                        const interface_name = try self.analyzer.typeName(expected);
-                        if (try shapes.carries(self.analyzer, value.value_type, .resource)) {
-                            try self.fail(
-                                "luce.sema.own",
-                                value.node.span(),
-                                "{s} carries a file or task, and an interface value borrows its receiver; keep the owner and call the method directly, or copy a resource-free value [INTERFACES.md]",
-                                .{interface_name},
-                            );
-                            return null;
-                        }
-                        if (value.provenance() == .fresh) {
-                            try self.fail(
-                                "luce.sema.own",
-                                value.node.span(),
-                                "this {s} is made here and dies at the end of this statement, and an interface value borrows its receiver; store the concrete value in a name first or copy it before conversion [INTERFACES.md]",
-                                .{try self.analyzer.typeName(value.value_type)},
-                            );
-                            return null;
-                        }
-                    }
                     const contract = self.analyzer.interface_decls.items[interface_index];
                     const methods = try self.arena().alloc(nodes.Expression.InterfaceMethod, contract.methods.len);
                     for (conformance.methods, contract.methods, methods) |function, method, *slot| {
@@ -948,7 +695,6 @@ pub const FunctionBuilder = struct {
                             .span = value.node.span(),
                         } }),
                         .value_type = expected,
-                        .root = value.root,
                     };
                     // The conversion allocates an interface value even
                     // when it appears only as a call argument.  Keep it in
@@ -973,7 +719,6 @@ pub const FunctionBuilder = struct {
                 .span = inner.node.span(),
             } }),
             .value_type = expected,
-            .root = inner.root,
         };
     }
 
@@ -1003,7 +748,6 @@ pub const FunctionBuilder = struct {
                 .span = value.node.span(),
             } }),
             .value_type = to,
-            .root = value.root,
         };
     }
 
@@ -1285,10 +1029,7 @@ pub const FunctionBuilder = struct {
         const result: Type = .{ .variant = found.variant };
         const parameters = try self.arena().alloc(types.Signature.Parameter, member.fields.len);
         for (member.fields, parameters) |payload, *parameter| {
-            parameter.* = .{
-                .value_type = payload.field_type,
-                .gives = shapes.carriesObjects(self.analyzer, payload.field_type),
-            };
+            parameter.* = .{ .value_type = payload.field_type };
         }
         const made: types.Signature = .{ .parameters = parameters, .result = result };
         const wants = self.analyzer.signatures.items[signature];
@@ -1311,22 +1052,16 @@ pub const FunctionBuilder = struct {
         const declaration = try self.arena().create(ast.FuncDecl);
         const written_parameters = try self.arena().alloc(ast.Parameter, member.fields.len);
         const arguments = try self.arena().alloc(ast.Argument, member.fields.len);
-        for (member.fields, parameters, written_parameters, arguments) |payload, parameter, *slot, *argument| {
+        for (member.fields, written_parameters, arguments) |payload, *slot, *argument| {
             slot.* = .{
                 .name = payload.name,
                 .name_span = field.span,
-                .mode = if (parameter.gives) .give else .borrow,
                 .type_name = .{ .name = "func", .span = field.span },
                 .span = field.span,
             };
             const read = try self.arena().create(ast.Expression);
             read.* = .{ .name = .{ .text = payload.name, .span = field.span } };
-            const passed = if (parameter.gives) given: {
-                const moved = try self.arena().create(ast.Expression);
-                moved.* = .{ .give = .{ .operand = read, .span = field.span } };
-                break :given moved;
-            } else read;
-            argument.* = .{ .name = payload.name, .value = passed, .span = field.span };
+            argument.* = .{ .name = payload.name, .value = read, .span = field.span };
         }
         const construction = try self.arena().create(ast.Expression);
         construction.* = .{ .method = .{
@@ -1422,60 +1157,6 @@ pub const FunctionBuilder = struct {
             );
             return .reported;
         }
-        // **A carrying receiver is borrowed, and the two refusals that
-        // keep that true** (docs/BINDING.md D4, as amended).
-        //
-        // The invariant the whole feature rests on: *a function value
-        // borrows its receiver's objects and never owns them.*  That is
-        // what makes `carriesObjects(.function)` false at the thirty-odd
-        // sites that ask a type rather than a value — a function value
-        // takes no verb, releases no object, and is storable without
-        // ceremony (D7).  A bind that could make a function value the
-        // *sole* owner of a graph would break it, and the two spellings
-        // that could are refused here rather than checked for later.
-        if (shapes.carriesObjects(self.analyzer, receiver.value_type)) {
-            // A resource cannot be borrowed by a value that outlives
-            // the borrow's own scope and cannot be duplicated when the
-            // value crosses into a worker's runtime, so the alias story
-            // S8 tells about a list has no counterpart for a `file` or
-            // a `task`.  Asked of the receiver's type, where the answer
-            // is exact.
-            if (try shapes.carries(self.analyzer, receiver.value_type, .resource)) {
-                try self.fail(
-                    "luce.sema.own",
-                    field.span,
-                    "{s} carries a file or task, and a bound value borrows its receiver and never owns it; " ++
-                        "a resource stays with the binding that owns it, so keep that binding and call " ++
-                        "{s}.{s} on it directly, or bind a method of a value-only receiver " ++
-                        "[BINDING.md D4, OWNERSHIP.md S31]",
-                    .{ try self.analyzer.typeName(receiver.value_type), declared, field.name },
-                );
-                return .reported;
-            }
-            // A fresh carrying receiver has no owner to outlive the
-            // value: its objects are this statement's temporary and die
-            // at the semicolon (S3), so every call through the value
-            // would trap `use_after_free`.  Refused where it is written
-            // rather than met at the first call.
-            if (nodes.provenance(receiver.node) == .fresh) {
-                try self.fail(
-                    "luce.sema.own",
-                    field.span,
-                    "this {s} is made here and dies at the end of this statement, and a bound value borrows " ++
-                        "its receiver and never owns it; bind {s} on a name that outlives the value, bind a " ++
-                        "method of a value-only receiver, or keep the {s} and call {s}.{s} on it directly " ++
-                        "[BINDING.md D4, OWNERSHIP.md S3]",
-                    .{
-                        try self.analyzer.typeName(receiver.value_type),
-                        field.name,
-                        try self.analyzer.typeName(receiver.value_type),
-                        declared,
-                        field.name,
-                    },
-                );
-                return .reported;
-            }
-        }
         const wants = self.analyzer.signatures.items[signature];
         if (!self.matchesSignature(info, wants, 1)) {
             try self.fail("luce.sema.type", field.span, "this place is {s}, and {s}.{s} bound is {s}", .{
@@ -1507,8 +1188,8 @@ pub const FunctionBuilder = struct {
         }
         const written = info.parameter_types[1..];
         const parameters = try self.arena().alloc(types.Signature.Parameter, written.len);
-        for (written, info.parameter_modes[1..], parameters) |held, mode, *parameter| {
-            parameter.* = .{ .value_type = held, .gives = mode == .give };
+        for (written, parameters) |held, *parameter| {
+            parameter.* = .{ .value_type = held };
         }
         const shape = try resolve.internSignature(self.analyzer, .{
             .parameters = parameters,
@@ -1518,8 +1199,8 @@ pub const FunctionBuilder = struct {
     }
 
     /// Whether a declared function really has the shape a function type
-    /// demands: the same parameter types in the same order, the same
-    /// verb on each, and the same answer.
+    /// demands: the same parameter types in the same order and the same
+    /// answer.
     ///
     /// **No widening anywhere.**  A `func(long)` place does not accept a
     /// `func(double)` even though a `long` reaches a `double` on its
@@ -1541,10 +1222,8 @@ pub const FunctionBuilder = struct {
         if (!info.return_type.eql(wants.result)) return false;
         for (
             info.parameter_types[first..],
-            info.parameter_modes[first..],
             wants.parameters,
-        ) |held, mode, parameter| {
-            if ((mode == .give) != parameter.gives) return false;
+        ) |held, parameter| {
             if (!held.eql(parameter.value_type)) return false;
         }
         return true;
@@ -1557,8 +1236,8 @@ pub const FunctionBuilder = struct {
         info: context.FunctionDeclInfo,
     ) Error![]const u8 {
         const parameters = try self.arena().alloc(types.Signature.Parameter, info.parameter_types.len);
-        for (info.parameter_types, info.parameter_modes, parameters) |held, mode, *parameter| {
-            parameter.* = .{ .value_type = held, .gives = mode == .give };
+        for (info.parameter_types, parameters) |held, *parameter| {
+            parameter.* = .{ .value_type = held };
         }
         const shape = try resolve.internSignature(self.analyzer, .{
             .parameters = parameters,
@@ -1568,22 +1247,6 @@ pub const FunctionBuilder = struct {
             return std.fmt.allocPrint(self.arena(), "a function answering {d} values", .{info.results.len});
         }
         return self.analyzer.typeName(shape);
-    }
-
-    /// Report a use of a poisoned name (S10, S29); true when poisoned.
-    pub fn checkPoisoned(self: *FunctionBuilder, info: *const LocalInfo, name: []const u8, span: Span) Error!bool {
-        const why = info.poisoned orelse return false;
-        try self.fail(
-            "luce.sema.own",
-            span,
-            "{s} was {s} and cannot be touched again in this scope [OWNERSHIP.md {s}]",
-            .{
-                name,
-                if (why == .given) @as([]const u8, "given away") else "freed",
-                if (why == .given) @as([]const u8, "S10, S29") else "S6",
-            },
-        );
-        return true;
     }
 
     fn lowerOperands(self: *FunctionBuilder, operands: []const *ast.Expression) Error!?[]Typed {
@@ -1775,24 +1438,17 @@ pub const FunctionBuilder = struct {
         operands: []const *ast.Expression,
         landing: Landing,
     ) Error!?[]Typed {
-        const run = (try self.lowerOperandsIntoTracking(operands, landing, null)) orelse return null;
+        const run = (try self.lowerOperandsIntoTracking(operands, landing)) orelse return null;
         return run.values;
     }
 
-    /// The ordinary operand walk, optionally recording the revision of
-    /// each bare owning name at the moment that operand is staged.  Only
-    /// shaped returns need the observation; all other callers use the
-    /// wrapper above and pay no bookkeeping cost.
+    /// The ordinary operand walk: lower each operand into the place it
+    /// lands on and record the batch's per-operand defensive copies.
     pub fn lowerOperandsIntoTracking(
         self: *FunctionBuilder,
         operands: []const *ast.Expression,
         landing: Landing,
-        staged_owners: ?[]?StagedOperandOwner,
     ) Error!?OperandRun {
-        if (staged_owners) |owners| {
-            std.debug.assert(owners.len == operands.len);
-            @memset(owners, null);
-        }
         const wide = operands.len > inline_operands;
 
         const values = try self.arena().alloc(Typed, operands.len);
@@ -1849,19 +1505,6 @@ pub const FunctionBuilder = struct {
             else
                 (try self.lowerExpression(expression, false)) orelse return null;
             values[index] = value;
-            if (staged_owners) |owners| {
-                if (expression.* == .name) {
-                    if (self.findLocal(expression.name.text)) |found| {
-                        if (found.info.carries and found.info.class == .owned) {
-                            owners[index] = .{
-                                .local = found.info.local,
-                                .revision = found.info.revision,
-                                .name = expression.name.text,
-                            };
-                        }
-                    }
-                }
-            }
             // The residual hazard copy-on-store leaves open
             // (docs/STRINGS.md): this value may be a *borrow* of an
             // element's or a field's bytes, and an operand still to
@@ -1941,22 +1584,15 @@ pub const FunctionBuilder = struct {
 
         const value = (try self.lowerExpressionInner(expression, as_statement)) orelse return null;
         if (value.value_type == .none) return value;
-        // Every ownership-yielding object is parked as a statement
-        // temporary (S3).  Whatever adopts it — a binding, a
-        // container, a give parameter, a return — re-owns it at run
-        // time, which turns the parked release into a no-op.
-        const objects = shapes.carriesObjects(self.analyzer, value.value_type) and
-            try self.yieldsOwnership(expression) and
-            !ledger.parkedAlready(self, value.node);
-        // Freshly allocated storage is parked for the same reason and
-        // in the same slot, but the two questions differ: `give s`
-        // hands over an object while borrowing the struct run it sits
-        // in, and a string slice borrows without yielding anything
-        // (docs/STRINGS.md).
+        // Freshly allocated storage is parked as a statement temporary
+        // so the statement's end reclaims it (docs/STRINGS.md): a string
+        // `+`, a built struct or union run, a call's fresh result.  A
+        // string slice borrows and allocates nothing, so it parks
+        // nothing.
         const storage = shapes.ownsStorage(self.analyzer, value.value_type) and
             value.provenance() == .fresh and
             !ledger.parkedAlready(self, value.node);
-        if (objects or storage) try ledger.registerTemp(self, value, objects, storage, expression.span());
+        if (storage) try ledger.registerTemp(self, value, storage, expression.span());
         return value;
     }
 
@@ -2061,7 +1697,6 @@ pub const FunctionBuilder = struct {
                     try refusals.failUnknownName(self, name.text, name.span);
                     return null;
                 };
-                if (try self.checkPoisoned(found.info, name.text, name.span)) return null;
                 const local = found.info.local;
                 const local_type = recorder.localType(self, local);
                 // A narrowed local reads as its payload: the value is
@@ -2077,7 +1712,6 @@ pub const FunctionBuilder = struct {
                             .span = name.span,
                         } }),
                         .value_type = payload,
-                        .root = found.info.root,
                     };
                 }
                 // A name reads as a view of what its slot holds; the
@@ -2089,7 +1723,6 @@ pub const FunctionBuilder = struct {
                         .span = name.span,
                     } }),
                     .value_type = local_type,
-                    .root = found.info.root,
                 };
             },
             // `none` has no type of its own; every place that can
@@ -2169,8 +1802,6 @@ pub const FunctionBuilder = struct {
             .map_literal => |literal| return expressions.lowerMapLiteral(self, literal, wanted_container),
             .index => |index| return expressions.lowerIndex(self, index),
             .slice_range => |slice| return expressions.lowerSliceRange(self, slice),
-            .give => |give| return expressions.lowerGive(self, give),
-            .copy => |copied| return expressions.lowerCopy(self, copied),
             .try_call => |attempt| return self.lowerTry(attempt, as_statement, shape_position),
             .spawn => |worker| return calls.lowerSpawn(self, worker, as_statement),
             .lambda => |written| return self.lowerLambda(expression, written, wanted_function),
@@ -2242,11 +1873,10 @@ pub const FunctionBuilder = struct {
         // `registerLambda` hands them over resolved — and its body is
         // the one expression, as the statement that leaves with it.
         const parameters = try self.arena().alloc(ast.Parameter, written.parameters.len);
-        for (written.parameters, signature.parameters, parameters) |name, parameter, *slot| {
+        for (written.parameters, parameters) |name, *slot| {
             slot.* = .{
                 .name = name.text,
                 .name_span = name.span,
-                .mode = if (parameter.gives) .give else .borrow,
                 .type_name = .{ .name = "func", .span = name.span },
                 .span = name.span,
             };
@@ -2350,7 +1980,6 @@ pub const FunctionBuilder = struct {
         origin: nodes.NodeRef,
         span: Span,
     ) Error!Typed {
-        const objects = shapes.carriesObjects(self.analyzer, result_type);
         const storage = shapes.ownsStorage(self.analyzer, result_type);
 
         // A callee answering nothing has no value to carry: the
@@ -2374,20 +2003,17 @@ pub const FunctionBuilder = struct {
             .result = result_type,
             .span = origin.span(),
         } });
-        if (objects or storage) {
+        if (storage) {
             // The carried slot's park is recorded like every other
             // (coupling #3): at the park, settled at retractions.
             ledger.setPark(node, .{
                 .local = carried,
-                .objects = objects,
                 .storage = storage,
-                .released_objects = objects,
                 .released_storage = storage,
             });
             try self.temps.append(self.temporary(), .{
                 .local = carried,
                 .node = node,
-                .objects = objects,
                 .storage = storage,
                 // This slot is reloaded, so it must keep owning its
                 // storage: a borrowing slot would hand the reload the
@@ -2545,31 +2171,6 @@ pub const FunctionBuilder = struct {
         }
         const filed = fallback orelse return null;
 
-        // Both sides must agree on ownership, for the reason `else`
-        // does: the binding that receives the result either owns an
-        // object or does not, and that is one static fact (S1, S8).
-        //
-        // **Asked of the fallback only once it has lowered.**  A
-        // question about what an expression hands over presumes the
-        // expression exists, and `yieldsOwnership` is a reading of the
-        // written tree that answers "no" for a name nobody declared
-        // just as it does for a borrow.  Asked first, `f() catch
-        // Json.null` with no `Json` in scope reported an ownership
-        // disagreement about a thing that is not there; asked here,
-        // the unknown name refuses itself and a type mistake is not
-        // described as an ownership mistake either — the same order
-        // the argument batch keeps (`calls.zig`).
-        if (shapes.carriesObjects(self.analyzer, value.value_type) and
-            !(try self.yieldsOwnership(binary.right)))
-        {
-            try self.fail(
-                "luce.sema.own",
-                binary.span,
-                "the two sides of catch must agree on ownership: the call hands over a fresh object, so the fallback must too [OWNERSHIP.md S1, S8]",
-                .{},
-            );
-            return null;
-        }
         return .{
             .node = try recorder.recordNode(self, .{ .catch_expr = .{
                 .call = value.node,
@@ -2580,12 +2181,6 @@ pub const FunctionBuilder = struct {
             } }),
             .value_type = value.value_type,
         };
-    }
-
-    /// Pass one's entry to the root ledger, for the parameters it
-    /// declares before the walk starts (`flow.zig`).
-    pub fn setRoot(self: *FunctionBuilder, local: LocalId, state: RootState) void {
-        flow.setRoot(self, local, state);
     }
 
     /// The walk itself: pass one hands the body over here

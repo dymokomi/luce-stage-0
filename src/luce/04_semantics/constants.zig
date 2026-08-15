@@ -836,9 +836,6 @@ pub fn fold(
             }
             return constantError(analyzer, expression.span(), "file-scope const folds values or one flat literal container; new, slicing, and indexing belong in a function [CONSTANTS.md R-A, R-E]", .{});
         },
-        .give, .copy => {
-            return constantError(analyzer, expression.span(), "a constant initializer cannot take an ownership verb; give and copy belong in a function [OWNERSHIP.md S32]", .{});
-        },
         .try_call => {
             return constantError(analyzer, expression.span(), "a constant is folded at compile time and nothing can fail there; try belongs in a function", .{});
         },

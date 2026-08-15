@@ -100,12 +100,7 @@ pub fn print(allocator: Allocator, program: *const Program) error{OutOfMemory}![
             const parameter_type_name = try typeName(allocator, program, local.local_type);
             defer allocator.free(parameter_type_name);
             try appendPrint(&text, allocator, "{s}{s}: {s}", .{
-                if (local.inout)
-                    "inout "
-                else if (index < function.parameter_gives.len and function.parameter_gives[index])
-                    "give "
-                else
-                    "",
+                if (local.inout) "inout " else "",
                 local.name,
                 parameter_type_name,
             });
@@ -289,8 +284,6 @@ fn printInstruction(
             try appendPrint(text, allocator, "heap_new {s}", .{object_type_name});
             for (new.dims) |dimension| try appendPrint(text, allocator, ", r{d}", .{dimension});
         },
-        .object_bind => |bind| try appendPrint(text, allocator, "object_bind %{d}, r{d}", .{ bind.local, bind.value }),
-        .object_unbind => |unbind| try appendPrint(text, allocator, "object_unbind %{d}, r{d}", .{ unbind.local, unbind.value }),
         .jump => |target| try appendPrint(text, allocator, "jump b{d}", .{target}),
         .branch => |branch| try appendPrint(text, allocator, "branch r{d}, b{d}, b{d}", .{
             branch.condition,

@@ -2,16 +2,14 @@
 //! pass in this stage consults before it moves, duplicates, or deletes
 //! anything.
 //!
-//! Two questions come up over and over, and both are answered here so
+//! One question comes up over and over, and it is answered here so
 //! that the answer is written down once:
 //!
 //!   * `classify` — may a *later* instruction with the same operands
 //!     reuse this one's result, and may this one be deleted when
 //!     nothing reads it?
-//!   * `ownershipTransparent` — can this instruction change which
-//!     binding owns an object, or free one?
 //!
-//! Everything not named is `impure` / not transparent.  A new
+//! Everything not named is `impure`.  A new
 //! instruction or intrinsic is therefore pessimised rather than
 //! silently assumed harmless — the switches below are exhaustive, so
 //! adding one is a compile error here first.
@@ -150,8 +148,6 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
         // A spawn makes a task nothing else is, and hands a thread
         // everything it was given (docs/THREADS.md D2).
         .spawn,
-        .object_bind,
-        .object_unbind,
         .jump,
         .branch,
         .ret,
@@ -243,16 +239,14 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         => .impure,
 
         // Value storage: one allocates and one frees, and the second
-        // is a deallocation like `object_unbind` — deleting an unread
-        // one would leak, and folding two would double free
-        // (docs/STRINGS.md).
+        // is a deallocation — deleting an unread one would leak, and
+        // folding two would double free (docs/STRINGS.md).
         .own_storage,
         .drop_storage,
         .export_storage,
         => .impure,
 
-        // Fresh objects, mutation, ownership verbs, and every host
-        // service.
+        // Fresh objects, mutation, and every host service.
         .index_set,
         .list_slice,
         .append_value,
@@ -260,8 +254,6 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         .pop_value,
         .insert_value,
         .remove_entry,
-        .free_object,
-        .give_object,
         .copy_object,
         .list_sort,
         .list_reverse,
@@ -396,10 +388,6 @@ pub fn viewStable(instruction: Instruction) bool {
         // Nothing resolved before it can be believed after it
         // (docs/THREADS.md).
         .spawn => false,
-        // Binding writes one row's owner field; unbinding is the
-        // scope-exit release, and that frees.
-        .object_bind => true,
-        .object_unbind => false,
 
         .intrinsic => |call| switch (call.kind) {
             // Scalars and text: no handle is resolved, nothing is
@@ -461,9 +449,8 @@ pub fn viewStable(instruction: Instruction) bool {
             .list_contains,
             => true,
 
-            // In place over elements already there, and `give` only
-            // re-labels an owner.
-            .list_sort, .list_reverse, .give_object => true,
+            // In place over elements already there.
+            .list_sort, .list_reverse => true,
 
             // Value storage only: a string's bytes and a struct's
             // field run are not the object table and not an array's
@@ -472,9 +459,7 @@ pub fn viewStable(instruction: Instruction) bool {
 
             // Attaches a fresh object, so the table may grow.
             .list_slice, .map_keys, .map_values, .copy_object => false,
-            // Frees something, or replaces an element that owned
-            // something.
-            .free_object,
+            // Replaces an element that owned something.
             .index_set,
             .array_fill,
             .pop_value,
@@ -537,83 +522,5 @@ pub fn viewStable(instruction: Instruction) bool {
             // rows to *this* table.
             .task_wait => false,
         },
-    };
-}
-
-/// Can this instruction change which binding owns an object, or free
-/// one?  `false` for anything that can, which is the safe answer.
-///
-/// Ownership lives in one field per object (`runtime/heap.zig`), and
-/// only `object_bind`, `object_unbind`, the ownership verbs, container
-/// adoption, and a call can write it.
-///
-/// `heap_new` is excluded, but not because it could disturb anything.
-/// It does take a row a freed object vacated — rows are reused
-/// (`runtime/heap.zig`) — and it still cannot be confused with the
-/// object that left, because the row's generation moved when that one
-/// died and a fresh object is named at the new one.  So a `heap_new`
-/// writes the owner field of a row nothing else can still be talking
-/// about, and touches no other.  It is simply not on the list because
-/// no pass has needed it to be — the pattern this serves has its
-/// allocation before the binds, not between them.
-pub fn ownershipTransparent(function: *const Function, instruction: Instruction) bool {
-    return switch (instruction) {
-        .const_boolean,
-        .const_long,
-        .const_double,
-        .const_string,
-        .const_container,
-        .local_get,
-        .local_set,
-        .struct_get,
-        .struct_make,
-        .struct_set,
-        // A union value's run holds no owner field: the trio copies
-        // and reads values, exactly as the struct trio does.
-        .variant_make,
-        .variant_tag,
-        .variant_field,
-        .binary,
-        .unary,
-        .convert,
-        => true,
-        .intrinsic => |call| switch (call.kind) {
-            // Scalar and text work only: no handle is resolved, no
-            // owner is read or written, nothing is freed.
-            .abs,
-            .min,
-            .max,
-            .clamp,
-            .sqrt,
-            .floor,
-            .ceil,
-            .trunc,
-            .compare_long_double,
-            .string_slice,
-            .string_byte,
-            .string_find_byte,
-            .parse_int,
-            .parse_float,
-            .chr_code,
-            .ord_text,
-            .null_object,
-            .none_value,
-            .is_none,
-            .optional_wrap,
-            .optional_unwrap,
-            // Copying and releasing value storage never reads or
-            // writes an owner field: an object field of a struct
-            // aliases through a copy and is untouched by a release
-            // (docs/STRINGS.md, S26).
-            .own_storage,
-            .drop_storage,
-            .export_storage,
-            .shell_run,
-            .term_event_data,
-            => true,
-            .str_value => function.result_types[call.arguments[0]] != .heap,
-            else => false,
-        },
-        else => false,
     };
 }

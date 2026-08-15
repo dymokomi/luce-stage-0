@@ -90,7 +90,6 @@ const builtin = @import("builtin");
 const mir = @import("../06_mir.zig");
 const optimize = @import("../07_optimize.zig");
 const loops = @import("loops.zig");
-const roots = @import("roots.zig");
 const runtime = @import("../runtime.zig");
 const types = @import("../support/types.zig");
 const abi = @import("abi.zig");
@@ -257,10 +256,6 @@ const Module = struct {
     /// `libluce_rt`.  The layout is asserted against the Zig struct in
     /// `runtime/value.zig`.
     value_type: Builder.Type = .none,
-    /// `{ ptr, i64, i32 }` — the aliased receiver slot and the owner
-    /// identity of the binding behind it.  Internal calling convention
-    /// only; it never crosses the published host ABI.
-    inout_type: Builder.Type = .none,
 
     /// The two alias scopes generated code distinguishes, built on
     /// first use (task #45): **rows** — the object table's rows, an
@@ -1173,7 +1168,6 @@ const Module = struct {
             .i64, // bits
             .i64, // length
         });
-        self.inout_type = try self.builder.structType(.normal, &.{ .ptr, .i64, .i32 });
         self.host_type = try self.builder.structType(
             .normal,
             &([_]Builder.Type{.ptr} ** abi.Slot.count),
@@ -2074,7 +2068,7 @@ const Module = struct {
         for (function.locals[0..function.parameter_count]) |parameter| {
             try parameters.append(
                 self.gpa,
-                if (parameter.inout) self.inout_type else try self.valueType(parameter.local_type),
+                if (parameter.inout) .ptr else try self.valueType(parameter.local_type),
             );
         }
         if (function.return_type != .none) {
@@ -2827,25 +2821,15 @@ const Body = struct {
     current: mir.Register = 0,
     /// Where `alloca`s go, no matter where the walk currently is.
     entry_block: BlockIndex = undefined,
-    /// This call's ownership serial, minted in the entry block the
-    /// first time a binding needs one.  `.none` until then: a function
-    /// that owns nothing never asks for one.
-    serial: Builder.Value = .none,
-    /// The descriptor logical local zero arrived in with, and its
-    /// inherited owner pair.  `.none` in an ordinary function.
+    /// The aliased receiver slot logical local zero arrived in with, an
+    /// ordinary pointer parameter.  `.none` in an ordinary function.
     inout: Builder.Value = .none,
-    inout_serial: Builder.Value = .none,
-    inout_local: Builder.Value = .none,
 
     /// What each IR register produced.  Registers never cross blocks
     /// (the verifier enforces it), so one array per function is enough.
     produced: []Produced = &.{},
     /// One entry-block `alloca` per Luce local.
     local_slots: []Builder.Value = &.{},
-    /// Whether each heap register may name an immutable program root,
-    /// derived from this final MIR rather than trusted from the front
-    /// end (`roots.zig`).
-    roots: roots.Plan = .{},
     /// The first LLVM block of each IR block.  An IR block that
     /// contains a checked operation continues into further LLVM blocks,
     /// which no jump ever targets.
@@ -2873,7 +2857,6 @@ const Body = struct {
         const gpa = self.module.gpa;
         gpa.free(self.produced);
         gpa.free(self.local_slots);
-        self.roots.deinit(gpa);
         gpa.free(self.blocks);
         self.views.deinit(gpa);
         self.view_bounds.deinit(gpa);
@@ -2904,7 +2887,6 @@ const Body = struct {
         @memset(self.produced, .{});
         self.local_slots = try gpa.alloc(Builder.Value, function.locals.len);
         @memset(self.local_slots, .none);
-        self.roots = try roots.plan(gpa, function);
         self.blocks = try gpa.alloc(BlockIndex, function.blocks.len);
 
         if (function.return_type != .none) {
@@ -2995,8 +2977,6 @@ const Body = struct {
                 .call_inout,
                 .intrinsic,
                 .heap_new,
-                .object_bind,
-                .object_unbind,
                 => return self.fail("a block without a terminator"),
             }
         }
@@ -3030,9 +3010,7 @@ const Body = struct {
         for (function.locals, self.local_slots, 0..) |local, *slot, index| {
             if (local.inout) {
                 self.inout = self.wip.arg(@intCast(index + 3));
-                slot.* = try self.wip.extractValue(self.inout, &.{0}, "inout.slot");
-                self.inout_serial = try self.wip.extractValue(self.inout, &.{1}, "inout.serial");
-                self.inout_local = try self.wip.extractValue(self.inout, &.{2}, "inout.local");
+                slot.* = self.inout;
                 continue;
             }
             slot.* = try self.wip.alloca(
@@ -3707,24 +3685,6 @@ const Body = struct {
         return self.wip.load(.normal, .i8, address, byte_alignment, name);
     }
 
-    /// This call's ownership serial, minted once in the entry block.
-    fn frameSerial(self: *Body) Error!Builder.Value {
-        if (self.serial != .none) return self.serial;
-        const resume_at = self.wip.cursor;
-        const filled = self.entry_block.ptr(self.wip).instructions.items.len;
-        std.debug.assert(filled > 0);
-        self.wip.cursor = .{ .block = self.entry_block, .instruction = @intCast(filled - 1) };
-        self.serial = try self.module.callService(
-            self.wip,
-            .luce_rt_serial,
-            .i64,
-            &.{self.runtime},
-            "serial",
-        );
-        self.wip.cursor = resume_at;
-        return self.serial;
-    }
-
     /// What this function hands a callee: one less frame than it has
     /// itself.  Computed once, in the entry block, the first time the
     /// function calls anything — a leaf function never subtracts.
@@ -4112,9 +4072,9 @@ const Body = struct {
     const ElementView = struct {
         /// The MIR register whose handle this resolves.
         register: mir.Register,
-        /// The resolved object-table row.  Inline mutations inspect its
-        /// owner after the ordinary null/stale checks, matching
-        /// `Runtime.resolveMutable` without giving up the scalar path.
+        /// The resolved object-table row.  Inline mutations reach it
+        /// after the ordinary null/stale checks, without giving up the
+        /// scalar path.
         row: Builder.Value,
         /// `Object.dims.ptr`, or `.none` for a List and for a rank-1
         /// array, neither of which reads it: their one bound is
@@ -4430,39 +4390,6 @@ const Body = struct {
         return made;
     }
 
-    /// Reject a program-root row before an inline mutation.  The row
-    /// has already passed the null and generation checks, so this is
-    /// exactly the owner half of `Runtime.resolveMutable`: callers
-    /// through an unknown parameter alias cannot mutate a constant
-    /// merely because their scalar element type selected generated
-    /// storage instead of a runtime container call.
-    fn checkMutableRow(
-        self: *Body,
-        target: mir.Register,
-        row: Builder.Value,
-    ) Error!void {
-        // `roots` proves this from the final MIR, so a decoded module
-        // cannot forge a trusted bit.  A fresh row can never become a
-        // program root after the constants prologue has finished.
-        if (!self.roots.mayProgramRoot(target)) return;
-        const owner = try self.rowLoad(
-            .normal,
-            .i32,
-            try self.byteOffset(row, runtime.layout.owner_kind, "owner.at"),
-            Builder.Alignment.fromByteUnits(@alignOf(u32)),
-            "owner",
-        );
-        try self.check(
-            try self.wip.icmp(
-                .eq,
-                owner,
-                try self.module.builder.intValue(.i32, runtime.layout.owner_program),
-                "immutable",
-            ),
-            .immutable_object,
-        );
-    }
-
     /// The address of the element `indices` names, bound-checked axis
     /// by axis and flattened exactly as `heap.flattenIndex` does it.
     fn elementAddress(
@@ -4613,7 +4540,6 @@ const Body = struct {
         const one = try builder.intValue(.i64, 1);
 
         const row = try self.resolveRow(target);
-        try self.checkMutableRow(target, row);
         const count_at = try self.byteOffset(row, runtime.layout.elements_count, "count.at");
         const count = try self.rowLoad(.normal, .i64, count_at, value_alignment, "count");
         const capacity = try self.rowLoad(
@@ -5621,12 +5547,6 @@ const Body = struct {
             .spawn => |called| try self.emitSpawn(register, called),
             .intrinsic => |called| try self.emitIntrinsic(register, called),
             .heap_new => |new| try self.emitHeapNew(register, new),
-            .object_bind => |bind| try self.emitOwnership(.luce_rt_bind, bind.value, bind.local),
-            .object_unbind => |unbind| try self.emitOwnership(
-                .luce_rt_unbind,
-                unbind.value,
-                unbind.local,
-            ),
             .jump => |target| {
                 _ = try self.wip.br(self.blocks[target]);
             },
@@ -5640,22 +5560,6 @@ const Body = struct {
             },
             .ret => |value| {
                 if (value) |returned| {
-                    // Whatever this frame still owned in the returned
-                    // value moves to the caller (S16): loose until
-                    // something there binds it.  A struct is walked too,
-                    // because its fields may hold objects — and a union
-                    // is that walk with the tag in front (docs/UNION.md
-                    // D8, D9).
-                    if (self.function.return_type == .heap or
-                        self.function.return_type == .strukt or
-                        self.function.return_type == .variant)
-                    {
-                        _ = try self.callRuntime(.luce_rt_loosen_from_frame, .void, &.{
-                            self.runtime,
-                            try self.boxedRegister(returned, "returned"),
-                            try self.frameSerial(),
-                        }, "");
-                    }
                     _ = try self.wip.store(
                         .normal,
                         self.produced[returned].value,
@@ -6584,19 +6488,15 @@ const Body = struct {
         }
     }
 
-    /// Descriptor for a writing receiver.  Calling another writing
-    /// method on `self` forwards the descriptor unchanged; calling one
-    /// on an ordinary local names that slot and this frame's owner.
+    /// Descriptor for a writing receiver: the pointer to the aliased
+    /// slot.  Calling another writing method on `self` forwards it
+    /// unchanged; calling one on an ordinary local names that slot.
     fn inoutDescriptor(self: *Body, local: mir.LocalId) Error!Builder.Value {
         if (self.function.locals[local].inout) {
             std.debug.assert(self.inout != .none);
             return self.inout;
         }
-        return self.wip.buildAggregate(self.module.inout_type, &.{
-            self.local_slots[local],
-            try self.frameSerial(),
-            try self.module.builder.intValue(.i32, local),
-        }, "inout");
+        return self.local_slots[local];
     }
 
     /// A call **through a function value** (docs/FUNCTIONS.md D2).
@@ -7192,7 +7092,6 @@ const Body = struct {
                 if (self.elementShape(of[0])) |shape| {
                     if (ownsNothing(shape.element)) {
                         const view = try self.elementView(of[0], shape);
-                        try self.checkMutableRow(of[0], view.row);
                         const address = try self.elementAddress(
                             view,
                             shape.element,
@@ -7338,26 +7237,6 @@ const Body = struct {
                 try self.boxedRegister(of[0], "target"),
                 try self.boxedRegister(of[1], "element"),
             }),
-            .free_object => {
-                const owner = try self.namedBinding(of);
-                try self.callChecked(.luce_rt_free, &.{
-                    rt,
-                    try self.boxedRegister(of[0], "target"),
-                    owner.owned,
-                    owner.serial,
-                    owner.local,
-                });
-            },
-            .give_object => {
-                const owner = try self.namedBinding(of);
-                try self.callAnswering(register, .luce_rt_give, &.{
-                    rt,
-                    try self.boxedRegister(of[0], "target"),
-                    owner.owned,
-                    owner.serial,
-                    owner.local,
-                });
-            },
             .copy_object => try self.callAnswering(register, .luce_rt_copy, &.{
                 rt,
                 try self.boxedRegister(of[0], "target"),
@@ -8069,59 +7948,6 @@ const Body = struct {
                 });
             },
         }
-    }
-
-    /// `object_bind` / `object_unbind`: the binding that received a
-    /// fresh object owns it, and releases it when the scope exits
-    /// (docs/OWNERSHIP.md).
-    fn emitOwnership(
-        self: *Body,
-        which: Service,
-        value: mir.Register,
-        local: mir.LocalId,
-    ) Error!void {
-        const owner = try self.ownerOf(local);
-        _ = try self.callRuntime(which, .void, &.{
-            self.runtime,
-            try self.boxedRegister(value, "bound"),
-            owner.serial,
-            owner.local,
-        }, "");
-    }
-
-    fn ownerOf(self: *Body, local: mir.LocalId) Error!struct {
-        serial: Builder.Value,
-        local: Builder.Value,
-    } {
-        if (self.function.locals[local].inout) {
-            std.debug.assert(self.inout_serial != .none and self.inout_local != .none);
-            return .{ .serial = self.inout_serial, .local = self.inout_local };
-        }
-        return .{
-            .serial = try self.frameSerial(),
-            .local = try self.module.builder.intValue(.i32, local),
-        };
-    }
-
-    /// The binding `free`/`give` must verify against.  A second
-    /// argument names an owned local; without one the verb only checks
-    /// that no container owns the object (S6, S23).
-    fn namedBinding(self: *Body, arguments: []const mir.Register) Error!struct {
-        owned: Builder.Value,
-        serial: Builder.Value,
-        local: Builder.Value,
-    } {
-        const builder = self.module.builder;
-        if (arguments.len != 2) return .{
-            .owned = try builder.intValue(.i32, 0),
-            .serial = try builder.intValue(.i64, 0),
-            .local = try builder.intValue(.i32, 0),
-        };
-        return .{
-            .owned = try builder.intValue(.i32, 1),
-            .serial = try self.frameSerial(),
-            .local = try self.wip.cast(.trunc, self.produced[arguments[1]].value, .i32, "local"),
-        };
     }
 
     /// `trap("...")` reports and unwinds from the middle of a block, so

@@ -59,14 +59,6 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     for (program.signatures) |signature| {
         for (signature.parameters) |parameter| {
             try verifyType(program, parameter.value_type);
-            // `give` is an ownership operation, never a decorative bit on
-            // a scalar or a function value.  Stage 4 refuses that spelling;
-            // keep unused decoded signatures under the same rule.
-            if (parameter.gives and
-                !try typeCarriesObjects(allocator, program, parameter.value_type))
-            {
-                return error.BadFunction;
-            }
         }
         try verifyType(program, signature.result);
     }
@@ -147,14 +139,13 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     // what `decode` exists to refuse.
     for (program.functions) |*function| {
         if (function.parameter_count > function.locals.len) return error.BadLocal;
-        if (function.parameter_gives.len != function.parameter_count) return error.BadFunction;
         for (function.locals, 0..) |local, index| {
             if (!local.inout) continue;
             if (index != 0 or function.parameter_count == 0) return error.BadLocal;
         }
     }
-    for (program.functions, 0..) |*function, function_index| {
-        try verifyFunction(allocator, program, function, @intCast(function_index));
+    for (program.functions) |*function| {
+        try verifyFunction(allocator, program, function);
     }
     if (program.entry_function >= program.functions.len) return error.BadFunction;
     const entry = &program.functions[program.entry_function];
@@ -482,11 +473,9 @@ fn verifyFunction(
     allocator: Allocator,
     program: *const Program,
     function: *const Function,
-    function_index: u32,
 ) VerifyError!void {
     if (function.blocks.len == 0) return error.EmptyFunction;
     if (function.parameter_count > function.locals.len) return error.BadLocal;
-    if (function.parameter_gives.len != function.parameter_count) return error.BadFunction;
     if (function.instructions.len != function.result_types.len) return error.BadFunction;
     if (function.origins.len != 0 and function.origins.len != function.instructions.len)
         return error.BadFunction;
@@ -502,15 +491,10 @@ fn verifyFunction(
         }
     }
     for (function.result_types) |result_type| try verifyType(program, result_type);
-    for (function.locals[0..function.parameter_count], function.parameter_gives, 0..) |local, gives, index| {
-        if (gives and !try typeCarriesObjects(allocator, program, local.local_type)) {
-            return error.BadFunction;
-        }
-        // Ordinary parameters borrow value storage from their caller; the
-        // callee owns only the object graph when `give` says so.  The one
-        // exception is a writing receiver, which is an explicit inout
-        // place and may carry a boxed value slot.
-        if (index == 0 and local.inout and gives) return error.BadFunction;
+    for (function.locals[0..function.parameter_count]) |local| {
+        // Ordinary parameters borrow value storage from their caller; only
+        // a writing receiver, an explicit inout place, may carry a boxed
+        // value slot.
         if (!local.inout and local.owns_storage) return error.BadLocal;
     }
 
@@ -532,7 +516,7 @@ fn verifyFunction(
             if (instruction.isTerminator() != last) {
                 return if (last) error.UnterminatedBlock else error.MisplacedTerminator;
             }
-            try verifyInstruction(allocator, program, function, function_index, &defined, item, instruction);
+            try verifyInstruction(allocator, program, function, &defined, item, instruction);
             try verifyErrorHandling(program, function, block.items, position, item);
             try defined.put(allocator, item, {});
         }
@@ -778,7 +762,6 @@ fn expectSignature(
     for (signature.parameters, 0..) |parameter, index| {
         const callee_index = bound + index;
         try expectType(callee.locals[callee_index].local_type, parameter.value_type);
-        if (callee.parameter_gives[callee_index] != parameter.gives) return error.BadFunction;
     }
     try expectType(callee.return_type, signature.result);
 }
@@ -795,7 +778,6 @@ fn verifyInstruction(
     allocator: Allocator,
     program: *const Program,
     function: *const Function,
-    function_index: u32,
     defined: *const std.AutoHashMapUnmanaged(Register, void),
     register: Register,
     instruction: Instruction,
@@ -1100,32 +1082,6 @@ fn verifyInstruction(
             if (!result.eql(signature.result)) return error.TypeMismatch;
         },
         .intrinsic => |intrinsic| try verifyIntrinsic(allocator, program, function, defined, register, intrinsic),
-        .object_bind => |bind| {
-            try expectType(result, .none);
-            if (bind.local >= function.locals.len) return error.BadLocal;
-            if (!localMayOwnObjects(program, function, function_index, bind.local)) {
-                return error.BadFunction;
-            }
-            const value = try operandType(function, defined, bind.value);
-            if (!try typeCarriesObjects(allocator, program, function.locals[bind.local].local_type) or
-                !try typeCarriesObjects(allocator, program, value))
-            {
-                return error.BadLocal;
-            }
-        },
-        .object_unbind => |unbind| {
-            try expectType(result, .none);
-            if (unbind.local >= function.locals.len) return error.BadLocal;
-            if (!localMayOwnObjects(program, function, function_index, unbind.local)) {
-                return error.BadFunction;
-            }
-            const value = try operandType(function, defined, unbind.value);
-            if (!try typeCarriesObjects(allocator, program, function.locals[unbind.local].local_type) or
-                !try typeCarriesObjects(allocator, program, value))
-            {
-                return error.BadLocal;
-            }
-        },
         .heap_new => |new| {
             if (new.heap >= program.heap_types.len) return error.BadStruct;
             const expected_dims: usize = switch (program.heap_types[new.heap]) {
@@ -1170,26 +1126,6 @@ fn verifyInstruction(
             if (!function.fallible) return error.NotFallible;
         },
     }
-}
-
-/// Whether an ownership walk may name `local` as its binding owner.
-/// Ordinary locals remain conservative: stage 4's ownership class is
-/// intentionally not duplicated in MIR, so a local may become an owner
-/// after a fresh/give result is stored.  Parameters are different: their
-/// ownership class is part of the function contract and is already on the
-/// wire.  A borrowed parameter cannot bind or unbind the caller's graph;
-/// only a `give` parameter, an inout receiver, or the runtime-owned entry
-/// argument may do so.
-fn localMayOwnObjects(
-    program: *const Program,
-    function: *const Function,
-    function_index: u32,
-    local: defs.LocalId,
-) bool {
-    if (local >= function.parameter_count) return true;
-    if (function.locals[local].inout) return true;
-    if (function_index == program.entry_function) return true;
-    return function.parameter_gives[local];
 }
 
 /// Can the instruction in `register` come back errored rather than
@@ -1578,22 +1514,6 @@ fn verifyIntrinsic(
             if (try heapShape(program, arguments[0]) != .array) return error.BadIntrinsic;
             try expectType(arguments[1], .long);
             try expectType(result, .long);
-        },
-        .free_object => {
-            if (arguments.len < 1 or arguments.len > 2) return error.BadIntrinsic;
-            if (arguments[0] != .heap) return error.BadIntrinsic;
-            if (arguments.len == 2) try expectType(arguments[1], .long);
-            try expectType(result, .none);
-        },
-        .give_object => {
-            if (arguments.len < 1 or arguments.len > 2) return error.BadIntrinsic;
-            // A union value is a field run with a tag in slot 0, so it
-            // travels the verbs exactly as a struct value does
-            // (docs/UNION.md D8, D9).
-            if (arguments[0] != .heap and arguments[0] != .strukt and arguments[0] != .variant)
-                return error.BadIntrinsic;
-            if (arguments.len == 2) try expectType(arguments[1], .long);
-            try expectType(result, arguments[0]);
         },
         .copy_object => {
             try exactly(arguments, 1);
@@ -1997,69 +1917,6 @@ fn comparisonIsRefused(allocator: Allocator, program: *const Program, of: Type) 
                 }
             },
             else => {},
-        }
-    }
-    return false;
-}
-
-/// Whether a value's static shape contains an object that an ownership
-/// instruction can bind or release.
-///
-/// A heap type is itself an object; its element graph is already behind the
-/// handle and must not be expanded here.  Structs and unions are the only
-/// shapes whose fields are walked, and the optional wrapper contributes no
-/// new representation.  Keeping this answer at the verifier boundary stops
-/// forged `object_bind`/`object_unbind` instructions from assigning an object
-/// to a scalar owner, or from making a scalar look like an ownership walk.
-fn typeCarriesObjects(allocator: Allocator, program: *const Program, of: Type) VerifyError!bool {
-    const seen_structs = try allocator.alloc(bool, program.structs.len);
-    defer allocator.free(seen_structs);
-    @memset(seen_structs, false);
-
-    const seen_variants = try allocator.alloc(bool, program.variants.len);
-    defer allocator.free(seen_variants);
-    @memset(seen_variants, false);
-
-    var pending: std.ArrayList(Type) = .empty;
-    defer pending.deinit(allocator);
-    try pending.append(allocator, of);
-
-    while (pending.items.len != 0) {
-        const current = pending.pop().?;
-        switch (current) {
-            .heap => return true,
-            .optional => |payload| try pending.append(allocator, payload.asType()),
-            .strukt => |index| {
-                if (index >= program.structs.len) return error.BadStruct;
-                if (seen_structs[index]) continue;
-                seen_structs[index] = true;
-                for (program.structs[index].fields) |field| {
-                    try pending.append(allocator, field.field_type);
-                }
-            },
-            .variant => |index| {
-                if (index >= program.variants.len) return error.BadStruct;
-                if (seen_variants[index]) continue;
-                seen_variants[index] = true;
-                for (program.variants[index].members) |member| {
-                    for (member.fields) |field| {
-                        try pending.append(allocator, field.field_type);
-                    }
-                }
-            },
-            .none,
-            .boolean,
-            .byte,
-            .short,
-            .int,
-            .long,
-            .half,
-            .float,
-            .double,
-            .string,
-            .enumeration,
-            .function,
-            => {},
         }
     }
     return false;

@@ -1,12 +1,17 @@
 //! List, Map, Array, and Builder — every container operation Luce has,
-//! and the three ownership verbs (`free`, `give`, `copy`) that act on
-//! whole objects.
+//! and the `copy` verb that deep-copies a whole object.
 //!
 //! Each function here takes values rather than IR registers, so the
 //! interpreter and compiled code reach the same body by the same path.
 //! Where an operation is polymorphic in Luce (`a[i]` reads a list, a
 //! map, or an array) it is polymorphic here too: the object's own kind
 //! decides, exactly as it does in the language.
+//!
+//! **No object is freed while a program runs.**  An element overwritten,
+//! removed, or cleared leaks until the runtime's final sweep; only its
+//! *value storage* — a String's bytes, a struct value's field run — is
+//! given back at the store site, through `dropStorage`.  An object row
+//! is reclaimed only at `Runtime.deinit`.
 
 const std = @import("std");
 const heap = @import("heap.zig");
@@ -14,7 +19,6 @@ const operators = @import("operators.zig");
 const value = @import("value.zig");
 
 const Error = heap.Error;
-const OwnedBy = heap.OwnedBy;
 const Runtime = heap.Runtime;
 const Value = value.Value;
 
@@ -87,16 +91,12 @@ pub fn indexGet(runtime: *Runtime, target: Value, indices: []const Value) Error!
 /// already exists must not pay for a copy of a key it will not keep.
 pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: Value) Error!void {
     const stored = held;
-    var consume_on_failure = false;
-    errdefer {
-        if (consume_on_failure) runtime.freeValue(stored) else runtime.dropStorage(stored);
-    }
+    // `stored` is consumed.  On an error return its value storage goes
+    // back; any objects it carries leak until the run ends, like every
+    // other object.
+    errdefer runtime.dropStorage(stored);
     const object = try runtime.resolveMutable(target);
     try requireIndexRank(runtime, object, indices);
-    // Validate the incoming ownership before releasing the old cell.  On
-    // a forged store this preserves both the destination and the graph it
-    // tried to alias.
-    try runtime.checkGivable(stored, null);
     switch (object.data) {
         .list => {
             try requireLongIndex(runtime, indices[0]);
@@ -104,12 +104,11 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
             if (index < 0 or index >= object.elements.count) {
                 return runtime.fail(.index_bounds);
             }
-            try runtime.ensureAcyclicAdoption(target.asObject(), stored);
-            consume_on_failure = true;
-            // An element overwrite frees the old owned element (S22);
-            // only a `Value` cell can be holding one.
+            // An element overwrite drops the old cell's value storage;
+            // the old object, if any, leaks until the final sweep.  Only
+            // a `Value` cell can be holding storage.
             if (object.elements.kind == .value) {
-                runtime.freeValue(object.elements.at(@intCast(index)));
+                runtime.dropStorage(object.elements.at(@intCast(index)));
             }
             object.elements.put(@intCast(index), stored);
         },
@@ -117,15 +116,11 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
             const key = indices[0];
             try requireMapKey(runtime, key);
             if (map.find(&key)) |at| {
-                try runtime.ensureAcyclicAdoption(target.asObject(), stored);
-                consume_on_failure = true;
-                runtime.freeValue(map.entries.items[at].value);
+                runtime.dropStorage(map.entries.items[at].value);
                 map.entries.items[at].value = stored;
             } else {
-                try runtime.ensureAcyclicAdoption(target.asObject(), stored);
-                consume_on_failure = true;
-                // A fresh entry owns its key too, and frees it with
-                // itself.
+                // A fresh entry owns its key too, and its storage is
+                // freed with the map at the final sweep.
                 const owned_key = try runtime.ownValue(key);
                 errdefer runtime.dropStorage(owned_key);
                 try map.insert(runtime.objects, .{ .key = owned_key, .value = stored });
@@ -135,18 +130,16 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
             for (indices) |index| try requireLongIndex(runtime, index);
             const flat = heap.flattenIndex(object.dims, indices) orelse
                 return runtime.fail(.index_bounds);
-            try runtime.ensureAcyclicAdoption(target.asObject(), stored);
-            consume_on_failure = true;
-            // An element overwrite frees the old owned element (S22);
-            // only a `Value` cell can be holding one.
+            // An element overwrite drops the old cell's value storage;
+            // the old object, if any, leaks until the final sweep.  Only
+            // a `Value` cell can be holding storage.
             if (object.elements.kind == .value) {
-                runtime.freeValue(object.elements.at(flat));
+                runtime.dropStorage(object.elements.at(flat));
             }
             object.elements.put(flat, stored);
         },
         .builder, .file, .task => return runtime.fail(.not_owned),
     }
-    runtime.adoptInto(target.asObject(), stored);
 }
 
 /// The verifier normally makes rank a type fact, but this is also the
@@ -214,28 +207,12 @@ pub fn append(runtime: *Runtime, target: Value, held: Value) Error!void {
     const object = try runtime.resolve(target);
     switch (object.data) {
         .list => {
-            var consume_on_failure = false;
-            errdefer {
-                if (consume_on_failure) runtime.freeValue(held) else runtime.dropStorage(held);
-            }
+            // A List consumes `held`, even when the immutable backstop
+            // rejects the write: on any error its value storage goes
+            // back and any objects it carries leak until the run ends.
+            errdefer runtime.dropStorage(held);
             try runtime.requireMutable(object);
-            // A retaining store consumes an owned value.  The semantic
-            // stage normally proves this before lowering, but the runtime
-            // is also the backstop for decoded or hostile MIR: accepting a
-            // child that another container already owns would leave the
-            // graph with two edges and only one owner field.
-            try runtime.checkGivable(held, null);
-            // String and scalar appends cannot add an ownership edge.
-            // Keep their hot runtime path to the one growth/store call
-            // they had before cycle validation; only an object handle or
-            // a struct can carry the child whose ancestry needs checking.
-            const may_carry_objects = held.tag == .object or held.tag == .strukt;
-            if (may_carry_objects) {
-                try runtime.ensureAcyclicAdoption(target.asObject(), held);
-            }
-            consume_on_failure = true;
             try object.elements.append(runtime.objects, held);
-            if (may_carry_objects) runtime.adoptInto(target.asObject(), held);
         },
         .builder => {
             try runtime.requireMutable(object);
@@ -258,45 +235,33 @@ pub fn appendAscii(runtime: *Runtime, target: Value, code: i64) Error!void {
     }
 }
 
-/// `xs.pop()`.  pop hands the element out of the container (S22);
-/// whatever receives it owns it next.
+/// `xs.pop()`.  pop hands the element out of the container; whatever
+/// receives it holds it next.
 pub fn pop(runtime: *Runtime, target: Value) Error!Value {
     const object = try runtime.resolveMutable(target);
     switch (object.data) {
         .list => {},
         .map, .array, .builder, .file, .task => return runtime.fail(.not_owned),
     }
-    const taken = object.elements.pop() orelse return runtime.fail(.empty_collection);
-    runtime.loosen(taken);
-    return taken;
+    return object.elements.pop() orelse return runtime.fail(.empty_collection);
 }
 
 /// `xs.insert(i, v)`.  **Consumes `held`** (docs/STRINGS.md), including
-/// on the out-of-range trap: nothing the caller handed over is left
-/// without an owner.
+/// on the out-of-range trap: its value storage always goes back.
 pub fn insert(runtime: *Runtime, target: Value, index: i64, held: Value) Error!void {
-    var consume_on_failure = false;
-    errdefer {
-        if (consume_on_failure) runtime.freeValue(held) else runtime.dropStorage(held);
-    }
+    errdefer runtime.dropStorage(held);
     const object = try runtime.resolveMutable(target);
     switch (object.data) {
         .list => {},
         .map, .array, .builder, .file, .task => return runtime.fail(.not_owned),
     }
     if (index < 0 or index > object.elements.count) return runtime.fail(.index_bounds);
-    // Keep the runtime boundary honest for hand-built MIR.  A container
-    // element cannot be inserted into a second owner without first being
-    // popped or copied.
-    try runtime.checkGivable(held, null);
-    try runtime.ensureAcyclicAdoption(target.asObject(), held);
-    consume_on_failure = true;
     try object.elements.insert(runtime.objects, @intCast(index), held);
-    runtime.adoptInto(target.asObject(), held);
 }
 
-/// `xs.remove(i)` or `m.remove(key)`.  Removing an owned element frees
-/// it (S22); removing a key a map does not hold does nothing.
+/// `xs.remove(i)` or `m.remove(key)`.  Removing an element drops its
+/// value storage; the removed object, if any, leaks until the final
+/// sweep.  Removing a key a map does not hold does nothing.
 pub fn remove(runtime: *Runtime, target: Value, which: Value) Error!void {
     const object = try runtime.resolveMutable(target);
     switch (object.data) {
@@ -306,14 +271,14 @@ pub fn remove(runtime: *Runtime, target: Value, which: Value) Error!void {
             if (index < 0 or index >= object.elements.count) {
                 return runtime.fail(.index_bounds);
             }
-            runtime.freeValue(object.elements.orderedRemove(@intCast(index)));
+            runtime.dropStorage(object.elements.orderedRemove(@intCast(index)));
         },
         .map => |*map| {
             try requireMapKey(runtime, which);
             if (map.find(&which)) |at| {
                 const removed = map.removeAt(at);
                 runtime.dropStorage(removed.key);
-                runtime.freeValue(removed.value);
+                runtime.dropStorage(removed.value);
             }
         },
         .array, .builder, .file, .task => return runtime.fail(.not_owned),
@@ -443,20 +408,21 @@ fn cellBefore(comptime kind: heap.Object.ElementKind) type {
     };
 }
 
-/// `xs.clear()` — clear frees all owned elements (S22).
+/// `xs.clear()` — drops every element's value storage; the elements'
+/// objects, if any, leak until the final sweep.
 pub fn clear(runtime: *Runtime, target: Value) Error!void {
     const object = try runtime.resolveMutable(target);
     switch (object.data) {
         .list => {
             if (object.elements.kind == .value) {
-                for (object.elements.cells(Value)) |item| runtime.freeValue(item);
+                for (object.elements.cells(Value)) |item| runtime.dropStorage(item);
             }
             object.elements.clear();
         },
         .map => |*map| {
             for (map.entries.items) |entry| {
                 runtime.dropStorage(entry.key);
-                runtime.freeValue(entry.value);
+                runtime.dropStorage(entry.value);
             }
             map.clear();
         },
@@ -517,10 +483,11 @@ fn emptyList(zero: Value) heap.Object.Elements {
 /// stored boxed because its length is not a fact of the type.
 const text_list: heap.Object.Elements = .{ .kind = .value };
 
-/// Give back a half-built run and the storage its elements own.
+/// Give back a half-built run and the value storage its elements own.
+/// Any objects among those elements leak until the final sweep.
 fn dropBuilt(runtime: *Runtime, listed: *heap.Object.Elements) void {
     if (listed.kind == .value) {
-        for (listed.cells(Value)) |item| runtime.freeValue(item);
+        for (listed.cells(Value)) |item| runtime.dropStorage(item);
     }
     listed.deinit(runtime.objects);
 }
@@ -638,7 +605,7 @@ pub fn mapValues(runtime: *Runtime, target: Value, zero: Value) Error!Value {
     errdefer dropBuilt(runtime, &listed);
     for (entries) |entry| {
         const duplicate = try runtime.deepCopy(entry.value);
-        errdefer runtime.freeValue(duplicate);
+        errdefer runtime.dropStorage(duplicate);
         try listed.append(runtime.objects, duplicate);
     }
     return runtime.attachList(listed);
@@ -696,17 +663,13 @@ pub fn mapPlace(runtime: *Runtime, target: Value, key: Value, zero: Value) Error
         .map => |*map| {
             try requireMapKey(runtime, key);
             if (map.find(&key)) |at| return map.entries.items[at].value;
-            // `zero` becomes the map's owned value on this path.  Refuse a
-            // value already owned by another container before allocating a
-            // key or publishing the entry.
-            try runtime.checkGivable(zero, null);
-            try runtime.ensureAcyclicAdoption(target.asObject(), zero);
+            // `zero` becomes the map's value on this path, copied into
+            // storage the map frees with itself at the final sweep.
             const owned_key = try runtime.ownValue(key);
             errdefer runtime.dropStorage(owned_key);
             const owned_zero = try runtime.ownValue(zero);
             errdefer runtime.dropStorage(owned_zero);
             try map.insert(runtime.objects, .{ .key = owned_key, .value = owned_zero });
-            runtime.adoptInto(target.asObject(), owned_zero);
             return owned_zero;
         },
         .list, .array, .builder, .file, .task => return runtime.fail(.not_owned),
@@ -744,14 +707,14 @@ pub fn arrayFill(runtime: *Runtime, target: Value, held: Value) Error!void {
             .count = count,
         };
         errdefer {
-            for (replacement.cells(Value)) |cell| runtime.freeValue(cell);
+            for (replacement.cells(Value)) |cell| runtime.dropStorage(cell);
             replacement.deinit(runtime.objects);
         }
         try runtime.fillElements(replacement, held);
 
         const old = object.elements;
         object.elements.bytes = replacement.bytes;
-        for (old.cells(Value)) |cell| runtime.freeValue(cell);
+        for (old.cells(Value)) |cell| runtime.dropStorage(cell);
         runtime.objects.free(old.bytes);
         return;
     }
@@ -759,10 +722,9 @@ pub fn arrayFill(runtime: *Runtime, target: Value, held: Value) Error!void {
     if (object.elements.kind == .value) {
         // The source language rejects object arrays at this method, but a
         // decoded or hand-built runtime value can still have object cells.
-        // Replacing them must end their object ownership as well as their
-        // String/struct storage ownership; otherwise the old children stay
-        // live with an owner that no longer has an edge to them.
-        for (object.elements.cells(Value)) |cell| runtime.freeValue(cell);
+        // Replacing them drops their String/struct storage; the old
+        // objects, if any, leak until the final sweep.
+        for (object.elements.cells(Value)) |cell| runtime.dropStorage(cell);
     }
     try runtime.fillElements(object.elements, held);
 }
@@ -786,47 +748,8 @@ fn carriesObject(held: Value) bool {
 }
 
 // ---------------------------------------------------------------------------
-// The ownership verbs
+// The copy verb
 // ---------------------------------------------------------------------------
-//
-// One operation, spelled three times on its way down: Luce writes
-// `free`, MIR calls the instruction `free_object`, and here it is
-// `freeVerb`.  The suffix is the disambiguator — `free` alone is the
-// allocator's word and this is not it — and all three of `free`, `give`
-// and `copy` carry it, so the family reads as one.
-
-/// `free(x)`.  Only the named owner frees (S6, S23): `expected` carries
-/// the binding to verify against when the verb named one.
-pub fn freeVerb(runtime: *Runtime, held: Value, expected: ?OwnedBy) Error!void {
-    // The semantic stage only emits this verb for a direct object handle.
-    // Keep that fact at the runtime boundary too: `resolve` reads the
-    // payload as a Handle, so allowing a scalar through would let a forged
-    // scalar whose bits match a live row release somebody else's object.
-    if (held.tag != .object) return runtime.fail(.not_owned);
-    _ = try runtime.resolve(held);
-    try runtime.checkGivable(held, expected);
-    runtime.freeObject(held.asObject());
-}
-
-/// `give x`.  The dynamic ownership check (S23): giving what a
-/// container owns — or what the named binding no longer owns — would
-/// forge a second owner.  Verbs demand an object, so an unfilled slot
-/// traps (S42).
-pub fn giveVerb(runtime: *Runtime, held: Value, expected: ?OwnedBy) Error!Value {
-    if (!held.hasValidRepresentation()) return runtime.fail(.not_owned);
-    switch (held.view()) {
-        .object => {
-            _ = try runtime.resolve(held);
-            try runtime.checkGivable(held, expected);
-        },
-        .strukt => try runtime.checkGivable(held, expected),
-        // `give` is an ownership verb, not a truthy conversion.  A
-        // malformed artifact must trap rather than reach an unreachable
-        // arm (or accidentally treat a scalar as a handle).
-        else => return runtime.fail(.not_owned),
-    }
-    return held;
-}
 
 /// `copy x`.  Verbs demand an object (S42): copying an unfilled or
 /// freed slot traps.

@@ -192,8 +192,6 @@ fn collectFunction(
         });
     var parameter_types: std.ArrayList(Type) = .empty;
     defer parameter_types.deinit(self.arena);
-    var parameter_modes: std.ArrayList(ast.ParameterMode) = .empty;
-    defer parameter_modes.deinit(self.arena);
     var parameter_defaults: std.ArrayList(?TypedConstant) = .empty;
     defer parameter_defaults.deinit(self.arena);
     // The first parameter that declared a default, for D3's
@@ -208,7 +206,6 @@ fn collectFunction(
     if (enclosing != null and !declaration.is_static) {
         receiver = .reads;
         try parameter_types.append(self.arena, enclosing.?.asType());
-        try parameter_modes.append(self.arena, .borrow);
         try parameter_defaults.append(self.arena, null);
     }
     // The entry's written parameter is collected like every other
@@ -229,15 +226,6 @@ fn collectFunction(
                 );
                 continue;
             }
-        }
-        if (parameter.mode == .give and !shapes.carriesObjects(self, resolved)) {
-            try self.fail(
-                "luce.sema.own",
-                parameter.span,
-                "give applies to containers and resources (list, map, array, builder, file, task) and structs that carry them, not values [OWNERSHIP.md S32]",
-                .{},
-            );
-            continue;
         }
         // Defaults are trailing (docs/ARGS.md D3): a parameter
         // with one may be followed only by parameters with one.
@@ -263,7 +251,6 @@ fn collectFunction(
             folded = (try defaults.foldDefault(self, module, declaration, parameter, resolved, written)) orelse continue;
         }
         try parameter_types.append(self.arena, resolved);
-        try parameter_modes.append(self.arena, parameter.mode);
         try parameter_defaults.append(self.arena, folded);
     }
     var results: std.ArrayList(Type) = .empty;
@@ -302,7 +289,6 @@ fn collectFunction(
         .name = try self.arena.dupe(u8, name),
         .module = module,
         .parameter_types = try parameter_types.toOwnedSlice(self.arena),
-        .parameter_modes = try parameter_modes.toOwnedSlice(self.arena),
         .parameter_defaults = try parameter_defaults.toOwnedSlice(self.arena),
         .receiver = receiver,
         .enclosing = enclosing,
@@ -342,11 +328,9 @@ pub fn registerLambda(
     enclosing_locals: []const context.EnclosingLocal,
 ) Error!u32 {
     const parameter_types = try self.arena.alloc(Type, signature.parameters.len);
-    const parameter_modes = try self.arena.alloc(ast.ParameterMode, signature.parameters.len);
     const parameter_defaults = try self.arena.alloc(?TypedConstant, signature.parameters.len);
-    for (signature.parameters, parameter_types, parameter_modes, parameter_defaults) |parameter, *held, *mode, *default| {
+    for (signature.parameters, parameter_types, parameter_defaults) |parameter, *held, *default| {
         held.* = parameter.value_type;
-        mode.* = if (parameter.gives) .give else .borrow;
         default.* = null;
     }
     const results = try self.arena.alloc(Type, if (signature.result == .none) 0 else 1);
@@ -357,7 +341,6 @@ pub fn registerLambda(
         .name = declaration.name,
         .module = module,
         .parameter_types = parameter_types,
-        .parameter_modes = parameter_modes,
         .parameter_defaults = parameter_defaults,
         .results = results,
         .channel = results,
@@ -399,9 +382,6 @@ pub fn registerStandardSpecialization(
     {
         return null;
     }
-    for (template.parameter_modes) |mode| {
-        if (mode != .borrow) return null;
-    }
     for (template.parameter_defaults) |default| {
         if (default != null) return null;
     }
@@ -434,7 +414,6 @@ pub fn registerStandardSpecialization(
         .name = declaration.name,
         .module = template.module,
         .parameter_types = try self.arena.dupe(Type, parameter_types),
-        .parameter_modes = template.parameter_modes,
         .parameter_defaults = template.parameter_defaults,
         .receiver = template.receiver,
         .enclosing = template.enclosing,

@@ -92,7 +92,6 @@ pub const builtins = [_]Builtin{
     .{ .name = "assert", .kind = .assert_true, .parameters = &.{.{ .name = "condition" }} },
     .{ .name = "trap", .kind = .trap_message, .parameters = &.{.{ .name = "message" }} },
     .{ .name = "error", .kind = .raise_error, .parameters = &.{.{ .name = "message" }}, .pure = false },
-    .{ .name = "free", .kind = .free_object, .parameters = &.{.{ .name = "object" }}, .pure = false },
     .{ .name = "parse_int", .kind = .parse_int, .parameters = &.{.{ .name = "text" }} },
     .{ .name = "parse_float", .kind = .parse_float, .parameters = &.{.{ .name = "text" }} },
     .{ .name = "parse_string", .kind = .parse_string, .parameters = &.{.{ .name = "bytes" }} },
@@ -234,31 +233,16 @@ pub const array_methods = [_][]const u8{ "dim", "fill", "sort", "reverse", "find
 pub const map_methods = [_][]const u8{ "has", "get", "remove", "keys", "values", "clear" };
 pub const builder_methods = [_][]const u8{ "append", "append_ascii", "build", "clear" };
 /// The byte channel's three (docs/BYTES.md R4).  There is no
-/// `close`: a handle is scope-owned, so `free f` is the close and
-/// the end of the owning scope is the automatic one.
+/// `close`: a handle is scope-owned and the end of the owning scope
+/// closes it.
 pub const file_methods = [_][]const u8{ "read", "write", "flush" };
 
 /// A task's one method (docs/THREADS.md D4).  There is no `cancel`
 /// and no `done`: a worker owns its own runtime and nothing outside
 /// it may reach in, and a question whose answer is stale before it is
-/// read is not a question worth answering.  `free t` is an early join
-/// and the end of the owning scope is the automatic one, exactly as
-/// for `file`.
+/// read is not a question worth answering.  The end of the owning
+/// scope joins it, exactly as for `file`.
 pub const task_methods = [_][]const u8{"wait"};
-
-/// Builtin value methods whose result is a fresh object the caller
-/// owns (S22).  These three are intrinsics with no signature to
-/// consult, so the list is the signature; the method tables above
-/// must agree with it.  A method that routes into the standard library
-/// is *not* here — `builder.zig`'s `routedMethodYieldsObject` asks its
-/// declaration instead, so adding an object-returning `strings`
-/// function cannot quietly leak what it returns.
-/// `wait` is here for the same reason `pop` is: what it hands back
-/// belonged to somebody else a moment ago and belongs to nobody now.
-/// A worker's result is *moved* into the joiner's runtime as it
-/// crosses (docs/THREADS.md D4), so the binding that receives it owns
-/// it, exactly as S16 says of a return.
-pub const fresh_object_methods = [_][]const u8{ "pop", "keys", "values", "wait" };
 
 // ---------------------------------------------------------------------------
 // Tests

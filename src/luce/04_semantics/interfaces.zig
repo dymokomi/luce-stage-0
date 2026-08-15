@@ -11,7 +11,6 @@ const ast = @import("../03_parse.zig").ast;
 const types = @import("../support/types.zig");
 const naming = @import("naming.zig");
 const resolve = @import("resolve.zig");
-const shapes = @import("shapes.zig");
 const signatures = @import("signatures.zig");
 const context = @import("context.zig");
 const Error = context.Error;
@@ -99,8 +98,6 @@ pub fn settleDeclarations(self: *Analyzer) Error!void {
             if (duplicate) continue;
             var parameter_types: std.ArrayList(Type) = .empty;
             defer parameter_types.deinit(self.arena);
-            var parameter_modes: std.ArrayList(ast.ParameterMode) = .empty;
-            defer parameter_modes.deinit(self.arena);
             var signature_parameters: std.ArrayList(types.Signature.Parameter) = .empty;
             defer signature_parameters.deinit(self.arena);
             var valid = true;
@@ -114,11 +111,7 @@ pub fn settleDeclarations(self: *Analyzer) Error!void {
                     continue;
                 };
                 try parameter_types.append(self.arena, resolved);
-                try parameter_modes.append(self.arena, parameter.mode);
-                try signature_parameters.append(self.arena, .{
-                    .value_type = resolved,
-                    .gives = parameter.mode == .give,
-                });
+                try signature_parameters.append(self.arena, .{ .value_type = resolved });
             }
             var results: std.ArrayList(Type) = .empty;
             defer results.deinit(self.arena);
@@ -149,7 +142,6 @@ pub fn settleDeclarations(self: *Analyzer) Error!void {
             try methods.append(self.arena, .{
                 .declaration = method,
                 .parameter_types = try parameter_types.toOwnedSlice(self.arena),
-                .parameter_modes = try parameter_modes.toOwnedSlice(self.arena),
                 .results = try results.toOwnedSlice(self.arena),
                 .return_type = return_type,
                 .fallible = method.fallible,
@@ -173,17 +165,6 @@ pub fn synthesizeShapes(self: *Analyzer) Error!void {
     for (self.interface_decls.items) |*info| {
         self.diagnostics.scope = self.modules[info.module].file;
         for (info.methods) |*method| {
-            if (method.parameter_modes.len != method.parameter_types.len) continue;
-            for (method.parameter_modes, method.parameter_types, method.declaration.parameters) |mode, parameter_type, parameter| {
-                if (mode == .give and !shapes.carriesObjects(self, parameter_type)) {
-                    try self.fail(
-                        "luce.sema.own",
-                        parameter.span,
-                        "give applies to containers and resources (list, map, array, builder, file, task) and structs that carry them, not values [OWNERSHIP.md S32]",
-                        .{},
-                    );
-                }
-            }
             if (method.results.len < 2) continue;
             const return_type = (try signatures.internResultShape(
                 self,
@@ -207,8 +188,8 @@ fn interfaceSignatureParameters(
     method: *const context.InterfaceMethodInfo,
 ) Error![]types.Signature.Parameter {
     const parameters = try self.arena.alloc(types.Signature.Parameter, method.parameter_types.len);
-    for (method.parameter_types, method.parameter_modes, parameters) |value_type, mode, *parameter| {
-        parameter.* = .{ .value_type = value_type, .gives = mode == .give };
+    for (method.parameter_types, parameters) |value_type, *parameter| {
+        parameter.* = .{ .value_type = value_type };
     }
     return parameters;
 }
@@ -303,8 +284,8 @@ pub fn settleConformances(self: *Analyzer) Error!void {
                         valid = false;
                         continue;
                     }
-                    for (implementation.parameter_types[1..], method.parameter_types, implementation.parameter_modes[1..], method.parameter_modes) |actual, expected, actual_mode, expected_mode| {
-                        if (!actual.eql(expected) or actual_mode != expected_mode) {
+                    for (implementation.parameter_types[1..], method.parameter_types) |actual, expected| {
+                        if (!actual.eql(expected)) {
                             try self.fail("luce.sema.interface", method.declaration.name_span, "{s}.{s} does not match interface method {s}.{s}", .{
                                 declaration.name,
                                 method.declaration.name,

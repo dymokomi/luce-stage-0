@@ -4,7 +4,6 @@ const std = @import("std");
 const defs = @import("defs.zig");
 const types = @import("../support/types.zig");
 const verify_mod = @import("verify.zig");
-const module_mod = @import("module.zig");
 
 const testing = std.testing;
 const Program = defs.Program;
@@ -125,131 +124,21 @@ test "the verifier rejects structural damage a decoder could admit" {
     try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &program));
     functions[0].result_types[0] = .long;
 
-    const owned_instructions = try arena.dupe(Instruction, &.{
-        .{ .const_long = 1 },
-        .{ .object_bind = .{ .local = 7, .value = 0 } },
-        .{ .ret = 0 },
-    });
-    const owned_results = try arena.dupe(types.Type, &.{ .long, .none, .none });
-    const owned_items = try arena.dupe(Register, &.{ 0, 1, 2 });
-    functions[0].instructions = owned_instructions;
-    functions[0].result_types = owned_results;
-    blocks[0].items = owned_items;
-    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &program));
-    functions[0].instructions = instructions;
-    functions[0].result_types = result_types;
-    blocks[0].items = items;
-
     program.entry_function = 9;
     try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
     program.entry_function = 0;
     try verify_mod.verify(testing.allocator, &program);
 
     functions[0].parameter_count = 1;
-    functions[0].parameter_gives = &.{false};
     functions[0].locals = try arena.dupe(Local, &.{.{ .name = "arg", .local_type = .long }});
     try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
     functions[0].parameter_count = 0;
-    functions[0].parameter_gives = &.{};
     functions[0].locals = &.{};
 
     const duplicate = try arena.dupe(Register, &.{ 0, 0, 1 });
     blocks[0].items = duplicate;
     try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
     blocks[0].items = items;
-    try verify_mod.verify(testing.allocator, &program);
-}
-
-test "ownership instructions cannot fabricate values or bind non-carrying shapes" {
-    var program = try programOf(.{
-        .instructions = &.{
-            .{ .heap_new = .{ .heap = 0, .dims = &.{} } },
-            .{ .object_bind = .{ .local = 0, .value = 0 } },
-            .{ .ret = null },
-        },
-        .result_types = &.{ .{ .heap = 0 }, .none, .none },
-        .blocks = &.{&.{ 0, 1, 2 }},
-        .locals = &.{.{ .name = "number", .local_type = .long }},
-    });
-    defer program.deinit();
-    const arena = program.arena.allocator();
-    program.heap_types = try arena.dupe(types.HeapType, &.{.{ .list = .long }});
-
-    // The owner id names a local whose slot can actually own the graph.
-    // Binding a list to a scalar local is not a harmless no-op: a later
-    // release would have no matching ownership class.
-    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &program));
-
-    program.functions[0].locals[0].local_type = .{ .heap = 0 };
-    // `object_bind` has no value of its own.  A forged result type would
-    // make the following instruction consume a register no engine wrote.
-    program.functions[0].result_types[1] = .long;
-    try testing.expectError(error.TypeMismatch, verify_mod.verify(testing.allocator, &program));
-
-    program.functions[0].result_types[1] = .none;
-    program.functions[0].instructions[0] = .{ .const_long = 1 };
-    program.functions[0].result_types[0] = .long;
-    // The inverse mismatch is just as damaging: a scalar cannot enter an
-    // ownership walk merely because the instruction says `bind`.
-    try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &program));
-
-    program.functions[0].instructions[0] = .{ .heap_new = .{ .heap = 0, .dims = &.{} } };
-    program.functions[0].result_types[0] = .{ .heap = 0 };
-    try verify_mod.verify(testing.allocator, &program);
-
-    program.functions[0].instructions[1] = .{ .object_unbind = .{ .local = 0, .value = 0 } };
-    try verify_mod.verify(testing.allocator, &program);
-}
-
-test "borrowed parameters cannot become object owners in decoded MIR" {
-    var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
-    defer program.deinit();
-    const arena = program.arena.allocator();
-    program.heap_types = try arena.dupe(types.HeapType, &.{.{ .list = .long }});
-
-    const functions = try arena.alloc(Function, 2);
-    functions[0] = .{
-        .name = "main",
-        .parameter_count = 0,
-        .return_type = .none,
-        .locals = try arena.dupe(Local, &.{.{ .name = "value", .local_type = .{ .heap = 0 } }}),
-        .instructions = try arena.dupe(Instruction, &.{.{ .ret = null }}),
-        .result_types = try arena.dupe(types.Type, &.{.none}),
-        .blocks = try arena.dupe(Block, &.{.{ .items = try arena.dupe(Register, &.{0}) }}),
-    };
-    functions[1] = .{
-        .name = "borrowed",
-        .parameter_count = 1,
-        .parameter_gives = &.{false},
-        .return_type = .none,
-        .locals = try arena.dupe(Local, &.{.{ .name = "borrowed", .local_type = .{ .heap = 0 } }}),
-        .instructions = try arena.dupe(Instruction, &.{
-            .{ .local_get = 0 },
-            .{ .object_bind = .{ .local = 0, .value = 0 } },
-            .{ .ret = null },
-        }),
-        .result_types = try arena.dupe(types.Type, &.{ .{ .heap = 0 }, .none, .none }),
-        .blocks = try arena.dupe(Block, &.{.{ .items = try arena.dupe(Register, &.{ 0, 1, 2 }) }}),
-    };
-    program.functions = functions;
-    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
-    {
-        const encoded = try module_mod.encode(testing.allocator, &program);
-        defer testing.allocator.free(encoded);
-        try testing.expectError(error.InvalidModule, module_mod.decode(testing.allocator, encoded));
-    }
-
-    functions[1].instructions[1] = .{ .object_unbind = .{ .local = 0, .value = 0 } };
-    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
-    {
-        const encoded = try module_mod.encode(testing.allocator, &program);
-        defer testing.allocator.free(encoded);
-        try testing.expectError(error.InvalidModule, module_mod.decode(testing.allocator, encoded));
-    }
-
-    // A give parameter is an owned binding and may be installed and
-    // released by the callee's prologue/scope cleanup.
-    functions[1].parameter_gives = &.{true};
     try verify_mod.verify(testing.allocator, &program);
 }
 
@@ -278,7 +167,6 @@ test "local storage claims agree with the value representation" {
         .result_types = &.{.none},
         .blocks = &.{&.{0}},
         .parameter_count = 1,
-        .parameter_gives = &.{false},
         .locals = &.{.{ .name = "text", .local_type = .string, .owns_storage = true }},
     });
     defer parameter.deinit();
@@ -414,7 +302,6 @@ const Shape = struct {
     blocks: []const []const Register,
     locals: []const Local = &.{},
     parameter_count: u32 = 0,
-    parameter_gives: []const bool = &.{},
     return_type: types.Type = .none,
     fallible: bool = false,
 };
@@ -433,7 +320,6 @@ fn programOf(shape: Shape) !Program {
     functions[0] = .{
         .name = "main",
         .parameter_count = shape.parameter_count,
-        .parameter_gives = try arena.dupe(bool, shape.parameter_gives),
         .return_type = shape.return_type,
         .fallible = shape.fallible,
         .locals = try arena.dupe(Local, shape.locals),
@@ -904,7 +790,6 @@ test "a call agrees with the callee it names, argument for argument" {
     functions[1] = .{
         .name = "twice",
         .parameter_count = 1,
-        .parameter_gives = &.{false},
         .return_type = .long,
         .locals = try arena.dupe(Local, &.{.{ .name = "value", .local_type = .long }}),
         .instructions = try arena.dupe(Instruction, &.{
@@ -949,11 +834,9 @@ test "a call agrees with the callee it names, argument for argument" {
     // any body is walked — otherwise the read runs off the end.
     functions[0].instructions[1].call.arguments = try arena.dupe(Register, &.{ 0, 0 });
     functions[1].parameter_count = 2;
-    functions[1].parameter_gives = &.{ false, false };
     try testing.expectError(error.BadLocal, verify_mod.verify(testing.allocator, &program));
     functions[0].instructions[1].call.arguments = arguments;
     functions[1].parameter_count = 1;
-    functions[1].parameter_gives = &.{false};
 
     // What a function returns is checked against what it says it
     // returns, in the callee as well as at the call.
@@ -987,7 +870,6 @@ test "an inout call aliases exactly local zero and cannot use another call lane"
     functions[1] = .{
         .name = "bump",
         .parameter_count = 1,
-        .parameter_gives = &.{false},
         .return_type = .none,
         .locals = try arena.dupe(Local, &.{.{
             .name = "self",
@@ -1066,64 +948,6 @@ test "an inout call aliases exactly local zero and cannot use another call lane"
     try verify_mod.verify(testing.allocator, &program);
 }
 
-test "function values preserve give parameter modes" {
-    var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
-    defer program.deinit();
-    const arena = program.arena.allocator();
-
-    const functions = try arena.alloc(Function, 2);
-    functions[0] = .{
-        .name = "main",
-        .parameter_count = 0,
-        .return_type = .none,
-        .locals = &.{},
-        .instructions = try arena.dupe(Instruction, &.{
-            .{ .const_function = .{ .function = 1 } },
-            .{ .ret = null },
-        }),
-        .result_types = try arena.dupe(types.Type, &.{ .{ .function = 0 }, .none }),
-        .blocks = try arena.dupe(Block, &.{.{
-            .items = try arena.dupe(Register, &.{ 0, 1 }),
-        }}),
-    };
-    functions[1] = .{
-        .name = "consume",
-        .parameter_count = 1,
-        .parameter_gives = &.{true},
-        .return_type = .none,
-        .locals = try arena.dupe(Local, &.{.{
-            .name = "values",
-            .local_type = .{ .heap = 0 },
-        }}),
-        .instructions = try arena.dupe(Instruction, &.{.{ .trap = .missing_return }}),
-        .result_types = try arena.dupe(types.Type, &.{.none}),
-        .blocks = try arena.dupe(Block, &.{.{
-            .items = try arena.dupe(Register, &.{0}),
-        }}),
-    };
-    program.functions = functions;
-    program.heap_types = try arena.dupe(types.HeapType, &.{.{ .list = .long }});
-    program.signatures = try arena.dupe(types.Signature, &.{.{
-        .parameters = try arena.dupe(types.Signature.Parameter, &.{.{
-            .value_type = .{ .heap = 0 },
-            .gives = false,
-        }}),
-        .result = .none,
-    }});
-
-    // The value's signature cannot silently turn an ownership-taking
-    // function into a borrowing callback: that would leave two owners or
-    // free the caller's graph twice.
-    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
-
-    program.signatures[0].parameters[0].gives = true;
-    try verify_mod.verify(testing.allocator, &program);
-
-    // The reverse mismatch is equally invalid.
-    functions[1].parameter_gives = &.{false};
-    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
-}
-
 test "spawn rejects worker parameters carrying functions or resources" {
     var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
     defer program.deinit();
@@ -1149,7 +973,6 @@ test "spawn rejects worker parameters carrying functions or resources" {
     functions[1] = .{
         .name = "worker",
         .parameter_count = 1,
-        .parameter_gives = &.{false},
         .return_type = .none,
         .locals = try arena.dupe(Local, &.{.{
             .name = "value",
@@ -1553,13 +1376,13 @@ test "the entry is a function that exists and takes nothing" {
     // A host calls the entry with nothing to give it, so an entry that
     // declares a parameter could never be started.
     program.functions[0].parameter_count = 1;
-    program.functions[0].parameter_gives = &.{false};
     program.functions[0].locals = try program.arena.allocator().dupe(
         Local,
         &.{.{ .name = "argument", .local_type = .long }},
     );
     try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
-    program.functions[0].parameter_gives = &.{};
+    program.functions[0].parameter_count = 0;
+    program.functions[0].locals = &.{};
 }
 
 test "the side tables are exactly as long as the instruction pool" {

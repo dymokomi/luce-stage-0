@@ -51,8 +51,6 @@ pub const Object = @import("runtime/heap.zig").Object;
 pub const MapEntry = @import("runtime/heap.zig").MapEntry;
 pub const Map = @import("runtime/heap.zig").Map;
 pub const Memory = @import("runtime/heap.zig").Memory;
-pub const Owner = @import("runtime/heap.zig").Owner;
-pub const OwnedBy = @import("runtime/heap.zig").OwnedBy;
 pub const flattenIndex = @import("runtime/heap.zig").flattenIndex;
 /// The generation at which an object table row is retired instead of
 /// reused, so that generations never wrap (docs/MEMORY.md).

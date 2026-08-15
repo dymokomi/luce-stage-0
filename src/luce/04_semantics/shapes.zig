@@ -41,11 +41,11 @@ const Analyzer = @import("declarations.zig").Analyzer;
 
 // -- what a type carries, and how wide it is --------------------------
 
-/// True for types the ownership rules apply to: every heap-backed
-/// object, including file and task resources, and structs
-/// transitively containing one (S27's "object-carrying").  The
-/// legacy name says "objects", but it is the broad ownership
-/// predicate, not a list/map/array/builder-only test.
+/// True for types that transitively hold a heap-backed object: every
+/// heap object, including file and task resources, and structs and
+/// unions transitively containing one ("object-carrying").  The name
+/// says "objects", but it is the broad predicate, not a
+/// list/map/array/builder-only test.
 /// An array read: `collectStructs` settles every struct's shape
 /// once the layouts are known, and struct cycles are rejected
 /// before that.  Written function signatures are validated after
@@ -69,15 +69,10 @@ pub fn carriesObjects(self: *const Analyzer, of: Type) bool {
     };
 }
 
-/// What the one type-graph walk can be asked to look for.  Both
-/// questions are asked by the worker boundary and by nothing else that
-/// needs to see through a container, and both have the same answer
-/// shape — *is one of these anywhere in this type* — so they are one
-/// walk rather than two that would drift apart.
+/// What the one type-graph walk can be asked to look for.  Asked by
+/// the worker boundary and by nothing else that needs to see through a
+/// container — *is one of these anywhere in this type*.
 pub const Carried = enum {
-    /// A `file` or a `task`: tied to the `Runtime` that made it,
-    /// duplicable by nothing and re-ownable into no other runtime.
-    resource,
     /// A function value: it borrows the receiver it may carry
     /// (docs/BINDING.md D4), and a borrow has nothing to borrow *from*
     /// on the far side of a worker boundary.  The type cannot say
@@ -135,7 +130,7 @@ pub fn carries(self: *const Analyzer, of: Type, sought: Carried) Error!bool {
                     },
                     .array => |shape| try pending.append(self.temporary, shape.element),
                     .builder => {},
-                    .file, .task => if (sought == .resource) return true,
+                    .file, .task => {},
                 }
             },
             .variant => |index| {

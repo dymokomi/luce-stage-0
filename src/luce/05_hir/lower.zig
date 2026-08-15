@@ -70,15 +70,11 @@ pub const Deps = struct {
     /// The collected function surface, for resolved callees: receiver
     /// mode, parameter types and modes, results.
     functions: []const context.FunctionDeclInfo,
-    /// Per struct layout: does it transitively carry a heap object?
-    struct_carries: []const bool,
-    /// Per union: the same OR over its members' fields.
-    variant_carries: []const bool,
     /// Per file-scope constant: the folded value a `constant_ref`
     /// materializes.
     constants: []const context.TypedConstant,
-    /// The function being lowered — the prologue's classes and the
-    /// outer scope's parameter releases come from it.
+    /// The function being lowered — the prologue's parameter rows and
+    /// the outer scope's releases come from it.
     function: context.FunctionDeclInfo,
 };
 
@@ -102,10 +98,6 @@ pub fn lowerFunction(deps: Deps, body: *const nodes.Body, code: *mir.build.Lower
 // The replay walker
 // ---------------------------------------------------------------------------
 
-/// How a binding relates to the object graph in its slot — the slice
-/// of the checker's ownership classes the emission consults.
-const Class = enum { alias, owned, borrow_param, inout_receiver };
-
 const Replay = struct {
     deps: Deps,
     body: *const nodes.Body,
@@ -120,9 +112,6 @@ const Replay = struct {
     /// the checker's did.
     scopes: std.ArrayList(Scope) = .empty,
     loops: std.ArrayList(Loop) = .empty,
-    /// Per recorded local: its ownership class, filled as declares
-    /// replay (prologue rows from the declaration).
-    classes: []Class = &.{},
     /// The next row of the recorded table this walk expects to reach —
     /// coupling #5's lockstep, kept as a cursor now that the rows
     /// themselves are laid down up front (`makeLocalTable`).
@@ -134,14 +123,13 @@ const Replay = struct {
     const Temp = struct {
         local: LocalId,
         register: Register,
-        objects: bool,
         storage: bool,
         disownable: bool = true,
         taken: bool = false,
     };
 
     const Scope = struct { owned: std.ArrayList(Owned) = .empty };
-    const Owned = struct { local: LocalId, objects: bool, storage: bool };
+    const Owned = struct { local: LocalId, storage: bool };
     const Loop = struct {
         continue_block: BlockId,
         exit_block: BlockId,
@@ -163,41 +151,20 @@ const Replay = struct {
         for (self.scopes.items) |*scope| scope.owned.deinit(self.scratch());
         self.scopes.deinit(self.scratch());
         self.loops.deinit(self.scratch());
-        if (self.classes.len != 0) self.scratch().free(self.classes);
     }
 
     fn replayBody(self: *Replay) Error!void {
-        self.classes = try self.scratch().alloc(Class, self.body.locals.len);
-        @memset(self.classes, .alias);
-        // The prologue's classes come from the declaration: an owning
-        // parameter (give, or the entry's args) is an owned binding,
-        // an ordinary parameter borrows, and a writing receiver
-        // aliases its caller's slot.
         const info = self.deps.function;
         const hidden: usize = if (info.receiver == .not) 0 else 1;
-        if (info.receiver != .not) {
-            self.classes[0] = if (!self.carriesObjects(info.parameter_types[0]))
-                .alias
-            else if (info.receiver == .writes)
-                .inout_receiver
-            else
-                .borrow_param;
-        }
-        for (info.parameter_types[hidden..], info.parameter_modes[hidden..], hidden..) |held, mode, index| {
-            const owns = mode == .give or info.is_entry;
-            self.classes[index] = if (!self.carriesObjects(held))
-                .alias
-            else if (owns)
-                .owned
-            else
-                .borrow_param;
-        }
 
         // The prologue: the tree's whole local table, then the entry
         // block, then the receiver and parameter rows in declaration
-        // order — the table's leading rows, taken in lockstep — with
-        // an owning parameter taking its object over from the caller
-        // on entry (OWNERSHIP.md S15, S44).
+        // order — the table's leading rows, taken in lockstep.  A
+        // parameter borrows its caller's objects (they are not released
+        // here — objects live until the runtime sweeps at exit) and
+        // borrows its caller's bytes, so a parameter owns no storage; a
+        // writing receiver owns its `self` storage when the type carries
+        // any, so writes made through it survive.
         try self.makeLocalTable();
         try self.code.openBlock();
         if (info.receiver != .not) {
@@ -209,34 +176,17 @@ const Replay = struct {
             const index = written_index + hidden;
             if (index >= info.parameter_types.len) break;
             const parameter_type = info.parameter_types[index];
-            const id = self.takeSlot(parameter.name, parameter_type, false);
-            // An owning parameter is an owned binding like any other
-            // (S15): take the object over from the caller on entry.
-            if (info.parameter_modes[index] == .give or info.is_entry) {
-                const value = try self.code.load(id);
-                try self.code.bind(id, value);
-            }
+            _ = self.takeSlot(parameter.name, parameter_type, false);
         }
 
-        // Scope zero is the parameter scope: give parameters own their
-        // objects (never their storage — a parameter borrows its
-        // caller's bytes), in declaration order.
+        // Scope zero is the parameter scope; a parameter owns no
+        // storage, so it starts empty.
         try self.pushScope();
-        for (info.parameter_types[hidden..], hidden..) |held, index| {
-            if (self.classes[index] != .owned) continue;
-            _ = held;
-            try self.scopes.items[0].owned.append(self.scratch(), .{
-                .local = @intCast(index),
-                .objects = true,
-                .storage = false,
-            });
-        }
 
         try self.replayBlockParts(self.body.statements, self.body.releases);
 
-        // The outer scope's end: the owning parameters go back, in
-        // reverse declaration order — scope zero's own list, emitted
-        // the way every scope's is.
+        // The outer scope's end: scope zero's own list, emitted the way
+        // every scope's is (empty for parameters).
         try self.emitScopeEnd();
 
         // The lockstep's closing half: every row the tree recorded was
@@ -246,16 +196,6 @@ const Replay = struct {
     }
 
     // -- tables and predicates ---------------------------------------------
-
-    fn carriesObjects(self: *const Replay, of: Type) bool {
-        return switch (of) {
-            .heap => true,
-            .strukt => |layout| self.deps.struct_carries[layout],
-            .variant => |index| self.deps.variant_carries[index],
-            .optional => |payload| self.carriesObjects(payload.asType()),
-            else => false,
-        };
-    }
 
     fn ownsStorage(self: *const Replay, of: Type) bool {
         return switch (of) {
@@ -361,7 +301,7 @@ const Replay = struct {
         return &self.scopes.items[self.scopes.items.len - 1];
     }
 
-    fn emitScopeReleases(self: *Replay, from: usize, moved: []const LocalId) Error!void {
+    fn emitScopeReleases(self: *Replay, from: usize) Error!void {
         var scope_index = self.scopes.items.len;
         while (scope_index > from) {
             scope_index -= 1;
@@ -370,8 +310,7 @@ const Replay = struct {
             while (owned_index > 0) {
                 owned_index -= 1;
                 const release = owned[owned_index];
-                const keeps = std.mem.indexOfScalar(LocalId, moved, release.local) != null;
-                try self.code.release(release.local, release.objects and !keeps, release.storage);
+                try self.code.release(release.local, release.storage);
             }
         }
     }
@@ -379,7 +318,7 @@ const Replay = struct {
     /// The normal end of the innermost scope: its owned list back,
     /// in reverse declaration order (`emitScopeEnd`).
     fn emitScopeEnd(self: *Replay) Error!void {
-        try self.emitScopeReleases(self.scopes.items.len - 1, &.{});
+        try self.emitScopeReleases(self.scopes.items.len - 1);
     }
 
     fn emitTempReleasesUpTo(self: *Replay, from: usize, limit: usize) Error!void {
@@ -387,7 +326,7 @@ const Replay = struct {
         while (index > from) {
             index -= 1;
             const temp = self.temps.items[index];
-            try self.code.release(temp.local, temp.objects, temp.storage);
+            try self.code.release(temp.local, temp.storage);
         }
     }
 
@@ -400,18 +339,15 @@ const Replay = struct {
         self.temps.shrinkRetainingCapacity(from);
     }
 
-    /// Emit a recorded park: the store into its hidden slot, and the
-    /// bind exactly when the park claims objects; enter it in the
-    /// ledger with its at-park claims.
+    /// Emit a recorded park: the store into its hidden slot; enter it in
+    /// the ledger with its at-park storage claim.
     fn emitPark(self: *Replay, parked: nodes.Park, register: Register, value_type: Type) Error!void {
         const local = self.takeSlot(null, value_type, parked.storage);
         std.debug.assert(local == parked.local);
         try self.code.store(local, register);
-        if (parked.objects) try self.code.bind(local, register);
         try self.temps.append(self.scratch(), .{
             .local = local,
             .register = register,
-            .objects = parked.objects,
             .storage = parked.storage,
         });
     }
@@ -425,7 +361,6 @@ const Replay = struct {
         try self.temps.append(self.scratch(), .{
             .local = local,
             .register = register,
-            .objects = false,
             .storage = true,
         });
     }
@@ -441,7 +376,7 @@ const Replay = struct {
             if (temp.register != register) continue;
             if (temp.taken) return false;
             if (!temp.storage) continue;
-            if (!temp.disownable or temp.objects) return false;
+            if (!temp.disownable) return false;
             self.code.disownStorage(temp.local);
             temp.storage = false;
             temp.taken = true;
@@ -599,16 +534,6 @@ const Replay = struct {
             .map_literal => |literal| try self.replayMapLiteral(literal),
             .slice => |sliced| try self.replaySlice(sliced),
             .new_object => |made| try self.replayNewObject(made),
-            .give => |give| try self.replayGive(give),
-            .copy => |copied| copy: {
-                const operand = try self.replayValue(copied.operand);
-                const arguments = try self.arena().alloc(Register, 1);
-                arguments[0] = operand;
-                break :copy try self.code.emit(
-                    .{ .intrinsic = .{ .kind = .copy_object, .arguments = arguments } },
-                    copied.result,
-                );
-            },
             .spawn => |worker| try self.replaySpawn(worker),
             .function_value => |named| try self.code.emit(
                 .{ .const_function = .{ .function = named.function } },
@@ -707,7 +632,6 @@ const Replay = struct {
             // The copy's park was recorded onto the operand node
             // (nodes.OperandBatch's pre-copy convention).
             if (entry.core.park()) |parked| {
-                std.debug.assert(!parked.objects);
                 try self.emitPark(parked, entry.register, entry.core.result());
             }
         } else {
@@ -1247,21 +1171,9 @@ const Replay = struct {
                 entry.register = stored.register;
             }
         }
-        // `free` and `give` name their owning binding as a hidden
-        // trailing argument, re-derived from the operand's own local.
-        var extra: ?Register = null;
-        if (kind == .free_object) {
-            const local = switch (batch.operands[0].*) {
-                .local_get => |read| read.local,
-                .narrowed_get => |read| read.local,
-                else => unreachable, // free releases an owned name
-            };
-            extra = try self.code.emit(.{ .const_long = local }, .long);
-        }
-        const count = entries.len + @intFromBool(extra != null);
+        const count = entries.len;
         const registers = try self.arena().alloc(Register, count);
         for (entries, batch.slots) |entry, slot| registers[slot] = entry.register;
-        if (extra) |register| registers[count - 1] = register;
         const emitted = try self.code.emit(
             .{ .intrinsic = .{ .kind = kind, .arguments = registers } },
             called.result,
@@ -1270,7 +1182,7 @@ const Replay = struct {
         // then the unwind (docs/FAILURE.md).
         if (kind == .raise_error) {
             try self.emitTempReleases(0);
-            try self.emitScopeReleases(0, &.{});
+            try self.emitScopeReleases(0);
             _ = try self.code.emit(.unwind, .none);
             return emitted;
         }
@@ -1418,7 +1330,6 @@ const Replay = struct {
         _ = answer;
         if (!called.fallible) return call;
         const failed = try self.code.errored(call);
-        const objects = self.carriesObjects(called.result);
         const storage = self.ownsStorage(called.result);
         var carried: ?LocalId = null;
         if (called.result != .none) {
@@ -1433,12 +1344,10 @@ const Replay = struct {
         self.opened = .{ .handler = handler, .temps_floor = self.temps.items.len };
         const slot = carried orelse return call;
         const reload = try self.code.load(slot);
-        if (objects) try self.code.bind(slot, reload);
-        if (objects or storage) {
+        if (storage) {
             try self.temps.append(self.scratch(), .{
                 .local = slot,
                 .register = reload,
-                .objects = objects,
                 .storage = storage,
                 .disownable = false,
             });
@@ -1454,7 +1363,7 @@ const Replay = struct {
         const resume_at = self.code.current;
         self.code.switchTo(opened.handler);
         try self.emitTempReleasesUpTo(0, opened.temps_floor);
-        try self.emitScopeReleases(0, &.{});
+        try self.emitScopeReleases(0);
         _ = try self.code.emit(.unwind, .none);
         self.code.switchTo(resume_at);
         return value;
@@ -1710,24 +1619,6 @@ const Replay = struct {
         );
     }
 
-    fn replayGive(self: *Replay, give: nodes.Expression.Give) Error!Register {
-        // The operand's replay is the load (and the narrowed unwrap);
-        // the hidden owning-binding argument is the operand's local.
-        const value = try self.replayValue(give.operand);
-        const local = switch (give.operand.*) {
-            .local_get => |read| read.local,
-            .narrowed_get => |read| read.local,
-            else => unreachable, // give moves a bare owning name
-        };
-        const arguments = try self.arena().alloc(Register, 2);
-        arguments[0] = value;
-        arguments[1] = try self.code.emit(.{ .const_long = local }, .long);
-        return self.code.emit(
-            .{ .intrinsic = .{ .kind = .give_object, .arguments = arguments } },
-            give.result,
-        );
-    }
-
     fn replaySpawn(self: *Replay, worker: nodes.Expression.Spawn) Error!Register {
         const called = worker.call.call;
         const index = called.callee.function;
@@ -1835,7 +1726,7 @@ const Replay = struct {
         }
         // The recorded releases are the scope's own, in emission order.
         for (releases) |release| {
-            try self.code.release(release.local, release.objects, release.storage);
+            try self.code.release(release.local, release.storage);
         }
         self.popScope();
     }
@@ -1865,62 +1756,32 @@ const Replay = struct {
         }
     }
 
-    /// The park the value's tree recorded, looked through `try` and
-    /// fit wrappers — what says whether the receiving binding owns its
-    /// object (the checker's `yieldsOwnership`, read off the ledger).
-    fn valueParkObjects(node: nodes.NodeRef) bool {
-        const parked = parkThroughTry(node) orelse return false;
-        return parked.objects;
-    }
-
     fn replayDeclare(self: *Replay, declared: nodes.Statement.Declare) Error!void {
         const row = self.body.locals[declared.local];
         if (declared.value) |value| {
             const register = try self.replayValue(value);
             const local = self.takeRecordedSlot(declared.local);
-            const owns = self.carriesObjects(row.local_type) and
-                (value.* == .absent or valueParkObjects(value));
-            self.classes[local] = if (owns) .owned else .alias;
             try self.storeOwned(local, register, row.local_type, nodes.provenance(value), declared.store);
-            if (owns) try self.code.bind(local, register);
-            try self.noteOwned(local, owns);
+            try self.noteOwned(local);
             return;
         }
         // The zero fill of a late declaration, re-derived from the
-        // slot's type (S40); the binding always owns.
+        // slot's type (S40).
         const zero = try self.code.zeroOf(row.local_type);
         const local = self.takeRecordedSlot(declared.local);
-        self.classes[local] = .owned;
         try self.storeOwned(local, zero, row.local_type, nodes.zeroOf(row.local_type), declared.store);
-        try self.noteOwned(local, self.carriesObjects(row.local_type));
+        try self.noteOwned(local);
     }
 
-    /// Enter a declared binding in its scope's owned list, exactly as
-    /// `declareLocalAs` does.
-    fn noteOwned(self: *Replay, local: LocalId, owns_objects: bool) Error!void {
+    /// Enter a declared binding in its scope's owned list when it owns
+    /// storage, so the scope's end releases its bytes (`drop_storage`).
+    fn noteOwned(self: *Replay, local: LocalId) Error!void {
         const owns_storage = self.code.localOwnsStorage(local);
-        if (!owns_objects and !owns_storage) return;
+        if (!owns_storage) return;
         try self.currentScope().owned.append(self.scratch(), .{
             .local = local,
-            .objects = owns_objects,
             .storage = owns_storage,
         });
-    }
-
-    /// Retract a received shape's temporary: the names own the objects
-    /// now (`disownShape`).
-    fn disownShape(self: *Replay, register: Register) void {
-        var index = self.temps.items.len;
-        while (index > 0) {
-            index -= 1;
-            if (self.temps.items[index].register != register) continue;
-            if (self.temps.items[index].storage) {
-                self.temps.items[index].objects = false;
-            } else {
-                _ = self.temps.orderedRemove(index);
-            }
-            return;
-        }
     }
 
     fn replayDestructure(self: *Replay, bind: nodes.Statement.Destructure) Error!void {
@@ -1935,13 +1796,9 @@ const Replay = struct {
                 .field = @intCast(position),
             } }, field.field_type);
             const local = self.takeRecordedSlot(expected);
-            const carried = self.carriesObjects(field.field_type);
-            self.classes[local] = if (carried) .owned else .alias;
             try self.storeOwned(local, held, field.field_type, .view, recorded);
-            if (carried) try self.code.bind(local, held);
-            try self.noteOwned(local, carried);
+            try self.noteOwned(local);
         }
-        self.disownShape(register);
     }
 
     fn replayAssignMany(self: *Replay, assign: nodes.Statement.AssignMany) Error!void {
@@ -1990,12 +1847,9 @@ const Replay = struct {
             }
         }
         for (assign.targets, prepared) |target, staged| {
-            const owns_objects = self.carriesObjects(self.code.localType(target));
-            try self.code.release(target, owns_objects, self.code.localOwnsStorage(target));
+            try self.code.release(target, self.code.localOwnsStorage(target));
             try self.code.store(target, staged);
-            if (owns_objects) try self.code.bind(target, staged);
         }
-        self.disownShape(register);
     }
 
     fn replayAssign(self: *Replay, assign: nodes.Statement.Assign) Error!void {
@@ -2120,11 +1974,8 @@ const Replay = struct {
         } else {
             std.debug.assert(recorded == .plain);
         }
-        const owns_objects = self.carriesObjects(local_type) and
-            (self.classes[local] == .owned or self.classes[local] == .inout_receiver);
-        try self.code.release(local, owns_objects, owns_storage);
+        try self.code.release(local, owns_storage);
         try self.code.store(local, store);
-        if (owns_objects) try self.code.bind(local, store);
     }
 
     fn replayAssignField(
@@ -2151,15 +2002,6 @@ const Replay = struct {
             stored = combined.register;
             provenance = combined.provenance;
         }
-        const field_carries = self.carriesObjects(field_type);
-        if (field_carries) {
-            const old_field = try self.code.emit(.{ .struct_get = .{
-                .target = current,
-                .layout = place.layout,
-                .field = place.field,
-            } }, field_type);
-            try self.code.unbind(place.base, old_field);
-        }
         const stored_field = try self.ownedForStore(stored, field_type, provenance);
         std.debug.assert(stored_field.kind == recorded);
         const updated = try self.code.emit(.{ .struct_set = .{
@@ -2168,9 +2010,8 @@ const Replay = struct {
             .field = place.field,
             .value = stored_field.register,
         } }, local_type);
-        try self.code.release(place.base, false, self.code.localOwnsStorage(place.base));
+        try self.code.release(place.base, self.code.localOwnsStorage(place.base));
         try self.code.store(place.base, updated);
-        if (field_carries) try self.code.bind(place.base, stored);
     }
 
     fn replayAssignIndex(
@@ -2432,10 +2273,10 @@ const Replay = struct {
             .position = self.takeSlot(null, .long, false),
         };
         const first = self.takeRecordedSlot(loop.first);
-        try self.noteOwned(first, false);
+        try self.noteOwned(first);
         const second: ?LocalId = if (loop.second) |expected| owned: {
             const local = self.takeRecordedSlot(expected);
-            try self.noteOwned(local, false);
+            try self.noteOwned(local);
             break :owned local;
         } else null;
         try self.code.startIteration(&shape, sequence);
@@ -2469,7 +2310,7 @@ const Replay = struct {
             try self.code.store(local, value);
             return;
         }
-        try self.code.release(local, false, true);
+        try self.code.release(local, true);
         // The getter answers a view; the owning slot copies it in.
         const copied = try self.code.ownStorage(value);
         try self.code.store(local, copied);
@@ -2480,44 +2321,14 @@ const Replay = struct {
         std.debug.assert(frame.temps_depth == temps_floor);
         std.debug.assert(self.scopes.items.len - frame.scope_depth == unwind);
         try self.emitTempReleases(frame.temps_depth);
-        try self.emitScopeReleases(frame.scope_depth, &.{});
+        try self.emitScopeReleases(frame.scope_depth);
         try self.code.jump(if (is_break) frame.exit_block else frame.continue_block);
-    }
-
-    /// Retract a moved fresh value's temporary at a return
-    /// (`disownTemp`): the object leaves with the caller, the storage
-    /// still goes back.
-    fn disownTempByPark(self: *Replay, node: nodes.NodeRef) void {
-        const parked = parkThroughTry(node) orelse return;
-        var index = self.temps.items.len;
-        while (index > 0) {
-            index -= 1;
-            if (self.temps.items[index].local != parked.local) continue;
-            if (self.temps.items[index].storage) {
-                self.temps.items[index].objects = false;
-            } else {
-                _ = self.temps.orderedRemove(index);
-            }
-            return;
-        }
-    }
-
-    fn parkThroughTry(node: nodes.NodeRef) ?nodes.Park {
-        if (node.park()) |parked| return parked;
-        return switch (node.*) {
-            .try_call => |attempt| parkThroughTry(attempt.call),
-            // The park rides the pre-fit node; the fused walk disowns
-            // by the pre-fit register (`lowered.register`).
-            .convert => |conversion| parkThroughTry(conversion.operand),
-            .wrap_optional => |wrapped| parkThroughTry(wrapped.operand),
-            else => null,
-        };
     }
 
     fn replayReturn(self: *Replay, returned: nodes.Statement.Return) Error!void {
         if (returned.values.len == 0) {
             try self.emitTempReleases(0);
-            try self.emitScopeReleases(0, &.{});
+            try self.emitScopeReleases(0);
             try self.code.ret(null);
             return;
         }
@@ -2527,12 +2338,9 @@ const Replay = struct {
             const value_type = value.result();
             if (value.* == .absent) {
                 try self.emitTempReleases(0);
-                try self.emitScopeReleases(0, &.{});
+                try self.emitScopeReleases(0);
                 try self.code.ret(register);
                 return;
-            }
-            if (self.carriesObjects(value_type) and returned.moved.len == 0) {
-                self.disownTempByPark(value);
             }
             const handed = try self.ownedForStore(register, value_type, nodes.provenance(value));
             std.debug.assert(handed.kind == returned.stores[0]);
@@ -2541,7 +2349,7 @@ const Replay = struct {
                 handed_out = try self.code.exportStorage(handed_out);
             }
             try self.emitTempReleases(0);
-            try self.emitScopeReleases(0, returned.moved);
+            try self.emitScopeReleases(0);
             try self.code.ret(handed_out);
             return;
         }
@@ -2560,13 +2368,8 @@ const Replay = struct {
         try self.reloadSpills(entries);
         for (entries) |*entry| try self.applyWrappers(entry);
         const registers = try self.arena().alloc(Register, entries.len);
-        for (entries, returned.values, returned.stores, registers) |entry, value, recorded, *slot| {
+        for (entries, returned.stores, registers) |entry, recorded, *slot| {
             const value_type = wrappedType(&entry);
-            if (self.carriesObjects(value_type) and
-                value.* != .local_get and value.* != .narrowed_get)
-            {
-                self.disownTempByPark(value);
-            }
             const stored = try self.ownedForStore(entry.register, value_type, entry.provenance);
             std.debug.assert(stored.kind == recorded);
             slot.* = stored.register;
@@ -2577,7 +2380,7 @@ const Replay = struct {
         );
         const handed_out = try self.code.exportStorage(shape);
         try self.emitTempReleases(0);
-        try self.emitScopeReleases(0, returned.moved);
+        try self.emitScopeReleases(0);
         try self.code.ret(handed_out);
     }
 
@@ -2594,9 +2397,8 @@ const Replay = struct {
             try self.pushScope();
             const words = try self.code.errorMessage();
             const local = self.takeRecordedSlot(expected);
-            self.classes[local] = .alias;
             try self.storeOwned(local, words, .string, .plain, null);
-            try self.noteOwned(local, false);
+            try self.noteOwned(local);
             _ = try self.code.emit(
                 .{ .intrinsic = .{ .kind = .forget, .arguments = &.{} } },
                 .none,
@@ -2684,9 +2486,8 @@ const Replay = struct {
         for (arm.bindings) |binding| {
             const register = try self.replayValue(binding.payload);
             const local = self.takeRecordedSlot(binding.local);
-            self.classes[local] = .alias;
             try self.storeOwned(local, register, binding.payload.result(), .view, null);
-            try self.noteOwned(local, false);
+            try self.noteOwned(local);
         }
         try self.replayBlock(arm.body);
         // The binding scope's own end, from the locals table: an alias

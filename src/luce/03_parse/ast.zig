@@ -34,12 +34,6 @@ pub const TypeName = struct {
     /// so nothing else can wear this shape.  Its parameter types are
     /// `arguments`, because that is what they are.
     result: ?*TypeName = null,
-    /// `give T` in a function type's parameter list: the callee takes
-    /// ownership.  A verb, not a name — two signatures that differ in
-    /// one are two types, because who owns the object afterwards
-    /// differs (docs/FUNCTIONS.md D5).  Read only of a function type's
-    /// arguments.
-    gives: bool = false,
     span: Span,
 };
 
@@ -151,8 +145,6 @@ pub const MapLiteral = struct { entries: []MapEntry, span: Span };
 pub const Index = struct { target: *Expression, indices: []*Expression, span: Span };
 pub const SliceRange = struct { target: *Expression, start: ?*Expression, end: ?*Expression, span: Span };
 pub const Method = struct { target: *Expression, name: []const u8, arguments: []Argument, span: Span };
-pub const Give = struct { operand: *Expression, span: Span };
-pub const Copy = struct { operand: *Expression, span: Span };
 pub const NoneLiteral = struct { span: Span };
 pub const Try = struct { operand: *Expression, span: Span };
 /// `spawn f(args)` — the call is *not* made here; it is handed to a
@@ -205,10 +197,6 @@ pub const Expression = union(enum) {
     /// namespaced call when the target chain names a struct/module
     /// (the analyzer decides; the parser cannot know).
     method: Method,
-    /// give x — transfer ownership; x is poisoned afterwards (S10).
-    give: Give,
-    /// copy x — a deep, independent duplicate (S31).
-    copy: Copy,
     /// try CALL — hand the caller whatever the call raised, releasing
     /// what this frame owns on the way out (docs/FAILURE.md).
     try_call: Try,
@@ -539,16 +527,9 @@ pub const UnionDecl = struct {
     span: Span,
 };
 
-/// How a parameter receives objects: borrowed (the default — the
-/// callee may read and mutate contents but not keep) or given (the
-/// callee takes ownership; the call site must say `give`/`copy` or
-/// pass something fresh).  See OWNERSHIP.md S11-S15.
-pub const ParameterMode = enum { borrow, give };
-
 pub const Parameter = struct {
     name: []const u8,
     name_span: Span,
-    mode: ParameterMode = .borrow,
     type_name: TypeName,
     /// `= EXPRESSION` after the type: the parameter's default, folded
     /// to a compile-time constant by stage 4 (docs/ARGS.md D2).  Null

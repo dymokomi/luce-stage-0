@@ -109,8 +109,6 @@ fn functionSlot(instruction: *Instruction) ?*u32 {
         .call_indirect,
         .intrinsic,
         .heap_new,
-        .object_bind,
-        .object_unbind,
         .jump,
         .branch,
         .ret,
@@ -153,8 +151,6 @@ fn constantSlot(instruction: *Instruction) ?ConstantSlot {
         .call_indirect,
         .intrinsic,
         .heap_new,
-        .object_bind,
-        .object_unbind,
         .jump,
         .branch,
         .ret,
@@ -325,7 +321,6 @@ test "unreachable functions are pruned and call targets renumbered" {
     } };
     functions[3].name = try arena.dupe(u8, "mid");
     functions[3].parameter_count = 1;
-    functions[3].parameter_gives = &.{false};
     functions[3].locals = try arena.dupe(defs.Local, &.{.{
         .name = "self",
         .local_type = .long,
