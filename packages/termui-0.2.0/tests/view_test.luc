@@ -11,7 +11,7 @@ func test_a_text_view_measures_and_draws_styled_lines():
     var lines = new list(text.Line)
     lines.append(text.plain("hello", termui.Style(foreground = 3)))
     lines.append(text.plain("world", termui.Style(foreground = 3)))
-    let block = view.Text(lines = give lines)
+    let block = view.Text(lines = lines)
     let item: view.View = block
     let rows, columns = item.measure(s.area())
     assert(rows == 2 and columns == 5)

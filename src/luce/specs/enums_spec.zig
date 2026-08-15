@@ -796,9 +796,8 @@ test "a runtime map literal keyed by enum members" {
     );
 }
 
-test "an enum-keyed map of owned lists is built, read and freed clean" {
-    // The leak census row: every list the map owns is released with the
-    // map, on both engines, and the key is a number that owns nothing.
+test "an enum-keyed map of lists is built and read" {
+    // An enum key is a number, and the map holds a list per key.
     try agree.ok(
         \\enum Key:
         \\    left
@@ -821,7 +820,6 @@ test "an enum-keyed map of owned lists is built, read and freed clean" {
         \\    assert(total == 6)
         \\    runs.remove(Key.up)
         \\    assert(len(runs) == 1)
-        \\    free(runs)
         \\
     );
 }

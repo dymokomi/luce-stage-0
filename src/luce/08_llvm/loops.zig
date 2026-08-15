@@ -612,7 +612,7 @@ test "a loop that writes plain elements still lifts; matmul's nest lifts all thr
     }
 }
 
-test "a loop that can free, allocate, or call refuses to lift" {
+test "a loop that can allocate or call refuses to lift" {
     const gpa = testing.allocator;
     for ([_][]const u8{
         // A call can do anything at all.
@@ -634,7 +634,6 @@ test "a loop that can free, allocate, or call refuses to lift" {
         \\    for i in range(0, 8):
         \\        var xs = new list(long)
         \\        total = total + a[i]
-        \\        free(xs)
         \\    print(string(long(total)))
         \\
     }) |source| {
@@ -653,13 +652,12 @@ test "an inner loop lifts even when the loop around it cannot" {
         \\        var a = new array(double, 8)
         \\        for i in range(0, 8):
         \\            total = total + a[i]
-        \\        free(a)
         \\    print(string(long(total)))
         \\
     );
     defer built.deinit(gpa);
 
-    // The outer loop allocates and frees, so nothing lifts out of it;
+    // The outer loop allocates, so nothing lifts out of it;
     // the inner one only reads, so `a` resolves once per outer pass
     // instead of once per element.
     try testing.expectEqual(@as(usize, 1), built.made.hoists.len);

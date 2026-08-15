@@ -386,7 +386,6 @@ test "every runtime declaration carries what the compiler knows about it" {
         \\    let counts = new map(string, long)
         \\    counts["one"] = 1
         \\    print(string(len(counts)) + string(counts["one"]))
-        \\    free(counts)
         \\
     )).?;
     defer gpa.free(rendered);
@@ -1085,96 +1084,8 @@ test "lists, maps, strings, and ownership agree with the interpreter" {
         \\    print(string(41 + 1) + chr(33) + string(ord("A")))
         \\    print(string("abc" < "abd") + string("abc" == "abc"))
         \\
-        \\    let kept = copy xs
+        \\    let kept = xs
         \\    print(string(len(kept)))
-        \\    free(kept)
-        \\    free(names)
-        \\    free(text)
-        \\    free(xs)
-        \\
-    );
-}
-
-// Move-instead-of-copy (docs/STRINGS.md step 6).  Every string below
-// is well past the twenty-two byte inline threshold, so each store is
-// a real allocation with a real owner: a move that skipped a release
-// is a leak the census and the test allocator both report, and a move
-// that should not have happened is a double free.
-test "a fresh value moves into every kind of place, and a borrow still copies" {
-    try agree(
-        \\struct Note:
-        \\    title: string
-        \\    body: string
-        \\
-        \\func joined(a: string, b: string) -> string:
-        \\    return a + b
-        \\
-        \\func main():
-        \\    let head = "a string comfortably past the inline threshold"
-        \\    let tail = "-and a tail that is well past it on its own"
-        \\
-        \\    # A list element takes the temporary's allocation; a
-        \\    # borrow of an element still copies, because appending can
-        \\    # move the very cell it was read out of.
-        \\    var xs: list(string) = [head + tail]
-        \\    xs.append(joined(head, tail))
-        \\    xs.append(xs[0])
-        \\    xs.append(xs[0][0:30])
-        \\    xs.insert(0, head + tail)
-        \\    print(string(len(xs)) + " " + string(len(xs[2])) + " " + string(len(xs[4])))
-        \\
-        \\    # A map value moves; the key beside it is a borrow the map
-        \\    # copies for itself, and m[k] = m[k] stays legal.
-        \\    var m: map(string, string) = new map(string, string)
-        \\    m[head] = head + tail
-        \\    m[head] = m[head]
-        \\    m[tail] = joined(tail, head)
-        \\    print(string(len(m)) + " " + string(len(m[head])) + " " + string(len(m[tail])))
-        \\
-        \\    # A struct field moves at construction and at assignment;
-        \\    # a field read out of the same struct copies.
-        \\    var note = Note(title = head + tail, body = head)
-        \\    note.body = joined(tail, head)
-        \\    note.title = note.body
-        \\    print(string(len(note.title)) + " " + string(len(note.body)))
-        \\
-        \\    free(xs)
-        \\    free(m)
-        \\
-    );
-}
-
-test "a value still live after a store is copied, and a returned borrow too" {
-    try agree(
-        \\func fresh(a: string, b: string) -> string:
-        \\    return a + b
-        \\
-        \\func borrowed(s: string) -> string:
-        \\    return s[4:40]
-        \\
-        \\func passed(s: string) -> string:
-        \\    return s
-        \\
-        \\func main():
-        \\    let head = "a string comfortably past the inline threshold"
-        \\    let tail = "-and a tail that is well past it on its own"
-        \\
-        \\    # `kept` is read after both stores, so neither can take
-        \\    # its bytes; a reassignment that reads its own place is
-        \\    # the same question one statement wide.
-        \\    var kept = head + tail
-        \\    var xs: list(string) = [kept]
-        \\    xs.append(kept)
-        \\    kept = kept[2:44]
-        \\    kept = kept + "!"
-        \\    print(string(len(kept)) + " " + string(len(xs[0])) + " " + string(len(xs[1])))
-        \\
-        \\    # A string return is a copy unless the frame made it.
-        \\    xs.append(fresh(head, tail))
-        \\    xs.append(borrowed(head))
-        \\    xs.append(passed(head))
-        \\    print(string(len(xs[2])) + " " + string(len(xs[3])) + " " + string(len(xs[4])))
-        \\    free(xs)
         \\
     );
 }
@@ -1209,7 +1120,6 @@ test "a fallible call's result is carried, not taken, and still agrees" {
         \\    xs.append(file_read("notes.txt") catch "(none)")
         \\    xs.append(text + "!")
         \\    print(string(len(xs)) + " " + string(len(xs[0])) + " " + string(len(xs[2])))
-        \\    free(xs)
         \\
     );
 }
@@ -1223,71 +1133,12 @@ test "a nested container agrees, and the leak census counts the same" {
         \\        let row = new list(long)
         \\        row.append(r)
         \\        row.append(r * 10)
-        \\        rows.append(give row)
+        \\        rows.append(row)
         \\        r = r + 1
         \\    print(string(len(rows)) + " " + string(rows[2][1]))
         \\    let leaked = new list(long)
         \\    leaked.append(1)
         \\    print("done")
-        \\    free(rows)
-        \\
-    );
-}
-
-test "an alias used after the owner freed agrees: use_after_free (S9)" {
-    try agree(
-        \\func main():
-        \\    var xs = new list(long)
-        \\    xs.append(1)
-        \\    let view = xs
-        \\    free(xs)
-        \\    print("freed")
-        \\    print(string(len(view)))
-        \\
-    );
-}
-
-test "a stale alias whose row was reused agrees: still use_after_free (S9)" {
-    // The row `xs` vacates is the row `fresh` moves into, so the two
-    // handles differ only in their generation — and that is the whole
-    // of what keeps `stale` from quietly becoming a second name for
-    // `fresh` on either engine.  Compiled code makes this test itself,
-    // inline, with the row's generation against the handle's.
-    try agree(
-        \\func main():
-        \\    var xs = new list(long)
-        \\    xs.append(1)
-        \\    let stale = xs
-        \\    free(xs)
-        \\    let fresh = new list(long)
-        \\    fresh.append(10)
-        \\    fresh.append(20)
-        \\    if stale == fresh:
-        \\        print("aliased")
-        \\    else:
-        \\        print("distinct")
-        \\    print(string(len(fresh)))
-        \\    print(string(len(stale)))
-        \\
-    );
-}
-
-test "a reused row is refused by every door, and the newcomer by none" {
-    // The same reuse reached through indexing, iteration and the
-    // ownership verbs rather than through `len`, because each takes a
-    // different route to the row.
-    try agree(
-        \\func main():
-        \\    var rows = new list(list(long))
-        \\    var doomed = new list(long)
-        \\    doomed.append(7)
-        \\    let stale = doomed
-        \\    free(doomed)
-        \\    let fresh = new list(long)
-        \\    fresh.append(3)
-        \\    rows.append(give fresh)
-        \\    print(string(rows[0][0]))
-        \\    print(string(stale[0]))
         \\
     );
 }
@@ -1340,7 +1191,6 @@ test "float arithmetic, comparison, and formatting agree over the special values
         \\                string(clamp(a, -1.0, 1.0)) + " " + string(abs(a)) + " " + string(-a))
         \\            j = j + 1
         \\        i = i + 1
-        \\    free(values)
         \\
     );
 }
@@ -1397,8 +1247,6 @@ test "min and max reductions over an array agree, signed zeros and all" {
         \\            xs[i] = double(i + 1)
         \\        xs[at] = control[2]
         \\        print(string(lowest(xs)) + " " + string(highest(xs)))
-        \\    free(xs)
-        \\    free(control)
         \\
     );
 }
@@ -1421,7 +1269,6 @@ test "clamp agrees when the bounds cross and when they are not numbers" {
         \\            high = high + 1
         \\        low = low + 1
         \\    print(string(clamp(5, 9, 2)) + " " + string(clamp(0, 9, 2)))
-        \\    free(bounds)
         \\
     );
 }
@@ -1438,7 +1285,6 @@ test "the float builtins agree" {
         \\    for x in xs:
         \\        print(string(x) + ": " + string(sqrt(abs(x))) + " " + string(floor(x)) +
         \\            " " + string(ceil(x)) + " " + string(double(long(clamp(x, -9.0, 9.0)))))
-        \\    free(xs)
         \\
     );
 }
@@ -1488,7 +1334,6 @@ test "the long math builtins agree, and abs of the smallest long traps" {
         \\    xs.append(0 - 9223372036854775807 - 1)
         \\    for x in xs:
         \\        print(string(min(x, 3)) + " " + string(max(x, 3)) + " " + string(clamp(x, -2, 2)))
-        \\    free(xs)
         \\
     );
     try agree(
@@ -1567,7 +1412,6 @@ test "zero-initialized structs agree, nested ones included" {
         \\    grid[1, 0].inner.n = 7
         \\    print(string(grid[1, 0].inner.n) + " " + string(grid[0, 1].inner.n))
         \\    print(string(grid[0, 0] == grid[0, 1]) + string(grid[0, 0] == grid[1, 0]))
-        \\    free(grid)
         \\
     );
 }
@@ -1604,54 +1448,18 @@ test "an inline array access agrees on every element kind and rank" {
         \\    for i in range(0, 2):
         \\        var row = new list(long)
         \\        row.append(i)
-        \\        rows[i] = give row
+        \\        rows[i] = row
         \\    print(string(rows[0][0] + rows[1][0]))
         \\
-        \\    free(rows)
-        \\    free(weights)
-        \\    free(flags)
-        \\    free(names)
-        \\    free(grid)
         \\
     );
 }
 
 test "a resolution lifted out of a loop still traps where the access is" {
-    // `loops.zig` reads an Array's row once per loop instead of once
-    // per access.  What must not move with it is the *deciding*: a
-    // loop that never runs must not trap for an array that is already
-    // freed, and one that does run must trap at the access, not at the
-    // preheader.  Both engines, one source, twice.
-    try agree(
-        \\func drop(xs: give array(double, _)):
-        \\    free(xs)
-        \\
-        \\func main():
-        \\    var a = new array(double, 4)
-        \\    let alias = a
-        \\    drop(give a)
-        \\    var total: double = 0.0
-        \\    for i in range(0, 0):
-        \\        total += alias[i]
-        \\    print("survived " + string(long(total)))
-        \\
-    );
-    try agree(
-        \\func drop(xs: give array(double, _)):
-        \\    free(xs)
-        \\
-        \\func main():
-        \\    var a = new array(double, 4)
-        \\    let alias = a
-        \\    drop(give a)
-        \\    var total: double = 0.0
-        \\    for i in range(0, 4):
-        \\        total += alias[i]
-        \\    print("unreachable " + string(long(total)))
-        \\
-    );
-    // And an index past the end still traps at the access it was made
-    // at, with the loop's resolution already lifted above it.
+    // `loops.zig` reads an Array's row once per loop instead of once per
+    // access.  What must not move with it is the *deciding*: an index
+    // past the end still traps at the access it was made at, with the
+    // loop's resolution already lifted above it.
     try agree(
         \\func main():
         \\    var a = new array(double, 4)
@@ -1663,29 +1471,10 @@ test "a resolution lifted out of a loop still traps where the access is" {
     );
 }
 
-test "a lifted resolution sees the generation, so a reoccupied row still traps" {
-    // The row `a` vacates is the row `reborn` moves into, and the
-    // lifted resolution reads that row in the preheader — so what
-    // stands between `alias` and `reborn`'s elements is the one
-    // comparison the loop kept: the row's generation against the
-    // handle's.
-    try agree(
-        \\func main():
-        \\    var a = new array(long, 4)
-        \\    a.fill(5)
-        \\    let alias = a
-        \\    free(a)
-        \\    var reborn = new array(long, 4)
-        \\    reborn.fill(1)
-        \\    var total: long = 0
-        \\    for i in range(0, 3):
-        \\        total += alias[i]
-        \\    print("unreachable " + string(total))
-        \\
-    );
-    // And the null handle, whose lifted resolution reads the module's
-    // retired row rather than the table: still `null_object`, still at
-    // the access.
+test "a lifted resolution on a null row still traps at the access" {
+    // The null handle's lifted resolution reads the module's retired row
+    // rather than the table: still `null_object`, still at the access and
+    // not at the preheader.
     try agree(
         \\func main():
         \\    var rows = new array(array(long, _), 2)
@@ -1740,7 +1529,6 @@ test "structs inside containers agree" {
         \\    for cell in cells:
         \\        print(cell.name + "=" + string(cell.value))
         \\    print(string(cells[0] == cells[1]) + string(len(cells)))
-        \\    free(cells)
         \\
     );
 }
@@ -1758,7 +1546,7 @@ test "a struct carrying an object is owned and released through its fields" {
         \\    let xs = new list(long)
         \\    xs.append(1)
         \\    xs.append(2)
-        \\    return Bag(items = give xs, label = label)
+        \\    return Bag(items = xs, label = label)
         \\
         \\func main():
         \\    var bag = fill("b")
@@ -1933,7 +1721,6 @@ test "a heap optional agrees, and holding none owns nothing (S43)" {
         \\    let got = pick(true)
         \\    if got != none:
         \\        print("len=" + string(len(got)) + " first=" + string(got[0]))
-        \\        free(got)
         \\    let missing = pick(false)
         \\    if missing == none:
         \\        print("nothing came back")
@@ -1989,7 +1776,6 @@ test "optionals in a loop agree, boxed into container cells and back" {
         \\    for cell in cells:
         \\        out = out + cell.tag + ":" + show(cell.room) + " "
         \\    print(out)
-        \\    free(cells)
         \\    print(show(even(2)) + "/" + show(even(3)))
         \\
     );
@@ -2064,7 +1850,6 @@ test "the null object put in a T? is present, because absence is not a handle" {
         \\    let real = new list(long)
         \\    real.append(1)
         \\    print("absent=" + string(look(real)))
-        \\    free(real)
         \\
     );
 }
@@ -2199,7 +1984,6 @@ test "a directory listing is a List(String) the program owns, on both engines" {
         \\        print(name)
         \\    names.sort()
         \\    print(names[0])
-        \\    free(names)
         \\
     );
 }
@@ -2209,7 +1993,6 @@ test "a directory that will not list is an error on both engines" {
         \\func main() -> !:
         \\    print("before")
         \\    let names = try dir_list("nowhere")
-        \\    free(names)
         \\
     );
 }
@@ -2223,7 +2006,6 @@ test "a caught listing failure leaks nothing on either engine" {
         \\    let names = dir_list("nowhere") catch new list(string)
         \\    found = len(names)
         \\    print("caught, " + string(found) + " names")
-        \\    free(names)
         \\
     );
 }
@@ -2272,7 +2054,6 @@ test "each new host service fails closed on its own" {
     try agreeGiven(
         \\func main() -> !:
         \\    let names = try dir_list(".")
-        \\    free(names)
         \\
     , .{ .files = false });
 }
@@ -2386,7 +2167,6 @@ test "a fallible call handing back an object gives it up on both paths" {
         \\func main():
         \\    let missing = load("nothing-here.txt") catch new list(string)
         \\    print(string(len(missing)))
-        \\    free(missing)
         \\
     );
 }
@@ -2454,10 +2234,8 @@ test "owned String bytes agree, census included" {
         \\    names.append(trimmed + "-lovelace")
         \\    names[0] = names[1]
         \\    print(names[0] + " " + string(len(names)))
-        \\    var duplicate = copy names
-        \\    free(names)
+        \\    var duplicate = names
         \\    print(duplicate[1])
-        \\    free(duplicate)
         \\
         \\    var tag = Tag(label = "one", count = 1)
         \\    tag.label = "two"
@@ -2472,16 +2250,12 @@ test "owned String bytes agree, census included" {
         \\    var keys = table.keys()
         \\    var values = table.values()
         \\    print(keys[0] + values[0])
-        \\    free(keys)
-        \\    free(values)
         \\    table.remove("k1")
-        \\    free(table)
         \\
         \\    var pieces = new list(string)
         \\    pieces.append("first-piece")
         \\    pieces.append("second")
         \\    print(string(measure(pieces[0], drop_first(pieces))))
-        \\    free(pieces)
         \\
         \\    var text = "abcdef"
         \\    text = text[1:5]
@@ -2493,7 +2267,6 @@ test "owned String bytes agree, census included" {
         \\    cells[1] = cells[0]
         \\    cells[0] = "y"
         \\    print(cells[0] + cells[1] + string(len(cells[2])))
-        \\    free(cells)
         \\
     );
 }
@@ -2532,8 +2305,6 @@ test "text agrees on both sides of the boundary between its two forms" {
         \\        print(string(size) + " " + string(len(kept)) + " " + string(len(held.label)) +
         \\            " " + string(len(words[len(words) - 1])) + " " + string(len(table[kept])) +
         \\            " " + string(table.has(kept)))
-        \\    free(words)
-        \\    free(table)
         \\
     );
     // The transitions in both directions: short grown long by `+`,
@@ -2558,7 +2329,6 @@ test "text agrees on both sides of the boundary between its two forms" {
         \\    for piece in kept:
         \\        joined = joined + string(len(piece)) + ","
         \\    print(joined)
-        \\    free(kept)
         \\
     );
     // A long String cut down to short, kept, and then the original
@@ -2576,7 +2346,6 @@ test "text agrees on both sides of the boundary between its two forms" {
         \\    source = "replaced"
         \\    small = small + "!"
         \\    print(cells[0] + " " + string(len(cells[1])) + " " + small + " " + source)
-        \\    free(cells)
         \\
     );
 }
@@ -2597,7 +2366,6 @@ test "a loop name agrees whether it borrows its element or copies it" {
         \\        seen = seen + w
         \\        words[0] = "zz"
         \\    print(seen)
-        \\    free(words)
         \\
         \\    var table = new map(string, string)
         \\    table["a"] = "1"
@@ -2606,7 +2374,6 @@ test "a loop name agrees whether it borrows its element or copies it" {
         \\    for key, value in table:
         \\        joined = joined + key + value
         \\    print(joined)
-        \\    free(table)
         \\
     );
 }

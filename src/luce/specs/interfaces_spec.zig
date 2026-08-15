@@ -301,14 +301,14 @@ test "interface values can be returned and narrowed through an optional" {
     , "42\n");
 }
 
-test "interface methods can take ownership of object arguments" {
+test "interface methods take object arguments" {
     try agree.prints(
         \\interface Sink:
-        \\    func accept(value: give list(long)) -> long
+        \\    func accept(value: list(long)) -> long
         \\
         \\struct Collector: Sink:
         \\    marker: long
-        \\    func accept(value: give list(long)) -> long:
+        \\    func accept(value: list(long)) -> long:
         \\        return len(value)
         \\
         \\func main():
@@ -316,7 +316,7 @@ test "interface methods can take ownership of object arguments" {
         \\    var values = new list(long)
         \\    values.append(1)
         \\    values.append(2)
-        \\    print(string(sink.accept(give values)))
+        \\    print(string(sink.accept(values)))
         \\
     , "2\n");
 }

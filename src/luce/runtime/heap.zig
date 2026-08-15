@@ -828,6 +828,13 @@ pub const layout = struct {
     /// test generated code emits is this one load and one compare,
     /// and a reused row fails it for every handle but the newest.
     pub const generation = @offsetOf(Object, "generation");
+    /// `Object.constant` — a `bool`.  A materialized program constant is
+    /// immutable, so an inline container write generated code emits reads
+    /// this one byte and traps `immutable_object` when it is set, the way
+    /// a runtime-routed write meets `requireMutable`.  This is the seam
+    /// the compiled path enforces constant immutability through now that
+    /// scope ownership's program-root guard is gone.
+    pub const constant = @offsetOf(Object, "constant");
     /// `Object.dims.ptr` — `[*]i64`, one entry per axis.  An Array's
     /// alone: a List has no shape but its length.  The rank is a
     /// compile-time fact, so the length is not read, and only a
@@ -935,13 +942,6 @@ pub const Runtime = struct {
     /// Memory is explicit in Luce, so what a program did not free is
     /// part of what it did.
     live: u32 = 0,
-
-    /// Unique per call: object ownership names (serial, local) pairs,
-    /// so recursion never confuses two frames' bindings.  u64 — a run
-    /// has no instruction limit of any kind, so 2^32 calls is an
-    /// afternoon, and a wrapped serial would let ownership confuse
-    /// two frames.
-    next_serial: u64 = 1,
 
     /// The trap raised by the operation that most recently returned
     /// `error.Trap`.  This is the ceval-style pending-error pattern —
@@ -1165,13 +1165,6 @@ pub const Runtime = struct {
         const copied = if (bytes.len == 0) "" else try self.objects.dupe(u8, bytes);
         if (self.last_key_text.len != 0) self.objects.free(self.last_key_text);
         self.last_key_text = copied;
-    }
-
-    /// A serial no other live frame carries.  One per call.
-    pub fn takeSerial(self: *Runtime) u64 {
-        const serial = self.next_serial;
-        self.next_serial += 1;
-        return serial;
     }
 
     // -- the trap channel ------------------------------------------------

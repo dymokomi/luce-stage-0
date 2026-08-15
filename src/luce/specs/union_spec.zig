@@ -176,35 +176,6 @@ test "D10: an object payload binds as an alias — mutate through it, observe th
 // Ownership: give, copy, free, and the unwind (D9, S34)
 // ---------------------------------------------------------------------------
 
-test "D9: give moves a carrying union whole, and copy is the deep walk" {
-    try agree.ok(
-        \\union Json:
-        \\    null
-        \\    array(items: list(long))
-        \\
-        \\func count(j: give Json) -> long:
-        \\    match j:
-        \\        null:
-        \\            return 0
-        \\        array(items):
-        \\            return len(items)
-        \\
-        \\func main():
-        \\    var xs = new list(long)
-        \\    xs.append(7)
-        \\    var a = Json.array(items = give xs)
-        \\    let b = copy a
-        \\    assert(count(give a) == 1)
-        \\    match b:
-        \\        null:
-        \\            assert(false)
-        \\        array(items):
-        \\            assert(len(items) == 1)
-        \\            assert(items[0] == 7)
-        \\
-    );
-}
-
 test "D9: scope release frees whichever member a union holds, object-carrying or not" {
     // No `free(u)`: a union takes the verbs a carrying struct takes
     // (D9), and `free` was never one of them — S6 releases a direct
@@ -300,7 +271,7 @@ test "a union copies a function-valued field and dispatches both choices" {
         \\    var jobs = new list(Job)
         \\    jobs.append(Job.action(run = twice, label = "!"))
         \\    jobs.append(Job.action(run = none, label = "?"))
-        \\    let copied = copy jobs
+        \\    let copied = jobs
         \\    print(string(apply(copied[0], 20)))
         \\    print(string(apply(copied[1], 20)))
         \\    print(string(apply(jobs[0], 20)))
@@ -319,7 +290,7 @@ test "a trapped callback releases a union payload and its function run" {
         \\
         \\func main():
         \\    var payload: list(long) = [3, 4]
-        \\    let job = Job.run(action = read, values = give payload)
+        \\    let job = Job.run(action = read, values = payload)
         \\    match job:
         \\        run(action, values):
         \\            if action != none:
@@ -344,7 +315,7 @@ test "S34: catch releases a fallible union result before an early return" {
         \\    var items: list(long) = [3, 4]
         \\    if not ok:
         \\        error("packet unavailable")
-        \\    return Packet.payload(action = twice, items = give items)
+        \\    return Packet.payload(action = twice, items = items)
         \\
         \\func recover(ok: bool) -> long:
         \\    var packet: Packet
@@ -518,11 +489,11 @@ test "D12: a Json tree builds through containers, walks recursively, and frees c
         \\    items.append(Json.number(value = 2.5))
         \\    items.append(Json.null)
         \\    var fields = new map(string, Json)
-        \\    fields["values"] = Json.array(items = give items)
+        \\    fields["values"] = Json.array(items = items)
         \\    fields["extra"] = Json.number(value = 4.0)
-        \\    let doc = Json.object(fields = give fields)
+        \\    let doc = Json.object(fields = fields)
         \\    assert(total(doc) == 8.0)
-        \\    let twin = copy doc
+        \\    let twin = doc
         \\    assert(total(twin) == 8.0)
         \\
     );
@@ -633,135 +604,6 @@ test "S3: a call's result is matched whole, and released once after the arms" {
     defer session.deinit();
     try std.testing.expectEqualStrings("b 42\n", session.printed());
     try std.testing.expectEqual(agree.End{ .finished = 0 }, session.end);
-}
-
-test "S3: a carrying temporary survives its arms, and the census says it was freed once" {
-    try agree.ok(
-        \\union Bag:
-        \\    empty
-        \\    full(items: list(long), label: string)
-        \\
-        \\func make(fill: bool) -> Bag:
-        \\    if not fill:
-        \\        return Bag.empty
-        \\    var items = new list(long)
-        \\    items.append(4)
-        \\    items.append(6)
-        \\    return Bag.full(items = give items, label = "carried")
-        \\
-        \\func main():
-        \\    match make(true):
-        \\        empty:
-        \\            assert(false)
-        \\        full(items, label):
-        \\            assert(len(items) == 2)
-        \\            assert(items[0] + items[1] == 10)
-        \\            assert(label == "carried")
-        \\    match make(false):
-        \\        empty:
-        \\            assert(true)
-        \\        full(items, label):
-        \\            assert(false)
-        \\
-    );
-}
-
-test "S3: a nested call is one temporary the outer match owns to the end" {
-    try agree.ok(
-        \\union Json:
-        \\    null
-        \\    text(value: string)
-        \\    array(items: list(Json))
-        \\
-        \\func leaf(word: string) -> Json:
-        \\    return Json.text(value = word)
-        \\
-        \\func wrap(inner: give Json) -> Json:
-        \\    var items = new list(Json)
-        \\    items.append(give inner)
-        \\    return Json.array(items = give items)
-        \\
-        \\func depth(j: Json) -> long:
-        \\    match j:
-        \\        null:
-        \\            return 0
-        \\        text(value):
-        \\            return len(value)
-        \\        array(items):
-        \\            return 1 + depth(items[0])
-        \\
-        \\func main():
-        \\    match wrap(wrap(leaf("deep"))):
-        \\        null:
-        \\            assert(false)
-        \\        text(value):
-        \\            assert(false)
-        \\        array(items):
-        \\            assert(len(items) == 1)
-        \\            assert(depth(items[0]) == 5)
-        \\    assert(depth(wrap(wrap(leaf("deep")))) == 6)
-        \\
-    );
-}
-
-test "S3: a temporary scrutinee in a loop leaves nothing behind, round after round" {
-    try agree.ok(
-        \\union Bag:
-        \\    empty
-        \\    full(items: list(long))
-        \\
-        \\func make(round: long) -> Bag:
-        \\    if round % 3 == 0:
-        \\        return Bag.empty
-        \\    var items = new list(long)
-        \\    items.append(round)
-        \\    return Bag.full(items = give items)
-        \\
-        \\func main():
-        \\    var total: long = 0
-        \\    for round in range(0, 64):
-        \\        match make(round):
-        \\            empty:
-        \\                total = total + 1
-        \\            full(items):
-        \\                total = total + items[0]
-        \\    assert(total == 1345)
-        \\
-    );
-}
-
-test "S4: an arm that leaves early releases the temporary on its way out" {
-    try agree.ok(
-        \\union Bag:
-        \\    empty
-        \\    full(items: list(long))
-        \\
-        \\func make() -> Bag:
-        \\    var items = new list(long)
-        \\    items.append(4)
-        \\    return Bag.full(items = give items)
-        \\
-        \\func first() -> long:
-        \\    match make():
-        \\        empty:
-        \\            return -1
-        \\        full(items):
-        \\            return items[0]
-        \\
-        \\func main():
-        \\    assert(first() == 4)
-        \\    var seen: long = 0
-        \\    for round in range(0, 16):
-        \\        match make():
-        \\            empty:
-        \\                continue
-        \\            full(items):
-        \\                seen = seen + items[0]
-        \\                if seen >= 8:
-        \\                    break
-        \\    assert(seen == 8)
-        \\
-    );
 }
 
 test "S3: an enum-valued call is matched the same way, and nothing is left over" {

@@ -1039,119 +1039,6 @@ test "luce.sema.call: a return shape is never an ordinary tuple value" {
     );
 }
 
-test "luce.sema.own: one object cannot be owned twice, and only a comma can write it" {
-    // The one genuinely new ownership check.  `return` is a
-    // terminator, so with one value there was never anything after it
-    // to poison; the comma is what puts something after a return for
-    // the first time (OWNERSHIP.md S45).
-    try expectSaying(
-        \\func bad(xs: give list(long)) -> (list(long), list(long)):
-        \\    return xs, xs
-        \\
-        \\func main():
-        \\    var mine = [1]
-        \\    let a, b = bad(give mine)
-        \\    free(a)
-        \\    free(b)
-        \\
-    , "luce.sema.own", "xs is returned twice; one object cannot be owned twice [OWNERSHIP.md S23, S45]");
-
-    // An alias beside its owner is the same whole-shape conflict, but
-    // a copyable graph can make the distinct second result explicitly.
-    try expectSaying(
-        \\func bad(xs: give list(long)) -> (list(long), list(long)):
-        \\    let alias = xs
-        \\    return xs, alias
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "alias aliases an object graph already used by another result; return copy alias to make a distinct graph, or change the return shape [OWNERSHIP.md S17, S23, S45]");
-
-    // An unrelated borrow remains the ordinary per-position S17 rule.
-    try expectSaying(
-        \\func bad(xs: give list(long), borrowed: list(long)) -> (list(long), list(long)):
-        \\    return xs, borrowed
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "borrowed is a borrowed parameter; return copy borrowed, or take the parameter as give [OWNERSHIP.md S17]");
-}
-
-test "luce.sema.own: batch advice does not poison a later occurrence" {
-    // A give would be the right repair for one argument in
-    // isolation, but not for the first of two arguments that spell
-    // the same owner.  The diagnostic must understand the whole
-    // source-order batch before suggesting a move.
-    try expectSaying(
-        \\func take(first: give list(long), second: give list(long)) -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    var mine = new list(long)
-        \\    let answer = take(mine, mine)
-        \\    print(string(answer))
-        \\
-    , "luce.sema.own", "mine is used again later in this operand batch, so writing give mine here would poison that use");
-
-    try expectSaying(
-        \\struct Holder:
-        \\    marker: long
-        \\
-        \\    func take(first: give list(long), second: give list(long)) -> long:
-        \\        return self.marker
-        \\
-        \\func main():
-        \\    let holder = Holder(marker = 1)
-        \\    var mine = new list(long)
-        \\    let answer = holder.take(mine, mine)
-        \\    print(string(answer))
-        \\
-    , "luce.sema.own", "mine is used again later in this operand batch, so writing give mine here would poison that use");
-
-    try expectSaying(
-        \\struct Pair:
-        \\    first: list(long)
-        \\    second: list(long)
-        \\
-        \\func main():
-        \\    var mine = new list(long)
-        \\    let pair = Pair(first = mine, second = mine)
-        \\    print(string(len(pair.first)))
-        \\
-    , "luce.sema.own", "mine is used again later in this operand batch, so writing give mine here would poison that use");
-
-    try expectSaying(
-        \\union Choice:
-        \\    pair(first: list(long), second: list(long))
-        \\
-        \\func main():
-        \\    var mine = new list(long)
-        \\    let choice = Choice.pair(first = mine, second = mine)
-        \\    match choice:
-        \\        pair(left, right):
-        \\            print(string(len(left) + len(right)))
-        \\
-    , "luce.sema.own", "mine is used again later in this operand batch, so writing give mine here would poison that use");
-
-    try expectSaying(
-        \\func main():
-        \\    var mine = new list(long)
-        \\    let values = [mine, mine]
-        \\    print(string(len(values)))
-        \\
-    , "luce.sema.own", "mine is used again later in this operand batch, so writing give mine here would poison that use");
-
-    try expectSaying(
-        \\func main():
-        \\    var mine = new list(long)
-        \\    let values = {"first": mine, "second": mine}
-        \\    print(string(len(values)))
-        \\
-    , "luce.sema.own", "mine is used again later in this operand batch, so writing give mine here would poison that use");
-}
-
 // ---------------------------------------------------------------------------
 // Methods: implied `self`
 // ---------------------------------------------------------------------------
@@ -1303,72 +1190,6 @@ test "luce.sema.call: a writing method does not bind (BINDING.md D9)" {
     ,
         "luce.sema.call",
         "writes its receiver, and a writing method is not a function value",
-    );
-}
-
-test "luce.sema.own: a fresh carrying receiver has nothing to borrow from (BINDING.md D4)" {
-    try expectSaying(
-        \\struct Bag:
-        \\    items: list(long)
-        \\
-        \\    func beyond(n: long) -> bool:
-        \\        return len(self.items) > n
-        \\
-        \\func apply(f: func(long) -> bool) -> bool:
-        \\    return f(0)
-        \\
-        \\func main():
-        \\    assert(apply(Bag(items = new list(long)).beyond) == false)
-        \\
-    ,
-        "luce.sema.own",
-        "dies at the end of this statement",
-    );
-}
-
-test "luce.sema.own: a receiver carrying a resource does not bind (BINDING.md D4)" {
-    try expectHostSaying(
-        \\struct Reader:
-        \\    handle: file
-        \\
-        \\    func ready() -> bool:
-        \\        return true
-        \\
-        \\func apply(f: func() -> bool) -> bool:
-        \\    return f()
-        \\
-        \\func main() -> !:
-        \\    var reader = Reader(handle = try file_open("notes.txt", 0))
-        \\    assert(apply(reader.ready))
-        \\
-    ,
-        "luce.sema.own",
-        "carries a file or task, and a bound value borrows its receiver",
-    );
-}
-
-test "luce.sema.own: a task-bearing receiver does not bind (BINDING.md D4)" {
-    try expectHostSaying(
-        \\union Job:
-        \\    running(task: task(long))
-        \\
-        \\struct Reader:
-        \\    job: Job
-        \\
-        \\    func ready() -> bool:
-        \\        return true
-        \\
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let reader = Reader(job = Job.running(task = spawn work()))
-        \\    let check: func() -> bool = reader.ready
-        \\    print(string(check()))
-        \\
-    ,
-        "luce.sema.own",
-        "carries a file or task, and a bound value borrows its receiver",
     );
 }
 
@@ -1918,53 +1739,6 @@ test "luce.sema.method: a method checks its arity against its written parameters
     );
 }
 
-test "luce.sema.own: self: an object-carrying writer cannot be given or moved out" {
-    try expectSaying(
-        \\struct Box:
-        \\    items: list(long)
-        \\
-        \\    func lose():
-        \\        let moved = give self
-        \\
-        \\func main():
-        \\    return
-        \\
-    ,
-        "luce.sema.own",
-        "self is the caller's receiver and cannot be given away; pass it to a borrowing parameter, or use copy self [SELF.md D4, OWNERSHIP.md S12]",
-    );
-
-    try expectSaying(
-        \\struct Box:
-        \\    items: list(long)
-        \\
-        \\    func moved() -> Box:
-        \\        self.items = [2]
-        \\        return self
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "self is the caller's receiver and cannot be moved out; return copy self");
-}
-
-test "luce.sema.own: self: an object-carrying writer cannot be freed" {
-    try expectSaying(
-        \\struct Box:
-        \\    items: list(long)
-        \\
-        \\    func release():
-        \\        free(self)
-        \\
-        \\func main():
-        \\    return
-        \\
-    ,
-        "luce.sema.own",
-        "self is the caller's receiver and cannot be freed; replace its fields or let the caller's scope release it [SELF.md D4]",
-    );
-}
-
 test "luce.sema.call: self: reader and writer methods are not function values" {
     try expectSaying(
         \\struct Point:
@@ -2074,20 +1848,6 @@ test "luce.sema.main: the entry takes at most the one parameter" {
         "main takes at most one parameter, the command line; it has 2",
         1,
         28,
-    );
-}
-
-test "luce.sema.main: the entry's parameter takes no verb" {
-    // S13 says `give` appears at both ends; the entry has one end.
-    try expectOnlySayingAt(
-        \\func main(args: give list(string)):
-        \\    return
-        \\
-    ,
-        "luce.sema.main",
-        "main's parameter takes no verb; the runtime hands the list to main's scope [OWNERSHIP.md S44]",
-        1,
-        11,
     );
 }
 
@@ -2838,7 +2598,6 @@ test "luce.sema.convert: string() names its value domain and build() for a build
         \\    var b = new builder()
         \\    b.append("x")
         \\    let text = string(b)
-        \\    free(b)
         \\
     ,
         "luce.sema.convert",
@@ -2850,7 +2609,6 @@ test "luce.sema.convert: string() names its value domain and build() for a build
         \\func main():
         \\    var xs = [1, 2]
         \\    let text = string(xs)
-        \\    free(xs)
         \\
     ,
         "luce.sema.convert",
@@ -3499,37 +3257,6 @@ test "luce.sema.field: a nested place checks each field on the way down" {
     , "luce.sema.field");
 }
 
-test "luce.sema.own: a nested place cannot assign an object slot" {
-    // The single-level form (bag.items = [1, 2]) is the way to
-    // restock an object field; a chain leaf must be a value.
-    try expectRejected(
-        \\struct Bag:
-        \\    items: list(long)
-        \\
-        \\struct Holder:
-        \\    bag: Bag
-        \\
-        \\func main():
-        \\    var h = Holder(bag = Bag(items = [1]))
-        \\    h.bag.items = [2, 3]
-        \\
-    , "luce.sema.own");
-}
-
-test "luce.sema.own: cannot index into object-carrying elements in a chain" {
-    try expectRejected(
-        \\struct Bag:
-        \\    label: string
-        \\    items: list(long)
-        \\
-        \\func main():
-        \\    var bags = new list(Bag)
-        \\    bags.append(Bag(label = "a", items = [1]))
-        \\    bags[0].label = "b"
-        \\
-    , "luce.sema.own");
-}
-
 test "luce.parse.new: new builds only the four heap types" {
     try expectRejected("func main():\n    let a = new Point()\n", "luce.parse.new");
 }
@@ -3540,10 +3267,6 @@ test "luce.parse.new: new builds only the four heap types" {
 
 test "luce.sema.name: input is not a name in a script" {
     try expectRejected("func main():\n    let a = input\n", "luce.sema.name");
-}
-
-test "luce.sema.name: give needs a name that exists" {
-    try expectRejected("func main():\n    let a = give ghost\n", "luce.sema.name");
 }
 
 test "luce.sema.duplicate: a struct cannot be declared twice" {
@@ -3932,17 +3655,6 @@ test "luce.sema.const: a default cannot read an earlier parameter" {
     , "luce.sema.const", "a default cannot use a: it is folded before any call is made");
 }
 
-test "luce.sema.own: a give parameter has no default" {
-    try expectSaying(
-        \\func f(xs: give list(long) = [1]):
-        \\    free(xs)
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "a give parameter takes ownership, so its default cannot be a shared constant container");
-}
-
 test "luce.sema.type: a default lands at the parameter's type or is refused" {
     try expectSaying(
         \\func f(start: long = "zero"):
@@ -4016,17 +3728,6 @@ test "luce.sema.struct: field defaults are trailing" {
         \\    return
         \\
     , "luce.sema.struct", "cursor has a default, so path needs one too — the fields with defaults come last");
-}
-
-test "luce.sema.own: an object-carrying field has no default" {
-    try expectSaying(
-        \\struct Bag:
-        \\    items: list(long) = [1]
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "Bag.items keeps its object, so its default cannot be a shared object [OWNERSHIP.md S21, S24, S46]");
 }
 
 test "luce.sema.const: a field default is a constant, called or not" {
@@ -4376,25 +4077,6 @@ test "luce.sema.new: a file is opened, not made" {
     try expectRejected("func main():\n    var f = new file\n", "luce.sema.new");
 }
 
-test "luce.sema.own: a file cannot be copied" {
-    try expectHostSaying(
-        \\import std.files
-        \\
-        \\func main() -> !:
-        \\    var f = try files.open("notes.txt")
-        \\    let twin = copy f
-        \\
-    , "luce.sema.own", "there is one open file behind a handle");
-}
-
-test "luce.sema.type: free names every directly releasable heap kind" {
-    try expectSaying(
-        \\func main():
-        \\    free(1)
-        \\
-    , "luce.sema.type", "free releases a list, map, array, builder, file, or task");
-}
-
 test "luce.sema.method: a file has read, write and flush and nothing else" {
     try expectRejected(
         \\import std.files
@@ -4735,22 +4417,16 @@ test "luce.sema.absent: a T? used unnarrowed names the two ways out" {
         \\        return
         \\
     , "luce.sema.loop");
-    // As something to hand over, or to free.
+    // As something to hand over.
     try expectRejected(
-        \\func consume(xs: give list(long)):
-        \\    free(xs)
+        \\func consume(xs: list(long)):
+        \\    return
         \\
         \\func main():
         \\    var xs: list(long)? = none
-        \\    consume(give xs)
+        \\    consume(xs)
         \\
-    , "luce.sema.absent");
-    try expectRejected(
-        \\func main():
-        \\    var xs: list(long)? = none
-        \\    free(xs)
-        \\
-    , "luce.sema.absent");
+    , "luce.sema.type");
 }
 
 test "luce.sema.absent: a field is not a local, so it is told to bind a name" {
@@ -5090,19 +4766,6 @@ test "a function that can fall off the end names the type it owes" {
     , "pick must return double on every path");
 }
 
-test "storing a borrowed parameter is not told to give it" {
-    // give on a borrow is its own error (S12), so advising it would
-    // only earn the reader a second message one keystroke later.
-    try expectMessage(
-        \\func stash(index: map(string, list(long)), hits: list(long)):
-        \\    index["latest"] = hits
-        \\
-        \\func main():
-        \\    var m = new map(string, list(long))
-        \\
-    , "borrowed parameter and can never be given away");
-}
-
 test "an f-string hole is underlined, not the whole literal" {
     // The synthesized `string(...)` used to carry the whole f-string's
     // span, so a reader with four holes on one line was shown all four
@@ -5401,7 +5064,6 @@ test "a slice whose start falls back to a name is still a slice" {
         \\    let base = 0
         \\    let part = xs[first(xs) catch base : 3]
         \\    assert(len(part) == 2)
-        \\    free(part)
         \\
     );
 }
@@ -5848,21 +5510,6 @@ test "luce.sema.call: a fallible builtin that answers nothing has nothing to tes
         \\        print("wrote")
         \\
     , "luce.sema.call");
-}
-
-test "luce.sema.own: the two sides of catch agree on ownership" {
-    try expectHostError(
-        \\func load(path: string) -> list(string)!:
-        \\    let lines = new list(string)
-        \\    lines.append(try file_read(path))
-        \\    return lines
-        \\
-        \\func main():
-        \\    let kept = new list(string)
-        \\    let got = load("notes.txt") catch kept
-        \\    free(kept)
-        \\
-    , "luce.sema.own");
 }
 
 test "luce.sema.name: a fallback that names nothing is unknown, not disagreeing about ownership" {
@@ -6336,72 +5983,6 @@ test "luce.sema.type: a T? argument to a method earns the same advice it earns a
     );
 }
 
-test "ownership-cycle refusal follows method, type, index, and ordinary ownership checks" {
-    // These all resemble an owner entering its descendant, but each
-    // has an earlier mistake.  The ancestry check is deliberately the
-    // last gate on an otherwise-valid adopting store (S20, S33).
-    try expectSaying(
-        \\struct Node:
-        \\    children: list(Node)
-        \\
-        \\func main():
-        \\    var root = Node(children = new list(Node))
-        \\    root.children.apend(give root)
-        \\
-    , "luce.sema.method", "did you mean append?");
-    try expectSaying(
-        \\struct Root:
-        \\    rows: list(list(long))
-        \\
-        \\func main():
-        \\    var root = Root(rows = new list(list(long)))
-        \\    root.rows.append(give root)
-        \\
-    , "luce.sema.type", "argument 1 of append is list(long), got Root");
-    try expectSaying(
-        \\struct Node:
-        \\    children: map(string, Node)
-        \\
-        \\func main():
-        \\    var root = Node(children = new map(string, Node))
-        \\    root.children[true] = give root
-        \\
-    , "luce.sema.index", "this map is keyed by string");
-    try expectSaying(
-        \\struct Node:
-        \\    children: list(Node)
-        \\
-        \\func main():
-        \\    var root = Node(children = new list(Node))
-        \\    root.children.append(root)
-        \\
-    , "luce.sema.own", "a container keeps its owned elements; write give root to hand it over, or copy root to keep your own");
-    try expectSaying(
-        \\struct Node:
-        \\    children: list(Node)
-        \\
-        \\func main():
-        \\    var root = Node(children = new list(Node))
-        \\    root.children[0] += give root
-        \\
-    , "luce.sema.type", "Node has no compound assignment");
-}
-
-test "a field replacement that gives its base away is S10, not an ownership cycle" {
-    // The fresh list makes this graph reshaping acyclic, but installing
-    // it still reloads `root` after the right-hand side gave `root`
-    // away.  The established use-after-give rule therefore decides it.
-    try expectSaying(
-        \\struct Node:
-        \\    children: list(Node)
-        \\
-        \\func main():
-        \\    var root = Node(children = new list(Node))
-        \\    root.children = [give root]
-        \\
-    , "luce.sema.own", "root was given away and cannot be touched again in this scope [OWNERSHIP.md S10, S29]");
-}
-
 test "luce.sema.call: a builtin counts its arguments the way a function does" {
     // "print takes 1 arguments" miscounted its own grammar and never
     // said how many it got.  Hosted, because the host gate is checked
@@ -6477,49 +6058,6 @@ test "luce.sema.call: a user function agrees with itself about one argument" {
         \\    let x = twice(1, 2)
         \\
     , "luce.sema.call", "twice takes 1 argument, got 2", 5, 13);
-}
-
-test "luce.sema.own: the checks that have no name to suggest still say what to do" {
-    // `failNeedsOwnership` has three endings: a borrowed parameter, a
-    // name that could be given, and an expression that is neither.
-    // The third is what a container element read reaches.
-    try expectSaying(
-        \\func main():
-        \\    var outer = new list(list(long))
-        \\    var source = new list(list(long))
-        \\    outer.append(source[0])
-        \\    free(outer)
-        \\    free(source)
-        \\
-    , "luce.sema.own", "store something fresh, give NAME, or copy NAME");
-
-    // Both arms of `else` decide ownership together, because the
-    // binding that receives the answer either owns or does not.
-    try expectHostSaying(
-        \\func pick(which: bool) -> list(long)?:
-        \\    if which:
-        \\        return new list(long)
-        \\    return none
-        \\
-        \\func main():
-        \\    let kept = new list(long)
-        \\    let got = pick(true) else kept
-        \\    free(kept)
-        \\
-    , "luce.sema.own", "the two sides of else must agree on ownership");
-
-    // std strings borrows, so a give at one of its arguments has no
-    // owner to become.
-    try expectSaying(
-        \\import std.strings
-        \\
-        \\func main():
-        \\    var parts = new list(string)
-        \\    var other = new list(string)
-        \\    let joined = parts.join(give other)
-        \\    free(parts)
-        \\
-    , "luce.sema.own", "only borrows its arguments");
 }
 
 test "luce.sema.name: a port is not a place, however it is written" {
@@ -7260,170 +6798,9 @@ test "luce.sema.const: a constant keymap refuses a duplicated member" {
 // The refusals *are* the design: a worker has a runtime of its own, so
 // every one of them is the same sentence said at a different site.
 
-test "luce.sema.own: a spawned function may not take an object as a borrow" {
-    try expectSaying(
-        \\func total(values: list(long)) -> long:
-        \\    return len(values)
-        \\
-        \\func main():
-        \\    var mine: list(long) = [1, 2]
-        \\    let t = spawn total(give mine)
-        \\
-    , "luce.sema.own", "a worker cannot borrow from another runtime");
-}
-
-test "luce.sema.own: a bare object name still needs a verb at a spawn" {
-    // S13/S14 unchanged: the spawn boundary adds a rule about the
-    // *signature*, and the rule about the call site is the one every
-    // give parameter already had.
-    try expectRejected(
-        \\func total(values: give list(long)) -> long:
-        \\    return len(values)
-        \\
-        \\func main():
-        \\    var mine: list(long) = [1, 2]
-        \\    let t = spawn total(mine)
-        \\
-    , "luce.sema.own");
-}
-
-test "luce.sema.own: a name given to a worker cannot be touched again" {
-    try expectRejected(
-        \\func total(values: give list(long)) -> long:
-        \\    return len(values)
-        \\
-        \\func main():
-        \\    var mine: list(long) = [1, 2]
-        \\    let t = spawn total(give mine)
-        \\    assert(len(mine) == 2)
-        \\
-    , "luce.sema.own");
-}
-
-test "luce.sema.own: a task cannot be copied" {
-    try expectSaying(
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let t = spawn work()
-        \\    let twin = copy t
-        \\
-    , "luce.sema.own", "there is one worker behind it");
-}
-
-test "luce.sema.own: give applies diagnostic names resources at all three sites" {
-    const wording = "give applies to containers and resources (list, map, array, builder, file, task) and structs that carry them, not values";
-
-    // A declared function parameter is checked while declarations are
-    // collected.
-    try expectSaying(
-        \\func consume(value: give long):
-        \\    return
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", wording);
-
-    // The parameter inside a first-class function type has a distinct
-    // signature-resolution path.
-    try expectSaying(
-        \\func run(callback: func(give long) -> long):
-        \\    return
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", wording);
-
-    // And the expression verb is checked while the body is lowered.
-    try expectSaying(
-        \\func main():
-        \\    var value: long = 1
-        \\    let moved = give value
-        \\
-    , "luce.sema.own", wording);
-}
-
-test "luce.sema.own: a function field checks give after shapes settle" {
-    try expectSaying(
-        \\struct Holder:
-        \\    callback: (func(give long) -> long)?
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "give applies to containers and resources (list, map, array, builder, file, task) and structs that carry them, not values");
-}
-
-test "luce.sema.own: copy's value-domain diagnostic distinguishes resources" {
-    try expectSaying(
-        \\func main():
-        \\    let duplicate = copy 1
-        \\
-    ,
-        "luce.sema.own",
-        "copy applies to resource-free containers and carrying structs; values copy by themselves, and resources move with give [OWNERSHIP.md S31, S32]",
-    );
-}
-
-test "luce.sema.own: a resource store never recommends forbidden copy" {
-    // An owned task has exactly one valid handoff spelling.
-    try expectSaying(
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let running = spawn work()
-        \\    var tasks = new list(task(long))
-        \\    tasks.append(running)
-        \\
-    , "luce.sema.own", "a container keeps its owned elements; write give running to hand it over — running carries a file or task and cannot be copied");
-
-    // A borrowed resource cannot take that spelling either; the
-    // signature is the place that must grant ownership.
-    try expectSaying(
-        \\func keep(tasks: list(task(long)), running: task(long)):
-        \\    tasks.append(running)
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "a container keeps its owned elements; running is a borrowed parameter and carries a file or task, so it can neither be given nor copied — change running to a give parameter and make each call site pass ownership (give NAME for an owning name; fresh values need no verb), then write give running here");
-
-    // An alias cannot move either.  Where its live owner is known, the
-    // diagnostic names that binding instead of suggesting `give view`.
-    try expectSaying(
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let running = spawn work()
-        \\    let view = running
-        \\    var tasks = new list(task(long))
-        \\    tasks.append(view)
-        \\
-    , "luce.sema.own", "view aliases a resource graph it does not own — write give running, the owning binding; view cannot be copied");
-
-    // Narrowing an alias does not narrow its optional owner.  Advice
-    // must not promise `give maybe` until that owning binding is proven.
-    try expectSaying(
-        \\func keep(maybe: give task(long)?):
-        \\    let view = maybe
-        \\    var tasks = new list(task(long))
-        \\    if view != none:
-        \\        tasks.append(view)
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "view aliases a resource graph it does not own; this borrowed view cannot be copied or moved — obtain an owned value from an ownership-returning operation or redesign the handoff");
-}
-
 test "luce.sema.type: call arguments fit before ownership advice" {
     try expectOnlySayingAt(
-        \\func consume(items: give list(long)):
+        \\func consume(items: list(long)):
         \\    return
         \\
         \\func main():
@@ -7438,11 +6815,11 @@ test "luce.sema.type: call arguments fit before ownership advice" {
     );
 
     try expectOnlySayingAt(
-        \\func count(items: give list(long)) -> long:
+        \\func count(items: list(long)) -> long:
         \\    return len(items)
         \\
         \\func main():
-        \\    let chosen: func(give list(long)) -> long = count
+        \\    let chosen: func(list(long)) -> long = count
         \\    var running = new list(task(long))
         \\    let result = chosen(running)
         \\
@@ -7457,7 +6834,7 @@ test "luce.sema.type: call arguments fit before ownership advice" {
         \\struct Sink:
         \\    marker: long
         \\
-        \\    func consume(items: give list(long)) -> long:
+        \\    func consume(items: list(long)) -> long:
         \\        return len(items) + self.marker
         \\
         \\func main():
@@ -7475,7 +6852,7 @@ test "luce.sema.type: call arguments fit before ownership advice" {
     // The reverse mismatch proves advice is based on the source type,
     // not on a resource-bearing destination type.
     try expectSaying(
-        \\func keep(items: give list(task(long))):
+        \\func keep(items: list(task(long))):
         \\    return
         \\
         \\func main():
@@ -7492,838 +6869,6 @@ test "luce.sema.type: call arguments fit before ownership advice" {
         \\    tasks[0] = numbers
         \\
     , "luce.sema.type", "this place holds task(long) but the value is list(long)");
-}
-
-test "luce.sema.own: copy and return advice respects resource ownership class" {
-    // A borrowed resource needs a signature change, ownership at every
-    // caller, and a move at this handoff — never `copy`.
-    try expectSaying(
-        \\func duplicate(running: task(long)):
-        \\    let twin = copy running
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "remove copy to use or borrow running; if the surrounding site must take ownership, supply a distinct owned graph or redesign the handoff");
-
-    // Testing presence alone would only reveal the same no-copy rule
-    // one line later, so an optional resource says both facts once.
-    try expectSaying(
-        \\func duplicate(maybe: task(long)?):
-        \\    let twin = copy maybe
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "task(long)? may be absent and, when present, carries a file or task that cannot be copied; prove the owning binding is present");
-
-    // A fresh resource already owns what it produced; removing `copy`
-    // is the whole repair.
-    try expectSaying(
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let twin = copy spawn work()
-        \\
-    , "luce.sema.own", "remove copy; this expression already yields an owned resource graph");
-
-    // A resource reached through a field is a view.  The enclosing
-    // owner has another type, so advice must not promise `give owner`.
-    try expectSaying(
-        \\struct Box:
-        \\    running: task(long)
-        \\
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let running = spawn work()
-        \\    var box = Box(running = give running)
-        \\    let twin = copy box.running
-        \\
-    , "luce.sema.own", "remove copy to use this borrowed view; if the surrounding site must take ownership, obtain a distinct owned graph from an ownership-returning operation or redesign the handoff");
-
-    // `copy` can also sit inside a borrowing call.  Removing the verb
-    // is the compiling repair for an owned name, a borrowed parameter,
-    // and an alias; transfer advice would merely create a second error.
-    try expectSaying(
-        \\func inspect(running: task(long)):
-        \\    return
-        \\
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let running = spawn work()
-        \\    inspect(copy running)
-        \\
-    , "luce.sema.own", "remove copy to use or borrow running; if the surrounding site must take ownership, supply a distinct owned graph or redesign the handoff");
-    try expectSaying(
-        \\func inspect(running: task(long)):
-        \\    return
-        \\
-        \\func relay(running: task(long)):
-        \\    inspect(copy running)
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "remove copy to use or borrow running; if the surrounding site must take ownership, supply a distinct owned graph or redesign the handoff");
-    try expectSaying(
-        \\func inspect(running: task(long)):
-        \\    return
-        \\
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let running = spawn work()
-        \\    let view = running
-        \\    inspect(copy view)
-        \\
-    , "luce.sema.own", "remove copy to use or borrow view; if the surrounding site must take ownership, supply a distinct owned graph or redesign the handoff");
-
-    // A nested give happens before copy, so removing copy alone may
-    // still be wrong when the surrounding call borrows.
-    try expectSaying(
-        \\func inspect(running: task(long)):
-        \\    return
-        \\
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let running = spawn work()
-        \\    inspect(copy give running)
-        \\
-    , "luce.sema.own", "this spelling gives before it copies; in a borrowing context remove both give and copy, while an ownership-taking context removes copy only");
-
-    try expectSaying(
-        \\func hand(running: task(long)) -> task(long):
-        \\    return running
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "running is a borrowed parameter and carries a file or task; it cannot be copied — change it to a give parameter and make each call site pass ownership (give NAME for an owning name; fresh values need no verb)");
-
-    try expectSaying(
-        \\func hand(maybe: give task(long)?) -> task(long):
-        \\    let view = maybe
-        \\    if view != none:
-        \\        return view
-        \\    return spawn fallback()
-        \\
-        \\func fallback() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "view aliases a resource graph owned by maybe, but that owning binding is not proven present — prove maybe is present, then return the owner; the alias cannot be copied");
-
-    // Multi-return uses the same ownership decision rather than a
-    // second, stale copy recommendation.
-    try expectSaying(
-        \\func hand(running: task(long)) -> (task(long), long):
-        \\    return running, 1
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "running is a borrowed parameter and carries a file or task; it cannot be copied — change it to a give parameter and make each call site pass ownership (give NAME for an owning name; fresh values need no verb)");
-
-    // A second scalar result is already fine; the ordinary owner repair
-    // remains exact when only one slot names the resource graph.
-    try expectSaying(
-        \\func pair(running: give task(long)) -> (task(long), long):
-        \\    let view = running
-        \\    return view, 1
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "view aliases a resource graph it does not own; return running, the owning name — view cannot be copied");
-
-    // Naming the owner is not a repair after an earlier result already
-    // moved it; a resource graph cannot be duplicated into two slots.
-    try expectSaying(
-        \\func pair(running: give task(long)) -> (task(long), task(long)):
-        \\    let view = running
-        \\    return running, view
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "view aliases a resource graph already returned through running; one graph cannot fill two results — return a distinct owned graph or change the return shape");
-    try expectSaying(
-        \\func pair(running: give task(long)) -> (task(long), task(long)):
-        \\    let view = running
-        \\    return view, running
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "view aliases the resource graph owned by running; every result needs a distinct owned graph — return running in only one slot and change the other slot or the return shape");
-
-    // A copyable graph can make the missing second owner explicitly,
-    // but naming the already-used owner is still not a legal repair.
-    try expectSaying(
-        \\func pair(values: give list(long)) -> (list(long), list(long)):
-        \\    let view = values
-        \\    return values, view
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "view aliases an object graph already used by another result; return copy view to make a distinct graph, or change the return shape");
-
-    try expectSaying(
-        \\func pair(running: task(long)) -> (task(long), task(long)):
-        \\    return running, running
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "running is one borrowed resource graph used by more than one result; it cannot be copied — every resource result needs a distinct owned graph");
-
-    try expectSaying(
-        \\struct Box:
-        \\    running: task(long)
-        \\    marker: long
-        \\
-        \\    func pair() -> (Box, Box):
-        \\        self.marker = 1
-        \\        return self, self
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "self is one caller-owned resource graph used by more than one result; it cannot be copied or moved out — every resource result needs a distinct owned graph");
-
-    // A written give is caught before it can poison a name whose value
-    // was already staged for an earlier result.
-    try expectSaying(
-        \\func pair(running: give task(long)) -> (task(long), task(long)):
-        \\    return running, give running
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "one object graph is used by more than one return result, including this give; one graph cannot be owned twice");
-
-    // The later give can be nested in a call too.  The whole operand
-    // batch is rechecked so its earlier bare-name register cannot escape.
-    try expectSaying(
-        \\func hand(running: give task(long)) -> task(long):
-        \\    return running
-        \\
-        \\func pair(running: give task(long)) -> (task(long), task(long)):
-        \\    return running, hand(give running)
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "running was given away and cannot be touched again in this scope");
-
-    // Fitting every staged result happens before that ownership recheck,
-    // so a direct slot type mistake keeps diagnostic precedence.
-    try expectSaying(
-        \\func hand(running: give task(long)) -> task(long):
-        \\    return running
-        \\
-        \\func pair(running: give task(long)) -> (list(task(long)), task(long)):
-        \\    return running, hand(give running)
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.type", "value 1 of this return is task(long), and pair answers list(task(long)) there");
-
-    // A writing method replaces its receiver in place.  The old value
-    // staged for result one cannot escape beside the replacement.
-    try expectSaying(
-        \\struct Box:
-        \\    running: task(long)
-        \\
-        \\    func replace(next: give task(long)) -> long:
-        \\        self.running = give next
-        \\        return 1
-        \\
-        \\func pair(box: give Box, next: give task(long)) -> (Box, long):
-        \\    var current = give box
-        \\    return current, current.replace(give next)
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "current was replaced by a later return expression after its old value was staged; evaluate the writing operation first, then return distinct current values");
-}
-
-test "luce.sema.own: nested give advice respects borrowing and free contexts" {
-    // Builtin and declared read methods lower arguments before their
-    // borrow mode is checked.  An invalid resource alias must therefore
-    // offer the borrow-preserving edit itself.
-    try expectSaying(
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let running = spawn work()
-        \\    let view = running
-        \\    var tasks = new list(task(long))
-        \\    let seen = tasks.contains(give view)
-        \\
-    , "luce.sema.own", "view aliases a resource graph it does not own — remove give to keep borrowing this view; if this site must take ownership, write give running, the live owning binding");
-
-    try expectSaying(
-        \\struct Judge:
-        \\    marker: long
-        \\
-        \\    func sees(running: task(long)) -> bool:
-        \\        return self.marker == 0
-        \\
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let running = spawn work()
-        \\    let view = running
-        \\    let judge = Judge(marker = 0)
-        \\    let seen = judge.sees(give view)
-        \\
-    , "luce.sema.own", "view aliases a resource graph it does not own — remove give to keep borrowing this view; if this site must take ownership, write give running, the live owning binding");
-
-    // The receiver is borrowed too, including inside a loop where a
-    // give parameter could not be consumed again on the next iteration.
-    try expectSaying(
-        \\struct Box:
-        \\    running: task(long)
-        \\    marker: long
-        \\
-        \\    func inspect(other: Box):
-        \\        return
-        \\
-        \\    func check():
-        \\        self.marker = 1
-        \\        for n in [1]:
-        \\            self.inspect(give self)
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "self comes from outside this loop and carries a file or task — remove give to keep borrowing self; an ownership-taking site needs a distinct owned value created or received inside each iteration");
-
-    try expectSaying(
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let running = spawn work()
-        \\    free(give running)
-        \\
-    , "luce.sema.own", "free names its owner directly; remove give and write free(running)");
-
-    try expectSaying(
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let running = spawn work()
-        \\    let view = running
-        \\    free(give view)
-        \\
-    , "luce.sema.own", "view is only an alias; free names the live owner directly — write free(running), without give");
-
-    try expectSaying(
-        \\func release(maybe: task(long)?):
-        \\    free(give maybe)
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "maybe is borrowed, so neither give nor free may release it; let its caller-owned scope release the resource");
-
-    // Narrowing an alias does not prove its optional owning binding is
-    // present; advice names the proof that free itself will accept.
-    try expectSaying(
-        \\func release(maybe: give task(long)?):
-        \\    let view = maybe
-        \\    if view != none:
-        \\        free(give view)
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "view is only an alias and its owner maybe is not proven present — prove the owning binding is present, then write free(maybe) directly without give");
-
-    try expectSaying(
-        \\func release(maybe: give task(long)?):
-        \\    let view = maybe
-        \\    if view != none:
-        \\        free(view)
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "view is only an alias and its owner maybe is not proven present — prove the owning binding is present, then write free(maybe)");
-
-    try expectSaying(
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let running = spawn work()
-        \\    let view = running
-        \\    for n in [1]:
-        \\        free(view)
-        \\
-    , "luce.sema.own", "view is only an alias and its owner running lives outside this loop; neither may be freed per iteration — let the outer scope release it");
-
-    // Carrying structs are scope-released but are not direct free handles;
-    // naming their owner must not create a second diagnostic.
-    try expectSaying(
-        \\struct Box:
-        \\    running: task(long)
-        \\
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let running = spawn work()
-        \\    let box = Box(running = give running)
-        \\    free(give box)
-        \\
-    , "luce.sema.own", "a carrying struct cannot be released through free(give NAME) — remove the whole call and let this value's scope release it");
-
-    try expectSaying(
-        \\struct Box:
-        \\    running: task(long)
-        \\
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let running = spawn work()
-        \\    free(give Box(running = give running))
-        \\
-    , "luce.sema.own", "free(give EXPR) has no legal verb stack — remove the whole call, or bind a direct freeable handle and write free(NAME); carrying structs and borrowed views are released by their owner or scope");
-
-    try expectSaying(
-        \\struct Box:
-        \\    running: task(long)
-        \\
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let running = spawn work()
-        \\    let box = Box(running = give running)
-        \\    free(give box.running)
-        \\
-    , "luce.sema.own", "free(give EXPR) has no legal verb stack — remove the whole call, or bind a direct freeable handle and write free(NAME); carrying structs and borrowed views are released by their owner or scope");
-
-    // `copy` is lowered before free diagnoses its binding requirement.
-    // That preserves name/type/resource errors inside copy; a legal
-    // resource-free copy reaches this precise, actionable free error.
-    try expectSaying(
-        \\func main():
-        \\    var values = new list(long)
-        \\    free(copy values)
-        \\
-    , "luce.sema.own", "free releases an owned name; bind this copy result to a name, then write free(NAME)");
-
-    try expectSaying(
-        \\func main():
-        \\    free(copy missing)
-        \\
-    , "luce.sema.name", "unknown name missing");
-
-    try expectSaying(
-        \\func main():
-        \\    free(copy 1)
-        \\
-    , "luce.sema.own", "copy applies to resource-free containers and carrying structs; values copy by themselves, and resources move with give");
-
-    try expectSaying(
-        \\func release(maybe: give task(long)?):
-        \\    free(copy maybe)
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "task(long)? may be absent and, when present, carries a file or task that cannot be copied; prove the owning binding is present");
-}
-
-test "luce.sema.own: resource handoff advice respects the active loop" {
-    try expectSaying(
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let running = spawn work()
-        \\    var tasks = new list(task(long))
-        \\    for value in [1]:
-        \\        tasks.append(running)
-        \\
-    , "luce.sema.own", "running is owned outside this loop and cannot be moved or copied per iteration — create or receive an owned value inside each iteration, or redesign the handoff");
-
-    try expectSaying(
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let running = spawn work()
-        \\    for value in [1]:
-        \\        let twin = copy running
-        \\
-    , "luce.sema.own", "remove copy to use or borrow running; if the surrounding site must take ownership, supply a distinct owned graph or redesign the handoff");
-}
-
-test "luce.sema.own: resource reassignment never recommends giving a name to itself" {
-    try expectSaying(
-        \\func main():
-        \\    var tasks = new list(task(long))
-        \\    tasks = tasks
-        \\
-    , "luce.sema.own", "tasks already owns the resource graph named by tasks; it cannot take the same graph back through itself or an alias — remove a redundant self-assignment, or assign a distinct owned graph");
-
-    try expectSaying(
-        \\func main():
-        \\    var tasks = new list(task(long))
-        \\    let view = tasks
-        \\    tasks = view
-        \\
-    , "luce.sema.own", "tasks already owns the resource graph named by view; it cannot take the same graph back through itself or an alias — remove a redundant self-assignment, or assign a distinct owned graph");
-
-    try expectSaying(
-        \\func main():
-        \\    var tasks = new list(task(long))
-        \\    tasks = give tasks
-        \\
-    , "luce.sema.own", "tasks already owns the object graph named by this give; a binding cannot give its graph back to itself");
-
-    try expectSaying(
-        \\func main():
-        \\    var tasks = new list(task(long))
-        \\    let view = tasks
-        \\    tasks = give view
-        \\
-    , "luce.sema.own", "tasks already owns the object graph named by this give; a binding cannot give its graph back to itself");
-
-    try expectSaying(
-        \\func main():
-        \\    var xs = new list(long)
-        \\    xs = give xs
-        \\
-    , "luce.sema.own", "xs already owns the object graph named by this give; a binding cannot give its graph back to itself");
-}
-
-test "luce.sema.own: resource alias provenance follows replacement" {
-    // Replacing an owner invalidates aliases of the old handle; advice
-    // must never name the unrelated replacement as their owner.
-    try expectSaying(
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    var running = spawn work()
-        \\    let old = running
-        \\    running = spawn work()
-        \\    let moved = give old
-        \\
-    , "luce.sema.own", "old aliases a resource graph it does not own — remove give only if this still names a live borrowed view; if its owner was replaced or this site must take ownership, obtain an owned value from an ownership-returning operation or redesign the handoff");
-
-    try expectSaying(
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    var running = spawn work()
-        \\    let old = running
-        \\    running = spawn work()
-        \\    free(old)
-        \\
-    , "luce.sema.own", "old is a borrowed or stale view with no live owner to free here; let its owner or scope release it");
-
-    // Reassigning a mutable alias refreshes its visible owner root.
-    try expectSaying(
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let first = spawn work()
-        \\    let second = spawn work()
-        \\    var view = first
-        \\    view = second
-        \\    var kept = spawn work()
-        \\    kept = view
-        \\
-    , "luce.sema.own", "view aliases a resource graph it does not own — write give second, the owning binding; view cannot be copied");
-
-    // A writing method can replace a carrying receiver just as a plain
-    // assignment can; aliases of the old graph must not name the new box.
-    try expectSaying(
-        \\struct Box:
-        \\    running: task(long)
-        \\
-        \\    func replace(next: give task(long)):
-        \\        self.running = give next
-        \\
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let first = spawn work()
-        \\    var box = Box(running = give first)
-        \\    let old = box
-        \\    let next = spawn work()
-        \\    box.replace(give next)
-        \\    let moved = give old
-        \\
-    , "luce.sema.own", "old aliases a resource graph it does not own — remove give only if this still names a live borrowed view; if its owner was replaced or this site must take ownership, obtain an owned value from an ownership-returning operation or redesign the handoff");
-
-    // Even a value-field write makes the owner's new struct differ from
-    // an earlier copied alias; the old view must not be redirected to it.
-    try expectSaying(
-        \\struct Box:
-        \\    running: task(long)
-        \\    marker: long
-        \\
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let running = spawn work()
-        \\    var box = Box(running = give running, marker = 1)
-        \\    let old = box
-        \\    box.marker = 2
-        \\    let moved = give old
-        \\
-    , "luce.sema.own", "old aliases a resource graph it does not own — remove give only if this still names a live borrowed view; if its owner was replaced or this site must take ownership, obtain an owned value from an ownership-returning operation or redesign the handoff");
-
-    // Mutating a mutable alias's value field changes its copied struct,
-    // not the owner's value.  Writing methods already require the owning
-    // var, so this direct store is the alias-divergence path.
-    try expectSaying(
-        \\struct Box:
-        \\    running: task(long)
-        \\    marker: long
-        \\
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let running = spawn work()
-        \\    let box = Box(running = give running, marker = 1)
-        \\    var view = box
-        \\    view.marker = 2
-        \\    let moved = give view
-        \\
-    , "luce.sema.own", "view aliases a resource graph it does not own — remove give only if this still names a live borrowed view; if its owner was replaced or this site must take ownership, obtain an owned value from an ownership-returning operation or redesign the handoff");
-}
-
-test "luce.sema.own: copy refuses resources through every type-graph edge" {
-    // map -> array -> file proves both container edges without opening
-    // a file: copy is ruled by the type, not by today's population.
-    try expectSaying(
-        \\func main():
-        \\    var handles = new map(string, array(file, _))
-        \\    let twins = copy handles
-        \\
-    , "luce.sema.own", "contains a file or task and cannot be copied");
-
-    // Node -> list(Node) is a legal cycle in the type graph.  The
-    // resource query must terminate, then find task through optional.
-    try expectSaying(
-        \\struct Node:
-        \\    running: task(long)?
-        \\    children: list(Node)
-        \\
-        \\func main():
-        \\    var root = Node(children = new list(Node), running = none)
-        \\    let twin = copy root
-        \\
-    , "luce.sema.own", "Node contains a file or task and cannot be copied");
-}
-
-test "luce.sema.own: copy-producing reads refuse resource elements" {
-    // A slice deep-copies every selected element.  The refusal is
-    // type-driven even when today's list is empty; only equal
-    // compile-time bounds prove that the operation itself copies
-    // nothing.  Node -> list(Node) makes the type graph cyclic before
-    // the walk reaches its optional task.
-    try expectSaying(
-        \\struct Node:
-        \\    running: task(long)?
-        \\    children: list(Node)
-        \\
-        \\func main():
-        \\    var nodes = new list(Node)
-        \\    let duplicate = nodes[0:1]
-        \\
-    , "luce.sema.own", "a list slice deep-copies its elements, but list(Node) carries a file or task");
-
-    // Bound typing is the earlier and more useful question: ownership
-    // does not hide a direct spelling error in the slice itself.
-    try expectSaying(
-        \\func main():
-        \\    var running = new list(task(long))
-        \\    let duplicate = running["a":"b"]
-        \\
-    , "luce.sema.type", "slice bounds are long");
-
-    // Equal runtime values are not a compile-time proof: evaluating
-    // either bound could have effects, and the general intrinsic still
-    // has a deep-copying path.
-    try expectSaying(
-        \\func main():
-        \\    var running = new list(task(long))
-        \\    var at: long = 0
-        \\    let duplicate = running[at:at]
-        \\
-    , "luce.sema.own", "only equal compile-time bounds make a resource-safe empty slice");
-
-    // `values()` likewise returns a fresh list that owns independent
-    // copies; map -> array -> file proves the nested container path.
-    try expectSaying(
-        \\func main():
-        \\    var parcels = new map(string, array(file, _))
-        \\    let duplicate = parcels.values()
-        \\
-    , "luce.sema.own", "map.values() deep-copies every value, but array(file, _) carries a file or task");
-}
-
-test "luce.sema.own: direct resources cannot enter or leave a worker Runtime" {
-    try expectHostSaying(
-        \\import std.files
-        \\
-        \\func consume(handle: give file) -> long:
-        \\    free(handle)
-        \\    return 1
-        \\
-        \\func main() -> !:
-        \\    var handle = try files.open("notes.txt")
-        \\    let running = spawn consume(give handle)
-        \\
-    , "luce.sema.own", "parameter handle of consume is file");
-
-    try expectSaying(
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func consume(running: give task(long)) -> long:
-        \\    return running.wait()
-        \\
-        \\func main():
-        \\    let inner = spawn work()
-        \\    let outer = spawn consume(give inner)
-        \\
-    , "luce.sema.own", "parameter running of consume is task(long)");
-
-    try expectHostSaying(
-        \\import std.files
-        \\
-        \\func opened() -> file!:
-        \\    return try files.open("notes.txt")
-        \\
-        \\func main():
-        \\    let running = spawn opened()
-        \\
-    , "luce.sema.own", "opened answers file");
-
-    try expectSaying(
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func started() -> task(long):
-        \\    return spawn work()
-        \\
-        \\func main():
-        \\    let outer = spawn started()
-        \\
-    , "luce.sema.own", "started answers task(long)");
-}
-
-test "luce.sema.own: nested resources cannot enter or leave a worker Runtime" {
-    try expectSaying(
-        \\struct Parcel:
-        \\    handles: list(file)
-        \\
-        \\func inspect(parcel: give Parcel) -> long:
-        \\    return len(parcel.handles)
-        \\
-        \\func main():
-        \\    var parcel = Parcel(handles = new list(file))
-        \\    let running = spawn inspect(give parcel)
-        \\
-    , "luce.sema.own", "parameter parcel of inspect is Parcel, which carries a file or task");
-
-    try expectSaying(
-        \\func inspect(running: give list(task(long))) -> long:
-        \\    return len(running)
-        \\
-        \\func main():
-        \\    var running = new list(task(long))
-        \\    let outer = spawn inspect(give running)
-        \\
-    , "luce.sema.own", "parameter running of inspect is list(task(long)), which carries a file or task");
-
-    try expectSaying(
-        \\func opened() -> list(file):
-        \\    return new list(file)
-        \\
-        \\func main():
-        \\    let running = spawn opened()
-        \\
-    , "luce.sema.own", "opened answers list(file), which carries a file or task");
-
-    try expectSaying(
-        \\struct Batch:
-        \\    running: list(task(long))
-        \\
-        \\func started() -> Batch:
-        \\    return Batch(running = new list(task(long)))
-        \\
-        \\func main():
-        \\    let outer = spawn started()
-        \\
-    , "luce.sema.own", "started answers Batch, which carries a file or task");
-}
-
-test "luce.sema.own: a task is consumed by its wait" {
-    try expectRejected(
-        \\func work() -> long:
-        \\    return 1
-        \\
-        \\func main():
-        \\    let t = spawn work()
-        \\    assert(t.wait() == 1)
-        \\    assert(t.wait() == 1)
-        \\
-    , "luce.sema.own");
-
-    // The same one-shot rule must survive a match binding and an optional
-    // union payload; otherwise the first wait could leave a stale handle
-    // reachable through the pattern variable.
-    try expectSaying(
-        \\union Slot:
-        \\    running(task: task(long)?)
-        \\
-        \\func work() -> long:
-        \\    return 4
-        \\
-        \\func main():
-        \\    var running = spawn work()
-        \\    let slot = Slot.running(task = give running)
-        \\    match slot:
-        \\        running(task):
-        \\            if task != none:
-        \\                task.wait()
-        \\                task.wait()
-        \\
-    , "luce.sema.own", "task was given away and cannot be touched again in this scope");
 }
 
 test "luce.sema.new: a task is spawned, not made" {
@@ -8774,23 +7319,6 @@ test "luce.parse.type: one '?' is all there is, inside parentheses too" {
     , "luce.parse.type", "one '?' is all there is");
 }
 
-test "luce.sema.own: a container of function values does not cross a worker boundary" {
-    // The refusal used to compare the top-level type; since a function
-    // value is storable it walks the whole type graph, because the
-    // receiver a value may borrow has nothing to borrow from over
-    // there (docs/BINDING.md D4, D7).
-    try expectHostSaying(
-        \\func work(steps: give list((func(long) -> long)?)) -> long:
-        \\    return len(steps)
-        \\
-        \\func main():
-        \\    var steps = new list((func(long) -> long)?)
-        \\    let t = spawn work(give steps)
-        \\    print(string(t.wait()))
-        \\
-    , "luce.sema.own", "which carries a function value");
-}
-
 test "luce.sema.type: a function value has no zero, so a late var is refused" {
     try expectHostSaying(
         \\func main():
@@ -8829,18 +7357,6 @@ test "luce.sema.call: a function type has no parameter names to call by" {
         \\    print("hi")
         \\
     , "luce.sema.call", "a function type has no parameter names");
-}
-
-test "luce.sema.own: a give through a function value still needs the verb" {
-    try expectHostSaying(
-        \\func run(f: func(give list(long)) -> long, xs: give list(long)) -> long:
-        \\    return f(xs)
-        \\
-        \\func main():
-        \\    var xs: list(long) = [1]
-        \\    print(string(run((ys) -> len(ys), give xs)))
-        \\
-    , "luce.sema.own", "takes ownership");
 }
 
 test "luce.sema.const: a top-level const is not a place for a lambda" {
@@ -9165,44 +7681,6 @@ test "luce.sema.interface: a non-conforming struct cannot be passed as the contr
     , "luce.sema.type", "argument 1 of draw is Renderable, got Button");
 }
 
-test "luce.sema.own: a fresh carrying receiver cannot be retained as an interface" {
-    try expectHostSaying(
-        \\interface Sized:
-        \\    func size() -> long
-        \\
-        \\struct Box: Sized:
-        \\    values: list(long)
-        \\    func size() -> long:
-        \\        return len(self.values)
-        \\
-        \\func main():
-        \\    var views = new list(Sized)
-        \\    views.append(Box(values = [1, 2, 3]))
-        \\
-    , "luce.sema.own", "an interface value borrows its receiver");
-}
-
-test "luce.sema.own: a carrying receiver cannot escape through an interface return" {
-    try expectHostSaying(
-        \\interface Sized:
-        \\    func size() -> long
-        \\
-        \\struct Box: Sized:
-        \\    values: list(long)
-        \\    func size() -> long:
-        \\        return len(self.values)
-        \\
-        \\func make() -> Sized:
-        \\    let box = Box(values = [1, 2, 3])
-        \\    return box
-        \\
-        \\func main():
-        \\    let item = make()
-        \\    _ = item
-        \\
-    , "luce.sema.own", "a carrying receiver cannot be returned as an interface");
-}
-
 test "luce.parse.interface: an interface must have at least one method" {
     try expectHostSaying(
         \\interface Empty:
@@ -9226,34 +7704,6 @@ test "luce.sema.interface: a multi-value witness must match every result" {
         \\func main():
         \\    let range = Range(marker = 0)
         \\    _ = range
-        \\
-    , "luce.sema.interface", "does not match interface method");
-}
-
-test "luce.sema.interface: ownership verbs on interface methods need an object type" {
-    try expectHostSaying(
-        \\interface Bad:
-        \\    func take(value: give long) -> long
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.own", "give applies to containers and resources");
-}
-
-test "luce.sema.interface: witness parameter ownership must match" {
-    try expectHostSaying(
-        \\interface Sink:
-        \\    func accept(value: list(long)) -> long
-        \\
-        \\struct Collector: Sink:
-        \\    marker: long
-        \\    func accept(value: give list(long)) -> long:
-        \\        return len(value)
-        \\
-        \\func main():
-        \\    let collector = Collector(marker = 0)
-        \\    _ = collector
         \\
     , "luce.sema.interface", "does not match interface method");
 }

@@ -16,8 +16,8 @@ func fresh() -> state.Editor:
     var histories = new list(history.Stacks)
     histories.append(history.Stacks(past = new list(history.Revision), future = new list(history.Revision)))
     return state.Editor(
-        buffers = give buffers,
-        histories = give histories,
+        buffers = buffers,
+        histories = histories,
         names = new list(string),
         search_matches = new list(long),
         path = "f.luc",

@@ -36,8 +36,8 @@ func main(args: list(string)):
             histories[len(histories) - 1].past.append(history.Revision(content = loaded.base, cursor = 0))
     let first = buffers[0]
     var editor = state.Editor(
-        buffers = give buffers,
-        histories = give histories,
+        buffers = buffers,
+        histories = histories,
         names = new list(string),
         search_matches = new list(long),
         path = first.path,

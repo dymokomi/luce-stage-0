@@ -4530,6 +4530,33 @@ const Body = struct {
     /// which is `ownsNothing`.  A String, a struct and an object all
     /// go on calling `luce_rt_append`, which is the one place the
     /// ownership walk is written.
+    /// Trap `immutable_object` when an inline container write targets a
+    /// materialized program constant.  A runtime-routed write meets
+    /// `Runtime.requireMutable`; an inline write reaches the row itself,
+    /// so it reads `Object.constant` and traps the same way.  This is
+    /// guarded on every inline write — scope ownership's `roots` analysis,
+    /// which proved where the guard was needless, retired with the model,
+    /// and a redundant guard is the optimizer's to drop, never
+    /// correctness's to skip.
+    fn checkNotConstant(self: *Body, row: Builder.Value) Error!void {
+        const flag = try self.rowLoad(
+            .normal,
+            .i8,
+            try self.byteOffset(row, runtime.layout.constant, "constant.at"),
+            Builder.Alignment.fromByteUnits(1),
+            "constant",
+        );
+        try self.check(
+            try self.wip.icmp(
+                .ne,
+                flag,
+                try self.module.builder.intValue(.i8, 0),
+                "immutable",
+            ),
+            .immutable_object,
+        );
+    }
+
     fn emitListAppend(
         self: *Body,
         target: mir.Register,
@@ -4540,6 +4567,7 @@ const Body = struct {
         const one = try builder.intValue(.i64, 1);
 
         const row = try self.resolveRow(target);
+        try self.checkNotConstant(row);
         const count_at = try self.byteOffset(row, runtime.layout.elements_count, "count.at");
         const count = try self.rowLoad(.normal, .i64, count_at, value_alignment, "count");
         const capacity = try self.rowLoad(
@@ -7092,6 +7120,7 @@ const Body = struct {
                 if (self.elementShape(of[0])) |shape| {
                     if (ownsNothing(shape.element)) {
                         const view = try self.elementView(of[0], shape);
+                        try self.checkNotConstant(view.row);
                         const address = try self.elementAddress(
                             view,
                             shape.element,

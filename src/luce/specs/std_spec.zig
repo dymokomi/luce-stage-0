@@ -945,7 +945,6 @@ test "files: append, rename, delete and list reach the services beyond read and 
         \\    assert((try files.exists("kept.txt")) and not try files.exists("log.txt"))
         \\    let names = try files.list(".")
         \\    print(names.join(","))
-        \\    free(names)
         \\    try files.delete("kept.txt")
         \\    assert(not try files.exists("kept.txt"))
         \\
@@ -1069,10 +1068,8 @@ test "files: list answers names alone, while entries carries kinds" {
         \\func main() -> !:
         \\    let names = try files.list(".")
         \\    print(names.join(","))
-        \\    free(names)
         \\    let listed = try files.entries(".")
         \\    print(string(len(listed)))
-        \\    free(listed)
         \\
     , budget);
     defer session.deinit();
@@ -1100,7 +1097,6 @@ test "files: a listing the world refuses is an error naming the path" {
         \\
         \\func main() -> !:
         \\    let names = try files.list("nowhere")
-        \\    free(names)
         \\
     , budget, .io_failed, "cannot list nowhere");
 }

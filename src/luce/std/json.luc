@@ -265,7 +265,7 @@ union Json:
         match self:
             object(fields):
                 if fields.has(name):
-                    return copy fields[name]
+                    return fields[name]
                 return none
             else:
                 return none
@@ -284,12 +284,12 @@ union Json:
             array(items):
                 if index < 0 or index >= len(items):
                     trap(f"json: no element {index} in a value of {len(items)}")
-                return copy items[index]
+                return items[index]
             object(fields):
                 let names = fields.keys()
                 if index < 0 or index >= len(names):
                     trap(f"json: no element {index} in a value of {len(names)}")
-                return copy fields[names[index]]
+                return fields[names[index]]
             else:
                 trap(f"json: no element {index} in a value of 0")
 
@@ -329,7 +329,7 @@ func parse(content: string) -> Json!:
     let after = skip_blank(content, next)
     if after != len(content):
         error(f"json: text after the document's one value, at byte {after}")
-    return give value
+    return value
 
 # One value, and the byte after it.
 #
@@ -365,7 +365,7 @@ private func read_value(content: string, from: long, depth: long) -> (Json, long
             var listed = false
             while not listed:
                 let element, after = try read_value(content, in_list, depth + 1)
-                items.append(give element)
+                items.append(element)
                 in_list = skip_blank(content, after)
                 if in_list >= len(content):
                     error(f"json: the text ends inside the array opened at byte {at}")
@@ -376,7 +376,7 @@ private func read_value(content: string, from: long, depth: long) -> (Json, long
                     listed = true
                 else:
                     error(f"json: a comma or a close was expected at byte {in_list}")
-        return Json.array(items = give items), in_list + 1
+        return Json.array(items = items), in_list + 1
 
     # RFC 8259 §4: names, colons, values, commas, between braces.
     if head == brace_open:
@@ -398,7 +398,7 @@ private func read_value(content: string, from: long, depth: long) -> (Json, long
                 # §4 leaves a repeated name to the parser; a map is a
                 # mapping, so the last one written is what the name
                 # means, in the place the first one claimed.
-                fields[name] = give member
+                fields[name] = member
                 in_map = skip_blank(content, after)
                 if in_map >= len(content):
                     error(f"json: the text ends inside the object opened at byte {at}")
@@ -409,7 +409,7 @@ private func read_value(content: string, from: long, depth: long) -> (Json, long
                     mapped = true
                 else:
                     error(f"json: a comma or a close was expected at byte {in_map}")
-        return Json.object(fields = give fields), in_map + 1
+        return Json.object(fields = fields), in_map + 1
 
     # A multi-value answer is received by a destructuring bind and
     # never passed straight through (docs/RETURNS.md), so each of these

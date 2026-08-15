@@ -715,22 +715,20 @@ test "json: element walks arrays and objects alike, and past the end is a bug th
 // Building, and the ownership that comes with it
 // ---------------------------------------------------------------------------
 
-test "json: a value is built the way it is taken apart, and ownership is taken once" {
+test "json: a value is built the way it is taken apart" {
     try agree.printsGiven(
         \\import std.json
         \\
         \\func main():
         \\    # docs/UNION.md's own construction paragraph, run: every
-        \\    # inner value is fresh and silent (S20), and the one verb
-        \\    # is on the last line, where a named object moves into a
-        \\    # value that outlives the name (S24).
+        \\    # inner value is a fresh Json placed into the map.
         \\    var fields = new map(string, json.Json)
         \\    fields["name"] = json.Json.text(value = "luce")
         \\    fields["version"] = json.Json.integer(value = 2)
         \\    fields["ratio"] = json.Json.real(value = 0.5)
         \\    fields["tags"] = json.Json.array(items = [json.Json.text(value = "lang")])
         \\    fields["nothing"] = json.Json.null
-        \\    let doc = json.Json.object(fields = give fields)
+        \\    let doc = json.Json.object(fields = fields)
         \\    print(doc.write())
         \\    print(doc.pretty(2))
         \\
@@ -778,40 +776,6 @@ test "json: a parsed tree is walked, mutated through its containers, and written
         \\
     , budget,
         \\{"servers":[{"port":81},{"port":8081},true],"port":2}
-        \\
-    );
-}
-
-test "json: give, copy and the scope are the whole of a tree's memory" {
-    try agreeOk(
-        \\import std.json
-        \\
-        \\func swallow(value: give json.Json) -> long:
-        \\    # The parameter takes ownership, so this scope frees the
-        \\    # whole tree when it ends.
-        \\    return value.count()
-        \\
-        \\func main() -> !:
-        \\    for step in range(0, 50):
-        \\        let doc = try json.parse("{\"a\": [1, 2, {\"b\": \"c\"}], \"d\": null}")
-        \\        # A copy is a second tree with a second owner: editing
-        \\        # it leaves the first alone.
-        \\        var twin = copy doc
-        \\        match twin:
-        \\            object(fields):
-        \\                fields["a"] = json.Json.null
-        \\            else:
-        \\                trap("a parsed object is an object")
-        \\        assert(doc.member("a") != none)
-        \\        assert(twin.member("a") != none)
-        \\        assert(doc.element(0).count() == 3)
-        \\        assert(twin.element(0).count() == 0)
-        \\        assert(swallow(give twin) == 2)
-        \\
-        \\    # A refused parse frees what it had built so far too.
-        \\    for step in range(0, 50):
-        \\        let refused = json.parse("[1, 2, [3, 4") catch json.Json.null
-        \\        assert(refused.is_null())
         \\
     );
 }

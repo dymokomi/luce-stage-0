@@ -216,7 +216,6 @@ test "string(x) prints every scalar, and builder.build() hands over its own" {
         \\    b.append("!")
         \\    assert(b.build() == "hello!")
         \\    assert(len(b) == 6)
-        \\    free(b)
         \\
     );
 }
@@ -256,8 +255,6 @@ test "f-strings: a colon inside brackets belongs to the brackets" {
         \\    print(f"{len(sliced)} {parts[1]} {len(parts[0:3])}")
         \\    let text = "hello"
         \\    print(f"{text[1:3]}")
-        \\    free(sliced)
-        \\    free(parts)
         \\
     , budget, "2 b 3\nel\n");
 }
@@ -1819,7 +1816,6 @@ test "returns: a shape is declared, returned, and bound" {
         \\    a = a + 1
         \\    b = b + 1
         \\    assert(a == 2 and b == 6)
-        \\    free(xs)
         \\
     );
 }
@@ -1869,8 +1865,6 @@ test "returns: each value moves, and the caller's two names own one each" {
         \\    assert(head[0] == 7 and tail[0] == 8)
         \\    head.append(9)
         \\    assert(len(head) == 2 and len(tail) == 1)
-        \\    free(head)
-        \\    free(tail)
         \\
     );
 }
@@ -1916,7 +1910,6 @@ test "returns: T? is an ordinary element of a shape" {
         \\    assert(present and (found else 0) == 36)
         \\    let missing, there = lookup(ages, "bob")
         \\    assert(not there and missing == none)
-        \\    free(ages)
         \\
     );
 }
@@ -2153,7 +2146,6 @@ test "methods: a receiver may be a field, an element, or a chain of both" {
         \\    assert(box.corner.doubled() == 6)
         \\    var cells = [Point(x = 5)]
         \\    assert(cells[0].doubled() == 10)
-        \\    free(cells)
         \\
     );
 }
@@ -2179,8 +2171,6 @@ test "methods: a method may take and answer objects, and ownership is the plain-
         \\    assert(tally.over(numbers) == 16)
         \\    var pair = tally.spread()
         \\    assert(len(pair) == 2 and pair[0] == 10)
-        \\    free(pair)
-        \\    free(numbers)
         \\
     );
 }
@@ -2262,7 +2252,6 @@ test "named arguments: evaluation stays in written order, binding lands by name"
         \\    let got = pair(b = logged(log, 7), a = logged(log, 3))
         \\    assert(got == 37)
         \\    assert(log[0] == 7 and log[1] == 3)
-        \\    free(log)
         \\
     );
 }
@@ -2470,7 +2459,6 @@ test "builtins: the table is the signature, so a call may name its slots" {
         \\    assert(chr(code = 65) == "A")
         \\    assert(ord(text = "A") == 65)
         \\    assert(long(value = 2.5) == 3)
-        \\    free(object = xs)
         \\
     );
 }
@@ -2784,23 +2772,6 @@ test "lists: an append through one name is seen through the other" {
         \\    assert(xs[302] == 1)
         \\
     );
-}
-
-test "trap: an inline append refuses a freed list where the call did" {
-    // The free happens where the analyzer cannot follow it — a scope
-    // the alias outlives — so the refusal is the *engine's*, which is
-    // the one the inline path now owes.
-    try agreeTrap(
-        \\func main():
-        \\    var xs = new list(long)
-        \\    var view = xs
-        \\    if true:
-        \\        var inner = new list(long)
-        \\        view = inner
-        \\        view.append(2)
-        \\    view.append(3)
-        \\
-    , .use_after_free);
 }
 
 test "trap: an inline append refuses a list that was never made" {
@@ -3391,23 +3362,6 @@ test "lists: a slice is an independent copy" {
     );
 }
 
-test "lists: nested lists are references shared until copied" {
-    try agreeOk(
-        \\func main():
-        \\    var outer = new list(list(long))
-        \\    var inner: list(long) = [1, 2]
-        \\    outer.append(give inner)
-        \\    outer[0].append(3)
-        \\    assert(len(outer[0]) == 3)
-        \\    var dup = new list(list(long))
-        \\    dup.append(copy outer[0])
-        \\    dup[0].append(4)
-        \\    assert(len(dup[0]) == 4)
-        \\    assert(len(outer[0]) == 3)
-        \\
-    );
-}
-
 test "lists: value structs stored by copy are independent" {
     // append copies the value struct; later mutating the source or
     // replacing one slot leaves the other stored copies untouched.
@@ -3662,24 +3616,10 @@ test "ownership: give transfers an object into a new owner" {
     try agreeOk(
         \\func main():
         \\    var original = [1, 2, 3]
-        \\    var moved = give original
+        \\    var moved = original
         \\    moved.append(4)
         \\    assert(len(moved) == 4)
         \\    assert(moved[3] == 4)
-        \\
-    );
-}
-
-test "ownership: copy is a deep, independent duplicate" {
-    try agreeOk(
-        \\func main():
-        \\    var source = [1, 2, 3]
-        \\    var dup = copy source
-        \\    dup.append(4)
-        \\    assert(len(dup) == 4)
-        \\    assert(len(source) == 3)
-        \\    source[0] = 99
-        \\    assert(dup[0] == 1)
         \\
     );
 }
@@ -3911,7 +3851,6 @@ test "narrowing: continue and break guards narrow what follows them" {
         \\            break
         \\        first = first + n
         \\    assert(first == 1)
-        \\    free(inputs)
         \\
     );
 }
@@ -3950,7 +3889,6 @@ test "narrowing: an assignment of a plain value proves the name present" {
         \\    xs = new list(long)
         \\    xs.append(4)
         \\    assert(len(xs) == 1)
-        \\    free(xs)
         \\
     );
 }
@@ -3997,7 +3935,6 @@ test "else runs its fallback only when the value is absent" {
         \\    assert((parse_int("1") else note(log, "a")) == 1)
         \\    assert((parse_int("x") else note(log, "b")) == 0)
         \\    assert(log.build() == "b")
-        \\    free(log)
         \\
     );
 }
@@ -4554,17 +4491,6 @@ test "trap: slicing through the middle of a UTF-8 character" {
     , .string_boundary);
 }
 
-test "trap: use after free" {
-    try agreeTrap(
-        \\func main():
-        \\    var xs = [1, 2]
-        \\    let view = xs
-        \\    free(xs)
-        \\    let bad = view[0]
-        \\
-    , .use_after_free);
-}
-
 test "trap: using an unfilled late object slot" {
     try agreeTrap(
         \\func main():
@@ -4791,8 +4717,6 @@ test "lists grow, index, slice, iterate, and free explicitly" {
         \\    assert(mid[0] == 1)
         \\    assert(mid != xs)
         \\    assert(xs == xs)
-        \\    free(mid)
-        \\    free(xs)
         \\
     );
 }
@@ -4815,8 +4739,6 @@ test "maps upsert, look up, and iterate keys in insertion order" {
         \\    assert(not ages.has("alan"))
         \\    ages.remove("ghost")
         \\    assert(len(ages) == 1)
-        \\    free(ages)
-        \\    free(joined)
         \\
     );
 }
@@ -4840,8 +4762,6 @@ test "arrays are fixed, zeroed, multi-dimensional, and typed" {
         \\    for value in row:
         \\        total = total + value
         \\    assert(total == 2.5)
-        \\    free(grid)
-        \\    free(row)
         \\
     );
 }
@@ -4861,27 +4781,6 @@ test "conversions: string, parse_int, parse_float, chr, ord over every kind" {
         \\    assert(chr(955) == "λ")
         \\    assert(ord("λ") == 955)
         \\    assert(ord("A") == 65)
-        \\
-    );
-}
-
-test "structs and nested collections share objects by reference" {
-    try agreeOk(
-        \\struct Bag:
-        \\    label: string
-        \\    items: list(long)
-        \\
-        \\func main():
-        \\    var inner: list(long) = [1, 2]
-        \\    var bag = Bag(label = "first", items = give inner)
-        \\    let same_bag = bag
-        \\    same_bag.items.append(3)
-        \\    assert(len(bag.items) == 3)
-        \\    var nested = new list(list(long))
-        \\    nested.append(copy bag.items)
-        \\    nested[0].append(4)
-        \\    assert(len(nested[0]) == 4)
-        \\    assert(len(bag.items) == 3)
         \\
     );
 }
@@ -4906,22 +4805,6 @@ test "collection misuse traps with stable codes" {
         \\    let bad = m["ghost"]
         \\
         , .code = .key_missing },
-        .{ .source =
-        \\func main():
-        \\    var xs = [1]
-        \\    let view = xs
-        \\    free(xs)
-        \\    view.append(2)
-        \\
-        , .code = .use_after_free },
-        .{ .source =
-        \\func main():
-        \\    var xs = [1]
-        \\    let view = xs
-        \\    free(xs)
-        \\    let bad = view[0]
-        \\
-        , .code = .use_after_free },
         .{ .source =
         \\func main():
         \\    var cells = new array(list(long), 2)
@@ -4949,7 +4832,6 @@ test "S33: nothing leaks — scope ownership frees what free() used to" {
         \\    let kept = [1, 2, 3]
         \\    let copied = kept[0:2]
         \\    var released = new builder()
-        \\    free(released)
         \\    assert(len(copied) == 2)
         \\
     );
@@ -4989,11 +4871,6 @@ test "list and array methods: sort, reverse, find, contains, fill, clear" {
         \\    assert(listed[0] == "ada" and listed[1] == "alan")
         \\    ages.clear()
         \\    assert(len(ages) == 0)
-        \\    free(xs)
-        \\    free(names)
-        \\    free(row)
-        \\    free(ages)
-        \\    free(listed)
         \\
     );
 }
@@ -5023,9 +4900,6 @@ test "short-circuit operands survive block splits everywhere" {
         \\    let sliced = flags[0:len(flags)]
         \\    for index in range(0, len(sliced)):
         \\        let unused = sliced[index] or compared
-        \\    free(sliced)
-        \\    free(flags)
-        \\    free(cells)
         \\
     );
 }

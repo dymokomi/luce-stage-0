@@ -12,14 +12,13 @@
 #     against one, on disjoint slices.  An honest number, taken on the
 #     same machine in the same run.
 
-func sum_of(values: give list(long)) -> long:
+func sum_of(values: list(long)) -> long:
     var total: long = 0
     for v in values:
         total = total + v
-    free(values)
     return total
 
-func slice_sum(values: give list(long)) -> long:
+func slice_sum(values: list(long)) -> long:
     # Deliberately arithmetic-bound rather than memory-bound: what is
     # under test is whether four workers use four cores, not how fast
     # one list walks.
@@ -27,7 +26,6 @@ func slice_sum(values: give list(long)) -> long:
     for round in range(0, 400):
         for v in values:
             total = total + (v * v) % 7919
-    free(values)
     return total
 
 func chunk(source: list(long), from: long, upto: long) -> list(long):
@@ -44,7 +42,7 @@ func main():
 
     # -- the crossing ---------------------------------------------------
     let before_cross = clock_ms()
-    let crossed = spawn sum_of(copy numbers)
+    let crossed = spawn sum_of(numbers)
     let answered = crossed.wait()
     let cross_ms = clock_ms() - before_cross
     print("crossing_ms " + string(cross_ms))
@@ -54,7 +52,7 @@ func main():
     let work: long = 200000
     var one_piece = chunk(numbers, 0, work)
     let before_one = clock_ms()
-    let single = spawn slice_sum(give one_piece)
+    let single = spawn slice_sum(one_piece)
     let one_total = single.wait()
     let one_ms = clock_ms() - before_one
 
@@ -66,7 +64,7 @@ func main():
     let before_four = clock_ms()
     var tasks = new list(task(long))
     for piece in pieces:
-        tasks.append(spawn slice_sum(copy piece))
+        tasks.append(spawn slice_sum(piece))
     var four_total: long = 0
     for t in tasks:
         four_total = four_total + t.wait()

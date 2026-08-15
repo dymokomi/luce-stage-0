@@ -432,7 +432,6 @@ test "every host service fails closed when the host withholds it" {
         ,
         \\func main() -> !:
         \\    let names = try dir_list(".")
-        \\    free(names)
         \\
         ,
         \\func main() -> !:

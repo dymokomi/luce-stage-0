@@ -9,7 +9,7 @@ func test_line_width_sums_its_spans():
     var spans = new list(text.Span)
     spans.append(text.Span(text = "let ", style = termui.Style()))
     spans.append(text.Span(text = "x", style = termui.Style()))
-    let line = text.Line(spans = give spans)
+    let line = text.Line(spans = spans)
     assert(line.width() == 5)
 
 func test_plain_builds_a_one_span_line():
@@ -23,7 +23,7 @@ func test_spans_draw_one_after_another():
     var spans = new list(text.Span)
     spans.append(text.Span(text = "ab", style = termui.Style(foreground = 1)))
     spans.append(text.Span(text = "cd", style = termui.Style(foreground = 2)))
-    let line = text.Line(spans = give spans)
+    let line = text.Line(spans = spans)
     line.draw(view, area, 0)
     assert(view.back[0, 0].text == "a")
     assert(view.back[0, 1].text == "b")

@@ -61,12 +61,12 @@ test "a module encoded and decoded again is the same program on both engines" {
     try testing.expectEqualSlices(u8, encoded, again);
 }
 
-test "optimized ownership graphs execute after module round-trip" {
-    // This is the ownership-heavy composition that a shape-only round-trip
-    // test cannot prove: an owned union carries a list of value structs, a
-    // match arm borrows one struct as a bound method, and an enclosing
-    // struct carries a second callback.  Encode the already optimized MIR,
-    // then run the decoded program through both engines.
+test "optimized object graphs execute after module round-trip" {
+    // This is the composition that a shape-only round-trip test cannot
+    // prove: a union carries a list of value structs, a match arm binds
+    // one struct as a bound method, and an enclosing struct carries a
+    // second callback.  Encode the already optimized MIR, then run the
+    // decoded program through both engines.
     var program = try agree.program(
         \\struct Item:
         \\    prefix: string
@@ -85,7 +85,7 @@ test "optimized ownership graphs execute after module round-trip" {
         \\func suffix(value: long) -> string:
         \\    return "!" + string(value)
         \\
-        \\func consume(values: give list(long)) -> long:
+        \\func consume(values: list(long)) -> long:
         \\    var total: long = 0
         \\    for value in values:
         \\        total = total + value
@@ -109,14 +109,14 @@ test "optimized ownership graphs execute after module round-trip" {
         \\
         \\func main():
         \\    var values: list(long) = [1, 2, 3]
-        \\    assert(consume(give values) == 6)
+        \\    assert(consume(values) == 6)
         \\    var counter = Counter(value = 1)
         \\    counter.add(2)
         \\    assert(counter.value == 3)
         \\
         \\    var items = new list(Item)
         \\    items.append(Item(prefix = "item", scale = 2))
-        \\    let plan = Plan(work = Work.batch(items = give items), finish = suffix)
+        \\    let plan = Plan(work = Work.batch(items = items), finish = suffix)
         \\    print(evaluate(plan))
         \\
     );

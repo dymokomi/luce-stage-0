@@ -88,6 +88,7 @@ test "dead code sweeps unread values and compacts the pool" {
         \\func main():
         \\    let xs = new list(long)
         \\    xs.append(1)
+        \\    let unused = len(xs)
         \\    print(string(len(xs)))
         \\
     );

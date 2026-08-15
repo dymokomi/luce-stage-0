@@ -351,12 +351,6 @@ pub export fn luce_rt_report_error(
     );
 }
 
-/// A serial no other live frame carries — one per call, so ownership
-/// bindings from two frames of the same function never collide.
-pub export fn luce_rt_serial(runtime: *Runtime) callconv(.c) u64 {
-    return runtime.takeSerial();
-}
-
 /// The host ran out of memory inside a service call.  Nothing about
 /// the program was wrong, so this is not a trap: the run ends
 /// `exhausted`, exactly as it does when the arena gives up.

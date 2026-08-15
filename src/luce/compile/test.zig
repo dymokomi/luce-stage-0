@@ -665,24 +665,17 @@ test "a named call lowers to byte-identical MIR — names die in stage 4" {
     try testing.expectEqualStrings(plain_dump, permuted_dump);
 }
 
-test "the IR dump has a stable golden shape (short-circuit + ownership)" {
-    // A full-dump snapshot of the two trickiest lowerings at once:
-    // short-circuit `and` splitting a block, and scope ownership
-    // inserting object_bind/object_unbind around the list.  Behavior
-    // tests can't see block ordering or a lost temp release; this
+test "the IR dump has a stable golden shape (short-circuit)" {
+    // A full-dump snapshot of the trickiest lowering: short-circuit `and`
+    // splitting a block.  Behavior tests can't see block ordering; this
     // does, and it documents the IR for a reader.  Regenerate
     // deliberately when lowering changes on purpose.
     //
     // This is the *optimized* program — what `luce build` compiles.
-    // Stage 7 has already been over it: the hidden temporary's bind and
-    // its inert release are gone (07_optimize/ownership.zig).  The
-    // re-reads of `xs` are *not* folded, and deliberately: block-local
+    // The re-reads of `xs` are *not* folded, and deliberately: block-local
     // value numbering was the interpreter's pass and went with it, and
     // `default<O3>` folds them downstream (docs/ENGINE.md step 7).
-    // `luce ir --full` prints the raw lowering instead.  The temporary
-    // is still in the local table: `give`/`free` carry a local id as an
-    // integer value, so nothing may renumber locals yet
-    // (07_optimize/dead.zig).
+    // `luce ir --full` prints the raw lowering instead.
     var program = try expectCompilesOptions(
         \\func main():
         \\    var xs = [1, 2]
@@ -695,42 +688,38 @@ test "the IR dump has a stable golden shape (short-circuit + ownership)" {
     defer testing.allocator.free(dump);
     try testing.expectEqualStrings(
         \\func main() -> None
-        \\    local %0 (temporary): list(int)
-        \\    local %1 xs: list(int)
-        \\    local %2 (temporary): bool
+        \\    local %0 xs: list(int)
+        \\    local %1 (temporary): bool
         \\  b0:
         \\    r0 = const 1
         \\    r1 = const 2
         \\    r2 = heap_new list(int)
         \\    intrinsic append_value, r2, r0
         \\    intrinsic append_value, r2, r1
-        \\    local_set %1, r2
-        \\    object_bind %1, r2
-        \\    r7 = local_get %1
-        \\    r8 = intrinsic len, r7
-        \\    r9 = const 0
-        \\    r10 = greater.long r8, r9
-        \\    local_set %2, r10
-        \\    branch r10, b1, b2
+        \\    local_set %0, r2
+        \\    r6 = local_get %0
+        \\    r7 = intrinsic len, r6
+        \\    r8 = const 0
+        \\    r9 = greater.long r7, r8
+        \\    local_set %1, r9
+        \\    branch r9, b1, b2
         \\  b1:
-        \\    r13 = local_get %1
-        \\    r14 = const 0
-        \\    r15 = intrinsic index_get, r13, r14
-        \\    r16 = const 1
-        \\    r17 = equal.int r15, r16
-        \\    local_set %2, r17
+        \\    r12 = local_get %0
+        \\    r13 = const 0
+        \\    r14 = intrinsic index_get, r12, r13
+        \\    r15 = const 1
+        \\    r16 = equal.int r14, r15
+        \\    local_set %1, r16
         \\    jump b2
         \\  b2:
-        \\    r20 = local_get %2
-        \\    branch r20, b3, b4
+        \\    r19 = local_get %1
+        \\    branch r19, b3, b4
         \\  b3:
-        \\    r22 = local_get %1
-        \\    r23 = const 3
-        \\    intrinsic append_value, r22, r23
+        \\    r21 = local_get %0
+        \\    r22 = const 3
+        \\    intrinsic append_value, r21, r22
         \\    jump b4
         \\  b4:
-        \\    r26 = local_get %1
-        \\    object_unbind %1, r26
         \\    ret
         \\
     , dump);
@@ -962,14 +951,12 @@ test "collections type-check and reject misuse at compile time" {
         \\    var b = new builder()
         \\    b.append(string(len(counts) + grid[0, 0]))
         \\    let made = b.build()
-        \\    free(b)
         \\    return made
         \\
         \\func main():
         \\    var values: list(long) = []
         \\    values.append(4)
         \\    let total = sum(values[0:])
-        \\    free(values)
         \\
     , script);
     defer featured.deinit();
@@ -2082,98 +2069,6 @@ test "a union match keeps ENUMS R1 whole and extends it with bindings" {
     , "luce.sema.duplicate");
 }
 
-test "a union takes the ownership rules a carrying struct takes" {
-    // S27: keeping a union value needs a verb, whichever member it
-    // holds — the predicate is type-level (docs/UNION.md D9).
-    try expectRejected(
-        \\union Json:
-        \\    null
-        \\    number(value: double)
-        \\    array(items: list(Json))
-        \\
-        \\func main():
-        \\    var values = new list(Json)
-        \\    var j = Json.number(value = 3.0)
-        \\    values.append(j)
-        \\    free(values)
-        \\
-    , "luce.sema.own");
-    // S24: a payload field is a place that stores.
-    try expectRejected(
-        \\union Json:
-        \\    null
-        \\    array(items: list(Json))
-        \\
-        \\func main():
-        \\    var kids = new list(Json)
-        \\    let a = Json.array(items = kids)
-        \\
-    , "luce.sema.own");
-    // D9 gives a union the verbs a carrying struct takes and no
-    // others: `free` releases a direct container or resource handle
-    // (S6), so a union value is refused exactly as a struct value is
-    // — the list it carries is released when the union goes out of
-    // scope, never by name.
-    try expectRejected(
-        \\union Json:
-        \\    null
-        \\    array(items: list(long))
-        \\
-        \\func main():
-        \\    var doc = Json.array(items = [1, 2])
-        \\    free(doc)
-        \\
-    , "luce.sema.type");
-    // D10: an arm's payload binding is an alias, and S23 names the
-    // owner to give instead.
-    try expectRejected(
-        \\union Json:
-        \\    null
-        \\    array(items: list(Json))
-        \\
-        \\func main():
-        \\    let doc = Json.array(items = new list(Json))
-        \\    match doc:
-        \\        null:
-        \\            return
-        \\        array(items):
-        \\            let taken = give items
-        \\
-    , "luce.sema.own");
-    // And the whole legal story compiles: construction with give,
-    // borrowing reads in an arm, and a copy where one is kept.
-    var program = try expectCompiles(
-        \\union Json:
-        \\    null
-        \\    number(value: double)
-        \\    text(value: string)
-        \\    array(items: list(Json))
-        \\
-        \\func main():
-        \\    var elements = new list(Json)
-        \\    var j = Json.number(value = 3.0)
-        \\    elements.append(give j)
-        \\    let doc = Json.array(items = give elements)
-        \\    var count: long = 0
-        \\    match doc:
-        \\        null:
-        \\            count = 0
-        \\        number(value):
-        \\            count = long(value)
-        \\        text(value):
-        \\            count = len(value)
-        \\        array(items):
-        \\            count = len(items)
-        \\    let second = copy doc
-        \\    var maybe: Json? = none
-        \\    if count == 0:
-        \\        maybe = Json.null
-        \\    assert(count == 0 or maybe == none)
-        \\
-    );
-    program.deinit();
-}
-
 test "imports are explicit, checked, and reported per file" {
     const script: types.CompileOptions = .{};
     var files: TestLoader = .{ .modules = &.{ geo_module, util_module } };
@@ -2693,7 +2588,7 @@ fn failsWith(source: []const u8, code: []const u8) !void {
     return expectRejectedOptions(source, script_options, code);
 }
 
-test "constants are compile-time: calls, nested objects, and verbs are refused" {
+test "constants are compile-time: calls and nested objects are refused" {
     try failsWith(
         \\func answer() -> long:
         \\    return 42
@@ -2709,14 +2604,6 @@ test "constants are compile-time: calls, nested objects, and verbs are refused" 
         \\    items: list(long)
         \\
         \\const bad = Bag(items = [1])
-        \\
-        \\func main():
-        \\    return
-        \\
-    , "luce.sema.const");
-    try failsWith(
-        \\const source = "x"
-        \\const bad = copy source
         \\
         \\func main():
         \\    return
@@ -2839,7 +2726,7 @@ test "a plain map store reads nothing; only the compound one defines" {
     //                       operand, then the same `index_set`.
     //
     // The key is loaded once for both halves of the compound form
-    // (r8 feeds the read and the store), which is the "evaluated
+    // (r7 feeds the read and the store), which is the "evaluated
     // once" guarantee in instruction form.
     var program = try expectCompilesOptions(
         \\func main():
@@ -2853,25 +2740,21 @@ test "a plain map store reads nothing; only the compound one defines" {
     defer testing.allocator.free(dump);
     try testing.expectEqualStrings(
         \\func main() -> None
-        \\    local %0 (temporary): map(string, long)
-        \\    local %1 counts: map(string, long)
+        \\    local %0 counts: map(string, long)
         \\  b0:
         \\    r0 = heap_new map(string, long)
-        \\    local_set %1, r0
-        \\    object_bind %1, r0
-        \\    r3 = local_get %1
-        \\    r4 = const data#0
-        \\    r5 = const 7
-        \\    intrinsic index_set, r3, r4, r5
-        \\    r7 = local_get %1
-        \\    r8 = const data#1
-        \\    r9 = const 1
-        \\    r10 = const 0
-        \\    r11 = intrinsic map_place, r7, r8, r10
-        \\    r12 = add.long r11, r9
-        \\    intrinsic index_set, r7, r8, r12
-        \\    r14 = local_get %1
-        \\    object_unbind %1, r14
+        \\    local_set %0, r0
+        \\    r2 = local_get %0
+        \\    r3 = const data#0
+        \\    r4 = const 7
+        \\    intrinsic index_set, r2, r3, r4
+        \\    r6 = local_get %0
+        \\    r7 = const data#1
+        \\    r8 = const 1
+        \\    r9 = const 0
+        \\    r10 = intrinsic map_place, r6, r7, r9
+        \\    r11 = add.long r10, r8
+        \\    intrinsic index_set, r6, r7, r11
         \\    ret
         \\
     , dump);

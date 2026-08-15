@@ -200,55 +200,6 @@ test "a worker that answers nothing is a bare task" {
 // Arguments cross a boundary (D2)
 // ---------------------------------------------------------------------------
 
-test "give moves an object into the worker and poisons the name" {
-    try agree.prints(
-        \\func total(values: give list(long)) -> long:
-        \\    var sum: long = 0
-        \\    for v in values:
-        \\        sum = sum + v
-        \\    return sum
-        \\
-        \\func main():
-        \\    var xs: list(long) = [1, 2, 3, 4]
-        \\    let t = spawn total(give xs)
-        \\    print(string(t.wait()))
-        \\
-    , "10\n");
-}
-
-test "copy hands the worker a duplicate and the sender keeps its own" {
-    try agree.prints(
-        \\func total(values: give list(long)) -> long:
-        \\    var sum: long = 0
-        \\    for v in values:
-        \\        sum = sum + v
-        \\    return sum
-        \\
-        \\func main():
-        \\    var xs: list(long) = [1, 2, 3]
-        \\    let t = spawn total(copy xs)
-        \\    print(string(t.wait()))
-        \\    xs.append(4)
-        \\    print(string(len(xs)))
-        \\
-    , "6\n4\n");
-}
-
-test "a fresh object needs no verb, exactly as at any other call" {
-    try agree.prints(
-        \\func total(values: give list(long)) -> long:
-        \\    var sum: long = 0
-        \\    for v in values:
-        \\        sum = sum + v
-        \\    return sum
-        \\
-        \\func main():
-        \\    let t = spawn total([5, 6, 7])
-        \\    print(string(t.wait()))
-        \\
-    , "18\n");
-}
-
 test "values copy across a spawn and the caller keeps its own" {
     try agree.prints(
         \\func describe(label: string, n: long) -> string:
@@ -292,7 +243,7 @@ test "an unwaited nested union result is discarded with its owned graph" {
         \\
         \\func build() -> Job:
         \\    var items: list(long) = [6, 7]
-        \\    return Job.run(items = give items)
+        \\    return Job.run(items = items)
         \\
         \\func main():
         \\    let task = spawn build()
@@ -308,7 +259,7 @@ test "discarding a worker error still joins and closes its owned graph" {
         \\
         \\func fail() -> long!:
         \\    var items: list(long) = [10, 11, 12]
-        \\    let packet = Packet.payload(items = give items, label = "discarded")
+        \\    let packet = Packet.payload(items = items, label = "discarded")
         \\    error("ignored")
         \\
         \\func main():
@@ -316,19 +267,6 @@ test "discarding a worker error still joins and closes its owned graph" {
         \\    print("joined")
         \\
     , "joined\n");
-}
-
-test "free is an early join" {
-    try agree.prints(
-        \\func work(n: long) -> long:
-        \\    return n + 1
-        \\
-        \\func main():
-        \\    var t = spawn work(1)
-        \\    free(t)
-        \\    print("joined early")
-        \\
-    , "joined early\n");
 }
 
 test "a task returned from a function is the caller's to wait on" {
@@ -344,24 +282,6 @@ test "a task returned from a function is the caller's to wait on" {
         \\    print(string(t.wait()))
         \\
     , "15\n");
-}
-
-test "a resource-carrying object may be given and returned inside one Runtime" {
-    try agree.prints(
-        \\func work() -> long:
-        \\    return 7
-        \\
-        \\func handoff(running: give list(task(long))) -> list(task(long)):
-        \\    return running
-        \\
-        \\func main():
-        \\    var running = new list(task(long))
-        \\    running.append(spawn work())
-        \\    let moved = handoff(give running)
-        \\    for task in moved:
-        \\        print(string(task.wait()))
-        \\
-    , "7\n");
 }
 
 test "a struct composes a union optional task callback and recursive children" {
@@ -385,7 +305,7 @@ test "a struct composes a union optional task callback and recursive children" {
         \\    let chosen = callback else twice
         \\    return chosen(value)
         \\
-        \\func consume(packet: give Envelope) -> long:
+        \\func consume(packet: Envelope) -> long:
         \\    match packet.job:
         \\        idle:
         \\            return 0
@@ -400,7 +320,7 @@ test "a struct composes a union optional task callback and recursive children" {
         \\        callback = twice,
         \\        children = new list(Envelope),
         \\    )
-        \\    print(string(consume(give packet)))
+        \\    print(string(consume(packet)))
         \\
     , "42\n");
 }
@@ -425,37 +345,37 @@ test "a resource graph survives union optional container give return and failure
         \\func bump(value: long) -> long:
         \\    return value + 1
         \\
-        \\func route(crate: give Crate) -> Crate:
+        \\func route(crate: Crate) -> Crate:
         \\    return crate
         \\
-        \\func finish(parcel: give Parcel, callback: (func(long) -> long)?, fail: bool) -> Crate!:
+        \\func finish(parcel: Parcel, callback: (func(long) -> long)?, fail: bool) -> Crate!:
         \\    var contents = new map(string, long)
         \\    contents["kind"] = 1
         \\    var grid = new array(long, 2)
         \\    grid.fill(7)
         \\    let crate = Crate(
-        \\        parcel = give parcel,
+        \\        parcel = parcel,
         \\        callback = callback,
-        \\        contents = give contents,
-        \\        grid = give grid,
+        \\        contents = contents,
+        \\        grid = grid,
         \\    )
         \\    if fail:
         \\        error("discarded crate")
-        \\    return route(give crate)
+        \\    return route(crate)
         \\
         \\func absent(fail: bool) -> Crate!:
         \\    var tasks = new list(task(long))
         \\    tasks.append(spawn work(2))
-        \\    let parcel = Parcel.loaded(tasks = give tasks, extra = none)
-        \\    return try finish(give parcel, none, fail)
+        \\    let parcel = Parcel.loaded(tasks = tasks, extra = none)
+        \\    return try finish(parcel, none, fail)
         \\
         \\func present(fail: bool) -> Crate!:
         \\    var tasks = new list(task(long))
         \\    tasks.append(spawn work(2))
-        \\    let parcel = Parcel.loaded(tasks = give tasks, extra = spawn work(3))
-        \\    return try finish(give parcel, bump, fail)
+        \\    let parcel = Parcel.loaded(tasks = tasks, extra = spawn work(3))
+        \\    return try finish(parcel, bump, fail)
         \\
-        \\func consume(crate: give Crate) -> long:
+        \\func consume(crate: Crate) -> long:
         \\    let chosen = crate.callback else identity
         \\    var total = crate.contents["kind"] + crate.grid[0]
         \\    match crate.parcel:
@@ -468,9 +388,9 @@ test "a resource graph survives union optional container give return and failure
         \\
         \\func main() -> !:
         \\    let without_extra = try absent(false)
-        \\    print(string(consume(give without_extra)))
+        \\    print(string(consume(without_extra)))
         \\    let with_extra = try present(false)
-        \\    print(string(consume(give with_extra)))
+        \\    print(string(consume(with_extra)))
         \\    var failed_absent: Crate? = none
         \\    failed_absent = absent(true) catch reason:
         \\        print("caught: " + reason)
@@ -491,7 +411,7 @@ test "a task is consumed exactly once through a union optional field" {
         \\
         \\func main():
         \\    var running = spawn work()
-        \\    let slot = Slot.running(task = give running)
+        \\    let slot = Slot.running(task = running)
         \\    match slot:
         \\        running(task):
         \\            if task != none:
@@ -573,7 +493,7 @@ test "nested worker errors unwind owned graphs at both joins" {
         \\
         \\func leaf() -> long!:
         \\    var items: list(long) = [1, 2, 3]
-        \\    let packet = Packet.payload(items = give items, label = "nested")
+        \\    let packet = Packet.payload(items = items, label = "nested")
         \\    error("nested failure")
         \\
         \\func branch() -> long!:
@@ -610,7 +530,7 @@ test "a worker trap unwinds a nested union graph before the join" {
         \\
         \\func boom() -> long:
         \\    var items: list(long) = [4, 5, 6]
-        \\    let job = Job.run(items = give items, label = "worker")
+        \\    let job = Job.run(items = items, label = "worker")
         \\    var zero: long = 0
         \\    return 1 // zero
         \\
@@ -873,7 +793,7 @@ test "worker exit unwinds a nested union graph before the join" {
         \\
         \\func bail() -> long:
         \\    var items: list(long) = [7, 8, 9]
-        \\    let job = Job.run(items = give items, label = "worker")
+        \\    let job = Job.run(items = items, label = "worker")
         \\    exit(11)
         \\
         \\func main():

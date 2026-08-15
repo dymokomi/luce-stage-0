@@ -47,8 +47,8 @@ struct Save:
         held: list(string)
         seen: list(string)
 
-    static func make(room: string, moves: long, held: give list(string), seen: give list(string)) -> Save:
-        return Save(room = room, moves = moves, held = give held, seen = give seen)
+    static func make(room: string, moves: long, held: list(string), seen: list(string)) -> Save:
+        return Save(room = room, moves = moves, held = held, seen = seen)
 
     # What a realm would save as, right now.  `carrying()` and
     # `visited()` hand over lists they have just built, so they fill
@@ -78,7 +78,7 @@ struct Save:
     # holding the same one could outlive it.  `copy` is the answer,
     # and it is written where its cost is (S31).
     func carried() -> list(string):
-        return copy self.held
+        return self.held
 
     # Put this save back into a realm and answer the room it left the
     # player in.  Everything the realm was is forgotten first: a
@@ -136,7 +136,7 @@ func read(path: string) -> Save!:
             error(paths.base(path) + " has a line this game cannot read: " + key)
     if len(room) == 0:
         error(paths.base(path) + " does not say which room the player is in")
-    return Save.make(room = room, moves = moves, held = give held, seen = give seen)
+    return Save.make(room = room, moves = moves, held = held, seen = seen)
 
 # A bar-separated field, and the empty one that means nothing at all
 # rather than one empty name.

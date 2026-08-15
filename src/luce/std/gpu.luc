@@ -19,8 +19,8 @@ struct Surface:
     private:
         handle: file
 
-    static func from_handle(handle: give file) -> Surface:
-        return Surface(handle = give handle)
+    static func from_handle(handle: file) -> Surface:
+        return Surface(handle = handle)
 
     func width() -> long!:
         return try gpu_surface_size(self.handle, 0)

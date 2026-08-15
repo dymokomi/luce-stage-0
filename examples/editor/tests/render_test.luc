@@ -23,9 +23,9 @@ func editor_of() -> state.Editor:
     names.append("a.luc")
     names.append("b.luc")
     return state.Editor(
-        buffers = give buffers,
-        histories = give histories,
-        names = give names,
+        buffers = buffers,
+        histories = histories,
+        names = names,
         search_matches = new list(long),
         path = "sample.luc",
         content = "func main():\n    let x = 42",

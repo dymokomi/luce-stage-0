@@ -25,7 +25,7 @@ func source_line(content: string, from: long, to: long) -> text.Line:
     var spans = new list(text.Span)
     for token in highlight.tokens(content, from, to):
         spans.append(text.Span(text = token.text, style = theme.style_for(theme.palette, token.kind)))
-    return text.Line(spans = give spans)
+    return text.Line(spans = spans)
 
 func pane_style(active: bool) -> termui.Style:
     if active:

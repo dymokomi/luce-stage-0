@@ -326,24 +326,6 @@ test "a function value copies freely, into a local, a parameter and back out" {
 // Ownership travels through the value (D5)
 // ---------------------------------------------------------------------------
 
-test "a give-taking function is a value, and the call through it needs the verb" {
-    try agree.prints(
-        \\func consume(xs: give list(long)) -> long:
-        \\    var sum: long = 0
-        \\    for n in xs:
-        \\        sum = sum + n
-        \\    return sum
-        \\
-        \\func run(f: func(give list(long)) -> long, xs: give list(long)) -> long:
-        \\    return f(give xs)
-        \\
-        \\func main():
-        \\    let xs: list(long) = [1, 2, 3]
-        \\    print(string(run(consume, give xs)))
-        \\
-    , "6\n");
-}
-
 test "a borrowing function value leaves its argument with its owner" {
     try agree.prints(
         \\func total(xs: list(long)) -> long:
@@ -426,27 +408,6 @@ test "a function value chosen by a branch dispatches to whichever was chosen" {
 // D4, as amended): it borrows the receiver it may carry, a borrow
 // cannot cross, and a function type cannot say whether this one
 // carries anything.  Both refusals are proved in `errors_spec.zig`.
-// What survives here is the fact those two tests were really about —
-// a `give`-taking function called through a value moves its argument
-// exactly as a direct call does (D5).
-
-test "a give-taking function value moves its argument when called through the value" {
-    try agree.prints(
-        \\func consume(values: give list(long)) -> long:
-        \\    var total: long = 0
-        \\    for value in values:
-        \\        total += value
-        \\    return total
-        \\
-        \\func run(f: func(give list(long)) -> long, values: give list(long)) -> long:
-        \\    return f(give values)
-        \\
-        \\func main():
-        \\    var values: list(long) = [1, 2, 3, 4]
-        \\    print(string(run(consume, give values)))
-        \\
-    , "10\n");
-}
 
 // ---------------------------------------------------------------------------
 // The call suffix: a call is a postfix operator
@@ -602,26 +563,6 @@ test "a field narrowed into a local is still called through the local" {
         \\    print(string(missing == none))
         \\
     , "row 3\ntrue\n");
-}
-
-test "a give travels through a call suffix exactly as through a name" {
-    // D5's sentence, at a callee that is not a name: the verbs are the
-    // signature's business and the callee's spelling changes nothing.
-    try agree.prints(
-        \\func consume(values: give list(long)) -> long:
-        \\    var total: long = 0
-        \\    for value in values:
-        \\        total += value
-        \\    return total
-        \\
-        \\func pick() -> func(give list(long)) -> long:
-        \\    return consume
-        \\
-        \\func main():
-        \\    var values: list(long) = [1, 2, 3, 4]
-        \\    print(string(pick()(give values)))
-        \\
-    , "10\n");
 }
 
 test "a call suffix answering nothing stands as a statement" {

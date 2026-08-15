@@ -41,4 +41,4 @@ struct Line:
 func plain(text: string, style: termui.Style) -> Line:
     var spans = new list(Span)
     spans.append(Span(text = text, style = style))
-    return Line(spans = give spans)
+    return Line(spans = spans)

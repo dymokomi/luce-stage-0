@@ -1443,10 +1443,6 @@ test "the mistakes a beginner actually makes name the Luce spelling" {
             .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "declared with 'func'" },
         },
         .{
-            .source = "class Point:\n    x: long\n",
-            .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "no classes" },
-        },
-        .{
             .source = "final width = 80\n",
             .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "declared with 'const'" },
         },

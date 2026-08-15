@@ -240,6 +240,10 @@ pub const Service = enum {
     luce_rt_drop_storage,
     luce_rt_export_storage,
 
+    // -- reference counting (ARC, docs/MEMORY.md) --------------------
+    luce_rt_retain,
+    luce_rt_release,
+
     /// The C symbol this service is declared under: a static string —
     /// the enum's own tag name — that the caller owns nothing of.
     pub fn symbol(self: Service) []const u8 {
@@ -783,6 +787,17 @@ pub fn describe(service: Service) Effect {
         .luce_rt_export_storage => .{
             .memory = touches_text,
             .parameters = &.{ .run, .value_in, .value_out },
+        },
+
+        // -- reference counting (ARC, docs/MEMORY.md) -----------------
+        //
+        // One raises the reference count of every object a value names,
+        // the other drops it and reclaims the objects whose last name is
+        // gone.  Both resolve handles and touch the heap, and read a
+        // value in without writing one out.
+        .luce_rt_retain, .luce_rt_release => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in },
         },
 
         // -- struct values --------------------------------------------

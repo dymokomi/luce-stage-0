@@ -76,8 +76,6 @@ test "self: writer inference includes calls made while evaluating assignment pla
         \\    assert(cursor.at == 2)
         \\    assert(items[0] == 0 and items[1] == 8)
         \\    assert(cells[0].value == 4 and cells[1].value == 0)
-        \\    free(items)
-        \\    free(cells)
         \\
     );
 }
@@ -313,64 +311,6 @@ test "self: writer arguments borrowed from the receiver outlive whole-self repla
         \\    var box = Box(text = original)
         \\    assert(box.replace(box.text, box))
         \\    assert(box.text == replacement)
-        \\
-    );
-}
-
-test "self: inout replaces union and optional object fields without sharing a copy" {
-    try agree.ok(
-        \\const old_note = "the old union note is long enough to own outside bytes"
-        \\const new_note = "the new union note is also long enough to own outside bytes"
-        \\union State:
-        \\    empty
-        \\    values(items: list(long)?, note: string)
-        \\
-        \\struct Holder:
-        \\    state: State
-        \\    maybe: list(long)?
-        \\
-        \\    func rewrite(seed: long):
-        \\        self.state = State.values(items = [seed, seed + 1], note = new_note)
-        \\        self.maybe = [seed + 2]
-        \\
-        \\    func clear():
-        \\        self.state = State.empty
-        \\        self.maybe = none
-        \\
-        \\func score(box: Holder) -> long:
-        \\    match box.state:
-        \\        empty:
-        \\            return 0
-        \\        values(items, note):
-        \\            let chosen = items
-        \\            if chosen == none:
-        \\                return 0
-        \\            return chosen[0] + chosen[1] + len(note)
-        \\
-        \\func extra(box: Holder) -> long:
-        \\    let chosen = box.maybe
-        \\    if chosen == none:
-        \\        return 0
-        \\    return chosen[0]
-        \\
-        \\func main():
-        \\    var initial = new list(long)
-        \\    initial.append(1)
-        \\    initial.append(2)
-        \\    var initial_maybe = new list(long)
-        \\    initial_maybe.append(5)
-        \\    var holder = Holder(
-        \\        state = State.values(items = give initial, note = old_note),
-        \\        maybe = give initial_maybe,
-        \\    )
-        \\    let snapshot = copy holder
-        \\    assert(score(snapshot) == 3 + len(old_note) and extra(snapshot) == 5)
-        \\    holder.rewrite(7)
-        \\    assert(score(snapshot) == 3 + len(old_note) and extra(snapshot) == 5)
-        \\    assert(score(holder) == 15 + len(new_note) and extra(holder) == 9)
-        \\    holder.clear()
-        \\    assert(score(holder) == 0 and extra(holder) == 0)
-        \\    assert(score(snapshot) == 3 + len(old_note) and extra(snapshot) == 5)
         \\
     );
 }

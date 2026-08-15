@@ -162,31 +162,3 @@ test "an inout frame aliases through nested calls and its errored edge" {
     try testing.expect(outcome == .success);
     try testing.expectEqual(@as(u32, 0), outcome.success.leaked_objects);
 }
-
-test "an object-carrying inout replacement keeps the caller owner" {
-    var program = try compileScript(
-        \\struct Holder:
-        \\    values: list(long)
-        \\
-        \\    func replace():
-        \\        self = Holder(values = [9])
-        \\
-        \\func main():
-        \\    var holder = Holder(values = [1])
-        \\    holder.replace()
-        \\    assert(holder.values[0] == 9)
-        \\
-    );
-    defer program.deinit();
-
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const outcome = try interpreter.run(
-        .{ .arena = arena.allocator(), .objects = testing.allocator },
-        &program,
-        .{},
-        null,
-    );
-    try testing.expect(outcome == .success);
-    try testing.expectEqual(@as(u32, 0), outcome.success.leaked_objects);
-}

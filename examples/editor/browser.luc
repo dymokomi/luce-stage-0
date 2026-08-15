@@ -45,7 +45,6 @@ func refresh(names: list(string), directory: string, active_path: string) -> str
                 names.append(entry.name)
             other:
                 names.append(entry.name)
-    free(found)
     if paths.dir(active_path) == directory and not names.contains(paths.base(active_path)):
         names.append(paths.base(active_path))
     return none

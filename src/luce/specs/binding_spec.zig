@@ -372,7 +372,7 @@ test "a bound method takes a union task and callback graph through another struc
         \\struct Scorer:
         \\    factor: long
         \\
-        \\    func score(packet: give Packet, value: long) -> long:
+        \\    func score(packet: Packet, value: long) -> long:
         \\        var answer: long = 0
         \\        match packet.job:
         \\            idle:
@@ -383,11 +383,11 @@ test "a bound method takes a union task and callback graph through another struc
         \\        return chosen((answer + value + len(packet.values)) * self.factor)
         \\
         \\struct Runner:
-        \\    operation: (func(give Packet, long) -> long)?
+        \\    operation: (func(Packet, long) -> long)?
         \\
-        \\    func execute(packet: give Packet, value: long) -> long:
+        \\    func execute(packet: Packet, value: long) -> long:
         \\        let chosen = self.operation else fallback
-        \\        return chosen(give packet, value)
+        \\        return chosen(packet, value)
         \\
         \\func identity(value: long) -> long:
         \\    return value
@@ -398,7 +398,7 @@ test "a bound method takes a union task and callback graph through another struc
         \\func triple(value: long) -> long:
         \\    return value * 3
         \\
-        \\func fallback(packet: give Packet, value: long) -> long:
+        \\func fallback(packet: Packet, value: long) -> long:
         \\    return value
         \\
         \\func main():
@@ -409,7 +409,7 @@ test "a bound method takes a union task and callback graph through another struc
         \\        values = [10, 20, 30],
         \\        callback = triple,
         \\    )
-        \\    print(string(runner.execute(give packet, 0)))
+        \\    print(string(runner.execute(packet, 0)))
         \\
     , "30\n");
 }
@@ -421,40 +421,21 @@ test "a function field resolves give through a later resource-bearing struct" {
     // declaration-order-dependent partial layout.
     try agree.prints(
         \\struct Runner:
-        \\    operation: (func(give Packet) -> long)?
+        \\    operation: (func(Packet) -> long)?
         \\
         \\struct Packet:
         \\    values: list(long)
         \\
-        \\func count(packet: give Packet) -> long:
+        \\func count(packet: Packet) -> long:
         \\    return len(packet.values)
         \\
         \\func main():
         \\    let runner = Runner(operation = count)
         \\    let packet = Packet(values = [1, 2, 3])
         \\    let chosen = runner.operation else count
-        \\    print(string(chosen(give packet)))
+        \\    print(string(chosen(packet)))
         \\
     , "3\n");
-}
-
-test "a bound value whose receiver's owner is gone traps at the call" {
-    try agree.trap(
-        \\struct Bag:
-        \\    items: list(long)
-        \\
-        \\    func at(i: long) -> long:
-        \\        return self.items[i]
-        \\
-        \\func make() -> func(long) -> long:
-        \\    var bag = Bag(items = [1, 2])
-        \\    return bag.at
-        \\
-        \\func main():
-        \\    let read = make()
-        \\    print(string(read(0)))
-        \\
-    , .use_after_free);
 }
 
 // ---------------------------------------------------------------------------
@@ -521,9 +502,9 @@ test "a carrying payload takes give through the constructor value, as its constr
         \\        numbers(values):
         \\            return len(values)
         \\
-        \\func build(make: func(give list(long)) -> Item) -> long:
+        \\func build(make: func(list(long)) -> Item) -> long:
         \\    var xs: list(long) = [1, 2, 3]
-        \\    return count(make(give xs))
+        \\    return count(make(xs))
         \\
         \\func main():
         \\    print(string(build(Item.numbers)))
@@ -691,92 +672,6 @@ test "a bound method is stored in a field and called out of it" {
         \\        print(step.name + " " + string(action(7)))
         \\
     , "triple 21\n");
-}
-
-test "a stored bind whose receiver's owner is gone traps at the call, not before" {
-    // **The invariant D7 must not open a hole in**: a function value
-    // owns the two-slot run that holds it and never owns the objects
-    // inside it, so a bind of a carrying receiver is an *alias* (S26).
-    // Storing one is storing an alias, and an alias that outlives its
-    // owner meets `use_after_free` at the call — deterministically,
-    // because a handle carries the generation of the row it names, so a
-    // freed row can never be mistaken for a live one (S9).  That is the
-    // same net every source alias meets, which is why no storage shape
-    // has to be refused for the alias reason.
-    try agree.trap(
-        \\struct Bag:
-        \\    items: list(long)
-        \\
-        \\    func at(i: long) -> long:
-        \\        return self.items[i]
-        \\
-        \\func collect(into: list((func(long) -> long)?)):
-        \\    var bag = Bag(items = [1, 2])
-        \\    into.append(bag.at)
-        \\
-        \\func main():
-        \\    var readers = new list((func(long) -> long)?)
-        \\    collect(readers)
-        \\    let held = readers[0]
-        \\    if held != none:
-        \\        print(string(held(0)))
-        \\
-    , .use_after_free);
-}
-
-test "a copied union preserves a bound receiver's borrowed graph" {
-    try agree.prints(
-        \\struct Bag:
-        \\    items: list(long)
-        \\
-        \\    func at(i: long) -> long:
-        \\        return self.items[i]
-        \\
-        \\union Reader:
-        \\    held(action: (func(long) -> long)?)
-        \\
-        \\func main():
-        \\    var bag = Bag(items = [7, 8])
-        \\    var readers = new list(Reader)
-        \\    readers.append(Reader.held(action = bag.at))
-        \\    let copied = copy readers
-        \\    bag.items.append(99)
-        \\    match readers[0]:
-        \\        held(action):
-        \\            if action != none:
-        \\                print(string(action(2)))
-        \\    match copied[0]:
-        \\        held(action):
-        \\            if action != none:
-        \\                print(string(action(2)))
-        \\
-    , "99\n99\n");
-}
-
-test "a bound receiver borrowed through a union traps only when called" {
-    try agree.trap(
-        \\struct Bag:
-        \\    items: list(long)
-        \\
-        \\    func at(i: long) -> long:
-        \\        return self.items[i]
-        \\
-        \\union Reader:
-        \\    held(action: (func(long) -> long)?)
-        \\
-        \\func collect(into: list(Reader)):
-        \\    var bag = Bag(items = [1, 2])
-        \\    into.append(Reader.held(action = bag.at))
-        \\
-        \\func main():
-        \\    var readers = new list(Reader)
-        \\    collect(readers)
-        \\    match readers[0]:
-        \\        held(action):
-        \\            if action != none:
-        \\                print(string(action(0)))
-        \\
-    , .use_after_free);
 }
 
 test "a stored function value is released with what holds it" {
@@ -1007,7 +902,7 @@ test "a union payload composes with a bound method and a stored callback" {
         \\func main():
         \\    var items = new list(Item)
         \\    items.append(Item(prefix = "item", scale = 2))
-        \\    let plan = Plan(work = Work.batch(items = give items), finish = suffix)
+        \\    let plan = Plan(work = Work.batch(items = items), finish = suffix)
         \\    print(evaluate(plan))
         \\
     , "item8!5\n");
@@ -1179,12 +1074,12 @@ test "a struct holding a container of function values compares by handle, and is
         \\func main():
         \\    var buttons = new list(Button)
         \\    buttons.append(Button(on_click = twice))
-        \\    let panel = Panel(buttons = give buttons)
+        \\    let panel = Panel(buttons = buttons)
         \\    let alias = panel
         \\    print(string(panel == alias))
         \\    var others = new list(Button)
         \\    others.append(Button(on_click = twice))
-        \\    let second = Panel(buttons = give others)
+        \\    let second = Panel(buttons = others)
         \\    print(string(panel == second))
         \\
     , "true\nfalse\n");
