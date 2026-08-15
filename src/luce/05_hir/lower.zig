@@ -129,7 +129,7 @@ const Replay = struct {
     };
 
     const Scope = struct { owned: std.ArrayList(Owned) = .empty };
-    const Owned = struct { local: LocalId, storage: bool };
+    const Owned = struct { local: LocalId, storage: bool, objects: bool };
     const Loop = struct {
         continue_block: BlockId,
         exit_block: BlockId,
@@ -209,6 +209,20 @@ const Replay = struct {
         return switch (of) {
             .string => true,
             .optional => |payload| carriesText(payload.asType()),
+            else => false,
+        };
+    }
+
+    /// Whether a value of this type names a reference object whose count a
+    /// scope's end must lower — a container or a `file`/`task` resource,
+    /// or an optional of one.  A struct's reference fields are not yet
+    /// counted (they outlive their scope until the value-copy path learns
+    /// to retain them); leaving them uncounted only defers a release, it
+    /// never double-frees.
+    fn carriesObjects(of: Type) bool {
+        return switch (of) {
+            .heap => true,
+            .optional => |payload| carriesObjects(payload.asType()),
             else => false,
         };
     }
@@ -310,6 +324,7 @@ const Replay = struct {
             while (owned_index > 0) {
                 owned_index -= 1;
                 const release = owned[owned_index];
+                if (release.objects) try self.code.releaseObject(release.local);
                 try self.code.release(release.local, release.storage);
             }
         }
@@ -387,12 +402,28 @@ const Replay = struct {
 
     /// The checker's `ownedForStoreKind`: this register when its
     /// storage moves into the place, a copy otherwise.
+    /// A borrowed reference kept in a place that outlives the statement
+    /// owes the object a retain, so the source binding and the new holder
+    /// each count.  A fresh reference is transferred untouched — its one
+    /// reference moves into the place — and a value naming no object needs
+    /// nothing (docs/MEMORY.md).
+    fn keepReference(
+        self: *Replay,
+        register: Register,
+        value_type: Type,
+        provenance: nodes.Provenance,
+    ) Error!void {
+        if (provenance == .view and carriesObjects(value_type))
+            try self.code.retainObject(register);
+    }
+
     fn ownedForStore(
         self: *Replay,
         register: Register,
         value_type: Type,
         provenance: nodes.Provenance,
     ) Error!StoredValue {
+        try self.keepReference(register, value_type, provenance);
         if (!self.ownsStorage(value_type)) return .{ .register = register, .kind = .plain };
         if (self.takeStorage(register, provenance)) return .{ .register = register, .kind = .take };
         return .{ .register = try self.code.ownStorage(register), .kind = .copy };
@@ -410,6 +441,7 @@ const Replay = struct {
         recorded: ?nodes.StoreKind,
     ) Error!void {
         if (!self.code.localOwnsStorage(local)) {
+            try self.keepReference(register, value_type, provenance);
             try self.code.store(local, register);
             if (recorded) |kind| std.debug.assert(kind == .plain);
             return;
@@ -1773,14 +1805,17 @@ const Replay = struct {
         try self.noteOwned(local);
     }
 
-    /// Enter a declared binding in its scope's owned list when it owns
-    /// storage, so the scope's end releases its bytes (`drop_storage`).
+    /// Enter a declared binding in its scope's owned list when it holds
+    /// storage or a reference, so the scope's end gives its bytes back
+    /// (`drop_storage`) and drops its reference (`release`).
     fn noteOwned(self: *Replay, local: LocalId) Error!void {
         const owns_storage = self.code.localOwnsStorage(local);
-        if (!owns_storage) return;
+        const owns_objects = carriesObjects(self.code.localType(local));
+        if (!owns_storage and !owns_objects) return;
         try self.currentScope().owned.append(self.scratch(), .{
             .local = local,
             .storage = owns_storage,
+            .objects = owns_objects,
         });
     }
 

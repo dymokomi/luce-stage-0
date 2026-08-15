@@ -332,6 +332,29 @@ pub const Lowering = struct {
         try self.store(local, try self.dropStorage(value));
     }
 
+    /// Drop one reference to every object a local names — the object half
+    /// of a scope's end, beside the storage `release` gives back.  The
+    /// local is read, not emptied: a released handle resolves stale from
+    /// here on, which the generation guard makes a trap rather than a
+    /// double free (docs/MEMORY.md).  A no-op on a value naming no object.
+    pub fn releaseObject(self: *Lowering, local: LocalId) Error!void {
+        const value = try self.load(local);
+        const arguments = try self.arena.alloc(Register, 1);
+        arguments[0] = value;
+        _ = try self.emit(.{ .intrinsic = .{ .kind = .release, .arguments = arguments } }, .none);
+    }
+
+    /// Raise by one the reference count of every object a register names —
+    /// what a store of a *borrowed* reference into a place that outlives
+    /// the statement owes, so the source binding and the new one each hold
+    /// their own reference.  A fresh value is transferred instead, never
+    /// retained: its one reference simply moves into the place.
+    pub fn retainObject(self: *Lowering, value: Register) Error!void {
+        const arguments = try self.arena.alloc(Register, 1);
+        arguments[0] = value;
+        _ = try self.emit(.{ .intrinsic = .{ .kind = .retain, .arguments = arguments } }, .none);
+    }
+
     /// A copy of `value` whose storage nothing else owns — what a
     /// store into a place outliving this statement takes first.
     pub fn ownStorage(self: *Lowering, value: Register) Error!Register {
