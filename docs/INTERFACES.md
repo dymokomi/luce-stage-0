@@ -34,13 +34,13 @@ check.
 The interface and implementation must agree on:
 
 - method name and instance status;
-- parameter count, types, and `give` modes;
-- return count and types; and
-- receiver mutability.
+- parameter count and types; and
+- return count and types.
 
-Interface methods are read-only. A method whose body writes `self` cannot
-satisfy one. A concrete struct may have additional methods; they are not
-part of the interface.
+A concrete struct may have additional methods; they are not part of the
+interface. A method reached through an interface may mutate its receiver:
+an interface value is a reference (see `docs/MEMORY.md`), so dispatch runs
+the concrete method with no restriction on what it writes.
 
 Failure effects are directional. A non-fallible implementation may satisfy a
 fallible requirement, because it is safe for a caller to write `try` when no
@@ -80,14 +80,12 @@ named["button"] = Button(label = "one")
 Reading an element gives back `I`, and dispatch uses the implementation that
 belonged to that element. The same rule applies to arrays and struct fields.
 
-An interface value owns its dispatch storage. As with a bound read-only
-method, object graphs inside a carrying receiver remain borrowed from the
-concrete value that supplied them; the interface does not silently create a
-second owner. Keep that owner alive, or make an explicit `copy` before a
-value is kept beyond the owner's lifetime. A function cannot return a
-carrying concrete receiver as an interface, because its local owner would
-die at the return; return the concrete owner instead. Value-only receivers
-(including strings) are independent copies.
+An interface value is a reference to the conforming value it was made from,
+paired with its dispatch information. It can be stored in a local, a struct
+field, a list, or a map and kept for as long as you like: ARC keeps the
+underlying object alive while any interface — or any other reference — names
+it, and frees it at the last release. A function may return a concrete value
+as an interface, because the reference outlives the frame that produced it.
 
 The executable specification is
 [`src/luce/specs/interfaces_spec.zig`](../src/luce/specs/interfaces_spec.zig),

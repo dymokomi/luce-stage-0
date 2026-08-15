@@ -7,9 +7,8 @@ Everything is Zig 0.16.  `src/luce/06_mir/module.zig` is the reference
 style: one clear job, explicit ownership, tests beside the code.
 North star for architecture: [V2.md](V2.md) (Luce the language, loom
 the terminal); [LANGUAGE.md](LANGUAGE.md) is the language itself,
-[OWNERSHIP.md](OWNERSHIP.md) its memory model, and
-[CODEGEN.md](CODEGEN.md) why there is one code generator.  The v1
-guide this revises is preserved at `v1/CODING_GUIDE.md`.
+[MEMORY.md](MEMORY.md) its memory model, and
+[CODEGEN.md](CODEGEN.md) why there is one code generator.
 
 ## Goals
 
@@ -75,7 +74,7 @@ Files start with a `//!` doc comment saying what the file is for.
 Sections inside a file use short dashed headers.  Public types and
 methods get `///` comments that explain assumptions and ownership,
 not narration of obvious code.  Compiler and interpreter code that
-implements a ratified rule cites its number (`(S23)`) so the reader
+implements a ratified rule cites its number (`(D3)`) so the reader
 can find the contract.
 
 **Every published symbol answers three questions: what it does, who
@@ -107,9 +106,9 @@ src/luce/                     the language, one numbered surface per stage:
   04_semantics                resolve + type-check + validate, recording a typed tree
   05_hir                      that tree, and the one pass that lowers it to MIR
   06_mir                      the typed MIR, verifier, printer, module format
-  07_optimize                 three MIR passes: prune, ownership, dead
+  07_optimize                 two MIR passes: prune, dead
   08_llvm                     MIR to LLVM IR to an object; the host ABI
-  runtime                     libluce_rt: heap, ownership, resources, workers, text
+  runtime                     libluce_rt: heap, reference counting, resources, workers, text
   interpreter                 the differential oracle over that runtime
   support/                    types and diagnostics, used by every stage
   specs/                      the executable specification — its own module
@@ -123,7 +122,7 @@ src/apps/*.zig                shared by both binaries, because a program's behav
 src/manifest_corpus/          luce.yaml fixtures both parsers are held to: apps/manifest.zig
                               in Zig and src/luce/std/yaml.luc in Luce (docs/PACKAGES.md)
 examples/                     userland, written in Luce; editor/editor.luc is embedded in loom
-docs/                         V2.md LANGUAGE.md OWNERSHIP.md CODEGEN.md; v1/ is history
+docs/                         V2.md LANGUAGE.md MEMORY.md CODEGEN.md
 ```
 
 A stage that outgrows one file becomes a directory beside a
@@ -170,7 +169,7 @@ IR internals.
 ## Errors and diagnostics
 
 - Small explicit error sets at package borders
-- Compiler diagnostics carry stable codes (`luce.sema.own`,
+- Compiler diagnostics carry stable codes (`luce.sema.host`,
   `luce.parse.top`, ...) and byte spans; tests assert the code, not
   the wording
 - Runtime failures are traps with stable codes, raised through one
@@ -184,10 +183,10 @@ IR internals.
 - Tests are `test` blocks beside the code they prove, named after
   what they prove: `test "truncated, oversold, and damaged modules
   are rejected"`
-- Ratified specifications get an executable form:
-  `specs/ownership_spec.zig` mirrors OWNERSHIP.md's numbering, and
-  every situation is proven three ways — the behavior works, misuse
-  is a compile error with a stable code, the dynamic backstop traps
+- Ratified specifications get an executable form under `specs/`, named
+  after the decision they prove (`docs/MEMORY.md`'s numbering), each
+  proven both ways where it applies — the behavior works, and misuse is
+  a compile error with a stable code
 - **Anything that runs a Luce program is a specification and lives in
   `specs/`, where it runs on both engines and the two are compared;
   anything that inspects a structure lives beside the code it
@@ -205,7 +204,7 @@ IR internals.
 ## What not to add casually
 
 - Comptime metaprogramming beyond what a reader can hold in their head
-- Concurrency outside THREADS.md's share-nothing ownership design
+- Concurrency outside THREADS.md's share-nothing worker design
 - Codegen / build-time tricks beyond simple steps in `build.zig`
 - Premature abstraction before a caller needs it
 - Wrappers around Zig std that add nothing but indirection

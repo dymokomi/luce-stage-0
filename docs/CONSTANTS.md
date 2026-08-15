@@ -5,16 +5,16 @@ constant containers obviously."*  What is ratified is the feature; what
 this memo is for is the shape, because the shape turns on one question
 the corpus cannot answer by itself and the owner has to (§6 below).
 
-The rule this extends is `docs/OWNERSHIP.md` **S35** — *"File scope
-owns nothing, so a constant is a value"* — and the extension has to be
-made without breaking the sentence, not around it.  S35's reasoning is
-sound and stays: the three owner kinds are a binding, a container and
-the statement temporary, and every one of them lives inside a
-function, so a top-level `let` has nothing to own with.  What this memo
-observes is that S35 answered a question nobody had asked it: **an
-object needs an owner because it has to die.**  An object that never
-dies needs no owner, and file scope is exactly the place where "never
-dies" is true by construction.
+The model this extends is `docs/MEMORY.md`: value types (scalars,
+`string`, struct, enum) copy, while reference types (`class`, `list`,
+`map`, `array`, `builder`, `file`, `task`) are shared and freed
+automatically at their last reference.  Until now a file-scope constant
+could only hold a value, so a table — a `list`, a reference type — had
+no constant form and was rebuilt per call.  What this memo observes is
+that a reference object materialized once before `main` and held by the
+program root never reaches a last reference until the program ends: it
+is the program, not the run, and it lives for the whole of it by
+construction.
 
 ## The evidence
 
@@ -63,30 +63,29 @@ CRC table is flat, the four DEFLATE tables are flat, both word lists
 are flat, and a canonical Huffman table is two flat lists.  That is
 what decides §2.
 
-## §1 — The eternal object
+## §1 — The program-root object
 
-**A top-level `let` may hold a container.**  It is built by the
+**A file-scope `const` may hold a container.**  It is built by the
 constant folder, baked into the artifact beside the interned strings,
-materialized once per run before `main`, and never freed.
+materialized once per run before `main`, and held by the program root
+for the whole run.
 
 ```text
-private let crc_table: list(long) = [0, 1996959894, 3993919788, ...]
+private const crc_table: list(long) = [0, 1996959894, 3993919788, ...]
 
-let length_bases: array(long, 29) = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13,
+const length_bases: array(long, _) = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13,
     15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163,
     195, 227, 258]
 
-private let keywords = {"and": true, "break": true, "catch": true}
+private const keywords = {"and": true, "break": true, "catch": true}
 ```
 
-**How S35's sentence extends.**  File scope still owns nothing — that
-part is untouched and untouchable.  What is added is one clause: an
-object with no death point needs no owner, and a constant container has
-none, because the program is what holds it and the program does not
-end before the run does.  The proposed clause is **S46** (§7), and it
-is deliberately written as an *exception to the obligation*, not as a
-fourth owner kind: there is no "file owner", nothing in `Owner`
-resolves to a scope, and no walk gains a case that frees something.
+**How the model extends.**  A constant container is a reference object
+like any other; what makes it a constant is that the program root holds
+the one reference, so its last-reference point is program teardown and
+never earlier.  It is not a new kind of ownership — it is an ordinary
+program-root reference materialized once, and the release walk touches
+it last with the rest of the heap.
 
 **Immutable, refused at compile time, per container** — the whole
 method table, split by whether it writes:
@@ -105,8 +104,8 @@ Plus the two element stores — `TABLE[i] = v` and `TABLE[k] = v` — which
 are refused for the same reason and with the same sentence.  The
 sentence names the constant and what it is: *"`crc_table` is a
 constant; `append` would write the program"*.  `keys()` and `values()`
-allocate fresh owned lists and are therefore fine; a slice `TABLE[a:b]`
-copies (S22) and answers a fresh owned mutable object, which is fine
+allocate fresh lists and are therefore fine; a slice `TABLE[a:b]`
+copies and answers a fresh mutable object, which is fine
 for the same reason.
 
 **`builder` is refused entirely**, and the sentence is short: every one
@@ -121,31 +120,28 @@ structs.**  Each of these is something the folder already produces —
 `.boolean`, `.string`, `.strukt` and `.absent` — so the element rule is
 not a new judgment, it is the existing one applied per element.  An
 enum member is a constant by ENUMS.md D8 and needs nothing.  A struct
-that carries objects is already refused as a constant by S35 and stays
+that holds a reference object is already refused as a constant and stays
 refused as an element by the same check (`carriesObjects`).
 
 **Run one is flat: a constant container may not hold a container.**
 This is the memo's one deliberate narrowing, and it is taken on the
 evidence rather than on difficulty.  A baked list of baked lists is
-*buildable* — the outer eternal object would hold handles to inner
-eternal ones and the release walk would no-op on all of them — but
-nothing in the corpus asks for one, and it is where two questions bite
-that flatness avoids entirely: whether `copy TABLE` deep-copies the
-children into fresh mutable ones (S31 says deep, so yes, and that is a
-surprising amount of allocation behind a two-word expression), and
-whether a *mutable* container may hold an eternal one (S25's field
-assignment and S37's container adoption both assume the container owns
-what it holds).  Refusing nesting now costs nothing and can be relaxed
-later without breaking a single program, which is the test that
-decides which way a restriction should default.
+*buildable* — the outer program-root object would hold references to
+inner ones, all released together at teardown — but nothing in the
+corpus asks for one, and it is where questions bite that flatness
+avoids entirely, from how a fresh mutable copy of a nested constant is
+built to how a mutable container holds a program-root one.  Refusing
+nesting now costs nothing and can be relaxed later without breaking a
+single program, which is the test that decides which way a restriction
+should default.
 
 **The three shapes:**
 
 | written | what it is |
 |---|---|
-| `let xs = [a, b, c]` | a `list(T)`, `T` from the elements or from the annotation |
-| `let xs: array(long, 29) = [...]` | a rank-1 `array`, the count checked against the literal; `array(long, _)` infers it |
-| `let m = {k: v, ...}` | a `map(K, V)`, `K` from §3 |
+| `const xs = [a, b, c]` | a `list(T)`, `T` from the elements or from the annotation |
+| `const xs: array(long, _) = [...]` | a rank-1 `array`, the literal supplying the dimension |
+| `const m = {k: v, ...}` | a `map(K, V)`, `K` from §3 |
 
 The bracket literal already exists at runtime and already parses; what
 it gains is a constant position.  An array needs the annotation to say
@@ -154,8 +150,8 @@ Multi-dimensional arrays are out with nesting, since a rank-2 literal
 is a list of lists.
 
 **Types land the way they already do.**  A constant has no type until
-it lands on one: `let xs = [1, 2, 3]` is `list(int)` by the literal
-default, `let xs: list(long) = [1, 2, 3]` is `list(long)` because the
+it lands on one: `const xs = [1, 2, 3]` is `list(int)` by the literal
+default, `const xs: list(long) = [1, 2, 3]` is `list(long)` because the
 annotation is the landing type — `constants.zig` resolves the
 annotation *before* the fold for exactly this reason, and the rule
 carries to elements unchanged (docs/TYPES.md D3).
@@ -183,11 +179,11 @@ argument for having one rather than against.
 **Recommended: `{key: value, ...}`.**
 
 ```text
-private let keywords: map(string, bool) = {
+private const keywords: map(string, bool) = {
     "and": true, "break": true, "catch": true,
 }
 
-let method_names = {0: "stored", 8: "deflated"}
+const method_names = {0: "stored", 8: "deflated"}
 ```
 
 Four reasons, in the order they matter.  **Braces cost nothing**: they
@@ -243,7 +239,7 @@ than re-deriving comparison (docs/NUMERICS.md §5).
 
 `set(T)` is a fifth heap type.  It needs a row in `types.HeapType`, a
 `new set(T)`, a method table (`add`/`remove`/`has`/`len`/iteration),
-MIR intrinsics for each, `libluce_rt` implementations, ownership rules,
+MIR intrinsics for each, `libluce_rt` implementations, memory rules,
 two-engine specs, and a literal whose spelling collides with §3's on
 the empty case — Python's exact wart, arriving fresh.  That is a
 feature-sized run, and the run this memo describes is the **last
@@ -306,22 +302,23 @@ it for free.
 - **One trap can fire before `main`**: `allocation_failed`, because RAM
   decides (BYTES.md's folded ruling).  Debug builds report it at the
   constant's declaration site.
-- **The generation story is that there is no story.**  An eternal row
-  takes an ordinary generation, never advances it because nothing ever
-  frees it, and is never on the free list.  `resolve` is untouched;
-  `retired` is never approached.
-- **The leak census does not count them.**  The census exists to prove
-  the ownership rules (S33), and an eternal object is outside those
-  rules by construction — it is the program, not the run.  Both engines
-  exclude them identically because both get them from the same
-  prologue, which is what keeps `agree` honest.
+- **The generation story is that there is no story.**  A program-root
+  row takes an ordinary generation, never advances it because nothing
+  frees it before teardown, and is never on the free list.  `resolve`
+  is untouched; `retired` is never approached.
+- **The user leak census does not count them.**  The census exists to
+  catch a run's objects that outlive the run, and a constant container
+  is deliberately live for the whole run — it is the program, not the
+  run.  Both engines exclude them identically because both get them
+  from the same prologue, which is what keeps `agree` honest.
 - **Teardown releases them last**, with the rest of the heap, so a
   run's memory still all comes back.
-- **Zero new reference counting, at any layer.**  Nothing counts,
-  nothing traces, nothing carries a shared bit.  The only new field is
-  one tag in a union that already exists (`Owner`, §6), and it is read,
-  never incremented.  `docs/MEMORY.md`'s rule is not approached, let
-  alone bent.
+- **The only new field is one tag** in a union that already exists
+  (`Owner`, §6) marking the program-root row, and it is read, never
+  written on the execution path.  `docs/MEMORY.md`'s reference counting
+  covers a constant container the way it covers any reference object;
+  a program-root reference simply never reaches its last release until
+  teardown.
 
 **`abi.version` does not move.**  Nothing in `LuceHost` changes —
 materialization is generated calls into runtime exports that already
@@ -332,8 +329,9 @@ exist.  BYTES.md spent a version; this run spends none.
 `f(TABLE)` where `f` takes `xs: list(long)` and calls `xs.append(v)`.
 Stage 4 refuses `TABLE.append(v)` at the constant's own name and
 refuses it through an alias, because the aliasing it needs is machinery
-S23 already built.  It cannot see it through a call — the parameter's
-type is `list(long)`, and `list(long)` is what a mutable list is too.
+the analyzer already had.  It cannot see it through a call — the
+parameter's type is `list(long)`, and `list(long)` is what a mutable
+list is too.
 
 This is not a corner: **the first evidence file passes one.**
 `editor.luc`'s `listed(keyword_words, word)` hands a constant to a
@@ -349,9 +347,9 @@ against the frozen type or written twice, and there are no generics to
 write it once; making mutable-to-frozen an implicit coercion then owes
 a variance rule for `list(frozen list(T))` that nothing else in Luce
 needs; and it reopens, one week later and one feature before the lock,
-the sentence `docs/SELF.md` D6 just ratified — *"an object argument
-still borrows, and borrowed contents still mutate through the object's
-own methods — that is what a reference is."*  Adding a mutability
+the sentence `docs/SELF.md` D6 just ratified — *"a reference argument
+is shared, and its contents still mutate through the object's own
+methods — that is what a reference is."*  Adding a mutability
 dimension to the type system as the last thing before a lock is the
 wrong shape of change at the wrong moment.
 
@@ -383,37 +381,29 @@ nearly unreachable.**  Stage 4 refuses, by name and at the site:
 ```text
 TABLE.append(v)            constant; the method writes
 TABLE[i] = v               constant; the store writes
-let x = TABLE  →  x.sort() the alias carries the fact (S23 machinery)
-give TABLE                 nothing to transfer
-free TABLE                 nothing to release
-return TABLE               the caller's binding would free the program
-xs.append(TABLE)           a container frees what it holds
+let x = TABLE  →  x.sort() the alias carries the fact
+return TABLE               the caller's binding would write the program
+xs.append(TABLE)           the container's element would be written
 ```
 
-`copy TABLE` **works** — S31 says `copy` is a deep copy and is always
-legal on readable objects, and it is the sanctioned door from eternal
-to mutable: `var t = copy TABLE` starts from the table and owns what it
-gets.  The division is principled rather than a list: **`give` and
-`free` operate on an ownership that does not exist here; `copy` creates
-one.**  Plain aliasing (`let x = TABLE`) is free and carries the fact.
+A program that wants a mutable list builds one the ordinary way and
+fills it from the constant; the constant itself is read-only.  Plain
+aliasing (`let x = TABLE`) is free — it shares the same reference — and
+carries the fact that the shared object is a constant.
 
-Notice what the refused list is made of: every entry but the first two
-is a *release-side* mistake, and the release walks no-op on an eternal
-row by construction.  So even IR that arrives without passing the
-analyzer is **safe** on all of them rather than trapping.  The only
-genuinely dangerous operation is a write, which is why exactly one trap
-code is needed — **`immutable_object`**, named for the state like
-`null_object` — and why it fires in exactly one situation: a write
-through a parameter.  That is the shape of `not_owned`, which
-LANGUAGE.md already describes as defense-only: unreachable from source
-today, kept because a `.lc` is an executable and a `.lcm` reaches the
-backend without the analyzer.
+The only genuinely dangerous operation is a write, which is why exactly
+one trap code is needed — **`immutable_object`**, named for the state
+like `null_object` — and why it fires in exactly one situation: a write
+through a parameter.  It is defense-only: unreachable from source today,
+kept because a `.lc` is an executable and a `.lcm` reaches the backend
+without the analyzer.
 
-**Where the flag lives, and what it costs.**  `Owner` gains `.eternal`
-— it already answers "who owns this", and the honest answer for these
-is *nobody, forever*.  A boxed mutation (`append`, `insert`, `sort`,
-`map_put`) already resolves the handle and reads the row; a tag compare
-on a row that is already in a register is not measurable.  The site
+**Where the flag lives, and what it costs.**  `Owner` marks the
+program-root row — it already answers "who holds this", and the answer
+for these is *the program, until teardown*.  A boxed mutation
+(`append`, `insert`, `sort`, `map_put`) already resolves the handle and
+reads the row; a tag compare on a row that is already in a register is
+not measurable.  The site
 that needs an argument is the **inline element store**: `xs[i] = v`
 and `grid[r, c] = v` are generated without a runtime call
 (docs/CODEGEN.md, "Inline access"), and a check there would sit in the
@@ -431,25 +421,19 @@ noise.  The obligation is stated rather than assumed — `bench/run.sh`'s
 `arrays` and `matmul` rows are the guard, and `bench/compare.sh` against
 the pre-run commit is the check.
 
-## §7 — S46, proposed
+## §7 — The memory rule
 
-For `docs/OWNERSHIP.md`, whose situations are ratified and therefore
-the owner's to add to:
-
-> **S46. An eternal object has no owner, and that is why it needs
-> none.**  A constant container is built at compile time, materialized
-> once before `main`, and never freed, so the obligation S33 places on
-> every object — that it have a death point — is discharged by its not
-> having one.  It is not owned by the file (S35 stands: file scope owns
-> nothing); it is owned by nothing.  `give` and `free` are refused
-> because there is no ownership to move or end; `copy` is legal and
-> answers a fresh owned object (S31); aliasing is free; a borrow into a
-> call is an ordinary borrow (S18); returning one or storing one into a
-> container is refused, because both would create an owner that would
-> free the program.  Every mutating operation is refused at compile
-> time, and a write that reaches the runtime anyway traps
-> `immutable_object`.  Eternal objects are outside the leak census
-> (S33), because they are the program rather than the run.
+For `docs/MEMORY.md`: a constant container is a reference object owned
+by the program root.  It is built at compile time, materialized once
+before `main`, and never reaches a last reference before program
+teardown, when it is released with the rest of the heap.  It is
+excluded from the user leak census precisely because it is deliberately
+live for the whole run — it is the program, not the run.  Aliasing
+shares the reference and carries the constant fact; returning one or
+storing one into a container is refused, because a fresh owner would
+then be free to write the program; every mutating operation is refused
+at compile time, and a write that reaches the runtime anyway traps
+`immutable_object`.
 
 ## Surface interactions
 
@@ -459,19 +443,20 @@ one line because each already works.
 - **`module.name` across imports** is unchanged: a constant container
   is reachable through an import exactly as a value constant is, and
   the visibility gate is the reference site's module (VISIBILITY.md).
-  `private let TABLE` works, and the existing "a public constant may
+  `private const TABLE` works, and the existing "a public constant may
   not hold a private type" check in `constants.zig` applies to the
   element type with no new code.
 - **Indexing, slicing and iteration just work** — they are what the
-  feature is for.  A slice copies and is owned; iteration borrows.
+  feature is for.  A slice copies and answers a fresh list; iteration
+  reads the shared object.
 - **A parameter default may be a constant container.**  It would be the
-  first object-valued default, and it is permitted precisely because
-  nothing owns it: the default is the same eternal handle at every call
-  site, borrowed like any argument (docs/ARGS.md D8, unchanged).
-- **A lambda may name one.**  `docs/FUNCTIONS.md` S3 lets a
-  capture-free lambda name module-level constants; an eternal object is
-  the one "outer" thing it can honestly reach, because reaching it
-  captures nothing.
+  first reference-typed default, and it is the same program-root
+  reference at every call site, shared like any argument (docs/ARGS.md
+  D8, unchanged).
+- **A lambda may name one.**  `docs/FUNCTIONS.md` lets a capture-free
+  lambda name module-level constants; a constant container is the one
+  "outer" thing it can honestly reach, because reaching it captures
+  nothing.
 - **Threads: each runtime materializes its own.**  `docs/THREADS.md` D1
   is structural — *"nothing allocated in one runtime is addressable
   from another"* — and a shared read-only region would be the one
@@ -490,14 +475,14 @@ through the existing `fold`, duplicates refused through
 `value.keyEquals` — and the alias tracker gains one bit.  MIR: a second
 pool, `const_container`, a verifier rule, `format_version`.
 `07_optimize/prune`: pool rows.  Both engines: the prologue, over
-existing `libluce_rt` exports, and `.eternal` in `Owner` with the
-mutation checks behind it.  Specs: two-engine rows for materialization
-at every element type, indexing/iteration/slicing, `copy`, the refusals
-(each verb, each mutating method, each container), duplicate keys, the
-`immutable_object` backstop driven from hand-made IR, the census
-exclusion, and the artifact-refusal row for the version bump.  Site: the
-Guide's language chapters, its exact-rules appendix, and
-`/guide/reference/ownership/#s46`.
+existing `libluce_rt` exports, and the program-root tag in `Owner` with
+the mutation checks behind it.  Specs: two-engine rows for
+materialization at every element type, indexing/iteration/slicing, a
+fresh mutable copy, the refusals (each mutating method, each container),
+duplicate keys, the `immutable_object` backstop driven from hand-made
+IR, the census exclusion, and the artifact-refusal row for the version
+bump.  Site: the Guide's language chapters and its exact-rules
+appendix.
 
 **Sequencing.**  After threads → lambdas → the self revision, on a
 quiet tree, as the final feature before the lock.  Threads and lambdas
@@ -531,7 +516,7 @@ Four, and the first two decide the shape.
 |---|---|
 | **R1** | **Frozen through a call.**  Recommended: the dynamic backstop — every case stage 4 can see refused by name, one new trap (`immutable_object`) for the write that reaches the runtime through a parameter, and no mutability dimension in the type system.  The alternatives are `frozen list(T)` in signatures (honest, infectious, and it reopens SELF.md D6 a week after ratifying it) and refusing to pass constants at all (refuted by the editor's own call). |
 | **R2** | **The map literal: `{key: value, ...}`**, claiming braces and refining the lexer's sentence about them; `{}` refused with `new map(K, V)` named, which keeps braces free for a future set.  And: **legal in both constant and runtime position** (recommended — one grammar, and the runtime form is the list literal's lowering said again), or constant-only if the run should be narrower. |
-| **R3** | **S46 as written above**, including the verb split: `give` and `free` refused because there is no ownership to move or end, `copy` legal because it creates one. |
+| **R3** | **The memory rule as written above**: a constant container is a program-root reference materialized once and released at teardown, refused as a return or a stored element, and read-only — a program that wants a mutable list builds one and fills it. |
 | **R4** | **Run one is flat** — scalars, strings, enum members and object-free value structs as elements; no container inside a constant container (relaxable later without breaking a program) — and **`set(T)` does not enter**, with a constant `map(T, bool)` serving membership at constant time in the meantime. |
 
 ## As built — 2026-08-08
@@ -544,11 +529,10 @@ earlier examples or mechanisms disagree with it.
 - **Declaration.**  File scope uses `const`; top-level `let` is retired
   and the diagnostic teaches `const`.  Function-scope `let` and `var`
   are unchanged, and there is still no top-level `var`.
-- **Ownership.**  Ratified R-C supersedes the proposal's “ownerless” and
-  `.eternal` language.  Each materialized row is owned by the program
-  root, excluded from the user leak census while it is deliberately
-  live, and released at runtime teardown.  This is S46.  Each worker
-  has a runtime of its own and materializes roots of its own.
+- **Ownership.**  Each materialized row is owned by the program root,
+  excluded from the user leak census while it is deliberately live, and
+  released at runtime teardown.  Each worker has a runtime of its own
+  and materializes roots of its own.
 - **Surface.**  `{key: value}` is an expression in runtime and constant
   positions.  A runtime literal is a fresh mutable map; entries evaluate
   in order and a later equal key replaces the earlier value.  An
@@ -562,17 +546,16 @@ earlier examples or mechanisms disagree with it.
   annotation.  Containers stay flat: scalars, strings, enums and
   object-free structs are elements; an optional field inside such a
   struct may be absent or present, while an optional top-level element
-  is refused.  Nested containers, builders, object-carrying structs,
-  multidimensional arrays and sets remain out.  Contrary to the
+  is refused.  Nested containers, builders, structs that hold a
+  reference object, multidimensional arrays and sets remain out.  Contrary to the
   proposal's earlier broad slicing example, only a list constant may
-  be sliced, producing a fresh owned list.  Constant arrays support
-  indexing, iteration and `copy`, but the language has no array slice
-  expression.
+  be sliced, producing a fresh list.  Constant arrays support indexing
+  and iteration, and a program can build a fresh mutable copy, but the
+  language has no array slice expression.
 - **Identity and defaults.**  The compiler emits one pool row per
   written construction rather than interning equal contents.  Aliases,
-  imports, uses and a borrowing parameter default share that row;
+  imports, uses and a shared parameter default share that row;
   separately written equal constructions compare as different objects.
-  A `give` parameter still cannot have an object default.
 - **Visibility.**  Constant containers obey the ordinary file boundary.
   A public container cannot expose a private element or map-value type;
   marking the container private or making the type public closes the
@@ -580,11 +563,11 @@ earlier examples or mechanisms disagree with it.
   constant because the value, not the private name, crosses the boundary.
 - **Enforcement.**  Stage 4 tracks visible roots through aliases and
   control flow, refusing mutating methods (including `sort_by`), indexed
-  and nested stores, `file.read` destinations, ownership verbs, returns
-  and retaining stores.  A parameter boundary hides provenance, so all
-  runtime mutation paths, including LLVM's inline stores, trap
-  `immutable_object` before changing the row.  `copy` remains the one
-  door to a fresh owned mutable object.
+  and nested stores, `file.read` destinations, returns and retaining
+  stores.  A parameter boundary hides provenance, so all runtime
+  mutation paths, including LLVM's inline stores, trap
+  `immutable_object` before changing the row.  A program that wants a
+  fresh mutable object builds one and fills it from the constant.
 - **Representation.**  Verified MIR carries a distinct
   `container_constants` pool and `const_container` instruction.  Dead
   rows are compacted after dead instructions, then both engines eagerly
@@ -593,8 +576,7 @@ earlier examples or mechanisms disagree with it.
   serialized module was `format_version = 33`; the published host table
   did not change at that point; the current `abi.version` is 16 after
   the later `shell_run`, `term_event_data`, `dir_create` and `epoch_ms`
-  host services, and the current module format is 43 after MIR began
-  carrying function parameter ownership verbs.
+  host services, and the current module format is 43.
 - **Customers and proof.**  `std.zip` now holds the CRC table, four
   length/distance base and extra tables, and the code-length order as
   six file-scope constants.  The editor's keyword and builtin sets are

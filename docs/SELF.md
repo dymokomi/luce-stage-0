@@ -13,9 +13,9 @@ return value or a member function — was checked and **none survived**:
 state threading is `pos, bits = read_bits(data, pos, 5)` once the
 polish run lands multi-return into existing bindings; "reset this
 struct" is a member function or a fresh construction; `swap` is three
-lines once a decade; buffers are objects, whose borrowed contents
+lines once a decade; buffers are reference objects, whose contents
 already mutate through their own methods on the other side of the
-value/object line, unchanged.
+value/reference line, unchanged.
 
 ## The rule the call site keeps
 
@@ -33,7 +33,7 @@ so structs and containers stop having different mutation stories.
 | **D3** | **Writing `self` requires the receiver to be a `var` place**, checked at the call site — `frozen.advance(8)` on a `let` binding is refused by the sentence `let` refusals already use.  Reading `self` needs nothing.  There is no per-method mutation marker: the receiver's own mutability is the whole permission, as it is for `xs.append`. |
 | **D4** | **`var self` is retired**, and with it the copy-in/copy-out write-back and the "receiver is result zero" convention.  A member function that writes `self` simply writes the receiver in place — one mutation story, no hidden travel in returns. |
 | **D5** | **`var` parameters do not enter the language.**  A value passed to a function is never mutated by it, with no exception to learn.  (The near-miss was value-only copy-in/copy-out; refused for the clarity cost the ratification names.) |
-| **D6** | The value/object line is untouched: an object argument still borrows, and borrowed contents still mutate through the object's own methods — that is what a reference is.  What this memo removes is any way for a *value* to change under a caller's feet. |
+| **D6** | The value/reference line is untouched: a reference argument is the same object the caller holds, and its contents mutate through the object's own methods — that is what a reference is.  What this memo removes is any way for a *value* to change under a caller's feet. |
 | **D7** | **Migration is mechanical and total**: every method in `std/`, `examples/` and every doc/site sample drops its `self` parameter; namespace functions gain `static`; `var self` methods (the rng, zip's writer) become plain writing methods.  The suite, the site build and the doc guards verify every one.  The old spellings are refused with sentences that teach the new (`self is implied; remove the parameter`, `a namespace function says static`). |
 
 ## Where it lands
@@ -54,15 +54,15 @@ The surface landed exactly as D1–D7: every plain struct or enum member
 has implied `self`, and `static func` is the member with none.  One
 detail was deliberately narrowed at implementation time: a writing
 method accepts a **bare mutable binding**, not every nested place.
-Reading methods still accept lets and temporaries.  An object-carrying
-receiver may be replaced only through the binding that owns its
-objects; mutating an object's contents through a borrowed field remains
-a reading method under D6.
+Reading methods still accept lets and temporaries.  A receiver may be
+replaced only through the bare mutable binding that names it; mutating
+a referenced object's contents through a field remains a reading method
+under D6.
 
 The write effect is inferred to a fixed point.  A direct store to
 `self`, a store to one of its value fields, or a call to another writer
 on `self` makes a method a writer, even through forward declarations
-and several wrappers.  An object-content call such as
+and several wrappers.  A call on a referenced field such as
 `self.items.append(value)` does not.  Writers may declare zero, one, or
 several ordinary results; the receiver is not one of them.
 
@@ -72,12 +72,12 @@ into a function value, or spawned.  A static member is called through
 its type and may be both a value and a worker target.
 
 The prediction that MIR would not change was the one part that did not
-survive implementation.  A writing call needs the caller's slot and
-owner identity, not merely its current value, so MIR gained
+survive implementation.  A writing call needs the caller's slot itself,
+not merely its current value, so MIR gained
 `call_inout` and an `inout` local zero.  The interpreter aliases that
-slot; LLVM passes an internal pointer/owner descriptor and forwards it
-through nested writers.  Cleanup remains the caller's, and replacing an
-object-carrying receiver does not invent a second owner.  This moved the
+slot; LLVM passes an internal place descriptor and forwards it
+through nested writers.  Replacing a receiver that holds references
+rebinds them in place and creates no second reference.  This moved the
 serialized module to **format 32** and added no host service at that
 point.  (The host ABI has since moved on its own schedule — later
 slots such as `shell_run` and `term_event_data` carried it past this

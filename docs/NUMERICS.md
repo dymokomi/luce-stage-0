@@ -5,9 +5,7 @@
 > `builder` — docs/TYPES.md D8), and the two numeric types became four:
 > `int` and `float` are 32 bits and are what a literal takes with
 > nothing to tell it otherwise, `long` and `double` are the 64-bit
-> types this memo calls `Int` and `Float`.  A fenced block tagged
-> `luce historical` is shown as it was written and is not compiled;
-> every other one in this file is (`tools/doccheck.zig`).
+> types this memo calls `Int` and `Float`.
 
 > **The rule.** `Int` converts to `Float` implicitly, in one direction,
 > wherever a `Float` is required — and nowhere does a `Float` become an
@@ -18,7 +16,8 @@
 > with the name of the type it produces: `Int(x)`, `Float(x)`,
 > `String(x)`.
 
-`docs/MEMORY.md` records why scope ownership won; `docs/FAILURE.md` why
+`docs/MEMORY.md` records why value and reference types with ARC won;
+`docs/FAILURE.md` why
 there are three failure mechanisms and not one. This is the memo for
 the rule those two never had to touch, and it is the first one that
 **overturns a ratified decision** rather than filling a hole.
@@ -308,13 +307,13 @@ That is the kind of seam that produces bug reports for a decade.
 **Two — three corpus sites are already hand-written workarounds for
 the C rule, and this deletes all three.** This is not a hypothetical:
 
-```luce historical
-# src/luce/std/math.luc:96 — sign-safe parity, today
-if (Int(y) % 2 + 2) % 2 == 1:
+```text
+# src/luce/std/math.luc:96 — sign-safe parity, before floor-mod
+if (int(y) % 2 + 2) % 2 == 1:
 # under floor-mod
-if Int(y) % 2 == 1:
+if int(y) % 2 == 1:
 
-# src/luce/std/math.luc:230-233 — folding a seed into range, today
+# src/luce/std/math.luc:230-233 — folding a seed into range, before floor-mod
 var folded = from % 2147483646
 if folded < 0:
     folded += 2147483646
@@ -322,7 +321,7 @@ return [folded + 1]
 # under floor-mod
 return [from % 2147483646 + 1]
 
-# examples/bf/bf.luc:42 — a byte decrement, today
+# examples/bf/bf.luc:42 — a byte decrement, before floor-mod
 tape[pointer] = (tape[pointer] + 255) % 256
 # under floor-mod, the spelling the author meant
 tape[pointer] = (tape[pointer] - 1) % 256
@@ -595,9 +594,15 @@ the larger version of the same mistake.
 
 **Recommended: format specs inside f-strings**, and nowhere else.
 
-```luce historical
-print(f"mean = {mean:.2f}")        # "mean = 23.99"
-print(f"{count} rolls, {rate:.3f}/s")
+```luce
+import std.strings
+
+func main():
+    let mean = 23.99
+    let count = 3
+    let rate = 1.5
+    print(f"mean = {mean:.2f}")        # "mean = 23.99"
+    print(f"{count} rolls, {rate:.3f}/s")
 ```
 
 Because that is where formatting happens. Every numeric formatting
@@ -653,13 +658,13 @@ from the first arm to no arm at all.
 promotion makes newly possible is caught by a message that already
 exists, because the type system refuses the continuation:
 
-```luce historical
-let mid = (lo + hi) / 2      # Float now
-grid[mid]                    # index is Float — refused, existing message
-func f(n: Int)
-f(a / b)                     # argument is Float — refused, existing message
-var n: Int = 10
-n /= 2                       # place is Int, value is Float — refused,
+```text
+let mid = (lo + hi) / 2      # a float now
+grid[mid]                    # index is float — refused, existing message
+func f(n: int)
+f(a / b)                     # argument is float — refused, existing message
+var n: int = 10
+n /= 2                       # place is int, value is float — refused,
                              # builder.zig:1882, existing message
 ```
 

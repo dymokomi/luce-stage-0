@@ -11,15 +11,16 @@ along a ladder every rung reaches every rung above it — `byte` to
 the two ladders the answer is always `double` (docs/TYPES.md §2).
 **Nothing narrows**, in any direction or context.
 
-## Values, objects, and resources
+## Values and references
 
-Three categories of data, with deliberate lines between them:
+Every type is one of two kinds, and the line between them is deliberate
+(the full model is `docs/MEMORY.md`):
 
 - **Values** — `bool`, the seven numbers, `string` (immutable UTF-8),
-  user `struct`s and `union`s that carry no container object or
-  resource, `enum`s,
-  and function values.  Values copy on assignment and call;
-  nobody frees a value.  The numbers are two ladders, and four of them do
+  user `struct`s and `union`s, `enum`s,
+  and function values.  A value copies on assignment and call, lives
+  inline, and costs nothing at runtime; nobody frees a value.  The
+  numbers are two ladders, and four of them do
   arithmetic: `int` (signed 32-bit) and `long` (signed 64-bit) trap on
   overflow and on division by zero; `float` (IEEE binary32) and
   `double` (IEEE binary64) follow IEEE without traps.  `int` and
@@ -30,109 +31,94 @@ Three categories of data, with deliberate lines between them:
   ever has one and there is no arithmetic at 8 or 16 bits to define.
   What they are for is `array(byte, _)` at one byte an element, with
   the extent supplied at construction (docs/TYPES.md D5).
-- **Container objects** — `list(T)`, `map(K, V)`, `array(T, ...)`, and
-  `builder`.  Variables hold *references*.  Runtime objects are
-  created with `new ...` or a literal and freed automatically by
-  **scope ownership** (next section).  A flat list, map, or rank-1
-  array declared with file-scope `const` is instead materialized once
-  into the program root and remains there until that runtime ends
-  (S46).  Assigning or passing a struct value that contains a list copies
-  the *reference* — both struct values see the same list.  The explicit
-  `copy` verb instead deep-copies a resource-free owned graph.
-- **Scope-owned resources** — `file` and `task(...)`.  They use heap
-  handles because a resource needs one owner and one death point, but
-  they are not containers: there is no `new file` or `new task`.
-  The raw `file_open` host builtin is the primitive file door;
-  `std.files` wraps it as `open`, `create`, and `append_to`.  `spawn` is
-  the task door.  A resource may be
-  moved with `give` or `return`, or released early with `free`; it
-  cannot be copied because that would make two owners of one file or
-  worker.  Releasing a file closes it, and releasing a task joins it.
+- **References** — a `class`, the container objects `list(T)`,
+  `map(K, V)`, `array(T, ...)` and `builder`, and the resources `file`
+  and `task(...)`.  A reference is a shared, reference-counted object:
+  created with `new ...` or a literal, named by a variable that holds a
+  *reference*, and freed automatically the instant its last reference
+  goes away.  Assigning or passing one shares the same object — both
+  names see it, and a mutation through either is seen through both.  A
+  flat list, map, or rank-1 array declared with file-scope `const` is
+  instead materialized once into the program root and stays there until
+  that runtime ends.
 
-A struct that carries a container object or resource is an
-**ownership-carrying struct**.  Its scalar fields remain values, but
-keeping the whole struct follows the rules of what it carries; if any
-member is a resource, the whole struct is non-copyable.
+`file` and `task(...)` are references too, but not containers: there is
+no `new file` or `new task`.  The raw `file_open` host builtin is the
+primitive file door, which `std.files` wraps as `open`, `create`, and
+`append_to`; `spawn` is the task door.  Because release is
+deterministic, the last reference to a `file` closes it and the last
+reference to a `task` joins it — the moment it drops, not at some later
+collection.
 
-## Ownership
+A `struct` is always a value: it copies field by field.  When a field
+holds a reference — a `list`, a `class`, a `file` — the copy shares
+that reference, exactly as a bare reference does, so both struct values
+see one object through that field while their scalar fields stay
+independent.  A `weak` reference is the one reference that does not
+retain; it reads as `T?`, so a read after the object is gone is `none`
+rather than a dangling pointer, and it is how a reference cycle is
+broken (`docs/MEMORY.md`).
 
-The memory model, in one paragraph (the full ratified specification —
-46 numbered situations — is `docs/OWNERSHIP.md`; the compiler quotes
-its numbers in diagnostics and `src/luce/specs/ownership_spec.zig` executes
-it):
+## Memory
 
-- **The binding that received a fresh object or resource owns it**, and the
-  owning scope releases it — at the block end, at early `return`/`break`/
-  `continue`, and immediately on reassignment of the owning `var`.
+Memory is automatic, and the model is one paragraph (the full ratified
+specification is `docs/MEMORY.md`; the compiler enforces it identically
+on both engines):
+
+- **A value copies; a reference is shared and counted.**  Assigning or
+  passing a value — a number, `bool`, `string`, `enum`, plain `struct`,
+  or function value — makes an independent copy.  Assigning or passing a
+  reference — a `class`, a container, a `file`, a `task` — shares the
+  one object.  Reference objects carry a count the compiler maintains,
+  and the object is freed the instant its last reference goes away.
   Casual code never writes a memory word:
 
   ```luce
   func main():
-      var xs = [1, 2, 3]        # xs owns the list
+      var xs = [1, 2, 3]        # a fresh list; xs references it
       xs.append(4)
-      xs = [5, 6]               # old list freed right here
-      # scope ends: everything owned here is freed
+      xs = [5, 6]               # the old list has no references left; freed
+      # scope ends; the last references drop and their objects are freed
   ```
 
-- **`let y = x` is an alias** — two names, one container object or
-  resource handle, no tracking.  An alias that outlives its target
-  traps `use_after_free` at use
-  (safe builds; the Zig posture).
-- **Keeping a named owned thing needs a verb.**  Storing into a
-  container or struct field, or passing to a `give` parameter, takes
-  something fresh, `give x` (transfer; `x` is poisoned — a compile
-  error — to the end of its scope), or `copy x` (deep copy, for a
-  container object or a carrying struct with no resource inside it).
-  Containers therefore *always* own their owned elements: `pop()`
-  hands the element out; overwrite/`remove`/`clear` releases the old one;
-  freeing a container frees everything it owns.
-- **Calls borrow by default.**  A borrowed parameter may read and
-  mutate through its handle but never keep, give, free, or return the
-  borrowed owned thing.
-  Taking ownership is declared in the signature *and* echoed at the
-  call site: `func stash(hits: give list(long))` /
-  `stash(give mine)`.  For a resource graph, changing a borrow into a
-  handoff means changing the parameter, making every caller pass an
-  owning name with `give` (or a fresh value without a verb), and moving
-  that parameter at the retaining site.  A field/index view or an alias
-  with no live owning name can be borrowed but cannot be copied or
-  given; an ownership-taking use must obtain a distinct owned graph or
-  be restructured.
-- **`return` moves.**  Whatever a function returns, the caller owns —
-  returning a borrow or alias is a compile error.  For a resource-free
-  graph, `return copy x` is the escape hatch.  A resource borrow cannot
-  be duplicated: the function must instead receive it through a `give`
-  parameter and every caller must hand over ownership.
-- **Values never take verbs.**  Numbers, `bool`, `string`, enums,
-  function values and plain-value structs copy freely.  A struct or
-  union that
-  carries a container object or resource follows the ownership rules when
-  *kept*.  A resource takes `give` and `free`, but never `copy`.
-- **`free(x)` survives as deliberate early release** on a direct owned
-  container or resource handle, and poisons the name like `give`.  A
-  carrying struct releases its fields at scope end; explicit early
-  release of that outer struct is not in the current surface (S6).
-- **`var name: Type`** (no value) declares now, fills later: the slot
-  holds the type's zero value — a null handle for a container object or
-  resource type — and using it before assignment traps `null_object`.
-  That stable trap name uses the runtime's older broad “object” term.
-  A `T?` says
-  "there may be nothing here" out loud instead (next section), and
-  holding `none` owns nothing (S43), so a `list(T)?` obeys every rule
-  above exactly as a `list(T)` does.
+- **`let y = x` shares a reference or copies a value.**  For a
+  container, a `class`, or a resource, `x` and `y` name one object, and
+  a mutation through either is seen through both.  For a value struct,
+  `y` is an independent copy.  There is no ownership verb of any kind:
+  keeping a reference in a field, a container, or another scope simply
+  shares it, and the object lives as long as any reference to it does.
+  Containers hold references like anything else: `pop()` hands an
+  element out; overwrite, `remove`, or `clear` releases the reference
+  that was there, freeing its object if it was the last.
 
-One dynamic backstop covers what static rules cannot see: every verb
-demands a filled slot, or traps `null_object`.  The second one is
-gone — `give` through an alias was a `not_owned` trap until
-2026-08-04 and is now a compile error, because an alias is one at the
-site (S23).  `not_owned` itself stays as defense against a module the
-front end did not produce, and is no longer reachable from source.
-The ratified model says nothing can leak, so loom's leak report is a
-runtime self-check rather than a program diagnostic.  A container
-cannot adopt itself or one of its ancestors: stage 4 refuses a visible
-same-root handoff, while an alias-hidden case traps `ownership_cycle`
-before the store mutates either graph.  Every container owner therefore
-still has the recursive death point S20 and S33 require.
+- **A call shares, it does not take.**  A parameter that is a reference
+  names the same object the caller holds; mutating it is visible to the
+  caller, as everyone expects, and returning a reference simply shares
+  it onward.  A value parameter is a copy, so a function cannot reach
+  the caller's value through it.
+
+- **A reference cycle is the one thing to think about.**  Reference
+  counting cannot reclaim a cycle on its own, so a back-edge that would
+  close one is declared `weak`: a `weak` reference does not retain and
+  reads as `T?`, so following it after the object is gone yields `none`
+  rather than a dangling pointer.  Cycles are rare — a parent and its
+  child pointing back — and `weak` is the whole of the answer.
+
+- **Deterministic release makes resources ordinary.**  Because the last
+  reference to a `file` closes it and the last reference to a `task`
+  joins it the moment it drops, a resource needs no `close`, no `with`,
+  and no finalizer roulette.
+
+- **`var name: Type`** (no value) declares now, fills later: the slot
+  holds the type's zero value — a null handle for a reference type —
+  and using that handle before assignment traps `null_object`.  That
+  stable trap name uses the runtime's broad “object” term.  A `T?` says
+  "there may be nothing here" out loud instead (next section), so a
+  `list(T)?` obeys every rule above exactly as a `list(T)` does.
+
+The ratified model says nothing can leak outside of an uncollected
+cycle, so loom's leak report is a runtime self-check rather than a
+program diagnostic.
 
 ## Absence: `T?` and `none`
 
@@ -293,14 +279,13 @@ the check is inherently racy or impossible, it is an error. And if the
 answer is simply "there is nothing there", with no reason worth
 carrying, it is neither — it is `T?`.
 
-The shared vocabulary currently carries **twenty-one trap codes**.  This
+The shared vocabulary currently carries **eighteen trap codes**.  This
 rule moved the host's file boundary out of that set: a read or a write
 the world refuses is an error, because asking whether a file is there
 before `file_read` is a race no program can close.  Later language features
 added their own traps without changing the rule — checked shifts,
-allocator refusal, mutation hidden behind a constant-container borrow,
-and an alias-hidden ownership cycle remain bugs rather than recoverable
-news.
+allocator refusal, and mutation hidden behind a constant reference
+remain bugs rather than recoverable news.
 
 **A call that can fail must say which it means.** Ignoring the outcome
 is not a spelling the grammar has:
@@ -327,7 +312,7 @@ func handle(path: string, text: string):
         print("cannot write " + path)
 ```
 
-`try` propagates: it releases what this frame owns, innermost scope
+`try` propagates: it releases this frame's references, innermost scope
 first, and leaves — the same three lines `return` ends with, with one
 terminator changed. It needs a caller that said `!`, or it is
 `luce.sema.fallible`.
@@ -374,8 +359,8 @@ name obeys the no-shadowing rule, and reading it outside the block is
 that reads the reason is a message being built, which is a statement.
 
 `catch` binds like `else`, between the comparisons and `+`, and
-associates right. Both sides must agree on ownership: if the call
-hands over a fresh object, the fallback must too.
+associates right. Both sides must agree on type: the fallback yields a
+value of the same type the call would have.
 
 **`error("…")` raises**, with the program's own words:
 
@@ -409,10 +394,10 @@ an error is news, and where it came from is the news. (Carrying a full
 trace would also charge the *success* path for it, which docs/MODES.md
 forbids.)
 
-There is no `errdefer` and there never will be: Luce's cleanup is
-scope ownership, which already knows that `return` moves what it hands
-back and `try` moves nothing. The one bit `errdefer` encodes is
-already a parameter of the unwinder (docs/OWNERSHIP.md S4).
+There is no `errdefer` and there never will be: cleanup is automatic
+reference counting, which already releases every reference a frame
+holds as `try` unwinds it and shares onward whatever `return` hands
+back. The one bit `errdefer` encodes the unwinder already has.
 
 `examples/calc/calc.luc` is the worked example, and `docs/FAILURE.md` is
 the decision record.
@@ -484,9 +469,9 @@ The assignment is parallel and two-phase. Every target is checked;
 then the right side is evaluated and every returned value is extracted
 and prepared for storage; only then are the old values replaced, left
 to right. Thus `a, b = swapped(a, b)` is a swap rather than two
-sequential assignments, and no storage-owning value is released before
-every replacement is ready. Ordinary side effects while evaluating the
-right side still happen before that commit.
+sequential assignments, and no target's old reference is released
+before every replacement is ready. Ordinary side effects while
+evaluating the right side still happen before that commit.
 
 `-> (A, B)!` is legal and composes with `try`:
 `a, b = try read_pair()`. A block handler also composes:
@@ -498,23 +483,14 @@ shape. An element may be a `T?` — absence is an ordinary value — but
 `-> (long, long)?` is refused, because there the `?` would be marking
 the shape.
 
-Ownership is `docs/OWNERSHIP.md` S45: S16 applies to each returned
-value, each new binding owns what it received (S1 per name), and each
-existing owning `var` releases its old object and adopts its answer only
-after the whole shape is ready (S5). The ordinary S17 borrow/alias rule
-applies to each position, then the shape adds cross-slot constraints: a
-poisoned target cannot be revived, and **no object graph may travel
-twice** — `return xs, xs` is a compile error because two moves of one
-handle would free it twice.  The
-compiler resolves visible ownership roots across the whole return: an
-owner beside its alias, a repeated borrow, or an explicit `give` of a
-graph already used by another result is one cross-slot conflict, not a
-second opportunity to copy or move that graph.  Evaluation stays
-left-to-right: stage 4 records an owning bare name's replacement revision
-when that operand is staged.  A writer to the left is therefore legal —
-the later bare name stages the replacement — while a later result may not
-give or replace a name whose old value is already staged.  Put the writing
-operation first, then return distinct current values.
+Each returned value copies or shares as its kind dictates — a value is
+copied out, a reference is shared onward — and each existing `var`
+target releases its old reference and adopts its answer only after the
+whole shape is ready.  `return xs, xs` is fine: it shares one list
+twice, and both results name the same object.  Evaluation stays
+left-to-right, so a writer to the left is legal and its effect is
+visible when the later operands are staged.  Put the writing operation
+first, then return the current values.
 
 ## Function values and lambdas
 
@@ -524,15 +500,13 @@ parameter names removed:
 ```text
 func(long, long) -> bool
 func(string)
-func(give list(long)) -> long
+func(list(long)) -> long
 ```
 
-The result is omitted when the function answers nothing.  `give` stays
-on a container, resource, or carrying-struct parameter because ownership
-is part of a call's meaning; parameter names and defaults do not, and
-neither does `!`.  A fallible function is not a value in this run: a
-function type has nowhere to carry the obligation to write `try` or
-`catch`.
+The result is omitted when the function answers nothing.  Parameter
+names, defaults, and `!` are all left off — a fallible function is not a
+value in this run, because a function type has nowhere to carry the
+obligation to write `try` or `catch`.
 
 A function type may annotate a parameter or local, may be a function's
 result, and may nest inside another function signature.  File-scope
@@ -612,27 +586,20 @@ func main():
     print(string(apply(doubling.times, 21)))
 ```
 
-A **value-only** receiver is copied into the value at the bind, so the
+A **value** receiver is copied into the value at the bind, so the bound
 value carries its own state and writing the original afterwards does
-not reach it.  A receiver that **carries objects** — a list, a map, an
-array, or a struct holding one — is **borrowed**: the value holds its
-own two-slot run, and the handles inside it alias the receiver's graph
-exactly as a struct copy does.  So appending to the receiver's list is
-visible through the bound value, and a bound value whose receiver's
-owner is gone meets `use_after_free` at the call, like every other
-alias.
+not reach it.  A receiver that is a **reference** — a list, a map, an
+array, or a struct holding one — is shared: the bound value holds its
+own two-slot run whose receiver slot references the same object, so
+appending to the receiver's list is visible through the bound value,
+and reference counting keeps that object alive for as long as the bound
+value does.
 
-A function value therefore **never owns objects**, and that is a
-guarantee rather than an accident: `give doubling.times` and
-`copy doubling.times` are refused, so no bound value can be the sole
-owner of a graph.  Two more refusals keep it true — a receiver
-carrying a `file` or `task` does not bind, and neither does a **fresh**
-one, whose objects die at the end of the statement that made them.
-Two consequences follow from the same fact, since a function type
-cannot say which of its values carries a receiver: a function value
-has **no equality** (`string(f)` is how a program asks what it names),
-and a function value does **not cross a worker boundary**, in either
-direction.
+Since a function type cannot say which of its values carries a
+receiver, two consequences follow: a function value has **no equality**
+(`string(f)` is how a program asks what it names), and a function value
+that carries a reference receiver does **not cross a worker boundary**,
+in either direction, exactly as a bare reference does not.
 
 Two things also do not bind, each saying so by name: a **writing**
 method (its store-back discipline is its own design) and a **fallible**
@@ -688,7 +655,7 @@ sentence became something a program can write.
 A call through a function value is positional.  Its type carries no
 parameter names or defaults, so `f(value = 1)` is refused even when the
 declaration that produced `f` happened to use the name `value`.
-Argument types and `give` are checked exactly as for a direct call.
+Argument types are checked exactly as for a direct call.
 
 **A call is a postfix suffix**, beside the index and the field access:
 `EXPR(args)` is written wherever `EXPR[i]` is, and calls the value the
@@ -715,7 +682,7 @@ func main():
     print(string(actions["double"](21)))
 ```
 
-Function values copy freely and take no ownership verb.  There is
+Function values copy freely.  There is
 neither ordering nor **equality**: a function type cannot say which of
 its values carries a receiver, so `f == g` would call two binds of one
 method equal whatever they carry, and `==`/`!=` are refused saying so
@@ -742,9 +709,10 @@ type.  A value default is folded once at the declaration by the same
 folder that folds file-scope `const`, then inlined at each call site;
 the lowered program is byte-identical to one with that value argument
 written out.  A flat container default is different: it is one
-program-root construction per runtime, and every omitted call borrows
-that same object.  Writing a literal at the call instead creates an
-ordinary fresh runtime object.  Defaults are trailing: a parameter
+program-root construction per runtime, and every omitted call shares a
+reference to that same object.  Writing a literal at the call instead
+creates an ordinary fresh runtime object.  Defaults are trailing: a
+parameter
 with one may be followed only by parameters with one.  Struct fields
 take the same clause for value defaults, and a struct every one of
 whose fields has one constructs bare: `Options()`; object-valued field
@@ -788,11 +756,10 @@ func main():
 The boundaries, each one sentence: `self` is the receiver, not a
 nameable argument, and takes no default; a default cannot read another
 parameter, because it is folded before any call is made; and an object
-default on a plain borrowing parameter may be a flat literal or a
-file-scope constant container, with every omitted call borrowing the
-same per-runtime program root.  A `give` parameter cannot have that
-object default because there is no ownership to transfer, and an
-object-valued struct field default remains refused.  Free builtins take
+default on a reference parameter may be a flat literal or a
+file-scope constant container, with every omitted call sharing a
+reference to the same per-runtime program root.  An object-valued
+struct field default remains refused.  Free builtins take
 names and defaults from the table that is their signature —
 `term_style(fg, bg = -1, bold = false)` — while **builtin value
 methods** (`xs.append`, `m.get`) stay positional: their tables hold
@@ -849,17 +816,16 @@ where `func() -> Point` is expected and may be a worker target.
 store to `self` or one of its value fields makes it a writer, as does
 calling another writing method on `self`; that fact is found to a
 fixed point, so declaration order and a chain of wrappers do not
-matter.  Calling an object method through a field —
-`self.items.append(value)` — mutates the borrowed object's contents,
+matter.  Calling a method on a reference field —
+`self.items.append(value)` — mutates that object's contents,
 not the struct value, and therefore remains a read of `self`.
 
 A reading method accepts any value of its receiver type: a `let`, a
 mutable binding, or a temporary.  A writing method requires an exact,
 bare mutable binding such as `p`; a `let`, a call result, a field, an
-index, or a narrowed optional is refused.  If the value carries
-objects, that binding must own them.  The callee aliases the caller's
-slot and owner identity in place, so it may replace one field or the
-whole object-carrying value without a second owner appearing.
+index, or a narrowed optional is refused.  The callee writes the
+caller's slot in place, so it may replace one field or the whole struct
+value directly.
 
 In-place also decides failure: writes performed before a method raises
 an error remain visible to its caller.  A writer's declared results
@@ -891,7 +857,7 @@ func main():
 Members are **namespaced always** — `Method.stored`, never a bare
 `stored` — and each is a compile-time constant, so a member stands in
 a file-scope `const`, a parameter default and a field default.  An enum
-is a value: it copies, it takes no ownership word, and a `list(Method)`
+is a value: it copies, and a `list(Method)`
 or an array constructed with `new array(Method, n)` holds it at the
 backing width.
 
@@ -984,21 +950,17 @@ and no tag test, so reading the wrong member's payload is
 unrepresentable rather than checked.  Exhaustiveness, `else`, and the
 duplicate-arm rules are `match`'s own, unchanged.
 
-**Ownership arrives with no new rule.**  A union carries objects if
-*any* member's field does — the predicate is type-level, so a
-`Json.number` needs `give` or `copy` to be kept even though it owns
-nothing — and the verbs mean exactly what they mean for a carrying
-struct: construction takes `give`/`copy`/fresh in payload fields, an
-arm's payload binding **aliases** what the scrutinee owns (keeping it
-needs `copy`; `give` on it is refused naming the owner), and `free(u)`
-is refused as it is for a struct — a union dies when its scope ends,
-whichever member it holds.  A union of value-only members takes no
-verbs at all.
+**Memory arrives with no new rule.**  A union is a value, like a
+struct: it copies field by field.  When a payload field holds a
+reference — a `list`, a `class` — the copy shares that reference, and an
+arm's payload binding names the same object the scrutinee holds, so
+reference counting keeps it alive for as long as either does.  A union
+whose payloads are all values is a plain value throughout.
 
 The zero of a union is its **first declared member** with every
 payload field at its own zero: that is what `var s: Shape` starts at,
 what `new array(Shape, n)` fills cells with, and what makes
-`list(Json)` constructible.  Recursion travels through owning
+`list(Json)` constructible.  Recursion travels through reference
 containers — `array(items: list(Json))` is finite because a list is
 one handle — while a member that unconditionally contains its own
 union is refused, with `?` named as the fix;
@@ -1048,7 +1010,7 @@ var b = new builder()              # string builder
 xs.append(4)                       # [1, 2, 3, 4]
 let first = xs[0]                  # index (bounds-checked)
 xs[1] = 20                         # index assignment
-let mid = xs[1:3]                  # slice -> a NEW list, owned by mid
+let mid = xs[1:3]                  # slice -> a NEW list that mid references
 let tail = xs[2:]                  # open ends default to 0 / len
 m["one"] = 1                       # insert or update
 let n = m["one"]                   # missing key traps; guard with has
@@ -1059,7 +1021,7 @@ let rows = grid.dim(0)             # dimension size; len(grid) == dim 0
 b.append("hello, ")
 b.append("world")
 let text = b.build()                  # builder -> string
-# scope ownership frees xs, m, grid, and b here — no free() needed
+# the last references to xs, m, grid, and b drop here — freed automatically
 ```
 
 Type-specific operations are **methods** (Python's split: `len`,
@@ -1071,13 +1033,11 @@ sugar for a plain function with the receiver first, not dispatch):
   when empty), `sort()` (in place, **stable**; long/double/string
   elements),
   `reverse()`, `find(v) -> long` (-1 when absent), `contains(v)`,
-  `clear()`, plus `len`, index, slice.  A slice copies its selected
-  elements into a fresh list.  If `T` carries `file` or `task`, it is
-  admitted only when both effective bounds are equal compile-time
-  `long` constants, which proves that no element is selected or copied.
+  `clear()`, plus `len`, index, slice.  A slice produces a fresh list
+  holding the selected elements — value elements by copy, reference
+  elements as shared references to the same objects.
 - rank-1 `array(T, _)` shares `sort()`, `reverse()`, `find(v)`,
-  `contains(v)`, `fill(v)` (value elements only — an array of
-  container or resource handles stores each slot separately); every
+  `contains(v)`, `fill(v)` (value elements only); every
   array has `dim(axis)`.
 - `map(K, V)`: `K` is `long`, `string`, or an **enum** — an enum is an
   integer at a chosen width whose whole comparison surface is equality,
@@ -1088,8 +1048,8 @@ sugar for a plain function with the receiver first, not dispatch):
   (the value or absence — no trap, and `m.get(k) else d` is the
   fallback form), `remove(k)`
   (no-op when absent), `keys() -> list(K)`, `values() -> list(V)`,
-  `clear()`, `len`.  `values()` copies each value into its fresh list
-  and is therefore admitted only when `V` carries no `file` or `task`.
+  `clear()`, `len`.  `values()` returns a fresh list of the map's
+  values — value values copied, reference values shared.
   Iteration order is insertion order, and the
   lookups (index, `has`, `get`, index-set) are O(1): the entries
   stay a dense array in arrival order with a hash index over it.
@@ -1105,21 +1065,16 @@ sugar for a plain function with the receiver first, not dispatch):
   UTF-8.  Wider characters go through `append(chr(code))`.
 - `array(T, ...)`: fixed shape, up to 4 dimensions, sizes are runtime
   values at `new`, elements zero-initialized (numbers 0, bool false,
-  string "", structs zeroed field by field, container/resource handle
-  elements start null — using a null element traps until you store
+  string "", structs zeroed field by field, reference elements start
+  null — using a null element traps until you store
   something).  In type
   annotations the shape is spelled with `_`:
   `func total(grid: array(long, _, _)) -> long`.
-- `==` / `!=` on container objects and resources compare handle
-  *identity* (the same object or resource), never contents.
-- Slices copy: `xs[a:b]` allocates a new list the receiver owns —
-  deeply, when its elements are resource-free container objects or
-  carrying structs (two containers can never own one object).  If the
-  element type transitively carries `file` or `task`, both effective
-  bounds must be equal compile-time `long` constants; that one form
-  constructs a statically empty list and executes no element copy.
-  Every other such slice is a compile error rather than a second owner
-  for that resource.
+- `==` / `!=` on references compare
+  *identity* (the same object), never contents.
+- Slices produce a new list: `xs[a:b]` allocates a fresh list holding
+  the selected elements — value elements by value, reference elements as
+  shared references to the same objects.
   `s[a:b]` on a string stays a value.
 
 ## Iteration
@@ -1134,7 +1089,7 @@ for key, value in m:        both, no second lookup
 
 The two-name form binds a *position* then a *payload*: a sequence's
 long index and its element, or a map's key and its value.  Don't grow,
-shrink, or free a collection while iterating it; bounds stay checked
+shrink, or replace a collection while iterating it; bounds stay checked
 per step, but which elements you visit is your problem.
 
 ## Strings
@@ -1184,7 +1139,7 @@ strings.format_float(x, 2)   # fixed-point double display: "2.50"
 ```
 
 The method spelling is the same sugar as everywhere else:
-`s.find(x)` is `strings.find(s, x)` — a plain borrowed call with the
+`s.find(x)` is `strings.find(s, x)` — a plain call with the
 receiver first — whenever `import std.strings` is in scope, and a compile
 error pointing at the missing import otherwise.  Only `byte_at` and
 `find_byte` are built in.
@@ -1282,7 +1237,7 @@ func main(args: list(string)):
 ```
 
 The free builtins are the generic, cross-type set — Python's own
-split of capability: `len print range assert trap error free abs
+split of capability: `len print range assert trap error abs
 min max clamp sqrt floor ceil trunc chr ord parse_int parse_float`,
 `parse_string`, the eight conversion constructors (docs/NUMERICS.md
 §7), and the host-gated file, terminal, and key builtins (see
@@ -1305,7 +1260,7 @@ func main(args: list(string)):     # and `-> !` composes with it
 *handed to* the program rather than called *by* it, which is why the
 host gate does not cover it and why a host with no arguments to offer
 supplies an **empty** list instead of a trap; reading past the end is
-the language's own `index_bounds` (OWNERSHIP.md S44).  A program that
+the language's own `index_bounds`.  A program that
 ignores its arguments writes `func main():` and says nothing false.
 
 Every other effect is a host service, every service is optional, and
@@ -1385,11 +1340,11 @@ gets a name (`files.kind`, `files.exists`, `files.is_file`,
 
 `file_open` is the primitive under `std.files.open`, `create`, and
 `append_to`; ordinary code uses those named doors rather than the mode
-numbers.  It answers a scope-owned `file`.  A file has three fallible
+numbers.  It answers a `file`, a reference.  A file has three fallible
 methods: `f.read(buffer) -> long!`, `f.write(buffer, count) -> long!`,
 and `f.flush() -> !`, where the buffer is an `array(byte, _)`.  There
-is deliberately no `close`: `free(f)` closes early and the owning
-scope closes otherwise — which is also why there is no `with`
+is deliberately no `close`: the last reference to a `file` closes it
+the instant it drops, which is also why there is no `with`
 (docs/FILESYSTEM.md D9).  `parse_string(bytes) -> string?` is the pure
 boundary in the other direction — bytes that are not UTF-8 are absent,
 not an I/O error.
@@ -1604,7 +1559,7 @@ the addition really did widen.)
 
 Loosest to tightest: `or`, `and`, the comparisons, `else` and `catch`,
 `+ - | ^`, `* / // % & << >>`, then the prefix operators `not` `-` `~`
-`give` `copy` `try`, then postfix `.field` `[index]` `(call)`.  The bit
+`try`, then postfix `.field` `[index]` `(call)`.  The bit
 set sits at Go's precedence, which is why `|` and `^` are additive and
 `&` and the shifts are multiplicative (docs/BITWISE.md R1).
 Same-precedence binary operators associate to the left — except `else`
@@ -1730,8 +1685,8 @@ body.
 **`let` freezes the name, not the object it reached.**  `xs.append(v)`,
 `xs.sort()`, `xs[0] = v`, `bag.counts[0] = v` and `cells[0].value += 1`
 all go through an immutable name, because none of them writes the
-name: the store lands in the heap object, which is shared and mutable
-whoever holds it (S8).  That is what lets every function that takes a
+name: the store lands in the referenced object, which is shared and
+mutable whoever holds it.  That is what lets every function that takes a
 container fill it — a parameter is a `let`-bound name.  What `let`
 refuses is a store that lands in the binding's own storage: `p = q`,
 `p.x = 3`, `p.inner.y = 3`, and a writing `p.advance()` on a struct
@@ -1795,11 +1750,10 @@ other constants (including `module.constant` through imports), numeric
 and bitwise expressions, comparisons and boolean logic, string
 concatenation, the eight conversion constructors and `ord()`, enum
 members and conversions from enums (`int(m)`, `string(m)`), and
-object-free value-struct construction.
+reference-free value-struct construction.
 `none` also folds when a `T?` annotation says what it is absent of; a
 bare `const x = none` is still refused, because nothing says which `T`
-is absent.  Function values, general calls, and ownership verbs are not
-constant.
+is absent.  Function values and general calls are not constant.
 
 A `const` may also construct one **flat constant container**:
 
@@ -1815,7 +1769,7 @@ const ENTRIES = [Entry(name = "first", fallback = none)]
 const ALIAS = NUMBERS
 ```
 
-The element may be a scalar, string, enum, or object-free value struct;
+The element may be a scalar, string, enum, or reference-free value struct;
 such a struct may contain an optional field.  A container may not hold
 another container, and a top-level optional element or map value is
 refused.  A bracket literal is a `list` unless an `array(T, _)`
@@ -1824,31 +1778,28 @@ needs an annotation, but the annotation supplies only the missing type:
 its element type must still be flat and non-optional even when `[]` has
 no elements.  A map uses `{key: value}`; duplicate folded keys are a
 compile error naming both sites, and `{}` is refused in favour of `new
-map(K, V)`.  `builder`, object-carrying structs, and multi-dimensional
+map(K, V)`.  `builder`, reference-holding structs, and multi-dimensional
 arrays cannot be constant containers.
 
 Each written construction has one identity.  Repeated uses, aliases,
-imports, lambdas, and a borrowing parameter default all read that same
-program-root handle; a separately written equal declaration is a
-different object.  A `give` parameter cannot have an object default.
-The reachable pool is materialized eagerly once per
+imports, lambdas, and a reference-typed parameter default all read that
+same program-root object; a separately written equal declaration is a
+different object.  The reachable pool is materialized eagerly once per
 runtime before a function executes, so every worker gets its own roots
 and no object crosses between runtimes.  An unused row is pruned and
 costs nothing to ship or start.
 
-The program root owns these objects until runtime teardown (S46).
+The program root holds these objects until runtime teardown.
 Reads and iteration work normally.  Slicing a constant list returns a
-fresh owned list, as map `keys()` and `values()` return fresh owned
-lists; arrays have indexing, iteration and `copy`, but no slice
-expression.  `copy TABLE` answers a fresh mutable deep copy.  Stage 4
-refuses every visible mutation (`append`, `sort_by`, indexed and nested
-stores, `file.read` into an array) and every attempt to move or retain
-the root (`give`, `free`, return, assignment into an owner, or a
-container/struct store).
-A borrow through a parameter hides the root from static analysis, so
-every runtime mutation path also checks and traps `immutable_object`
-before writing.  A constant is never silently copied and a forbidden
-write is never silently dropped.
+fresh list, as map `keys()` and `values()` return fresh
+lists; arrays have indexing and iteration, but no slice
+expression.  Stage 4 refuses every visible mutation (`append`,
+`sort_by`, indexed and nested stores, `file.read` into an array).
+Sharing a reference to the constant — reading it, passing it, returning
+it — is fine; only writing through it is refused.  A reference reached
+through a parameter hides the root from static analysis, so every
+runtime mutation path also checks and traps `immutable_object` before
+writing.  A forbidden write is never silently dropped.
 
 Constants share the file's namespace with structs and functions, are
 reachable as `module.name` through imports, and cannot be assigned or
@@ -1861,61 +1812,57 @@ program-root handle.
 
 `spawn f(args)` runs `f` on a **worker** — a thread with a runtime of
 its own: its own heap, its own scopes, its own fresh call-depth budget
-— and answers a `task` the spawning scope owns (docs/THREADS.md).
+— and answers a `task` the spawning scope holds (docs/THREADS.md).
 Nothing a worker touches is reachable from anywhere else and nothing
-elsewhere is reachable from a worker, so **the ownership model is the
-concurrency model**: races are not detected, they are unrepresentable.
+elsewhere is reachable from a worker, so the value/reference split is
+the concurrency model too: races are not detected, they are
+unrepresentable.
 
 ```luce
-func crunch(chunk: list(double)) -> double:
+func crunch(base: double, count: long) -> double:
     var total: double = 0.0
-    for value in chunk:
+    for i in range(0, count):
+        let value = base + double(i)
         total += value * value
     return total
 
 func main(args: list(string)):
     var tasks = new list(task(double))
     for part in range(0, 4):
-        var chunk = new list(double)
-        chunk.append(double(part))
-        tasks.append(spawn crunch(chunk))
+        tasks.append(spawn crunch(double(part), 3))
     var total: double = 0.0
     for t in tasks:
         total += t.wait()
     print(string(total))
 ```
 
-Four sentences are the whole of it, and three of them are rules the
-language already had.
+Three sentences are the whole of it, and each is a rule the language
+already had.
 
-**Arguments cross a boundary.**  A worker has a heap of its own, so it
-cannot borrow anything of the spawner's: every resource-free container
-or carrying struct must be `give`n or `copy`ed, or be fresh, and its
-parameter must take ownership.  A `file`, `task`, or any graph carrying
-one does not cross at all — the resource stays in the runtime that made
-it, so both such arguments and such worker results are refused
-statically.  `give` poisons the sender's name from that line (S10, S23,
-unchanged), so after an ordinary object transfer there is nothing left
-behind to race on.  Values copy as they copy everywhere (S32).
+**Values cross a boundary; references do not.**  A worker has a heap of
+its own, so a **value** — a number, a `string`, an `enum`, a plain
+`struct` — crosses by copy, exactly as it copies everywhere.  A
+**reference** — a `class`, a container, a `file`, a `task`, or a struct
+holding one — does not cross at all: it stays in the runtime that made
+it, so passing one as a spawn argument or returning one as a worker
+result is refused statically.  With nothing shared, there is nothing to
+race on.
 
-**A task is a scope-owned resource**, the `file` precedent exactly:
-made by `spawn` and by nothing else — there is no `new task` and no
-`copy t`, because one worker has one owner — and released by its
-owning scope.  What "release" *is* differs: for a file it is a close,
-for a task it is a **join**.  So structured concurrency is a
-consequence of scope ownership rather than a discipline laid over it,
-and an orphan thread is as unrepresentable as a leaked list.  `free(t)`
-joins early; `return t` hands the wait to the caller.
+**A task is a reference-counted resource**, the `file` precedent
+exactly: made by `spawn` and by nothing else — there is no `new task` —
+and its release is a **join**.  So structured concurrency is a
+consequence of the memory model rather than a discipline laid over it,
+and an orphan thread is as unrepresentable as a leaked list.  The last
+reference to a task joins it; `return t` hands the wait to the caller.
 
-**`t.wait()` moves the answer here, once.**  A second wait is refused
-the way a second `give` is.  The type is written as the return shape
-it names — `task`, `task(!)`, `task(double)`, `task(double!)` — so a
-worker whose function is `-> T!` gives a task whose wait is a site
-that says `try` or `catch`, and the error crosses whole: code,
-message, and the place it was raised.  A **trap** is not data and
-never was: one in a worker surfaces at the join with the worker's own
-frames in front of the joiner's, and stops the program.  A task
-nobody waits on is joined all the same and its answer discarded —
+**`t.wait()` moves the answer here, once.**  The type is written as the
+return shape it names — `task`, `task(!)`, `task(double)`,
+`task(double!)` — so a worker whose function is `-> T!` gives a task
+whose wait is a site that says `try` or `catch`, and the error crosses
+whole: code, message, and the place it was raised.  A **trap** is not
+data and never was: one in a worker surfaces at the join with the
+worker's own frames in front of the joiner's, and stops the program.  A
+task nobody waits on is joined all the same and its answer discarded —
 only a wait observes.
 
 **Effects from workers are specified to be serialized.**  The shared
@@ -1930,34 +1877,30 @@ spawns still pays nothing for either mechanism: its compiled module
 contains no effect lock, no install, and no worker entry at all.
 
 Absent from the surface, permanently: locks, atomics, shared mutable
-state, condition variables, thread identifiers, priorities, and
-`async`/`await` colouring.  Their jobs are done by moving ownership,
-or they do not exist here.  Workers are OS threads — thousands, not
-millions — and typed channels are the approved next design-and-build
-run.  D12 ratifies typed pipes and ownership-moving `send(give x)`;
-their complete endpoint, capacity, receive, close and failure surface
-is not ratified yet.
+state between workers, condition variables, thread identifiers,
+priorities, and `async`/`await` colouring.  Their jobs are done by the
+value/reference split, or they do not exist here.  Workers are OS
+threads — thousands, not millions — and typed channels are the approved
+next design-and-build run; their complete endpoint, capacity, receive,
+close and failure surface is not ratified yet.
 
 ## Traps
 
 A trap is a **bug**: deterministic, with a stable code, and it aborts
 the program without publishing anything.  What a correct program can
 meet anyway is an *error* and is not here (see the section above).
-The twenty-one current codes are `integer_overflow`, `divide_by_zero`,
+The eighteen current codes are `integer_overflow`, `divide_by_zero`,
 `conversion_range`, `assertion_failed`, `explicit_trap`,
 `missing_return`, `call_depth_exceeded`, `string_bounds`,
 `string_boundary`, `host_unavailable`, `index_bounds`, `key_missing`,
-`empty_collection`, `use_after_free`, `null_object`, `bad_codepoint`,
-`not_owned`, `shift_out_of_range`, `allocation_failed`,
-`immutable_object`, and `ownership_cycle`.
+`empty_collection`, `null_object`, `bad_codepoint`,
+`shift_out_of_range`, `allocation_failed`, and `immutable_object`.
 
-Two are compiler defenses rather than paths correct source can reach.
+One is a compiler defense rather than a path correct source can reach.
 `missing_return` seals a typed MIR block after stage 4 has already
-refused a source function that can fall off its end.  `not_owned`
-survives for a damaged module that presents a `give` the front end
-could not emit; S23's source alias case became a compile error on
-2026-08-04.  The IR verifier trusts instruction types and a `.lc` is
-an executable, so both backstops remain real.  Call depth is a
+refused a source function that can fall off its end.  The IR verifier
+trusts instruction types and a `.lc` is an executable, so the backstop
+remains real.  Call depth is a
 *policy* limit, not a native-stack accident: compiled code carries
 its remaining depth as a hidden argument and refuses the call that
 would exhaust it (docs/CODEGEN.md).  Runaway recursion is a trap with
@@ -2091,8 +2034,8 @@ mutable file-scope `var`
 (file-scope `const` exists; mutable globals are a separate
 decision), `errdefer` and error return traces (docs/FAILURE.md
 refuses both, with reasons), typed error sets and error payloads
-beyond the message, garbage collection and reference counting (scope
-ownership is the model — docs/OWNERSHIP.md), operator overloading,
+beyond the message, a tracing garbage collector (memory is automatic
+via ARC — docs/MEMORY.md), operator overloading,
 and **positional-only and keyword-only parameter
 markers** (Python's `/` and `*`, Dart's `{}` section): one kind of
 parameter, and the trailing-defaults rule is what keeps a

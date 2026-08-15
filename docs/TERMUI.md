@@ -92,10 +92,10 @@ interface View:
 ```
 
 The receiver is read-only. A view changes only the `Screen` value supplied by
-the caller. This is intentional: Luce interfaces borrow carrying receivers,
-so a retained tree of mutable widgets would make ownership and replacement
-surprising. Keep state in the application and pass a drawing surface into a
-view. Value-only views can be heterogeneous:
+the caller. This is intentional: termui keeps application state in the
+application and passes a drawing surface into a view, rather than retaining a
+tree of mutable widgets, so state and replacement stay in one place. Views can
+be heterogeneous:
 
 ```text
 var children = new list(views.View)
@@ -115,7 +115,7 @@ adapter from the current `render`, `count`, `top`, and `selected` values when
 painting; it never changes the `Rows` value while drawing.
 
 This split between state and rendering is the important interface pattern in
-termui. It supports heterogeneous composition without hiding an owning list
+termui. It supports heterogeneous composition without hiding a retained list
 or a mutable receiver inside a long-lived interface value.
 
 ## Surfaces, cells, and clipping
@@ -169,34 +169,33 @@ stream's `last_name` preserves its raw spelling for applications that need to
 handle a newer host event. termui does not ship a keymap: mapping keys to an
 editor command or an application's intent belongs to that application.
 
-## Ownership and lifecycle
+## State and lifecycle
 
-- The application owns its model, providers, and event loop.
-- `Renderer` owns its `Screen` and `Events` fields and centralizes resize,
+- The application holds its model, providers, and event loop.
+- `Renderer` holds its `Screen` and `Events` and centralizes resize,
   presentation, cursor placement, and flush sequencing.
-- Views borrow the surface for one draw call; they do not retain it.
-- A provider such as `Rows.render` borrows the application's owner. Mutate the
-  provider's existing container in place or keep its owner alive; replacing an
-  owning field while a bound provider is retained is rejected by design in
-  the language's ownership model.
-- Do not put a carrying mutable application model behind `View` merely to get
-  dynamic dispatch. Keep that model in the app and make the view a value-only
+- Views draw into the surface for one call; they do not retain it.
+- A provider such as `Rows.render` reads the application's state without
+  retaining it: mutate the provider's existing container in place, or keep
+  the state it reads alive.
+- Do not put a mutable application model behind `View` merely to get
+  dynamic dispatch. Keep that model in the app and make the view a
   projection of the current state.
 
 These rules avoid the shallow-wrapper and temporal-coupling problems described
-in `docs/SOFTWARE_DESIGN.md`: terminal lifecycle is in one owner, layout and
+in `docs/SOFTWARE_DESIGN.md`: terminal lifecycle sits in one place, layout and
 painting have explicit inputs, and the caller can see where mutation and
 failure occur.
 
 ## Why this shape
 
-OpenTUI's useful ideas are the ones that survive Luce's type and ownership
-model: one renderer owning terminal state, a retained surface made of cells,
+OpenTUI's useful ideas are the ones that survive Luce's type and memory
+model: one renderer holding terminal state, a retained surface made of cells,
 structured input, shared layout geometry, explicit destruction/cleanup, and a
 deterministic in-memory renderer for tests. Luce intentionally does not copy
 OpenTUI's TypeScript VNodes, proxy-based constructs, or a universal mutable
-widget interface. Those would be a large abstraction surface without Luce's
-generics, inheritance, or writable interface receivers.
+widget interface. Those would be a large abstraction surface Luce's current
+lack of generics and inheritance does not call for.
 
 The comparison used OpenTUI's [renderer and lifecycle
 documentation](https://opentui.com/docs/core-concepts/renderer/), its

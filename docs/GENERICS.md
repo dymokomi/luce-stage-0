@@ -5,9 +5,9 @@
 > to pursue generics — for typed reusable abstractions (`List[T]`,
 > `Stack[T]`) and to make a UI runtime that fully hides the loop —
 > having weighed the honest alternative below and chosen the fully
-> hidden loop over a minimal explicit one. Of the decisions **D1–D6**,
-> **D2 is ratified as D2a**; D1 and D3–D6 stand as proposed pending the
-> owner's read of this record. Implementation begins on that go.
+> hidden loop over a minimal explicit one. The decisions **D1–D6** stand
+> as proposed pending the owner's read of this record. Implementation
+> begins on that go.
 >
 > **The honest alternative, on the record.** A declarative,
 > boilerplate-free UI framework does **not** strictly need generics.
@@ -23,7 +23,7 @@
 > value — typed widgets and data structures — stands regardless. It follows the survey style of
 > [CONCURRENCY_RESEARCH.md](CONCURRENCY_RESEARCH.md) and
 > [UNION_RESEARCH.md](UNION_RESEARCH.md): price every option against
-> scope ownership, the no-collector rule, and the differential oracle
+> the value/reference model, ARC, and the differential oracle
 > before choosing.
 
 ## 1. The need, stated precisely
@@ -33,11 +33,11 @@ Three things want the same missing capability:
 1. **A runtime that hides the loop.** `run(initial, view, update)` must
    name the application's state type to hold it, call `view` on it, and
    store what `update` returns. Today that type is the app's, so the
-   library cannot name it. The interface escape hatch fails the moment
-   the state carries a container: `let m: Model = Editor(...)` is refused
-   — *"a carrying receiver cannot be returned as an interface because the
-   interface borrows its owner"* — because an interface value is a borrow
-   and a fresh carrying value dies at the statement's end.
+   library cannot name it. An interface can *hold* the state — an
+   interface value is a reference (`docs/MEMORY.md`) — but it erases the
+   concrete type, so `run` could no longer name `Model` in `view`'s and
+   `update`'s signatures or hand it back unchanged. Generics let the
+   library name the type without knowing it in advance.
 2. **Typed reusable widgets.** A selection list is `func(long) -> string`
    today because it cannot be `List(T)`. Every widget that reads app data
    is stringly typed for the same reason.
@@ -66,12 +66,12 @@ it is the one already in the tree.
 ## 3. The implementation strategy — D1
 
 Three ways to compile a generic, priced against Luce's commitments
-(value copy, no collector, one LLVM backend, a concrete-MIR oracle):
+(value copy, ARC, one LLVM backend, a concrete-MIR oracle):
 
 | Strategy | What it is | Cost | Fit |
 | --- | --- | --- | --- |
 | **Monomorphization** | one specialized copy per type argument (Rust, C++, **Zig**) | code size; instantiate at each use | concrete MIR per instantiation — **the oracle, MIR, verifier, LLVM and `libluce_rt` never see a type parameter** |
-| Dictionary passing | one copy + a vtable argument (Haskell, Swift) | a runtime indirection per generic call; a new ABI shape | reuses interface dispatch, but adds a second calling convention and hides ownership behind the dictionary |
+| Dictionary passing | one copy + a vtable argument (Haskell, Swift) | a runtime indirection per generic call; a new ABI shape | reuses interface dispatch, but adds a second calling convention |
 | Type erasure | one copy over a uniform boxed value (Java; Luce's own containers) | boxing every `T`; a uniform representation Luce scalars/structs do not have | already how containers work, but generalizing it boxes everything |
 
 **Proposed D1: monomorphization.** It is the only strategy under which
@@ -86,50 +86,35 @@ instantiation — is the accepted price of the same choice in Rust and
 Zig, and `07_optimize/prune` already drops the instantiations a program
 does not reach.
 
-## 4. The crux — generics × scope ownership — D2
+## 4. Generics need no memory reasoning — D2
 
-This is the decision that is Luce's alone, because no other language
-prices a generic against *scope ownership*. Whether `T` copies, moves,
-or needs `give`/`copy` depends on whether `T` carries objects or a
-resource — a fact a generic body written once cannot know.
+Under Luce's memory model (`docs/MEMORY.md`) a generic body needs no
+memory reasoning of its own. A `T` that resolves to a value type copies;
+a `T` that resolves to a reference type shares and is reference-counted;
+ARC inserts every retain and release automatically. There are no
+ownership verbs a generic body could get wrong, so the question that
+would once have been Luce's alone — how a generic prices against an
+ownership discipline — simply does not arise.
 
 ```
-func keep(x: give T) -> T:      # does `give` move a graph or copy a value?
-    return x                    # depends entirely on what T turns out to be
+func keep(x: T) -> T:      # copies a value, shares a reference…
+    return x               # …ARC decides from the concrete T, not the body
 ```
 
-Two honest options:
+Monomorphization (D1) makes this exact: each instantiation substitutes a
+concrete `T`, and the ordinary checker runs on concrete code where every
+copy, share, retain and release is already settled by the type. No new
+theory, no new category on a type parameter, and no per-use diagnostic
+about memory — a generic is checked exactly as the hand-written concrete
+code it expands to would be.
 
-- **D2a — per-instantiation ownership checking (template-style).** The
-  generic body is parsed, its names resolved, and its shape recorded,
-  but the ownership walk (OWNERSHIP.md's S-rules) runs on each *concrete
-  instantiation*, where `T` is a real type and the existing checker is
-  exact. Full precision, no new ownership theory. The cost is C++-
-  template diagnostics: an ownership error in a generic surfaces at the
-  *use* that instantiated it, so the compiler must carry an
-  instantiation trace ("`keep(a_file)` instantiated `keep[file]` here,
-  which moves a resource…") to keep the message pointed at a fix.
-
-- **D2b — ownership-categorized parameters.** A type parameter declares
-  its category up front: `T: value` (copies, takes no verbs — the
-  MVU-view case), or `T: any` (may carry, so the body must `give`/`copy`
-  conservatively and is checked once against the pessimistic assumption).
-  Better diagnostics (the body is checked in isolation), at the cost of a
-  new axis on every type parameter and a body that must be written
-  ownership-generic even when every instantiation is a value.
-
-**Proposed D2: D2a (per-instantiation), with the instantiation trace as
-a first-class diagnostic.** Monomorphization already produces a concrete
-program per instantiation; running the ownership checker there reuses
-every S-rule exactly and invents no new ownership category. The
-diagnostic cost is real but bounded, and the trace is the same idea the
-compiled path's call trace already carries. D2b stays available as a
-later *optimization* of diagnostics if template-style errors prove hard
-to read — it is additive, not a fork.
+**Proposed D2: nothing to decide.** ARC over value/reference types makes
+a generic body memory-agnostic, and monomorphization checks each
+instantiation as ordinary concrete code.
 
 ## 5. Bounds — how a body uses its `T` — D3
 
-An unbounded `T` can only be **moved, copied, stored and compared for
+An unbounded `T` can only be **copied, shared, stored and compared for
 identity** — the operations that need no knowledge of the type. To call
 a method on a `T`, the parameter must be **bounded by an interface**,
 which is the mechanism the language already has:
@@ -161,8 +146,8 @@ func run[Model](start: Model, view: func(Model) -> ui.View, update: func(Model, 
 struct Stack[T]:
     items: list(T)
 
-    func push(value: give T):
-        self.items.append(give value)
+    func push(value: T):
+        self.items.append(value)
 
     func pop() -> T?:
         ...
@@ -195,9 +180,9 @@ Monomorphization makes this a **front-end-only** change:
   Each use collects/infers the type arguments, **instantiates** the
   template by substituting `T`, interns the instantiation by (template,
   arguments) so `Stack[long]` is one type program-wide, and checks the
-  instantiation — types, ownership (D2), bounds (D3) — as ordinary
-  concrete code. `main`'s reachable set drives which instantiations are
-  produced.
+  instantiation — types and bounds (D3), memory settled by the concrete
+  types (D2) — as ordinary concrete code. `main`'s reachable set drives
+  which instantiations are produced.
 - **Stage 5+ (HIR, MIR, optimize, LLVM, runtime)**: **unchanged.** They
   only ever see the concrete instantiations. `format_version` bumps for
   the new AST/HIR nodes; the host **`abi.version` does not move**, and
@@ -214,7 +199,7 @@ lowering — is a *never*, and it owes a stage-4 refusal like every other.
 ## 8. Scope for v1 — D6
 
 **In:** generic `func`s and generic `struct`s; monomorphized; interface
-bounds; argument inference; per-instantiation ownership. This is exactly
+bounds; argument inference. This is exactly
 enough for `termui.app.run[Model]`, a typed `List[T]`/`Stack[T]` widget
 family, and reusable data structures.
 
@@ -234,24 +219,23 @@ func main():
     app.run(Editor.open(args), Editor.view, Editor.step)
 ```
 
-`run[Editor]` holds the concrete `Editor` — no interface, no borrow, no
-wall. **But note the honest limit:** if `update`/`step` is a *function*
-`func(Model, Event) -> Model`, it returns a *new* model, and a value-copy
-language copies the whole state each event. For a text editor that copy
-is dominated by the content string it already rebuilds per keystroke, so
-it is likely acceptable; for very large state it is a real cost.
-Mutating the model in place would need a **writing method reachable
-through the generic** — and writing methods do not bind as values
-(BINDING.md D9) and interface dispatch is read-only. So the immutable-
-update cost is a *separate* question generics does not answer; it is
+`run[Editor]` holds the concrete `Editor` — no interface, no wall.
+**Note where the cost lives:** if `update`/`step` is a *function*
+`func(Model, Event) -> Model` over a value-type `Model`, it returns a
+*new* model, and copying a value type copies the whole state each event.
+For a text editor that copy is dominated by the content string it already
+rebuilds per keystroke, so it is likely acceptable; for very large state,
+make `Model` a `class` — a reference is shared, so an `update` that
+mutates it in place needs no copy at all. So the immutable-update cost is
+a *choice* the memory model already answers (`docs/MEMORY.md`); it is
 noted here so the editor port measures it rather than assumes it away.
 
 ## 10. Decisions to ratify
 
 - **D1** — Monomorphization.
-- **D2** — *Ratified.* Per-instantiation ownership checking, with an
-  instantiation trace in diagnostics; D2b categorized parameters are a
-  later, additive diagnostics upgrade, not a fork.
+- **D2** — Generics need no memory reasoning: under value/reference +
+  ARC, each instantiation's copies, shares, retains and releases are
+  settled by its concrete types (§4).
 - **D3** — Bounds are interfaces (INTERFACES.md), one per parameter in
   v1.
 - **D4** — `[T]`/`[T: Bound]` syntax; argument inference; explicit `[…]`

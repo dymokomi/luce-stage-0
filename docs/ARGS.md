@@ -1,17 +1,10 @@
 # Naming an argument, and not writing the one that never changes
 
-> **Every Luce block here is tagged `historical`, and that is the
-> honest tag.** `tools/doccheck.zig` compiles every fenced `luce`
-> sample in the documents it knows about, and `historical` is its one
-> exemption — *"a syntax that was proposed and refused, or a fragment
-> quoted out of a program nobody wrote."* A memo written before its
-> feature exists is entirely the second of those: half the samples
-> quote code that is about to change and half show a syntax the
-> compiler will reject today. So **`docs/ARGS.md` is not in
-> `doccheck`'s `documents` list yet**, and the last step of `Order` is
-> where it joins — at which point the forward-looking fences lose the
-> tag and start being checked, which is the only state in which the
-> tag would be a lie.
+> **The `luce` samples here show current syntax and compile** —
+> `tools/doccheck.zig` builds each one with the freshly built toolchain.
+> Where a sample illustrates a spelling the compiler *refuses*, it is
+> shown as plain text, so nothing on this page is unchecked code
+> pretending to run.
 
 > **The rule.** Every parameter has a name, and a call site may use it:
 > `term_style(theme.gutter, bold = false)`. Positional arguments come
@@ -31,7 +24,7 @@
 > instruction stays positional, and neither the serialized module's
 > `format_version` nor the published host ABI moves.
 
-`docs/MEMORY.md` records why scope ownership won; `docs/TYPES.md` why
+`docs/MEMORY.md` records the memory model; `docs/TYPES.md` why
 there are seven numbers; `docs/RETURNS.md` how a function answers more
 than one thing without acquiring a tuple. This is the smallest memo in
 the series and the one with the least new machinery behind it — which
@@ -107,7 +100,7 @@ and are corrected here rather than carried:
 
 ## Decisions to ratify
 
-One read, twelve answers. Each is argued at the section named.
+One read, eleven answers. Each is argued at the section named.
 
 | | decision | where |
 |---|---|---|
@@ -122,7 +115,6 @@ One read, twelve answers. Each is argued at the section named.
 | **D9** | **`none` becomes a constant when something says what it is absent *of*.** `ConstantValue` gains an `absent` arm, and `let x: long? = none` becomes legal at file scope too — a gap `T?` left behind. | §2 |
 | **D10** | **All four argument paths are served, in three tiers.** User functions and struct fields get names and defaults; free builtins get both from a widened table; builtin *value methods* get neither, because their tables hold types and not names. | §3 |
 | **D11** | **Names die in stage 4.** MIR's `call` stays positional, `format_version` does not move, and stages 5–8, `libluce_rt` and the host ABI are untouched. | §6 |
-| **D12** | **A `give` parameter cannot have a default**, and this needs no new rule — it falls out of two that exist. It gets a sentence anyway. | §5 |
 
 ---
 
@@ -150,7 +142,7 @@ the fifteenth (`editor.luc:413`, the keyword colour) ends in `true`.
 | …whose last two arguments are `-1, false` | **12** |
 | `term_style` as a share of all arity-3 calls in shipped Luce | **15 of 36 — 42%** |
 
-```luce historical
+```text
 # examples/editor/editor.luc:352, 381, 397, 404, 415, 417, 419, 425, 431, 433
 term_style(theme.gutter, -1, false)
 term_style(theme.comment, -1, false)
@@ -207,7 +199,7 @@ arity ≥ 4, and all five are in shipped code:
 `fold_case` is the strongest readability case in the corpus and it is
 in the standard library:
 
-```luce historical
+```text
 # src/luce/std/strings.luc:85, 88 — today
 return fold_case(s, 65, 90, 32)
 return fold_case(s, 97, 122, -32)
@@ -227,7 +219,7 @@ large enough to notice.
 Exactly one pair of declarations is a wrapper supplying a constant
 tail:
 
-```luce historical
+```text
 # src/luce/std/strings.luc:42-46
 func find(s: string, needle: string) -> long:
     return find_from(s, needle, 0)
@@ -264,7 +256,7 @@ come free.
 
 ### The densest site is not a call at all
 
-```luce historical
+```text
 # examples/editor/editor.luc:449-458
 var state = State(
     path = path,
@@ -282,7 +274,7 @@ Five of eight fields set to the zero of their type, at the struct's
 **only** construction site. With field defaults the declaration
 absorbs all five:
 
-```luce historical
+```text
 struct State:
     path: string
     content: string
@@ -324,7 +316,7 @@ That is not evidence that readers *prefer* names — they have no
 alternative. What is evidence is the two lines eleven apart in the
 same file by the same author:
 
-```luce historical
+```text
 # examples/editor/editor.luc:328
 term_style(theme.status_fg, theme.status_bg, false)
 # examples/editor/editor.luc:454
@@ -734,7 +726,7 @@ requires every field (`builder.zig:6184-6194`), so an options struct
 in Luce costs *more* than the positional call it replaces, at every
 site:
 
-```luce historical
+```text
 # what the Zig pattern would actually cost today
 struct Style:
     fg: long
@@ -824,7 +816,7 @@ walrus and no inline annotation, so `=` is unclaimed.
 > first named argument ends the positional run**; every argument after
 > it must be named.
 
-```luce historical
+```text
 term_style(theme.gutter, bold = false)     # ok
 term_style(theme.gutter, -1, bold = false) # ok
 term_style(fg = theme.gutter, -1, false)   # refused
@@ -879,8 +871,9 @@ argued in *Refused*.
 
 ### Defaults in the signature (D2, D3)
 
-```luce historical
+```luce
 func find(s: string, needle: string, start: long = 0) -> long:
+    return start
 ```
 
 One new production, in the one place a parameter is parsed
@@ -932,8 +925,8 @@ struct State:
     dirty: bool = false
 ```
 
-Same production, same folder, same trailing rule, same ownership rule.
-`lowerConstruct`'s missing-field check becomes a
+Same production, same folder, same trailing rule, same folded-constant
+rule. `lowerConstruct`'s missing-field check becomes a
 **missing-required-field** check: a field with a default that is not
 written is filled from it, and `writeMissingFields`
 (`04_semantics/context.zig:139`) reports only the ones that remain.
@@ -1013,36 +1006,31 @@ constants-only choice is not a compromise between Python's fork and
 JavaScript's — it is Dart's and Zig's position, which is not on the
 fork.
 
-### The mutable-default trap cannot be written here, for three independent reasons
+### The mutable-default trap cannot be written here, for two independent reasons
 
 Python's trap is the one thing everybody knows about defaults, and it
-deserves working through rather than dismissing, because two of the
-three reasons it cannot happen here are ones a careless design could
-give up.
+deserves working through rather than dismissing, because one of the
+two reasons it cannot happen here is one a careless design could give
+up.
 
 1. **Values copy.** A `string` or value-struct default is a value, and
-   Luce has no way to observe two uses of one value as the same value.
-   This is the reason people cite, and **it is the weakest of the
-   three**, because it says nothing about objects.
-2. **A default cannot be an object.** `foldConstant` refuses `new`,
-   list literals and calls, so no expression produces a `list`, `map`,
-   `array` or `builder` and is also a constant. The thing Python's
-   trap is *about* — one heap object shared across calls — has no
-   spelling.
-3. **Even if it did, ownership would ask who owns it, and there is no
-   answer.** A `list(long)` default would be an object with no
-   binding, created at a declaration and used by every call: it could
-   not be scope-owned (whose scope?), given (to whom?), or freed (by
-   which caller?). It is not a hard question with a clever answer; it
-   is a question with none, and scope ownership is what makes it
-   un-askable.
+   each use is its own copy — Luce has no way to observe two uses of
+   one value as the same value. This is the reason people cite, and
+   **it is the weakest of the two**, because it says nothing about
+   reference types.
+2. **A default cannot be a reference object.** `foldConstant` refuses
+   `new`, list, map and object literals and calls, so no expression
+   produces a `list`, `map`, `array`, `builder` or `class` instance
+   and is also a constant. The thing Python's trap is *about* — one
+   shared object mutated across calls — has no spelling: the folder
+   simply has no way to write it.
 
-Any one suffices. That they are independent is the point: a future
+Either suffices. That they are independent is the point: a future
 memo widening defaults to call-time expressions would lose (2) and
-keep (1) and (3), and would still be safe. A memo allowing object
-defaults would lose (2) and (3) at once and would be inventing a
-second lifetime model. **The line to hold is objects, not evaluation
-time.**
+keep (1), and would still be safe. A memo allowing reference-object
+defaults would lose (2) and be inventing a shared-mutable-state
+hazard the folder currently makes unwritable. **The line to hold is
+reference objects, not evaluation time.**
 
 PEP 671's late-bound defaults exist to fix a trap Luce does not have.
 Its three motivating workarounds — a `None` sentinel that breaks when
@@ -1304,8 +1292,8 @@ the receiver alone, then the arguments. `lowerOperandsInto`'s doc
 comment refuses it in advance —
 
 > Splitting the batch in two would have answered it as well, and would
-> have given up the cross-operand analysis that copies a borrowed
-> string before a later operand can free it (docs/STRINGS.md). One
+> have given up the cross-operand analysis that copies a string value
+> before a later operand can invalidate it (docs/STRINGS.md). One
 > batch, asked as it goes.
 
 — and a correctness property is not worth a permutation's convenience.
@@ -1319,37 +1307,20 @@ rule imposed on it.
 
 ---
 
-## 5. Ownership: no new rule, one better sentence (D12)
+## 5. A default is a folded constant, which is all the rule there is
 
-A `give` parameter takes ownership of an object. A default is a folded
-constant. An object is never a constant. So **a `give` parameter can
-never have a default**, and the refusal is already implied by two
-checks that exist:
+A default is a **folded compile-time constant** (D2), and a call or an
+object literal — `new`, `[...]`, `{...}` — is not a constant. So a
+default can never be a freshly-constructed container or object: the
+folder refuses those expressions outright, and there is no second rule
+to add. A file-scope `const` container *can* be named as a default,
+because it is already a materialised constant living once in the
+program's constant table (`docs/CONSTANTS.md`); what is refused is
+building a new one at the declaration.
 
-```zig
-// src/luce/04_semantics/declarations.zig:1703-1711
-if (parameter.mode == .give and !self.carriesObjects(resolved)) {
-    try self.fail("luce.sema.own", parameter.span,
-        "give applies to objects (list, map, array, builder, object-carrying structs), not values [OWNERSHIP.md S32]", .{});
-```
-
-`give` requires an object-carrying type; `foldConstant` refuses every
-expression that produces one. A default on a `give` parameter is
-already refused — but by `luce.sema.const` saying something about
-constants, which is true and unhelpful. §8 gives it a sentence that
-names the actual rule.
-
-The same reasoning covers struct fields: S24 says the binding that
-receives a struct owns its object fields, and a defaulted field is one
-nobody wrote at the construction site. A default on an object-carrying
-field is refused for the identical reason, and the diagnostic cites
-S21 and S24 the way `lowerConstruct` already does
-(`builder.zig:6172-6177`).
-
-**No situation is added to `docs/OWNERSHIP.md`.** This is the first
-memo in the series to add none, and that is the correct outcome rather
-than an oversight: it adds no way to create, alias, move or release an
-object.
+The same fact covers struct fields: a field default is folded by the
+same folder, so an object or container literal in a field default is
+refused for the identical reason. §8 gives that refusal its sentence.
 
 ---
 
@@ -1442,7 +1413,7 @@ either.
 
 The wording bar is `builder.zig:4976-4984`, `NAME takes N argument{s},
 got M`, and everything below is parallel to it. **No new code.**
-`luce.sema.call`, `.method`, `.construct`, `.type`, `.own`, `.struct`
+`luce.sema.call`, `.method`, `.construct`, `.type`, `.self`, `.struct`
 and `.const` say all of it — itself evidence about the size of the
 feature, since `docs/RETURNS.md` needed a new code for a smaller
 surface.
@@ -1479,12 +1450,11 @@ written down at `04_semantics/context.zig:128-137`:
 | `func f(a: long = g())` | `luce.sema.const` | `a default is a constant: g(…) is a call` |
 | `func f(a: list(long) = [])` | `luce.sema.const` | `a default is a constant, and an object is not one` |
 | `func f(a: long, b: long = a)` | `luce.sema.const` | `a default cannot use a: it is folded before any call is made` |
-| `func f(give xs: list(long) = …)` | `luce.sema.own` | `a give parameter takes ownership of an object, and an object is never a default [OWNERSHIP.md S13, S32]` |
-| `struct S:` with `items: list(long) = …` | `luce.sema.own` | `S.items keeps its object, and an object is never a default [OWNERSHIP.md S21, S24]` |
+| `struct S:` with `items: list(long) = new list(long)` | `luce.sema.const` | `a default is a constant, and a freshly-constructed container is not one` |
 | `func f(a: int = 99999999999999999999)` | `luce.sema.const` | the existing range sentence, unchanged (`context.rangeMessage`) |
 | `func f(self = …)` | `luce.sema.self` | `self is the receiver and takes no default` |
 
-Twenty-five sentences: **five already exist word for word**, four are
+Twenty-four sentences: **five already exist word for word**, four are
 edits to sentences that exist, and one is a deletion. The did-you-mean
 machinery is `helpers.Suggestion` (`04_semantics/helpers.zig:283-316`)
 used exactly as `failUnknownField` uses it (`builder.zig:673-687`) —
@@ -1532,7 +1502,6 @@ half, and the memo would rather say so than be quoted later.
   be marked so; it is the visibility question, which is run two.
 - **`docs/STD.md`** — `strings.find_from` disappears; `strings.find`
   grows a parameter.
-- **`docs/OWNERSHIP.md`** — nothing (§5).
 - **`docs/PIPELINE.md`** — no stage changes status.
 - **`docs/README.md`** — one row in the decision-record table.
 - **`tools/doccheck.zig`** — `docs/ARGS.md` joins `documents`, and
@@ -1625,13 +1594,13 @@ Each step leaves the tree green.
 4. **Defaults on user functions.** `ast.Parameter.default`; the
    trailing rule in stage 3; the fold at collection time with the
    parameter type as `wanted`; the fill-in in `lowerUserCall`; §5's
-   `give` sentence. *Tests:* the shape of step 3, plus one proving the
+   folded-constant sentence. *Tests:* the shape of step 3, plus one proving the
    fold happens once — a default of `1 / 0` is a compile error at the
    declaration even if the function is never called. *~1.5 days.*
 
 5. **Defaults on struct fields.** The same clause in the field parser;
    `lowerConstruct`'s missing check becomes missing-required; `S()`
-   when every field defaults; the S21/S24 sentence. *Tests:*
+   when every field defaults; the object-default refusal sentence. *Tests:*
    `behavior_spec.zig` for the fill-in, `errors_spec.zig` for the
    object default. *~1 day.*
 
@@ -1723,13 +1692,13 @@ price is documented: JavaScript had to give the parameter list **its
 own scope**, parent to the body and with TDZ rules between them, to
 make it sound. The corpus asks for it nowhere — every default the
 survey found is a literal. **Scoped out rather than refused**; if it
-returns it returns as its own memo, and (1) and (3) of §2's three
-reasons still hold.
+returns it returns as its own memo, and (1) of §2's two reasons still
+holds.
 
-**Object defaults.** `func f(xs: list(long) = [])`. No owner, no
-scope, no answer to who frees it. The one line in the design that must
-not move, and the one that makes Python's trap unwritable rather than
-merely unlikely (§2).
+**Object defaults.** `func f(xs: list(long) = [])`. A freshly-built
+reference object is not a constant, so the folder has no way to write
+one. The one line in the design that must not move, and the one that
+makes Python's trap unwritable rather than merely unlikely (§2).
 
 **Positional-only (`/`) and keyword-only (`*`) markers.** Four
 rationales in PEP 570 and one in PEP 3102, none of which applies —
@@ -1786,8 +1755,8 @@ listen.
   four, and Nystrom's own survey of Flutter found that *"the wide
   majority of named arguments were not required"* even there.
 - **Defaults on `main`.** `func main(args: list(string) = …)` is
-  meaningless — the runtime supplies the list (OWNERSHIP.md S44) and
-  there is no call site. Already refused by the entry checks
+  meaningless — the runtime supplies the list and there is no call
+  site. Already refused by the entry checks
   (`declarations.zig:1779-1795`) without a word added.
 - **A lint that requires names past N arguments.** Griesemer's
   Pandora's box, and the memo declines to open it. The tripwire in
@@ -1925,14 +1894,12 @@ is the one answer the memo said the pair owed.
 §10's list, including the stale *"no receivers"* on
 `ref/statements.md`.  Two notes against the memo's own preamble:
 
-- **`docs/ARGS.md` was already in `tools/documents.zig` when this run
-  began** — registered, with every fence `historical`, when the memo
-  landed — so "the last step of `Order` is where it joins" had
-  already happened.  What this step did instead is audit the fences:
-  the one that now compiles as written (the `struct State` clause
-  under D8) lost the tag, and every other keeps it honestly — each is
-  an earlier language's spelling or a fragment quoted out of a
-  program nobody wrote, which is the exemption's charter.
+- **`docs/ARGS.md` is in `tools/documents.zig`**, so its `luce` fences
+  compile against the freshly built toolchain.  The fences that show a
+  built feature in current syntax (the `find` default and the `struct
+  State` clause under D8) are checked as written; the ones that
+  illustrate a refused spelling or quote a fragment out of a program
+  nobody wrote are shown as plain text rather than run.
 - **`docs/VECTOR.md` is registered too**, so the quiet-failure worry
   in §10 (an unregistered memo invisible to the guard) had already
   been fixed in the tree; it is named here so the worry has an

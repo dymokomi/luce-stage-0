@@ -5,9 +5,7 @@
 > being decided; D8 made the builtin type names lowercase and the
 > resize gave `int` and `float` their 32-bit meanings.  A reader
 > wanting the current spelling of anything here wants *As built* at
-> the end, which is written in it.  A fenced block tagged
-> `luce historical` is shown as it was written and is not compiled;
-> every other one in this file is (`tools/doccheck.zig`).
+> the end, which is written in it.
 
 > **The rule.** There are seven numeric types on two ladders —
 > `Byte` `Short` `Int` `Long` and `Half` `Float` `Double` — sized the
@@ -22,7 +20,8 @@
 > every existing `Int` becomes a `Long` and every existing `Float`
 > becomes a `Double` before either name is resized.
 
-`docs/MEMORY.md` records why scope ownership won; `docs/FAILURE.md`
+`docs/MEMORY.md` records why value and reference types with ARC won;
+`docs/FAILURE.md`
 why there are three failure mechanisms and not one; `docs/NUMERICS.md`
 why `Int` promotes to `Float`, and it is this memo's direct parent —
 every rule it ratified is inherited here, restated over seven types
@@ -442,15 +441,15 @@ Go's model, adopted for the reason Go adopted it: a language with more
 than one integer width and no untyped constants makes its users write
 casts around numbers they wrote correctly.
 
-```luce historical
-let x: Float = 1.5              # 1.5 is a binary32
-let y: Half = 0.25              # a binary16
-var count: Short = 1000         # fits; a Short
-let n = 1                       # no context: a Long
-let z = 1.5                     # no context: a Double
-pixels[i] = 200                 # element is Byte; 200 fits
+```text
+let x: float = 1.5              # 1.5 is a binary32
+let y: half = 0.25              # a binary16
+var count: short = 1000         # fits; a short
+let n = 1                       # no context: an int
+let z = 1.5                     # no context: a float
+pixels[i] = 200                 # element is byte; 200 fits
 pixels[i] = 300                 # luce.sema.literal, at compile time
-let h: Half = 1e5               # 100000 > 65504 — refused, at compile time
+let h: half = 1e5               # 100000 > 65504 — refused, at compile time
 ```
 
 Three properties, and the third is the one that matters:
@@ -1366,7 +1365,7 @@ comes from and why it is coverage rather than a rename.
 | | migrated | forked |
 |---|---:|---:|
 | `specs/behavior_spec.zig` | 29 | 6 |
-| `specs/ownership_spec.zig` | 43 | 0 |
+| the memory-model spec | 43 | 0 |
 | `specs/errors_spec.zig` | 12 | 1 |
 | `specs/optimize_spec.zig`, `modules_spec.zig`, `std_spec.zig` | 8 | 0 |
 | in-module tests (`06_mir`, `07_optimize`, `08_llvm`, `compile`, `interpreter`) | 20 | 0 |

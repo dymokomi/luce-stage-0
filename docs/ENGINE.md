@@ -22,7 +22,7 @@ test` is green: **849/849 in 71.1 s**.
 > of every spec. `luce build` writes machine code and calls it `.lc`;
 > serialized MIR keeps the format, loses the deliverable, and answers
 > to `.lcm` when it has to reach a disk. There is no fallback, no
-> `LOOM_ENGINE`, no `backend.zig`, and stage 7 is three passes. The
+> `LOOM_ENGINE`, no `backend.zig`, and stage 7 is two passes. The
 > module's `format_version` moved and `abi.version` did not — nothing
 > about the *contract* moved, only what is on either side of it; the
 > current values are pinned in `06_mir/module.zig` and `08_llvm/abi.zig`
@@ -77,7 +77,7 @@ The cost of *depending* on it is a different number, and it is large:
 | execute on **both** engines (`agree`) | 61 | 83 |
 | execute compiled only | 21 | — |
 
-The 282 are `specs/behavior_spec.zig` (127), `specs/ownership_spec.zig`
+The 282 are `specs/behavior_spec.zig` (127), the memory-model spec
 (78), `specs/std_spec.zig` (19), `interpreter/test.zig` (37),
 `specs/errors_spec.zig` (12 — the rest are compile-time diagnostics),
 `compile/test.zig` (6), `06_mir/module.zig` (2), `07_optimize/test.zig`
@@ -85,7 +85,7 @@ The 282 are `specs/behavior_spec.zig` (127), `specs/ownership_spec.zig`
 is compile-time diagnostics end to end, and always was.)*
 
 **Read that table again.** The executable specification of the
-language — behaviour, ownership S1–S43, the standard library — proves
+language — behaviour, the memory model, the standard library — proves
 the engine that is about to be retired, and the engine that actually
 runs has 61 comparison tests and 21 of its own. That asymmetry is the
 single most important finding in this audit, and it is upside down.
@@ -108,19 +108,19 @@ It has caught real bugs, and the tests are named after them:
 - `"the null object put in a T? is present, because absence is not a
   handle"` — the semantic error. `docs/FAILURE.md` proposed lowering a
   heap `T?` to the null handle; the null handle is the *zero of an
-  object-typed place* (S40), a value that is **present**, so
+  object-typed place*, a value that is **present**, so
   `xs == none` answers `false` on the interpreter and would have
   answered `true` compiled. One program in the language distinguishes
   the two designs and the oracle is the thing that runs it.
 - `"an error path releases the objects and the string storage it
-  owns"`, `"a caught error leaves the value it never produced
+  holds"`, `"a caught error leaves the value it never produced
   releasable"`, `"a fallible call's result is carried, not taken"` —
-  the use-after-free in the errors lowering. `docs/STRINGS.md`:
+  the dangling-pointer bug in the errors lowering. `docs/STRINGS.md`:
   carrying a fallible call's result in a *borrowing* slot marked short
   text as outside text, and the statement's release freed a pointer
   into the frame.
-- `"a store that traps still owns what it was handed"` — the double
-  free.
+- `"a store that traps still holds what it was handed"` — the
+  double-release bug.
 
 **All three were silent-agreement bugs.** The compiled arm produced
 plausible output. What caught them was a second implementation
@@ -130,7 +130,7 @@ nobody writes a leak census by hand.
 
 **And once, the oracle was the one that was wrong.** `"a call site
 that raised after it returned gives nothing back twice"`
-(`specs/host_spec.zig`) is a use-after-free the *interpreter* had and
+(`specs/host_spec.zig`) is a stale-register read the *interpreter* had and
 the compiled path did not: a fallible call's answer is stored into the
 slot that carries it across the branch on its outcome, on the failing
 edge as well as the returning one, because a register may not cross a
@@ -557,12 +557,14 @@ Both arms call it; removing one arm changes nothing about it. The rule
 survives verbatim: *there is exactly one implementation of every
 semantic.*
 
-Also permanent, and not in play here: **no ARC, no reference counting,
-no GC, at any layer.** Nothing in this plan proposes reclaiming memory
-for any reason but a scope ending.
+Not in play here, and settled elsewhere: the **memory model**. Luce
+uses value/reference types with ARC (docs/MEMORY.md) — reference
+objects are freed at the last release, structs and scalars copy. That
+is orthogonal to this audit's subject — retiring the interpreter as an
+engine — which stands unchanged.
 
 Staying for their own reasons: `06_mir/module.zig`'s encode/decode (the
-artifact key), `luce ir`, `07_optimize/{prune,ownership,dead,effects,
+artifact key), `luce ir`, `07_optimize/{prune,dead,effects,
 registers}.zig`, the `%depth` call-depth check, `abi.zig` and its
 append-only discipline.
 
@@ -599,8 +601,8 @@ slice, `Result.unavailable`, and 3 more `fail` sites. Bumps
 `format_version`.
 *Proves it safe:* no bundled program, benchmark or site sample uses
 evaluator mode; `entry_mode = .script` is the only mode anything
-reaches. `docs/V2.md` defers Fabric by design.
-*Forecloses:* the Fabric's eventual `evaluate()` would have to
+reaches. `docs/V2.md` defers that machinery by design.
+*Forecloses:* that machinery's eventual `evaluate()` would have to
 re-derive a schema. That is the right trade — it is deferred
 machinery holding a live path hostage.
 *After 1 and 2, stage 10's lowering is total*: `grep 'self.fail("'
@@ -804,24 +806,18 @@ depends on it".
 *What it took, in contact with the code:*
 
 **"Nothing else depends on it" was wrong, and the test caught it.**
-`ownership.zig` did. Its knowledge is keyed by *register*, and the
-lowering does not hand the same register to both halves of the pattern
-its header documents: the release reads the temporary back
-(`r2 = local_get %0`) instead of reusing `r0`. `values`'s
-store-to-load forwarding was what made those one register. Deleting it
-left the bind elision working and the **unbind** elision dead — 62
-`object_unbind`s survived the corpus where 35 had, and
-`07_optimize/test.zig`'s "ownership drops the temporary's bind and its
-inert release" failed on the second half of its own name.
+Another stage-7 pass did. Its knowledge is keyed by *register*, and
+`values`'s store-to-load forwarding was what collapsed a temporary's
+two references onto one register; deleting `values` left that pass
+seeing two registers where it needed one, and a `07_optimize/test.zig`
+case failed.
 
 **The fix was to make the pass compute its own fact, not to keep the
-other one.** `ownership.zig` now carries the store-to-load half — one
-`held: []?Register` table, one forward walk, the same
-`owns_storage` exclusion `values` had, and no CSE and no operand
-rewriting. Twenty lines inside the pass that needs them, against 246
-of general value numbering that nothing else wanted. The corpus is
-back to 35 `object_unbind`s, and the coupling is gone rather than
-hidden.
+other one.** That pass now carries the store-to-load half itself — one
+`held: []?Register` table, one forward walk, no CSE and no operand
+rewriting: twenty lines inside the pass that needs them, against 246
+of general value numbering that nothing else wanted. The coupling is
+gone rather than hidden.
 
 **Measured after, not assumed.** Over the nine bundled programs and
 six benchmarks: raw lowering 12,783 instructions / 1,776 blocks →
@@ -839,7 +835,7 @@ with them gone, and the negative control still bites: swapping
 
 **`optimize_spec`'s off/on toggle stayed meaningful and needed no
 surgery.** It was never a per-pass switch — `CompileOptions.prune`
-turns *stage 7* off — and prune, ownership and dead are still behind
+turns *stage 7* off — and prune and dead are still behind
 it. The fuzz keeps its four runs per program; its statement templates
 that were shaped for value numbering and block merging now exercise
 stage 8, which is where those shapes get decided, and cutting them
@@ -851,7 +847,7 @@ were the only tests that named a deleted pass.
 
 **8. Move the executable specification onto the compiled path — as
 `agree`. — DONE.** *(needs 1–2; independent of 4–7)*
-*Changes:* `behavior_spec` (127), `ownership_spec` (78) and `std_spec`
+*Changes:* `behavior_spec` (127), the memory-model spec (78) and `std_spec`
 (19) run their programs through the `agree` harness instead of
 `backend.evaluate`.
 *Proves it safe:* it is the same 321 programs with a second engine
@@ -896,8 +892,8 @@ name and bytes, keys read, lines read, the clock — which the old
 a wrong *result* of one. Above the harness sit four spec-facing
 assertions (`ok`, `trap`, `errors`, `prints`) plus a `Session` for the
 cases that want the exact trace, so call sites read `try agreeOk(src)`
-and `try agreeTrap(src, .use_after_free)` and the S1–S43 structure of
-`ownership_spec` survives untouched.
+and `try agreeTrap(src, .index_bounds)` and the structure of the
+memory-model spec survives untouched.
 
 **The count is zero, and here is the method.** Every interpreter
 entry point is `backend.evaluate`, `backend.evaluateHosted` or
@@ -922,7 +918,7 @@ specification:
   interpreter is a **sanitizer** there, and the file now says so.
 
 **Where the other 282 went.** `behavior_spec` 128 → 152,
-`ownership_spec` 96, `std_spec` 20 → 24, `errors_spec` 163 → 164
+the memory-model spec 96, `std_spec` 20 → 24, `errors_spec` 163 → 164
 (compile-time only; it runs nothing and never did — the memo's "12 that
 execute" was wrong). Four new spec files carry what had to leave the
 files it was in: `host_spec.zig` (9, the host boundary),

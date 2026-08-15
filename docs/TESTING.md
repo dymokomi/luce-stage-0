@@ -56,7 +56,7 @@ enforced by `tools/test_suites.zig` and its directory audit:
 
 | focused lane | specification owner |
 |---|---|
-| `test-language` | Core syntax, types, control flow, functions, ownership, modules, threading semantics, diagnostics, optimization equivalence, module round trips, and the synthesized Luce-test entry. |
+| `test-language` | Core syntax, types, control flow, functions, memory management, modules, threading semantics, diagnostics, optimization equivalence, module round trips, and the synthesized Luce-test entry. |
 | `test-stdlib` | `std`, including math, lists, strings, paths, files, OS, JSON, and ZIP. |
 | `test-host` | The raw host boundary and its byte/resource representation. |
 | `test-backend` | Source-to-loaded-machine-code LLVM behavior and defensive lowering checks. |
@@ -198,7 +198,7 @@ luce test tests/geo tests/io     # directories, recursively
   entry shapes, the way lambdas are already compiler-synthesized
   functions, so the entry gate stays literally true and gains one
   sentence: no source may declare it.  The entry reads the test
-  name from `args` (OWNERSHIP S44's channel, unchanged) and runs
+  name from `args` (the command-line channel, unchanged) and runs
   exactly that test **by direct call** — a static dispatch like the
   worker table, never a runtime list of function values, which the
   type system could not even hold (`func()` and `func() -> !` are
@@ -252,7 +252,7 @@ bracketed by the per-call loop.
   compiler rendering the failing comparison's operands (it has the
   spans), not a matcher DSL.
 - **No setup/teardown, no fixtures** — a helper called first thing
-  is a fixture; scope ownership already guarantees cleanup.
+  is a fixture; ARC already guarantees cleanup.
 - **No filtering, tags, or skips in v1** — run a file.  (The
   zero-discovered refusal applies to *discovery*, so a later filter
   flag can answer "no match" in its own gentler words.)
@@ -313,8 +313,8 @@ back out of the rendered diagnostics would be parsing our own output,
 which is the shape this whole design refuses.
 
 **What a leaking test is, and why nothing in the corpus is one.**  D4's
-leak arm is real and is checked on every call, but scope ownership
-frees everything (OWNERSHIP.md S33), so no Luce source can reach it: it
+leak arm is real and is checked on every call, but ARC
+frees everything (docs/MEMORY.md), so no Luce source can reach it: it
 is a guard against an engine bug, not against a program.  It is proved
 where a guard nothing can reach has to be — `suite.verdictOf` is a pure
 function from `abi.Status` plus the census plus the exit status to a

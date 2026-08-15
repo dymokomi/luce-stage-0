@@ -490,15 +490,11 @@ instruction removal, compacts the pool, and remaps the indices.  An
 unused table therefore emits neither data nor startup work.  The pool,
 the instruction, their wire tags, and `immutable_object` moved the
 serialized module to **format 33**; none is a host service, so
-`abi.version` remains **13** at that point in the format history. The
-later appended `ownership_cycle` trap moves the module format to **34**;
-the subsequent `shell_run` host service moved it to **35** and the ABI
-to **14**; `term_event_data` moved the format to **36** and the ABI to
-**15**; the `dir_create` and `epoch_ms` services moved the format
-to **40** and the ABI to **16**; and the appended `path_kind` service,
-which retires `file_exists` beside it, moved the format to **42** and
-the ABI to **17**; version 18 then made the finished census cover
-normal completion, exit, traps, and uncaught errors as well as success.
+`abi.version` remains **13** at that point in the format history.
+Later host services and instruction changes moved both forward under
+the append-only discipline — the module format to **47** and the ABI
+to **19** — each bump refusing a stale artifact by name rather than
+migrating it.
 
 Every generated entry path calls one private `luce.constants`
 materializer before user code.  It constructs rows through the same
@@ -509,7 +505,7 @@ in debug mode the synthetic trace frame names the declaration.  A
 worker creates a runtime of its own and calls the same materializer, so
 roots never cross the worker boundary.  The interpreter performs the
 same eager prologue against `libluce_rt`, which is why the executable
-specification compares one ownership representation rather than two.
+specification compares one representation rather than two.
 
 The static analyzer rejects a write while it can still see the root.
 Generated code carries the dynamic half for a parameter-hidden root:
@@ -562,15 +558,9 @@ This is genuinely in-place, not the retired copy-in/copy-out result
 convention: a store performed before an error remains visible while
 the error unwinds.  It is also entirely internal.  `call_inout` and
 the local flag first moved the serialized module to format 32;
-program-root constants then moved it to 33, and the appended
-`ownership_cycle` trap moved the module format to **34**. The current
-`shell_run` service moved the format to **35** and the host ABI to **14**;
-the appended `term_event_data` service moved the format to **36** and
-the ABI to **15**; the appended `dir_create` and `epoch_ms` services
-moved the format to **40** and the ABI to **16**; and the appended
-`path_kind` service moved the format to **42** and the ABI to **17**;
-version **18** then made the finished census cover every
-non-exhaustion ending.
+program-root constants then moved it to 33, and later host services
+and instruction changes carried both forward under the append-only
+discipline to the current **format 47** and **host ABI 19**.
 
 ## Call depth, and the trace a trap carries
 
@@ -772,9 +762,9 @@ are worth writing down:
   So what the inline path needs is that there is nothing to adopt,
   which a scalar satisfies.  A `string`, a struct and an object go on
   calling the runtime, which is the one place that walk is written.
-- **The checks do not move.**  `null_object` then `use_after_free`, in
-  that order, at the instruction that owes them, exactly as the call
-  made them; the growing arm resolves a second time, which costs one
+- **The checks do not move.**  `null_object`, at the instruction that
+  owes it, exactly as the call made it; the growing arm resolves a
+  second time, which costs one
   row walk on the path that was about to allocate anyway.
 
 `map` is deliberately not on the inline path: a hash probe is genuinely
@@ -833,7 +823,7 @@ Three claims, each justified from the body of the corresponding export:
 - **`willreturn`** — a trap returns rather than jumping, but host/worker
   callbacks, the effect-lock wait, and release paths that can close a
   file or join a task may not.  `copy`, `list_slice`, and `map_values`
-  also withhold the promise: the ownership-cycle guard makes their graph
+  also withhold the promise: the cycle guard makes their graph
   walk finite, but native recursion depth remains data-dependent and has
   no fixed return bound.  Exactly twenty-three
   exports withhold the attribute, pinned as a closed set in
@@ -910,7 +900,7 @@ null index".  Two things are wrong with that.  The small one is the
 width: a handle became `{index, generation}` packed in an `i64` when
 generational handles landed, so there is no `i32` any more.  The
 disqualifying one is that the null index is already spoken for.  The
-null handle is the *zero of an object-typed place* (S40) — a value that
+null handle is the *zero of an object-typed place* — a value that
 is **present** and traps `null_object` when used — and a program can
 put one inside a `T?` without a diagnostic:
 
@@ -937,11 +927,11 @@ representation both engines can be checked against.
 Where a `T?` has to become a `runtime.Value` — a struct field, an
 argument crossing into `libluce_rt` — absence boxes as `Value.none`:
 tag zero, no payload, no length, byte for byte what the interpreter
-parks in the same slot.  **That is what makes ownership cost nothing.**
-The runtime's ownership walks switch on the tag and fall through on
-`none`, so "holding `none` owns nothing" (S43) is already true on both
-engines with no code written for it, and a present `list(T)?` binds and
-releases exactly as the bare handle does.  It is the one place the box
+parks in the same slot.  **That is what makes reference counting cost
+nothing.**  The runtime's retain/release walks switch on the tag and
+fall through on `none`, so "holding `none` retains nothing" is already
+true on both engines with no code written for it, and a present
+`list(T)?` retains and releases exactly as the bare handle does.  It is the one place the box
 is filled entirely at the value site rather than partly in the entry
 block, because neither its tag nor its length is a fact about the type.
 
@@ -1015,8 +1005,8 @@ statement freed a pointer into the frame (docs/STRINGS.md).
 `src/luce/runtime.zig` plus
 `runtime/{value,heap,containers,text,operators,trace,exports}.zig`.  Luce's
 semantics below the instruction level live here: the object heap,
-binding/container/temporary/program-root ownership and serials
-(docs/OWNERSHIP.md), `list`/`map`/`array`/
+reference counting for bindings, containers, temporaries and program
+roots (docs/MEMORY.md), `list`/`map`/`array`/
 `builder`, string storage and the string primitives,
 `str`/`parse_int`/`parse_float`/`chr`/`ord`, checked arithmetic, and
 the trap channel they all report through.
@@ -1067,7 +1057,7 @@ fits; generated code only ever *writes* the other form, and reads both
 ## The published host ABI
 
 `src/luce/08_llvm/abi.zig` is the contract and the only authority on
-it; `abi.version` is the number a loader checks, currently **18**.  A compiled artifact
+it; `abi.version` is the number a loader checks, currently **19**.  A compiled artifact
 exports one symbol:
 
 ```c
@@ -1084,8 +1074,8 @@ Effects reach the outside world through this table rather than through
 undefined symbols, because an undefined symbol does not link into a
 two-level-namespace macOS dylib — and a vtable is the shape
 `interpreter.Host` already has for the oracle.  *Semantics* do not
-come through it: lists, maps, strings, ownership, and the conversions
-are `libluce_rt` calls, because they are the language rather than a
+come through it: lists, maps, strings, reference counting, and the
+conversions are `libluce_rt` calls, because they are the language rather than a
 capability a host may withhold.
 
 **Three rules hold the whole thing together:**
@@ -1199,8 +1189,8 @@ pointers to the runtime once at the start of a run, and the runtime is
 what calls them.
 
 That last one is the shape of the decision rather than a detail of it.
-A handle is a scope-owned resource, so its close happens at the end of
-the scope that owns it — inside the ownership walk, where no generated
+A handle is a reference-counted resource, so its close happens at the
+last release — inside the runtime's release walk, where no generated
 code is standing to hand a table in.  Installing it also puts both
 engines on *literally the same five function pointers*, so what an
 open answers, what a short read means and when a close happens are one
@@ -1280,7 +1270,7 @@ the conventions already there rather than inventing new ones:
 
 There is no list here any more.  Everything a program can say lowers:
 integers, floats, strings, structs, function values, all four container
-kinds, file/task resources and workers, `T?`, `T!`, ownership, the math
+kinds, file/task resources and workers, `T?`, `T!`, reference counting, the math
 builtins, and every host service.  The two things that did not — `Bytes`
 and the evaluator ports — were cut rather than grown (docs/ENGINE.md
 steps 1 and 2), because nothing constructed a `Bytes` and nothing
@@ -1580,7 +1570,7 @@ piece of work and not this one.
 
 **What is deliberately not inline.**  An `append` of a `string`, a
 struct or an object still calls the runtime, because such an element
-has to be *adopted* and the ownership walk lives in one place.  No row
+has to be *adopted* and the release walk lives in one place.  No row
 in the suite measures that (`strings` builds text in a `builder`, not a
 list), so there is no number here to quote and none is invented.
 

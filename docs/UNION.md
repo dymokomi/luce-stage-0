@@ -44,14 +44,14 @@ What is left over from that run is exactly the part that carries
 something.
 
 **The research's headline finding is the one that decides the shape.**
-§1.3: a struct value is already an out-of-line, exclusively-owned,
-deep-copied and deep-freed field run — `Value.strukt`'s *"`bits`
-addresses `length` fields"*, `.strukt => .ptr` on the compiled path,
-`ownValue` and `dropStorage` as the recursive copy and the recursive
-free.  **Luce already boxes; it simply never had to say so.**  What
-OCaml gets from a collector and Rust spells `Box`, this tree has as one
-owner per allocation and a static death point.  So the layout question
-was never "how do we afford a box".
+§1.3: a struct value is already an out-of-line, deep-copied and
+deep-freed field run — `Value.strukt`'s *"`bits` addresses `length`
+fields"*, `.strukt => .ptr` on the compiled path, `ownValue` and
+`dropStorage` as the recursive copy and the recursive release.  **Luce
+already boxes; it simply never had to say so.**  What OCaml gets from a
+collector and Rust spells `Box`, this tree has as a reference-counted
+allocation freed at its last release.  So the layout question was never
+"how do we afford a box".
 
 **Three things landed after the survey was gathered, and two of them
 move an answer.**
@@ -74,8 +74,8 @@ move an answer.**
 **And the two blockers that killed this feature elsewhere are not
 here.**  Go refused sum types twice, on the zero value not being
 all-bytes-zero and on the collector's need for a pointer bitmap (§2.7).
-Luce has S40 — *an unfilled slot holds its type's zero*, whatever that
-zero is — and no collector scanning anything.  Neither objection
+Luce gives every unfilled slot its type's zero value, whatever that
+zero is, and has no collector scanning anything.  Neither objection
 transfers, and the layout Go sketched and could not have is simply the
 layout available here.
 
@@ -91,15 +91,16 @@ and an edition break, all of it because a payload binding may be the
 payload itself rather than a copy of it (§2.2, §2.8 pattern 4).
 **Swift** is the counterweight: enums are value types, so `case
 let .circle(r)` binds a copy and the specification is one sentence
-(§2.3) — but its `indirect` recursion is a compiler-inserted
-refcounted box, which `docs/MEMORY.md` closes the door on
-permanently.  **Zig** is the closest sibling and gives two answers
+(§2.3) — and its `indirect` recursion is a compiler-inserted
+refcounted box, where Luce lets the recursion travel through its
+reference-typed containers instead, so no special case is needed.
+**Zig** is the closest sibling and gives two answers
 Luce cannot take — the untagged `union` whose safety check disappears
 in release modes (`docs/MODES.md` forbids exactly that), and an
 arena-owned `std.json.Value` with **no `deinit` at all** (§2.4, §Q3a).
 What Luce *does* take from Zig's JSON is the half that works: the
-recursion travels through owning containers, so the container is the
-indirection and there is no `Box`.  **Python** is the cautionary tale
+recursion travels through reference-typed containers, so the container
+is the indirection and there is no `Box`.  **Python** is the cautionary tale
 about bare names in patterns — two PEPs and a rejection (§2.6) — and
 `docs/ENUMS.md` R3 already removed the question rather than answering
 it.  **OCaml and Haskell** price the alternative: uniform boxing makes
@@ -117,16 +118,16 @@ recursion free and a collector mandatory (§2.1).
 | **D6** | **No literal patterns, no nested patterns, no guards, no or-patterns, no multi-member arms, and no capture on `else`.**  Each is a separate feature and each is where Python's and Rust's ergonomics debt came from; Zig's own tracker says why the last two are traps (§2.4, §Q7).  PEP 642's process argument is the house's own principle in someone else's words: *"if we start out with only the abbreviated forms, then we don't have any real way to revisit those decisions"* (§2.6).  Every restriction here reopens as a superset. |
 | **D7** | **`match` is the only door.**  There is no field access on a union value, no tag test operator, and no way to name a payload outside an arm.  So *wrong-arm access is unrepresentable* rather than checked: Ada raises `Constraint_Error` for it and Zig panics, and this design has no such run-time check to define because no program can ask the question. |
 | **D8** | **A union value is a struct value whose field 0 is the tag.**  The run is the member index followed by the active member's payload fields in declaration order; `luce_rt_struct_make` builds it unchanged, `ownValue` copies it, `dropStorage` frees it, and the runtime never learns that unions exist.  On the compiled path a union is `.ptr` and `resultSize` is 8; on the interpreter it is `Value.strukt`, so `sizeOf(Value)` stays 24 and no thirteenth tag is spent.  **This is the memo's one departure from the research's layout (§Q4) and the argument is below.** |
-| **D9** | **Ownership arrives with no new rule.**  `carriesObjects` answers the **OR over the members' fields** — the same shape `.strukt` already answers from a layout's `carries` flag, and the same conservatism `.optional` already pays (S43).  `ownsStorage` is true, because a union owns its run exactly as a struct owns its field run.  `give`, `copy` and `free` on a union value mean what S31, S26, S6 and S27 already say about a carrying struct; a union of value-only members takes no verbs at all (S32). |
-| **D10** | **A payload binding is an alias.**  Reading through it is free (S8, S11, S22); keeping it needs `copy`; `give` on it is refused with S23's sentence, naming the scrutinee as the owner.  For a value payload the binding is an ordinary copy and no verb exists to write.  Moving a payload *out* of a scrutinee would leave it partially moved, which is a flow analysis S29 explicitly refuses the shape of — and which cost Rust `ref`, binding modes, E0507 and two RFCs (§2.2). |
+| **D9** | **A union is a value type, and ARC needs no new rule.**  A union value is a struct-shaped value: it copies when assigned or passed, and a payload field that is a **reference type** (a `list`, a `map`, a `class`) is shared exactly as that reference is anywhere else — ARC retains it when the union is copied and releases it when the last reference goes.  A payload that is a **value type** is copied with the union.  There are no ownership verbs, because a value type never had any (`docs/MEMORY.md`). |
+| **D10** | **A payload binding names the payload.**  For a **reference** payload the arm's binding is another reference to the same object — reading or mutating through it is seen by whoever else holds it, exactly as any shared reference is.  For a **value** payload the binding is an ordinary copy.  There is nothing to move and no verb to write; ARC keeps a bound reference alive for as long as the binding lives, which is what removed the machinery Rust spent `ref`, binding modes, E0507 and two RFCs on (§2.2). |
 | **D11** | **An arm binding is an ordinary name in the arm's scope** — like `catch NAME:` — and obeys the no-shadowing rule.  A payload field colliding with an enclosing local is the duplicate-name diagnostic the tree already prints well.  No rename form, and no first exemption from no-shadowing (`docs/RETURNS.md` priced that when it refused `_`). |
 | **D12** | **A union's unconditional expansion is `1 + the largest member's`**, counted by `valueCount` into the same `max_struct_values = 4096` bound and the same strongly-connected-component check that refuses struct cycles.  *Largest*, not the sum, because only one member is ever live — but every member is counted, so a member that unconditionally contains the union makes the type infinite whichever member it is.  The refusal names `?` and the containers as the two fixes, exactly as the struct-cycle diagnostic already does. |
-| **D13** | **A union's zero is its first declared member, with every payload field at its own zero** — ENUMS A3 generalized, S40 honored, and forced by BYTES B2 (a type with no zero cannot be a container element, and `list(Json)` is the point).  **No ordering constraint is needed**, and the argument is below: D12 has already refused every member that could make the zero recurse. |
+| **D13** | **A union's zero is its first declared member, with every payload field at its own zero** — ENUMS A3 generalized, the zero-value rule honored, and forced by BYTES B2 (a type with no zero cannot be a container element, and `list(Json)` is the point).  **No ordering constraint is needed**, and the argument is below: D12 has already refused every member that could make the zero recurse. |
 | **D14** | **`T?` stays its own mechanism, and `Shape?` becomes writable.**  Five independent reasons in §Q5 and the field's own split runs on whether a language has generics; Zig has them and still chose the built-in.  The converse is the cheap half: one arm on `types.Type.Payload` beside `strukt` and `heap`, which is what gives a union a recursion terminator that is not a container.  `Shape??` stays unrepresentable, because `Payload` is a union of its own. |
 | **D15** | **Containers, fields and keys.**  `list(Json)` and `map(string, Json)` work by construction; a union element keeps the 24-byte boxed cell, exactly as a struct element does (BYTES B1's `.value` kind).  A union may **not** be a map *key* — keys are `long` and `string` and always have been, for `hashOf`'s reason, which is the same narrowing ENUMS' D9 met on
-contact.  A struct field may be a union, which ORs into the struct's `carries` flag — so **a struct with a `Json` field can never be a `var self` receiver** (`docs/METHODS.md`), which is worth knowing before `std.json` is written against it. |
+contact.  A struct field may be a union, and a method may mutate a receiver holding one exactly as it mutates any other value field. |
 | **D16** | **`string(u)` answers the member's name**, by ENUMS A2's mechanism unchanged — a compare-and-branch over the tag answering an interned constant, nothing new in `libluce_rt`.  **The payload is never formatted**: that is a formatting protocol, it is a different feature, and it is refused here by name so nobody assumes it.  `==` on unions is refused in this run by a sentence naming `match` — **and the refusal is transitive**, because a struct's `==` is field-by-field `==`: see *D16's `==`, as it had to be corrected* below. |
-| **D17** | **Methods and namespace functions carry over whole** from `docs/METHODS.md`, as they did for enums (D7 there): `Json.parse(text)` is a namespace function, `j.kind()` a method, told apart by whether the first parameter is `self`.  METHODS' existing restriction does the rest — a `var self` receiver must carry no objects, so a value-only union may have one and `Json` may not.  A member name and a declaration name colliding inside one union is the duplicate-name refusal two members already get. |
+| **D17** | **Methods and namespace functions carry over whole** from `docs/METHODS.md`, as they did for enums (D7 there): `Json.parse(text)` is a namespace function, `j.kind()` a method, told apart by whether the first parameter is `self`.  A method may mutate its receiver whether or not the union holds a reference payload, because a union is a value.  A member name and a declaration name colliding inside one union is the duplicate-name refusal two members already get. |
 | **D18** | **Inside the compiler the word is `variant`.**  The language keyword is `union`; Zig's own `union` keyword takes the name in the one place it must not be dodged around — `types.Type`'s arm — so the arm is `.variant: u32`, the table is `Program.variants`, and the three instructions are `variant_make` / `variant_tag` / `variant_field`.  One word inside, one word outside, the `strukt` precedent, and one sentence in `types.zig` saying so.  Diagnostics say `union`, because a diagnostic speaks the language's vocabulary and not the compiler's. |
 
 ---
@@ -163,10 +164,10 @@ Read the consequences off the existing code rather than off this page:
   union value is built whole and never assigned into.
 - **`ownValue` and `dropStorage` need no member table and no new
   arm.**  They walk a run and switch on each *slot's* own tag; slot 0
-  is an `int` and no-ops in both walks.  Freeing a `Shape.circle`
-  frees nothing, freeing a `Json.array` frees a list — the static
-  predicate is conservative, the runtime walk is exact, and both
-  already exist.
+  is an `int` and no-ops in both walks.  Releasing a `Shape.circle`
+  releases nothing, releasing a `Json.array` releases its list
+  reference — the static predicate is conservative, the runtime walk is
+  exact, and both already exist.
 - **Nothing new crosses the C boundary.**  `boxTag` answers `.strukt`,
   a union element in a `list` is the boxed cell a struct element is,
   and a union crossing into `libluce_rt` is a pointer to a run — which
@@ -210,72 +211,68 @@ run is a run of `Value`s, so `circle(radius: half)` costs 24 bytes for
 two.  Arrays are where narrow widths pay, and a union payload is not
 an array.
 
-## Ownership: four situations reached from one new place
+## Memory: a value with reference payloads
 
-Nothing in `docs/OWNERSHIP.md` changes.  That would be the second time
-— `T?` arrived and *"nothing in this document changed, which is the
-strongest thing that can be said about it"* (S43) — and it is the thing
-to check hardest rather than assume, which is what the two-engine leak
-census is for.
+Nothing in `docs/MEMORY.md` changes.  A union is a value type, so it
+copies when assigned or passed; a payload field that is a reference
+type is shared like any reference, and ARC retains and releases it with
+the union.  There are no ownership verbs and no situations to
+enumerate — the two kinds do what they do everywhere, which is the
+thing to check hardest rather than assume, and which is what the
+two-engine leak census is for.
 
-**Construction is S24, unchanged.**  A payload field is a place that
-stores, so it takes the verb rule a struct field takes:
+**Construction stores the payload.**  A payload field is an ordinary
+place: a value payload is copied in, a reference payload is shared.
 
 ```text
 var kids = new list(Json)
-let a = Json.array(items = kids)             # refused (S21): give kids, or copy kids
-let b = Json.array(items = give kids)        # transfer into the value
-let c = Json.array(items = new list(Json))   # fresh: silent (S20/S14)
+let a = Json.array(items = kids)             # a and kids share one list
+kids.append(Json.null)                       # seen through a as well
+let c = Json.array(items = new list(Json))   # a fresh list, held here
 ```
 
-**Keeping one is S27, unchanged, and this is where the cost lands.**
-`carriesObjects` is a *static, type-level* predicate — the compiler
-does not know which member a value holds — so `Json` carries objects
-unconditionally, and a `Json.number(value = 3.0)` needs a verb to be kept even
-though it owns nothing:
+**Keeping a member is ordinary.**  Because a union is a value, storing
+one in a list or a field copies the value; a reference payload inside
+it is retained, so the object it names stays alive for as long as any
+copy does:
 
 ```text
 var values = new list(Json)
 var j = Json.number(value = 3.0)
-values.append(j)               # refused (S27): give j, or copy j
+values.append(j)               # j is a value; the list holds its own copy
 ```
 
-The research listed this as a question for the owner (Q-OWNER-2).
-**This memo answers it instead**, because S27 already did: *"the rule is
-type-driven — any struct type transitively containing object fields is
-object-carrying"*.  A union is a struct with a tag, `T?` already pays
-exactly this cost by exactly this reasoning, and the alternative — a
-flow analysis over tags, so that `Json.number` is known to own nothing
-— is a much larger feature than union and is the shape S29 refuses
-(*"blunt and predictable beats flow-sensitive and clever"*).  What is
-owed is that the cost is said out loud once, which is what this
-paragraph is; `Json` will be written a hundred times where a
-`list(long)?` is written rarely, and every one of those hundred will
-say `give` or `copy`.
+The research listed this as a question for the owner (Q-OWNER-2), and
+ARC answers it without a rule: a union is a struct with a tag, a struct
+is a value, and a value copies.  A `Json.number(value = 3.0)` holds no
+reference, so copying it copies bytes; a `Json.array` holds a list
+reference, so copying it retains that list.  The compiler needs to know
+only whether a union *could* contain a reference — for the worker
+boundary and for where ARC inserts retain/release — and that is the OR
+over the members' fields, the same conservative question `T?` answers.
 
-**Binding is S8/S22, unchanged** (D10).  An arm's payload name aliases
-whatever the scrutinee owns:
+**A payload binding names the payload** (D10).  A reference binding is
+another reference to the same object; a value binding is a copy:
 
 ```text
 match doc:
     array(items):
-        keep.append(items)     # refused (S23): items aliases the list doc
-                               # owns; copy items
+        items.append(Json.null)  # items is the same list doc holds;
+                                  # the append is seen through doc too
     text(value):
-        label = value          # a value payload: an ordinary copy, no verb
+        label = value            # a value payload: an ordinary copy
     else:
         label = "other"
 ```
 
 The scrutinee may be any expression of union type; a temporary one
-lives to the end of the statement (S3), and the `match` *is* the
-statement, so an arm's alias is valid for the whole arm.
+lives to the end of the statement, and the `match` *is* the statement,
+so an arm's binding is valid for the whole arm.
 
-**And the walks are exact where the predicate is conservative.**
-`give u` moves the whole value whatever member it holds; `copy u` is
-S31 verbatim and `ownValue` already is that walk; `free u` is S6's
-early release, poisoning the name; a payload-less member moves and
-frees nothing, because `dropStorage` switches on each slot's own tag.
+**And the runtime walks are exact.**  Copying a union copies its value
+payloads and retains its reference payloads; its last release drops
+those references; a payload-less member holds and releases nothing,
+because `ownValue` and `dropStorage` switch on each slot's own tag.
 
 ## Finiteness, recursion, and the zero
 
@@ -292,14 +289,14 @@ union Json:
     object(fields: map(string, Json))
 ```
 
-`list(Json)` and `map(string, Json)` are heap objects — one handle each
-— so `Json`'s unconditional expansion is finite by construction, and
-S20 (*"freeing a container frees the objects it owns, recursively"*)
+`list(Json)` and `map(string, Json)` are reference objects — one handle
+each — so `Json`'s unconditional expansion is finite by construction,
+and a container's last release freeing the objects it held, recursively,
 is the whole of the reclamation story.  No `Box`, no `indirect`, no
-arena, no collector.  Zig's `std.json` reaches the same shape and then
-hands the tree to an arena because it has nowhere else to put the
-ownership (§2.4); here the ownership is where it always is, and
-`specs/agree.zig`'s leak census is what proves it.
+arena, no tracing collector.  Zig's `std.json` reaches the same shape
+and then hands the tree to an arena because it has nowhere else to put
+the reclamation (§2.4); here ARC frees the tree at its last reference,
+and `specs/agree.zig`'s leak census is what proves it.
 
 **Direct self-containment is infinite and is refused.**  `union List:
 nil / cons(head: long, tail: List)` is infinite for exactly the reason
@@ -333,17 +330,17 @@ at its own zero**, which is ENUMS A3 one level up.  `zeroOf` recurses
 into the first member's fields and terminates, and it terminates for
 every union the compiler accepted — because the only recursion that
 survives D12 goes through a `?` (whose zero is `none`) or a container
-(whose zero is the null handle), and neither recurses.  **The
+(whose zero is the null reference), and neither recurses.  **The
 "recursive first member, refused with a sentence naming the reorder"
 rule that looked necessary is not**, and writing it would have been a
 diagnostic that can never fire.
 
 One property to name rather than leave implicit: `var s: Shape` is
 `Shape.circle(radius = 0.0)` — a real value of a member the programmer
-did not choose.  That is S40 doing exactly what it does for a struct
-(`var p: Point` is a zeroed `Point`) and for an enum (A3), and S41's
-answer applies unchanged: the "did I set it?" information is the bool
-you branched on, and it belongs in the program.
+did not choose.  That is the zero-value rule doing exactly what it does
+for a struct (`var p: Point` is a zeroed `Point`) and for an enum (A3),
+and its corollary applies unchanged: the "did I set it?" information is
+the bool you branched on, and it belongs in the program.
 
 ## The worked example
 
@@ -395,11 +392,11 @@ compiling and names it (R1).  `value` is bound three times in three
 arms and each is a different type — the fields are scoped to the
 member, which is the lesson OCaml's inline records teach and Haskell's
 top-level field names are the warning about (§2.1).  `items` and
-`fields` are aliases, so iterating them is borrowing and no verb is
-written (D10).  `write(out, item)` passes a `Json` by borrow (S11) and
-recurses through the container, not through the layout.  The
-`Json.null` handed to `fields.get` is a default that costs one run and
-no ownership.  And `string(value)` on the `boolean` and `number` arms
+`fields` name the scrutinee's own containers, so iterating them reads
+shared references and copies nothing (D10).  `write(out, item)` passes
+a `Json` value and recurses through the container, not through the
+layout.  The `Json.null` handed to `fields.get` is a default value that
+costs one run.  And `string(value)` on the `boolean` and `number` arms
 is the ordinary conversion constructor — nothing here is a formatting
 protocol, which D16 refuses by name.
 
@@ -411,13 +408,13 @@ SE-0155:
 var fields = new map(string, Json)
 fields.put("name", Json.text(value = "luce"))
 fields.put("tags", Json.array(items = [Json.number(value = 1.0)]))
-let doc = Json.object(fields = give fields)
+let doc = Json.object(fields = fields)
 ```
 
-The `give` on the last line is S24 and not a union rule: the map was
-bound to a name, so keeping it inside a value says which.  Written
-inline — `Json.object(fields = new map(string, Json))` — it is fresh
-and silent (S20).
+The last line shares the map into the value: `fields` and the object
+`doc` holds now name the same map, and ARC keeps it alive for as long
+as either does.  Written inline — `Json.object(fields = new map(string,
+Json))` — the map is simply created in place.
 
 ## Three boundaries this run does not cross
 
@@ -427,11 +424,12 @@ message (`docs/FAILURE.md`), and a parse failure is `user_error` plus a
 sentence.  §Q6 is careful about which half of FAILURE's refusal union
 removes: the *stated* reason for refusing `Result<T, E>` was *"no
 generics, no tagged unions"*, and half of that premise changes here —
-but the load-bearing reason does not.  An error **unwinds through
-releases** (S34), so a reason that carries objects would have the
-unwind releasing what it is carrying out, and a value-only reason is
-already free because `Runtime.raise` copies the message's words.  If it
-ever reopens, the shape that fits keeps FAILURE's design intact —
+but the load-bearing reason does not.  An error **unwinds and ARC
+releases each reference on the way out**, so a reason that named a
+reference object would have the unwind dropping it as it passed, and a
+value-only reason is already safe because `Runtime.raise` copies the
+message's words.  If it ever reopens, the shape that fits keeps
+FAILURE's design intact —
 fallibility stays an attribute and the attribute grows a named error
 type, `-> list(Entry)!ZipError`, with `catch reason:` binding something
 a handler can `match`, and **an error reason may be a union of
@@ -478,8 +476,8 @@ grow an optional field-name list.  Nothing else in the grammar moves.
 **Stage 4**: the variant table beside the struct layouts and the enum
 table; member resolution through the existing head-names-a-declaration
 path; construction through `docs/ARGS.md` D8's named-argument checker;
-`sumShape`/`valueCount`/the cycle walk extended per D12;
-`carriesObjects`/`ownsStorage` per D9; arm binding scopes beside
+`sumShape`/`valueCount`/the cycle walk extended per D12; the
+contains-a-reference check per D9; arm binding scopes beside
 `catch NAME:`'s; exhaustiveness reusing the `luce.sema.match`
 diagnostics already written, whose *"match dispatches over an enum, and
 X is not one"* sentence learns a second word.  New diagnostic family:
@@ -518,17 +516,18 @@ host boundary as anything but a value the program already had.
 **Specs** (`specs/`, both engines, compared on prints, trap code, trap
 message, call trace, **leak census** and the world left behind):
 construction and dispatch for every member shape; payload binding of a
-value and of an object; `give`/`copy`/`free` on a union carrying
-objects, including a caught error unwinding past one, which is where a
-missed release shows up as a number; the zero of a late `var`, of an
-`array(Shape, n)` and of a `list(Json)` element; recursion through a
-container built, walked and freed; `Shape?` narrowed; `string(u)`.  And
+value and of a reference; a union whose reference payload is shared,
+retained and released, including a caught error unwinding past one,
+which is where a missed release shows up in the leak census; the zero
+of a late `var`, of an `array(Shape, n)` and of a `list(Json)` element;
+recursion through a container built, walked and released; `Shape?`
+narrowed; `string(u)`.  And
 refusal rows for each of D1's positional payload, D2's all-bare union,
 D3's `let c: Shape.circle`, D5's partial field list and missing member,
 D12's self-containing union, D15's union map key and D16's `==`.
 
 **Site**: a tour page and the reference in the same commit, fenced and
-verified, and `docs/OWNERSHIP.md` gains no clause — which is the claim
+verified, and `docs/MEMORY.md` gains no clause — which is the claim
 the specs are there to keep honest.
 
 ## Sequencing
@@ -575,13 +574,13 @@ its turn, carrying two more arms than it would have.
 ## For ratification
 
 Three, and only the ones that genuinely need the owner.  The research's
-§5a — named payloads, namespaced construction, alias bindings, hard
+§5a — named payloads, namespaced construction, payload bindings, hard
 exhaustiveness, `T?` staying its own mechanism, monomorphic unions —
 had one honest answer each and this memo took them as decisions (D1,
 D4, D5, D9, D10, D14, and the generics boundary above) rather than
 spending a question on each.  Two of §5b's six are
-answered above instead of asked: the per-type object-carrying rule
-(S27's own sentence answers it, and the cost is stated in full), and
+answered above instead of asked: the per-type reference question (ARC
+answers it — a value copies, a reference is retained), and
 match-arm shadowing (leave it as the ordinary duplicate-name error, D11
 — it costs nothing and the corpus will say within a week whether it
 hurts).  A third, `string(u)`, is D16; it is the one D-row that could
@@ -590,7 +589,7 @@ run, and nothing else in the memo moves if it goes.
 
 | | question | recommendation |
 |---|---|---|
-| **R1** | **What is a union's zero?**  It gates `var j: Json` (S40), array elements, list element zeros (BYTES B2), and whether a recursive union is declarable at all.  It is the question Go could not answer and lost the feature over, twice (§2.7). | **The first declared member, with every payload field at its own zero** (D13) — ENUMS A3 one level up, and the only answer BYTES B2 leaves standing, since a type with no zero cannot be a container element.  **No ordering constraint comes with it**: D12 has already refused every member that could make the zero recurse, so a "recursive first member" rule would be a diagnostic that can never fire.  This is a departure from the research's framing and the argument is above. |
+| **R1** | **What is a union's zero?**  It gates `var j: Json` (the zero-value rule), array elements, list element zeros (BYTES B2), and whether a recursive union is declarable at all.  It is the question Go could not answer and lost the feature over, twice (§2.7). | **The first declared member, with every payload field at its own zero** (D13) — ENUMS A3 one level up, and the only answer BYTES B2 leaves standing, since a type with no zero cannot be a container element.  **No ordering constraint comes with it**: D12 has already refused every member that could make the zero recurse, so a "recursive first member" rule would be a diagnostic that can never fire.  This is a departure from the research's framing and the argument is above. |
 | **R2** | **Does a union get Zig's tag reuse** — `union Shape(Kind):` naming an already-declared enum as its discriminant, so a program can hold and compare a tag without a payload? | **Not in this run.**  Its user — a decoder that validates a kind byte before building anything — is served today by an enum, `Kind(n) -> Kind?` and a match arm that constructs the member; and it comes with Zig's three checked rules including the ordering one, which exists because a version without it miscompiled.  The research called it nearly free *while the enum work was in flight*; that moment has passed, and it now costs what a feature costs.  It reopens as a superset — no member index is serialized, so nothing is foreclosed. |
 | **R3** | **Is the roadmap closed after union, or may `std.json` ask one more question?**  `docs/MISSING.md` records *"and I think we're good"* after union.  §Q6 shows union removes the *stated* reason `docs/FAILURE.md` refused typed errors and not the load-bearing one, while `std.zip`'s forty raise sites collapsed into one code and a sentence are the strongest evidence in the corpus that something is still missing. | **This run promises nothing**: errors stay `T!`, two codes, a message — the first of the three boundaries above.  The recommendation is that the *question* be allowed to be asked once `std.json` is written against a concrete union and its callers exist — because zip's five error families are five things a caller might branch on, and zip's callers do not exist yet.  Everything in §Q6 is designed to be answerable later without moving anything, and SE-0413's warning is the reason not to answer it early: *"Resist the temptation to use typed throws because there is only a single kind of error that the implementation can throw."* |
 
@@ -599,10 +598,10 @@ run, and nothing else in the memo moves if it goes.
 - **Whether `union` ships.**  Ratified, and ratified tagged.
 - **A second dispatch statement.**  `match` is ENUMS R1's and this memo
   extends it; ENUMS R3's bare arms are an input, not an open question.
-- **Reopening `T!` as a type**, ARC, refcounting or a collector.
-  `docs/MEMORY.md` says *"do not relitigate this section"*, and where a
-  surveyed design depends on collection — OCaml's boxing, Swift's
-  `indirect` — that is recorded as a cost of the design.
+- **Reopening `T!` as a type**, or the memory model — value types,
+  reference types, or ARC (`docs/MEMORY.md`).  Where a surveyed design
+  depends on a tracing collector — OCaml's uniform boxing — that is
+  recorded as a cost of the design.
 - **`std.json`'s API.**  It is the customer and it is deliberately not
   sketched beyond the type and the walk: what its functions look like
   is a memo of its own, written after this one is ratified.
@@ -612,13 +611,12 @@ run, and nothing else in the memo moves if it goes.
 ## SELF amendment — 2026-08-08
 
 D17's receiver spelling is superseded before union is implemented.
-Union members will follow the built struct/enum rule from
-`docs/SELF.md`: plain member functions have implied self, namespace
-members say `static func`, and receiver writing is inferred.  A writer
-is not categorically forbidden on an object-carrying value; it may
-replace one bare mutable binding that owns its objects in place.  The
-union work must apply that same ownership test rather than revive the
-old `var self` restriction.
+Union members follow the built struct/enum rule from `docs/SELF.md`:
+plain member functions have implied self, namespace members say
+`static func`, and receiver writing is inferred.  A method may mutate
+its receiver whether or not the union holds a reference payload — a
+union is a value, mutated by writing its binding — so there is no
+receiver restriction to revive.
 
 ---
 
@@ -636,8 +634,8 @@ with the reason, and each has a spec.
 
 | | departure, and where it is argued |
 |---|---|
-| **A1** | **Runs are padded to one static length per union** — `1 + the widest member's field count`, D12's own number made the run length — where D8's letter said a run was the member index followed by the *active* member's fields, so that `Shape.empty` would have been one slot.  It could not be: generated code re-derives a value's box from its static type alone at sites where the run pointer is legitimately null — a call's result is a bare pointer, and `fillBoxShape` writes the length word once in the entry block — so the length had to be a fact about the type, exactly as a struct's is.  A member with fewer fields pads its tail with `none` slots, which own nothing, copy as themselves, and free nothing, so the ownership walks never notice.  `types.VariantType.runLength` is the number and its comment the argument; `lower.zig`'s `boxLength` and `variantZero` arms are where the compiled path reads it. |
-| **A2** | **`free(u)` is refused, as it is for a struct.**  D9 said the verbs mean what S31, S26, S6 and S27 already say about a carrying struct — and read closely, S6 as ratified never freed a struct: `free` releases a direct container or resource handle, and a struct value has never been one.  A union takes exactly a struct's verbs, so `free` on one is the same `luce.sema.type` sentence a struct value gets, and a union dies the way a struct does — when its scope ends.  That release is proven by the two-engine leak census rather than by a verb: three members of three shapes go out of scope in `specs/union_spec.zig` and the census is zero. |
+| **A1** | **Runs are padded to one static length per union** — `1 + the widest member's field count`, D12's own number made the run length — where D8's letter said a run was the member index followed by the *active* member's fields, so that `Shape.empty` would have been one slot.  It could not be: generated code re-derives a value's box from its static type alone at sites where the run pointer is legitimately null — a call's result is a bare pointer, and `fillBoxShape` writes the length word once in the entry block — so the length had to be a fact about the type, exactly as a struct's is.  A member with fewer fields pads its tail with `none` slots, which hold nothing, copy as themselves, and release nothing, so the value walks never notice.  `types.VariantType.runLength` is the number and its comment the argument; `lower.zig`'s `boxLength` and `variantZero` arms are where the compiled path reads it. |
+| **A2** | **A union is released with its scope, like any value.**  D9's letter still spoke of ownership verbs; ARC has none, so there is nothing to write and nothing to refuse.  A union value's reference payloads are released when the last reference to them goes, and a union of value-only members frees nothing at all — a union dies the way a struct does, when its scope ends.  That reclamation is proven by the two-engine leak census rather than by a verb: three members of three shapes go out of scope in `specs/union_spec.zig` and the census is zero. |
 
 Two smaller calls the memo did not need to make: `variant_tag`
 answers a **`long`** — slot 0 boxes exactly as a `long` does, which
@@ -659,12 +657,12 @@ executable.  `abi.version` did not move.
 
 **Twenty-two two-engine spec rows** in `specs/union_spec.zig` cover the
 memo's battery — construction and dispatch for every member shape,
-defaults on payload fields, value and object payload bindings,
-`give`/`copy` on a carrying union, a caught error unwinding past two
-of them with the census at zero, a trap with union values in flight,
-the zeros of a late `var`, an `array(Shape, n)` and a `list(Json)`
-element, a recursive `Json` tree built, walked, copied and freed,
-`Shape?` narrowed and defaulted, `string(u)` for all six `Json`
+defaults on payload fields, value and reference payload bindings,
+a union whose reference payload is shared and released, a caught error
+unwinding past two of them with the census at zero, a trap with union
+values in flight, the zeros of a late `var`, an `array(Shape, n)` and a
+`list(Json)` element, a recursive `Json` tree built, walked, copied and
+released, `Shape?` narrowed and defaulted, `string(u)` for all six `Json`
 members, and A4's fallthrough — beside refusal rows in
 `03_parse/test.zig` and `compile/test.zig` for every numbered refusal:
 D1's positional payload, D2's all-bare union, D3's member-as-type,
@@ -684,12 +682,12 @@ run, and nothing caught it because until that day no spec had ever
 matched anything but a name.  The cause was where the promise lives —
 the statement-temporary ledger — and the fix is that the scrutinee's
 park stays open across the arms and flushes in the merge, once, from
-one slot.  The rows now ask: a call's result, a carrying temporary
-whose census proves one release, a nested call, sixty-four rounds of a
-loop where a leak would accumulate, an arm that leaves early by
-`return`, `break` and `continue`, and an enum-valued call taking the
-same road.  `specs/ownership_spec.zig` carries the siblings under S3 —
-the iterable of a `for`, a narrowing test, `else`, a receiver, an
+one slot.  The rows now ask: a call's result, a temporary holding a
+reference whose census proves one release, a nested call, sixty-four
+rounds of a loop where a leak would accumulate, an arm that leaves
+early by `return`, `break` and `continue`, and an enum-valued call
+taking the same road.  The spec suite carries the siblings
+— the iterable of a `for`, a narrowing test, `else`, a receiver, an
 index, an argument, and a fallible call's result — all of which were
 already right, and none of which had been asked either.
 
@@ -713,23 +711,23 @@ What held, checked rather than assumed:
   was the decisive one exactly as argued.
 - **D12's finiteness.**  The recursion goes through the two containers
   and nothing else; `sumShape` accepted the declaration on the first
-  try and the tree frees itself through S20.
-- **D9/D10's ownership, with no new rule.**  Construction is S24
-  (`give` once, at the outermost value — the map and the list *are*
-  the builder); an arm's payload binding aliases, so mutating a
-  parsed tree in place is `match` plus an ordinary container write and
-  no verb; keeping what a walk found needs `copy`, which is why
-  `member` and `element` answer copies and say so.  The two-engine
-  leak census over a tree built, walked, copied, mutated, given away
-  and freed is zero, which was the claim the specs existed to keep
+  try and the tree frees itself at its last reference.
+- **D9/D10's memory, with no new rule.**  Construction just shares the
+  map and the list into the outermost value — they *are* the builder;
+  an arm's reference payload binding names the scrutinee's own object,
+  so mutating a parsed tree in place is `match` plus an ordinary
+  container write; a value a walk hands back is a copy, which is why
+  `member` and `element` answer copies and say so.  The two-engine leak
+  census over a tree built, walked, copied, mutated, shared and
+  released is zero, which was the claim the specs existed to keep
   honest.
 - **D7's "match is the only door"** turned out to be the *API*, not a
   restriction on it: `std.json` needs no navigation type at all,
   because matching an object hands the caller the `map` itself and
-  reading through it is a borrow.  The old `Document`/`Node`/`Kind`
-  triple — a flat tape of indices, written that way because a nested
-  tree of owning containers could not answer `get -> Node?` — is
-  gone whole.
+  reading through it shares that reference.  The old
+  `Document`/`Node`/`Kind` triple — a flat tape of indices, written
+  that way because a nested tree of reference containers could not
+  answer `get -> Node?` — is gone whole.
 - **D16's `string(u)`** is what became of `Kind`: the member's name,
   which is every use `kind()` had that `match` did not already serve.
 

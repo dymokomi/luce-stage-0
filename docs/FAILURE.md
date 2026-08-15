@@ -5,16 +5,15 @@
 > `builder` — docs/TYPES.md D8), and the two numeric types became four:
 > `int` and `float` are 32 bits and are what a literal takes with
 > nothing to tell it otherwise, `long` and `double` are the 64-bit
-> types this memo calls `Int` and `Float`.  A fenced block tagged
-> `luce historical` is shown as it was written and is not compiled;
-> every other one in this file is (`tools/doccheck.zig`).
+> types this memo calls `Int` and `Float`.  The fenced blocks below
+> use the current spellings.
 
 > Three mechanisms, one rule for choosing. `T?` says a value may not be
 > there. `T!` says a call may not succeed. A trap says the program is
 > wrong. This memo records why there are three and not one, and what
 > each costs.
 
-`docs/MEMORY.md` records why scope ownership won. This is the same kind
+`docs/MEMORY.md` records the memory model. This is the same kind
 of memo for the one remaining semantic hole.
 
 ## The rule
@@ -62,7 +61,7 @@ boundary plus `error(...)`, which is why two error codes suffice.
 | exists today as | `Value.Tag.none` — a slot the heap already carries | `Runtime.pending` — an out-of-band channel with a message |
 | can be stored | yes: local, struct field, container | no: it propagates and dies |
 | carries a reason | meaningless | the reason is the whole payload |
-| ownership | holding `none` owns nothing (S43) | *causes* the release of what you own |
+| cleanup effect | holding `none` keeps nothing alive | *causes* the release of what the frame holds |
 
 The corpus agrees with no overlap. Absence sites — `counts.has(word)`
 then index, and five `parse_int`/`parse_float` calls — want no reason.
@@ -72,7 +71,7 @@ both.**
 
 ## Optionals
 
-```luce historical
+```text
 var user: User? = none
 if user != none:              # narrowing: user is User inside
     print(user.name)
@@ -110,11 +109,11 @@ assert-unwrap, and it is greppable.
 
 ## Errors
 
-```luce historical
-func read(path: String) -> String!:
+```text
+func read(path: string) -> string!:
     return try host_read(path)
 
-func main(args: List(String)) -> !:
+func main(args: list(string)) -> !:
     let text = try files.read(args[0])
     let cfg  = files.read("cfg") catch ""
 ```
@@ -204,7 +203,7 @@ inventing those codes would be a lie.
 > Zero corpus sites wanted it.
 >
 > Two things did need building. One intrinsic, `error_message`, which
-> answers a **borrow** of the words rather than a copy — the arena
+> answers a **view** of the words rather than a copy — the arena
 > holding them outlives the run, so this is exactly the shape
 > `key_text` already had, and the binding's own store is what takes the
 > copy it owns. It stands in front of the `forget` beside it, and so
@@ -213,7 +212,7 @@ inventing those codes would be a lie.
 > emptying means nothing has to know that. And a scope of its own
 > wrapped around the handler's, so the binding is not one of the
 > handler's statements and a `return` or `break` out of the handler
-> releases it like any other local (S1).
+> releases it like any other local.
 >
 > The one thing that cost more than expected was the lookahead. The
 > line above says one token separates the two spellings; `catch NAME:`
@@ -279,32 +278,32 @@ inventing those codes would be a lie.
 > and carried nothing. An answer nobody reads is not a design; it is a
 > loop waiting to be found.
 
-## Ownership on the error path needs nothing new
+## Cleanup on the error path needs nothing new
 
 This is where the answer is Zig's, wholesale, and the reason is in our
 own source. `lowerReturn` ends every no-value return with three lines:
 release temporaries, release scopes innermost-first, terminate. `break`
-and `continue` do the same against a loop frame. **The unwinder is
-entirely static and compile-time emitted; there is no dynamic unwinder
-to teach about errors.** So `try` is the same three lines with one
-terminator changed.
+and `continue` do the same against a loop frame. **The release sequence
+is entirely static and compile-time emitted — this is ARC's inserted
+release, not a dynamic unwinder to teach about errors.** So `try` is the
+same three lines with one terminator changed.
 
 **Luce needs no `errdefer`.** That construct exists because Zig's
-cleanup is manual, so the programmer must distinguish "success
-transfers ownership, do not free" from "failure, do free". Luce already
-makes that distinction structurally — `return` passes the returned
-binding as `moved` and skips it; `try` passes nothing and releases
-everything. The one bit `errdefer` encodes is already a parameter of
-the existing unwinder.
+cleanup is manual, so the programmer must distinguish "success keeps the
+value, do not free" from "failure, do free". Luce already makes that
+distinction structurally — a `return` hands its value back to the caller
+and releases the other locals; a `try` releases everything, the returned
+slot included. The one bit `errdefer` encodes is already a parameter of
+the existing release sequence.
 
 The feature has also aged badly: Zig removed capturing `errdefer` in
 April 2026 after concluding all three possible typings break `switch`,
 with two uses in its own repository at removal.
 
 The one case Luce cannot roll back is a function that partially mutated
-a *borrowed* container and then failed. That is the caller's object,
-mutation through a borrow is legal (S38), and undoing it is application
-logic. Go says the same.
+a container it was passed and then failed. That is the caller's object —
+a container is a reference, so mutation through it is visible to the
+caller — and undoing it is application logic. Go says the same.
 
 ## No error return traces
 
@@ -322,7 +321,7 @@ index, stored once at `error(...)`. Traps keep their full trace.
 ## What this costs
 
 Optionals need **no runtime change at all**: `Value.Tag.none` exists and
-every ownership path already no-ops on it. No new MIR instructions —
+every release path already no-ops on it. No new MIR instructions —
 four intrinsics. In the compiled representation a `T?` is `{T, i1}`,
 which SROA keeps in registers.
 
@@ -331,7 +330,7 @@ which SROA keeps in registers.
 > free", and that one sentence was wrong twice. The width went first:
 > generational handles made a handle `{index, generation}` in an
 > `i64`. The idea went with it. The null index is not spare — it is
-> the zero of an object-typed place (S40), a value that is **present**
+> the zero of an object-typed place, a value that is **present**
 > and traps on use — and a program can hand one to a `T?` without a
 > diagnostic (`look(raw)` against `func look(xs: List(Int)?)`). The
 > interpreter answers "present", because absence there is
@@ -346,8 +345,8 @@ which SROA keeps in registers.
 > every payload and wrap and unwrap are the identity. Two engines, two
 > shapes, one set of answers — which is what the agree tests check.
 > The seam between them is the box: absence becomes `Value.none` byte
-> for byte, so the runtime's ownership walk finds nothing to own and
-> S43 costs no code on either side. docs/CODEGEN.md is the detail.
+> for byte, so the runtime's release walk finds nothing to release and
+> absence costs no code on either side. docs/CODEGEN.md is the detail.
 
 Errors need no new type, no new register, and no new ABI shape. The
 outcome channel already has room: `1` is trapped, `2` becomes errored,
@@ -377,7 +376,7 @@ every payload-carrying `!T` — even an 8-byte one — through memory.
 > Three things did need a shape after all. **`raise_error` copies the
 > words**: an error unwinds *through* releases, which is the whole
 > difference from a trap, so `error("x: " + String(n))` hands over bytes a
-> statement temporary is about to give back. The copy is one line in
+> statement temporary is about to release. The copy is one line in
 > `Runtime.raise` and both engines reach it. **A fallible call's value
 > crosses a block boundary**, because the branch on its outcome ends
 > the block it was made in — so it travels through a hidden slot, and
@@ -391,10 +390,10 @@ every payload-carrying `!T` — even an 8-byte one — through memory.
 >
 > The crossing is also where errors meet small-string optimisation,
 > which landed between the design and the build. A slot that owns its
-> storage holds a whole `runtime.Value`; a borrowing one holds the
+> storage holds a whole `runtime.Value`; a non-owning one holds the
 > register shape, which for a String is `{ptr, i64}` and cannot say
 > that the text is *inside* the value it was read out of. Carrying a
-> fallible call's result in a borrowing slot therefore marked short
+> fallible call's result in a non-owning slot therefore marked short
 > text as outside text, and the release at the end of the statement
 > freed a pointer into the frame. Making the carrying slot the owning
 > slot fixes it at the root rather than at the symptom, and it is what

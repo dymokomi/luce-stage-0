@@ -6,9 +6,9 @@ workflow is reproducibly wrong.
 
 Feature requests, unratified design questions, broad coverage campaigns,
 refactors, optimizations, and deliberate non-goals are not bugs and do not
-belong in this file. Their owning references, decision records, and
-[LANGUAGE_AUDIT.md](LANGUAGE_AUDIT.md) retain that context.
+belong in this file. Their owning references and decision records retain
+that context.
 
-Resolved bugs move to [RESOLVED.md](RESOLVED.md) with the fix and its proof.
+Resolved bugs are removed from this file once the fix and its proof land.
 
 No known bugs.

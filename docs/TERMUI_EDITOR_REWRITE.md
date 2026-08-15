@@ -83,26 +83,26 @@ SOFTWARE_DESIGN.md §45/§14 warns against.
 
 ---
 
-## 2. The one language constraint that shapes everything
+## 2. The design choice that shapes everything
 
-Luce interfaces **borrow** a carrying receiver, there are **no
-generics**, **no closures that capture locals**, and values **copy**.
-So OpenTUI's central abstraction — a retained tree of mutable
-`Renderable` widgets, reconciled from a VNode description — genuinely
-cannot exist here, and must not be faked. v0.1 got that call right.
+The rewrite keeps a deliberately simple discipline instead of OpenTUI's
+central abstraction — a retained tree of mutable `Renderable` widgets,
+reconciled from a VNode description. There are **no generics** yet, so a
+generic widget tree would be a large abstraction surface with no consumer
+that needs it. v0.1 made the same call and it holds.
 
 The rewrite commits to the alternative and makes it uniform:
 
-> **The app owns the state; a View is a pure projection of the current
-> state, drawn once.** A widget is therefore a *pair*: a small
-> app-owned **state struct** with the logic (movement, selection,
-> scroll offset) and a read-only **View** built from that state each
-> frame. The View never retains or mutates the app's model.
+> **The app holds the state; a View is a projection of the current state,
+> drawn once.** A widget is therefore a *pair*: a small app-held **state
+> struct** with the logic (movement, selection, scroll offset) and a
+> **View** built from that state each frame. The View draws; it does not
+> reconcile a persistent tree.
 
 This is the pattern `Rows`/`RowsView` gestured at. The rewrite makes it
 *the* pattern, applied consistently (`Rows`, `Viewport`), documented as
-the way to build a widget, and free of the special-casing the editor
-had to add.
+the way to build a widget, and free of the special-casing the editor had
+to add — state in one place, the render path a pure function of it.
 
 What survives from OpenTUI, restated for Luce: one cell buffer with a
 diff (`surface`), shared layout geometry raised to a real constraint
@@ -176,9 +176,9 @@ than byte length. `Line.width()` measures. This deletes every hand
 cell-walk: the syntax highlighter returns a `Line`; `Text` (below) is a
 `Line` per source row; the status bar is one `Line`.
 
-Ownership note to settle in code: a `Line` built per frame from
-`Span` values (which copy) is the simplest correct shape; the editor's
-highlighter produces one per visible row and drops it at end of frame.
+Note to settle in code: a `Line` built per frame from `Span` values
+(which copy) is the simplest correct shape; the editor's highlighter
+produces one per visible row and drops it at end of frame.
 
 ### 3.4 `layout.luc` — the constraint solver  **[NEW, the biggest win]**
 
@@ -288,7 +288,7 @@ logic, and a pure **View** projection.
 - `Rows` (selection state: `count`, `top`, `selected`, `move_by`,
   `choose`, `adjust`) + `RowsView` (draws a `func(long) -> Line`
   provider, highlighting the selected row). The provider stays a bound
-  method so the widget reads app data without owning it
+  method so the widget reads app data through the receiver
   (docs/BINDING.md).
 - `Viewport` (scroll state: `top`, `total`, `height`, `scroll_by`
   clamped) + `ViewportView` (draws a `func(long) -> Line` provider over

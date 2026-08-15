@@ -25,8 +25,8 @@ its own name, so `import std.math as m` is refused at parse time.
 namespace is not a module — no `std.luc` can be imported
 (`luce.import.reserved`).
 
-Being ordinary modules, std code obeys every language rule — the
-ownership model, the checked arithmetic, and the host gate:
+Being ordinary modules, std code obeys every language rule — ARC,
+the checked arithmetic, and the host gate:
 `import std.files` inside a host-less program is a compile error,
 because file access genuinely does not exist there.
 
@@ -42,7 +42,7 @@ nouns, functions are short verbs read *with* the module prefix —
 without colliding.
 
 The two low-level platform modules are deliberately small seams rather
-than a widget toolkit. `std.ui` opens an owned window and exposes its
+than a widget toolkit. `std.ui` opens a window and exposes its
 drawing surface; `std.gpu` describes that surface and submits simple
 clear, rectangle, and present operations. Their native callbacks live in
 the host table, so Metal, Vulkan, and a headless test host can be supplied
@@ -55,7 +55,7 @@ leave the channel absent and report `host_unavailable`.
 `std.gpu` is the backend-neutral surface API. `gpu.backend()` reports the
 host's selected backend (`Backend.metal`, `Backend.vulkan`, or
 `Backend.headless`). A `gpu.Surface` is obtained from `ui.Window.surface()`;
-the surface owns its native resource and is released with its scope.
+the surface holds its native resource and is released at its last reference.
 
 ```text
 import std.gpu
@@ -174,7 +174,7 @@ For a `list(T)`, `xs.sort_by(before)` expects
 `before: func(T, T) -> bool`.  `before(a, b)` means that `a` belongs
 before `b`.  It should define a consistent strict order; two elements
 are equivalent when neither precedes the other, and stability preserves
-their original order.  The comparator is borrowed and positional; it
+their original order.  The comparator is positional; it
 may be a named function or a capture-free lambda.  The sort is in place,
 **stable**, and O(n log n).  Empty and one-element lists are unchanged,
 and every element type is accepted, including structs and heap objects.
@@ -317,18 +317,15 @@ never a guard for the call after it: read the file and handle what the
 read says.
 
 **There is no `close` and no `with`** (docs/FILESYSTEM.md D9).  A
-`file` is owned by the binding that received it, so the end of that
-scope closes it, `free f` closes it early, `give f` and `return f`
-move it, and using one after it is closed traps like any use after
-free.  Python's `with` is a per-call-site opt-in to a guarantee this
-language gives unconditionally — to every owned thing, rather than to
+`file` is a reference-counted resource, so it closes automatically
+when its last reference goes away (docs/MEMORY.md).  Python's `with`
+is a per-call-site opt-in to a guarantee this language gives
+unconditionally — to every reference-counted thing, rather than to
 the ones a library remembered to write an `__exit__` for — so a Luce
 program cannot leak a file by forgetting a keyword, because there is
 no keyword to forget.  `close()` is *refused* rather than merely
-absent, and the diagnostic says both halves: a working one would have
-to poison the receiver exactly as `free` does, making it `free` under
-a second name for one concept, and an idempotent one would need a
-"closed but not poisoned" state, which is the one state a resource
+absent, and the diagnostic says why: a working one would need a
+"closed but still referenced" state, which is the one state a resource
 must never hold.
 
 ```text
@@ -445,12 +442,11 @@ files.append_bytes(path, bytes)  # !
 ```
 
 `open`, `create` and `append_to` answer a **`file`**, which is a
-scope-owned resource: the binding that received it owns it, the end of
-that scope closes it, `free(f)` closes it early, `give` and `return`
-move it, and using one after it is closed traps `use_after_free`,
-because it is the same mistake.  There is deliberately no `close` — a
-file you have to remember to close is a file somebody will not, and
-the compiler already knows where a name's life ends.
+reference-counted resource: assigning or passing it shares the same
+handle, and it closes automatically when its last reference goes away
+(docs/MEMORY.md).  There is deliberately no `close` — a file you have
+to remember to close is a file somebody will not, and ARC already
+knows where the last reference ends.
 
 The handle's own three are `f.read(buffer)`, `f.write(buffer, count)`
 and `f.flush()`, all fallible.  The buffer is an `array(byte, _)` the
@@ -667,7 +663,7 @@ The six printed tables are written as what they are: one program-root
 CRC array, four length/distance base and extra lists, and the
 code-length order array, all `private const`.  Each runtime
 materializes them once before the module's code runs; `crc32`,
-`inflate` and `deflate` borrow the shared rows instead of rebuilding
+`inflate` and `deflate` read the shared rows instead of rebuilding
 them per call or block.
 
 ```text
@@ -805,31 +801,28 @@ match doc:
 ```
 
 `member` and `element` are the other half of that pair, for a caller
-who wants to *keep* what it found: a value read out of a container has
-an owner already ([S17], [S22]), so the only thing a function can hand
+who wants to *keep* what it found: a value living inside a container
+stays there, so the only thing a function can hand
 back is a copy of its own — which for a leaf is a number or a string
 and for a subtree is the subtree.  The two are not duplicates of each
 other; they have different costs and say so.
 
-**Building one reads the way taking it apart does**, and ownership is
-taken once, at the outermost value — the map and the list *are* the
-builder, so there is no second construction API:
+**Building one reads the way taking it apart does** — the map and the
+list *are* the builder, so there is no second construction API:
 
 ```text
 var fields = new map(string, json.Json)
 fields["name"] = json.Json.text(value = "luce")
 fields["tags"] = json.Json.array(items = [json.Json.integer(value = 1)])
-let doc = json.Json.object(fields = give fields)
+let doc = json.Json.object(fields = fields)
 ```
 
-Every inner value there is fresh and silent (S20); the one `give` is
-on the last line, where a named object moves into a value that
-outlives the name (S24).  A `Json` carries objects, so it takes
-`give`/`copy` where any carrying value does and dies with the binding
-that received it, recursively, through the containers (S20) — no
-arena, no collector, and no `deinit` to remember.  The two-engine leak
-census over a tree built, walked, copied, mutated and freed is what
-proves it.
+A `Json` holds reference objects — its `list` and `map` payloads —
+which ARC keeps alive as long as anything refers to them and frees at
+the last release (docs/MEMORY.md), recursively, through the
+containers: no arena, no collector, and no `deinit` to remember.  The
+two-engine leak census over a tree built, walked, copied, mutated and
+dropped is what proves it.
 
 **Eager, where the old design was lazy.**  A parse turns `"1e3"` into
 1000.0 and `"é"` into é once, on the way in; the document's bytes

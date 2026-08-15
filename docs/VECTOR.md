@@ -44,7 +44,7 @@ The seeded framing of this problem — and the sentence in
 over `int` elements cannot overflow, so prove the check away".  That
 is true, and it is **not what `bench/arrays32` is**.  The row reads:
 
-```luce historical
+```text
 var dot: long = 0
 for r in range(0, reps):
     var sum: int = 0
@@ -797,7 +797,7 @@ must be swept with, and what must catch each:
 | the trip-count-versus-length guard removed | the over-long-loop spec |
 | recognition admits a second write to the accumulator | a body that also does `acc = acc * 2` |
 | recognition admits an early exit | a body with a `break` |
-| the `fast` arm entered on a dead handle | a use-after-free spec over a loop that runs zero times |
+| the `fast` arm entered on a dead handle | a dead-handle spec over a loop that runs zero times |
 
 ---
 

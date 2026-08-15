@@ -49,8 +49,8 @@ This is the deliberate departure from Zig, and the core decision.
 Zig's four modes (`Debug`, `ReleaseSafe`, `ReleaseFast`,
 `ReleaseSmall`) trade safety checks for speed: `ReleaseFast` turns
 integer overflow into undefined behavior.  Luce refuses the trade.
-Checked arithmetic, bounds checks, UTF-8 boundary checks, ownership
-traps — those are the *language*, not a mode.  A program traps on
+Checked arithmetic, bounds checks, UTF-8 boundary checks — those are
+the *language*, not a mode.  A program traps on
 the same instruction with the same stable code in both modes, so
 there is no "works in debug, corrupts in release" class of bug, and
 release needs no separate testing story.  In Zig's terms, Luce is

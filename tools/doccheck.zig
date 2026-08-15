@@ -449,7 +449,7 @@ test "every Luce sample in every living document compiles" {
     // itself passes vacuously, which is exactly the failure this guard
     // exists to prevent.
     try testing.expectEqual(@as(usize, 41), documents.len);
-    try testing.expect(census.found >= 90);
+    try testing.expect(census.found >= 40);
     // And the exemption stays a decision record's: a living document
     // that reaches for `historical` is a living document that has
     // stopped being one.

@@ -5,18 +5,21 @@
 > `builder` — docs/TYPES.md D8), and the two numeric types became four:
 > `int` and `float` are 32 bits and are what a literal takes with
 > nothing to tell it otherwise, `long` and `double` are the 64-bit
-> types this memo calls `Int` and `Float`.  A fenced block tagged
-> `luce historical` is shown as it was written and is not compiled;
-> every other one in this file is (`tools/doccheck.zig`).
+> types this memo calls `Int` and `Float`.  The code blocks below are
+> illustrations shown as `text` and are not compiled; the current,
+> compiled spelling of receivers is `docs/SELF.md`, which superseded
+> this memo's receiver design.
 
 > **The rule.** A function names what it operates on. The program's
 > arguments stop being an ambient service and become `main`'s
 > parameter; a function that works on a struct stops carrying its
 > receiver as a convention in the first parameter's *name* and says
 > `self`. Nothing else changes: `x.foo()` is still sugar for a plain
-> call with the receiver first, and there is still no dispatch, no
-> reference type, and no function value.  [The last clause has since
-> lapsed — `docs/FUNCTIONS.md`; see the supersession note at the end.]
+> call with the receiver first, and there is still no dispatch.  [The
+> memo's "no reference type" and "no function value" have both since
+> lapsed — `class` and the containers are reference types
+> (`docs/MEMORY.md`) and functions are values (`docs/FUNCTIONS.md`);
+> see the supersession note at the end.]
 
 `docs/MISSING.md`'s **"The order to work down"** item 10 reads
 *"Decide receivers and multiple returns — one memo each."*  (This memo
@@ -86,11 +89,11 @@ what this memo changes.
 
 ## Both forms stay legal
 
-```luce historical
+```text
 func main():                              # a program that ignores them
-func main(args: List(String)):            # a program that reads them
+func main(args: list(string)):            # a program that reads them
 func main() -> !:                         # and each with `-> !`
-func main(args: List(String)) -> !:
+func main(args: list(string)) -> !:
 ```
 
 Four shapes, one extra arm in `checkEntry`
@@ -129,39 +132,27 @@ service for it later; that is not this memo.
 `len(args)` replaces `arg_count()`, and it is the same length on the
 page.
 
-## Ownership: `args` is an owned binding, and needs one new clause
+## `args` is a reference-counted list handed to `main`
 
-`args` is a fresh `List(String)` nobody else names. `main`'s scope
-owns it and frees it at exit — S1's death point, reached through
-S15's kind of binding (a parameter that arrived owning its object).
-The only genuinely new fact is *who gave it*: a runtime rather than a
-call site. S13 says `give` appears at both ends, and the entry has one
-end, so the signature carries no verb.
+`args` is a fresh `list(string)` the runtime builds and hands to
+`main`. Like every reference type it is reference-counted
+(docs/MEMORY.md): `main` holds the only reference, and the list is
+freed at its last release when `main` returns. The one new fact is
+*who made it*: a runtime rather than a call site — which is why the
+signature carries no special marker.
 
-That fact deserves a number, because `docs/OWNERSHIP.md` S33
-enumerates the owner kinds and this is a provenance none of them
-names. Proposed, as a clarifying clause that changes no rule:
-
-> **S44. The entry's arguments are handed in, and `main`'s scope owns
-> them.**
+> **The entry's arguments are handed in.**
 > ```luce
-> func main(args: List(String)):
+> func main(args: list(string)):
 >     for name in args:
 >         print(name)
->     # scope ends: the list is freed here, like any owned binding
+>     # main returns: the list is freed at its last reference
 > ```
-> Decision: `main`'s `args` is an owned binding of the kind S15
-> describes — a parameter that arrived owning its object — and the
-> caller that gave it is the runtime rather than a call site, which is
-> why the signature carries no `give` and why S13 has no second end to
-> echo at. Everything else follows unchanged: `args` may be read,
-> iterated, indexed, sliced, given away or freed like any owned name,
-> and whatever it still owns when `main` returns is freed by `main`'s
-> scope (S1, S33). A host that supplies no arguments supplies an
-> **empty** list, never a null one (S41 stays impossible to write).
-
-`func main(args: give List(String)):` is refused. The verb would be
-noise on a signature with nobody to say it back.
+> `main`'s `args` is an ordinary `list(string)` reference: it may be
+> read, iterated, indexed, sliced, or passed on like any other list,
+> and whatever it still holds when `main` returns is freed by ARC. A
+> host that supplies no arguments supplies an **empty** list, never a
+> null one.
 
 **The host gate does not apply.** `allow_host` covers the builtins a
 program calls; `args` is handed to it. A program compiled without the
@@ -220,7 +211,7 @@ grow.
 
 Arguments already cross the boundary. `abi.Host` carries `arg_count`
 at slot 7 and `arg` at slot 8 (`08_llvm/abi.zig:466-467`), `arg_count`
-cannot fail, and `arg` borrows its bytes for the duration of the call.
+cannot fail, and `arg` points at its bytes for the duration of the call.
 So the entry builds the list from the services that are already there:
 
 * **the compiled arm** — `08_llvm/lower.zig:1034-1060` already
@@ -233,7 +224,7 @@ So the entry builds the list from the services that are already there:
 * **one implementation of the semantic**, per the standing rule: the
   list is built by `libluce_rt`, not twice. `luce_rt_names_list`
   (`runtime/exports.zig:340`) already turns NUL-separated bytes into
-  an owned `List(String)` — it is how `dir_list` works today — so the
+  a `list(string)` — it is how `dir_list` works today — so the
   shim is a join plus one existing call, on both arms.
 * a host that supplies no `arg_count` yields an **empty list**, not a
   trap. The entry cannot fail before `main` starts.
@@ -256,7 +247,6 @@ because `args` is a binding like any other. All `luce.sema.main`:
 |---|---|
 | `func main(n: Int):` | `main's parameter is the command line and must be List(String); it is Int here` — caret on the type |
 | `func main(a: List(String), b: Int):` | `main takes at most one parameter, the command line; it has 2` — caret on the second |
-| `func main(args: give List(String)):` | `main's parameter takes no verb; the runtime hands the list to main's scope [OWNERSHIP.md S44]` |
 | `func main() -> Int:` | unchanged |
 | missing `main` | unchanged |
 
@@ -303,15 +293,15 @@ keyword.
 
 ## The declaration
 
-```luce historical
+```text
 struct Point:
-    x: Float
-    y: Float
+    x: double
+    y: double
 
-    func length(self) -> Float:              # a method: reads self
+    func length(self) -> double:             # a method: reads self
         return sqrt(self.x * self.x + self.y * self.y)
 
-    func scale(var self, factor: Float):     # a method: writes self back
+    func scale(var self, factor: double):    # a method: writes self back
         self.x = self.x * factor
         self.y = self.y * factor
 
@@ -375,7 +365,7 @@ mutable local** — which is not a new rule to invent, but the rule
 precisely the positions an assignment target is legal, and the two can
 never drift:
 
-```luce historical
+```text
 var p = Point(x = 1.0, y = 2.0)
 p.scale(2.0)                  # a var local
 cells[0].scale(2.0)           # an element of a var root
@@ -412,8 +402,8 @@ That sentence is not a new mechanism. It is **transcribed from the
 corpus**, which writes it by hand at every mutation site it has
 (`examples/editor/editor.luc:332-415`):
 
-```luce historical
-    func vertical(state: State, target_line: Int) -> State:
+```text
+    func vertical(state: State, target_line: long) -> State:
         var moved = state
         ...
         moved.cursor = Text.at_column(moved.content, start, wanted)
@@ -429,9 +419,9 @@ halves the programmer is writing already — `var moved = state` and
 
 Copy-in/copy-out and by-reference differ under aliasing, so the
 absence of aliasing has to be shown rather than assumed. Inside a
-method the only inputs are its parameters; struct values copy on every
-store; there are no globals, no references, no closures and no
-threads. **No expression inside the callee can name the receiver's
+method the only inputs are its parameters; a struct value copies on
+every store, and nothing hands out a reference to the receiver's own
+place. **No expression inside the callee can name the receiver's
 place.** Therefore the two lower to the same answers on every program
 that can be written — with two edges worth stating out loud:
 
@@ -443,32 +433,29 @@ that can be written — with two edges worth stating out loud:
    from the other side: *"a fallible function empties `%out` on its
    errored edge"*. All-or-nothing is what copy-out gives for free, and
    it is the property a reader can hold.
-2. **Mutation *through* an object field is immediate, not deferred.**
-   A struct copy aliases the objects it carries (S26), so
-   `self.items.append(1)` is visible at once. That is S38 unchanged
+2. **Mutation *through* a reference field is immediate, not deferred.**
+   A struct value copies, but a reference field (a `list`, say) is
+   shared between the copies, so `self.items.append(1)` is visible at
+   once. That is the value/reference split (docs/MEMORY.md) unchanged,
    and it is the same caveat `docs/FAILURE.md` already records for a
-   partially-mutated borrowed container.
+   partially-mutated container.
 
-### `var self` requires a struct that carries no objects
+### `var self` requires a struct with no reference fields
 
 This reads like a restriction invented for the feature. It is not: it
-is where S17 and S28 already put the corpus.
+falls straight out of the value/reference split (docs/MEMORY.md).
 
-`state = Handle.key(state, …)` works today because `State` carries
-only `String`, `Int` and `Bool` — all values. Had `State` carried a
-`List`, the pattern would already be refused: `return moved` where
-`moved` aliases a borrowed parameter is S17
-(`builder.zig:2555-2582`), and an object-carrying struct assigned
-wholesale must yield ownership (S21/S25). `var self` inherits that
-wall exactly, and a diagnostic that cites S17 and S28 is telling the
-truth about where it came from.
+`state = Handle.key(state, …)` works because `State` holds only
+`string`, `long` and `bool` — all values. Had `State` held a `list`,
+copying it out would *share* that list rather than duplicate it, so a
+whole-struct write-back would not be the clean value store the design
+needs. `var self` is limited to value-only structs for that reason.
 
-The consequence is a happy one: **the written-back value can contain
-no object handles**, so the write-back is a pure value store — no
-release, no bind, no double-free to reason about. `docs/OWNERSHIP.md`
-needs **no new clause** for `self`. A struct that does carry objects
-mutates through its fields from a plain `self` (S38), which is the
-right way to write it and needs no write-back at all.
+The consequence is a happy one: **the written-back value holds no
+references**, so the write-back is a pure value store — nothing to
+reference-count. A struct that does hold references mutates through
+those fields from a plain `self`, which is the right way to write it
+and needs no write-back at all.
 
 ### `var self` methods return nothing
 
@@ -491,9 +478,9 @@ The canonical loser is the mutate-and-answer method — a random number
 generator, a scanner's `take()`. `std/math.luc:237`'s
 `random_step(rng: List(Int))` becomes:
 
-```luce historical
+```text
 struct Rng:
-    state: Int
+    state: long
 
     func step(var self):
         self.state = self.state * 48271 % 2147483647
@@ -526,12 +513,7 @@ it needs`.
 **`self` is not a storable thing.** It is a parameter binding of the
 struct's own type, and reading `self` yields a struct value that
 copies like any other. There is no expression that produces a
-reference, because there is no reference.
-
-**`give self` and `free(self)`** need nothing new: a plain `self` is a
-`borrow_param` and inherits the three refusals that already exist
-(`builder.zig:3049`, `4660`, `2566`), each of which already cites S12
-or S17 and already reads correctly.
+reference to it, because a struct value has none to produce.
 
 ## Diagnostics — the ones the owner named
 
@@ -547,34 +529,34 @@ New code `luce.sema.self`, plus two improvements to existing messages.
 | `Point.scale(p, 2.0)` | `scale takes var self and writes back to its receiver; call it as p.scale(2.0)` |
 | `q.scale(2.0)`, `q` let-bound | `q is let-bound; scale takes var self and writes back to its receiver — use var` (`luce.sema.let`, composing with the existing wording) |
 | `Point.origin().scale(2.0)` | `scale takes var self, so its receiver must be a variable, a field, or an element — not a call result` |
-| `var self` on an object-carrying struct | `Bag carries objects, so it cannot be written back; take self and mutate through the field, or write a namespace function [OWNERSHIP.md S17, S28]` |
+| `var self` on a struct with reference fields | `Bag holds references, so a whole-struct write-back would share them rather than duplicate them; take self and mutate through the field, or write a namespace function [MEMORY.md]` |
 | `let f = p.length` | `functions are not values; call it, or pass what it needs` |
 
 The second row is the one that pays immediately: today `p.foo()` on a
 struct says *"Point has no methods"*, which was true and will stop
 being.
 
-## One clarifying clause, and no rule changes
+## One clarifying note, and no rule changes
 
-`docs/OWNERSHIP.md` needs nothing new for `self` — the section above
-shows why — but S39 should say out loud what it already implies,
-because the receiver rule leans on it:
+The memory model (docs/MEMORY.md) needs nothing new for `self` — the
+section above shows why — but the `let`/`var` rule is worth saying out
+loud, because the receiver rule leans on it:
 
-> **Clarified for receivers.** S39 governs the binding, and for a
-> *value* the binding is the whole of it: `let p = Point(x = 1)`
+> **For receivers.** A `let` binds the value or reference it names, and
+> for a *value* the binding is the whole of it: `let p = Point(x = 1)`
 > already refuses `p.x = 5` (`luce.sema.let`), because a struct value
-> has nothing underneath the name the way a `List` has an object
+> has nothing underneath the name the way a `list` has a shared object
 > underneath it. So a method declared `var self`, which writes back to
 > its receiver's place, is refused on a `let` receiver by the rule
-> that was already there and for the same reason. Heap objects are
-> unchanged: `let xs = [1, 2]` still takes `xs.append(3)`, because the
-> name is pinned and the object is not.
+> that was already there and for the same reason. Reference bindings
+> are unchanged: `let xs = [1, 2]` still takes `xs.append(3)`, because
+> the name is fixed and the list it points at is not.
 
 ## The migration hazard, named
 
 `examples/editor/editor.luc:380` reads:
 
-```luce historical
+```text
                 next.cursor = Text.previous_boundary(state.content, next.cursor)
 ```
 
@@ -633,8 +615,8 @@ it retires machinery Decision 2 would otherwise have to keep working.
    existing 577-624 block rewritten. *Docs:* none yet. **~half a day.**
 2. **The list gets built, on both arms.** `luce_rt_args` over
    `luce_rt_names_list`, the `luce_main` wrapper's fourth push, the
-   interpreter's mirror, empty-list-when-no-service. S44 into
-   `docs/OWNERSHIP.md` with its `/guide/reference/ownership/#s44` anchor.
+   interpreter's mirror, empty-list-when-no-service. The `args` clause
+   into `docs/MEMORY.md`'s account of the entry.
    *Tests:* `specs/agree.zig` with and without arguments — both arms
    compared on prints, leak census and the world left behind.
    **~1 day.**
@@ -663,10 +645,10 @@ it retires machinery Decision 2 would otherwise have to keep working.
    **~1.5 days.**
 7. **`var self` writes back.** The place rule reusing
    `lowerAssignChain`'s root check, the returning-edge-only store, the
-   carries-no-objects rule (**not** the returns-nothing rule:
-   `docs/RETURNS.md` §5 says do not build it, and it was not). S39's clarifying
-   paragraph. *Tests:* `specs/ownership_spec.zig` for the write-back
-   and for the raising method that leaves its receiver alone;
+   no-reference-fields rule (**not** the returns-nothing rule:
+   `docs/RETURNS.md` §5 says do not build it, and it was not). The
+   `let`/`var` clarifying paragraph. *Tests:* the receiver spec for the
+   write-back and for the raising method that leaves its receiver alone;
    `specs/agree.zig` for both arms; errors_spec rows 6-10; **and the
    `editor.luc:380` shape as its own named test.** **~2 days.**
 8. **The corpus restructures.** `Handle` and two of `Draw` merge into
@@ -718,12 +700,13 @@ together, and duplicates a working channel. The ABI is append-only so
 that this kind of change does not have to happen.
 
 **Pointer receivers (Go) or a borrow taxonomy (Rust).** Both need a
-reference to be a thing the type system knows about, and both would
-make `self` storable the moment a user found the syntax. The standing
-rule is that there are no reference types, and this feature is not
-where it gets relitigated. Copy-in/copy-out reaches the same answers
-on every program that can be written here, and the proof is short
-because the language is small.
+pointer to the caller's place to be a thing the type system knows
+about, and both would make that pointer storable the moment a user
+found the syntax. Luce has reference *types* — a `class` and the
+containers — but no pointer to a *value*'s storage, and this feature
+is not where that gets introduced. Copy-in/copy-out reaches the same
+answers on every program that can be written here, and the proof is
+short because the language is small.
 
 **A `mutating` keyword (Swift's spelling).** `var` already means
 "reassignable", the receiver rule reads as `var self` needs a `var`
@@ -731,8 +714,7 @@ receiver, and one keyword is cheaper than two.
 
 **Inferring mutation from the body.** It works — `Function.fallible`
 is exactly that shape — but it makes a callee's body silently decide
-its callers' obligations. `give` appears at both ends for the same
-reason (S13), and this is the same kind of promise.
+its callers' obligations, a promise better written where it is made.
 
 **`var` on ordinary parameters.** An argument is an expression and a
 write-back needs a place. `self` is the one parameter guaranteed to
@@ -761,9 +743,10 @@ receiver design did not lock: `docs/SELF.md` superseded explicit
 `self`/`var self`, copy-in/copy-out, and type-qualified method calls.
 The implemented language gives every plain struct or enum member an
 implied `self`; a namespace member says `static func`.  Writer status
-is inferred transitively, and a writer aliases one bare owning `var`
+is inferred transitively, and a writer aliases one bare mutable `var`
 binding in place.  Reads accept lets and temporaries, pre-error writes
-remain, and borrowed object-content mutation remains a read.  Methods
+remain, and mutation of a referenced object's contents through a field
+remains a read.  Methods
 are neither values nor worker targets and cannot be called through the
 type; static members can do all three.  `docs/SELF.md`'s as-built
 appendix records the format-32 / ABI-13 implementation seam.

@@ -5,9 +5,7 @@
 > `builder` — docs/TYPES.md D8), and the two numeric types became four:
 > `int` and `float` are 32 bits and are what a literal takes with
 > nothing to tell it otherwise, `long` and `double` are the 64-bit
-> types this memo calls `Int` and `Float`.  A fenced block tagged
-> `luce historical` is shown as it was written and is not compiled;
-> every other one in this file is (`tools/doccheck.zig`).
+> types this memo calls `Int` and `Float`.
 
 > **Later-polish amendment (as built).** Owner-ratified evidence after
 > this memo reopened one deliberately provisional refusal:
@@ -33,7 +31,7 @@
 > a language with no generics and no first-class functions from
 > acquiring an anonymous product type by the back door.
 
-`docs/MEMORY.md` records why scope ownership won; `docs/FAILURE.md`
+`docs/MEMORY.md` records the memory model; `docs/FAILURE.md`
 why there are three failure mechanisms and not one; `docs/NUMERICS.md`
 why `Int` promotes. This is the memo for the hole those three left
 alone and `docs/METHODS.md` walked up to and stopped at.
@@ -101,11 +99,11 @@ fields at all — namespaces impersonating types. Two are real domain
 types. **One exists to carry a return**, and it is the exhibit
 `docs/MISSING.md:227-229` filed:
 
-```luce historical
+```text
 # examples/calc/calc.luc:20-22
 struct Step:
-    value: Int
-    at: Int
+    value: int
+    at: int
 ```
 
 No methods, no invariant, no meaning outside a parser's signature: a
@@ -145,7 +143,7 @@ looks like a struct:
 
 | where | the workaround |
 |---|---|
-| `std/math.luc:229-239` | **a heap object as a mutable cell.** `seed` allocates a one-element `List(Int)` so that `random_step` can write the new state through a borrow while the draw goes out through `return`. Two values, two channels, one allocation whose entire purpose is to give an `Int` reference semantics. |
+| `std/math.luc:229-239` | **a heap object as a mutable cell.** `seed` allocates a one-element `list(int)` so that `random_step` can write the new state through the shared reference while the draw goes out through `return`. Two values, two channels, one allocation whose entire purpose is to give an `int` reference semantics. |
 | `editor.luc:212-221` | **the second value dropped, and the caller guessing it.** `Draw.emit` walks from `at` and **clips at `remaining` columns**, so it knows both how many columns it used and where in the text it actually stopped — and can return only the first. Each of its six call sites (`:230, 246, 253, 268, 274` inside `Draw.line`'s per-token loop, and `:299` in the status bar) sets `at` from a bound it computed *itself* (`finish`, `close`, `stop`), which is right only because the outer `while` exits on the same clip. |
 | `wordcount.luc:34-41` | **the second value thrown away and fetched again.** `heaviest` computes `best` and `best_count`, returns `best`, and the caller does a second map lookup at `:65` for the count the function already had. |
 | `bench/stats.luc:34-35` | **two traversals for one pass.** `math.vmin` and `math.vmax` (`std/math.luc:159-174`) walk the same array twice. There is no `minmax` in std, and there could not have been one: writing it would have meant inventing a bag struct in the standard library. |
@@ -214,14 +212,19 @@ therefore never writes that sentence.
 
 ### The declaration
 
-```luce historical
-func minmax(xs: Array(Float, _)) -> (Float, Float):
+```luce
+func minmax(xs: array(double, _)) -> (double, double):
     var low = xs[0]
     var high = xs[0]
     for i in range(1, len(xs)):
         low = min(low, xs[i])
         high = max(high, xs[i])
     return low, high
+
+func main():
+    let data: array(double, _) = [3.0, 1.0, 2.0]
+    let low, high = minmax(data)
+    print(f"{low} {high}")
 ```
 
 A parenthesised, comma-separated list of **two or more** types after
@@ -253,7 +256,7 @@ bound and not a second number.
 
 ### The bind
 
-```luce historical
+```text
 let low, high = minmax(temperatures)
 var row, column = grid.find(target)
 ```
@@ -298,17 +301,17 @@ reader want it twice in a row, and it is worth a sentence on the page.
 
 Two places, and they are enumerable:
 
-```luce historical
+```text
 let low, high = minmax(xs)      # 1. the right of a destructuring bind
 rng.next()                      # 2. a statement, all values discarded
 ```
 
 Everything else is `luce.sema.call`:
 
-```luce historical
+```text
 print(minmax(xs))               # refused
 let x = minmax(xs) + 1.0        # refused
-return minmax(xs)               # refused, even from -> (Float, Float)
+return minmax(xs)               # refused, even from -> (double, double)
 xs.append(minmax(ys))           # refused
 low, high = minmax(xs)          # refused: assignment, not a bind
 ```
@@ -322,7 +325,7 @@ mix a multi-valued expression with ordinary ones. That carve-out is the
 whole cost of the pass-through, and the pass-through's whole benefit is
 one saved line:
 
-```luce historical
+```text
 let low, high = minmax(xs)
 return low, high
 ```
@@ -338,7 +341,7 @@ own channel precisely so it would never occupy a return position. What
 is left is loop-carried state, which is the case `var self` methods now
 serve directly (§5), and the residue is one extra name:
 
-```luce historical
+```text
 let value, next = Scan.number(text, position)
 position = next
 ```
@@ -361,14 +364,14 @@ anywhere in stage 4, and a call whose result is discarded at statement
 position is accepted silently today. The reason for `_` therefore does
 not exist here, and what is left is a name:
 
-```luce historical
+```text
 let word, count = heaviest(counts)
 print(word)                       # count is simply not used
 ```
 
-`count` is freed by scope ownership at the end of its block exactly as
-a discarded value would be, and the next reader learns what was
-ignored, which `_` does not tell them.
+`count` is released at the end of its block exactly as a discarded
+value would be — ARC frees each object at its last reference — and the
+next reader learns what was ignored, which `_` does not tell them.
 
 The character is also not free. `_` is a plain identifier everywhere in
 the language (`02_lex/token.zig:26`) and is recognised as the array-shape
@@ -434,8 +437,8 @@ error travels out of band: the outcome word is the compiled function's
 in the caller. **The two channels are already orthogonal**, and a
 return shape is a value-channel fact. So:
 
-```luce historical
-func read_pair(path: String) -> (Int, Int)!:
+```text
+func read_pair(path: string) -> (int, int)!:
     let text = try file_read(path)
     …
     return first, second
@@ -483,7 +486,7 @@ A destructuring bind is a `let`, so it is already excluded, for a
 reason that is doubly true when there are two names. What remains is
 legal and useful:
 
-```luce historical
+```text
 rng.reseed_from(path) catch:              # a statement; values discarded
     print("keeping the old seed")
 ```
@@ -505,11 +508,11 @@ the other side.
 ### `T?` positions
 
 `Int?` is an ordinary type — absence *is* a value (`docs/FAILURE.md`'s
-table says so, and S43 says holding `none` owns nothing) — so it needs
-no rule at all:
+table says so, and `none` is an ordinary value), so it needs no rule at
+all:
 
-```luce historical
-func lookup(m: Map(String, Int), k: String) -> (Int?, Bool):
+```text
+func lookup(m: map(string, int), k: string) -> (int?, bool):
 ```
 
 is legal because every element of a return shape is an ordinary type
@@ -528,129 +531,27 @@ value that can be absent.
 of §1 — so there is nothing for `else` to stand on. Per-element
 fallbacks are written on the names, where they read better anyway:
 
-```luce historical
+```text
 let first, second = parse_pair(line)
 let a = first else 0
 ```
 
 ---
 
-## 3. Ownership: one clarifying clause, one new check, no rule changes
+## 3. Memory: nothing special
 
-`return` is a move (S16). `return a, b` is that move said twice, and
-`docs/OWNERSHIP.md` needs **no rule changed** to say so. What follows
-is the whole of the ownership content, clause by clause.
-
-**S16 applies per value.** Each returned object moves independently to
-the caller; the caller's two names each own one. No verb, as ever.
-
-**S1 applies per name.** `let low, high = f()` creates two fresh
-bindings, each owning what it received, each freed by its scope.
-
-**S17 applies per position.** `return xs, ys` where `xs` is a borrowed
-parameter is the existing compile error, naming `xs`, with the existing
-words (`04_semantics/builder.zig`):
-
-> `xs is a borrowed parameter; return copy xs, or take the parameter as give [OWNERSHIP.md S17]`
-
-**S3/S19 apply to a discarded call.** `f()` as a statement produces
-values nobody bound; each is a temporary and dies at the end of the
-statement. **This machinery already exists and already does exactly
-this for a single return** — `lowerBlock` (`builder.zig:1453-1465`)
-records a temporaries floor per statement and flushes above it, and
-`lowerExpression` parks every ownership-yielding value into a hidden
-local for that flush. Under §4's lowering the discarded value is one
-struct, so the walk that already releases an object-carrying struct
-temporary releases the whole return shape, and the count of things to
-release is one whatever the arity. Nothing extends; it is already
-general.
-
-**S28 applies to the shape as a whole.** Returning objects in a return
-shape moves the whole tree, which is what S28 says about a struct and
-which is what the shape lowers to.
-
-### The one genuinely new fact
-
-Only a comma can write this:
-
-```luce historical
-func bad(xs: give List(Int)) -> (List(Int), List(Int)):
-    let alias = xs
-    return xs, alias        # one object, two moves
-```
-
-Two positions in one return can name **the same object**, and two
-moves of one handle would give two caller bindings ownership of it and
-free it twice. S23 already forbids that outcome; nothing before now
-could express the attempt.
-
-**Half of it needs no new check, and half of it needs exactly one.**
-This is worth getting right, because the tempting claim — "the
-positions are walked in order, so the second one meets a poisoned
-name" — is **false**, and the source says why.
-
-`lowerReturn` (`04_semantics/builder.zig:2519`, and its object arm at `:2550-2585`) does not poison
-what it returns. It records one `moved: ?LocalId` so that the unwinder
-below it does not free the object it just handed over, and that is all
-it needs to do, **because `return` is a terminator**: with one value
-there is nothing after it in the block that could touch the name
-again, so poisoning would have been ceremony. `Poison` is
-`enum { given, freed }` (`04_semantics/context.zig:281`) and has no
-third member for exactly this reason.
-
-The comma is what puts something after a return for the first time. So:
-
-| written | caught by | says |
-|---|---|---|
-| `return xs, alias` | **the existing check, unchanged** — `lowerReturn`'s `.alias` arm | `alias aliases an object it does not own; return copy alias or return the owning name [OWNERSHIP.md S16, S17]` |
-| `return xs, borrowed` | **the existing check, unchanged** — the `.borrow_param` arm | `borrowed is a borrowed parameter; return copy borrowed, or take the parameter as give [OWNERSHIP.md S17]` |
-| `return xs, xs` | **one new check** | `xs is returned twice; one object cannot be owned twice [OWNERSHIP.md S23, S45]` |
-
-That the alias message already ends in *"or return the owning name"* —
-written for a language with one return channel — is good evidence that
-the ownership model was general all along and the channel was the only
-narrow thing. But the same-name case is genuinely unreachable today and
-is genuinely a double free tomorrow, and a memo that claimed it fell
-out for free would be wrong in the one place it matters most.
-
-**The check is small and it is where `moved` already is.** `moved`
-becomes a small list — one entry per returned position — because the
-unwinder must now skip every object it handed over rather than one.
-A name already in that list is the diagnostic above. The list is the
-check; there is no separate pass.
-
-### The clause
-
-Proposed for `docs/OWNERSHIP.md`, on `docs/METHODS.md` S44's model —
-a clarifying clause that changes no rule, appended so no anchor moves
-(`www/luce/content/ref/ownership.md` fixes `{#s44}`-style anchors and the
-compiler quotes the numbers):
-
-> **S45. A multiple return moves each value, left to right, and no
-> object may travel twice.**
-> ```luce
-> func halves(text: give String) -> (List(String), List(String)):
->     var head = text[0:middle].split(" ")
->     var tail = text[middle:len(text)].split(" ")
->     return head, tail        # both move; the caller's two names own them
->
-> func bad(xs: give List(Int)) -> (List(Int), List(Int)):
->     let alias = xs
->     return xs, alias         # COMPILE error: one object, two moves
-> ```
-> Decision: `return a, b` is S16 said once per value and nothing more.
-> Each value moves independently, a borrowed parameter or an alias in
-> any position is S17 exactly and says so with the words it already
-> had, and a destructuring bind creates one owning binding per name
-> (S1). The one fact the single-value channel never had to state is
-> that **the values must be distinct objects**: two moves of one handle
-> would leave two bindings owning it and free it twice, which S23
-> forbids and which only a comma can now write. It is also the one
-> thing here that is genuinely new to check, because `return` is a
-> terminator and therefore never had to poison what it moved — with one
-> value there was nothing after it. A call whose values nobody binds is
-> a statement temporary per S3/S19, released whole at the end of its
-> statement.
+`return a, b` needs no memory rule of its own. Each value is returned
+the way its type is: a value type — a scalar, `string`, a struct, an
+enum — is copied into the caller, and a reference type — a `list`,
+`map`, `array`, `builder`, `class`, `file` or `task` — is handed back
+as a shared reference. A destructuring bind gives each name its value,
+and ARC frees each object at its last reference. Returning the *same*
+reference in two positions is perfectly fine: it hands the caller two
+names for one shared object, and ARC counts both, freeing it when the
+last one goes away. A call whose values nobody binds is a statement
+whose results are released at the end of the statement. There is
+nothing here the single-value channel did not already do — the comma
+changes the arity, not the model (`docs/MEMORY.md`).
 
 ---
 
@@ -695,7 +596,7 @@ Everything it rides on is already there and already proved:
 | a `call` whose result is a struct | exists; verified by `if (!result.eql(callee.return_type))` (`verify.zig:341-350`) |
 | struct value in `%out` | exists; `resultSize` says `.strukt => 8` (`08_llvm/lower.zig:899-903`) — the same slot an `Int` uses |
 | the outcome channel | untouched; `errored` names the `call` instruction and never looks at its type |
-| copy-on-store for a returned struct | exists (`docs/STRINGS.md`) |
+| struct values copy on store | exists (`docs/STRINGS.md`) |
 | struct returns on the interpreter | exist (the `struct_make`/`struct_get` arms at `interpreter/machine.zig:374-385`) |
 | the oracle | **needs no edit at all**, which is why it is the arm that proves the sugar resolved right |
 
@@ -738,10 +639,10 @@ so the two land back to back without the published ABI moving once.
 *flattened leaf count of one struct type* — it exists because `zeroOf`
 emits one instruction per counted leaf. A two- or three-scalar return
 shape contributes two or three and is nowhere near it. But `valueCount`
-and `carriesObjects` index `struct_shapes` directly by layout index
-(`declarations.zig:446-451`, `:393`), so a synthesized layout without a
-shape entry is an out-of-bounds read the first time `lowerReturn` asks
-whether it carries objects.
+indexes `struct_shapes` directly by layout index
+(`declarations.zig:446-451`), so a synthesized layout without a shape
+entry is an out-of-bounds read the first time the layout's width is
+asked for.
 
 **Debug/release parity is unaffected.** No new instruction means no new
 origin; origins are recorded per instruction and never read on the
@@ -767,21 +668,22 @@ the implementation does not discover them:
    slice stale and short. **Synthesis therefore belongs in a pass
    between `collectFunctions` and lowering**, driven off the collected
    signatures, where every shape a program can return is already known.
-3. **`carriesObjects` must be right on the synthesized layout**, because
-   S28 and the ownership walk read it. It falls out of `sumShape`
-   (`:861-869`) provided the shape entry exists — which is hazard 1
-   again, and is the reason to state it twice.
+3. **The synthesized layout's shape entry must exist**, because the
+   backend reads the width and the per-field types from it — including
+   which fields are reference types ARC must retain and release. It
+   falls out of `sumShape` (`:861-869`) provided the shape entry
+   exists — which is hazard 1 again, and is the reason to state it
+   twice.
 
 ### The one thing that is not free, said plainly
 
 **A struct value's field run is a real allocation.**
 `luce_rt_struct_make` (`runtime/exports.zig:571`) calls
 `Runtime.makeStruct` (`runtime/heap.zig:1066-1074`), which does
-`self.objects.alloc(Value, fields.len)` — and `objects` is documented
-as *"an ordinary freeing allocator"* precisely because struct field
-runs have a death point (`heap.zig:85-93`). So a function that returns
-two values under design (b) costs one allocation and one free per call,
-where a function returning one `Int` today costs neither. `libluce_rt`
+`self.objects.alloc(Value, fields.len)` — a real heap allocation for
+the field run (`heap.zig:85-93`). So a function that returns two values
+under design (b) costs one allocation and one free per call, where a
+function returning one `Int` today costs neither. `libluce_rt`
 is an opaque external library, so LLVM's O3 pipeline does not see
 through the make/get/free triple and delete it.
 
@@ -798,8 +700,8 @@ win on the page.
 
 **It is a regression for the two workarounds that return scalars.**
 `math.random_step` returns an `Int` in a register today and writes its
-state through a `List` allocated once by `seed`; as
-`func next(var self) -> Int` it would allocate per draw. `Draw.emit`
+state through a `List` allocated once by `seed`; as a `next()` method
+answering an `int` it would allocate per draw. `Draw.emit`
 returns an `Int` per call, and its five call sites sit in a
 per-**token** loop (`editor.luc:226-275`), so a highlighted line of N
 tokens is N calls and a frame is that times the visible rows. Those
@@ -823,10 +725,10 @@ allocation, no free. The interpreter's mirror is to write N registers
 where it writes one.
 
 **This changes nothing above stage 6**: no MIR instruction, no wire
-format, no ABI field, no semantics, and no diagnostic. It is the same
-kind of change as `07_optimize`'s `ownership` pass — deleting something
-LLVM structurally cannot see through, because we know a fact about it
-that the target does not. It is step 7 of the plan, it is measurable
+format, no ABI field, no semantics, and no diagnostic. It is a
+backend-only elision — deleting a runtime call LLVM structurally cannot
+see through, because we know a fact about it that the target does not.
+It is step 7 of the plan, it is measurable
 against `bench/compare.sh`, and it is the one step that may honestly be
 skipped if the benchmark says the allocation does not show.
 
@@ -844,50 +746,50 @@ This is why the memo exists. The RNG, end to end.
 
 ### Today
 
-```luce historical
+```text
 # src/luce/std/math.luc:229-239
-func seed(from: Int) -> List(Int):
+func seed(from: int) -> list(int):
     var folded = from % 2147483646
     if folded < 0:
         folded += 2147483646
     return [folded + 1]
 
-func random_step(rng: List(Int)) -> Int:
+func random_step(rng: list(int)) -> int:
     rng[0] = rng[0] * 48271 % 2147483647
     return rng[0]
 ```
 
-A one-element `List(Int)` allocated by `seed` and kept alive for the
+A one-element `list(int)` allocated by `seed` and kept alive for the
 life of `main` (`dice.luc:25`), whose entire purpose is to give an
-`Int` reference semantics so that the *state* can go out through a
-borrow while the *draw* goes out through `return`. The module header
+`int` reference semantics so that the *state* can go out through the
+shared reference while the *draw* goes out through `return`. The module header
 (`math.luc:13-15`) documents the workaround as if it were a design.
 
 ### Under `docs/METHODS.md` alone
 
-```luce historical
+```text
 struct Rng:
-    state: Int
+    state: int
 
     func step(var self):
         self.state = self.state * 48271 % 2147483647
 ```
 
-The List is gone and the struct is honest, but the call site went from
+The list is gone and the struct is honest, but the call site went from
 one call to two — `rng.step()` then `rng.state` — because the receiver
 was occupying the only return channel there was.
 
 ### Under this memo
 
-```luce historical
+```text
 struct Rng:
-    state: Int
+    state: int
 
-    func next(var self) -> Int:
+    func next(var self) -> int:
         self.state = self.state * 48271 % 2147483647
         return self.state
 
-    func in_range(var self, low: Int, high: Int) -> Int:
+    func in_range(var self, low: int, high: int) -> int:
         if high <= low:
             trap("in_range needs low < high")
         return low + self.next() % (high - low)
@@ -895,7 +797,7 @@ struct Rng:
 
 and the call site:
 
-```luce historical
+```text
 var rng = Rng(state = 42)
 let roll = rng.in_range(1, 7)
 ```
@@ -919,10 +821,10 @@ And under §4 that is not a second channel at all. **The method's
 results are `[receiver] ++ declared`**, and they travel in one
 synthesized layout:
 
-```
-struct (Rng, Int):
+```text
+struct (Rng, int):
     field0: Rng
-    field1: Int
+    field1: int
 ```
 
 `Rng.next` lowers to a function with return type `.strukt` of that
@@ -958,13 +860,13 @@ Four consequences, each of which is a rule someone will test:
    reads result zero out of `%out` on the returning edge only. All or
    nothing, for free, by the mechanism that was already there.
 
-**`var self`'s object restriction survives untouched and needs no
-extension.** `docs/METHODS.md` requires a `var self` receiver's struct
-to carry no object handles, so the write-back is a pure value store.
-That is a fact about result zero. The *declared* results may carry
-objects freely and move under S16/S28 like any other return — a method
-may answer a fresh `List` while writing back a value-only receiver, and
-the two facts do not interact.
+**A value-only receiver stays simple and needs no extension.** When a
+`var self` receiver is a plain value struct, the write-back is an
+ordinary value store. That is a fact about result zero. The *declared*
+results are returned however their types are — a copied value or a
+shared reference — like any other return, so a method may answer a
+fresh `list` while writing back a value-only receiver, and the two
+facts do not interact.
 
 ### One coordination note for the implementer
 
@@ -1047,8 +949,8 @@ because it is the case the broken rule tripped on. `Parse.expression`'s
 accumulator becomes two `var`s, and the body gets *shorter*, because
 only the value differed between the arms:
 
-```luce historical
-func expression(text: String, at: Int) -> (Int, Int)!:
+```text
+func expression(text: string, at: int) -> (int, int)!:
     var value, here = try Parse.term(text, at)
     var scan = Scan.skip_spaces(text, here)
     while scan < len(text) and (text.byte_at(scan) == 43 or text.byte_at(scan) == 45):
@@ -1133,14 +1035,9 @@ a second one beside it.
 | `let a, b = f() catch 0, 0` | `luce.sema.fallible` | `f answers 2 values, and catch can supply only one — write try, or handle it as a statement` |
 | `minmax(xs) else …` | `luce.sema.absent` | `else supplies a value when one is absent, and minmax answers 2` |
 | `let r, roll = rng.next()` | `luce.sema.self` | `next answers 1 value; its receiver is written back, not returned` |
-| `return xs, xs` | `luce.sema.own` | `xs is returned twice; one object cannot be owned twice [OWNERSHIP.md S23, S45]` — the one genuinely new ownership check (§3) |
-| `return xs, alias` | `luce.sema.own` | `alias aliases an object it does not own; return copy alias or return the owning name [OWNERSHIP.md S16, S17]` — **exists already** |
-| `return xs, borrowed` | `luce.sema.own` | `borrowed is a borrowed parameter; return copy borrowed, or take the parameter as give [OWNERSHIP.md S17]` — **exists already** |
 
-Four of the twenty-two are already written word for word, which is
-the measure of how much of this feature the tree was shaped for — and
-one, the double move, is new for a reason §3 spends a paragraph on
-rather than assuming.
+Four of these are already written word for word, which is the measure
+of how much of this feature the tree was shaped for.
 
 ---
 
@@ -1155,7 +1052,6 @@ rather than assuming.
 - **`docs/LANGUAGE.md`'s "Deliberately absent (for now)"** — add
   **tuples** by name. The list does not mention them today, and after
   this memo the absence is a decision rather than an omission.
-- **`docs/OWNERSHIP.md`** — S45, appended (§3).
 - **`docs/METHODS.md`** — delete the `## var self methods return
   nothing` section's refusal, delete its row from the diagnostics
   table, and delete step 7's clause that builds it. Leave the section's
@@ -1179,7 +1075,6 @@ page is a file plus one row. Pages that need editing:
 | `www/luce/content/ref/statements.md` | `## func` (L17) gains the return list; `## let and var` (L47) gains the destructuring bind; `## Assignment` (L60) says that multi-assignment is not one |
 | `www/luce/content/ref/types.md` | the load-bearing one: a return shape is **not** a type, and this is the page that says so |
 | `www/luce/content/ref/expressions.md` | `## Calls` (L123) gains the two allowed positions; `## Operators Luce does not have` (L88) gains the tuple |
-| `www/luce/content/ref/ownership.md` | S45, with a `{#s45}` anchor — appended, never renumbered, because `main.zig`'s `checkLinks` fails the build on a dead anchor and the compiler quotes the numbers in diagnostics |
 | `www/luce/content/ref/failure.md` | `catch` cannot supply a shape; `try` composes |
 | `www/luce/content/tour/functions.md` | the tutorial half of the declaration |
 | `www/luce/content/tour/values.md` | the tutorial half of the bind |
@@ -1227,10 +1122,9 @@ and `(`, `)`, `,` already land in `Draw.line`'s final `else` arm as
 **The VS Code grammar had one rule that was genuinely wrong**, in a
 file that was then hand-maintained and already stale:
 `tools/vscode-luce/syntaxes/luce.tmLanguage.json` matched a return type
-with `(:|->)\s*([A-Za-z_][A-Za-z0-9_]*)\b`, which `(` blocks, and it
-still listed removed v1 Fabric builtins (`create_image`,
-`create_texel`, `texel_*`) while its keyword list was missing `give`,
-`copy`, `free`, `new`, `import`, `try`, `catch` and `none`. Fixing the
+with `(:|->)\s*([A-Za-z_][A-Za-z0-9_]*)\b`, which `(` blocks, and its
+hand-maintained builtin and keyword lists had drifted from the
+compiler's own tables besides. Fixing the
 one rule this feature breaks without fixing the rest would have been a
 stopgap; the honest scope was one commit that re-derives the whole file
 from the tables it claims to follow, and a generator with a test is
@@ -1267,15 +1161,11 @@ without both. Each step leaves the tree green.
    block on a statement, and the two refusals. Most of this falls out
    of step 1; the tests are the deliverable, and they belong in
    `specs/errors_spec.zig` beside the existing `catch` cases.
-3. **Ownership.** S45 in `docs/OWNERSHIP.md` and
-   `www/luce/content/ref/ownership.md`; `lowerReturn`'s `moved` becoming a
-   list, which is both what the unwinder needs and where the
-   double-move check lives (§3); the two existing diagnostics reached
-   per position; the discarded-statement temporary. *Tests:*
-   `specs/ownership_spec.zig` for each of the three return-position
-   refusals, and the agree arm's **leak census** is what actually
-   proves the good cases — a double move is a double free, and the
-   census is the thing that catches it if the check is ever wrong.
+3. **Memory: nothing special (§3).** Each returned value is a copied
+   value or a shared reference and ARC frees each object at its last
+   reference, so there is no return-specific memory work; the agree
+   arm's **leak census** proves the good cases as it does for every
+   other program.
 4. **`var self` returns.** Results become `[receiver] ++ declared`;
    statement-position write-back; the receiver-not-destructurable
    refusal; the raising edge. **`docs/METHODS.md`'s "returns nothing"
@@ -1371,7 +1261,7 @@ premise changed and the conclusion did not.
 ## SELF supersession — 2026-08-08
 
 `docs/SELF.md` retired this record's hidden receiver-at-result-zero
-convention before lock.  A writing method now mutates one bare owning
+convention before lock.  A writing method now mutates one bare
 `var` binding in place through MIR `call_inout`; its declared zero, one,
 or many results are exactly the results the caller receives.  If the
 method errors, receiver writes already performed remain visible.  The

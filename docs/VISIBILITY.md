@@ -3,13 +3,12 @@
 > **Built.**  This memo opened with every fence tagged `historical`,
 > honestly — the feature did not exist.  `Order`'s last step executed
 > the promise the tag carried: every single-file fence now compiles or
-> is refused under `tools/doccheck.zig` (`luce` and `luce refused`),
-> and the tag survives only where it stays the honest one — the
-> multi-file demonstrations, which the doc guard cannot load siblings
-> for and which run executably as the site's own fences instead
+> is refused under `tools/doccheck.zig` (`luce` and `luce refused`).
+> The multi-file demonstrations, which the doc guard cannot load
+> siblings for, are shown here as plain illustrations (`text`) and run
+> executably as the site's own fences instead
 > (`www/luce/content/ref/modules.md` §Visibility, compiled and compared on
-> every build), and the quotations of idioms that no longer exist.
-> The "As built" section at the bottom is the run's record.
+> every build).  The "As built" section at the bottom is the run's record.
 
 > **The rule.**  A declaration is **public** unless it says `private`
 > — written in full, before `func`, before a top-level `let`, before
@@ -36,7 +35,7 @@
 > serialized module's `format_version` (24) nor the published host ABI
 > (9) moves.
 
-`docs/MEMORY.md` records why scope ownership won; `docs/ARGS.md` why
+`docs/MEMORY.md` records the memory model; `docs/ARGS.md` why
 names are optional and defaults are folded constants — this memo is
 run two of the ratified roadmap (`docs/MISSING.md:193`: *"named args,
 visibility, bitwise/hex"*, then enums, then union) and composes with
@@ -218,7 +217,7 @@ nothing at all.
 
 The most-documented struct construction in the language is:
 
-```luce historical
+```text
 var rng = math.Rng(state = 42)
 ```
 
@@ -405,7 +404,7 @@ files, and Luce has a spelling for that.
 
 ### The same rule for std, demonstrated three ways
 
-```luce historical
+```text
 # 1 — a sibling module; mathx.luc marks `sorted` private (§6)
 import mathx
 
@@ -462,7 +461,7 @@ A public constant may be *built from* private ones, because folding
 happens inside the declaring module and what crosses the boundary is
 the value:
 
-```luce historical
+```text
 # geo.luc
 private let seed = 41              # marked: geo's own business
 let answer = seed + 1              # public by default; folds to 42 in geo
@@ -570,7 +569,7 @@ every missing field at once.
    pattern that is: a public namespace function.  Inside the module,
    nothing changes.
 
-```luce historical
+```text
 # session.luc
 struct Session:
     name: string                       # public by default
@@ -640,7 +639,7 @@ Can a module export a struct whose shape outsiders cannot see?
 under the new frame opacity is always an explicit act, which the
 region spelling (§5) says in one label:
 
-```luce historical
+```text
 # handle.luc
 struct Handle:
     private:
@@ -715,7 +714,7 @@ Inside a struct body, at member position, `private:` or `public:`
 opens an **indented block** of members — fields and funcs alike — and
 every member in the block takes the label's visibility:
 
-```luce historical
+```text
 struct Rng:
     private:
         state: long

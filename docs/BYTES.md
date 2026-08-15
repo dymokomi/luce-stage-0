@@ -27,13 +27,13 @@ long-term shape rather than the least change.
   a file being read does not announce its length in advance.
 - The host gap is exactly **one service each way**: a read that does
   not validate, a write that takes bytes rather than text.  Everything
-  else — ownership, slices, the checked arithmetic a CRC needs —
+  else — the memory model, slices, the checked arithmetic a CRC needs —
   already exists and was proven by the zip run itself.
 
 ## Part one — the buffer: unbox `list` element storage
 
 **The proposal is not a new type.**  `list(byte)` is already the right
-surface: growable, owned by scope, indexable, sliceable, iterable, and
+surface: growable, reference-counted, indexable, sliceable, iterable, and
 spelled with the vocabulary every Luce program already knows.  What is
 wrong with it is only the storage, so the fix is storage: **`list(T)`
 adopts the `ElementKind` mechanism arrays already have**, storing
@@ -61,14 +61,14 @@ all three: **a file is bytes reached through an open handle, a read
 fills a caller-owned buffer and says how much landed, and text is a
 validation the language performs on the bytes.**
 
-- **The handle is a scope-owned resource** — a new object kind whose
-  create is `open` and whose scope-end release is `close`, so a file
-  cannot leak by the same construction that keeps every list from
-  leaking, and use-after-close traps like use-after-free because it
-  is the same mistake.  `give`, `return` and early `free` mean what
-  they always mean.  The run's design decides the type's spelling and
-  where it sits in `types.HeapType`; the ownership semantics are not
-  open — they are OWNERSHIP.md's, unchanged.
+- **The handle is a reference-counted resource** — a new object kind
+  whose create is `open` and whose close happens at its last reference,
+  so a file cannot leak by the same construction that keeps every list
+  from leaking, and using a closed file traps.  A file is a reference;
+  assignment shares it, and it is closed at its last reference (no
+  ownership verbs).  The run's design decides the type's spelling and
+  where it sits in `types.HeapType`; the memory model is docs/MEMORY.md's,
+  unchanged.
 - `LuceHost` gains appended handle-channel slots — open, read into a
   buffer answering the count, write from a buffer, flush, close —
   carrying raw bytes with no opinion about encoding.  Fail-closed
@@ -122,7 +122,7 @@ sitting as the directive itself:
 | **R2** | **Bytes underneath, text as validation in `libluce_rt`.**  Host file slots carry raw bytes; the text builtins are defined over them; the old text slots retire behind the `abi.version` bump.  Part two is the design. |
 | **R3** | **`strings.from_bytes` answers `string?`** — the parse case, the `parse_int` precedent. |
 | **R4** | **The primitive is C-shaped: read into a caller-owned buffer, answering the count** (*"generally we want reading bytes into array and write just like real languages like C"* — owner, same sitting).  `array(byte, n)` is the buffer — already packed, already fixed — and whole-file read/write demote to `std.files` conveniences built over the primitive, the Go/Rust layering.  The same shape serves sockets in `std.network`, where whole-read does not exist. |
-| **R5** | **File handles enter the language in this run, as scope-owned resources.**  `files.open(path)` answers a handle; reads advance it; the owning scope's end closes it — deterministic close is exactly what scope ownership is for, and `give`/`return`/`free` mean for a handle what they mean for every object.  Doing the channel path-shaped now and handle-shaped again for sockets would have been the patch-shaped choice; this run bumps the ABI once, and `std.network` reuses the resource pattern for sockets. |
+| **R5** | **File handles enter the language in this run, as reference-counted resources.**  `files.open(path)` answers a handle; reads advance it; its last reference going away closes it — deterministic close at the last reference is exactly what ARC gives, and sharing a handle shares the reference.  Doing the channel path-shaped now and handle-shaped again for sockets would have been the patch-shaped choice; this run bumps the ABI once, and `std.network` reuses the resource pattern for sockets. |
 
 ## The questions, as they were argued
 
@@ -157,14 +157,14 @@ reason, and each has a spec in `specs/bytes_spec.zig`.
 | **B2** | **`new list(T)` is handed the element zero, exactly as `new array` is.**  The runtime deliberately does not know the program's type table, and the zero's tag *is* the type — the sentence `ElementKind.of` already stood on.  Nothing new crosses the boundary; `luce_rt_new_list` takes one more `Value` and both engines pass it. |
 | **B3** | ~~**A list the *runtime* builds is a `.value` list, whatever its element type.**~~  `m.keys()`, `m.values()`, `dir_list` and `args` are built out of stored `Value`s and the runtime has no type to read a kind from.  A boxed cell holds anything and hands back exactly what was put in it, so this is always correct and only ever costs memory.  **Superseded 2026-08-07** — correct is not the same as *knowable*, and this made a `list(T)`'s storage depend on which code built it.  The moment generated code wanted to read a cell inline it had to know the width from the type alone (`docs/CODEGEN.md`, "Inline access"), and the alternative — a branch on the object's kind at every access — would have hidden the problem rather than fixed it.  So B2's answer was extended to the two operations that had a choice: `m.keys()` and `m.values()` take the element zero, `dir_list` and `args` can only ever build a `List(String)` and say `.value` in full, and `list_slice` and `copy` preserve the source's kind as they always did.  **A `list(T)` is packed whoever built it.** |
 | **B4** | **`capacity()` is not on the hot path.**  Element arithmetic in `ensureCapacity` divides by a width the compiler does not know, and one integer division per `append` measured as a real cost on the `strings` benchmark.  The growth arithmetic is in bytes; the division survives only where a reader asks for a capacity. |
-| **B5** | **The handle's type is spelled `file`, and it sits in `types.HeapType` as `.file`.**  A heap type because scope ownership is what gives a resource a death point, and it is the resource half of `HeapType` rather than a fifth container: no element type, no `new`, and the only door in is `files.open`.  `file_methods` in stage 4 is `read`/`write`/`flush`, and there is deliberately no `close` — `free(f)` is one and the end of the owning scope is the other.  `std.network`'s sockets are meant to arrive beside it wearing the same pattern, which is the whole reason the shape carries no container vocabulary. |
-| **B6** | **The channel is installed into `libluce_rt`, not read at each call.**  This is the decision the close forces, and it is the one that decided the whole architecture of part two: a scope's end arrives inside the ownership walk, where no generated code is standing to hand a host table in.  So `luce_rt_files_install` takes the five pointers once, `Runtime.files` holds them for the run, and the runtime calls them.  The consequence is better than the requirement: both engines install *literally the same five function pointers*, so the interpreter and a compiled artifact reach one implementation of what an open answers, what a short read means and when a close happens — and the four intrinsics lower to plain `luce_rt_*` calls rather than to host-slot code. |
+| **B5** | **The handle's type is spelled `file`, and it sits in `types.HeapType` as `.file`.**  A reference type because ARC gives a resource a deterministic close at its last reference, and it is the resource half of `HeapType` rather than a fifth container: no element type, no `new`, and the only door in is `files.open`.  `file_methods` in stage 4 is `read`/`write`/`flush`, and there is deliberately no `close` method — the close happens automatically at the last reference.  `std.network`'s sockets are meant to arrive beside it wearing the same pattern, which is the whole reason the shape carries no container vocabulary. |
+| **B6** | **The channel is installed into `libluce_rt`, not read at each call.**  This is the decision the close forces, and it is the one that decided the whole architecture of part two: the last reference going away arrives inside the ARC release path, where no generated code is standing to hand a host table in.  So `luce_rt_files_install` takes the five pointers once, `Runtime.files` holds them for the run, and the runtime calls them.  The consequence is better than the requirement: both engines install *literally the same five function pointers*, so the interpreter and a compiled artifact reach one implementation of what an open answers, what a short read means and when a close happens — and the four intrinsics lower to plain `luce_rt_*` calls rather than to host-slot code. |
 | **B7** | **The five slots are `handle_open`, `handle_read`, `handle_write`, `handle_flush`, `handle_close`**, appended in that order at `abi.version` 12.  Named for the handle rather than for the file, because the same five serve a socket; `file_read` and its siblings kept their names and their positions and are simply not filled any more.  Mode is a number on the slot (0 read, 1 write, 2 append) and a named door in `std.files`: a builtin speaks what the host slot speaks, and the library is where it gets a name. |
 | **B8** | **A handle remembers the path it was opened at.**  "The read failed" without saying which file is a message that helps nobody, and a handle two hundred lines from its `open` is exactly where a reader has stopped being able to supply the name themselves.  The bytes are the object's and go back with it.  `FileAct` gains `open` and `flush`, appended. |
 | **B9** | **The runtime raises the `io_failed` itself.**  It is the side that knows the path, so the exports take the raise site (`function`, `instruction`) and record the error; what reaches generated code is one flag to branch on.  `emitFileRead` went from a host call, a branch and an intern to one call. |
 | **B10** | **A method can be fallible.**  Nothing before the byte channel needed one — every fallible thing was a free builtin — so `lowerMethod` simply never opened an outcome.  `f.read(buffer)` needs `try` or `catch` for the same reason `file_read` does, and a site that says neither is `luce.sema.fallible` rather than a silently dropped outcome. |
 | **B11** | **`parse_string(xs) -> string?` is the primitive R3 needs.**  `strings.to_bytes` is an ordinary Luce loop over `byte_at`, but `from_bytes` is a *validator*, and a second UTF-8 validator written in Luce would be a second implementation of a semantic.  So the parse family takes a third member, named for what it produces exactly as `parse_int` and `parse_float` are, and `strings.from_bytes` is its one-line surface.  A packed `list(byte)` *is* its bytes, so the validator reads the run in place — which is R1 paying for R3. |
-| **B12** | **`copy f` and `new file` are refused by name, in stage 4.**  A second Luce handle on one open file would be two owners of one resource, which is the thing scope ownership exists to make impossible; a `file` with no file behind it is the one state the type must never hold.  Both have a wall behind them in the runtime and the verifier for IR that arrived some other way — a `.lcm` reaches the backend without passing the analyzer. |
+| **B12** | **`new file` is refused by name, in stage 4** — the only door is `files.open`.  A `file` is a reference type, so naming it in a second binding shares the same handle; a `file` with no file behind it is the one state the type must never hold.  The refusal has a wall behind it in the runtime and the verifier for IR that arrived some other way — a `.lcm` reaches the backend without passing the analyzer. |
 
 **The folded ruling, and what survived of the cap.**  The flat
 `max_array_elements = 1 << 24` is gone: it was a policy number
@@ -178,9 +178,9 @@ asked, located and traced like every other.  The Linux overcommit
 caveat is written where the trap code is defined, because it is the
 one case this trap honestly does not catch.
 
-**What did not move.**  The ownership rules are OWNERSHIP.md's,
-unchanged, and the handle specs are written against the existing
-clauses rather than new ones.  `map` is untouched.  `file_read`,
+**What did not move.**  The memory model is docs/MEMORY.md's,
+unchanged, and the handle specs are written against it rather than new
+clauses.  `map` is untouched.  `file_read`,
 `file_write` and `file_append` have the surface and the meaning they
 had.  No keyword arrived.
 

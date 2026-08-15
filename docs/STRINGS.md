@@ -5,23 +5,19 @@
 > `builder` — docs/TYPES.md D8), and the two numeric types became four:
 > `int` and `float` are 32 bits and are what a literal takes with
 > nothing to tell it otherwise, `long` and `double` are the 64-bit
-> types this memo calls `Int` and `Float`.  A fenced block tagged
-> `luce historical` is shown as it was written and is not compiled;
-> every other one in this file is (`tools/doccheck.zig`).
+> types this memo calls `Int` and `Float`.
 
-> **The rule.** A String's bytes have exactly one owner — the binding,
-> container element, struct field, or map key that holds them, or the
-> statement that produced them — and any store into something that
-> outlives the current statement copies the bytes, so no owner ever
-> holds a view of bytes it did not allocate. The one store that does
-> not copy is the one where the statement hands its own fresh bytes
-> over and keeps nothing: ownership moves, and the count of owners is
-> still one (step 6).
+> **The rule.** A string is a value. Storing it into anything that
+> outlives the current statement — a binding, a container element, a
+> struct field, a map key — copies the bytes, so no place ever holds a
+> view of bytes it did not allocate. The one store that does not copy
+> is the one where the statement hands over its own freshly-made bytes
+> and keeps nothing: the allocation moves rather than being duplicated
+> (step 6).
 
-`docs/MEMORY.md` records why scope ownership won for objects and then
-refuses, permanently, every automatic manager for values. This is the
-memo for what replaces them. It was `docs/MISSING.md` Tier 0 item 1,
-second bullet.
+`docs/MEMORY.md` records the memory model — values copy, reference
+types are shared and reference-counted. This memo is how string values
+are stored. It was `docs/MISSING.md` Tier 0 item 1, second bullet.
 
 **A note on the measurement tables.** Rows labelled *interpreter* are
 the reference implementation the test suite compares against — the
@@ -50,12 +46,11 @@ forwarding that had to stop at owning slots is now a private fact
 > **What SSO shipped** and **What move-instead-of-copy shipped** at the
 > foot of this document. Step 4 is still queued.
 
-Nothing in the language changes. No verb, no trap, no diagnostic, no
-change to the leak census. S1–S43 keep every decision; three lines of
-`docs/OWNERSHIP.md` need a clarifying clause and are quoted below. A
-program cannot observe the difference except in RSS — which is the
-test, and which is what makes this an implementation decision rather
-than a model change.
+Nothing in the language changes. No trap, no diagnostic, no change to
+the leak census. Every decision in the memory model holds; the memory
+model restated for values is below. A program cannot observe the
+difference except in RSS — which is the test, and which is what makes
+this an implementation decision rather than a model change.
 
 ## What is wrong
 
@@ -66,8 +61,8 @@ run in `loom/runner.zig:489` and dropped whole at the end.** Nothing
 between those two moments gives a byte back.
 
 `runtime/value.zig` says it plainly: *"Nothing here owns memory. String
-and struct payloads are borrowed from the program's constants or from
-the runtime arena, and they stay valid for the whole run — a value is a
+and struct payloads are views into the program's constants or into the
+runtime arena, and they stay valid for the whole run — a value is a
 view, never a handle to free."*
 
 Measured consequences, both in MISSING.md:
@@ -95,9 +90,9 @@ between a memory *footprint* and a memory *lifetime*.
 MEMORY.md's objection to a per-statement scratch arena was not the
 relief it gives (33% mid-file, 50% at end of file — still linear). It
 was correctness: *"resetting would dangle every view already stored,
-because containers, struct fields, `s[a:b]` and `m[k]` all hold borrows
+because containers, struct fields, `s[a:b]` and `m[k]` all hold views
 of bytes they did not allocate. Whether a string escapes cannot be
-decided at the producer, because the producer is usually a borrow of
+decided at the producer, because the producer is usually a view into
 something whose region is not known there."*
 
 That is exactly right, and copy-on-store deletes its premise. Under
@@ -119,30 +114,30 @@ door into them:
 
 | # | site | how it gets there | today | after |
 |---|---|---|---|---|
-| 1 | local binding, and reassignment | `local_set` (+ `object_bind`) | shares bytes | copies; the scope frees, S5 frees the old |
+| 1 | local binding, and reassignment | `local_set` (+ `object_bind`) | shares bytes | copies; the scope frees, a reassignment frees the old |
 | 2 | list append | `.append_value` → `containers.append` | shares | copies |
 | 3 | list insert | `.insert_value` → `containers.insert` | shares | copies |
-| 4 | list / array element store | `.index_set` → `containers.indexSet` | shares | copies, frees the old (S22) |
+| 4 | list / array element store | `.index_set` → `containers.indexSet` | shares | copies, frees the old |
 | 5 | map value store | `.index_set` | shares | copies, frees the old |
 | 6 | map **key** store | `.index_set` → `Map.insert` | shares | copies, freed with the entry |
 | 7 | list literal element | lowers to `.append_value` (`builder.zig:1790-1815`) | — | as (2) |
 | 8 | struct construction | `struct_make` → `Runtime.makeStruct` | shares run *and* bytes | copies both |
 | 9 | struct field assignment | `struct_set` → `Runtime.setField` | fresh run, shared bytes | copies both |
-| 10 | function return | `ret` | shares | copies, or moves an owned local (S16's `moved`) |
+| 10 | function return | `ret` | shares | copies, or moves a local this frame produced |
 | 11 | `xs[a:b]` on `List(String)` | `containers.listSlice` → `deepCopy` | shares (`heap.zig:959`) | copies |
 | 12 | `m.keys()` | `containers.mapKeys` | shares | copies |
 | 13 | `m.values()` | `containers.mapValues` → `deepCopy` | shares | copies |
-| 14 | `copy x` on a String-bearing object | `Runtime.deepCopy` | shares | copies |
+| 14 | a deep copy of a string-bearing object | `Runtime.deepCopy` | shares | copies |
 | 15 | Builder append | `containers.append` → `ArrayList.appendSlice` | **already copies** into the Builder's own buffer | unchanged |
 | 16 | `key_text` | `luce_rt_set_key_text` | already copies — into the arena | copies into one owned slot, frees the old |
 | 17 | host text in (`file_read`, `arg`) | `luce_rt_intern_text` | copies into the arena | copies into an owned temporary |
 | 18 | trap message | `Runtime.failMessage` | arena | at most one per run; a run ends on a trap |
 | 19 | `Array(String)` zero fill | `Runtime.newArray` | the static `""` | static, no owner |
-| 20 | `catch NAME:` binding | `Runtime.raise` already copied the words into the arena; `error_message` borrows them out | arena | copies into the binding's owned slot, which its scope frees |
+| 20 | `catch NAME:` binding | `Runtime.raise` already copied the words into the arena; `error_message` views them out | arena | copies into the binding's owned slot, which its scope frees |
 
 Rows 11–14 are the ones easiest to miss: `deepCopy`'s `else => return
-held` arm passes a String through by pointer, so `copy` of a
-`List(String)` today produces a second container holding the first's
+held` arm passes a String through by pointer, so a deep copy of a
+`list(string)` today produces a second container holding the first's
 bytes. Under the rule it duplicates them.
 
 **With that list, the theorem holds.** No owned storage contains a
@@ -151,18 +146,18 @@ death point, and the churn loop and the editor both go flat.
 
 ### The one residual hazard
 
-A *register* can hold a borrow of container or field bytes across a
+A *register* can hold a view into container or field bytes across a
 mutation of that container, inside one statement:
 
-```luce historical
+```text
 f(pieces[0], drop_first(pieces))    # drop_first calls pieces.remove(0)
 ```
 
 `pieces[0]` yields a view into the list's element cell; `remove` frees
-that element's bytes (S22); the first argument now dangles. Today this
-is safe only because element bytes are arena-lived. A String has no
-handle and no generation, so unlike S9 this cannot be turned into a
-trap.
+that element's bytes; the first argument now dangles. Today this is
+safe only because element bytes are arena-lived. A string has no handle
+and no generation, so unlike a reference type's stale handle this
+cannot be turned into a trap.
 
 It closes statically, and cheaply: a read out of a container or field
 materialises a copy when the same statement also contains a call that
@@ -247,8 +242,8 @@ result. Currently **1.73× C**.
 - Builder appends already copy into the Builder's own buffer
   (`containers.append`). Unchanged.
 - `let text = b.build()` — one extra 4.7 MB copy. **50 µs.**
-- `text.split(";")` — 400,001 pieces, each an `s[at:word_end]` borrow
-  appended into a `List(String)`. Every one becomes an owned
+- `text.split(";")` — 400,001 pieces, each an `s[at:word_end]` view
+  appended into a `list(string)`. Every one becomes an owned
   allocation: **~3.1 ms**, plus 400,000 twelve-byte copies at 0.29 ns,
   which is 0.1 ms and beneath notice.
 - `upper` and `replace` return `out.build()` — one fresh buffer each,
@@ -300,7 +295,7 @@ second byte, **22 bytes** fit inline — the same number libc++ reaches
 in the same 24 bytes
 (https://github.com/llvm/llvm-project/blob/main/libcxx/include/string;
 libstdc++ and MSVC get 15 in 32). Without demoting the tag, `bits` plus
-`length` give a 15-byte threshold, which is libstdc++'s and Swift's.
+`length` yield a 15-byte threshold, which is libstdc++'s and Swift's.
 
 Either threshold covers what this corpus actually stores: split pieces
 (~11 bytes), `String(Int)` results (≤20), wordcount's English map keys
@@ -329,16 +324,17 @@ last — after the measurement that says how much of the predicted
 
 ## `s[a:b]` on a String
 
-It is a **borrow today, on both engines**, and it stays one.
+It is a **view today, on both engines**, and it stays one.
 `text.slice` returns `Value.ofString(text[start..end])` — pointer
 arithmetic into the original bytes — and `08_llvm/lower.zig`'s
 `emitStringSlice` is a bounds check, two UTF-8 boundary checks, and a
-`getelementptr`. No allocation on either path.
+`getelementptr`. No allocation on either path. It is a value with no
+ownership verbs; at the low level it is a view into the same bytes.
 
 `docs/LANGUAGE.md:137` already says the right thing and needs no
-change: *"Slices copy: `xs[a:b]` allocates a new list the receiver owns
-— deeply, when elements are objects…; `s[a:b]` on a String stays a
-value."* What changes is not the slice, it is what happens when you
+change: *"Slices copy: `xs[a:b]` allocates a new list — deeply, when
+elements are reference types…; `s[a:b]` on a String stays a value."*
+What changes is not the slice, it is what happens when you
 keep one. `pieces.append(s[at:word_end])` copies at the append. That is
 `strings.split`'s whole cost, and it is the difference between Luce and
 Go, which shipped `strings.Clone` in 1.18 precisely because a
@@ -349,17 +345,17 @@ Go, which shipped `strings.Clone` in 1.18 precisely because a
 
 `src/luce/std/strings.luc` settles this by itself:
 
-```luce historical
-func trim(s: String) -> String:
+```text
+func trim(s: string) -> string:
     ...
-    return s[first:last]        # a borrow of a parameter
+    return s[first:last]        # a view of a parameter
 
-func replace(s: String, old: String, replacement: String) -> String:
+func replace(s: string, old: string, replacement: string) -> string:
     if len(old) == 0:
         return s                # the parameter itself
 ```
 
-`fold_case` does the same. A String-returning function may hand back a
+`fold_case` does the same. A string-returning function may hand back a
 view of a parameter, a view of a constant, or freshly-made bytes, and
 Luce has no annotation that distinguishes them. Rust does distinguish
 them, and pays for it with lifetimes — `Cow<'a, B>` is the escape hatch
@@ -367,63 +363,52 @@ and `'a` is the price. Luce does not have lifetimes and will not add
 them.
 
 So **`ret` copies** — except where the returned register is provably
-the frame's own: a statement temporary, or an owned local being moved.
-`emitScopeReleases(from, moved)` already takes exactly that `moved`
-parameter for S16, so `Editing.splice`'s concat result moves out with
-no copy and `strings.trim`'s slice is copied out. Both decisions are
-static.
+the frame's own: a statement temporary, or a local this frame produced
+being moved. `emitScopeReleases(from, moved)` already takes exactly
+that `moved` parameter, so `Editing.splice`'s concat result moves out
+with no copy and `strings.trim`'s slice is copied out. Both decisions
+are static.
 
-Extending S17 ("returning a borrowed parameter is a compile error") to
-Strings would make `trim`, `replace` and `fold_case` illegal. It is an
-object rule and it stays one.
+There is no rule against returning a view of a parameter for strings,
+because a string return copies. `trim`, `replace` and `fold_case` are
+all legal.
 
-## OWNERSHIP.md: three clarifying clauses, no rule changes
+## The memory model, restated for values
 
-Everything the specification says stays true. Two situations become
-*more* true than the implementation had made them:
+Everything the memory model says stays true. A string is a value, and
+the value rules already imply this memo's outcome:
 
-**S37** already promises the outcome:
+- **A store copies.** `x.append(i)` appends a copy of the value; `i`
+  dying each iteration is irrelevant, because values are copied.
+  `var names: list(string) = []` / `names.append("ada")` is the same
+  story — a string is a value.
+- **A temporary dies at the end of its statement** — precisely, at the
+  end of the outermost statement containing the expression that made
+  it. That is the death point every fresh string's storage rides on.
+- **Values take no verbs.** There is nothing to hand over or release on
+  a string; assignment and passing copy it.
 
-> `x.append(i)` — *"appends a COPY of the Int value; `i` "dying" each
-> iteration is irrelevant — values are copied, never owned"*. `var
-> names: List(String) = []` / `names.append("ada")` — *"String is a
-> value: same story."*
+Three things the value model now makes concrete, all of them already
+implied:
 
-**S3** already provides the death point:
+1. **A value's storage is reclaimed by the runtime, not the program.**
+   The program never frees a value; the runtime reclaims a value's
+   storage when the place holding it — a binding, a container element,
+   a struct field, a map key — dies.
 
-> *"Unbound temporary dies at the end of its statement."* … *"Precise
-> wording: 'end of the outermost statement containing the
-> expression.'"*
+2. **A string return copies** rather than erroring. There is no rule
+   against returning a view of a parameter for strings, because the
+   return copies.
 
-**S32** already forbids the verbs, which is what keeps the surface
-identical:
+3. **A struct copy copies its value fields and shares its reference
+   fields.** Reference fields alias; value fields — strings and nested
+   plain structs — copy, so a struct copy is O(bytes of its value
+   fields).
 
-> *"Values never take verbs."* … `give name` — *"COMPILE error: give
-> applies to List/Map/Array/Builder (and carrying structs), not to
-> values."*
-
-Three places need a clause added, and nothing else in S1–S43 moves:
-
-1. **The vocabulary line.** *"Everything else (`Int`, `Float`, `Bool`,
-   `String`, structs) is a value: copied freely, never freed,
-   never verbed."* — "never freed" is a statement about the *program*,
-   and stays true; the runtime does free value storage, at the point
-   its owner dies. Add: *"never freed by the program — the runtime
-   reclaims a value's storage when the place holding it dies."*
-
-2. **S17.** *"Returning a borrowed parameter is a compile error."*
-   Add: *"This is a rule about objects. A String return copies instead
-   of erroring, because a String has no verb to demand (S32)."*
-
-3. **S26.** *"Struct copies alias the same objects."* Add: *"Object
-   fields alias; value fields — Strings and nested plain structs —
-   copy, so a struct copy is O(bytes of its value fields)."*
-
-**S33** ("Nothing can leak") becomes true of values as well as objects
-for the first time. **S22**'s "an element overwrite frees the old
-element" and **S31**'s "`copy` duplicates the object and everything it
-owns" both already say what the runtime must now do; they were
-under-implemented, not mis-specified.
+Nothing can leak: value storage now has a death point exactly as
+reference-type storage does. An element overwrite frees the old
+element, and a deep copy duplicates the object and everything it holds
+— both were under-implemented for value storage, not mis-specified.
 
 ## Does the LLVM unboxing survive?
 
@@ -450,10 +435,11 @@ keeps working, because the shape of a boxed String is still
 Two genuinely new emissions, both outside loops that matter:
 
 - A String local acquires a `luce_rt_bind` at its store and a
-  `luce_rt_unbind` at scope exit — the same pair objects already carry,
-  and `07_optimize/ownership.zig` already deletes the dead ones.
-- `ret` of a borrow gains one runtime call. A function returning a
-  fresh or owned String gains nothing.
+  `luce_rt_unbind` at scope exit — the same pair reference types
+  already carry, and `07_optimize/ownership.zig` already deletes the
+  dead ones.
+- `ret` of a view gains one runtime call. A function returning a
+  fresh string gains nothing.
 
 SSO would change reads, which is the reason it is sequenced last and
 gated on measurement.
@@ -483,9 +469,8 @@ So the minimal honest addition is **not a new instruction**. It is:
    `registerTemp` (gated on it at `builder.zig:1544`) never sees a
    String. The new predicate — call it `ownsStorage` — is true for
    `.string`, `.strukt` and `.heap`, and drives *release emission
-   only*. It must not be wired to the verb rule: widening
-   `carriesObjects` itself would make `xs.append(name)` demand `give
-   name` under S21, which is a language change and is forbidden.
+   only*. It must not be wired to any verb rule: `xs.append(name)` on a
+   string takes no verb, because a string is a value that copies.
 2. `libluce_rt` freeing String bytes in `unbind`, `freeValue` and
    `freeObject`, and copying in the store sites of the table.
 3. Every String producer allocating from `Memory.objects` rather than
@@ -511,9 +496,8 @@ free the old, then store.
 meaning of `object_unbind` is not, and a stale module would simply not
 release its strings.
 
-`Bytes` would have got the same treatment mechanically. It was v1 machinery on the
-way out, `08_llvm` does not lower it, and it has no producer in the
-language today.
+`Bytes` would have got the same treatment mechanically. `08_llvm` does
+not lower it, and it has no producer in the language today.
 
 ## Order
 
@@ -529,8 +513,8 @@ Each piece is independently valuable and independently shippable.
    strings benchmark here.
 3. **Struct field runs.** Separable, because struct values are a
    distinct tag and the analyzer already tracks their shape. Closes the
-   editor's remaining tens of megabytes and makes S26's clarified
-   wording true.
+   editor's remaining tens of megabytes and makes the struct-copy rule
+   true for value fields.
 4. **Destructive `struct_set`** when the source register is dead after
    it. Pure optimisation, provable from MIR liveness, no semantic
    change. Takes the editor from ~10× today's copy traffic to ~3×.
@@ -544,21 +528,24 @@ Each piece is independently valuable and independently shippable.
 
 ## Refused, with reasons
 
-**Reference counting, ARC, and any hidden per-value counter.** Refused
-permanently by directive (MEMORY.md), and this document does not
-relitigate it. What is being given up is real and should be written
-down: under counting, `var next = state` is O(1) instead of O(40 KB),
-`split` allocates once per piece with no copy, and `return s` is free.
-Swift proves it works. It also measures: 32% of execution time on
-average, 25 points of it the atomics alone, on a runtime where over 99%
-of objects are thread-private and the compiler still cannot prove it
-(PACT'18). Luce has no threads, so a counter here would be non-atomic
-and cheaper than Swift's — and it would still be a second memory
-manager underneath a model that already has one.
+**Reference counting an individual string value.** Luce reference-counts
+its reference types, but a string is a value that copies, not a
+reference-counted object — and reference-counting a string value would
+be a second memory manager underneath the value model. What is being
+given up is real and should be written down: under counting,
+`var next = state` is O(1) instead of O(40 KB), `split` allocates once
+per piece with no copy, and `return s` is free. Swift proves it works.
+It also measures: 32% of execution time on average, 25 points of it the
+atomics alone, on a runtime where over 99% of objects are thread-private
+and the compiler still cannot prove it (PACT'18). Luce has no threads,
+so a counter on a string would be non-atomic and cheaper than Swift's —
+and it would still be a second manager over a type the value model
+already reclaims exactly.
 
 **Copy-on-write.** A shared/unique bit is a reference count with one
-bit of range, and it fails the same directive. It also has the worst
-measured record of anything in this memo: Sutter's harness put atomic
+bit of range, and reference-counting a string value fails for the same
+reason. It also has the worst measured record of anything in this memo:
+Sutter's harness put atomic
 COW *behind* plain deep copy, WG21 N2668 made it non-conforming in
 C++11, and GCC broke its own ABI to comply
 (https://gcc.gnu.org/onlinedocs/libstdc++/manual/using_dual_abi.html).
@@ -589,7 +576,7 @@ hold no strings. Reuse `registerTemp`/`flushTemps`, which already exist
 and already carry the temporary list as hidden locals, and revisit this
 only if allocation shows up in a profile that SSO did not fix.
 
-**Owned/borrowed as a type distinction — Rust's `String`/`&str`.** It
+**Owned/viewed as a type distinction — Rust's `String`/`&str`.** It
 is the correct answer for Rust and it needs lifetimes. `strings.trim`
 returning `s[first:last]` is the counterexample in our own std, and it
 would need a lifetime parameter to typecheck. The Rust Book's own
@@ -597,14 +584,14 @@ verdict on the ergonomics: *"This trade-off exposes more of the
 complexity of strings than is apparent in other programming
 languages."* Luce is not paying that for a memcpy that costs 0.29 ns.
 
-**Making `String` an object** — a heap type with a handle, `give`,
-`copy` and `free`. It would give exact reclamation with no copies at
+**Making `string` a reference type** — a reference-counted object
+instead of a value. It would yield exact reclamation with no copies at
 all, and it is the strongest alternative here. It is refused because it
-stops String being a value: S32 and S37 both die, LANGUAGE.md's first
-page stops being true, `xs.append(name)` starts demanding `give name`,
-and every `let a = b` becomes an ownership question. That is precisely
-the Rust ergonomics the project already refused, arrived at from a
-different direction.
+stops string being a value: the value rules die, LANGUAGE.md's first
+page stops being true, and every `let a = b` becomes a question of
+sharing rather than a copy. A string is a value by design; making it a
+reference-counted object is a memory manager the value model does not
+need for it.
 
 **A per-container byte pool** — one bump arena per List or Map, freed
 with the container. One allocation per growth instead of per element,
@@ -620,8 +607,8 @@ with a hash table in front of it.
 `strings.clone`, Hare's `strings::dup`, Go's `strings.Clone`.** This is
 what every other manual-memory language in the survey actually does,
 and it is refused for one reason: Luce has already promised that values
-copy on assignment, and a language that says so and then requires
-`copy` on a String store is lying on its first page. Nim is the
+copy on assignment, and a language that says so and then requires an
+explicit clone at a string store is lying on its first page. Nim is the
 precedent that goes the other way and it is the right one — *"The
 assignment operator for strings always copies the string"*, with move
 elision doing the work and no refcount on the string itself
@@ -728,15 +715,15 @@ Five things the memo did not have quite right, all found by running it:
    `drop_storage` answers the *emptied* value, which the caller stores
    back, and that is what makes releasing a place twice free nothing.
 
-2. **`mir.Local` carries `owns_storage`.** A parameter borrows its
-   caller's bytes and a block-split spill borrows whatever it carries
+2. **`mir.Local` carries `owns_storage`.** A parameter views its
+   caller's bytes and a block-split spill views whatever it carries
    across the branch; a binding and a temporary own theirs. Both
    engines read the flag for two things: a slot that owns storage
    starts *empty* rather than at the shared per-layout zero, and a trap
-   that unwound past every release (S34) still gives the storage back —
+   that unwound past every release still gives the storage back —
    the interpreter sweeps the frames it left standing, and every frame
    sweeps its own slots as it pops. Value storage is not in the census,
-   so unlike objects there is nothing to preserve by leaving it.
+   so unlike reference types there is nothing to preserve by leaving it.
 
 3. **A fresh value has an identity, so it cannot be CSE'd.**
    `07_optimize/values.zig` folded two identical `struct_make`s
@@ -749,22 +736,22 @@ Five things the memo did not have quite right, all found by running it:
 
 4. **`str` always allocates.** `String(s)` of a String and `b.build()` of a
    Bool used to answer a view and a static. A producer that sometimes
-   allocates and sometimes borrows cannot be told apart at its use
-   site, and the whole rule turns on being able to.
+   allocates and sometimes answers a view cannot be told apart at its
+   use site, and the whole rule turns on being able to.
 
-5. **A `for` name over a container is a borrow, and the body can
+5. **A `for` name over a container is a view, and the body can
    invalidate it.** `for s in items:` with `items[0] = ...` in the body
-   frees the bytes `s` is looking at — an object's handle would go
-   stale and trap (S9), a String has none. The name takes a copy per
+   frees the bytes `s` is looking at — a reference type's handle would
+   go stale and trap, a String has none. The name takes a copy per
    iteration exactly when the body could free something a container
-   holds, and keeps the borrow when it provably could not, which is
+   holds, and keeps the view when it provably could not, which is
    what keeps `for piece in pieces:` free. Same static question as the
    residual hazard, one scope wider.
 
 Two smaller ones. An `Array(String)` element store no longer writes
 inline in compiled code — `08_llvm`'s `ownsNothing` is scalars only
 now, because a String element owns its bytes; reads stay inline, since
-reading an element is a borrow. And `Memory.arena` survives, holding
+reading an element is a view. And `Memory.arena` survives, holding
 what a program cannot grow without bound: a trap's words, the
 per-layout struct zero templates, and host text on its
 way into owned storage.
@@ -838,13 +825,13 @@ The build phase — 400,000 `String(i)` results, which is where 400,000 of
 the 800,000 allocations were — is **recovered exactly**, to the
 millisecond. What remains is in `split` and the fold, and it is the
 *copying* copy-on-store introduced: `pieces.append(s[run:at])` used to
-store a borrow and now duplicates twelve bytes into the element cell,
+store a view and now duplicates twelve bytes into the element cell,
 400,001 times. That is the design's own trade, made deliberately
 (*"the copy is free and the allocation is not"*), and the memo's
 estimate of it — 0.1 ms, "beneath notice" — was the number that was
 wrong, by about thirty times. Removing it would need step 6, not a
 larger threshold. [Since retracted — see "Where the design met the
-code" below: the copy is the borrow's one necessary copy, it measures
+code" below: the copy is the view's one necessary copy, it measures
 1.3 ms rather than the ~3 ms this table attributed to it, and step 6
 could not have removed it.]
 
@@ -894,15 +881,15 @@ Six things the SSO section did not have quite right.
    register shape.** Same reason, one scope smaller: `own_storage`
    answers a value that may be inline, and a `{ptr, i64}` slot could
    only record a pointer into the runtime's answer scratch. Locals that
-   *borrow* — every parameter, every block-split spill — keep the two
+   *view* — every parameter, every block-split spill — keep the two
    words they had, which is what keeps `find`'s inner loop over a
    String parameter exactly as it was.
 
    Errors arrived after this and had to honour it. A fallible call's
    result crosses the branch on its outcome through a hidden slot
-   (docs/FAILURE.md), and that slot is *not* a borrowing spill: it is
+   (docs/FAILURE.md), and that slot is *not* a viewing spill: it is
    the slot that owns the value, so the form survives the crossing.
-   Carrying it in a borrowing one instead marked inline text as
+   Carrying it in a viewing one instead marked inline text as
    outside text, and the release at the end of the statement freed a
    pointer into the frame — the same failure this rule exists to
    prevent, met from a direction that did not exist when it was
@@ -928,7 +915,7 @@ Six things the SSO section did not have quite right.
    different things and the release needs the slot.
 
 5. **A slice of inline text is a copy, and has to be.** `text.slice`
-   answered `Value.ofString(text[a..b])` — a borrow of its argument,
+   answered `Value.ofString(text[a..b])` — a view of its argument,
    which is a *copy of the caller's value* when the text is inline, so
    the view pointed at a parameter about to go. The source is at most
    twenty-two bytes, so any part of it fits inline too: the fix is a
@@ -940,7 +927,7 @@ Six things the SSO section did not have quite right.
 6. **`ret` is not the only way out of a frame — a trap's words leave
    too.** Rule 1 named `ret` and stopped there, and for two years that
    was the whole list. It was not: `trap("not a number: " + text)` hands
-   its String to the trap channel, which stored the *borrow* on the
+   its String to the trap channel, which stored the *view* on the
    argument that a trap unwinds past every release, so nothing gives the
    bytes back before the report is read. True, and beside the point —
    the words were never freed, the **frame** they lived in ended, and a
@@ -981,9 +968,9 @@ could ever move. Now there is one mechanism:
 > `luce_rt_struct_set` consume the value they store — including on the
 > trap, so nothing the caller handed over is ever left without an
 > owner — and `own_storage` stands in the IR in front of them wherever
-> the source is a borrow.
+> the source is a view.
 
-A map's **key** is the one exception and stays a borrow the map copies
+A map's **key** is the one exception and stays a view the map copies
 for itself: a store looks its key up before it keeps one, and an entry
 that already exists must not pay for a copy it will throw away.
 `m[k] = v` in a loop allocates for the value and nothing for the key.
@@ -1004,7 +991,7 @@ answers text answers a view.
 
 **Dead** is the park. Stage 4 already puts every fresh value in a
 hidden slot whose release ends the statement (`registerTemp` /
-`flushTemps`), so "will anything else give this back?" is answered by
+`flushTemps`), so "will anything else hand this back?" is answered by
 looking for that park — and taking the storage is *retracting* it.
 `takeStorage` clears the slot's `owns_storage`: the statement's release
 goes with it, the trap sweep skips it, and `07_optimize/dead.zig`
@@ -1016,7 +1003,7 @@ slot's release is indistinguishable from a binding's.
 Two parks are kept rather than retracted, and both are correctness:
 
 - **A slot that is read back cannot stop owning its storage.** A
-  borrowing slot hands a reload the register shape, and a String's form
+  viewing slot hands a reload the register shape, and a String's form
   does not survive that — the reload comes back saying "outside" over
   bytes that are in the frame. That is exactly the slot a fallible
   call's result crosses its branch in (rule 2 of the SSO section), so a
@@ -1088,7 +1075,7 @@ copy-on-store introduced: `pieces.append(s[run:at])` … duplicates
 twelve bytes into the element cell, 400,001 times", and that "removing
 it would need step 6".
 
-Step 6 cannot remove it. `s[run:at]` is a **borrow of the text being
+Step 6 cannot remove it. `s[run:at]` is a **view of the text being
 split**, not a fresh value — there is no allocation to hand over, and a
 store that kept the view would put a pointer to somebody else's bytes
 in the list. It is the one copy the whole design exists to make. The
@@ -1128,7 +1115,8 @@ Three smaller things the design did not have quite right:
 3. **Returning an owned local still copies.** `return kept`, where
    `kept` is a `var` this frame owns, is a `local_get` and therefore not
    fresh, so `ret` copies and the scope release then frees the original.
-   S16's `moved` already suppresses exactly this for objects; doing it
-   for storage means proving the local is not read again after the
-   `return`, which is a liveness question rather than a freshness one.
+   The `moved` parameter already suppresses exactly this for reference
+   types; doing it for storage means proving the local is not read again
+   after the `return`, which is a liveness question rather than a
+   freshness one.
    Left for step 4, which needs the same machinery.
