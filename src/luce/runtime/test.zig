@@ -146,6 +146,15 @@ fn newArrayWithOwnedFill(allocator: std.mem.Allocator) !void {
     runtime.freeValue(array);
 }
 
+test "emptying a function slot preserves its fixed ABI width" {
+    const unwritten: Value = .{ .tag = .function, .length = 2 };
+    const emptied = Runtime.emptied(unwritten);
+    try testing.expectEqual(value.Tag.function, emptied.tag);
+    try testing.expectEqual(@as(u64, 0), emptied.bits);
+    try testing.expectEqual(@as(u64, 2), emptied.length);
+    try testing.expect(emptied.hasValidRepresentation());
+}
+
 const CopyShape = enum { list, map, array, strukt };
 
 const CAllocationDoor = enum {

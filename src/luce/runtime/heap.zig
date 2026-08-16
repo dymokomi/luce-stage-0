@@ -1847,7 +1847,11 @@ pub const Runtime = struct {
             // An emptied str is inline and zero bytes long, which
             // reads as `""` — the same thing it read as before, and
             // nothing to free.
-            .str, .bytes, .strukt, .function => .{ .tag = held.tag },
+            .str, .bytes, .strukt => .{ .tag = held.tag },
+            // A function's two-slot width is part of its valid ABI shape,
+            // even when the run itself is absent.  Preserve it so a reused
+            // loop temporary remains a valid empty function slot.
+            .function => .{ .tag = .function, .length = held.length },
             else => held,
         };
     }

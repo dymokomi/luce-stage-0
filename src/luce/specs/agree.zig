@@ -426,6 +426,16 @@ fn settle(reference: *Reference, capture: *Capture, status: abi.Status) !End {
         try testing.expectEqual(@as(i64, reference.leaked.?), capture.leaked.?);
         return .{ .exited = chosen };
     }
+    if (status != .ok) {
+        std.debug.print("compiled arm ended {s} while the oracle finished", .{@tagName(status)});
+        if (capture.trap_code) |code| {
+            std.debug.print(": {s}: {s}\n{s}", .{ @tagName(code), capture.trapMessage(), capture.trapTrace() });
+        } else if (capture.error_code) |code| {
+            std.debug.print(": {s}: {s}\n", .{ @tagName(code), capture.errorMessage() });
+        } else {
+            std.debug.print("\n", .{});
+        }
+    }
     try testing.expectEqual(abi.Status.ok, status);
     try testing.expectEqual(@as(?mir.TrapCode, null), capture.trap_code);
     try testing.expectEqual(@as(i64, reference.leaked.?), capture.leaked.?);

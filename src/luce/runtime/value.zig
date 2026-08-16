@@ -451,7 +451,11 @@ pub const Value = extern struct {
         return switch (tag) {
             .str => self.hasValidStringRepresentation(),
             .bytes => self.hasValidBytesRepresentation(),
-            .strukt => self.hasValidFieldRun(),
+            // Generated fallible calls clear an unwritten composite result
+            // to a null run while its static width remains in the box.  The
+            // null pointer is the empty-storage sentinel: ownership walks
+            // stop before consulting the width, so it is valid and safe.
+            .strukt => self.bits == 0 or self.hasValidFieldRun(),
             // An unwritten function slot is a valid null function: its
             // ABI shape is still the two-slot run, but there is no
             // backing allocation until a function is stored.  Readers
@@ -667,6 +671,24 @@ test "an unknown ABI tag is invalid data, not a native enum panic" {
     try std.testing.expect(!held.hasValidStringRepresentation());
     try std.testing.expect(!held.ownsStorage());
     try std.testing.expect(!keyEquals(&held, &held));
+}
+
+test "null composite runs are valid empty ownership sentinels" {
+    // A failed composite call returns a null pointer through its ordinary
+    // unboxed result slot. Boxing reattaches the type's static width, so a
+    // null run with nonzero length is a legitimate empty value.
+    const composite: Value = .{ .tag = .strukt, .length = 3 };
+    try std.testing.expect(composite.hasValidRepresentation());
+    try std.testing.expect(!composite.ownsStorage());
+    try std.testing.expectEqual(@as(usize, 0), composite.asStruct().len);
+
+    // Function values have one fixed two-slot ABI. Their unwritten form
+    // keeps that width while naming no run.
+    const function: Value = .{ .tag = .function, .length = 2 };
+    try std.testing.expect(function.hasValidRepresentation());
+    try std.testing.expect(!function.ownsStorage());
+    try std.testing.expectEqual(@as(usize, 0), function.asStruct().len);
+    try std.testing.expect(!(@as(Value, .{ .tag = .function })).hasValidRepresentation());
 }
 
 test "every payload survives a round trip" {
