@@ -3,8 +3,8 @@
 # A Surface is the thing a window gives you to draw on.  This module keeps
 # the language API independent of Metal, Vulkan, and any window-system
 # handle; the host supplies those through the runtime graphics channel.
-# Resource ownership is ordinary Luce ownership: the binding that receives a
-# Surface owns its native resource until it is moved, freed, or leaves scope.
+# Resource lifetime is ordinary Luce ARC: aliases retain the same surface, and
+# the native resource closes when its last strong reference disappears.
 #
 # The macOS host shipped with `loom` uses Metal when it is available and a
 # CPU-backed window when it is not. Other hosts may leave this channel absent;

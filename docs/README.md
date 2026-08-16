@@ -16,10 +16,10 @@ working language feature, a planned type name is not a current spelling, and
 a completed implementation plan is not the language reference.
 
 Start with [V2.md](V2.md) for the product north star and
-[ROADMAP.md](ROADMAP.md) for the ordered path from today's ARC foundation to
-the intended language. Use [LANGUAGE.md](LANGUAGE.md) and the current pages
-below when working on the compiler. Confirmed incorrect behavior belongs in
-[MISSING.md](MISSING.md), and only there.
+[ROADMAP.md](ROADMAP.md) for the dated state audit and ordered path to 1.0.
+Use [LANGUAGE.md](LANGUAGE.md) and the current pages below when working on the
+compiler. Confirmed incorrect behavior belongs in [MISSING.md](MISSING.md),
+and only there.
 
 User-facing documentation lives at
 [luce.luciaos.com](https://luce.luciaos.com), built from
@@ -71,9 +71,9 @@ selected surface roster is checked during the site build.
 
 | File | What it decides |
 |---|---|
-| [V2.md](V2.md) | The product north star and the deliberately small language we are aiming for. |
-| [ROADMAP.md](ROADMAP.md) | Completed ARC/type/class/closure phases and the ordered path through owned interfaces, userland proof, generics, and release lock. |
-| [GENERICS.md](GENERICS.md) | A later monomorphized generics design; not a prerequisite for the ARC/class/closure milestone. |
+| [V2.md](V2.md) | The language-first product north star, current userland proof, and intentionally deferred systems work. |
+| [ROADMAP.md](ROADMAP.md) | The dated state-of-language audit and ordered path through owned existentials, generics, native UI, platform work, and the 1.0 lock. |
+| [GENERICS.md](GENERICS.md) | The proposed monomorphized generics design, its real library customers, diagnostics, limits, and acceptance matrix. |
 | [VECTOR.md](VECTOR.md) | A future optimization plan for checked vectorized reductions; not current language behavior. |
 
 ## Decision records

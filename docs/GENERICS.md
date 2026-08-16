@@ -1,121 +1,53 @@
-# Generics — a proposed direction
+# Generics — proposed monomorphized design
 
-> **Status: proposed, not built.** This document describes the intended
-> design for parametric generics in Luce. Nothing here exists in the
-> tree yet; when it is built, this file becomes its reference.
+> **Status: proposed, not implemented.** Every syntax example in this document
+> is `text`. The current language has built-in parameterized containers, but
+> users cannot declare a generic function or type.
 
-Generics would let a function or type be written once over a type it does
-not name in advance — `Stack[T]`, `Vec[T]`, a `run(...)` loop that holds
-an application's own state type. Luce's containers (`list[T]`,
-`map[K, V]`, `array[T, _]`) already answer this for the three shapes the
-language blesses; generics is the same capability opened to the
-programmer.
+Generics let one declaration state an algorithm or data shape without naming
+every concrete type in advance. They are useful when the relationship between
+operations is the same for several types and copying the declaration would
+create several sources of truth.
 
-## What wants it
+They are not needed to finish ARC, classes, closures, or the hidden TermUI
+application loop. TermUI 0.3 is important evidence: a class model plus an
+`Application` interface already lets a library own the lifecycle. Generics
+must therefore justify themselves through reusable typed code, not by claiming
+the current UI architecture cannot exist without them.
 
-Three things need the same missing capability:
+## The work that currently repeats
 
-1. **A runtime that hides the loop.** A UI runtime
-   `run(initial, view, update)` must name the application's state type to
-   hold it, call `view` on it, and store what `update` returns. Today
-   that type is the application's own, so a library cannot name it. An
-   `interface` can *hold* the state — an interface value is a reference
-   (`docs/MEMORY.md`) — but it erases the concrete type, so `run` could
-   no longer name the model in `view`'s and `update`'s signatures or hand
-   it back unchanged. Generics let the library name the type without
-   knowing it in advance.
-2. **Typed reusable widgets.** A selection list is a `func(i64) ->
-   str` today because it cannot be a `Vec[T]`; every widget that reads
-   application data is stringly typed for the same reason.
-3. **Reusable data structures.** A stack, a queue, a tree are
-   copy-paste-per-element-type today, or routed through `list`.
+Three ordinary library problems want this feature:
 
-A declarative UI framework does not strictly *need* generics — an
-application can keep its state concrete, expose a `view() -> View` and an
-in-place mutating `step(event)`, and let a library hide the frame loop
-behind a screen type, leaving only a short `while` in `main`. Generics is
-what moves that last loop into a `run(...)`. Its independent value —
-typed widgets and reusable data structures — stands on its own.
+1. **Algorithms over element types.** A function such as `first`, `reverse`,
+   `deduplicate`, or `binary_search` should not be copied for every type it can
+   store. Operations beyond storage need a named behavioral bound.
+2. **Data structures with one invariant.** A stack, deque, tree, matrix, or
+   typed component should express its rule once while preserving the element
+   type at every call.
+3. **Typed composition.** Native UI and other packages will need reusable
+   state and component containers without reducing their application data to
+   `str`, numeric IDs, or an erased interface too early.
 
-## The foundation Luce already has
+The criterion is not “could use a type parameter.” A generic earns its place
+when several real instantiations share an invariant or algorithm and a common
+implementation materially reduces mistakes.
 
-The type system **already interns parameterized types.** A heap type is
-one of `list: Type`, `map: {key, value}`, or `array: {element, rank}`,
-and a `list[Point]` and a `list[i64]` are two interned heap types over
-one code path. A parameterized type is therefore not a new idea to the
-compiler — only a *user-written* one is.
+## Proposed syntax
 
-The container runtime is also **type-erased at the ABI**: `libluce_rt`
-moves tagged values and never sees the element type. The type table knows
-the element type; the runtime knows only "a run of values with this tag."
-
-## Monomorphization
-
-The proposed strategy is **monomorphization**: expand a generic to one
-specialized copy per type argument during checking and lowering, the way
-Rust, C++, and Zig do. Under it, *nothing below the check/lower seam
-changes* — a generic becomes concrete functions and structs before it
-reaches MIR, so the MIR, the serialized module, the interpreter oracle,
-the LLVM backend, and the runtime library are exactly what they are
-today. Both engines run identical concrete MIR, so the differential
-guarantee is untouched. The price is code size per instantiation, the
-accepted price of the same choice elsewhere, and `optimize/prune`
-already drops the instantiations a program does not reach.
-
-The two alternatives are weaker fits. **Dictionary passing** (a vtable
-argument per generic call) reuses interface dispatch but adds a second
-calling convention and a runtime indirection. **Type erasure** over a
-uniform boxed value is how containers already work, but generalizing it
-would box every scalar and struct, a representation Luce's value types do
-not have.
-
-## Memory needs no reasoning of its own
-
-Under the value/reference model with ARC (`docs/MEMORY.md`), a generic
-body needs no memory reasoning. A `T` that resolves to a value type
-copies; a `T` that resolves to a reference type is shared and
-reference-counted; ARC inserts every retain and release from the concrete
-type, not from the generic body:
+Type parameters appear in brackets after the declaration name. A parameter
+may name one interface bound:
 
 ```text
-func keep(x: T) -> T:      # copies a value, shares a reference…
-    return x               # …decided by the concrete T, not the body
-```
+func first[T](values: list[T]) -> T?:
+    if len(values) == 0:
+        return none
+    return values[0]
 
-Monomorphization makes this exact: each instantiation substitutes a
-concrete `T`, and the ordinary checker runs on concrete code where every
-copy, share, retain, and release is already settled by the type. There is
-no new category on a type parameter and no per-use diagnostic about
-memory — a generic is checked exactly as the hand-written concrete code
-it expands to would be.
+interface Ordered:
+    func before(other: Self) -> bool
 
-## Bounds are interfaces
-
-An unbounded `T` can only be **copied, shared, stored, and compared for
-identity** — the operations that need no knowledge of the type. To call a
-method on a `T`, the parameter must be **bounded by an interface**, the
-mechanism the language already has:
-
-```text
-func largest[T: Comparable](xs: list[T]) -> T?:   # T.less(other) is callable
-    ...
-```
-
-`T: Comparable` means "any type that conforms to `Comparable`," checked
-at the *use*, where the instantiation supplies a concrete type and its
-conformance is the existing interface-conformance check. A bound is the
-generic generalization of the interface-argument rule that works today.
-The proposal reuses `docs/INTERFACES.md` wholesale: no new constraint
-language, one interface per parameter to start. A multi-bound `T: A + B`
-is a natural later extension.
-
-## Syntax
-
-A type parameter is declared in brackets after the name, with an optional
-bound:
-
-```text
-func run[Model](start: Model, view: func(Model) -> ui.View, update: func(Model, ui.Event) -> Model):
+func smallest[T: Ordered](values: list[T]) -> T?:
     ...
 
 struct Stack[T]:
@@ -127,76 +59,208 @@ struct Stack[T]:
     func pop() -> T?:
         ...
 
-func largest[T: Comparable](xs: list[T]) -> T?:
-    ...
+let numbers = Stack[i64](items = [])
 ```
 
-At a use, type arguments are **inferred from the value arguments** where
-possible (`run(counter, view, update)` infers `Model = Counter`) and
-written explicitly where inference cannot reach them (`new Stack[i64]`).
-A bare `T` inside a generic is a *type name* in scope exactly as `i64`
-is; outside, it is nothing. Brackets are used rather than angle brackets
-because `<` and `>` are comparison operators and Luce has bitwise `<<`
-and `>>` — angle brackets would make the parser guess, and Luce does not
-guess.
+Brackets match Luce’s existing type application—`list[T]`, `map[K, V]`, and
+`array[T, _]`—and avoid making `<` and `>` ambiguous with comparisons and
+shifts.
 
-## Where it lives in the pipeline
-
-Monomorphization makes generics a **front-end-only** change:
-
-- **Parser**: `[T]` / `[T: Bound]` on `func` and `struct`; `T` as a
-  written type; `[…]` type arguments at a call or construction.
-- **Semantics**: a generic declaration is a *template* — named, scoped,
-  its signature recorded with `T` as a fresh type-parameter type variant
-  valid only inside its template. Each use collects or infers the type
-  arguments, **instantiates** the template by substituting `T`, interns
-  the instantiation by (template, arguments) so `Stack[i64]` is one type
-  program-wide, and checks the instantiation as ordinary concrete code.
-  `main`'s reachable set drives which instantiations are produced.
-- **HIR, MIR, optimize, LLVM, runtime**: **unchanged.** They only ever
-  see the concrete instantiations. The serialized module's
-  `format_version` bumps for the new AST/HIR nodes; the host
-  `abi.version` does not move, and `libluce_rt` learns nothing — the same
-  sentence enums and unions earned. The type-parameter variant exists
-  only inside a template and never reaches MIR; a `parameter` type in
-  lowering would be a *never*, owed a stage-4 refusal like every other.
-- **The oracle** enters at the same concrete MIR, so both engines agree
-  by construction.
-
-## Scope for a first version
-
-**In:** generic `func`s and generic `struct`s, monomorphized, with
-interface bounds and argument inference — enough for a `run[Model]` UI
-loop, a typed `Vec[T]`/`Stack[T]` widget family, and reusable data
-structures.
-
-**Deferred:** generic `enum`/`union`s (a concrete union suffices for a
-recursive `View` tree); multiple bounds `T: A + B`; variance and
-subtyping of instantiations; higher-kinded parameters; associated types;
-and specialization or overloading on type arguments. Each is additive
-over the core.
-
-## The payoff, and the one thing generics does not fix
-
-With generics, a UI runtime is writable and the loop disappears for any
-application, carrying state included:
+At a call, type arguments are inferred from value arguments when the answer is
+unique. An explicit form is available when inference has no evidence or more
+than one answer:
 
 ```text
-func main():
-    app.run(Editor.open(args), Editor.view, Editor.step)
+let found = first(names)
+let empty = first[str]([])
 ```
 
-`run[Editor]` holds the concrete `Editor` — no interface, no erasure.
-Where the cost lives is worth stating: if `update`/`step` is a *function*
-`func(Model, Event) -> Model` over a value-type `Model`, it returns a new
-model, and copying a value type copies the whole state each event. For a
-text editor that copy is dominated by the content it already rebuilds per
-keystroke, so it is likely acceptable; for very large state, make `Model`
-a `class` — a reference is shared, so an `update` that mutates it in place
-needs no copy at all. The immutable-update cost is a *choice* the memory
-model already answers (`docs/MEMORY.md`); it is noted here so a port
-measures it rather than assumes it away.
+Inference should remain local to one call or construction. It does not search
+the whole program, guess from future statements, choose conversions, or rank
+overloads. A missing or conflicting argument is a diagnostic that names the
+parameter and every source of evidence.
 
-When this is built, its proof is an executable specification that runs a
-generic on **both engines** and compares them, exactly as every other
-language feature earns its place.
+## What an unbounded parameter can do
+
+An unbounded `T` supports only operations valid for every Luce type in the
+declared position:
+
+- bind, pass, return, and store the value;
+- place it in a container whose own restrictions it satisfies; and
+- copy a value or retain a reference according to the concrete type.
+
+It does not silently acquire arithmetic, ordering, hashing, methods, a zero
+value, or construction syntax. Those operations require either a concrete
+type or an interface bound whose requirements say they exist.
+
+This keeps generic checking honest. The body is valid because of what its
+signature states, not because the first instantiation happened to have an
+extra method.
+
+## Bounds reuse interfaces
+
+Interfaces are the one behavioral contract in Luce. A generic bound should
+reuse nominal conformance rather than add traits, concepts, structural
+constraints, or compiler-known operator sets.
+
+```text
+interface Named:
+    func name() -> str
+
+func labels[T: Named](values: list[T]) -> list[str]:
+    var result = new list[str]
+    for value in values:
+        result.append(value.name())
+    return result
+```
+
+The concrete type is chosen at the call and checked for explicit `Named`
+conformance. The generic body is checked against `Named`, and each specialized
+call uses the concrete witness table selected by existing conformance rules.
+
+Owned interface existentials land first. That prevents generic bounds from
+depending on the current per-method bound-receiver representation and gives
+writing value witnesses one final meaning before generics reuse them.
+
+The first version has one bound per parameter. Multiple bounds, protocol
+composition, associated types, and generic interfaces are deferred until a
+real library cannot state its invariant without them.
+
+## Monomorphization
+
+The proposed implementation specializes a generic declaration once for each
+distinct concrete argument list. `Stack[i64]` and `Stack[str]` become ordinary
+concrete types before MIR; `first[i64]` becomes an ordinary concrete function.
+
+That choice preserves the existing lower half of the compiler:
+
+- MIR contains concrete layouts and call signatures only;
+- the runtime continues to move ordinary tagged values;
+- ARC insertion sees the final value/reference kind;
+- the optimizer and LLVM backend need no generic calling convention;
+- the interpreter oracle executes the same concrete MIR; and
+- unused specializations are removed by reachability pruning.
+
+The cost is compile time and code size per specialization. The compiler must
+intern instantiations by declaration identity plus concrete arguments, compile
+each one once, detect recursive expansion, and measure growth. A generic that
+creates a larger instantiation of itself must stop with a diagnostic instead
+of exhausting the compiler.
+
+Generic syntax alone does not require a serialized-module or host-ABI bump if
+all templates disappear before MIR. A future design that serializes templates
+would be a different boundary and would pay the corresponding format cost.
+
+## Pipeline ownership
+
+The change belongs in the source-facing half of the compiler:
+
+- **Parser and AST:** record parameter declarations, optional bounds, and
+  explicit type arguments.
+- **Semantic declarations:** give each type parameter a scoped identity that
+  cannot escape its generic declaration.
+- **Generic body checking:** validate operations against the parameter and its
+  bound before relying on any concrete use.
+- **Instantiation:** infer or accept arguments, check constraints, substitute
+  concrete types, intern the result, and emit ordinary typed HIR.
+- **HIR onward:** accept concrete declarations only. A type parameter reaching
+  lowering is a compiler invariant failure, not a runtime case.
+
+Cross-module templates must retain source locations and visibility so an
+error in an imported instantiation can show both the generic declaration and
+the call that selected the concrete type.
+
+## Memory semantics
+
+Generics add no ownership category. After substitution:
+
+- a value argument copies;
+- a reference argument retains and shares identity;
+- a generic structure copies its value fields and retains its reference
+  fields;
+- a generic class remains a final ARC reference;
+- a specialization that stores a weak-capable reference may use ordinary weak
+  storage where its declaration says so; and
+- resources retain their existing deterministic cleanup.
+
+There is no `T: Copy`, `T: Reference`, borrow annotation, move marker, or
+generic ARC API. If a declaration needs behavior such as cloning, equality,
+or ordering, it names an interface that provides that behavior.
+
+## First milestone
+
+The first generics milestone includes:
+
+- generic functions;
+- generic structures;
+- generic final classes after functions and structures prove the
+  instantiation model;
+- one type parameter or several independent parameters;
+- one interface bound per parameter;
+- local argument inference and explicit type arguments;
+- constructors, methods, static functions, aliases, optionals, functions,
+  built-in containers, and nested generic applications;
+- public/private declarations and cross-module/package use; and
+- monomorphized output before MIR.
+
+It excludes:
+
+- generic interfaces or existential type arguments;
+- associated types;
+- higher-kinded parameters;
+- variadic parameters or packs;
+- specialization/overload ranking;
+- variance or subtyping between instantiations;
+- partial specialization;
+- runtime reflection over type arguments; and
+- implicit structural bounds.
+
+Generic enumerations and unions may follow if a real data model needs them.
+They are not required to prove the core with algorithms, stacks, trees, typed
+components, and class-backed state.
+
+## Diagnostics and limits
+
+Typical mistakes must be designed with the feature, not after it:
+
+- unknown, duplicated, unused, or shadowed type parameters;
+- a type parameter used outside its declaration;
+- missing, extra, or conflicting explicit arguments;
+- inference with no evidence or contradictory evidence;
+- a concrete type that does not satisfy its bound;
+- a body operation not promised by the bound;
+- recursive or mutually recursive instantiation growth;
+- a specialization that exposes a private concrete type;
+- incompatible specializations reached under one module identity; and
+- an instantiation count, nesting depth, or generated-code limit.
+
+Diagnostics should lead with the generic declaration and failed relationship,
+then show the concrete call that supplied the type. Dumping a fully expanded
+internal name is evidence for a compiler engineer, not a useful primary error
+for a user.
+
+## Acceptance matrix
+
+The feature is complete only when all of these work or refuse on both engines:
+
+1. identity, optional-returning, and multiple-parameter generic functions;
+2. inferred and explicit calls with the same specialization identity;
+3. a `Stack[T]` containing values and a `Stack[T]` containing ARC references;
+4. a generic class whose aliases observe shared mutation;
+5. bounded method dispatch for both structure and class conformers;
+6. generic values in lists, maps, arrays, optionals, fields, returns, errors,
+   closures, and interface conversions where the final concrete type permits;
+7. public templates instantiated from another module and package;
+8. allocation failure, recoverable unwinding, traps, and destruction with no
+   leaked or double-released objects;
+9. stable module fingerprints and one emitted specialization per concrete
+   argument list;
+10. recursive-instantiation and code-growth limits with precise source spans;
+11. compile-time and artifact-size measurements across repeated and distinct
+    instantiations; and
+12. a real generic library structure used by an application, not only a
+    compiler fixture.
+
+The first userland proof should be small enough to understand and substantial
+enough to need the feature: a typed tree or deque plus one bounded algorithm,
+followed by a native UI component that keeps its application data concrete.

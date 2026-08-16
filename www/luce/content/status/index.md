@@ -50,10 +50,12 @@ Cursor extension.
 
 The embedded standard library includes `std.math`, `std.files`,
 `std.strings`, `std.lists`, `std.paths`, `std.os`, `std.term`, `std.zip`,
-`std.json`, `std.gpu`, and `std.ui`. The maintained `termui` package provides
-deterministic terminal rendering, layout, text, input, and view primitives.
+`std.json`, `std.gpu`, and `std.ui`. The maintained TermUI 0.3 package provides
+declarative terminal applications from panels, stacks, labels, rows, styles,
+events, and one library-owned application loop. The shipped editor uses that
+public surface.
 
-The current serialized-module format is 54 and the host ABI is 23. Loaders
+The current serialized-module format is 55 and the host ABI is 24. Loaders
 refuse incompatible artifacts rather than guessing.
 
 ## The memory model

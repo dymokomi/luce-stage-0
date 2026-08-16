@@ -1,12 +1,12 @@
 # Packages: finding and loading code you did not write
 
 A Luce project can depend on packages: named, versioned bundles of Luce
-source resolved from a store on disk. This is the *consuming* half of
-packages — how a program finds and loads code — and it is complete. The
-*publishing* half — a registry, a fetch protocol, and the `luce
-install`/`update`/`init` client — is not yet built; a package store is
-filled by hand today (copy a checkout, add a git submodule, or point at a
-source directory).
+source resolved from a store on disk. The consuming and local-authoring paths
+are complete: a project can resolve exact versions, use a direct source
+folder, and create or version that folder with `luce package`. The networked
+distribution half — a registry, trust model, fetch/update client, and actual
+upload — is not built. `luce package publish` validates the local boundary and
+then refuses rather than claiming it contacted a registry that does not exist.
 
 ## Two import namespaces
 
@@ -229,11 +229,11 @@ host loader, names in and bytes out. Four properties make that hold:
 
 ## Not yet built
 
-- **Fetching** — no network, no registry, no lockfile. Exact versions plus
-  optional hashes are the lock until transitive version ranges exist. The
-  intended client is `luce install` / `luce update` / `luce init` in the
-  `luce` binary's own Zig, against a registry that speaks a static-file
-  protocol first.
+- **Fetching** — no network, no registry, and no lockfile. Exact versions plus
+  optional hashes are the lock until registry metadata justifies anything
+  more. Future install/update commands belong in the `luce` binary and need a
+  specified registry and trust protocol first; local project bootstrapping is
+  already handled by `luce package new`.
 - **Registry publishing** — mandatory hashes, signatures, yanking, scoped
   names, and a package-level export boundary.
 - **Version ranges and a solver** — a solver needs registry metadata, so
