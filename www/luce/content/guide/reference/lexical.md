@@ -85,7 +85,7 @@ main.luc:2:9: _ is the array-shape wildcard, not a name (array(long, _)); a bind
 ## Keywords
 
 ```
-and      break    catch    class    const    continue elif
+alias    and      break    catch    class    const    continue elif
 else     enum     false    for      func     if       import   in
 interface let     match    new      none     not
 or       private  public   return   self     spawn    static

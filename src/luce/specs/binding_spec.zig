@@ -1071,8 +1071,8 @@ test "a struct holding a container of function values compares by handle, and is
         \\    var buttons = new list(Button)
         \\    buttons.append(Button(on_click = twice))
         \\    let panel = Panel(buttons = buttons)
-        \\    let alias = panel
-        \\    print(string(panel == alias))
+        \\    let same_panel = panel
+        \\    print(string(panel == same_panel))
         \\    var others = new list(Button)
         \\    others.append(Button(on_click = twice))
         \\    let second = Panel(buttons = others)

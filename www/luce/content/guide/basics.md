@@ -82,6 +82,38 @@ func main():
 7 0.5 true Luce
 ```
 
+## Naming a type
+
+Use `alias` when a domain name makes an existing type easier to understand:
+
+```luce run
+alias UserId = long
+alias UserNames = map(UserId, string)
+
+func display_name(names: UserNames, id: UserId) -> string:
+    return names.get(id) else "unknown"
+
+func main():
+    var names: UserNames = new UserNames
+    names[UserId(42)] = "Mina"
+    print(display_name(names, 42))
+```
+
+```output
+Mina
+```
+
+An alias is another spelling, not another type. `UserId` and `long` are
+interchangeable, so use a `struct` when two values must not mix or when the
+value needs fields and methods. Aliases may also name functions, optionals,
+containers, structures, interfaces, enums and unions. They can refer forward
+and form chains; cycles are rejected.
+
+The target decides construction. An alias of a structure can construct it, an
+enum or union alias can reach its members, and an owning-container alias
+follows `new` as above. [Type aliases](/guide/reference/types/#type-aliases)
+has the exact visibility, module, and diagnostic rules.
+
 ## Scalar types
 
 | Type | Meaning |

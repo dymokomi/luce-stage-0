@@ -29,6 +29,64 @@ program constructs an independent value explicitly when that is what its
 data model requires. `class` is currently a front-end scaffold, not a
 completed reference type; see [Status](/status/).
 
+## Type aliases {#type-aliases}
+
+`alias` is a file-scope declaration that gives one resolved type another
+source name:
+
+```text
+alias Name = Type
+public alias Name = Type
+private alias Name = Type
+```
+
+The unmarked form is public. The alias and target are exactly the same type.
+No wrapper, conversion, nominal identity, allocation, layout, runtime tag, or
+dispatch rule is created.
+
+An alias may appear anywhere its target type may appear:
+
+- annotations, parameters, results, fields and constants;
+- optionals and nested function/container types;
+- interface conformance lists and interface-typed containers;
+- enum backing widths;
+- imports and public re-exports; and
+- later declarations, because alias and nominal targets may refer forward.
+
+Aliases may form chains. Resolution follows a chain to its one concrete
+target before the program is lowered, including when no code uses the alias.
+A direct or indirect cycle is therefore always an error and reports the
+complete loop.
+
+Construction follows the target:
+
+| Target | Alias expression |
+|---|---|
+| numeric or `string` | `Alias(value)` performs the target conversion |
+| `struct` | `Alias(field = value)` constructs the structure |
+| `enum` or `union` | `Alias.member` reaches the target member |
+| nominal type with a static function | `Alias.function(...)` reaches it |
+| `list`, `map`, `array`, `builder` | `new Alias` constructs the object |
+| `file` | open it through `std.files` |
+| `task(...)` | create it with `spawn` |
+| `bool`, optional, interface, function type | no constructor; it remains a type |
+
+`private alias` is reachable only inside its file. A public alias may re-export
+an imported public type, but may not expose a private nominal target. Alias
+names share the top-level namespace with imports, constants, functions,
+structures, classes, interfaces, enums, and unions.
+
+| Invalid declaration or use | Diagnostic |
+|---|---|
+| `alias A = A` | `luce.sema.alias` with `A -> A` |
+| `alias A = B; alias B = A` | `luce.sema.alias` with the complete cycle |
+| unknown target or wrong type arguments | `luce.sema.type` |
+| `MaybeId?` when `MaybeId` already aliases `long?` | `luce.sema.type`; Luce has one optional layer |
+| builtin, reserved, or duplicate alias name | `luce.sema.reserved` or `luce.sema.duplicate` |
+| private imported alias or public alias exposing a private type | `luce.sema.private` |
+| calling an alias whose target has no call-shaped constructor | `luce.sema.call` with the target-specific creation form |
+| using the bare alias as a runtime value | `luce.sema.name` |
+
 ## Scalars
 
 | Type | Definition |
@@ -343,10 +401,10 @@ func main():
 different concrete type. The same interface value can be stored in an array
 or a struct field, returned, or wrapped in an optional. The current hidden
 layout stores bound dispatch values and copies the concrete struct receiver
-state. Reference fields are currently aliases that the dispatch value does not
-retain, so another concrete value must keep them alive. Interface methods are
-read-only until the planned owned-existential representation replaces this
-layout.
+state. Each bound dispatch value retains the reference graph carried by its
+receiver copy, so the interface may safely outlive the concrete binding that
+formed it. Interface methods are read-only until the planned owned-existential
+representation replaces this layout.
 
 Interfaces do not inherit from one another or expose fields. Interface
 methods may use the ordinary multi-value return shape:

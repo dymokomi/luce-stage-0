@@ -2,11 +2,11 @@
 
 ## File structure
 
-A file may contain `import` lines, file-scope `const` declarations,
-`struct`, `enum`, `union`, and `func` declarations in any order. It has
-no executable top-level statements and no top-level `var`.
+A file may contain `import` lines and file-scope `alias`, `const`,
+`struct`, `interface`, `enum`, `union`, and `func` declarations in any
+order. It has no executable top-level statements and no top-level `var`.
 
-Each of the five declaration forms may carry a
+Each declaration form may carry a
 [visibility](#visibility) word. Without one it is public.
 
 ## Entry
@@ -25,6 +25,23 @@ The optional `list(string)` parameter receives the command line. With
 Any other parameter list or any value result is refused.
 
 These are the only entry forms.
+
+## alias {#alias}
+
+```text
+alias Name = Type
+private alias Name = Type
+```
+
+An alias is a transparent second spelling for the complete type on the right.
+It is checked eagerly and erased before runtime. Aliases may chain and refer
+forward; cycles, unknown targets, reserved names, top-level collisions, and
+privacy violations are rejected.
+
+The declaration is file-scoped and public by default. `private alias` keeps
+the name inside the file; `public alias` states the default explicitly. See
+[Type aliases](../types/#type-aliases) for construction, namespaces, modules,
+and the exact diagnostic matrix.
 
 ## func
 
@@ -230,6 +247,7 @@ already the default is legal and inert.
 
 ```
 private func name(...)        public func name(...)
+private alias Name = Type     public alias Name = Type
 private const name = expr     public const name = expr
 private struct Name:          public struct Name:
 private field: Type           public field: Type

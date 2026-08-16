@@ -96,7 +96,7 @@ source file are rejected before parsing. See the
 [lexical reference](/guide/reference/lexical/)
 for limits and diagnostic codes.
 
-## Projects and aliases
+## Projects and renamed imports
 
 A `luce.yaml` file marks a project root. Dotted imports map to subfolders;
 `as` chooses a local binding name when two modules would otherwise collide.
@@ -121,6 +121,19 @@ func main():
 ```output
 12
 ```
+
+The `as gs` clause renames a module binding only. A type alias is a different
+declaration:
+
+```text
+alias PointId = long
+private alias Cache = map(PointId, string)
+```
+
+A public type alias is reachable as `module.PointId` and may deliberately
+re-export an imported public type. A private one stays inside its file. See
+[Naming a type](/guide/basics/#naming-a-type) for the first use and the
+[type-alias reference](/guide/reference/types/#type-aliases) for exact rules.
 
 Without a project manifest, imports remain single-segment sibling imports.
 The [module reference](/guide/reference/modules/) covers manifest resolution

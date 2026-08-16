@@ -53,7 +53,7 @@ func quoted_end(value: string, finish: long, opening: long) -> long:
 # --- the word tables -------------------------------------------------
 
 private const keyword_words = {
-    "and": true, "break": true, "catch": true, "class": true,
+    "alias": true, "and": true, "break": true, "catch": true, "class": true,
     "const": true, "continue": true, "elif": true, "else": true,
     "enum": true, "false": true, "for": true, "func": true,
     "if": true, "import": true, "in": true, "interface": true,

@@ -45,7 +45,10 @@ ARC contract:
 - `weak` references do not exist.
 - The public scalar spellings are still `byte`, `short`, `int`, `long`,
   `half`, `float`, `double`, and `string`.
-- Transparent `alias Name = Type` declarations do not exist yet.
+- Transparent `alias Name = Type` declarations are complete: type positions,
+  constructors and static/member namespaces, chains, forward references,
+  visibility, re-exports, constants, and diagnostics agree on both engines,
+  and aliases are erased before HIR.
 - [MISSING.md](MISSING.md) contains no confirmed current bug.
 
 That inventory is the baseline. A plan item is not allowed to migrate into a
@@ -336,7 +339,7 @@ hardening bug; zero live objects after every clean differential spec; exact
 file-close/task-join counts; no user-visible legacy ownership language; and
 reproducible baseline numbers.
 
-### Phase 1 — add transparent type aliases
+### Phase 1 — add transparent type aliases — complete
 
 1. Parse `alias Name = Type` as a file-scope declaration with ordinary
    public-by-default visibility and `private alias` support.
@@ -353,6 +356,11 @@ reproducible baseline numbers.
 Exit: aliases work everywhere a type may be written, add no runtime behavior,
 and every malformed alias fails at its own declaration or use with a precise
 source span.
+
+Completed on 2026-08-15. The focused differential lane covers 17 positive and
+negative specification groups with zero leaked objects. Syntax data, current
+references, the public Guide, construction/member namespaces, multi-file
+privacy and re-exports are included; no alias identity crosses into HIR.
 
 ### Phase 2 — freeze the new type contract
 

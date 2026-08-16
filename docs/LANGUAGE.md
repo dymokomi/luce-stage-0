@@ -62,6 +62,24 @@ independent. User-defined class references and `weak` do not exist as
 complete language features yet; `class` is only a front-end scaffold
 whose target semantics are in `docs/ROADMAP.md`.
 
+## Type aliases
+
+`alias Name = Type` declares a transparent second spelling for a type. The
+alias and target are interchangeable: aliases work in annotations,
+signatures, fields, containers, optionals, interface conformances,
+constructors, conversions, enum and union member namespaces, static
+functions, constants, and imports.
+
+`alias` is file-scoped and public by default; `private alias` follows the
+ordinary module rule. Forward references and chains are allowed. Direct or
+indirect cycles, unknown targets, double optionals hidden by an alias, private
+cross-module access, and collisions with any top-level declaration are
+refused during checking, including when the alias is unused.
+
+An alias has no runtime identity. Stage 4 resolves it to its target, and HIR,
+MIR, serialized modules, both engines, and ARC never receive an alias tag.
+`docs/ALIASES.md` is the complete current contract.
+
 ## Memory
 
 Memory syntax is automatic, and the model is one paragraph (the full contract
@@ -1913,7 +1931,7 @@ import, and using a namespace you didn't import is a compile error
 
 **Visibility** (docs/VISIBILITY.md, ratified): a declaration is
 public unless it says `private` — written in full, before `func`,
-before a file-scope `const`, before `struct`, and on a struct field;
+before a file-scope `alias` or `const`, before `struct`, and on a struct field;
 `public` is legal anywhere `private` is and inert where it restates
 the default.  Inside a struct — and only there — `private:` and
 `public:` open an indented region of members.  The unit is the file,

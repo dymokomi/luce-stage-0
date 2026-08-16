@@ -14,6 +14,8 @@ can use now and the language being designed. The [Tour](/tour/),
   `double`, `bool`, and `string`.
 - Value structs, enums, tagged unions, nominal interfaces, named functions,
   bound methods, and capture-free one-expression lambdas.
+- Transparent file-scope type aliases, including chains, forward references,
+  constructors, static/member namespaces, visibility, and module re-exports.
 - Lists, maps, fixed-shape arrays, builders, optionals, recoverable errors,
   and multiple returns.
 - ARC for lists, maps, arrays, builders, files, and tasks. Assignment shares
@@ -131,19 +133,6 @@ generics, not primitive keywords. `map` is the one associative container;
 `dict` and `hash` are not aliases. A compiler `vec[T, N]` is justified only by
 real SIMD and ABI semantics.
 
-### Type aliases
-
-Transparent aliases will use one declaration form:
-
-```text
-alias UserId = i64
-alias Names = list[str]
-```
-
-An alias gives an existing type another source name; it does not create a new
-nominal type, runtime representation, conversion, or dispatch rule. Alias
-chains are allowed, cycles are rejected, and normal module visibility applies.
-
 ## Ordered work
 
 The implementation order is chosen to avoid rewriting the same compiler and
@@ -153,8 +142,9 @@ documentation seams twice:
    census gate is gone; resources close or join exactly once, bound receivers
    retain their graphs, worker snapshots preserve aliases, derived collections
    retain elements, and malformed modules fail closed.
-2. **Add transparent type aliases.** Implement `alias Name = Type` with module
-   visibility, chains, cycle rejection, diagnostics, and both-engine specs.
+2. **Transparent type aliases — complete.** `alias Name = Type` works through
+   type positions, constructors, members, constants and modules; cycles,
+   privacy violations and namespace collisions have exact diagnostics.
 3. **Freeze the type and closure contracts.** Decide literal, conversion,
    Unicode, container-type, block-closure, capture-list, and diagnostic rules
    before changing code.

@@ -161,6 +161,17 @@ Luce 40
 
 `main` is the entry point and must not be private.
 
+Type aliases follow the same file boundary:
+
+```text
+private alias InternalId = long
+public alias UserId = long
+```
+
+A public alias may re-export a public type. It cannot expose a private
+structure, enum, union, class, or interface under a new public name; the
+compiler points to the alias declaration and offers the two honest fixes.
+
 ## Where visibility markers are valid
 
 Visibility applies to file-scope declarations and struct members, not local

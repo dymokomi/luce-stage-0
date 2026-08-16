@@ -218,7 +218,7 @@ A **function value** — `func(T, ...) -> R`, or the storable form
 The builtin type names are **lowercase**: `byte`, `short`, `int`,
 `long`, `half`, `float`, `double`, `bool`, `string`, and the containers
 `list`, `map`, `array`, `builder`, plus the resources `file` and `task`.
-A name you declare — a struct, enum, union, or interface — is TitleCase
+A name you declare — a type alias, struct, enum, union, or interface — is TitleCase
 by convention, so the case of a type name says who defined it. `class`
 will join that set only when its reference lowering is complete.
 
@@ -228,6 +228,20 @@ type. The one place the grouping is load-bearing is the storable
 function value: a bare `func(long) -> string?` is a function *answering*
 a `string?`, so "a function that may be absent" is written
 `(func(long) -> string)?`.
+
+## Transparent aliases
+
+`alias Name = Type` creates another source name for exactly the resolved
+target type. It does not create an eighth numeric type, a wrapper, a distinct
+nominal identity, or a runtime representation.
+
+An alias may stand anywhere its target type can stand and may use the target's
+construction and member namespace. For example, an alias of a structure may
+construct it, an alias of an enum may name its members, and an alias of a list
+may follow `new`. Chains and forward references resolve eagerly; cycles and
+unknown targets are rejected even when unused. [ALIASES.md](ALIASES.md)
+specifies visibility, privacy, construction, diagnostics, and compiler
+erasure.
 
 ## Conversions
 

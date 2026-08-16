@@ -2815,10 +2815,10 @@ test "lists: an append through one name is seen through the other" {
         \\
         \\func main():
         \\    var xs = new list(long)
-        \\    let alias = xs
+        \\    let same = xs
         \\    xs.append(1)
-        \\    alias.append(2)
-        \\    assert(xs[1] == 2 and len(alias) == 2)
+        \\    same.append(2)
+        \\    assert(xs[1] == 2 and len(same) == 2)
         \\    # The callee grows it far past the eight elements the
         \\    # first allocation holds; the caller's next read must be
         \\    # of the buffer that came back, not the one it lent.

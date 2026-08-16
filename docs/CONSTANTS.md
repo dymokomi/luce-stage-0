@@ -93,11 +93,11 @@ distinct objects.
 
 ```luce
 const numbers: list(long) = [5, 8]
-const alias = numbers
+const same_numbers = numbers
 const equal: list(long) = [5, 8]
 
 func main():
-    assert(numbers == alias)
+    assert(numbers == same_numbers)
     assert(numbers != equal)
 ```
 

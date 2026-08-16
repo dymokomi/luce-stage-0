@@ -8,8 +8,8 @@ it survives into the compiled program.
 
 ## The rule in one paragraph
 
-A file-scope `func`, `const`, `struct`, `interface`, `enum`, or `union` is
-public by default; write `private` before it to withhold it from
+A file-scope `func`, `alias`, `const`, `struct`, `interface`, `enum`, or
+`union` is public by default; write `private` before it to withhold it from
 importers. A struct field is public by default; write `private`
 before the field, or place it in a `private:` region, to withhold it. An
 `import` binds the module's namespace either way; what it *reaches* is the
@@ -45,6 +45,8 @@ written in full — never abbreviated — immediately before the declaration:
 ```luce
 private const scale: long = 10
 public const limit: long = scale * 4
+private alias InternalId = long
+public alias UserId = long
 
 private func helper(x: long) -> long:
     return x + scale

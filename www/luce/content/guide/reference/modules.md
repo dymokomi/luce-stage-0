@@ -13,8 +13,9 @@ import folder.name as other   the same file, bound as `other`
 ```
 
 An import binds the last path segment: `import std.math` and
-`import geo.math` both bind `math`. `as` chooses another binding name;
-it is contextual syntax, not a reserved keyword.
+`import geo.math` both bind `math`. `as` chooses another module binding
+name; it is contextual syntax, not a reserved keyword. This is separate from
+an `alias Name = Type` declaration, which names a type rather than a module.
 
 An import reaches the imported file's top level:
 
@@ -24,6 +25,7 @@ name.Struct(field = expr, ...)
 name.Struct.member(args)
 name.constant
 p: name.Struct              in an annotation
+p: name.Alias               a public type alias
 ```
 
 An import exposes the imported file's public top-level declarations.
@@ -59,6 +61,7 @@ construction, and the `s.method(...)` string sugar that routes to
 | `geo.helper()`, marked | `helper is private to geo` |
 | `geo.seed`, marked constant | `seed is private to geo` |
 | `p: store.Inner`, marked struct | `Inner is private to store` |
+| `p: store.InternalId`, marked alias | `InternalId is private to store` |
 | `h.slot`, marked field | `slot of Handle is private to handle` |
 | `session.Session(token = 7)`, marked field named | `token of Session is private to session` |
 | `geo.helperr`, a typo near a marked name | `unknown function helperr` — and no suggestion names a private one |
@@ -163,6 +166,12 @@ A public constant container is a public surface too: its element or
 map-value type may not be private. A private constant may use the
 private type, and a public folded value may still be computed from a
 private constant because that exposes the value rather than its name.
+
+A public type alias is itself part of the module surface. It may name or
+re-export a public local or imported type. It may not expose a private nominal
+type; the declaration is refused with the two available fixes. A
+`private alias` may name a private type and remains usable throughout its own
+file.
 
 ```luce fail
 private struct Inner:

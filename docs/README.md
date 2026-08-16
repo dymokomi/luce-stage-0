@@ -49,6 +49,7 @@ selected surface roster is checked during the site build.
 | [STRINGS.md](STRINGS.md) | Current UTF-8 string representation and lifetime behavior. |
 | [FAILURE.md](FAILURE.md) | Absence, recoverable errors, traps, `try`, and `catch`. |
 | [TYPES.md](TYPES.md) | Current builtin types and type grammar. |
+| [ALIASES.md](ALIASES.md) | Transparent type aliases, visibility, construction, diagnostics, and compiler erasure. |
 | [ARGS.md](ARGS.md) | Named and default arguments. |
 | [VISIBILITY.md](VISIBILITY.md) | Public-by-default declarations and file-scoped privacy. |
 | [BITWISE.md](BITWISE.md) | Integer bit operations and literals. |
