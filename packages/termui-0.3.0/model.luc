@@ -1,0 +1,146 @@
+# The public values shared by termui's declarative tree.
+#
+# These are transparent descriptions. They own no terminal and perform no
+# host IO. The application builds them; the hidden runtime interprets them.
+
+import std.strings
+
+enum Color:
+    black
+    red
+    green
+    yellow
+    blue
+    magenta
+    cyan
+    white
+    bright_black
+    bright_red
+    bright_green
+    bright_yellow
+    bright_blue
+    bright_magenta
+    bright_cyan
+    bright_white
+
+struct Style:
+    foreground: i64 = 7
+    background: i64 = -1
+    bold: bool = false
+
+    static func of(colour: Color) -> Style:
+        return Style(foreground = i64(colour))
+
+# A rectangle of terminal cells. Every operation is total because a small
+# terminal is a normal layout input, not an exceptional state.
+struct Rect:
+    row: i64 = 0
+    column: i64 = 0
+    rows: i64 = 0
+    columns: i64 = 0
+
+    func is_empty() -> bool:
+        return self.rows <= 0 or self.columns <= 0
+
+    func contains(row: i64, column: i64) -> bool:
+        return row >= self.row and row < self.row + self.rows and column >= self.column and column < self.column + self.columns
+
+    func split_top(height: i64) -> (Rect, Rect):
+        let taken = clamp(height, 0, self.rows)
+        let top = Rect(row = self.row, column = self.column, rows = taken, columns = self.columns)
+        let rest = Rect(
+            row = self.row + taken,
+            column = self.column,
+            rows = self.rows - taken,
+            columns = self.columns,
+        )
+        return top, rest
+
+    func split_bottom(height: i64) -> (Rect, Rect):
+        let taken = clamp(height, 0, self.rows)
+        let rest = Rect(
+            row = self.row,
+            column = self.column,
+            rows = self.rows - taken,
+            columns = self.columns,
+        )
+        let bottom = Rect(
+            row = self.row + self.rows - taken,
+            column = self.column,
+            rows = taken,
+            columns = self.columns,
+        )
+        return bottom, rest
+
+    func split_left(width: i64) -> (Rect, Rect):
+        let taken = clamp(width, 0, self.columns)
+        let left = Rect(row = self.row, column = self.column, rows = self.rows, columns = taken)
+        let rest = Rect(
+            row = self.row,
+            column = self.column + taken,
+            rows = self.rows,
+            columns = self.columns - taken,
+        )
+        return left, rest
+
+    func split_right(width: i64) -> (Rect, Rect):
+        let taken = clamp(width, 0, self.columns)
+        let rest = Rect(
+            row = self.row,
+            column = self.column,
+            rows = self.rows,
+            columns = self.columns - taken,
+        )
+        let right = Rect(
+            row = self.row,
+            column = self.column + self.columns - taken,
+            rows = self.rows,
+            columns = taken,
+        )
+        return right, rest
+
+    func inset(amount: i64) -> Rect:
+        let margin = max(amount, 0)
+        return Rect(
+            row = self.row + margin,
+            column = self.column + margin,
+            rows = max(self.rows - 2 * margin, 0),
+            columns = max(self.columns - 2 * margin, 0),
+        )
+
+struct Span:
+    text: str = ""
+    style: Style = Style()
+
+# One styled terminal row. A provider builds a Line for the current frame;
+# the view traversal owns clipping and placement.
+struct Line:
+    spans: list[Span]
+
+    func width() -> i64:
+        var total: i64 = 0
+        for span in self.spans:
+            total += span.text.width()
+        return total
+
+func plain(text: str, style: Style = Style()) -> Line:
+    let spans: list[Span] = [Span(text = text, style = style)]
+    return Line(spans = spans)
+
+struct Cursor:
+    row: i64 = 0
+    column: i64 = 0
+
+enum Response:
+    ignored
+    handled
+    quit
+
+# Which edges a frame contributes. Omitting an edge also leaves that cell
+# available to its content; the returned interior is inset only on edges that
+# exist.
+struct Edges:
+    top: bool = true
+    right: bool = true
+    bottom: bool = true
+    left: bool = true

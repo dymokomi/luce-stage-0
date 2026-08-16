@@ -1,0 +1,135 @@
+# The buffered cell canvas, terminal diff and host-free snapshot.
+
+import std.term
+import std.strings
+import model
+
+struct Cell:
+    text: str = " "
+    style: model.Style = model.Style()
+
+struct Painted:
+    cells: i64 = 0
+    runs: i64 = 0
+    moves: i64 = 0
+
+# A read-only rendered frame for tests and previews. The cell array is owned
+# by the snapshot; callers inspect it through `cell` and `line`.
+struct Snapshot:
+    private cells: array[Cell, _, _]
+    rows: i64
+    columns: i64
+    cursor: model.Cursor?
+
+    func cell(row: i64, column: i64) -> Cell:
+        if row < 0 or row >= self.rows or column < 0 or column >= self.columns:
+            return Cell()
+        return self.cells[row, column]
+
+    func line(index: i64) -> str:
+        if index < 0 or index >= self.rows:
+            return ""
+        var result = new builder
+        for at_column in range(0, self.columns):
+            result.append(self.cells[index, at_column].text)
+        return result.build()
+
+# `back` is the frame being described. `front` is the last frame committed to
+# the terminal. Only `present` changes the latter claim.
+struct Surface:
+    private back: array[Cell, _, _]
+    private front: array[Cell, _, _]
+    rows: i64
+    columns: i64
+    stale: bool = true
+
+    static func of(rows: i64, columns: i64) -> Surface:
+        let high = max(rows, 1)
+        let wide = max(columns, 1)
+        return Surface(
+            back = new array[Cell](high, wide),
+            front = new array[Cell](high, wide),
+            rows = high,
+            columns = wide,
+        )
+
+    func area() -> model.Rect:
+        return model.Rect(rows = self.rows, columns = self.columns)
+
+    func resize(rows: i64, columns: i64):
+        let high = max(rows, 1)
+        let wide = max(columns, 1)
+        if high == self.rows and wide == self.columns:
+            return
+        self.back = new array[Cell](high, wide)
+        self.front = new array[Cell](high, wide)
+        self.rows = high
+        self.columns = wide
+        self.stale = true
+
+    func clear():
+        for at_row in range(0, self.rows):
+            for at_column in range(0, self.columns):
+                self.back[at_row, at_column] = Cell()
+
+    func put(row: i64, column: i64, content: str, style: model.Style):
+        if row < 0 or row >= self.rows or column < 0 or column >= self.columns:
+            return
+        self.back[row, column] = Cell(text = content, style = style)
+
+    func cell_at(row: i64, column: i64) -> Cell:
+        if row < 0 or row >= self.rows or column < 0 or column >= self.columns:
+            return Cell()
+        return self.back[row, column]
+
+    # Offsets are relative to `area`; both the area and canvas clip writes.
+    func write(area: model.Rect, row: i64, column: i64, content: str, style: model.Style):
+        if row < 0 or row >= area.rows:
+            return
+        var at_column = column
+        for character in content.characters():
+            if at_column >= area.columns:
+                return
+            if at_column >= 0:
+                self.put(area.row + row, area.column + at_column, character, style)
+            at_column += 1
+
+    func fill(area: model.Rect, content: str, style: model.Style):
+        for at_row in range(0, area.rows):
+            for at_column in range(0, area.columns):
+                self.put(area.row + at_row, area.column + at_column, content, style)
+
+    func snapshot(cursor: model.Cursor?) -> Snapshot:
+        return Snapshot(cells = self.back, rows = self.rows, columns = self.columns, cursor = cursor)
+
+    # Commit changed horizontal style runs. Resize marks the terminal unknown,
+    # so the first frame after one is always complete.
+    func present() -> Painted:
+        var painted = Painted()
+        for at_row in range(0, self.rows):
+            var at_column: i64 = 0
+            while at_column < self.columns:
+                if self.back[at_row, at_column] == self.front[at_row, at_column] and not self.stale:
+                    at_column += 1
+                    continue
+                let style = self.back[at_row, at_column].style
+                var stop = at_column
+                var content = new builder
+                while stop < self.columns:
+                    let current = self.back[at_row, stop]
+                    if current.style != style:
+                        break
+                    if current == self.front[at_row, stop] and not self.stale:
+                        break
+                    content.append(current.text)
+                    self.front[at_row, stop] = current
+                    stop += 1
+                term.move(at_row, at_column)
+                term.style(style.foreground, style.background, style.bold)
+                term.write(content.build())
+                painted.cells += stop - at_column
+                painted.runs += 1
+                painted.moves += 1
+                at_column = stop
+        self.stale = false
+        return painted

@@ -1,0 +1,139 @@
+# Total one-axis layout for declarative rows and columns.
+
+import model
+
+union Length:
+    fixed(cells: i64)
+    grow(weight: i64, minimum: i64)
+    ratio(low: i64, high: i64, percent: i64)
+    preferred(low: i64, ideal: i64, high: i64)
+
+func floor_div(numerator: i64, denominator: i64) -> i64:
+    return i64(floor(numerator / denominator))
+
+# Turn one Length per child into non-negative sizes. Optional pane lengths
+# (`ratio` and `preferred`) compress before primary `grow` content.
+func resolve(total: i64, spacing: i64, lengths: list[Length]) -> list[i64]:
+    let count = len(lengths)
+    var sizes = new list[i64]
+    if count == 0:
+        return sizes
+    let gap = max(spacing, 0)
+    let usable = max(total - gap * (count - 1), 0)
+    var floors = new list[i64]
+    var weights = new list[i64]
+    var optional = new list[bool]
+    var growing = new list[bool]
+    var claimed: i64 = 0
+    var total_weight: i64 = 0
+
+    for length in lengths:
+        match length:
+            fixed(cells):
+                let size = max(cells, 0)
+                sizes.append(size)
+                floors.append(size)
+                weights.append(0)
+                optional.append(false)
+                growing.append(false)
+                claimed += size
+            grow(weight, minimum):
+                let floor_size = max(minimum, 0)
+                let share = max(weight, 0)
+                sizes.append(floor_size)
+                floors.append(floor_size)
+                weights.append(share)
+                optional.append(false)
+                growing.append(true)
+                claimed += floor_size
+                total_weight += share
+            ratio(low, high, percent):
+                let floor_size = max(low, 0)
+                let ceiling = max(high, floor_size)
+                let size = clamp(floor_div(usable * clamp(percent, 0, 100), 100), floor_size, ceiling)
+                sizes.append(size)
+                floors.append(floor_size)
+                weights.append(0)
+                optional.append(true)
+                growing.append(false)
+                claimed += size
+            preferred(low, ideal, high):
+                let floor_size = max(low, 0)
+                let ceiling = max(high, floor_size)
+                let size = clamp(ideal, floor_size, ceiling)
+                sizes.append(size)
+                floors.append(floor_size)
+                weights.append(0)
+                optional.append(true)
+                growing.append(false)
+                claimed += size
+
+    if claimed <= usable:
+        let remaining = usable - claimed
+        if total_weight > 0:
+            var given: i64 = 0
+            var first: i64 = -1
+            for index in range(0, count):
+                if weights[index] > 0:
+                    let share = floor_div(remaining * weights[index], total_weight)
+                    sizes[index] += share
+                    given += share
+                    if first < 0:
+                        first = index
+            if first >= 0:
+                sizes[first] += remaining - given
+        return sizes
+
+    var over = claimed - usable
+    # First return optional regions' slack down to their declared floor.
+    for index in range(0, count):
+        if over <= 0:
+            break
+        if optional[index]:
+            let cut = min(max(sizes[index] - floors[index], 0), over)
+            sizes[index] -= cut
+            over -= cut
+    # On a truly tiny axis, optional panes disappear before primary content.
+    for index in range(0, count):
+        if over <= 0:
+            break
+        if optional[index]:
+            let cut = min(sizes[index], over)
+            sizes[index] -= cut
+            over -= cut
+    for index in range(0, count):
+        if over <= 0:
+            break
+        if growing[index]:
+            let cut = min(sizes[index], over)
+            sizes[index] -= cut
+            over -= cut
+    # Fixed regions are the final claim. This branch is reached only when the
+    # complete axis is smaller than every other region reduced to zero.
+    for index in range(0, count):
+        if over <= 0:
+            break
+        let cut = min(sizes[index], over)
+        sizes[index] -= cut
+        over -= cut
+    return sizes
+
+func row(area: model.Rect, spacing: i64, lengths: list[Length]) -> list[model.Rect]:
+    let widths = resolve(area.columns, spacing, lengths)
+    var rectangles = new list[model.Rect]
+    var at_column = area.column
+    let gap = max(spacing, 0)
+    for width in widths:
+        rectangles.append(model.Rect(row = area.row, column = at_column, rows = area.rows, columns = width))
+        at_column += width + gap
+    return rectangles
+
+func column(area: model.Rect, spacing: i64, lengths: list[Length]) -> list[model.Rect]:
+    let heights = resolve(area.rows, spacing, lengths)
+    var rectangles = new list[model.Rect]
+    var at_row = area.row
+    let gap = max(spacing, 0)
+    for height in heights:
+        rectangles.append(model.Rect(row = at_row, column = area.column, rows = height, columns = area.columns))
+        at_row += height + gap
+    return rectangles

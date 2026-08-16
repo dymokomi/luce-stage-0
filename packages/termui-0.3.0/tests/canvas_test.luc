@@ -1,0 +1,43 @@
+import canvas
+import model
+
+func test_writes_clip_to_the_assigned_rectangle():
+    var surface = canvas.Surface.of(3, 6)
+    surface.clear()
+    let right = model.Rect(row = 0, column = 3, rows = 2, columns = 3)
+    surface.write(right, 0, 0, "abcdef", model.Style(foreground = 2))
+    let frame = surface.snapshot(none)
+    assert(frame.cell(0, 3).text == "a")
+    assert(frame.cell(0, 5).text == "c")
+    assert(frame.cell(0, 0).text == " ")
+    assert(frame.cell(0, 3).style.foreground == 2)
+
+func test_a_snapshot_owns_characters_styles_and_cursor():
+    var surface = canvas.Surface.of(2, 5)
+    surface.clear()
+    surface.write(surface.area(), 0, 0, "hé", model.Style(foreground = 3))
+    let frame = surface.snapshot(model.Cursor(row = 0, column = 2))
+    assert(frame.cell(0, 0).text == "h")
+    assert(frame.cell(0, 1).text == "é")
+    assert(frame.line(0) == "hé   ")
+    assert(frame.cursor != none)
+    let cursor = frame.cursor else model.Cursor()
+    assert(cursor.column == 2)
+
+func test_resize_replaces_both_grids_and_marks_the_frame_unknown():
+    var surface = canvas.Surface.of(2, 3)
+    surface.clear()
+    assert(surface.present().cells == 6)
+    assert(surface.present().cells == 0)
+    surface.resize(3, 4)
+    surface.clear()
+    assert(surface.present().cells == 12)
+
+func test_a_one_cell_change_is_one_diff_run():
+    var surface = canvas.Surface.of(2, 4)
+    surface.clear()
+    surface.present()
+    surface.put(1, 2, "x", model.Style(foreground = 4))
+    let painted = surface.present()
+    assert(painted.cells == 1)
+    assert(painted.runs == 1 and painted.moves == 1)
