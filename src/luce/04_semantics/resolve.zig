@@ -41,9 +41,71 @@ pub fn resolveType(self: *Analyzer, module: usize, written: ast.TypeName) Error!
     const base = (try resolveBase(self, module, written)) orelse return null;
     if (!written.optional) return base;
     return Type.optionalOf(base) orelse {
-        try self.fail("luce.sema.type", written.span, "None? is not a type: there is nothing there to be absent", .{});
+        try self.fail(
+            "luce.sema.type",
+            written.span,
+            "{s}? is not a type: {s} is already optional",
+            .{ written.name, try self.typeName(base) },
+        );
         return null;
     };
+}
+
+/// Resolve one alias row, guarding recursion and applying visibility at the
+/// written use.  The cached answer is the underlying `Type`: there is no alias
+/// tag for later stages to accidentally give distinct behavior.
+pub fn resolveAlias(
+    self: *Analyzer,
+    from_module: usize,
+    alias_index: u32,
+    use_span: Span,
+) Error!?Type {
+    const initial = self.alias_decls.items[alias_index];
+    if (!naming.reachable(initial.module, initial.declaration.visibility, from_module)) {
+        try self.fail("luce.sema.private", use_span, "{s} is private to {s}", .{
+            initial.declaration.name,
+            naming.moduleName(self, initial.module),
+        });
+        return null;
+    }
+    switch (initial.state) {
+        .ready => return initial.resolved,
+        .failed => return null,
+        .resolving => {
+            var path: std.ArrayList(u8) = .empty;
+            defer path.deinit(self.temporary);
+            var start: usize = 0;
+            while (start < self.alias_stack.items.len and self.alias_stack.items[start] != alias_index) : (start += 1) {}
+            for (self.alias_stack.items[start..]) |index| {
+                if (path.items.len != 0) try path.appendSlice(self.temporary, " -> ");
+                try path.appendSlice(self.temporary, self.alias_decls.items[index].declaration.name);
+            }
+            if (path.items.len != 0) try path.appendSlice(self.temporary, " -> ");
+            try path.appendSlice(self.temporary, initial.declaration.name);
+            try self.fail(
+                "luce.sema.alias",
+                use_span,
+                "type alias cycle: {s}; an alias must end at a concrete type",
+                .{path.items},
+            );
+            self.alias_decls.items[alias_index].state = .failed;
+            return null;
+        },
+        .pending => {},
+    }
+
+    self.alias_decls.items[alias_index].state = .resolving;
+    try self.alias_stack.append(self.temporary, alias_index);
+    defer _ = self.alias_stack.pop();
+    const declaration = self.alias_decls.items[alias_index].declaration;
+    const owner = self.alias_decls.items[alias_index].module;
+    const target = (try resolveType(self, owner, declaration.target)) orelse {
+        self.alias_decls.items[alias_index].state = .failed;
+        return null;
+    };
+    self.alias_decls.items[alias_index].resolved = target;
+    self.alias_decls.items[alias_index].state = .ready;
+    return target;
 }
 
 /// The `?` that a container element may not carry.  Refused in v1
@@ -256,6 +318,7 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
             return null;
         }
         const key = try naming.importedName(self, module, written.name);
+        if (self.alias_names.get(key)) |index| return resolveAlias(self, module, index, written.span);
         if (self.interface_names.get(key)) |interface_index| {
             const info = self.interface_decls.items[interface_index];
             if (!naming.reachable(info.module, info.declaration.visibility, module)) {
@@ -312,6 +375,7 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
         return null;
     }
     const local = try naming.qualify(self, self.modules[module].prefix, written.name);
+    if (self.alias_names.get(local)) |index| return resolveAlias(self, module, index, written.span);
     if (self.interface_names.get(local)) |interface_index| return .{ .strukt = self.interface_decls.items[interface_index].layout };
     if (self.struct_names.get(local)) |index| return .{ .strukt = index };
     if (self.enum_names.get(local)) |index| return self.enumType(index);
@@ -388,7 +452,7 @@ fn failUnknownType(self: *Analyzer, module: usize, written: ast.TypeName) Error!
     const prefix = self.modules[module].prefix;
     var suggestion = helpers.Suggestion.init(written.name);
     suggestion.offerAll(&builtin_types);
-    for ([_]*const std.StringHashMapUnmanaged(u32){ &self.struct_names, &self.enum_names, &self.variant_names }) |declared| {
+    for ([_]*const std.StringHashMapUnmanaged(u32){ &self.alias_names, &self.struct_names, &self.enum_names, &self.variant_names }) |declared| {
         var keys = declared.keyIterator();
         while (keys.next()) |key| {
             if (prefix.len == 0) {

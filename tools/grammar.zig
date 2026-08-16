@@ -147,6 +147,7 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
         // (docs/MEMORY.md), and wears its class.
         .keyword_class,
         .keyword_interface,
+        .keyword_alias,
         // `enum` and `union` declare types beside `struct`, and wear
         // its class.
         .keyword_enum,
@@ -658,6 +659,11 @@ pub fn emit(gpa: Allocator) Error![]u8 {
         "\\b({s})\\s+({s})",
         .{ spelling(.keyword_struct), name },
     );
+    const alias_pattern = try std.fmt.allocPrint(
+        arena,
+        "\\b({s})\\s+({s})",
+        .{ spelling(.keyword_alias), name },
+    );
     const binding_pattern = try std.fmt.allocPrint(
         arena,
         "\\b({s}|{s}|{s})\\s+({s})",
@@ -790,6 +796,13 @@ pub fn emit(gpa: Allocator) Error![]u8 {
             .captures = &.{
                 .{ .group = "1", .scope = "storage.type.struct.luce" },
                 .{ .group = "2", .scope = "entity.name.type.struct.luce" },
+            },
+        } },
+        .{ .match = .{
+            .pattern = alias_pattern,
+            .captures = &.{
+                .{ .group = "1", .scope = "storage.type.alias.luce" },
+                .{ .group = "2", .scope = "entity.name.type.alias.luce" },
             },
         } },
         .{ .match = .{

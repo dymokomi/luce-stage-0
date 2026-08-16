@@ -3256,8 +3256,93 @@ test "luce.sema.field: a nested place checks each field on the way down" {
     , "luce.sema.field");
 }
 
-test "luce.parse.new: new builds only the four heap types" {
-    try expectRejected("func main():\n    let a = new Point()\n", "luce.parse.new");
+test "luce.sema.new: new builds only the heap constructors" {
+    try expectSaying(
+        "struct Point:\n    x: long\n\nfunc main():\n    let a = new Point()\n",
+        "luce.sema.new",
+        "Point is a value type",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Transparent type aliases
+// ---------------------------------------------------------------------------
+
+test "luce.sema.alias: direct and indirect alias cycles name the complete loop" {
+    try expectSaying(
+        "alias Loop = Loop\n\nfunc main():\n    return\n",
+        "luce.sema.alias",
+        "Loop -> Loop",
+    );
+    try expectSaying(
+        "alias A = B\nalias B = C\nalias C = A\n\nfunc main():\n    return\n",
+        "luce.sema.alias",
+        "A -> B -> C -> A",
+    );
+}
+
+test "luce.sema.type: an alias target must exist and have the written shape" {
+    try expectSaying(
+        "alias UserId = Missing\n\nfunc main():\n    return\n",
+        "luce.sema.type",
+        "unknown type Missing",
+    );
+    try expectSaying(
+        "alias UserId = long(string)\n\nfunc main():\n    return\n",
+        "luce.sema.type",
+        "long takes no type arguments",
+    );
+    try expectSaying(
+        "alias MaybeId = long?\n\nfunc main():\n    let value: MaybeId? = none\n",
+        "luce.sema.type",
+        "MaybeId? is not a type: long? is already optional",
+    );
+}
+
+test "luce.sema.reserved: an alias cannot replace a builtin type or reserved name" {
+    try expectSaying(
+        "alias long = int\n\nfunc main():\n    return\n",
+        "luce.sema.reserved",
+        "long is a builtin type",
+    );
+    try expectSaying(
+        "alias print = long\n\nfunc main():\n    return\n",
+        "luce.sema.reserved",
+        "print is a reserved name",
+    );
+}
+
+test "luce.sema.duplicate: aliases share the top-level declaration namespace" {
+    const cases = [_][]const u8{
+        "alias Thing = long\nalias Thing = string\n",
+        "struct Thing:\n    value: long\nalias Thing = long\n",
+        "alias Thing = long\nstruct Thing:\n    value: long\n",
+        "class Thing:\n    value: long\nalias Thing = long\n",
+        "interface Thing:\n    func value() -> long\nalias Thing = long\n",
+        "enum Thing:\n    one\nalias Thing = long\n",
+        "union Thing:\n    one(value: long)\nalias Thing = long\n",
+        "const Thing = 1\nalias Thing = long\n",
+        "func Thing() -> long:\n    return 1\nalias Thing = long\n",
+        "alias Thing = long\nfunc Thing() -> long:\n    return 1\n",
+        "import std.math\nalias math = long\n",
+        "alias math = long\nimport std.math\n",
+    };
+    for (cases) |declarations| {
+        const source = try std.fmt.allocPrint(testing.allocator, "{s}\nfunc main():\n    return\n", .{declarations});
+        defer testing.allocator.free(source);
+        try expectRejected(source, "luce.sema.duplicate");
+    }
+}
+
+test "luce.sema.private: a public alias cannot expose a private nominal type" {
+    try expectSaying(
+        "private struct Secret:\n    value: long\n\nalias PublicSecret = Secret\n\nfunc main():\n    return\n",
+        "luce.sema.private",
+        "alias PublicSecret is public and names Secret",
+    );
+    try expectCompiles(
+        "private struct Secret:\n    value: long\n\nprivate alias HiddenSecret = Secret\n\nfunc main():\n    let value: HiddenSecret = Secret(value = 1)\n    assert(value.value == 1)\n",
+    );
 }
 
 // ---------------------------------------------------------------------------

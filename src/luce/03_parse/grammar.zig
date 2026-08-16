@@ -510,6 +510,8 @@ pub const Parser = struct {
         defer imports.deinit(self.arena);
         var constants: std.ArrayList(ast.ConstDecl) = .empty;
         defer constants.deinit(self.arena);
+        var aliases: std.ArrayList(ast.AliasDecl) = .empty;
+        defer aliases.deinit(self.arena);
         var structs: std.ArrayList(ast.StructDecl) = .empty;
         defer structs.deinit(self.arena);
         var interfaces: std.ArrayList(ast.InterfaceDecl) = .empty;
@@ -538,6 +540,13 @@ pub const Parser = struct {
                 },
                 .dedent => _ = self.advance(),
                 .keyword_import => try self.importDecl(&imports),
+                .keyword_alias => {
+                    if (try self.aliasDecl()) |declaration| {
+                        try aliases.append(self.arena, declaration);
+                    } else {
+                        self.recover();
+                    }
+                },
                 .keyword_struct, .keyword_class => {
                     if (try self.structDecl()) |declaration| {
                         try structs.append(self.arena, declaration);
@@ -608,7 +617,7 @@ pub const Parser = struct {
                     self.recover();
                 },
                 .keyword_public, .keyword_private => {
-                    try self.markedDeclaration(&constants, &structs, &interfaces, &enums, &unions, &functions);
+                    try self.markedDeclaration(&aliases, &constants, &structs, &interfaces, &enums, &unions, &functions);
                 },
                 else => {
                     // A file-scope name is never valid, so a word that
@@ -636,7 +645,7 @@ pub const Parser = struct {
                     try self.report(
                         "luce.parse.top",
                         self.peek().span,
-                        "expected import, const, struct, interface, enum, union, or func at file scope, found {s}",
+                        "expected import, alias, const, struct, interface, enum, union, or func at file scope, found {s}",
                         .{try self.found()},
                     );
                     self.recover();
@@ -645,6 +654,7 @@ pub const Parser = struct {
         }
         return .{
             .imports = try imports.toOwnedSlice(self.arena),
+            .aliases = try aliases.toOwnedSlice(self.arena),
             .constants = try constants.toOwnedSlice(self.arena),
             .structs = try structs.toOwnedSlice(self.arena),
             .interfaces = try interfaces.toOwnedSlice(self.arena),
@@ -661,6 +671,7 @@ pub const Parser = struct {
     /// marker fronting anything unmarkable — are §8's, wordings and all.
     fn markedDeclaration(
         self: *Parser,
+        aliases: *std.ArrayList(ast.AliasDecl),
         constants: *std.ArrayList(ast.ConstDecl),
         structs: *std.ArrayList(ast.StructDecl),
         interfaces: *std.ArrayList(ast.InterfaceDecl),
@@ -718,6 +729,15 @@ pub const Parser = struct {
                     self.recover();
                 }
             },
+            .keyword_alias => {
+                if (try self.aliasDecl()) |declaration| {
+                    var marked = declaration;
+                    marked.visibility = visibility;
+                    try aliases.append(self.arena, marked);
+                } else {
+                    self.recover();
+                }
+            },
             .keyword_let, .keyword_var => {
                 try self.report(
                     "luce.parse.top",
@@ -767,7 +787,7 @@ pub const Parser = struct {
                 try self.report(
                     "luce.parse.top",
                     marker.span,
-                    "'{s}' marks a declaration: expected func, const, struct, interface, enum, or union after it, found {s}",
+                    "'{s}' marks a declaration: expected func, alias, const, struct, interface, enum, or union after it, found {s}",
                     .{ keywordWord(marker.kind).?, try self.found() },
                 );
                 self.recover();
@@ -873,6 +893,23 @@ pub const Parser = struct {
     }
 
     // -- declarations: constants, types, structs --------------------------
+
+    /// `alias Name = Type` at file scope.  The parser records the written
+    /// target; stage 4 resolves chains, imports, privacy, and cycles.
+    fn aliasDecl(self: *Parser) Error!?ast.AliasDecl {
+        const start = self.advance(); // alias
+        const name = (try self.expect(.identifier, "an alias name")) orelse return null;
+        try self.refuseWildcardName(name);
+        if ((try self.expect(.assign, "'=' with the aliased type")) == null) return null;
+        const target = (try self.typeName()) orelse return null;
+        try self.endOfStatement("end of line after the alias");
+        return .{
+            .name = self.text(name),
+            .name_span = name.span,
+            .target = target,
+            .span = .{ .start = start.span.start, .end = target.span.end },
+        };
+    }
 
     /// const name = value at file scope — a constant declaration.
     fn constDecl(self: *Parser) Error!?ast.ConstDecl {
@@ -2146,7 +2183,7 @@ pub const Parser = struct {
                 );
                 return null;
             },
-            .keyword_func, .keyword_struct, .keyword_class, .keyword_interface, .keyword_enum, .keyword_union, .keyword_import => {
+            .keyword_func, .keyword_struct, .keyword_class, .keyword_interface, .keyword_alias, .keyword_enum, .keyword_union, .keyword_import => {
                 const word = keywordWord(self.peekKind()).?;
                 try self.report(
                     "luce.parse.expected",
@@ -2974,13 +3011,13 @@ fn foreignWord(word: []const u8) ?[]const u8 {
         .{ .word = "fn", .advice = "functions are declared with 'func'" },
         .{ .word = "fun", .advice = "functions are declared with 'func'" },
         .{ .word = "function", .advice = "functions are declared with 'func'" },
-        .{ .word = "type", .advice = "there are no type aliases; 'struct' declares a value type" },
+        .{ .word = "type", .advice = "type aliases are declared with 'alias': write 'alias Name = Type'" },
         .{ .word = "final", .advice = "file-scope constants are declared with 'const'" },
         .{ .word = "from", .advice = import_advice },
         .{ .word = "include", .advice = import_advice },
         .{ .word = "require", .advice = import_advice },
         .{ .word = "use", .advice = import_advice },
-        .{ .word = "pub", .advice = "there is no visibility keyword: every declaration is importable" },
+        .{ .word = "pub", .advice = "write 'public' in full" },
     };
     for (habits) |habit| {
         if (std.mem.eql(u8, habit.word, word)) return habit.advice;
@@ -3025,6 +3062,7 @@ pub fn describe(kind: Kind) []const u8 {
         .keyword_struct => "the keyword 'struct'",
         .keyword_class => "the keyword 'class'",
         .keyword_interface => "the keyword 'interface'",
+        .keyword_alias => "the keyword 'alias'",
         .keyword_enum => "the keyword 'enum'",
         .keyword_union => "the keyword 'union'",
         .keyword_match => "the keyword 'match'",

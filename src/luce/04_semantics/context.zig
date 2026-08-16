@@ -416,6 +416,17 @@ pub const StructDeclInfo = struct {
     field_visibility: []ast.Visibility = &.{},
 };
 
+/// A transparent type alias while its target is being resolved.  The state
+/// makes forward chains cheap and turns direct or indirect recursion into one
+/// source diagnostic instead of native recursion.  `resolved` is meaningful
+/// only in `.ready`; aliases disappear after this table.
+pub const AliasDeclInfo = struct {
+    declaration: *const ast.AliasDecl,
+    module: usize,
+    state: enum { pending, resolving, ready, failed } = .pending,
+    resolved: Type = .none,
+};
+
 /// The settled contract of one interface method.  The parameter names stay
 /// in the AST for diagnostics; these are the resolved types used by
 /// dispatch and conformance checks.

@@ -414,6 +414,17 @@ pub const Block = struct {
 /// stage 4 never knows a region existed (D15).
 pub const Visibility = enum { none, public, private };
 
+/// `alias Name = Type` — another source spelling for exactly one type.
+/// Resolution erases this node before HIR; aliases never become runtime
+/// layouts or distinct semantic types.
+pub const AliasDecl = struct {
+    name: []const u8,
+    name_span: Span,
+    target: TypeName,
+    visibility: Visibility = .none,
+    span: Span,
+};
+
 pub const Field = struct {
     name: []const u8,
     name_span: Span,
@@ -599,6 +610,7 @@ pub const ConstDecl = struct {
 
 pub const Program = struct {
     imports: []Import,
+    aliases: []AliasDecl = &.{},
     constants: []ConstDecl,
     structs: []StructDecl,
     interfaces: []InterfaceDecl = &.{},

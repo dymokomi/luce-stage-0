@@ -153,7 +153,7 @@ fn collectFunction(
     }
     if (self.function_names.contains(name) or
         self.constant_names.contains(name) or
-        (top_level and (self.struct_names.contains(name) or self.enum_names.contains(name))))
+        (top_level and (self.alias_names.contains(name) or self.struct_names.contains(name) or self.enum_names.contains(name))))
     {
         try self.fail("luce.sema.duplicate", declaration.name_span, "duplicate name {s}; the first is{s}", .{
             declaration.name,

@@ -75,6 +75,7 @@ const mir = @import("../06_mir.zig");
 // Pass one's own concerns, each a file of free functions over the
 // `Analyzer` below.
 const defaults = @import("defaults.zig");
+const aliases = @import("aliases.zig");
 const layouts = @import("layouts.zig");
 const naming = @import("naming.zig");
 const receiver = @import("receiver.zig");
@@ -105,6 +106,7 @@ const StructDeclInfo = context.StructDeclInfo;
 const StructShape = context.StructShape;
 const InterfaceDeclInfo = context.InterfaceDeclInfo;
 const InterfaceConformance = context.InterfaceConformance;
+const AliasDeclInfo = context.AliasDeclInfo;
 const ConstantInfo = context.ConstantInfo;
 const isReserved = context.isReserved;
 
@@ -177,6 +179,11 @@ pub const Analyzer = struct {
     /// (docs/FUNCTIONS.md S2), interned exactly as heap shapes are, so
     /// two identically written signatures are one type.
     signatures: std.ArrayList(types.Signature) = .empty,
+    /// Transparent source-level type names.  Their resolved `Type` is cached
+    /// here only during analysis; no alias identity crosses into HIR or MIR.
+    alias_names: std.StringHashMapUnmanaged(u32) = .empty,
+    alias_decls: std.ArrayList(AliasDeclInfo) = .empty,
+    alias_stack: std.ArrayList(u32) = .empty,
     struct_names: std.StringHashMapUnmanaged(u32) = .empty,
     /// Interfaces use the same written type namespace as structs, but keep
     /// a separate map so their hidden dispatch layouts cannot be constructed
@@ -243,6 +250,9 @@ pub const Analyzer = struct {
     fn deinitScratch(self: *Analyzer) void {
         self.struct_decls.deinit(self.temporary);
         self.struct_shapes.deinit(self.temporary);
+        self.alias_names.deinit(self.temporary);
+        self.alias_decls.deinit(self.temporary);
+        self.alias_stack.deinit(self.temporary);
         self.struct_names.deinit(self.temporary);
         self.interface_names.deinit(self.temporary);
         self.interface_decls.deinit(self.temporary);
@@ -288,6 +298,7 @@ pub const Analyzer = struct {
         // registered, because `= base + 1` may name a constant; union
         // member *fields* are resolved after the struct names are,
         // because a payload may hold one.
+        try aliases.collectDeclarations(self);
         try layouts.collectTypeNames(self);
         try layouts.collectStructs(self);
         try layouts.settleVariantMembers(self);

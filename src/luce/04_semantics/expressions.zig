@@ -231,7 +231,12 @@ pub fn lowerNew(self: *FunctionBuilder, new: ast.NewObject) Error!?Typed {
     } else {
         object_type = (try resolve.resolveType(self.analyzer, self.module, new.type_name)) orelse return null;
         if (object_type != .heap) {
-            try self.fail("luce.sema.new", new.span, "new builds list, map, array, or builder", .{});
+            try self.fail(
+                "luce.sema.new",
+                new.span,
+                "new builds list, map, array, or builder; {s} is a value type and is constructed as {s}(...) without new",
+                .{ try self.analyzer.typeName(object_type), new.type_name.name },
+            );
             return null;
         }
         // **A file is opened, never made** (docs/BYTES.md R5).  A

@@ -44,6 +44,8 @@ pub const errors = @import("specs/errors_spec.zig");
 pub const functions = @import("specs/functions_spec.zig");
 /// Nominal interface contracts and dispatch through an interface value.
 pub const interfaces = @import("specs/interfaces_spec.zig");
+/// Transparent compile-time type aliases.
+pub const aliases = @import("specs/aliases_spec.zig");
 /// Implied receivers, inferred writers, and the `static` boundary
 /// (docs/SELF.md).
 pub const self = @import("specs/self_spec.zig");
@@ -103,6 +105,7 @@ comptime {
         _ = errors;
         _ = functions;
         _ = interfaces;
+        _ = aliases;
         _ = self;
         _ = binding;
         _ = constants;

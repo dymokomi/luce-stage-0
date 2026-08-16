@@ -411,6 +411,25 @@ pub fn build(b: *std.Build) void {
     const test_examples_step = addSpecificationSuite(b, specs, .examples);
     _ = addSpecificationSuite(b, specs, .harness);
 
+    const alias_tests = b.addTest(.{
+        .root_module = specs,
+        .filters = &.{
+            "specs.aliases_spec.",
+            "specs.errors_spec.test.luce.sema.alias:",
+            "specs.errors_spec.test.luce.sema.type: an alias target",
+            "specs.errors_spec.test.luce.sema.reserved: an alias",
+            "specs.errors_spec.test.luce.sema.duplicate: aliases",
+            "specs.errors_spec.test.luce.sema.private: a public alias",
+            "specs.modules_spec.test.a private type alias",
+        },
+        .test_runner = progress_test_runner,
+    });
+    const test_aliases_step = b.step(
+        "test-aliases",
+        "Run the transparent type-alias differential specification",
+    );
+    test_aliases_step.dependOn(&addProgressTestRun(b, alias_tests, "aliases").step);
+
     // Keep the highest-risk function/union ownership composition seams addressable
     // without waiting for the bundled applications.  This is a focused
     // differential specification, not a replacement for the full suite.
@@ -420,6 +439,7 @@ pub fn build(b: *std.Build) void {
             "a bound method carries a union callback",
             "a bound method takes a union task and callback graph",
             "a function field resolves give through a later resource-bearing struct",
+            "an interface conversion before a nested carrying argument preserves local order",
         },
     });
     const test_composition_step = b.step(

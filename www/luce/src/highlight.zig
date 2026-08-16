@@ -33,11 +33,11 @@ const Buffer = @import("buffer.zig");
 
 /// Reserved words that read as control or declaration.
 pub const keywords = [_][]const u8{
-    "func",  "struct", "class",  "interface", "enum",     "union", "match",
-    "const", "let",    "var",    "if",        "elif",     "else",  "while",
-    "for",   "in",     "return", "break",     "continue", "and",   "or",
-    "not",   "true",   "false",  "import",    "none",     "try",   "catch",
-    "self",  "static", "public", "private",
+    "func",  "struct", "class",  "interface", "alias",   "enum",     "union",
+    "match", "const",  "let",    "var",       "if",      "elif",     "else",
+    "while", "for",    "in",     "return",    "break",   "continue", "and",
+    "or",    "not",    "true",   "false",     "import",  "none",     "try",
+    "catch", "self",   "static", "public",    "private",
 };
 
 /// The words that make a reference — a heap object, or a worker holding
@@ -177,7 +177,8 @@ pub fn render(out: *Buffer, source: []const u8) !void {
 
             const class: ?[]const u8 = blk: {
                 if (std.mem.eql(u8, previous_word, "func")) break :blk "d";
-                if (std.mem.eql(u8, previous_word, "struct")) break :blk "t";
+                if (std.mem.eql(u8, previous_word, "struct") or
+                    std.mem.eql(u8, previous_word, "alias")) break :blk "t";
                 if (inTable(&verbs, word)) break :blk "v";
                 if (inTable(&keywords, word)) break :blk "k";
                 if (inTable(&type_names, word)) break :blk "t";

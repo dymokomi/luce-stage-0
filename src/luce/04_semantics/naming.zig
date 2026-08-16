@@ -224,6 +224,10 @@ pub fn importSpelling(self: *Analyzer, name: []const u8) Error![]const u8 {
 /// Where a fully-qualified name is already declared, whichever of
 /// the three tables holds it — or null when none does.
 pub fn firstDeclarationOf(self: *Analyzer, qualified: []const u8) Error!?[]const u8 {
+    if (self.alias_names.get(qualified)) |index| {
+        const info = self.alias_decls.items[index];
+        return try declaredAt(self, self.modules[info.module].file, info.declaration.name_span);
+    }
     if (self.function_names.get(qualified)) |index| {
         const info = self.functions.items[index];
         return try declaredAt(self, self.modules[info.module].file, info.declaration.name_span);

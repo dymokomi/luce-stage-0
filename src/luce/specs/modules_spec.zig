@@ -102,7 +102,7 @@ test "a private interface cannot leak through a module's type surface" {
         \\    return Thing(marker = 7)
         \\
     };
-    try expectPrivateInterface(
+    try expectProjectPrivate(
         \\import hidden
         \\
         \\func main():
@@ -112,7 +112,25 @@ test "a private interface cannot leak through a module's type surface" {
     , &.{hidden}, "Secret is private to hidden");
 }
 
-fn expectPrivateInterface(
+test "a private type alias stays inside its declaring module" {
+    const hidden: agree.File = .{ .name = "hidden", .source =
+        \\private alias Secret = long
+        \\
+        \\func reveal() -> Secret:
+        \\    return 42
+        \\
+    };
+    try expectProjectPrivate(
+        \\import hidden
+        \\
+        \\func main():
+        \\    let value: hidden.Secret = hidden.reveal()
+        \\    _ = value
+        \\
+    , &.{hidden}, "Secret is private to hidden");
+}
+
+fn expectProjectPrivate(
     root: []const u8,
     files: []const agree.File,
     saying: []const u8,
@@ -127,7 +145,7 @@ fn expectPrivateInterface(
     defer result.deinit();
     switch (result) {
         .success => {
-            std.debug.print("expected private interface refusal, but this compiled:\n{s}", .{root});
+            std.debug.print("expected a private declaration refusal, but this compiled:\n{s}", .{root});
             return error.TestUnexpectedResult;
         },
         .failure => |diagnostics| {
@@ -138,7 +156,7 @@ fn expectPrivateInterface(
             }
             const rendered = try diagnostics.render(testing.allocator);
             defer testing.allocator.free(rendered);
-            std.debug.print("expected private interface refusal:\n{s}", .{rendered});
+            std.debug.print("expected a private declaration refusal:\n{s}", .{rendered});
             return error.TestUnexpectedResult;
         },
     }

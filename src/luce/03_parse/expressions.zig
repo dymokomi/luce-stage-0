@@ -964,13 +964,14 @@ fn newObject(self: *Parser) Error!?*ast.Expression {
             closing_end = closing.span.end;
         }
     } else {
-        try self.report(
-            "luce.parse.new",
-            name.span,
-            "new builds list, map, array, or builder (structs are values: {s}(...))",
-            .{kind},
-        );
-        return null;
+        // A transparent alias can name list, map, or builder, and the parser
+        // deliberately does not carry a symbol table.  Preserve the written
+        // type and let stage 4 decide whether it resolves to a constructible
+        // heap shape.  This also moves `new Point()` to the semantic `new`
+        // diagnostic, where the compiler can name Point as a struct rather
+        // than guessing from its spelling here.
+        written = (try self.typeName()) orelse return null;
+        closing_end = written.span.end;
     }
 
     return make(self, .{ .new_object = .{

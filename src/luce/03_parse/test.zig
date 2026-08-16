@@ -189,6 +189,53 @@ test "every declaration form at file scope parses into its own list" {
     try testing.expectEqual(@as(usize, 1), parsed.program.functions.len);
 }
 
+test "type aliases parse their complete target and visibility" {
+    var parsed = try expectClean(
+        \\alias UserId = long
+        \\private alias Names = list(string)
+        \\public alias Callback = func(UserId, Names) -> string
+        \\alias MaybeCallback = Callback?
+        \\
+        \\func main():
+        \\    return
+        \\
+    );
+    defer parsed.deinit();
+
+    try testing.expectEqual(@as(usize, 4), parsed.program.aliases.len);
+    try testing.expectEqualStrings("UserId", parsed.program.aliases[0].name);
+    try testing.expectEqualStrings("long", parsed.program.aliases[0].target.name);
+    try testing.expectEqual(ast.Visibility.none, parsed.program.aliases[0].visibility);
+
+    const names = parsed.program.aliases[1];
+    try testing.expectEqual(ast.Visibility.private, names.visibility);
+    try testing.expectEqualStrings("list", names.target.name);
+    try testing.expectEqualStrings("string", names.target.arguments[0].name);
+
+    const callback = parsed.program.aliases[2];
+    try testing.expectEqual(ast.Visibility.public, callback.visibility);
+    try testing.expectEqualStrings("func", callback.target.name);
+    try testing.expectEqual(@as(usize, 2), callback.target.arguments.len);
+    try testing.expectEqualStrings("string", callback.target.result.?.name);
+
+    try testing.expect(parsed.program.aliases[3].target.optional);
+}
+
+test "type aliases require a name, equals, target, and file scope" {
+    try expectDiagnostics("alias = long\n", &.{
+        .{ .code = "luce.parse.expected", .line = 1, .column = 7, .contains = "alias name" },
+    });
+    try expectDiagnostics("alias UserId long\n", &.{
+        .{ .code = "luce.parse.expected", .line = 1, .column = 14, .contains = "aliased type" },
+    });
+    try expectDiagnostics("alias UserId =\n", &.{
+        .{ .code = "luce.parse.expected", .line = 1, .column = 15, .contains = "type name" },
+    });
+    try expectDiagnostics("func main():\n    alias UserId = long\n", &.{
+        .{ .code = "luce.parse.expected", .line = 2, .column = 5, .contains = "file scope" },
+    });
+}
+
 test "dotted imports and the as alias parse: the binding is the last segment or the alias" {
     var parsed = try expectClean(
         \\import geo.shapes
@@ -1391,11 +1438,6 @@ test "the ordinary mistakes name themselves and point at the offending token" {
         .{
             .source = "func main():\n    var xs = [1]\n    xs[0:1] = 2\n",
             .wanted = .{ .code = "luce.parse.assign", .line = 3, .column = 5, .contains = "a slice copies" },
-        },
-        // new builds the four heap types; a struct is a value.
-        .{
-            .source = "func main():\n    let a = new Point()\n",
-            .wanted = .{ .code = "luce.parse.new", .line = 2, .column = 17, .contains = "structs are values" },
         },
     };
     for (cases) |case| try expectDiagnostics(case.source, &.{case.wanted});

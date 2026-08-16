@@ -36,6 +36,9 @@ pub const Kind = enum {
     /// `interface Name:` — a named set of method contracts that a
     /// struct may explicitly implement.
     keyword_interface,
+    /// `alias Name = Type` — a transparent, compile-time-only second
+    /// spelling for an existing type.
+    keyword_alias,
     /// `enum Name:` — a set of named constants at one integer width
     /// (docs/ENUMS.md D1).  A declaration keyword beside `struct`,
     /// because an enum declares a type the same way one does.
@@ -188,6 +191,7 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "struct", .kind = .keyword_struct },
     .{ .word = "class", .kind = .keyword_class },
     .{ .word = "interface", .kind = .keyword_interface },
+    .{ .word = "alias", .kind = .keyword_alias },
     .{ .word = "enum", .kind = .keyword_enum },
     .{ .word = "union", .kind = .keyword_union },
     .{ .word = "match", .kind = .keyword_match },

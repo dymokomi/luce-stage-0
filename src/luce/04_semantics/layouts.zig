@@ -28,6 +28,7 @@ const types = @import("../support/types.zig");
 // through (`constants.zig`).
 const constants = @import("constants.zig");
 
+const aliases = @import("aliases.zig");
 const naming = @import("naming.zig");
 const resolve = @import("resolve.zig");
 const shapes = @import("shapes.zig");
@@ -465,6 +466,10 @@ pub fn collectStructs(self: *Analyzer) Error!void {
     // Interfaces reserve their hidden layouts before struct fields are
     // resolved, so a struct may name an interface regardless of order.
     try interfaces.collectDeclarations(self);
+    // Every nominal name now exists.  Resolve aliases once, before the first
+    // field or interface signature asks for one, so unused cycles and unknown
+    // targets are diagnostics too.
+    try aliases.settleDeclarations(self);
     try interfaces.settleDeclarations(self);
 
     for (self.struct_decls.items) |info| {
