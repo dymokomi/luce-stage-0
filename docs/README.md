@@ -72,6 +72,7 @@ selected surface roster is checked during the site build.
 |---|---|
 | [V2.md](V2.md) | The product north star and the deliberately small language we are aiming for. |
 | [ROADMAP.md](ROADMAP.md) | The sequenced implementation and verification plan for ARC, the explicit type system, weak references, classes, interfaces, and closures. |
+| [TYPE_MIGRATION.md](TYPE_MIGRATION.md) | The frozen target contract and atomic migration manifest for explicit numbers, text, bytes, containers, weak storage, and class lifecycle syntax. |
 | [GENERICS.md](GENERICS.md) | A later monomorphized generics design; not a prerequisite for the ARC/class/closure milestone. |
 | [VECTOR.md](VECTOR.md) | A future optimization plan for checked vectorized reductions; not current language behavior. |
 

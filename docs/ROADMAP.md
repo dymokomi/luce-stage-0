@@ -373,7 +373,7 @@ negative specification groups with zero leaked objects. Syntax data, current
 references, the public Guide, construction/member namespaces, multi-file
 privacy and re-exports are included; no alias identity crosses into HIR.
 
-### Phase 2 — freeze the new type contract
+### Phase 2 — freeze the new type contract — complete
 
 1. Write the numeric, `char`, `str`, `bytes`, container-application, and
    conversion rules as a target specification.
@@ -385,7 +385,23 @@ privacy and re-exports are included; no alias identity crosses into HIR.
    ABI surfaces, standard library, examples, packages, editor grammar, public
    docs, and installer samples.
 
+The frozen contract and layer-by-layer manifest live in
+[TYPE_MIGRATION.md](TYPE_MIGRATION.md). It fixes contextual literals,
+same-type concrete arithmetic, checked integer widths, Python-shaped true
+division, explicit conversions, Unicode-scalar `char`/`str` behavior,
+immutable `bytes`, bracketed container application, block-closure and weak
+storage grammar, the first class lifecycle surface, diagnostics, and the
+acceptance matrix.
+
 Exit: there is no semantic question left hidden inside the mechanical rename.
+
+Completed on 2026-08-15. The contract distinguishes literal context from
+concrete values, defines every operator and conversion across all widths,
+fixes Unicode-scalar text and explicit binary data, separates bracketed type
+application from value calls, and records the weak/class/closure grammar that
+later ARC phases consume. Its manifest names every compiler, runtime,
+userland, tooling, documentation, ABI, and release surface that must move in
+the atomic cut; the documentation catalogue and executable-sample guard pass.
 
 ### Phase 3 — migrate the type vocabulary atomically
 
