@@ -131,8 +131,14 @@
 //!
 //! 5. **Narrowing keys on `LocalId`.**  The tree's locals table
 //!    (`Body.locals`) is now the numbering: the walk allocates every
-//!    slot, and lower reproduces stage 6's table by walking the same
-//!    declarations in the same order, asserting the lockstep.
+//!    slot, and lower lays that table into stage 6 row for row before
+//!    emitting the body.  A recorded declaration or park claims its
+//!    exact id; a lowering-derived slot takes the first unclaimed row.
+//!    Every claim checks the recorded name and type and every row is
+//!    claimed exactly once.  Exact ids matter because fitting happens
+//!    after a whole operand batch is checked: an interface wrapper on
+//!    operand one may own a later row than a temporary inside operand
+//!    two, even though replay visits the wrapper first.
 //!
 //! 6. **The constant pool is filled during checking** — still, and now
 //!    by design: nodes carry interned slots, and the walk interns

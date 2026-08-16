@@ -146,6 +146,37 @@ test "a multi-method interface dispatches every contract slot" {
     , "ok:42\nnew:43\n");
 }
 
+test "an interface conversion before a nested carrying argument preserves local order" {
+    try agree.prints(
+        \\interface Drawable:
+        \\    func render(value: long) -> long
+        \\
+        \\struct Button: Drawable:
+        \\    offset: long
+        \\    func render(value: long) -> long:
+        \\        return value + self.offset
+        \\
+        \\union Outcome:
+        \\    okay(value: long)
+        \\    failed(message: string)
+        \\
+        \\func read(answer: Outcome) -> long:
+        \\    match answer:
+        \\        okay(value):
+        \\            return value
+        \\        failed(message):
+        \\            return len(message)
+        \\
+        \\func draw(item: Drawable, value: long) -> long:
+        \\    return item.render(value)
+        \\
+        \\func main():
+        \\    let button = Button(offset = 1)
+        \\    print(string(draw(button, read(Outcome.okay(value = 41)))))
+        \\
+    , "42\n");
+}
+
 test "a multi-value method does not invalidate a later method with a carrying argument" {
     try agree.prints(
         \\struct Grid:

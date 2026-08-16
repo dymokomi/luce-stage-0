@@ -112,10 +112,14 @@ const Replay = struct {
     /// the checker's did.
     scopes: std.ArrayList(Scope) = .empty,
     loops: std.ArrayList(Loop) = .empty,
-    /// The next row of the recorded table this walk expects to reach —
-    /// coupling #5's lockstep, kept as a cursor now that the rows
-    /// themselves are laid down up front (`makeLocalTable`).
+    /// The first unclaimed row of the recorded table.  Most rows replay in
+    /// source order.  A conversion fitted after an operand batch can own a
+    /// later row while wrapping an earlier operand, however, so recorded
+    /// parks claim their explicit id and this cursor skips ids already
+    /// reached out of order.  Every row is still type/name checked exactly
+    /// once against the recorded table.
     next_slot: LocalId = 0,
+    claimed_slots: []bool = &.{},
     /// What the innermost fallible call left for its `try`/`catch` —
     /// the walker's one-hop `opened` hand-over, replayed.
     opened: ?Opened = null,
@@ -152,6 +156,7 @@ const Replay = struct {
         for (self.scopes.items) |*scope| scope.owned.deinit(self.scratch());
         self.scopes.deinit(self.scratch());
         self.loops.deinit(self.scratch());
+        if (self.claimed_slots.len != 0) self.scratch().free(self.claimed_slots);
     }
 
     fn replayBody(self: *Replay) Error!void {
@@ -160,13 +165,15 @@ const Replay = struct {
 
         // The prologue: the tree's whole local table, then the entry
         // block, then the receiver and parameter rows in declaration
-        // order — the table's leading rows, taken in lockstep.  A
+        // order — the table's leading rows, claimed in order.  A
         // parameter borrows its caller's objects (they are not released
         // here — objects live until the runtime sweeps at exit) and
         // borrows its caller's bytes, so a parameter owns no storage; a
         // writing receiver owns its `self` storage when the type carries
         // any, so writes made through it survive.
         try self.makeLocalTable();
+        self.claimed_slots = try self.scratch().alloc(bool, self.body.locals.len);
+        @memset(self.claimed_slots, false);
         try self.code.openBlock();
         if (info.receiver != .not) {
             const receiver_type = info.parameter_types[0];
@@ -190,9 +197,8 @@ const Replay = struct {
         // every scope's is (empty for parameters).
         try self.emitScopeEnd();
 
-        // The lockstep's closing half: every row the tree recorded was
-        // reached, in order, and what stands past them are this pass's
-        // spill slots and nothing else.
+        // Every row the tree recorded was reached exactly once; what stands
+        // past them are this pass's spill slots and nothing else.
         std.debug.assert(self.next_slot == self.body.locals.len);
     }
 
@@ -267,7 +273,7 @@ const Replay = struct {
         return self.deps.heap_types[of.heap];
     }
 
-    // -- locals: the lockstep -----------------------------------------------
+    // -- recorded local rows ------------------------------------------------
 
     /// Lay the tree's local table down on the tape, row for row,
     /// before the body's first instruction (05_hir.zig, coupling #5).
@@ -296,14 +302,29 @@ const Replay = struct {
         }
     }
 
-    /// Take the next recorded row, holding this walk to the table's
-    /// order (coupling #5's lockstep) and entering the at-creation
-    /// storage claim its declaration makes.  A park later retracted
-    /// settles through `disownStorage`, exactly as the fused walk's
-    /// did.
+    /// Take the next unclaimed recorded row.  Derived lowering slots carry no
+    /// id in HIR, so they use source order; rows that do carry an id go
+    /// through `takeSlotAt` below.
     fn takeSlot(self: *Replay, name: ?[]const u8, local_type: Type, owns: bool) LocalId {
         const id = self.next_slot;
+        return self.takeSlotAt(id, name, local_type, owns);
+    }
+
+    /// Claim one exact recorded row.  Interface fitting happens after a
+    /// batch's written operands have all been checked, while replay visits
+    /// the fitted wrapper with its earlier operand.  Its park can therefore
+    /// be row N+1 before a nested later operand reaches row N.  The explicit
+    /// id is the authority; the bitmap preserves the stronger invariants:
+    /// every row once, with the recorded name and type.
+    fn takeSlotAt(
+        self: *Replay,
+        id: LocalId,
+        name: ?[]const u8,
+        local_type: Type,
+        owns: bool,
+    ) LocalId {
         std.debug.assert(id < self.body.locals.len);
+        std.debug.assert(!self.claimed_slots[id]);
         const row = self.body.locals[id];
         std.debug.assert(row.local_type.eql(local_type));
         if (name) |written| {
@@ -311,7 +332,10 @@ const Replay = struct {
         } else {
             std.debug.assert(row.name == null);
         }
-        self.next_slot += 1;
+        self.claimed_slots[id] = true;
+        while (self.next_slot < self.claimed_slots.len and self.claimed_slots[self.next_slot]) {
+            self.next_slot += 1;
+        }
         self.code.claimStorage(id, owns);
         return id;
     }
@@ -321,9 +345,7 @@ const Replay = struct {
     /// check-side analysis (nodes.LocalDecl).
     fn takeRecordedSlot(self: *Replay, expected: LocalId) LocalId {
         const row = self.body.locals[expected];
-        const id = self.takeSlot(row.name, row.local_type, row.owns_storage);
-        std.debug.assert(id == expected);
-        return id;
+        return self.takeSlotAt(expected, row.name, row.local_type, row.owns_storage);
     }
 
     /// Make a spill slot: a row of **this pass's own**, after the
@@ -393,8 +415,7 @@ const Replay = struct {
     /// Emit a recorded park: the store into its hidden slot; enter it in
     /// the ledger with its at-park storage claim.
     fn emitPark(self: *Replay, parked: nodes.Park, register: Register, value_type: Type) Error!void {
-        const local = self.takeSlot(null, value_type, parked.storage);
-        std.debug.assert(local == parked.local);
+        const local = self.takeSlotAt(parked.local, null, value_type, parked.storage);
         try self.code.store(local, register);
         try self.temps.append(self.scratch(), .{
             .local = local,
@@ -1063,7 +1084,7 @@ const Replay = struct {
         const left = try self.replayValue(circuit.left);
         // The answer lives in a slot because the two sides are
         // written in different blocks and a register never crosses
-        // one; the row comes through the lockstep.
+        // one; the row comes through the recorded local table.
         const result = self.takeSlot(null, .boolean, false);
         try self.code.store(result, left);
         const right_block = try self.code.reserveBlock();
@@ -1110,7 +1131,7 @@ const Replay = struct {
     /// A short circuit's shape with the result typed by the fallback
     /// rather than bool: park the present value, then run the fallback
     /// only where `absent` says there was none.  The merge slot's row
-    /// comes through the lockstep table.
+    /// comes through the recorded local table.
     fn openMergeSlot(
         self: *Replay,
         result_type: Type,
@@ -2362,7 +2383,7 @@ const Replay = struct {
         try self.pushScope();
         const counter = self.takeRecordedSlot(loop.counter);
         // The hidden limit slot — the bound is evaluated once —
-        // through the lockstep.
+        // through the recorded local table.
         const limit = self.takeSlot(null, .long, false);
         try self.code.store(counter, entries[0].register);
         try self.code.store(limit, entries[1].register);
@@ -2417,7 +2438,7 @@ const Replay = struct {
 
         try self.pushScope();
         // The iteration's two hidden slots — the collection and the
-        // position within it — taken through the lockstep.
+        // position within it — taken through the recorded local table.
         var shape: mir.build.Lowering.Iteration = .{
             .object = self.takeSlot(null, sequence_type, false),
             .position = self.takeSlot(null, .long, false),

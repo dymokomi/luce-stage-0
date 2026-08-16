@@ -34,8 +34,8 @@
 //! resolves against, reused rather than mirrored so the two can never
 //! drift.  Locals are `LocalId`s of **this tree's own numbering**
 //! (05_hir.zig, coupling #5): `Body.locals` lists every slot, named
-//! and hidden, in declaration order, and lower reproduces stage 6's
-//! table by walking it in that order.
+//! and hidden, in allocation order. Lower reproduces stage 6's table
+//! row for row, then claims recorded ids exactly once while replaying.
 
 const std = @import("std");
 const source = @import("../01_source.zig");
@@ -47,8 +47,7 @@ const Span = source.Span;
 const Type = types.Type;
 
 /// A slot in `Body.locals` — the tree's own local numbering, which
-/// lower reproduces in stage 6 by walking the same declarations in the
-/// same order (05_hir.zig, coupling #5).
+/// lower reproduces row for row in stage 6 (05_hir.zig, coupling #5).
 pub const LocalId = u32;
 
 /// A reference to an expression node.  Nodes live in an arena beside

@@ -1516,17 +1516,21 @@ pub const FunctionBuilder = struct {
             // string has no handle to check, so it closes here, by
             // deciding the copy before the mutation can happen.
             // An interface receiver is already a dispatch value whose
-            // hidden function runs borrow the concrete receiver.  A
-            // conservative "later argument may mutate a container"
-            // copy would duplicate those runs, then release the copy at
-            // the end of this statement and leave the original interface
-            // dangling.  The receiver is not the storage hazard this
-            // rule protects; keep it as the caller's value and let the
-            // interface ownership contract govern its concrete owner.
+            // hidden function runs own the concrete receiver.  A concrete
+            // value *landing on* an interface is protected for the same
+            // reason: `fit` binds an owned receiver before a later operand
+            // runs.  Copying the pre-fit value here would attach a batch
+            // rewrite to a post-fit interface node, copying the dispatch
+            // run while parking the concrete receiver — two different
+            // values and, before the local-order fix, a double free.
+            // Neither is the borrowed-storage hazard this rule protects.
             const interface_receiver = value.value_type == .strukt and
                 self.analyzer.interfaceForLayout(value.value_type.strukt) != null;
+            const interface_landing = place != null and place.? == .strukt and
+                self.analyzer.interfaceForLayout(place.?.strukt) != null;
             if (mutating[index] and
                 !interface_receiver and
+                !interface_landing and
                 shapes.ownsStorage(self.analyzer, value.value_type) and
                 value.provenance() == .view)
             {
