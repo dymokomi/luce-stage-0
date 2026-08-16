@@ -1,206 +1,245 @@
 # termui
 
-`termui` is a small terminal-UI package. It turns application state into a
-deterministic grid of styled cells and keeps terminal protocol details at the
-`std.term` boundary. Your program keeps its state and event policy; `termui`
-handles frame preparation, clipping, constraint layout, styled text, box drawing,
-rendering composition and presenting changed cells.
+`termui` builds terminal applications from declarative views. Your application
+owns its state and says what should be visible. The package owns the terminal
+loop, layout, drawing, input routing, cursor, resize handling, and efficient
+screen updates.
 
-This is a package, not a second standard-library namespace. In a checkout its
-source lives under `packages/termui-0.2.0/`. The package manifest and import
-layout are ordinary Luce files, so you can study or copy the pattern in the
-[Packages and Projects](/guide/packages/).
+You import one module and call one lifecycle function. Application code never
+opens a renderer, clears a surface, flushes a frame, or writes its own loop.
 
-## The public pieces
+## Start an application
 
-| Module | What it provides |
-| --- | --- |
-| `termui` | `Color`, `Style`, and total `Rect` layout arithmetic |
-| `surface` | `Cell`, `Surface`, and the `Painted` presentation summary |
-| `text` | `Span` and `Line`: styled runs measured by display width |
-| `layout` | a constraint solver — `Length` (`cells`/`grow`/`between`), `Row`/`Column`, and a draggable `Handle` |
-| `frame` | box drawing whose edges merge into the correct junctions |
-| `input` | `Key`, `Mouse`, and the closed `Event` input union |
-| `view` | the `View` interface, `Text`, and `Fill` |
-| `rows` | a selection model and a read-only `RowsView` |
-| `viewport` | a scroll model and a read-only `ViewportView` |
-| `renderer` | terminal size, frame lifecycle, events, cursor and flush |
+Add `termui` to the project's `luce.yaml`:
 
-The package is intentionally small. It does not own your main loop, model,
-keymap, focus policy, or theme.
+```yaml
+name: counter
+version: 0.1.0
+packages:
+  termui: 0.3.0
+```
 
-## The frame lifecycle
-
-Create one `Renderer`, begin a frame, draw into its surface, present the
-changed cells, place the cursor, flush, and then read the next event. The
-application decides when to stop and what an event means.
+Then define a class that conforms to `termui.Application`:
 
 ```text
 import termui
-import termui.input as input
-import termui.frame as frame
-import termui.text as text
-import termui.renderer as renderer
+
+class Counter: termui.Application:
+    count: i64
+
+    init():
+        self.count = 0
+
+    func pressed(event: termui.Event, area: termui.Rect) -> termui.Response:
+        match event:
+            key(pressed):
+                if pressed == termui.Key.enter:
+                    self.count += 1
+                    return termui.Response.handled
+                if pressed == termui.Key.ctrl_q:
+                    return termui.Response.quit
+            else:
+                return termui.Response.ignored
+        return termui.Response.ignored
+
+    func body() -> termui.View:
+        let content = termui.VStack([
+            termui.Label("Count: " + str(self.count)).sized(
+                termui.Length.grow(weight = 1, minimum = 1),
+            ),
+            termui.Label("Enter adds one · Ctrl-Q quits").sized(
+                termui.Length.fixed(cells = 1),
+            ),
+        ])
+        return termui.Panel("counter", content).on_event(self.pressed)
 
 func main():
-    var ui = renderer.Renderer.open()
-    var quit = false
-    while not quit:
-        let area = ui.begin()
-        let inside = frame.Frame(title = "hello").draw(ui.surface, area)
-        text.plain("Luce", termui.Style()).draw(ui.surface, inside, 0)
-        ui.present()
-        ui.cursor(0, 0)
-        ui.flush()
-        match ui.next():
-            closed:
-                quit = true
-            key(pressed):
-                if pressed == input.Key.ctrl_q:
-                    quit = true
-            else:
-                continue
+    termui.run(Counter())
 ```
 
-`Renderer.open()` reads the terminal size. `Renderer.of(rows, columns)` and
-`begin_at(rows, columns)` are host-free constructors for tests and fixed-size
-programs. `begin()` resizes when needed, clears the next frame, and returns
-the available `Rect`.
+Build the file normally. The executable enters the terminal application when
+it starts and returns when input closes or a callback answers `quit`.
 
-`present()` compares the next (`back`) grid with the last presented (`front`)
-grid and returns `Painted(cells, runs, moves)`. It does not flush. Keeping
-cursor placement and flush separate makes the commit order explicit and lets
-tests assert the output without a terminal.
+## How to think about it
 
-## Values, surfaces, and clipping
+The application class is the source of truth. `body()` reads that state and
+returns a lightweight `View` value. When an event changes state, `termui`
+discards the old tree and asks for a new one.
 
-`Style` and `Rect` are plain values. `Rect.split_top`, `split_bottom`,
-`split_left`, `split_right`, and `inset` clamp their inputs. A small terminal
-therefore produces an empty rectangle rather than a trap.
+Keep `body()` cheap and free of effects. Opening files, saving, launching work,
+and other effects belong in event callbacks. The view tree is a description,
+not a second state store.
 
-`Surface` is an in-memory grid. `clear`, `put`, `write`, and `fill` change
-only the back grid. `write` treats its row and column as offsets inside the
-provided rectangle and clips both to that rectangle and to the surface. `Cell`
-stores a text unit and a `Style`; `present()` groups adjacent changed cells
-with the same style into runs, so an unchanged frame writes nothing and a
-one-character edit writes one run.
+This gives each kind of thing the right representation:
 
-The width rule follows `std.strings`: text is walked as UTF-8 characters.
-Grapheme clusters and the full East Asian width table are not yet implemented,
-so an editor that needs exact cursor columns should keep editing offsets
-separate from display drawing.
+- application and internal runtime owners are classes with identity;
+- views, geometry, styles, lines, lengths, events, and snapshots are values;
+- a bound callback retains the same application object for the current frame;
+  and
+- the application does not retain its view tree, so the ordinary shape has no
+  reference cycle.
 
-## Styled text
+## Components
 
-`text.Span` is a run of characters with a `Style`; `text.Line` is a row of
-spans, drawn once and measured by **display width** rather than byte length.
-A syntax highlighter produces one `Line` per source row — its keywords,
-strings and comments each their own `Span` — and a label or status bar is one
-`Line`. `text.plain(str, Style)` builds the common single-span line.
+These constructors return `termui.View`:
 
-```text
-var spans = new list[text.Span]
-spans.append(text.Span(text = "let ", style = keyword))
-spans.append(text.Span(text = "x", style = plain))
-let line = text.Line(spans = spans)
-line.draw(surface, area, row)
-```
+| Component | Use it for |
+|---|---|
+| `Label(text, style)` | one line of text |
+| `StyledText(lines)` | one or more lines made from styled spans |
+| `HStack(items, spacing)` | children from left to right |
+| `VStack(items, spacing)` | children from top to bottom |
+| `ZStack(children)` | overlapping children; the last is on top |
+| `Panel(title, content, style, edges)` | titled, junction-aware border |
+| `Rows(total, top, anchor, selected, render, selected_style)` | a visible window over indexed content |
+| `Fill(glyph, style)` | fill an assigned rectangle |
+| `Empty()` | intentionally draw nothing |
 
-## Layout
+The uppercase names are UI components. Lowercase names are operations or
+small helpers.
 
-`layout` turns a list of constraints into rectangles, so a resize is ordinary
-arithmetic rather than a special case. Each region is a `Length`:
+## Compose a screen
 
-| `Length` | Meaning |
-| --- | --- |
-| `cells(count)` | exactly `count` cells |
-| `grow(weight)` | share the leftover space in proportion to `weight` |
-| `between(low, high, ratio)` | `ratio` percent of the axis, clamped to `[low, high]` |
-
-`Row.solve(area, gap, items)` divides columns left to right; `Column.solve`
-divides rows top to bottom. The solver is total: the sizes never exceed the
-axis and never go negative, and an oversubscribed axis shrinks the flexible
-regions toward their floors in order. A hidden region is a zero-length item,
-which yields an empty rectangle and draws nothing.
+Stacks receive sized children. Call `.sized(length)` on a view to make an
+`Item`:
 
 ```text
-var columns = new list[layout.Length]
-columns.append(layout.Length.between(low = 18, high = 24, ratio = 25))
-columns.append(layout.Length.grow(weight = 1))
-let panes = layout.Row.solve(area, 0, columns)
-```
-
-## Frames that share their edges
-
-`frame.Frame` draws any subset of its four edges as box-drawing strokes. Where
-a frame's edge crosses a rule already on the surface — its own corner, or a
-neighbouring pane's border — the two glyphs **merge** into the correct
-`┼`/`├`/`┴`/… instead of one overwriting the other. So an application tiles
-framed panes and never chooses a junction glyph: the geometry it drew decides.
-`draw` returns the interior rectangle.
-
-```text
-let inside = frame.Frame(title = "files", bottom = false).draw(surface, area)
-```
-
-## Resizable dividers
-
-`layout.Handle` is the geometry of a draggable boundary between two
-panes — the rule an application lets a person drag with the mouse to
-resize. It carries an `axis` (a vertical rule you drag left and right is
-a width; a horizontal rule you drag up and down is a height), the `line`
-the rule sits on, and the span it covers. Two methods are the whole of
-it: `hit(row, column)` answers whether a mouse cell is on the divider,
-and `track(row, column)` answers the position a drag to that cell
-implies.
-
-```text
-let divider = layout.Handle(
-    axis = layout.Axis.horizontal,
-    line = panes.split_column(),
-    from = 0,
-    to = panes.status.row,
+let files = termui.Panel("files", file_rows).sized(
+    termui.Length.ratio(low = 12, high = 28, percent = 25),
 )
-if divider.hit(mouse.row, mouse.column):
-    files_width = divider.track(mouse.row, mouse.column)
+
+let source = source_rows.sized(
+    termui.Length.grow(weight = 1, minimum = 8),
+)
+
+let body = termui.HStack([files, source], spacing = 1)
 ```
 
-The sizes, and the policy that clamps them so a pane cannot starve its
-neighbour, stay with the application: it holds the width and height as
-state, a press begins a drag, a drag updates the size, and the next
-frame lays out and draws with it. Because the frame rules re-form their
-junctions wherever they land, a resize needs no drawing changes at all —
-only new sizes flowing through the same layout, frame and present path.
+`HStack` divides columns. `VStack` divides rows. `ZStack` gives every child the
+same rectangle and paints them in order, which is useful for a background plus
+foreground content.
 
-## Views and interfaces
+### Length
 
-`View` is deliberately read-only and small:
+| Form | Behavior |
+|---|---|
+| `fixed(cells)` | requests exactly that many cells |
+| `grow(weight, minimum)` | keeps its minimum and shares remaining space |
+| `ratio(low, high, percent)` | takes a clamped percentage of the axis |
+| `preferred(low, ideal, high)` | uses a stored user preference within limits |
+
+The solver is total: spacing is included, no result is negative, and allocated
+sizes never exceed the available axis. Optional `ratio` and `preferred` panes
+compress before primary `grow` content. If a terminal becomes extremely small,
+optional panes can disappear rather than trapping or creating invalid geometry.
+
+`preferred` is useful after a person drags a divider. Keep the chosen size in
+the application, then use it as the next body's `ideal`.
+
+## Labels, lines, and styles
+
+`Style` has `foreground`, `background`, and `bold`. `Color` names the sixteen
+terminal colors, while numeric color indexes can be used directly. The package
+has no global theme; keep a palette with the application.
+
+For syntax highlighting or mixed styles, construct a `Line` from `Span`
+values and pass lines to `StyledText` or return them from `Rows`:
 
 ```text
-interface View:
-    func measure(area: termui.Rect) -> (i64, i64)
-    func draw(into: surface.Surface, area: termui.Rect)
+let warning = termui.Line(spans = [
+    termui.Span(
+        text = "warning: ",
+        style = termui.Style(foreground = 3, bold = true),
+    ),
+    termui.Span(
+        text = "unsaved changes",
+        style = termui.Style(foreground = 7),
+    ),
+])
+
+let message = termui.StyledText([warning])
 ```
 
-A view receives the surface for one draw call; it does not retain the surface,
-terminal, event stream, or application model. `Text` draws a block of styled
-`Line`s; `Fill` paints a rectangle of one repeated cell. These values can be
-mixed in `list[View]`, `map[str, View]`, arrays, and fields because
-interfaces are nominal and heterogeneous.
+`plain(text, style)` constructs a one-span `Line`. Drawing clips content to the
+rectangle assigned by the parent.
 
-`Rows` and `Viewport` follow one pattern: the **state** value lives with the
-application, which moves it in response to events, and a read-only **view**
-(`RowsView`, `ViewportView`) is built from the current state each frame to
-paint. `Rows` tracks a selection and a window; `Viewport` tracks a scroll
-position. Neither stores the application's data — a provider function answers
-what each row says — so the application keeps its list and the widget reads it.
+## Panels
 
-See the [interface guide](/guide/interfaces/) and the exact [interface
-rules](/guide/reference/types/#interface) for conformance and lifetime rules.
+`Panel` draws its requested edges, then lays its content into the remaining
+interior. All four edges are present by default:
 
-## Input
+```text
+termui.Panel(
+    "output",
+    output,
+    style = active_border,
+    edges = termui.Edges(bottom = false),
+)
+```
 
-`Events.next()` snapshots one host event into this closed union:
+Where panel strokes meet, the package merges them into the correct
+`┼`/`├`/`┴`/… glyph. Your application describes neighboring panels; it never
+chooses junction characters.
+
+## Long lists and documents
+
+`Rows` calls a provider only for visible indexes:
+
+```text
+termui.Rows(
+    total,
+    top,
+    anchor,
+    selected,
+    self.line_at,
+    selected_style,
+)
+```
+
+The provider signature is `func(i64) -> Line`.
+
+- `total` is the number of available rows.
+- `top` is the requested first visible index.
+- `anchor` is kept inside the visible window.
+- `selected` receives `selected_style` across its entire row.
+
+Anchor and selection are separate on purpose. A file browser often uses the
+same index for both. A text editor uses the cursor line as its anchor and
+`none` as its selection, so scrolling follows the cursor without painting a
+selection bar.
+
+The application owns the collection, top index, and selection. `Rows` stores
+no duplicate model. `visible_top(top, total, anchor, height)` exposes the exact
+window calculation when an event or cursor callback needs to map screen rows
+back to indexes.
+
+## Handle events
+
+Attach a callback with `.on_event`:
+
+```text
+func respond(event: termui.Event, area: termui.Rect) -> termui.Response
+```
+
+The callback receives the exact `Rect` assigned to the wrapped view. That is
+the rectangle to use for pointer hit testing; do not reproduce stack layout in
+the application.
+
+`Response` has three values:
+
+| Response | Effect |
+|---|---|
+| `ignored` | continue routing through the tree |
+| `handled` | stop routing; the next frame reads updated state |
+| `quit` | release the current tree and leave the application |
+
+An outer modifier receives an event before its content, so a root handler can
+own global shortcuts. Pointer events enter only views whose rectangle contains
+the pointer. Stacks visit children in display order. `ZStack` checks the
+visually topmost child first. Keyboard and text events continue until the
+focused child accepts them.
+
+`Event` is a closed union:
 
 ```text
 closed
@@ -210,33 +249,84 @@ text(typed: str)
 mouse(pointer: Mouse)
 ```
 
-Mouse coordinates, buttons, modifiers, wheel direction, and text are copied
-into the event value. An unknown key is `Key.unknown`; `Events.last_name`
-keeps its raw name for applications that need to support a newer host event.
-The package does not impose a keymap. Mapping keys to commands belongs to the
-application.
+`Mouse` carries `kind`, `row`, `column`, `button`, `modifiers`, and `wheel`.
+`Pointer` is `press`, `release`, `drag`, `move`, or `wheel`. `Mouse.has_shift`,
+`has_alt`, and `has_control` inspect modifiers. An unrecognized host key is
+`Key.unknown`.
 
-## Lifetime boundaries
+`closed` and `resize` are owned by the application runtime. They are present in
+the event vocabulary but are not dispatched as ordinary commands.
 
-- The application keeps its model, providers, and event loop alive.
-- A `Renderer` keeps its `Surface` and `Events` fields.
-- A view receives the surface only for its `draw` call and must not store it.
-- A provider such as a `RowsView.render` bound function owns a snapshot of its
-  value receiver and retains any reference fields in that snapshot. It may be
-  stored independently of the concrete provider binding.
-- Do not hide a mutable application model behind `View` just to obtain dynamic
-  dispatch; project the current state into value-only views.
+## Place the terminal cursor
 
-This shape keeps terminal lifecycle in one owner and makes layout and drawing
-inputs visible. It follows the same information-hiding goal as the language's
-interfaces: the abstraction removes repeated mechanics without taking over
-decisions that belong to the application.
+Attach a cursor callback with `.cursor`:
 
-## What is intentionally not here
+```text
+func cursor(area: termui.Rect) -> termui.Cursor?
+```
 
-The current package does not provide a mutable retained widget tree, focus
-traversal, scrollbars, mouse hit-testing policy, grapheme-aware width, or a
-global theme. Each would need its own lifetime and testing decision. The
-package tests cover layout totality, the constraint solver, styled-text
-clipping, frame junctions, cell diffing, input snapshots, selection and scroll
-windowing, and renderer lifecycle; the editor is the end-to-end consumer.
+Return a cursor for the active view and `none` for inactive views. The callback
+receives the same assigned rectangle as drawing and events. If no view requests
+a cursor, the runtime uses a safe origin.
+
+## Test a view without a terminal
+
+`snapshot(view, rows, columns)` renders entirely in memory:
+
+```text
+let frame = termui.snapshot(app.body(), 12, 60)
+assert(frame.line(0).contains("counter"))
+
+let first = frame.cell(0, 0)
+assert(first.text == "┌")
+```
+
+`Snapshot.line(row)` returns visible characters. `cell(row, column)` returns
+the character and style. `cursor` records the chosen `Cursor?`. The snapshot
+owns a deep copy of its cells, so rendering another frame cannot change it.
+
+Snapshots are the preferred test seam. They prove the same layout and draw
+traversal as the live runtime without terminal IO or lifecycle choreography.
+
+## What `run` owns
+
+Every iteration follows one invariant:
+
+1. read terminal dimensions and resize the cell buffers;
+2. clear the next frame;
+3. ask `Application.body()` for a view tree;
+4. lay out and draw it while discovering the cursor;
+5. write only cells that differ from the last frame, place the cursor, and
+   flush once;
+6. snapshot one terminal event;
+7. route it through the same tree and rectangles that were visible; and
+8. release that tree before asking for a new body.
+
+Using the visible tree for input prevents a pointer from being interpreted
+against geometry the person has not seen. Hiding the entire sequence prevents
+partial frames, stale cursors, forgotten flushes, and resize-order bugs.
+
+## Public names
+
+The `termui` facade exports:
+
+- components: `Empty`, `Label`, `StyledText`, `Rows`, `Fill`, `HStack`,
+  `VStack`, `ZStack`, `Panel`;
+- layout: `Length`, `Item`, `Rect`, `Edges`;
+- text and styling: `Color`, `Style`, `Span`, `Line`, `plain`;
+- input and response: `Key`, `Pointer`, `Mouse`, `Event`, `Response`;
+- application: `Application`, `View`, `Cursor`, `run`; and
+- testing: `Snapshot`, `snapshot`, `visible_top`.
+
+Application code should import `termui`, not its implementation modules. The
+package source is split into model, input, layout, canvas, view, and runtime
+boundaries so each piece can hide its complexity and be tested independently.
+
+## Current limits
+
+Version 0.3 does not include a mutable retained widget tree, result-builder
+syntax, a global environment or theme, a focus registry, scrollbars, or a full
+grapheme/East-Asian-width engine. Applications keep focus and domain policy in
+their own model. The shipped editor is the larger reference application: it
+uses panels, all three stacks, lazy rows, styled source, pointer routing,
+resizable panes, cursors, and the hidden loop.

@@ -1483,13 +1483,13 @@ fn inList(list: []const []const u8, word: []const u8) bool {
 /// Since the editor split into modules no single file is large enough to
 /// exercise the language on its own, so the corpus is several of them
 /// concatenated — the coordinator, the highlighter, the text model, the
-/// painter and the file browser.  Reached by names `build.zig` binds,
+/// declarative application and the file browser. Reached by names `build.zig` binds,
 /// because they sit above this module's root and `@embedFile` does not
 /// leave a module.
 const corpus = @embedFile("state.luc") ++ "\n" ++
     @embedFile("highlight.luc") ++ "\n" ++
     @embedFile("document.luc") ++ "\n" ++
-    @embedFile("paint.luc") ++ "\n" ++
+    @embedFile("application.luc") ++ "\n" ++
     @embedFile("browser.luc");
 
 test "every language word the editor uses is coloured" {

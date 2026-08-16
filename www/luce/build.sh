@@ -63,6 +63,8 @@ release_prefix="$release_work/prefix"
 release_tree="$release_work/luce-$release_version"
 release_output="$here/out/install/$release_version"
 archive_name="luce-${release_version}-macos-aarch64.tar.gz"
+termui_version=$(awk '/^[[:space:]]*termui[[:space:]]*:/ { print $2; exit }' "$root/examples/editor/luce.yaml")
+termui_source="$root/packages/termui-$termui_version"
 extension_source="$root/tools/vscode-luce"
 extension_version=$(awk -F'"' '/^[[:space:]]*"version"[[:space:]]*:/ { print $4; exit }' "$extension_source/package.json")
 extension_id="luciaos.luce-language"
@@ -78,6 +80,14 @@ if ! grep -Fq "version=$release_version" "$release_source"; then
 fi
 if ! grep -Fq "extension_version=$extension_version" "$release_source"; then
     echo "luce site: installer extension version does not match package.json ($extension_version)" >&2
+    exit 1
+fi
+if [ -z "$termui_version" ] || [ ! -f "$termui_source/luce.yaml" ] || [ ! -f "$termui_source/termui.luc" ]; then
+    echo "luce site: termui $termui_version is incomplete" >&2
+    exit 1
+fi
+if ! grep -Fq "termui_version=$termui_version" "$release_source"; then
+    echo "luce site: installer termui version does not match the editor manifest ($termui_version)" >&2
     exit 1
 fi
 if [ -z "$extension_version" ] || [ ! -f "$extension_source/package.json" ] || [ ! -f "$extension_source/extension.js" ]; then
@@ -112,6 +122,12 @@ for library in libluce_rt.a libluce_start.a; do
         exit 1
     fi
     cp "$release_prefix/lib/$library" "$release_tree/lib/$library"
+done
+termui_release="$release_tree/lib/termui-$termui_version"
+mkdir -p "$termui_release"
+cp "$termui_source/luce.yaml" "$termui_release/luce.yaml"
+for module in termui model input layout canvas view runtime; do
+    cp "$termui_source/$module.luc" "$termui_release/$module.luc"
 done
 printf '%s\n' "$release_version" >"$release_tree/VERSION"
 # Keep the editor support in the same checked release.  The installer copies
@@ -154,14 +170,24 @@ run_installer_smoke
 test "$("$smoke_install/bin/luce" --version)" = "luce $release_version"
 test "$("$smoke_install/bin/loom" --version)" = "loom $release_version"
 test -x "$smoke_install/bin/editor"
+test -f "$smoke_install/lib/termui-$termui_version/termui.luc"
 test -f "$smoke_extensions/$extension_id-$extension_version/package.json"
 test "$(grep -Fc "$smoke_install/bin" "$smoke_profile")" -eq 1
+test "$(grep -Fc "$smoke_install/lib" "$smoke_profile")" -eq 1
 
 printf '%s\n' 'func main():' '    print("installer works")' >"$smoke_program"
 (cd "$smoke" && "$smoke_install/bin/luce" build hello.luc)
 test "$("$smoke/hello")" = "installer works"
 (cd "$smoke" && "$smoke_install/bin/luce" build hello.luc --emit=library -o hello.lc)
 test "$("$smoke_install/bin/loom" run "$smoke/hello.lc")" = "installer works"
-echo "installer: fresh replacement, PATH, editor support, executable, and library run passed"
+printf '%s\n' 'name: smoke' 'version: 0.1.0' 'packages:' "  termui: $termui_version" >"$smoke/luce.yaml"
+printf '%s\n' \
+    'import termui' \
+    'func main():' \
+    '    let frame = termui.snapshot(termui.Panel("ok", termui.Label("ready")), 3, 10)' \
+    '    print(frame.line(1))' >"$smoke/package_app.luc"
+(cd "$smoke" && . "$smoke_profile" && "$smoke_install/bin/luce" build package_app.luc)
+test "$("$smoke/package_app")" = "│ready   │"
+echo "installer: fresh replacement, PATH, package shelf, editor support, executable, and library run passed"
 
 echo "==> done: $here/out"

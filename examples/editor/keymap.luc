@@ -3,8 +3,8 @@
 # termui ships no keymap, deliberately: a keymap maps a key to *the
 # app's* intent, and no library can name that type.  So the app writes
 # the table, and an enum keys a map, so it is written the way it reads.
-# The host's key names never reach the editor — termui.input answers a
-# `Key`, and the table below is the whole translation.
+# The host's key names never reach the editor — termui answers a `Key`, and
+# the table below is the whole translation.
 
 import termui
 

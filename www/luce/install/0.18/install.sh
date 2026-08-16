@@ -17,6 +17,7 @@ editor_extensions_dir="${LUCE_INSTALL_EDITOR_EXTENSIONS_DIR:-}"
 profile_override="${LUCE_INSTALL_PROFILE:-}"
 extension_id="luciaos.luce-language"
 extension_version=0.4.0
+termui_version=0.3.0
 
 case "$(uname -s)" in
     Darwin) ;;
@@ -149,6 +150,13 @@ for library in libluce_rt.a libluce_start.a; do
         exit 1
     fi
 done
+termui_source="$release/lib/termui-$termui_version"
+for package_file in luce.yaml termui.luc model.luc input.luc layout.luc canvas.luc view.luc runtime.luc; do
+    if [ ! -f "$termui_source/$package_file" ]; then
+        echo "luce: release archive is missing termui $termui_version ($package_file)" >&2
+        exit 1
+    fi
+done
 extension_source="$release/share/vscode/extensions/$extension_id-$extension_version"
 if [ ! -f "$extension_source/package.json" ] ||
     [ ! -f "$extension_source/extension.js" ] ||
@@ -237,7 +245,7 @@ install_editor_support() {
 
 install_editor_support
 
-add_path() {
+add_shell_environment() {
     if [ -n "$profile_override" ]; then
         profile=$profile_override
     else
@@ -269,25 +277,35 @@ add_path() {
     if [ "$install_root" = "$HOME/.local/luce" ]; then
         path_line='export PATH="$HOME/.local/luce/bin:$PATH"'
         path_pattern='.local/luce/bin'
+        library_line='export LUCE_LIB="$HOME/.local/luce/lib${LUCE_LIB:+:$LUCE_LIB}"'
+        library_pattern='.local/luce/lib'
     else
         path_line="export PATH=\"$install_root/bin:\$PATH\""
         path_pattern="$install_root/bin"
+        library_line="export LUCE_LIB=\"$install_root/lib\${LUCE_LIB:+:\$LUCE_LIB}\""
+        library_pattern="$install_root/lib"
     fi
     if grep -Fq "$path_pattern" "$profile" 2>/dev/null; then
         echo "==> PATH already contains $install_root/bin (in $profile)"
-        return 0
-    fi
-    if printf '\n# Luce %s\n%s\n' "$version" "$path_line" >>"$profile"; then
+    elif printf '\n# Luce %s\n%s\n' "$version" "$path_line" >>"$profile"; then
         echo "==> added $install_root/bin to PATH in $profile"
         echo "    Start a new shell, or run: . \"$profile\""
     else
         echo "luce: installed successfully, but could not update $profile" >&2
         echo "luce: add $install_root/bin to PATH before using luce" >&2
     fi
+    if grep -Fq "$library_pattern" "$profile" 2>/dev/null; then
+        echo "==> LUCE_LIB already contains $install_root/lib (in $profile)"
+    elif printf '%s\n' "$library_line" >>"$profile"; then
+        echo "==> added $install_root/lib to LUCE_LIB in $profile"
+    else
+        echo "luce: installed successfully, but could not update LUCE_LIB in $profile" >&2
+        echo "luce: add $install_root/lib to LUCE_LIB before importing shipped packages" >&2
+    fi
 }
 
 if [ "${LUCE_INSTALL_NO_PATH:-0}" != 1 ]; then
-    add_path
+    add_shell_environment
 fi
 
 echo "==> Luce $version installed at $install_root"

@@ -1,10 +1,9 @@
 # Declarative termui and editor rewrite
 
-> **State.** This is the implementation plan for `termui` v0.3 and the
-> editor that proves it. Until the work is complete, [TERMUI.md](TERMUI.md)
-> remains the current package reference and
-> [TERMUI_EDITOR_REWRITE.md](TERMUI_EDITOR_REWRITE.md) remains the record of
-> v0.2.
+> **State.** Implemented in `termui` v0.3 and the shipped editor.
+> [TERMUI.md](TERMUI.md) is the current package reference;
+> [TERMUI_EDITOR_REWRITE.md](TERMUI_EDITOR_REWRITE.md) records the superseded
+> v0.2 boundary.
 
 This design follows [SOFTWARE_DESIGN.md](SOFTWARE_DESIGN.md): terminal
 protocol, frame buffering, layout traversal, event routing and lifecycle

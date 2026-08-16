@@ -63,7 +63,7 @@ selected surface roster is checked during the site build.
 | [TESTING.md](TESTING.md) | Luce tests, engineering lanes, progress output, and the release gate. |
 | [BINDING.md](BINDING.md) | Current bound-method representation and lifetime rules. |
 | [FILESYSTEM.md](FILESYSTEM.md) | The partly built filesystem surface, with the boundary stated explicitly. |
-| [TERMUI.md](TERMUI.md) | The current low-level terminal UI package. |
+| [TERMUI.md](TERMUI.md) | The current declarative terminal application package. |
 | [SELF.md](SELF.md) | Implied receivers, static members, and value-writer calls. |
 | [CONSTANTS.md](CONSTANTS.md) | File-scope constants and immutable program-root containers. |
 
@@ -75,10 +75,10 @@ selected surface roster is checked during the site build.
 | [ROADMAP.md](ROADMAP.md) | Completed ARC/type/class/closure phases and the ordered path through owned interfaces, userland proof, generics, and release lock. |
 | [GENERICS.md](GENERICS.md) | A later monomorphized generics design; not a prerequisite for the ARC/class/closure milestone. |
 | [VECTOR.md](VECTOR.md) | A future optimization plan for checked vectorized reductions; not current language behavior. |
-| [TERMUI_DECLARATIVE.md](TERMUI_DECLARATIVE.md) | The in-progress declarative termui v0.3 and editor replacement. |
 
 ## Decision records
 
 | File | What it records |
 |---|---|
+| [TERMUI_DECLARATIVE.md](TERMUI_DECLARATIVE.md) | The completed termui v0.3 application model and editor migration. |
 | [TERMUI_EDITOR_REWRITE.md](TERMUI_EDITOR_REWRITE.md) | The completed termui/editor rewrite plan and the reasoning behind its boundaries. |

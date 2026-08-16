@@ -30,7 +30,7 @@ fact at their boundary rather than making every application know the OS API.
 | [`std.paths`](/library/paths/) | joining and inspecting path text without touching the host |
 | [`std.os`](/library/os/) | memory, processor, shell, and terminal services |
 | [`std.term`](/library/term/) | the shorter terminal drawing and input facade |
-| [`termui`](/library/termui/) | a deterministic renderer, cell surface, views, layout, and events |
+| [`termui`](/library/termui/) | declarative terminal applications with stacks, panels, events, and a hidden loop |
 | [`std.zip`](/library/zip/) | ZIP/DEFLATE over byte lists, plus explicit file helpers |
 | [`std.json`](/library/json/) | parse, inspect, build, and write JSON values |
 | [`std.gpu`](/library/gpu/) | backend-neutral drawing surfaces |

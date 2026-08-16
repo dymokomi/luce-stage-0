@@ -111,7 +111,7 @@ pub const sections = [_]Section{
             .{ .slug = "json", .title = "std.json", .part = "Standard Library", .blurb = "JSON against RFC 8259, as a union: match a value, build one, write it back." },
             .{ .slug = "gpu", .title = "std.gpu", .part = "Standard Library", .blurb = "Backend-neutral surfaces for low-level drawing, with Metal and Vulkan kept behind the host boundary." },
             .{ .slug = "ui", .title = "std.ui", .part = "Standard Library", .blurb = "Windows and their drawing surfaces, before a higher-level UI package exists." },
-            .{ .slug = "termui", .title = "termui", .part = "Maintained Packages", .source = "library/termui.md", .blurb = "A deterministic terminal-UI surface built from a renderer, cells, views, layout and events." },
+            .{ .slug = "termui", .title = "termui", .part = "Maintained Packages", .source = "library/termui.md", .blurb = "Declarative terminal applications built from stacks, panels, rows, events, and one hidden lifecycle." },
         },
     },
     .{
