@@ -20,16 +20,16 @@ Every JSON value is one of these members:
 union Json:
     null
     boolean(value: bool)
-    integer(value: long)
-    real(value: double)
-    text(value: string)
-    array(items: list(Json))
-    object(fields: map(string, Json))
+    integer(value: i64)
+    real(value: f64)
+    text(value: str)
+    array(items: list[Json])
+    object(fields: map[str, Json])
 ```
 
-JSON has one number grammar while Luce has `long` and `double`, so the union
+JSON has one number grammar while Luce has `i64` and `f64`, so the union
 keeps both `integer` and `real`. JSON strings are named `text` because
-`string` is already the Luce type name. Use `match` to read a union value:
+`str` is already the Luce type name. Use `match` to read a union value:
 
 ```luce run
 import std.json
@@ -46,7 +46,7 @@ func describe(doc: json.Json) -> str:
             return "real " + str(value)
         text(value):
             return "text " + value
-        array[items]:
+        array(items):
             return "array " + str(len(items))
         object(fields):
             return "object " + str(len(fields))
@@ -54,7 +54,7 @@ func describe(doc: json.Json) -> str:
 func main() -> !:
     let value = try json.parse("[null, true, 7, 7.5, \"s\"]")
     match value:
-        array[items]:
+        array(items):
             for item in items:
                 print(describe(item))
         else:
@@ -73,18 +73,18 @@ text s
 
 | Signature | Result |
 |---|---|
-| `json.parse(content: string) -> Json!` | one parsed value, or an error naming the byte where the document is invalid |
-| `json.quote(content: string) -> string` | a JSON string literal with quotes and escapes |
+| `json.parse(content: str) -> Json!` | one parsed value, or an error naming the scalar position where the document is invalid |
+| `json.quote(content: str) -> str` | a JSON string literal with quotes and escapes |
 | `value.is_null() -> bool` | whether the member is `null` |
 | `value.as_bool() -> bool?` | boolean payload, or `none` for another member |
-| `value.as_long() -> long?` | integer payload; a real number returns `none` |
-| `value.as_double() -> double?` | either numeric member, widening an integer |
-| `value.as_text() -> string?` | text payload, or `none` |
-| `value.count() -> long` | array elements or object members; `0` for a leaf |
-| `value.member(name: string) -> Json?` | object member as a value, or `none` when absent/not an object |
-| `value.element(index: long) -> Json` | array element or object member by insertion position; out of range traps |
-| `value.write() -> string` | compact JSON text |
-| `value.pretty(spaces: long) -> string` | indented JSON; `spaces == 0` is the compact form |
+| `value.as_long() -> i64?` | integer payload; a real number returns `none` |
+| `value.as_double() -> f64?` | either numeric member, converting an integer explicitly inside the library |
+| `value.as_text() -> str?` | text payload, or `none` |
+| `value.count() -> i64` | array elements or object members; `0` for a leaf |
+| `value.member(name: str) -> Json?` | object member as a value, or `none` when absent/not an object |
+| `value.element(index: i64) -> Json` | array element or object member by insertion position; out of range traps |
+| `value.write() -> str` | compact JSON text |
+| `value.pretty(spaces: i64) -> str` | indented JSON; `spaces == 0` is the compact form |
 
 For a read-only walk, match the value and iterate its `fields` or `items`.
 `member` and `element` return a `Json` value. Leaf payloads copy; any list or
@@ -124,7 +124,7 @@ func main():
     var fields = new map[str, json.Json]
     fields["name"] = json.Json.text(value = "Luce")
     fields["version"] = json.Json.integer(value = 1)
-    fields["tags"] = json.Json.array[items = [json.Json.text(value = "language")]]
+    fields["tags"] = json.Json.array(items = [json.Json.text(value = "language")])
     let doc = json.Json.object(fields = fields)
     print(doc.write())
     print(doc.pretty(2))
@@ -149,8 +149,9 @@ no JSON-specific arena or cleanup call.
 
 The notation determines the numeric member: `42` is `integer`, while `42.0`,
 `4.2`, and `4.2e1` are `real`. `as_long` does not silently round a real;
-`as_double` widens either numeric member. A whole number too large for a
-`long` is represented as a `real`, where its precision is explicit.
+`as_double` explicitly converts either numeric member. A whole number too
+large for an `i64` is represented as a `real`, where its precision is
+explicit.
 
 `write` re-encodes the value rather than preserving the original spelling.
 It keeps the value's meaning: a `real` is written with a decimal point so it
@@ -176,7 +177,7 @@ true
 
 Duplicate object names replace the previous value. The key keeps its first
 insertion position, while its value is the last one written. A number beyond
-the range of a `double`, `NaN`, or `Infinity` is rejected because JSON has no
+the range of an `f64`, `NaN`, or `Infinity` is rejected because JSON has no
 text that can represent it.
 
 ## Input limits and refusals
@@ -191,11 +192,11 @@ The exact error message names the byte offset; handle it with `try` or
 Reading a document from a file is deliberately three separate operations:
 
 ```text
-let bytes = try files.read_bytes(path)
-let text = strings.from_bytes(bytes) else ""
+let data = try files.read_bytes(path)
+let text = strings.from_bytes(data) else ""
 let value = try json.parse(text)
 ```
 
-`std.json` receives a Luce `string`, so UTF-8 validation has already happened
+`std.json` receives a Luce `str`, so UTF-8 validation has already happened
 before parsing begins. `std.files` handles the host interaction and
 `std.strings.from_bytes` handles the byte-to-text conversion.

@@ -1,215 +1,191 @@
 # Numeric semantics
 
-This page is the reference for how Luce's numbers behave: how the two
-ladders mix, what `/`, `//` and `%` do, when arithmetic traps, how
-values compare across the ladders, and what each conversion constructor
-rounds. The types themselves — the seven-rung ladder, the storage
-types, and the widening rules — are in `docs/TYPES.md`.
+Luce has eight fixed-width integers and three IEEE floating-point types:
 
-## Promotion
+```text
+u8  u16  u32  u64
+i8  i16  i32  i64
+f16 f32 f64
+```
 
-An operator first takes each operand to its **arithmetic type**: `byte`
-and `short` to `int`, `half` to `float`, and `int`, `long`, `float` and
-`double` to themselves. No expression ever has a storage type, so
-arithmetic happens at four types, never seven.
+The type name is the representation. Concrete numeric values never change
+width, signedness, or numeric family implicitly. Literals take a type from
+context; explicit constructors cross representation boundaries.
 
-The two arithmetic operands then meet at a common type:
+## Contextual literals
 
-- Two of the same type meet at that type.
-- Two integers meet at the wider (`long`).
-- Two floats meet at the wider (`double`).
-- An integer and a float meet at `double`, whichever way round they were
-  written.
-
-Promotion is implicit and one-directional: it only ever widens, and it
-targets `double` across the ladders — never `float` — because a 32-bit
-float cannot hold every 32-bit integer. Nothing narrows implicitly
-(`docs/TYPES.md`).
-
-## `/` is true division
-
-`/` always divides. It promotes both operands to a float and answers a
-float — `double` unless both operands are already `float` — so
-`7 / 2` is `3.5`, not `3`.
+An integer literal is checked with arbitrary precision and lands directly in
+the integer type required by its annotation, argument, result, field,
+container element, enum backing, or concrete numeric operand. It must fit that
+type. Without context it is `i64`.
 
 ```luce
 func main():
-    print(str(7 / 2))         # 3.5
-    print(str(23 / 7))        # 3.2857142857142856 — a f64
+    let small: u8 = 255
+    let count = 42              # i64
+    let values: list[u16] = [1, 2, 3]
+    assert(small == 255)
+    assert(count == 42)
+    assert(values[2] == 3)
 ```
 
-Integer operands promote to `double`, so integer division answers full
-`double` precision even when it divides evenly (`6 / 3` is the `double`
-value `2`). The result is `float` only when both operands are already
-`float`.
+A floating literal follows the same rule for `f16`, `f32`, or `f64` and
+otherwise becomes `f64`. Compile-time rounding uses round-to-nearest,
+ties-to-even.
 
-`/` follows IEEE 754 and never traps: dividing by zero yields `inf` or
-`NaN`, exactly as any other float operation would.
+Context reaches a literal, not an already typed value. If `x` is `u32`, the
+literal in `x + 1` becomes `u32`; two names in `x + y` must already have the
+same concrete type.
 
-## `//` and `%`: the floor pair
+## No implicit numeric conversion
 
-`//` is floor division and `%` is the modulus that pairs with it. For
-integer operands both answer the promoted integer type; they floor
-together, so `%` takes the sign of the **divisor** and
-`b * (a // b) + (a % b) == a` holds for every sign.
+Assignment, arguments, returns, operators, comparisons, and container stores
+never convert one concrete numeric type into another. This is a type error:
+
+```luce refused
+func main():
+    let narrow: i32 = 7
+    let wide: i64 = narrow
+    print(str(wide))
+```
+
+The intended boundary is explicit:
 
 ```luce
 func main():
-    print(str(7 // 2))        # 3
-    print(str(7 % 3))         # 1
-    print(str(-7 % 3))        # 2 — sign of the divisor
-    print(str(-7 // 3))       # -3
+    let narrow: i32 = 7
+    let wide: i64 = i64(narrow)
+    print(str(wide))
 ```
 
-`//` and `%` accept mixed operands too, promoting like every other
-arithmetic operator: `7.5 // 2.0` is `3.0` (`floor(a / b)`), and on
-floats they follow IEEE — `1.0 // 0.0` is `inf`. To floor a float to an
-integer *value*, convert the floored result: `long(floor(x))`.
+## Checked integers
 
-## Division by zero
+Every integer type computes at its own width.
 
-The operators that produce an integer trap; the one that produces a
-float is IEEE.
-
-| Expression | Result |
-|---|---|
-| `1 / 0` | `inf` |
-| `0 / 0` | `NaN` |
-| `1 // 0` | trap `divide_by_zero` |
-| `1 % 0` | trap `divide_by_zero` |
+- `+`, `-`, `*`, and unary `-` are checked. Overflow traps
+  `integer_overflow`; it never wraps and is never undefined.
+- Unary `-` accepts signed integers only. Negating the minimum signed value
+  traps.
+- `//` is floor division and `%` is its paired remainder. Both preserve the
+  operand type, trap `divide_by_zero`, and satisfy
+  `b * (a // b) + (a % b) == a`.
+- Signed minimum divided by `-1` traps `integer_overflow`.
+- `&`, `|`, `^`, and `~` work on every integer type and preserve it.
+- `<<` and `>>` preserve the left type. A negative shift count or a count at
+  least the left width traps `shift_out_of_range`.
 
 ```luce
 func main():
-    var a: i32 = 1
-    var b: i32 = 0
-    print(str(a // b))
+    var value: u8 = 255
+    value += 1
 ```
 
-```output
-loom: trap: division by zero [divide_by_zero]
-    at main (main.luc:4:5)
-```
+The compound assignment computes as `u8`, so it traps
+`integer_overflow`; there is no hidden wider intermediate.
 
-## Checked arithmetic
-
-The four integer types are checked: `+`, `-`, `*` and negation trap
-`integer_overflow` when the true result does not fit, rather than
-wrapping. This holds at both arithmetic integer widths — an `int`
-counter overflows at ±2³¹, a `long` at ±2⁶³.
+Signed `//` floors toward negative infinity, and `%` takes the sign of the
+divisor:
 
 ```luce
 func main():
-    var x: i32 = 46341
-    print(str(x * x))         # 2147488281 > 2^31 - 1
+    assert(-7 // 3 == -3)
+    assert(-7 % 3 == 2)
 ```
 
-```output
-loom: trap: integer overflow [integer_overflow]
-    at main (main.luc:3:5)
-```
+Unsigned division is ordinary quotient and remainder.
 
-Storage types have no arithmetic and therefore no overflow: `byte` 255
-plus 1 does not wrap and does not trap, because the addition happens at
-`int` and its result is the `int` value 256. What can fail is storing
-that result back into a storage type, which is a **checked narrowing**:
+## Floats
+
+`f16`, `f32`, and `f64` all compute at their own width. Arithmetic,
+comparisons, `floor`, `ceil`, and `trunc` preserve that width. Floating-point
+arithmetic follows IEEE 754, including infinities and NaNs, and does not trap.
+
+Concrete float widths do not mix, and an integer does not mix with a float.
+A literal can still take the concrete operand's type:
 
 ```luce
 func main():
-    var b: u8 = 255
-    b += 1                       # b = u8(b + 1); 256 does not fit
-    print(str(b))
+    let scale: f32 = 1.5
+    let doubled = scale * 2       # 2 becomes f32
+    let precise = f64(scale) * 2  # explicit f64
+    print(str(doubled) + " " + str(precise))
 ```
 
-```output
-loom: trap: conversion out of range [conversion_range]
-    at main (main.luc:3:5)
-```
+## Division
 
-The floats never trap on arithmetic; they reach `inf` and `NaN` under
-IEEE 754.
+`/` is true division:
 
-## Comparison across representations
+- two operands of the same float type answer that float type;
+- two operands of the same integer type answer `f64`;
+- division by zero therefore follows IEEE 754 and answers infinity or NaN.
 
-Concrete numeric values compare only when they have the same type. A
-conversion makes a representation change visible, including its rounding:
+Integer `/` may lose precision because its result is explicitly floating.
+Use `//` for an integer result. Convert both inputs before `/` when the result
+must have a chosen float width.
 
 ```luce
 func main():
-    var n: i64 = 9007199254740993
-    print(str(n == i64(9007199254740992)))
-    print(str(f64(n) == 9007199254740992.0))
+    assert(7 / 2 == 3.5)
+    let done: u32 = 1
+    let total: u32 = 4
+    let ratio: f32 = f32(done) / f32(total)
+    assert(ratio == 0.25)
 ```
 
-The first comparison is exact and false. The second is true because the
-written `f64` conversion rounds an integer that binary64 cannot represent.
+## Comparisons
 
-## Conversions
-
-Every numeric type has a conversion constructor named for the type it
-produces: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f16`,
-`f32`, and `f64`. `str(x)` renders text. A conversion is the only way to
-change a concrete representation.
-
-- **A float to an integer** truncates toward zero and traps
-  `conversion_range` outside the target's range — `NaN` and the
-  infinities included. `i32(3.9)` is `3`; `i32(-2.5)` is `-2`.
-- **An integer to an integer that cannot hold it** traps the same way:
-  `u8(300)` is a program that stops, not `300` modulo anything.
-- **An integer to a float** rounds to nearest and never traps.
-- **A float to a narrower float** rounds to nearest, ties to even, and
-  may produce `inf` rather than trapping.
-- **A widening constructor never traps.** It is redundant with promotion
-  but stays, because it is how you widen where there is no operator to
-  hang the widening on.
+Numeric values compare only at one concrete type. Literals may take that type;
+typed values require a conversion. Integer ordering is exact. Floating-point ordering
+follows IEEE rules, so every ordered comparison with NaN is false and NaN is
+not equal to itself.
 
 ```luce
 func main():
-    let x = 3.9
-    print(str(i32(x)))            # 3 — truncates
-    print(str(i64(floor(x))))    # 3 — floor, then convert
+    let exact: i64 = 9007199254740993
+    assert(exact != 9007199254740992)
+    assert(f64(exact) == 9007199254740992.0)
 ```
+
+The second comparison is true because the written `f64` conversion rounds an
+integer that binary64 cannot represent exactly.
+
+## Explicit conversions
+
+Every numeric name is a conversion constructor. Conversion to the same type
+is legal and redundant.
+
+- Integer to integer checks the destination range and traps
+  `conversion_range` when the value does not fit.
+- Floating-point to integer truncates toward zero, then checks the destination range.
+  NaN and infinities trap `conversion_range`.
+- Integer to float rounds to nearest, ties-to-even, and does not trap.
+- One floating-point width to another rounds to nearest, ties-to-even; narrowing may produce
+  infinity rather than trapping.
 
 ```luce
 func main():
-    var over: i64 = 300
-    print(str(u8(over)))
+    let x: f64 = 3.9
+    assert(i32(x) == 3)
+    assert(i64(floor(x)) == 3)
 ```
 
-```output
-loom: trap: conversion out of range [conversion_range]
-    at main (main.luc:3:5)
-```
+Enum conversion uses the enum's declared integer backing type. An omitted
+backing defaults to `i32`. Converting out is explicit through that integer
+type or `str`; `Enum(value)` is the optional checked way in.
 
-### `floor`, `ceil`, `trunc`
+## Text formatting
 
-`floor`, `ceil` and `trunc` take a float and answer a float of the same
-width — they round without narrowing. Pair one with a conversion
-constructor to reach an integer value: `long(floor(x))`,
-`int(ceil(x))`.
+`str(x)` renders a number with the shortest text that round-trips at its own
+width. It also renders `bool`, `char`, `str`, enum and union members, and
+function values.
 
-### `string(x)`
-
-`string(x)` prints a number with the shortest text that round-trips **at
-its own width**, so the width is visible in the answer: a `float`
-divided out prints fewer digits than the same `double` would. It also
-renders a `bool`, a `string` (unchanged), an enum or union member's name,
-and a function value's name.
-
-```luce
-func main():
-    print(str(f64(1.0) / f64(3.0)))   # 0.3333333333333333
-    print(str(f32(1.0) / f32(3.0)))     # 0.33333334
-```
-
-### Formatting in f-strings
-
-A float interpolated into an f-string takes an optional `:.Nf` spec —
-`N` decimal places, rounded half away from zero:
+A float in an f-string accepts `:.Nf`, meaning `N` decimal places rounded half
+away from zero:
 
 ```luce
 import std.strings
 
 func main():
-    let mean = 23.99
-    print(f"mean = {mean:.2f}")      # mean = 23.99
+    let mean: f64 = 23.995
+    print(f"{mean:.2f}")
 ```

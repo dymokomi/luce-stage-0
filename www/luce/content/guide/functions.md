@@ -29,7 +29,7 @@ gcd(17, 5): 1
 
 Arguments are positional by default. Callers may use parameter names, and
 trailing parameters may have compile-time defaults, for example
-`func pad(s: string, width: long = 8) -> string`. Named arguments can be
+`func pad(s: str, width: i64 = 8) -> str`. Named arguments can be
 reordered, but positional arguments must come first.
 
 ## Functions are values
@@ -144,8 +144,8 @@ alive for as long as the bound value may be called.
 
 Function types have no zero value, so an optional is the storable form when
 a slot may be empty. Parentheses distinguish an optional function from a
-function whose result is optional: `(func(long) -> long)?` versus
-`func(long) -> long?`.
+function whose result is optional: `(func(i64) -> i64)?` versus
+`func(i64) -> i64?`.
 
 ```luce run
 struct Scale:

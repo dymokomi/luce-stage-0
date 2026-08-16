@@ -32,9 +32,9 @@ summary.
 
 ### Build text with a builder
 
-`+` creates a new string value. In a loop, repeated concatenation therefore
+`+` creates a new `str` value. In a loop, repeated concatenation therefore
 copies the text accumulated so far on each iteration. A `builder` grows one
-buffer and returns a string at the end:
+buffer and returns a `str` at the end:
 
 ```luce run
 func main():
@@ -50,7 +50,7 @@ func main():
 0,1,2,3
 ```
 
-Strings are values, so putting a string into a container copies its bytes.
+`str` values are values, so putting one into a container copies the value.
 That makes lifetime predictable; it also makes copying a large value a real
 cost. Keep large text in one owner, use a `builder` for construction, and
 measure before changing an algorithm. [Strings and copies](/guide/strings/)
@@ -58,9 +58,9 @@ explains the trade-off.
 
 ### Keep numeric storage in arrays
 
-`array(T, n)` stores a fixed number of elements with one shape. It is the
+`array[T, n]` stores a fixed number of elements with one shape. It is the
 natural input to `std.math` reductions and avoids list growth when the size
-is known. `list(T)` is the flexible choice when elements are added or
+is known. `list[T]` is the flexible choice when elements are added or
 removed. Neither choice changes the language's checked bounds and arithmetic
 rules.
 

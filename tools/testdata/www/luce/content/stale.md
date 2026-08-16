@@ -9,6 +9,8 @@ const held: Float = 1.5;
 
 A fence of another language is not a Luce sample either.
 
+An inline signature using `long` is stale even though it is not executable.
+
 ```luce
 func main():
     var xs: List(Int) = []

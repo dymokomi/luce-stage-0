@@ -32,7 +32,7 @@ internal host-handle bridge used by `std.ui`.
 
 All operations that ask the host are fallible. A refused operation is an
 error; a missing or malformed callback is a trap. Coordinates and colours
-are `long` so the boundary does not silently narrow a platform value.
+are `i64` so the host boundary has one explicit, stable integer width.
 
 ```text
 import std.ui

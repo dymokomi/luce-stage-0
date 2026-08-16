@@ -7,7 +7,7 @@ fails closed with `host_unavailable` rather than silently doing nothing.
 ## Arguments and output
 
 A program that accepts command-line arguments declares
-`main(args: list(string))`. The list contains the words after the program's
+`main(args: list[str])`. The list contains the words after the program's
 own name.
 
 ```luce run args=3 fig
@@ -133,7 +133,7 @@ Paths in these examples are relative to the process's current directory.
 
 ## Bytes and file handles
 
-`string` is UTF-8 text. Use byte operations when a file may contain arbitrary
+`str` is UTF-8 text. Use byte operations when a file may contain arbitrary
 binary data:
 
 ```luce run
@@ -141,11 +141,11 @@ import std.files
 import std.strings
 
 func main() -> !:
-    var bytes = new list[u8]
-    bytes.append(u8(0x89))
-    bytes.append(u8(0x50))
-    bytes.append(u8(0x00))
-    try files.write_bytes("image.bin", bytes)
+    var data = new list[u8]
+    data.append(u8(0x89))
+    data.append(u8(0x50))
+    data.append(u8(0x00))
+    try files.write_bytes("image.bin", data)
 
     let back = try files.read_bytes("image.bin")
     print(f"{len(back)} bytes")
@@ -184,8 +184,8 @@ func main() -> !:
 
 ## Input, errors, and time
 
-`read_line(prompt)` returns `string?`; end of input is `none`. `env(name)`
-also returns `string?`. `print_error` writes to standard error. `clock_ms`
+`read_line(prompt)` returns `str?`; end of input is `none`. `env(name)`
+also returns `str?`. `print_error` writes to standard error. `clock_ms`
 is monotonic, `sleep_ms` waits for a duration, and neither is fallible.
 
 ```luce run
@@ -208,7 +208,7 @@ this line went to standard error
 ## The terminal
 
 Terminal dimensions, drawing, and key input are host services available when
-running in a terminal. `key_read` returns a `string?`; an empty input stream
+running in a terminal. `key_read` returns a `str?`; an empty input stream
 therefore ends a draw loop cleanly. Terminal output is sanitized by the
 host. These services need a real terminal and are not demonstrated by the
 site's non-interactive examples. The [editor example](/guide/programs/)

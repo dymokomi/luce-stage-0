@@ -653,7 +653,7 @@ fn verifyContainerConstant(
 }
 
 /// A map row preserves written order but may not carry the same key
-/// twice.  String identity is its bytes, not the shared-pool index, so
+/// twice. `str` identity is its bytes, not the shared-pool index, so
 /// two separate slots holding equal text are duplicates too.
 ///
 /// The keys are compared **as they are stored** (`mir.mapKeyStorage`):

@@ -1,16 +1,15 @@
-//! String storage and the pure conversion builtins.
+//! `str` and `bytes` storage plus the pure conversion builtins.
 //!
-//! A Luce String is immutable and UTF-8.  Every function here that
+//! A Luce `str` is immutable and UTF-8. Every function here that
 //! makes new text hands it back owned by nobody: whatever receives it
 //! next owns it, and the statement that produced it releases it if
 //! nothing does (docs/STRINGS.md).  Where the bytes go is the value's
 //! own business — short text lives inside the `Value` and costs no
-//! allocation at all, which is why `str(long)` and `chr` never call the
-//! allocator.  `slice` is the one borrow here, on both engines, and
+//! allocation at all. `slice` is the one borrow here, on both engines, and
 //! storing one copies; a slice of inline text is a copy already,
 //! because there is nothing to borrow from.
 //!
-//! The String surface the language keeps is deliberately small — `+`,
+//! The `str` surface the language keeps is deliberately small — `+`,
 //! comparison, checked `s[a:b]`, `len`, `byte_at`, `find_byte` — and
 //! everything else is the `strings` std module built on top of it
 //! (docs/LANGUAGE.md).
@@ -57,7 +56,7 @@ pub fn parseStr(runtime: *Runtime, held: Value) Error!Value {
 }
 
 /// True when `index` is either the end of `held` or the first byte of a
-/// UTF-8 sequence.  Slicing anywhere else would produce a String that
+/// UTF-8 sequence. Slicing anywhere else would produce a `str` that
 /// is not valid UTF-8.
 pub fn isStringBoundary(held: []const u8, index: usize) bool {
     return index == held.len or held[index] & 0xc0 != 0x80;
@@ -210,11 +209,11 @@ pub fn findByte(runtime: *Runtime, held: Value, byte: i64, start: i64) Error!Val
 
 /// `str(x)` for every type it accepts.  Every answer is fresh owned
 /// text, including the two that could have been a view — `str(s)` of a
-/// String and `str(b)` of a Bool — because a producer that sometimes
+/// str and `str(b)` of a bool — because a producer that sometimes
 /// allocates and sometimes borrows cannot be told apart at its use
 /// site, and the whole ownership rule turns on being able to
-/// (docs/STRINGS.md).  A Builder hands back a copy of its bytes, so
-/// later appends do not change the String that was taken.
+/// (docs/STRINGS.md). A builder hands back a copy of its bytes, so
+/// later appends do not change the str that was taken.
 pub fn str(runtime: *Runtime, held: Value) Error!Value {
     if (!held.hasValidRepresentation()) return runtime.fail(.not_owned);
     switch (held.view()) {

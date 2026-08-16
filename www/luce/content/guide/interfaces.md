@@ -55,7 +55,7 @@ badge:42
 `Button` and `Badge` are different types, but both can be passed where
 `Drawable` is expected. Each interface value remembers the implementation
 that belonged to the concrete value that created it. The same pattern works
-with `map(string, Drawable)`, arrays, and struct fields.
+with `map[str, Drawable]`, arrays, and struct fields.
 
 The conversion is implicit at an interface-typed destination. There is no
 cast syntax and no structural conformance: a struct must write

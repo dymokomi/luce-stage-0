@@ -7,7 +7,7 @@ drift apart.
 
 ## sort
 
-Sorting, searching and joining a `list(long)`.
+Sorting, searching and joining a `list[i64]`.
 
 ```luce run include=examples/sort/sort.luc
 ```

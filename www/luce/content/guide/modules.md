@@ -126,8 +126,8 @@ The `as gs` clause renames a module binding only. A type alias is a different
 declaration:
 
 ```text
-alias PointId = long
-private alias Cache = map(PointId, string)
+alias PointId = i64
+private alias Cache = map[PointId, str]
 ```
 
 A public type alias is reachable as `module.PointId` and may deliberately

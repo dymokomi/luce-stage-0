@@ -1,45 +1,35 @@
 # The Luce language
 
-The reference for Luce as it exists in this tree.  docs/V2.md is the
-project plan; this file is the language.  Luce is **statically typed**
-with inference — every expression has one type known at compile time,
-annotations are optional where the initializer decides
-(`let n = 1` is an `int`; `let n: long = 1` says otherwise out loud),
-and the implicit conversions are the ones in `types.Type.widensTo`:
-along a ladder every rung reaches every rung above it — `byte` to
-`short` to `int` to `long`, `half` to `float` to `double` — and across
-the two ladders the answer is always `double` (docs/TYPES.md §2).
-**Nothing narrows**, in any direction or context.
+The reference for Luce as it exists in this tree. `docs/V2.md` is the
+project plan; this file is the language. Luce is **statically typed** with
+inference: every expression has one type known at compile time. An annotation
+is optional when an initializer decides the type. An unconstrained integer
+literal is `i64`; an unconstrained floating literal is `f64`.
+
+The numeric names state width and representation: `u8`, `u16`, `u32`, `u64`,
+`i8`, `i16`, `i32`, `i64`, `f16`, `f32`, and `f64`. Concrete numeric values
+never change width, signedness, or numeric family implicitly. Literals take a
+type from context; explicit constructors cross representation boundaries
+(`docs/TYPES.md` and `docs/NUMERICS.md`).
 
 > **Memory model.** Values copy. References share identity and are reclaimed
 > by ARC after their last strong reference. Files close and unfinished tasks
 > join on that same last-release path. ARC does not collect strong cycles;
-> `weak` is planned but is not current syntax. `docs/MEMORY.md` is the full
-> contract.
+> zeroing `weak` storage breaks cycles. `docs/MEMORY.md` is the full contract.
 
 ## Values and references
 
 Every type is one of two kinds, and the line between them is deliberate
 (the full model is `docs/MEMORY.md`):
 
-- **Values** — `bool`, the seven numbers, `string` (immutable UTF-8),
-  user `struct`s and `union`s, `enum`s,
-  and function values.  A value copies on assignment and call, lives
-  inline, and costs nothing at runtime; nobody frees a value.  The
-  numbers are two ladders, and four of them do
-  arithmetic: `int` (signed 32-bit) and `long` (signed 64-bit) trap on
-  overflow and on division by zero; `float` (IEEE binary32) and
-  `double` (IEEE binary64) follow IEEE without traps.  `int` and
-  `float` are what a literal takes when nothing tells it otherwise.
-  The other three — `byte` (unsigned 8-bit), `short` (signed 16-bit)
-  and `half` (IEEE binary16) — are **storage**: an operator widens
-  them to `int` and `float` before it does anything, so no expression
-  ever has one and there is no arithmetic at 8 or 16 bits to define.
-  What they are for is `array(byte, _)` at one byte an element, with
-  the extent supplied at construction (docs/TYPES.md).
-- **References** — the container objects `list(T)`, `map(K, V)`,
-  `array(T, ...)` and `builder`, and the resources `file`
-  and `task(...)`.  A reference is a shared, reference-counted object:
+- **Values** — `bool`, all eleven numbers, `char`, immutable `str` and
+  `bytes`, user `struct`s and `union`s, `enum`s, and function values. A
+  value copies on assignment and call. Every integer width computes with
+  checked arithmetic at its own width; every float width computes with IEEE
+  semantics at its own width.
+- **References** — the container objects `list[T]`, `map[K, V]`,
+  `array[T, ...]` and `builder`, and the resources `file`
+  and `task(...)`. A reference is a shared, reference-counted object:
   created with `new ...` or a literal, named by a variable that holds a
   *reference*. ARC frees it when its last reference
   goes away. Assigning or passing one shares the same object — both
@@ -58,9 +48,9 @@ A `struct` is always a value: it copies field by field. When a field
 holds a reference — a `list`, a `file`, a `task` — the copy shares
 that reference, exactly as a bare reference does, so both struct values
 see one object through that field while their scalar fields stay
-independent. User-defined class references and `weak` do not exist as
-complete language features yet; `class` is only a front-end scaffold
-whose target semantics are in `docs/ROADMAP.md`.
+independent. User-defined class references do not exist as a complete
+language feature yet; `class` is only a front-end scaffold whose target
+semantics are in `docs/ROADMAP.md`.
 
 ## Type aliases
 
@@ -86,7 +76,7 @@ Memory syntax is automatic, and the model is one paragraph (the full contract
 is in `docs/MEMORY.md`; both engines implement the same semantics):
 
 - **A value copies; a reference is shared and counted.**  Assigning or
-  passing a value — a number, `bool`, `string`, `enum`, plain `struct`,
+  passing a value — a number, `bool`, `char`, `str`, `bytes`, `enum`, plain `struct`,
   or function value — makes an independent copy.  Assigning or passing a
   reference — a container, a `file`, or a `task` — shares the
   one object. Reference objects carry a count the compiler maintains.
@@ -116,11 +106,11 @@ is in `docs/MEMORY.md`; both engines implement the same semantics):
   it onward.  A value parameter is a copy, so a function cannot reach
   the caller's value through it.
 
-- **ARC does not collect strong cycles.** A recursive struct can already
-  point back through a container, so avoid strong back-edges today. Classes
-  and closure environments make such graphs routine; the `weak` reference
-  that safely breaks them is therefore part of their completion milestone
-  (`docs/ROADMAP.md`).
+- **ARC does not collect strong cycles.** A `weak var` or `weak` field records
+  an optional built-in ARC reference without retaining it. A live read is an
+  owned strong snapshot; after final strong release it reads `none`. Weak
+  storage breaks recursive struct/container back-edges today and will support
+  classes once their reference lowering lands.
 
 - **Deterministic release is the resource contract.** ARC
   closes a `file` and joins an unfinished `task` at the last release, so no
@@ -131,15 +121,39 @@ is in `docs/MEMORY.md`; both engines implement the same semantics):
   and using that handle before assignment traps `null_object`.  That
   stable trap name uses the runtime's broad “object” term.  A `T?` says
   "there may be nothing here" out loud instead (next section), so a
-  `list(T)?` obeys every rule above exactly as a `list(T)` does.
+  `list[T]?` obeys every rule above exactly as a `list[T]` does.
 
 Every successful differential specification must leave no live objects. A
 surviving strong cycle is a leak, not something ARC silently claims to
 collect.
 
+### Weak storage
+
+Weakness belongs to a mutable storage place, not to a value type:
+
+```luce
+struct Observer:
+    weak target: list[i64]?
+
+func main():
+    weak var local: list[i64]?
+    let source = [42]
+    local = source
+    let snapshot = local else [0]
+    assert(snapshot[0] == 42)
+```
+
+The type is explicit and optional. Current targets are `list`, `map`,
+`array`, and `builder`; scalars, text, value structs, interfaces, functions,
+files, and tasks are refused. A weak field has an implicit `none` default.
+Assigning does not retain. Reading upgrades a live target to an owned optional
+snapshot; a dead target reads `none`, and object-table row reuse cannot revive
+it. Weak places do not persistently narrow across separate reads and never
+cross a worker boundary. `docs/MEMORY.md` carries the complete rules.
+
 ## Absence: `T?` and `none`
 
-A trailing `?` makes a type nullable: `long?` is a `long` that may not
+A trailing `?` makes a type nullable: `i64?` is an `i64` that may not
 be there, and `none` is the value that is not.  `?` means nullable and
 **only** nullable — failure is `!` and is never spelled with a `?`
 (see the next section).

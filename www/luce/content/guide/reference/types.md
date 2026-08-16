@@ -1,535 +1,245 @@
 # Types
 
-Luce is statically typed and supports inference. Every expression has exactly
-one type, known at compile time. Concrete numeric values do not change width
-or signedness implicitly; a literal can take its type from context.
+Luce is statically typed with inference. Every expression has one type known
+at compile time. An annotation is optional when an initializer supplies the
+type and required when nothing does.
 
-The complete built-in vocabulary is `bool`; `u8`, `u16`, `u32`, `u64`,
-`i8`, `i16`, `i32`, `i64`; `f16`, `f32`, `f64`; `char`, `str`, `bytes`;
-`list`, `map`, `array`, `builder`, `file`, and `task`.
+The complete built-in vocabulary is:
 
-An annotation is optional wherever the initializer decides the type,
-and required where nothing does — an empty list literal, a `var` with
-no value.
+```text
+bool
+u8 u16 u32 u64
+i8 i16 i32 i64
+f16 f32 f64
+char str bytes
+list map array builder
+file task
+```
+
+User declarations add aliases, structs, enums, unions, and interfaces. Class
+reference semantics are not complete yet; [Status](/status/) owns that work.
 
 ## Values and references
 
-The lines between them decide everything about memory.
+The kind of a type decides assignment, argument, and return behavior.
 
-**Values** copy on assignment and on call: numbers, `bool`, `char`, `str`,
-`bytes`, structs, unions, enums, and plain function values. A value may
-contain references. Copying it copies value fields and retains reference
-fields.
+| Kind | Current examples | Behavior |
+|---|---|---|
+| Value | numbers, `bool`, `char`, `str`, `bytes`, structs, enums, unions, function values | copy the value |
+| Reference | `list[T]`, `map[K, V]`, `array[T, ...]`, `builder` | share one ARC object |
+| Resource reference | `file`, `task(T)` | share one ARC object; close or join at the last release |
 
-**References** share one runtime object: `list[T]`, `map[K, V]`,
-`array[T, ...]`, `builder`, `file`, and `task(...)`. They are created by
-a literal, `new`, a host/library operation, or `spawn`. Assignment,
-arguments, results, fields, optionals, and container slots share the same
-object. ARC destroys it after its last strong reference.
-
-There are no source ownership operators and no universal deep copy. A
-program constructs an independent value explicitly when that is what its
-data model requires. `class` is currently a front-end scaffold, not a
-completed reference type; see [Status](/status/).
+A value may contain references. Copying the value copies its value fields and
+retains its reference fields. There are no source retain, release, borrow,
+move, clone, or free operations.
 
 ## Type aliases {#type-aliases}
 
-`alias` is a file-scope declaration that gives one resolved type another
-source name:
+`alias` gives one resolved type another source name:
 
 ```text
-alias Name = Type
-public alias Name = Type
-private alias Name = Type
+alias UserId = u64
+public alias Rows = list[str]
+private alias Handler = func(i64) -> i64
 ```
 
-The unmarked form is public. The alias and target are exactly the same type.
-No wrapper, conversion, nominal identity, allocation, layout, runtime tag, or
-dispatch rule is created.
+The unmarked form is public. An alias creates no wrapper, conversion, nominal
+identity, allocation, layout, runtime tag, or dispatch rule. It works anywhere
+its target works: annotations, signatures, fields, optionals, containers,
+interface conformance lists, enum backing types, constructors, constants,
+imports, and member namespaces.
 
-An alias may appear anywhere its target type may appear:
+Aliases may refer forward and form chains. Direct and indirect cycles,
+unknown targets, duplicate names, private cross-module access, and an optional
+applied twice are compile errors even when the alias is unused. Alias names
+share the file-scope namespace with every other declaration.
 
-- annotations, parameters, results, fields and constants;
-- optionals and nested function/container types;
-- interface conformance lists and interface-typed containers;
-- enum backing widths;
-- imports and public re-exports; and
-- later declarations, because alias and nominal targets may refer forward.
+## Numbers
 
-Aliases may form chains. Resolution follows a chain to its one concrete
-target before the program is lowered, including when no code uses the alias.
-A direct or indirect cycle is therefore always an error and reports the
-complete loop.
+Each numeric name states its exact representation:
 
-Construction follows the target:
-
-| Target | Alias expression |
+| Type | Meaning |
 |---|---|
-| numeric or `string` | `Alias(value)` performs the target conversion |
-| `struct` | `Alias(field = value)` constructs the structure |
-| `enum` or `union` | `Alias.member` reaches the target member |
-| nominal type with a static function | `Alias.function(...)` reaches it |
-| `list`, `map`, `array`, `builder` | `new Alias` constructs the object |
-| `file` | open it through `std.files` |
-| `task(...)` | create it with `spawn` |
-| `bool`, optional, interface, function type | no constructor; it remains a type |
+| `u8`, `u16`, `u32`, `u64` | unsigned integers at 8, 16, 32, and 64 bits |
+| `i8`, `i16`, `i32`, `i64` | signed integers at 8, 16, 32, and 64 bits |
+| `f16`, `f32`, `f64` | IEEE binary16, binary32, and binary64 |
 
-`private alias` is reachable only inside its file. A public alias may re-export
-an imported public type, but may not expose a private nominal target. Alias
-names share the top-level namespace with imports, constants, functions,
-structures, classes, interfaces, enums, and unions.
-
-| Invalid declaration or use | Diagnostic |
-|---|---|
-| `alias A = A` | `luce.sema.alias` with `A -> A` |
-| `alias A = B; alias B = A` | `luce.sema.alias` with the complete cycle |
-| unknown target or wrong type arguments | `luce.sema.type` |
-| `MaybeId?` when `MaybeId` already aliases `long?` | `luce.sema.type`; Luce has one optional layer |
-| builtin, reserved, or duplicate alias name | `luce.sema.reserved` or `luce.sema.duplicate` |
-| private imported alias or public alias exposing a private type | `luce.sema.private` |
-| calling an alias whose target has no call-shaped constructor | `luce.sema.call` with the target-specific creation form |
-| using the bare alias as a runtime value | `luce.sema.name` |
-
-## Scalars
-
-| Type | Definition |
-|---|---|
-| `bool` | `true` or `false`. The only type a condition may have. |
-| `u8` | Unsigned 8-bit, 0 … 255. **Storage.** |
-| `i16` | Signed 16-bit, −32 768 … 32 767. **Storage.** |
-| `i32` | Signed 32-bit, **checked**: overflow traps. The default for an integer literal. |
-| `i64` | Signed 64-bit, **checked**: overflow traps. |
-| `f16` | IEEE 754 binary16, ±65 504. **Storage.** |
-| `f32` | IEEE 754 binary32. Does not trap. The default for a float literal. |
-| `f64` | IEEE 754 binary64. Does not trap. |
-| `str` | Immutable UTF-8. A value. |
-
-`byte` is the only unsigned numeric type and stores values from 0
-through 255.
-
-## Storage and arithmetic
-
-Three of the seven — `byte`, `short` and `half` — are **storage
-types**. They are what an annotation, a parameter, a struct field and
-above all an array element may say, and an operator widens them before
-it does anything: `byte` and `short` compute at `int`, `half` at
-`float`. So there are four arithmetic types and not seven, no checked
-arithmetic at 8 or 16 bits, and no binary16 arithmetic on any machine.
-
-Operators widen storage types before arithmetic. For example, `byte`
-255 plus 1 is the `int` value 256; it does not wrap.
+An unconstrained integer literal is `i64`; an unconstrained floating literal
+is `f64`. A literal can instead land directly in a contextual numeric type
+when it fits. A concrete value never changes width, signedness, or integer/
+float family implicitly.
 
 ```luce run
 func main():
-    var a: u8 = 255
-    var b: u8 = 1
-    print(str(a + b))
-    var h: f16 = 0.5
-    print(str(h + h))
+    let small: u8 = 255
+    let wide: u16 = u16(small)
+    let ratio: f32 = f32(wide) / 2
+    print(f"{wide} {ratio}")
 ```
 
 ```output
-256
-1
+255 127.5
 ```
 
-What they are *for* is `array(byte, _)` at one byte an element — the
-underscore is the type's rank-only extent, with the actual dimension
-given to `new array(byte, n)` — an eighth of what the same array of
-`long` costs, and the same vector register holding four `float`s where
-it held two `double`s.
+Integer arithmetic is checked at the operand's own width and traps
+`integer_overflow` instead of wrapping. `//` is floor division; `%` is its
+paired remainder. `/` is true division: same-type integer operands answer
+`f64`, while same-type float operands preserve their float width. Concrete
+operands of different types require an explicit conversion.
 
-## Promotion
+Every numeric type name is a conversion constructor. Integer narrowing and
+float-to-integer conversion trap `conversion_range` when the destination
+cannot represent the result. Float-to-integer truncates toward zero. Float
+conversions round to nearest, ties-to-even.
 
-The integer ladder is `byte` → `short` → `int` → `long`; the floating
-ladder is `half` → `float` → `double`. A value widens only upward on its
-ladder. Mixing the ladders widens to `double`; `long` values above 2^53
-are not all exactly representable there.
+[Basic Operators](/guide/operators/) teaches the common forms. The exact
+operator table is in [Expressions](../expressions/).
 
-`int` does not widen to `float`; cross-family promotion always chooses
-`double`.
+## `bool`
 
-`/` is real division and always answers a `double`. `//` is floor
-division and `%` the modulus that pairs with it — both answer the
-promoted integer type, both floor, so `%` takes the sign of the
-divisor, and both trap on a zero divisor. `/` does not trap:
-`1 / 0` is `inf`.
+`bool` has the values `true` and `false`. It is the only type accepted as a
+condition; Luce has no truthiness and numbers do not convert to booleans.
 
-Comparison across the ladders does **not** widen — it is exact, so
-`9007199254740993 == 9007199254740992.0` is `false`, which widening
-would get wrong.
+## `char`, `str`, and `bytes`
 
-## Conversions
+`char` is one Unicode scalar. A single-quoted literal must decode to exactly
+one scalar. `char(integer)` validates a scalar value, `u32(character)` returns
+its code point, and `str(character)` encodes it as UTF-8.
 
-Conversions are named for their result type: `byte(x)`, `short(x)`,
-`int(x)`, `long(x)`, `half(x)`, `float(x)`, `double(x)`, and
-`string(x)`.
+`str` is immutable valid UTF-8. Its ordinary sequence unit is `char`:
+`len(text)` counts scalars, indexing answers `char`, slicing uses scalar
+positions, and iteration yields characters.
 
-- **Float to integer** rounds half away from zero and traps
-  `conversion_range` outside the target — NaN and the infinities
-  included.
-- **Integer to an integer that cannot hold it** traps the same way:
-  `byte(300)` is not 44, it is a program that stops.
-- **Integer to float** never traps.
-- **Float to a narrower float** rounds to nearest, ties to even, and
-  may produce `inf` rather than trapping.
-
-A widening constructor never traps and is redundant with promotion,
-but it stays: it is how you widen where there is no operator to hang
-it on.
-
-```luce trap
-func main():
-    var over: i64 = 300
-    print(str(u8(over)))
-```
-
-```output
-loom: trap: conversion out of range [conversion_range]
-    at main (main.luc:3:5)
-```
-
-`string(x)` prints a number with the shortest text that round-trips
-**at its own width**, so the width is visible in the answer. It also
-prints a `bool`, a string, an enum or union member's name, or a
-function value's
-name. Container objects, resources and structs are not accepted.
+`bytes` is immutable binary data. Its sequence unit is `u8`: length counts
+bytes, indexing answers `u8`, slicing answers `bytes`, and iteration yields
+bytes. `bytes(text)` encodes UTF-8; `parse_str(data) -> str?` validates binary
+data as text. Mutable binary buffers use `list[u8]` or `array[u8, _]`.
 
 ```luce run
 func main():
-    print(str(1.0 / 3.0))
-    print(str(f64(1.0) / f64(3.0)))
-    print(str(f16(65504.0)))
+    let text = "A👋é"
+    let encoded = bytes(text)
+    print(str(len(text)))
+    print(str(text[1]))
+    print(parse_str(encoded) else "invalid")
 ```
 
 ```output
-0.33333334
-0.3333333333333333
-65500
+3
+👋
+A👋é
 ```
 
-The last line is not a rounding mistake. 65504 is the largest finite
-binary16, and no other binary16 lies nearer to 65500 — so four digits
-name it exactly, and reading them back gives 65504.
+## Optionals: `T?`
 
-## Function
+`T?` is a `T` that may be absent. `none` is the absent value. Luce has one
+optional layer, so `T??` is invalid. A present `T` lands in `T?` implicitly;
+an optional must be narrowed or given a fallback before `T` operations apply.
 
-A function value's type is its signature with parameter names and
-defaults removed:
+```text
+if value != none:
+    use(value)
 
+let present = value else fallback
 ```
+
+Parentheses group a type: `(T)` is `T`. This matters for optional function
+values because `func(str) -> i64?` answers an optional integer, while
+`(func(str) -> i64)?` is a function value that may itself be absent.
+
+## Function values {#function}
+
+`func(T, ...) -> R` is a non-fallible function type. It contains parameter
+types, not names or defaults. For example, `func(i64, i64) -> bool`:
+
+```text
 func(i64, i64) -> bool
 func(str)
 func(list[i64]) -> i64
 ```
 
-A function type is worn by four things: a named top-level or `static`
-function, a lambda, a **bound method** (`receiver.method`, whose
-environment is that receiver), and a **union member constructor**
-(`Msg.query_changed`). One place holds any of them and no reader can
-tell which — which is also why a function value has no equality, and
-why one never crosses a worker boundary. A bound value copies its struct
-receiver into the function value and retains every reference carried by that
-copy. The bound value may outlive the original concrete binding.
+Named functions, static functions, capture-free lambdas, union member
+constructors, and compatible bound methods can land in a function-typed place.
+Calls through a value are positional. Function values may be stored and
+returned, but have no equality or ordering.
 
-That lack of equality follows the value wherever a comparison reaches
-it: a struct holding a `(func(...) -> R)?` field is not compared with
-`==` either, and `xs.find(v)` and `xs.contains(v)` over a container of
-such structs are refused for the same reason, because a search is `==`
-under another spelling. Keep what you meant to look for beside the
-values — a name, an enum — and compare that.
+A lambda is `(parameters) -> expression`. Its parameter types come from the
+destination function type. Current lambdas cannot capture enclosing locals.
 
-The result is omitted when the function returns nothing. Fallibility
-does not appear in a function type: a fallible function cannot be used as a value because a
-function type has no `!` with which to carry the obligation.
+A bound method carries its receiver. A value receiver is copied; any reference
+fields in that copy remain shared and are retained for the bound value's
+lifetime.
 
-A function type may annotate a parameter or local, be a function's
-result, and nest inside another function signature. A file-scope
-`const` cannot hold one because function declarations and lambdas are
-not constant expressions.
+## Interfaces {#interface}
 
-**A slot holds the optional form: `(func(...) -> R)?`.** A struct
-field, a list element, an array cell and a union payload field all
-exist before anything fills them, and a function value has no zero —
-every value of the type names a function, and an empty slot names
-none. So absence is the zero, and reaching the value takes the
-narrowing or the `else` any other optional takes. A late `var` is the
-same slot and takes the same form.
+An interface is a nominal set of instance-method requirements. A struct opts
+in by listing the interface and must implement every requirement:
 
 ```luce run
-struct Button:
-    label: str
-    on_click: (func(i64) -> i64)?
+interface Named:
+    func name() -> str
+    func measure(value: i64) -> (i64, i64)
+
+struct Label: Named:
+    text: str
+
+    func name() -> str:
+        return self.text
+
+    func measure(value: i64) -> (i64, i64):
+        return value, value + 1
+
+func describe(item: Named) -> str:
+    let low, high = item.measure(20)
+    return item.name() + ":" + str(low + high)
 
 func main():
-    let wired = Button(label = "double", on_click = (n) -> n * 2)
-    let action = wired.on_click
-    if action != none:
-        print(wired.label + " " + str(action(21)))
+    print(describe(Label(text = "size")))
 ```
 
 ```output
-double 42
+size:41
 ```
 
-A **map value** is the one slot no container ever creates — it exists
-because a store created it — and `m.get(k)` already answers `V?`, so
-the function type is written bare there and the absence is the missing
-key. Writing the `?` as well would make `get` answer a `V??`, which
-does not exist.
+Conformance is explicit, not structural. Method names, instance status,
+parameter names/order/types, and result arity/types must match. A non-fallible
+witness may satisfy a fallible requirement; the reverse is invalid. Static
+functions, incomplete conformers, duplicate witnesses, and writing receiver
+methods are rejected.
 
-```luce run
-func twice(n: i64) -> i64:
-    return n * 2
+Interface values work as locals, parameters, results, optionals, fields, and
+heterogeneous list/map/array elements. Current dispatch is read-only and stores
+bound value receivers; [Status](/status/) records the later owned-existential
+and class-mutation work. There are no default methods, interface inheritance,
+associated types, runtime casts, or generic constraints.
 
-func main():
-    var actions = new map[str, func(i64) -> i64]
-    actions["double"] = twice
-    let found = actions.get("double")
-    if found != none:
-        print(str(found(4)))
-    print(str(actions.get("missing") == none))
-```
+## Structs
 
-```output
-8
-true
-```
-
-A top-level or static namespace function becomes a value where a function
-type is expected, and so does a **reading method bound to its
-receiver** — `doubling.times`, whose type is the method's with the
-receiver's parameter dropped. The expected signature supplies the
-landing shape, so an unannotated `let f = named_function` is refused.
-Function values copy freely and have neither ordering nor equality —
-a value is the function it names *and* the receiver it may carry, and
-its type cannot say which, so no comparison has an honest answer.
-`string(f)` gives the declared or compiler-generated function name —
-for a bound value, the method's qualified name.
-See [calls and lambdas](../expressions/#function-values-and-lambdas)
-for the expression forms, the bind and the capture rule.
-
-## Interface
-
-An interface is a nominal, method-only contract. A struct opts in by naming
-the interface after its name; a matching method set without that declaration
-is not enough.
+A struct is a value aggregate with named fields. Construction names fields;
+defaults must be trailing. A copied struct has independent value fields while
+reference fields still name the same objects.
 
 ```text
-interface Drawable:
-    func draw(scale: long) -> long
-
-struct Button: Drawable:
-    label: string
-
-    func draw(scale: long) -> long:
-        return scale + 1
-```
-
-The contract is checked at the declaration. Method names, parameter count and
-types, return count and types, and receiver mutability must
-match. Interface methods are read-only, so an implementation that writes
-`self` is rejected. Extra methods on the struct are harmless. A non-fallible
-implementation may satisfy a fallible requirement; the reverse is rejected.
-
-An interface may declare several distinct methods. Every method is a required
-dispatch slot, and the implementation must provide every slot:
-
-```text
-interface Drawable:
-    func render(value: long) -> long
-    func label() -> string
-```
-
-The following are part of the contract check:
-
-| Requirement | Rule |
-| --- | --- |
-| Receiver | The witness is an instance method; `static` functions cannot satisfy it. |
-| Parameters | Count, types, and order match exactly. Interface methods cannot declare default arguments. |
-| Results | Count and types match exactly. Two or more results use the ordinary return shape. |
-| Effects | A non-fallible witness may satisfy a fallible requirement; a fallible witness may not satisfy a non-fallible one. |
-| Mutation | The witness may not write `self`. |
-
-The conversion is nominal and implicit: a concrete value enters an interface
-when an interface-typed parameter, local, field, collection element, or
-return slot expects it. There is no cast and no structural conformance. An
-interface itself cannot be constructed and an interface-typed variable has no
-default implementation; initialize it with a value from a conforming struct.
-Interfaces do not convert to one another because this release has no
-inheritance.
-
-An interface exposes methods, not the concrete struct's fields. Calling a
-method uses the implementation carried by the value:
-
-```luce run
-interface Drawable:
-    func draw(scale: i64) -> i64
-
-struct Button: Drawable:
-    label: str
-
-    func draw(scale: i64) -> i64:
-        return scale + 1
-
-struct Badge: Drawable:
-    label: str
-
-    func draw(scale: i64) -> i64:
-        return scale + 2
-
-func paint(item: Drawable) -> i64:
-    return item.draw(40)
-
-func main():
-    var items = new list[Drawable]
-    items.append(Button(label = "button"))
-    items.append(Badge(label = "badge"))
-    var named = new map[str, Drawable]
-    named["button"] = Button(label = "button")
-    named["badge"] = Badge(label = "badge")
-    print(str(items[0].draw(40)))
-    print(str(items[1].draw(40)))
-    let found = named.get("badge") else Button(label = "fallback")
-    print(str(paint(found)))
-```
-
-```output
-41
-42
-42
-```
-
-`list(I)` and `map(K, I)` are heterogeneous: each element may have a
-different concrete type. The same interface value can be stored in an array
-or a struct field, returned, or wrapped in an optional. The current hidden
-layout stores bound dispatch values and copies the concrete struct receiver
-state. Each bound dispatch value retains the reference graph carried by its
-receiver copy, so the interface may safely outlive the concrete binding that
-formed it. Interface methods are read-only until the planned owned-existential
-representation replaces this layout.
-
-Interfaces do not inherit from one another or expose fields. Interface
-methods may use the ordinary multi-value return shape:
-
-```text
-interface Measured:
-    func span(value: long) -> (long, long)
-
-func total(item: Measured) -> long:
-    let low, high = item.span(10)
-    return low + high
-```
-
-Receive the shape with a destructuring `let`, `var`, or assignment; it is not
-a scalar expression and cannot be passed as one argument. The exact
-declaration and conformance rules are summarized above; compiler diagnostics
-point to the offending method or conformance list.
-
-## struct
-
-A named product of fields. Fields are annotated; construction names
-its fields — every one without a default; assignment copies.
-
-```luce run
 struct Point:
     x: f64
-    y: f64
+    y: f64 = 0.0
 
-func main():
-    let p = Point(x = 1.5, y = 2.5)
-    var q = p                       # a copy
-    q.x = 9.0
-    print(f"{p.x} {q.x}")
+let point = Point(x = 2.5)
 ```
 
-```output
-1.5 9
-```
+A `func` declared inside a struct is a method with implied `self`; source does
+not declare a receiver parameter. A `static func` has no receiver and is
+called through the type name. The compiler infers whether a method writes
+`self`; a writing method requires a mutable value receiver today.
 
-A field may declare a trailing **default**, the same clause a
-parameter takes: a compile-time constant the construction site may
-omit. Defaults come last, and a struct every one of whose fields has
-one constructs bare.
+Fields and methods are public by default. `private`/`public` regions and
+per-member marks follow the ordinary file visibility rules.
 
-```luce run
-struct Options:
-    depth: i64 = 3
-    wide: bool = false
+## Enums {#enum}
 
-func main():
-    let plain = Options()
-    let tuned = Options(depth = 9)
-    print(f"{plain.depth} {plain.wide} {tuned.depth}")
-```
-
-```output
-3 false 9
-```
-
-A plain function declared inside a struct is a method with implied
-`self`, called as `value.name(...)`.  A `static func` has no receiver
-and is the namespace form reached as `Struct.name(...)`.  Neither form
-adds dynamic dispatch or inheritance.
-
-A struct remains a value when it contains a reference. Copying the struct
-copies its value fields and retains its reference fields, so the two struct
-values are independent while a `list`, `file`, or `task` field may still name
-one shared object.
-
-Struct definitions may not be cyclic through plain fields. Recursion
-goes through an optional field:
-
-```luce run
-struct Node:
-    value: i64
-    next: Node?
-
-func main():
-    let tail = Node(value = 2, next = none)
-    let head = Node(value = 1, next = tail)
-    let second = head.next            # bind the field, then test the name
-    if second != none:
-        print(f"{head.value} then {second.value}")
-```
-
-```output
-1 then 2
-```
-
-Narrowing applies to locals and parameters, never to a field — which
-could change between the test and the use — so the field is bound to a
-name first.
-
-The cycle rule is one scale of a single rule: **a struct's
-unconditional size must be finite, and small.** A plain field's
-payload is part of what the struct is, so it is counted through — a
-struct of two struct fields doubles per level — and past 4096 values
-the declaration is refused, just as an infinite one is. An optional
-field counts as one whatever it holds, because its payload starts
-absent and arrives only when a program builds one. So `?` answers both
-refusals, and so does a container: a `list`, `map` or `array` is one
-reference however much it holds.
-
-## enum {#enum}
-
-A set of named constants at one integer width, declared with
-[`enum`](../statements/#enum). It is a value type: it copies, and a
-container holds it at its backing width.
-
-- **No implicit conversion in either direction.** `int(m)` and every
-  other numeric constructor answer the member's number at that width,
-  trapping exactly where the same constructor would on the number
-  itself; `string(m)` answers the member's **name**, and an f-string
-  hole is a `string(...)` nobody wrote.
-- `Method(n)` is the other direction and is fallible: it answers
-  `Method?`, with `none` where no member holds `n`. Nothing else
-  produces an enum value, which is why every value of an enum is one
-  of its members.
-- **Equality only.** `==` and `!=` compare members; `<` and its
-  relatives are refused, naming `int(…)`.
-- Members fold: a member is a constant, so it stands in a file-scope
-  `const`, a parameter default and a field default.
+An enum is a closed set of names stored at one integer width. The default
+backing is `i32`; any of the eight integer types may be written explicitly.
+Members start at zero and increment unless a constant value is supplied.
 
 ```luce run
 enum Method(u8):
@@ -537,307 +247,167 @@ enum Method(u8):
     deflated = 8
 
 func main():
-    var seen = new list[Method]
-    seen.append(Method.deflated)
-    print(f"{seen[0]} is {i32(seen[0])}, and 3 is {str(Method(3) != none)}")
+    let method = Method.deflated
+    print(f"{method} {u8(method)}")
 ```
 
 ```output
-deflated is 8, and 3 is false
+deflated 8
 ```
 
-## union {#union}
+Members are always namespaced. Conversion out is explicit through an integer
+constructor or `str`. `Enum(value)` checks the backing value and answers
+`Enum?`; an unknown member answers `none`. `match` is exhaustive unless it has
+an `else` arm.
 
-A value that is exactly one of a set of declared members, each member
-optionally carrying named payload fields; declared with
-[`union`](../statements/#union). The member is part of the value:
-there is no way to construct one without choosing a member, and no way
-to reach a payload except a [`match`](../statements/#match) arm that
-proved which member the value holds.
+## Unions {#union}
 
-- **Construction is a namespaced call with named arguments** —
-  `Shape.circle(radius = 2.0)` — under the same rules as struct
-  construction, defaults included. A bare member is written without
-  parentheses: `Shape.empty`. The union's own name is not a
-  constructor.
-- **Memory follows each payload field.** A union is a value. Copying it
-  copies value payloads and retains reference payloads. An arm's reference
-  binding names the same object the scrutinee holds, and ARC balances both
-  references.
-- **The zero is the first declared member**, every payload field at
-  its own zero — what `var s: Shape` starts at and what container
-  cells hold.
-- A member may not unconditionally contain its own union — the same
-  finite-size rule structs have, refused with `?` and the containers
-  named as the fixes. `Shape?` is an ordinary optional and is the
-  recursion terminator that is not a container.
-- `string(u)` answers the member's **name**; the payload is never
-  formatted. `==` on two union values is refused, naming `match`. A
-  union may not be a map key.
-- A union takes methods and static namespace functions under the
-  [same rules](../statements/#methods) as a struct.
+A union is a tagged value whose members may have named payload fields.
+Construction names payloads and `match` is the only way to read them.
 
 ```luce run
-union Json:
-    null
-    number(value: f64)
-    array[items: list[Json]]
+union Shape:
+    empty
+    circle(radius: f64)
+
+func area(shape: Shape) -> f64:
+    match shape:
+        empty:
+            return 0.0
+        circle(radius):
+            return 3.0 * radius * radius
 
 func main():
-    var xs = new list[Json]
-    xs.append(Json.number(value = 2.5))
-    let doc = Json.array[items = xs]
-    match doc:
-        array[items]:
-            print(f"an {doc} of {len(items)}")
-        else:
-            print("not an array")
+    print(str(area(Shape.circle(radius = 2.0))))
 ```
 
 ```output
-an array of 1
+12
 ```
 
-## list(T)
+A union is a value. Value payloads copy and reference payloads remain shared
+through ARC. Recursive unions must pass through a reference container so the
+layout stays finite.
 
-A growable sequence. Created with a literal or `new list(T)`. An empty
-literal requires an annotated binding.
+## `list[T]`
 
-`T` may be any value, reference, or resource type. A list copies value
-elements and retains reference elements; removing or replacing an element
-releases what that slot held.
+A growable ARC reference sequence. Non-empty literals infer an element type;
+an empty list uses `new list[T]`. Indexes and lengths are `i64`. Slicing
+creates a new outer list: value elements copy and reference elements remain
+shared.
 
-## map(K, V)
+Function values and optionals have storage restrictions described in the
+function and optional sections; otherwise `T` may be any current value or
+reference type.
 
-An insertion-ordered dictionary. `K` is `long`, `string` or an enum;
-`V` is any
-type other than an optional. Index get, index set, `has` and `get`
-are O(1): the entries stay a dense array in arrival order with a hash
-index over it. Iteration is in insertion order.
+## `map[K, V]`
 
-## array(T, ...)
+An insertion-ordered ARC reference map. `K` is an integer, `str`, or an enum.
+`get(key)` answers `V?`; indexing an absent key traps `key_missing`. `{}` has
+no type, so an empty map uses `new map[K, V]`.
 
-Fixed shape, one to four dimensions, sizes given as runtime values at
-`new`. Elements begin at the type's zero value: `0`, `0.0`, `false`,
-`""`, a field-by-field zeroed struct, or — for container/resource
-handle element types — the null handle, which traps on use until
-something is stored.
+## `array[T, ...]`
 
-In a type annotation the shape is spelled with `_` for each axis:
-`array(long, _, _)`.
+A fixed-after-construction ARC reference grid. Each `_` in the type records
+one rank; runtime extents are arguments to construction:
 
-`array(double, _)` is the numeric vector type `std.math`'s whole-array
-operations take.
-
-## builder
-
-Accumulates text. `builder.build()` hands back the `string`.
-
-## file
-
-An open file. A heap-backed resource rather than a fifth container. It
-takes no type argument, and there is no `new file`. The raw
-`file_open(path, mode)` host builtin is the primitive door; `std.files`
-wraps it as `open`, `create`, and `append_to`. A handle with no file
-behind it is the one thing this type must never hold.
-
-It is a reference **resource**. Assignment and return share the same handle.
-ARC closes it at the last release. A null
-or stale runtime handle traps rather than becoming undefined memory access.
-
-```luce run
-import std.files
-
-func main() -> !:
-    try files.write("note.txt", "abc")
-    var f = try files.open("note.txt")
-    var buffer = new array[u8](8)
-    print(str(try f.read(buffer)))
-    try files.delete("note.txt")
+```text
+let pixels: array[u8, _, _] = new array[u8](height, width)
 ```
 
-```output
-3
-```
+Arrays are densely packed at the element's declared width and are indexed
+with one `i64` coordinate per rank.
 
-A file reference may be shared, but that does not duplicate the open file.
-The methods are `f.read(buffer)`, `f.write(buffer, count)` and `f.flush()`,
-all three fallible; [`std.files`](/library/files/) is where the loops over
-them live.
+## `builder`
 
-## task
+An ARC reference text accumulator. Append text or ASCII bytes and call
+`build() -> str` to finish a value string. Builders are mutable and have no
+type arguments.
 
-A running worker (see the [Workers](/guide/concurrency/) chapter). The
-`file` precedent exactly: a resource rather than a container, with no
-`new task` — `spawn` is the only door in — and an ARC lifetime. The completed
-contract closes a file and **joins** a task at the last release; current
-lifecycle tests must still prove every automatic path.
+## `file` {#file}
 
-What stands inside the parentheses is a **return shape**, written the
-way it would be written after a function's `->`:
+An ARC resource opened through `std.files` or the host primitive. Assignment
+and calls share one handle. The final strong release closes it; there is no
+manual `close`. Handle reads and writes use `array[u8, _]` buffers and are
+fallible. A file cannot cross a worker boundary or be weak.
 
-| written | the worker's function answers |
-|---|---|
-| `task` | nothing, and cannot fail |
-| `task(!)` | nothing, or a failure |
-| `task(double)` | a `double` |
-| `task(double!)` | a `double`, or a failure |
+## `task(T)` {#task}
 
-A `spawn` is admitted only when its worker's return shape is
-resource-free. A worker function that answers `file`, `task`, or any
-container or struct carrying one is refused there, because that resource
-belongs to the runtime that created it and cannot cross back through
-`wait`. The type spelling itself remains valid for an unfilled slot.
-
-The `!` is the spawned function's own attribute travelling with the
-call the task carries — the same fact `-> T!` states, one level out —
-and it decides whether `t.wait()` is a site that has to say `try` or
-`catch`.
-
-```luce run
-func square(n: i64) -> i64:
-    return n * n
-
-func main():
-    var tasks = new list[task[i64]]
-    for i in range(1, 4):
-        tasks.append(spawn square(i))
-    var total: i64 = 0
-    for t in tasks:
-        total = total + t.wait()
-    print(str(total))
-```
-
-```output
-14
-```
-
-A task reference may be shared, but there is still one worker behind it. Its
-one method is `t.wait()`, which observes the answer once. Releasing the final
-task reference joins an unfinished worker and discards its unobserved answer.
+An ARC resource produced only by `spawn`. The result shape is written in
+parentheses: `task`, `task(!)`, `task(i64)`, or `task(i64!)`. Assignment shares
+one worker handle. `wait()` observes the result once; the final release joins
+an unfinished worker. A task cannot cross another worker boundary or be weak.
 
 ## Return shapes {#return-shapes}
 
-`(long, long)` after a function's `->` says it answers two values.
-
-**It is not a type.** It is a shape a *signature* has, and it may be
-written nowhere else: not on a binding, not on a parameter, not on a
-struct field, not inside a `list`, not nested inside another shape,
-and not with a `?` (which would be marking the shape rather than a
-value). There is no expression that produces one.
-
-```luce fail
-func main():
-    let p: (i64, i64) = 1
-```
-
-```output
-luce: compile failed
-main.luc:2:12: a return shape is not a type: a pair that travels together is a struct [luce.parse.type]
-        let p: (long, long) = 1
-               ^~~~~~
-```
-
-The comma is what makes it a shape. **One type in parentheses is a
-parenthesized type**, which is that type — so `-> (long)` answers a
-`long`, exactly as `(long)` is `long` wherever a type stands.
-
-A pair that travels together is a struct. A pair that only ever
-travels *outward* — never a parameter, never a field, never a
-container element, only ever read one value at a time — is a return
-shape, and the question is greppable rather than a matter of taste.
-
-Every element is an ordinary type, so `-> (long?, bool)` is fine, and
-`-> (A, B)!` composes with `try` like any other fallible signature.
-
-## Optionals: `T?`
-
-A trailing `?` makes a type nullable. `none` is the absent value, and
-it is legal only where a `T?` is expected — a plain type can never
-hold it.
-
-`T?` may be:
-
-- a local variable
-- a parameter
-- a return type
-- a struct field
-- a union member's payload field — which is what lets a recursive
-  union end at absence
-
-`T?` may **not** be a container element type or a map value type, and
-there is no `T??` — one `?` is all there is. The one exception is a
-**function value**, whose storable form *is* the optional: see
-[function](#function).
-
-### Parentheses in a type {#parenthesized-types}
-
-`(T)` is `T`, wherever a type may stand. Parentheses group and are
-required nowhere — `long?` and `(long)?` are one type.
-
-They exist for one shape. A function type's result consumes its own
-`?`, so `func(string) -> long?` means *a function answering a `long?`*
-— which is how `parse_int` is written as a value. Closing the function
-type first is what says the **function** may be absent:
+Two or more types after `->` describe multiple answers:
 
 ```text
-func(string) -> long?     a function answering long?
-(func(string) -> long)?   a function, or none
+func bounds(values: list[i64]) -> (i64, i64):
+    return values[0], values[len(values) - 1]
+
+let low, high = bounds(values)
 ```
 
-After `->` in a declaration a `(` may instead open a
-[return shape](#return-shapes); the arity decides, so `-> (long)` is
-`-> long` and `-> (long, long)` is two answers.
-
-Absence holds no reference: a `list(T)?` containing a list retains it
-exactly as a `list(T)` place would, while `none` retains nothing.
-
-Narrowing is described in [expressions](../expressions/#narrowing).
+A return shape is not a tuple or a type. It cannot annotate a parameter,
+field, binding, or container element, cannot nest, and cannot take `?`.
+Receive it with destructuring, parallel assignment to existing mutable names,
+or a statement that discards every answer.
 
 ## Fallibility: `-> T!`
 
-A trailing `!` on a **return type** says the function may raise an
-error. `-> !` means it returns nothing or an error.
+`!` marks a function result channel, not a type. `-> T!` may return `T` or
+raise a recoverable error; `-> !` returns no value or raises. `try` propagates
+the error and `catch` handles it. `T!` cannot be used as a local, field, or
+container type.
 
-**`T!` is not a type.** Fallibility is an attribute of the function.
-There is no `T!` to declare a variable of, to use as a container
-element, or to write in a struct field, and `return x` in a `-> T!`
-function returns `x` with nothing wrapped around it.
+## Weak storage
 
-```luce fail
-struct Holder:
-    value: i64!
+`weak` qualifies a mutable local or field; it does not create a type. The
+declared type must be an optional `list`, `map`, `array`, or `builder`:
+
+```luce run
+struct Link:
+    weak root: list[Link]?
 
 func main():
-    print("unreachable")
+    let root: list[Link] = [Link()]
+    root[0].root = root
+    let snapshot = root[0].root else [Link()]
+    print(str(len(snapshot)))
 ```
 
 ```output
-luce: compile failed
-main.luc:2:16: expected end of line after the field, found '!' [luce.parse.expected]
-        value: long!
-                   ^
+1
 ```
+
+A weak place starts at `none`; a weak field has that implicit default.
+Assignment records the target without retaining it. Reading a live target
+produces an owned `T?` snapshot. After final strong release it reads `none`,
+and object-table reuse cannot revive it. Separate reads do not persistently
+narrow one another.
+
+Weak targets exclude scalars, text values, value structs, interfaces,
+functions, files, and tasks. Weak fields disable implicit aggregate equality
+and collection search, and weak handles cannot cross worker runtimes. Classes
+will become valid targets when class reference semantics ship.
 
 ## Zero values and late initialization
 
-`var name: Type` with no initializer declares the binding, its type
-and its scope. The slot holds the type's zero value until it is
-assigned. For a container object or resource type that is the null
-handle, and using it traps `null_object`; the stable code uses the
-runtime's older broad “object” term. For an enum it is the **first declared member**:
-zero is a number no member need hold, and every value of an enum is a
-member. For a union it is likewise the first declared member, with
-every payload field at its own zero.
+`var name: Type` without an initializer creates the type's zero. Numbers are
+zero, `bool` is false, `char` is `U+0000`, `str` and `bytes` are empty, and
+struct/union fields recursively use their zeros. A container or resource gets
+a defensive null handle; using it before assignment traps `null_object`.
 
-`let` always requires an initializer: a name that can never be
-reassigned and holds nothing is a contradiction.
+This is not optionality. A place that may legitimately hold nothing is `T?`
+and says so. `let` always requires an initializer.
 
-This is zero-initialization, not nullability. A slot that may
-genuinely hold nothing is a `T?` and says so.
+## Equality and identity
 
-## Identity
+Value equality descends through value fields. Container and resource `==`/
+`!=` compare reference identity, never contents. Function values and values
+containing functions or weak fields have no equality. Floats follow IEEE
+rules, including NaN not equaling itself.
 
-`==` and `!=` on container objects and resources compare handle
-identity — whether two names denote the same reference object — never
-contents.
+Classes will introduce the distinct `is` identity operator when their ARC
+reference semantics are complete; it is not current syntax.

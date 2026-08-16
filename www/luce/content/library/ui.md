@@ -15,7 +15,7 @@ explains the common lifetime rule.
 Call `ui.open` when the application is ready to create a native window.
 
 ```text
-ui.open(title: string, width: long, height: long) -> Window!
+ui.open(title: str, width: i64, height: i64) -> Window!
 ```
 
 The dimensions are backend pixels. A host may refuse creation, which arrives

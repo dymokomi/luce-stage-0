@@ -8,10 +8,10 @@ can use now and the language being designed. The [Tour](/tour/),
 
 ### Language
 
-- Static types with inference, checked integer arithmetic, and explicit
-  narrowing conversions.
-- The current scalar names `byte`, `short`, `int`, `long`, `half`, `float`,
-  `double`, `bool`, and `string`.
+- Static types with inference, checked fixed-width integer arithmetic,
+  contextual literals, and explicit representation conversions.
+- The current scalar names `bool`; `u8`, `u16`, `u32`, `u64`; `i8`, `i16`,
+  `i32`, `i64`; `f16`, `f32`, `f64`; `char`, `str`, and `bytes`.
 - Value structs, enums, tagged unions, nominal interfaces, named functions,
   bound methods, and capture-free one-expression lambdas.
 - Transparent file-scope type aliases, including chains, forward references,
@@ -21,6 +21,9 @@ can use now and the language being designed. The [Tour](/tour/),
 - ARC for lists, maps, arrays, builders, files, and tasks. Assignment shares
   reference objects; the last strong release reclaims containers, closes
   files, and joins unfinished tasks on both engines.
+- Zeroing `weak` fields and locals for optional lists, maps, arrays, and
+  builders. Live reads become owned snapshots; dead targets read `none`; row
+  reuse cannot revive a handle; weak storage never crosses a worker.
 - Explicit nominal interfaces with multiple methods, multi-value answers,
   directional failure matching, returns, optionals, and heterogeneous
   containers. Interface dispatch is read-only today.
@@ -80,14 +83,12 @@ frame that created each value.
 The first complete model does not include interface inheritance, default
 method bodies, associated types, or runtime casting.
 
-### Weak references and capturing closures
+### Capturing closures
 
-`weak` will apply to ordinary ARC objects, including classes and built-in
-container references, and read as an optional that becomes `none` when the
-object is destroyed. That scope matters because a recursive struct/container
-graph can already form a cycle. Resources and function values remain
-strong-only in the first model. A weak reference never dangles, and there is
-no unsafe `unowned` form.
+Weak storage is current for built-in ARC containers and will also accept
+classes once class heap lowering exists. Resources, function values, current
+interface values, and value types remain strong-only. A weak reference never
+dangles, and there is no unsafe `unowned` form.
 
 Capturing closures will share the ordinary function type. Immutable values
 capture a snapshot; mutable locals share an environment cell; references are
@@ -98,7 +99,7 @@ escapes.
 
 ### Explicit type names
 
-The intended core type vocabulary is:
+The current core type vocabulary is:
 
 ```text
 bool
@@ -113,15 +114,14 @@ bytes
 
 list[T]
 map[K, V]
-array[T, N, ...]
+array[T, _, ...]
 func(T, ...) -> R
 T?
 ```
 
-The current-to-target migration is `byte` → `u8`, `short` → `i16`,
-`int` → `i32`, `long` → `i64`, `half` → `f16`, `float` → `f32`,
-`double` → `f64`, and `string` → `str`. The new family also adds `i8`,
-`u16`, `u32`, and `u64`.
+The migration is complete. Retired spellings are not aliases; the compiler
+rejects each one with its direct replacement so a pre-release language does
+not carry two vocabularies.
 
 `none` remains an absence value, not a type. `char` is one Unicode scalar,
 not a borrowed view or a grapheme cluster. `str` is immutable UTF-8 and
@@ -145,14 +145,14 @@ documentation seams twice:
 2. **Transparent type aliases — complete.** `alias Name = Type` works through
    type positions, constructors, members, constants and modules; cycles,
    privacy violations and namespace collisions have exact diagnostics.
-3. **Freeze the type and closure contracts.** Decide literal, conversion,
+3. **Freeze the type and closure contracts — complete.** Decide literal, conversion,
    Unicode, container-type, block-closure, capture-list, and diagnostic rules
    before changing code.
-4. **Migrate type names atomically.** Update compiler, runtime, module format,
+4. **Migrate type names atomically — complete.** Update compiler, runtime, module format,
    standard library, examples, editor grammar, packages, and documentation in
    one pre-release cut; old spellings become direct diagnostics rather than
    long-lived aliases.
-5. **Build weak references.** Safe zeroing for built-in ARC objects, lifecycle
+5. **Build weak references — complete.** Safe zeroing for built-in ARC objects, lifecycle
    integration, cycle diagnostics, and both-engine agreement.
 6. **Complete classes.** Heap lowering, sharing, mutation, identity,
    construction, teardown, weak fields, errors, optionals, containers, and

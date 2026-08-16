@@ -39,13 +39,14 @@ stored is 0
 deflated is 8
 ```
 
-`string(member)` returns the name and `int(member)` returns its number.
+`str(member)` returns the name and converting to the backing integer type
+returns its number.
 Neither conversion is implicit. Members are constants and can be used in
 defaults and other constant expressions.
 
 ## Choosing storage width
 
-The default backing width is `int`. Put a storage type in parentheses when
+The default backing width is `i32`. Put an integer type in parentheses when
 the enum must fit a narrow array:
 
 ```luce run
@@ -84,7 +85,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:3:5: deflated = 300 does not fit byte, which holds 0 to 255; write the enum's width wider — enum Method(long): [luce.sema.enum]
+main.luc:3:5: deflated = 300 does not fit u8, which holds 0 to 255; write the enum's width wider — enum Method(i64): [luce.sema.enum]
         deflated = 300
         ^~~~~~~~~~~~~~
 ```
@@ -151,7 +152,7 @@ enum Method:
     deflated = 8
 
 func read(raw: i64) -> str:
-    let m = Method(raw)
+    let m = Method(i32(raw))
     if m == none:
         return f"method {raw} is one I cannot read"
     return f"method {raw} is {m}"

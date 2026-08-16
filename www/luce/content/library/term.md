@@ -12,11 +12,11 @@ import std.term
 
 | Signature | Purpose |
 |---|---|
-| `term.rows() -> long`, `term.cols() -> long` | current terminal dimensions |
+| `term.rows() -> i64`, `term.cols() -> i64` | current terminal dimensions |
 | `term.clear()` | clear the screen |
-| `term.move(row: long, column: long)` | move the cursor |
-| `term.style(foreground: long, background: long = -1, bold: bool = false)` | set terminal style |
-| `term.write(text: string)` | write text |
+| `term.move(row: i64, column: i64)` | move the cursor |
+| `term.style(foreground: i64, background: i64 = -1, bold: bool = false)` | set terminal style |
+| `term.write(text: str)` | write text |
 | `term.flush()` | flush buffered output |
 
 `term.ui` provides the Unicode geometry methods `horizontal`, `vertical`,

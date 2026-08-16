@@ -205,10 +205,9 @@ fn foldIntLiteral(
     return .{ .value = .{ .integer = parsed }, .value_type = lands };
 }
 
-/// A folded number's value as an `f64`, whichever family it came
-/// from.  A constant carries its value at the widest member of its
-/// family (`ConstantValue`), so an `int` arrives in `.i64` and a
-/// `float` in `.f64`.
+/// A folded number's value as an `f64`, whichever family it came from.
+/// `ConstantValue` uses wide host storage while `value_type` preserves the
+/// source representation.
 fn asF64(held: TypedConstant) f64 {
     return switch (held.value) {
         .integer => |whole| @floatFromInt(whole),
@@ -217,19 +216,19 @@ fn asF64(held: TypedConstant) f64 {
     };
 }
 
-/// One folded number widened along `Type.widensTo`.  A no-op when
-/// it is already there, so a caller may apply it to both operands
-/// without asking which one moved.
+/// Convert a folded number for a language construct with a specified result
+/// representation. Integer true division is the remaining caller; source
+/// conversions use the fully checked path below.
 pub fn widen(held: TypedConstant, to: Type) TypedConstant {
     if (held.value_type.eql(to)) return held;
     if (to.isInteger()) return .{ .value = held.value, .value_type = to };
     return .{ .value = .{ .float = asF64(held) }, .value_type = to };
 }
 
-/// Make one folded value fit the type of its landing place.  This is
-/// the constant-folding twin of `FunctionBuilder.fit`: numeric values
-/// widen along the language lattice, and a present `T` may stand in a
-/// `T?` place.  Presence needs no extra `ConstantValue` tag --
+/// Make one folded value fit the type of its landing place. This is the
+/// constant-folding twin of `FunctionBuilder.fit`: concrete values match
+/// exactly, while a present `T` may stand in a `T?` place. Presence needs no
+/// extra `ConstantValue` tag --
 /// `.absent` is the exceptional encoding, while every other tag is a
 /// present payload whose optional type supplies the wrapper.
 pub fn fit(held: TypedConstant, wanted: Type) ?TypedConstant {
@@ -354,7 +353,7 @@ fn constantError(analyzer: *Analyzer, span: Span, comptime format: []const u8, a
 }
 
 /// Translate one already-checked flat element into the serialized
-/// constant-pool vocabulary.  String bytes join the ordinary text
+/// constant-pool vocabulary. str bytes join the ordinary text
 /// pool so pruning and both engines have one spelling for them.
 fn encodeValue(
     analyzer: *Analyzer,
@@ -395,9 +394,8 @@ fn containerContextError(analyzer: *Analyzer, span: Span) Error!?TypedConstant {
     return constantError(analyzer, span, "a container literal is constant only in a file-scope const or a borrowed parameter default", .{});
 }
 
-/// Finish a folded numeric value at the element/key type its container
-/// chose.  `Type.widensTo` is the whole implicit numeric lattice; no
-/// other conversion happens here.
+/// Return a folded element unchanged. Contextual literals already landed at
+/// the container's element type, and concrete values never convert here.
 fn fitElement(value: TypedConstant, wanted: Type) TypedConstant {
     return if (value.value_type.widensTo(wanted)) widen(value, wanted) else value;
 }
@@ -1137,7 +1135,7 @@ fn foldConvertAs(
 
     if (target.isFloating()) {
         const held = asF64(operand);
-        // Float to narrower float rounds to nearest, ties to even,
+        // Floating-point narrowing rounds to nearest, ties to even,
         // and reaches `inf` rather than trapping — the same
         // `@floatCast` `runtime/operators.zig` performs, so the
         // fold and the run answer the same bits.  A narrow float

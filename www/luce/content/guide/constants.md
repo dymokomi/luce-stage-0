@@ -54,7 +54,7 @@ Constants may contain scalar values, strings, enum members, and value
 structs that contain no objects. An optional field in such a struct may be
 `none`. A container constant is flat: its elements cannot themselves be
 containers or top-level optionals. Empty list and array literals need an
-annotation, such as `list(long)` or `array(long, _)`.
+annotation, such as `list[i64]` or `array[i64, _]`.
 
 Builders, reference-carrying structs, multidimensional arrays, function values,
 and ordinary function calls do not fold. Constants may
@@ -80,7 +80,7 @@ pear: 2
 plum: 7
 ```
 
-An empty `{}` has no key or value type. Use `new map(K, V)` for an empty
+An empty `{}` has no key or value type. Use `new map[K, V]` for an empty
 mutable map. A duplicate key in a constant map is rejected because the
 constant must describe one stable table.
 

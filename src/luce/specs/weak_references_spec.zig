@@ -66,6 +66,20 @@ test "weak fields initialize, assign through a nested value place, and zero" {
     );
 }
 
+test "a weak field breaks a recursive struct and container cycle" {
+    try agree.ok(
+        \\struct Link:
+        \\    weak root: list[Link]?
+        \\
+        \\func main():
+        \\    let root: list[Link] = [Link()]
+        \\    root[0].root = root
+        \\    let snapshot = root[0].root else [Link()]
+        \\    assert(len(snapshot) == 1)
+        \\
+    );
+}
+
 test "every ARC object family can be observed weakly" {
     try agree.ok(
         \\func main():

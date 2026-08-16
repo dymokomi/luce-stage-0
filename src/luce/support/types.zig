@@ -418,11 +418,10 @@ pub const Type = union(enum) {
         if (from.isFloating()) return to.isInteger();
         if (to.isFloating()) return false;
         // Integer to integer: it traps exactly when the destination
-        // cannot hold every value the source can.  Comparing the two
-        // *ranges* rather than their widths is what keeps `byte`
-        // honest in both directions — `short(b)` is a widening
-        // although `byte` is unsigned, and `byte(s)` is not although
-        // `short` is wider.
+        // cannot hold every value the source can. Comparing ranges rather
+        // than widths handles signedness correctly: `i16(u8_value)` is
+        // total, while `u8(i16_value)` can fail even though both names state
+        // their representation explicitly.
         const source = from.integerRange();
         const target = to.integerRange();
         return target.low > source.low or target.high < source.high;
@@ -762,22 +761,17 @@ const builtin_table = [_]struct { name: []const u8, is: Builtin }{
     .{ .name = "task", .is = .task },
 };
 
-/// The lowercase name a retired TitleCase spelling is written with
-/// now, or null when the name was never one of the language's.
+/// The current explicit name for a retired spelling, or null when the name
+/// was never one of the language's.
 ///
-/// The two resized names are the reason this exists rather than a
-/// suggestion by edit distance: nothing spells `long` closely enough
-/// to `Int` for a did-you-mean to find it, and a reader whose only
-/// mistake is remembering the older name should be told the newer one
-/// outright.  It is also the sentence the whole tree's migration
-/// hangs on, so it names both halves.
+/// The resized names are the reason this exists rather than a suggestion by
+/// edit distance: nothing spells `i64` closely enough to `Int` for a
+/// did-you-mean to find it, and a reader whose only mistake is remembering an
+/// older name should be told the current one outright.
 ///
-/// **`Int` answers `long` and `Float` answers `double`, not `int` and
-/// `float`** — the lowercase names exist now, but they are 32 bits
-/// wide and the TitleCase ones never were.  A reader migrating a
-/// program written before the resize wants the type that holds what
-/// theirs held; the narrow one is a decision, and a decision belongs
-/// where somebody writes it down.
+/// **`Int` answers `i64` and `Float` answers `f64`** because those are the
+/// representations the TitleCase names carried. The intermediate lowercase
+/// spellings also receive direct replacements, with no compatibility aliases.
 pub fn retiredSpelling(text: []const u8) ?[]const u8 {
     const retired = [_]struct { was: []const u8, now: []const u8 }{
         .{ .was = "byte", .now = "u8" },

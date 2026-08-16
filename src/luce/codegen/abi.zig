@@ -87,7 +87,7 @@ const trace = @import("../runtime/trace.zig");
 ///
 /// 6 — short text lives inside a `LuceValue`.  The tag is one byte
 /// where it was eight, and the twenty-two bytes that frees are where a
-/// String's text goes when it fits (docs/STRINGS.md).  No field moved
+/// `str` text goes when it fits (docs/STRINGS.md). No field moved
 /// and nothing was reordered — `bits` and `length` are still at 8 and
 /// 16 — but generated code reads a `Value` differently, so an artifact
 /// built against the old reading has to be rebuilt.
@@ -389,11 +389,11 @@ pub const CallDepthFn = *const fn (context: ?*anyopaque) callconv(.c) i64;
 /// traps at the same call on both engines.
 pub const default_call_depth: i64 = 256;
 
-/// The run ended after opening a runtime, leaving `leaked` objects
-/// alive.  Memory is explicit in Luce, so what a program did not free
-/// is part of what it did, including a trap or uncaught error.  An
-/// exhausted run has no census and does not call this slot.  Optional:
-/// a null slot simply means nobody is counting.
+/// The run ended after opening a runtime, leaving `leaked` objects alive
+/// after ordinary ARC cleanup. A nonzero census can expose a surviving strong
+/// cycle or a compiler/runtime lifetime bug, including on a trap or uncaught
+/// error. An exhausted run has no census and does not call this slot.
+/// Optional: a null slot simply means nobody is counting.
 pub const FinishedFn = *const fn (
     context: ?*anyopaque,
     leaked: i64,

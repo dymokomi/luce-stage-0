@@ -16,11 +16,11 @@ A program requires exactly one entry in one of four shapes:
 ```
 func main():
 func main() -> !:
-func main(args: list(string)):
-func main(args: list(string)) -> !:
+func main(args: list[str]):
+func main(args: list[str]) -> !:
 ```
 
-The optional `list(string)` parameter receives the command line. With
+The optional `list[str]` parameter receives the command line. With
 `-> !`, an uncaught error ends the run and is reported by the host.
 Any other parameter list or any value result is refused.
 
@@ -58,7 +58,7 @@ A parenthesised list of **two or more** types is a
 [return shape](../types/#return-shapes): the function answers that
 many values. It is not a type, and it may be written nowhere but here.
 
-A parameter may declare a trailing default — `start: long = 0`, a
+A parameter may declare a trailing default — `start: i64 = 0`, a
 compile-time constant a call site may omit; call sites may name
 arguments too (see [calls](../expressions/#calls)). Every path through
 a function that declares a value return type must return; the compiler
@@ -109,7 +109,7 @@ enum Name:
     static func member(...):
         ...
 
-enum Name(byte):
+enum Name(u8):
     ...
 ```
 
@@ -119,8 +119,8 @@ member's plus one, and an unvalued first member is 0. A written value
 is a constant integer expression, folded like every other constant.
 
 - Two members may not hold one number.
-- The backing width is `int` unless the declaration names one of
-  `byte`, `short`, `int`, `long`; a member the width cannot hold is
+- The backing width is `i32` unless the declaration names another
+  integer type; a member the width cannot hold is
   refused (`luce.sema.enum`).
 - Members are reached only through the type: `Method.stored`, and
   `module.Method.stored` across an import.
@@ -131,7 +131,7 @@ is a constant integer expression, folded like every other constant.
   may not — an enum's members are what the type is.
 - The zero value of an enum-typed slot is its **first declared
   member**, which is what `var m: Method` starts at and what
-  `new array(Method, n)` fills with.
+  `new array[Method](n)` fills with.
 
 ## union {#union}
 
@@ -297,7 +297,7 @@ func main():
 ```output
 luce: compile failed
 main.luc:3:9: value is inside a private region, which already says it [luce.parse.expected]
-            private value: long
+            private value: i64
             ^~~~~~~
 ```
 
@@ -395,12 +395,12 @@ The place is read once — every subscript evaluated exactly once — and
 then rebuilt: value structs update functionally up to their root
 binding, and the innermost container element is written in place.
 
-A **nested** place assigns a value (a number, a `string`, or a plain
+A **nested** place assigns a value (a number, a `str`, or a plain
 struct). To restock an *object* field use the single-level form:
 `bag.items = [1, 2]`.
 
 Compound assignment is `+= -= *= /= //= %=`, value-only arithmetic —
-the place is a number, or a `string` for `+=` — and the place is
+the place is a number, or a `str` for `+=` — and the place is
 evaluated once, so `counts[key] += 1` looks the key up a single time.
 A **map** key that is not there is defined at the value type's zero
 and then applied to; a list or array index out of range still traps.
@@ -418,9 +418,9 @@ func main():
 5 xy
 ```
 
-A storage-width place combines at its arithmetic type and narrows
-back: `b += 1` on a `byte` is `b = byte(b + 1)`, and it traps
-`conversion_range` at 255 rather than wrapping.
+A compound assignment keeps the place's concrete numeric type: `b += 1` on
+a `u8` performs checked `u8` addition and traps `integer_overflow` at 255
+rather than widening or wrapping.
 
 ## if / elif / else
 
@@ -446,7 +446,7 @@ while condition:
 ## for
 
 ```
-for name in range(low, high):     long, excluding high
+for name in range(low, high):     i64, excluding high
 for name in sequence:             list or rank-1 array elements, in order
 for name in map:                  map keys, in insertion order
 for index, name in sequence:      position and element
@@ -490,7 +490,7 @@ NAMES = CALL catch:               NAMES = CALL catch NAME:
 ```
 
 The handler guards exactly one call, so which statement failed has one
-answer. `NAME` binds the error's message — an immutable `string`
+answer. `NAME` binds the error's message — an immutable `str`
 scoped to the handler block. For a multi-return assignment, success
 performs every replacement store and failure performs none; ordinary
 side effects from evaluating the right side remain visible in the
@@ -526,7 +526,7 @@ Initializers fold at compile time. Foldable forms include literals,
 other constants (including `module.constant` through an import),
 numeric and bitwise expressions, comparisons and boolean logic, string
 concatenation, the eight conversion constructors and `ord()`, enum
-members and conversions from enums (`int(m)`, `string(m)`), and
+members and conversions from enums (`i32(m)`, `str(m)`), and
 reference-free value-struct construction.
 `none` also folds when a `T?` annotation supplies the absent type; bare
 `const x = none` is refused because it supplies no `T`.
@@ -538,22 +538,22 @@ Every value use site inlines the fold. A `const` may also hold one flat
 container construction:
 
 ```
-const ITEMS: list(long) = [3, 1, 2]
+const ITEMS: list[i64] = [3, 1, 2]
 const WORDS = {"and": true, "break": true}
-const ORDER: array(long, _) = [16, 17, 18, 0]
+const ORDER: array[i64, _] = [16, 17, 18, 0]
 ```
 
 - Elements may be scalars, strings, enum values, or reference-free value
   structs. Such a struct may contain an optional field, but an optional
   top-level element or map value is refused.
-- A bracket literal is a `list` unless an `array(T, _)` annotation
+- A bracket literal is a `list` unless an `array[T, _]` annotation
   makes it rank 1. Empty list and array constants need an annotation,
   but its element type must still be flat and non-optional; zero
   elements do not waive the constant-container boundary.
 - Constant containers are flat: no nested container, builder,
   reference-carrying struct, or multidimensional array.
 - A constant map rejects duplicate folded keys and names both sites.
-  Empty `{}` is not a literal; use `new map(K, V)`.
+  Empty `{}` is not a literal; use `new map[K, V]`.
 - One written construction is one identity. Aliases, imports and
   parameter defaults share it; separately written equal
   constructions do not.

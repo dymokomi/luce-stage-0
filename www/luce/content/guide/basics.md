@@ -26,7 +26,7 @@ types and build modes after you have something worth building.
 
 ## Command-line arguments
 
-Declare a `list(string)` parameter on `main` when a program needs its
+Declare a `list[str]` parameter on `main` when a program needs its
 arguments. Leave the parameter out when it does not.
 
 ```luce run args=fig pear plum
@@ -46,7 +46,7 @@ func main(args: list[str]):
 3. hello, plum
 ```
 
-Arguments are strings. `parse_int` returns a `long?` because some text
+Arguments are `str` values. `parse_int` returns an `i64?` because some text
 is not an integer; `else` supplies a value when it is absent:
 
 ```luce run args=4
@@ -67,7 +67,7 @@ line 3
 
 Every expression has one statically known type. You can annotate a value
 or let its context infer the type. An unannotated integer literal defaults
-to `int`; an unannotated fractional literal defaults to `float`.
+to `i64`; an unannotated fractional literal defaults to `f64`.
 
 ```luce run
 func main():
@@ -103,7 +103,7 @@ func main():
 Mina
 ```
 
-An alias is another spelling, not another type. `UserId` and `long` are
+An alias is another spelling, not another type. `UserId` and `i64` are
 interchangeable, so use a `struct` when two values must not mix or when the
 value needs fields and methods. Aliases may also name functions, optionals,
 containers, structures, interfaces, enums and unions. They can refer forward
@@ -119,33 +119,33 @@ has the exact visibility, module, and diagnostic rules.
 | Type | Meaning |
 |---|---|
 | `bool` | `true` or `false`; only a `bool` can be a condition. |
-| `byte` | Unsigned 8-bit storage. |
-| `short` | Signed 16-bit storage. |
-| `int` | Checked signed 32-bit integer. |
-| `long` | Checked signed 64-bit integer. |
-| `half` | IEEE binary16 storage. |
-| `float` | IEEE binary32. |
-| `double` | IEEE binary64. |
-| `string` | Immutable UTF-8 text. |
+| `u8`, `u16`, `u32`, `u64` | Unsigned integers whose names state their width. |
+| `i8`, `i16`, `i32`, `i64` | Signed integers whose names state their width. |
+| `f16`, `f32`, `f64` | IEEE binary floating-point numbers. |
+| `char` | One Unicode scalar. |
+| `str` | Immutable, valid UTF-8 text. |
+| `bytes` | Immutable binary data. |
 
 Enums, structs and functions are values too. A function value has a type
-such as `func(long) -> long` and is covered in [Functions](/guide/functions/).
+such as `func(i64) -> i64` and is covered in [Functions](/guide/functions/).
 
 Literals may be decimal, hexadecimal (`0xFF`) or binary (`0b1010`), with
 underscores between digits. A fraction or exponent makes a floating-point
 literal. Octal and hexadecimal floating-point literals are not accepted.
 
-## Storage types
+## Width and arithmetic
 
-`byte`, `short` and `half` describe storage, not arithmetic. Operations
-widen them to `int` or `float` first. Integer arithmetic is checked, so a
-value does not wrap merely because it was stored in a narrow type.
+Arithmetic preserves its operands' concrete type. It never silently widens,
+narrows, changes signedness, or crosses between integers and floating point.
+Convert first when the result needs more range. Integer arithmetic is checked
+at its own width, so it never wraps silently.
 
 ```luce run
 func main():
-    var full: u8 = 255
-    print(str(full + 1))
-    print(str(full * full))
+    let full: u8 = 255
+    let wide = u16(full)
+    print(str(wide + 1))
+    print(str(wide * wide))
 ```
 
 ```output
@@ -160,7 +160,7 @@ func main():
     var pixels = new array[u8](4)
     pixels[0] = 255
     pixels[1] = 128
-    print(str(pixels[0] + pixels[1]))
+    print(str(u16(pixels[0]) + u16(pixels[1])))
 ```
 
 ```output
@@ -168,21 +168,22 @@ func main():
 ```
 
 Storing a value outside the destination range traps. Use an explicit
-conversion, such as `byte(x % 256)`, when wrapping is intended.
+conversion, such as `u8(x % 256)`, only after the program has deliberately
+brought a value into range.
 
-## Numeric widening
+## Numeric conversions
 
-The integer ladder is `byte` → `short` → `int` → `long`. The floating
-ladder is `half` → `float` → `double`. Widening is implicit in the forward
-direction. A value is never narrowed implicitly. When an integer and a
-floating value meet, the common type is `double`.
+Literals take a numeric type from context when they can. Once a value has a
+concrete type, mixing it with another type requires an explicit conversion.
+That keeps width, signedness, rounding, and possible loss visible at the line
+where they matter.
 
 ```luce run
 func main():
     let steps = 7
     let seconds = 2.5
-    print(str(steps * seconds))
-    let elapsed: f64 = steps
+    print(str(f64(steps) * seconds))
+    let elapsed: f64 = f64(steps)
     print(str(elapsed))
     print(str(i64(seconds)))
 ```
@@ -190,17 +191,18 @@ func main():
 ```output
 17.5
 7
-3
+2
 ```
 
-Comparisons across numeric types preserve the exact values being compared:
+Comparisons follow the same rule. Convert deliberately before comparing
+different concrete numeric types:
 
 ```luce run
 func main():
     let after: i64 = 9007199254740993
     let rounded: f64 = 9007199254740992.0
-    print(str(1 < 1.5))
-    print(str(after == rounded))
+    print(str(f64(1) < 1.5))
+    print(str(after == i64(rounded)))
 ```
 
 ```output

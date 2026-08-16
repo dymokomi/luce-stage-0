@@ -3563,8 +3563,8 @@ test "failed worker argument transfer returns carried struct storage" {
 
     var child_objects: std.testing.FailingAllocator = .init(testing.allocator, .{
         // The argument array and the first argument's struct run and
-        // outside String consume three allocations.  Refuse the later
-        // List's String after its element run has also been allocated.
+        // outside str consume three allocations. Refuse the later
+        // list's str after its element run has also been allocated.
         .fail_index = 4,
     });
     var child_arena: std.heap.ArenaAllocator = .init(testing.allocator);
@@ -4404,8 +4404,8 @@ test "every boxed container mutation refuses a program root without consuming a 
     );
     try expectTrap(.immutable_object, runtime, containers.arrayFill(runtime, array, Value.ofI64(2)));
 
-    // Builder append is a borrow, unlike List append.  The failed
-    // mutation must leave the caller's owned String intact.
+    // builder append is a borrow, unlike list append. The failed
+    // mutation must leave the caller's owned str intact.
     const borrowed = try runtime.ownValue(Value.ofStr(long_text));
     defer runtime.dropStorage(borrowed);
     try expectTrap(.immutable_object, runtime, containers.append(runtime, builder, borrowed));
@@ -5218,7 +5218,7 @@ test "a map keeps insertion order through growth, lookup, and removal" {
     runtime.freeObject(map.asObject());
 }
 
-test "map keys hash as they compare, for long and for String" {
+test "map keys hash as they compare, for i64 and for str" {
     var bench: Bench = undefined;
     bench.setup();
     defer bench.deinit();
@@ -5388,7 +5388,7 @@ test "lists index, append, pop, insert, remove, and bound-check" {
 test "array fill keeps its old values through every copy allocation failure" {
     const long_text = "a long fill value that must be copied into every array cell";
     // One array has one shape allocation, one element run and one table row;
-    // the fill then has one replacement run followed by one String copy per
+    // the fill then has one replacement run followed by one str copy per
     // cell.  Walk beyond that range too, proving success after the failure
     // points rather than relying on an assumed allocation count.
     for (0..8) |offset| {
@@ -5634,7 +5634,7 @@ test "every map and array bound is checked on both sides too" {
     try expectTrap(.index_bounds, runtime, containers.dimSize(runtime, grid, 2));
     try expectTrap(.index_bounds, runtime, containers.dimSize(runtime, grid, -1));
 
-    // A Builder's bytes are ASCII, so its bound is a codepoint range:
+    // A builder's bytes are ASCII, so its bound is a codepoint range:
     // 0x7F is the last byte that is one, and 0x80 is the first that is
     // not.
     const builder = try runtime.newBuilder();
@@ -5805,7 +5805,7 @@ test "compiled code's byte offsets find the fields they name" {
     try testing.expectEqual(@as(usize, 6), @as(*const usize, @ptrCast(@alignCast(
         row + heap.layout.elements_count,
     ))).*);
-    // An `Array(double)` stores `f64`s, so the element is one load and
+    // An `array[f64]` stores `f64`s, so the element is one load and
     // no unboxing — which is the whole reason the storage is typed.
     const elements: [*]const f64 = @ptrCast(@alignCast(@as(*const [*]const u8, @ptrCast(@alignCast(
         row + heap.layout.elements_pointer,
@@ -6088,7 +6088,7 @@ test "integer arithmetic is checked and float arithmetic is IEEE" {
     try testing.expect(std.math.signbit((try operators.negate(runtime, Value.ofF64(0.0))).asF64()));
 
     try expectTrap(.conversion_range, runtime, operators.convert(runtime, Value.ofF64(1e30), .i64));
-    // Float-to-integer conversion truncates toward zero.
+    // Floating-point-to-integer conversion truncates toward zero.
     try testing.expectEqual(@as(i64, -1), (try operators.convert(runtime, Value.ofF64(-1.9), .i64)).asI64());
     try testing.expectEqual(@as(i64, 2), (try operators.convert(runtime, Value.ofF64(2.5), .i64)).asI64());
     try testing.expectEqual(@as(i64, -2), (try operators.convert(runtime, Value.ofF64(-2.5), .i64)).asI64());
@@ -6892,7 +6892,7 @@ test "C container doors reject wrong tags and object shapes before mutation" {
     try expectCTrapCode(runtime, luce_rt_array_fill(runtime, &list, &Value.none), .not_owned);
     try testing.expectEqual(@as(u32, 1), runtime.live);
 
-    // `string(builder)` accepts only a Builder object.  A list must not be
+    // `str(builder)` accepts only a builder object. A list must not be
     // interpreted through the builder arm of the same union.
     try expectCTrapCode(runtime, luce_rt_str(runtime, &list, &out), .not_owned);
     try testing.expectEqual(@as(i64, 99), out.asI64());
@@ -7575,7 +7575,7 @@ test "allocating C value doors preserve graphs and slots at every failure point"
 
 test "C file acquisition closes raw handles through every allocation failure" {
     const path = "a file path long enough to require owned resource storage";
-    const payload = "file text long enough to require an owned returned String";
+    const payload = "file text long enough to require an owned returned str";
     const content = "content written through the whole-file C door";
     const doors = [_]CFileAllocationDoor{ .open, .read_text, .write_text };
 

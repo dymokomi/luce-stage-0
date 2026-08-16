@@ -96,10 +96,10 @@ separate from display drawing.
 spans, drawn once and measured by **display width** rather than byte length.
 A syntax highlighter produces one `Line` per source row — its keywords,
 strings and comments each their own `Span` — and a label or status bar is one
-`Line`. `text.plain(string, Style)` builds the common single-span line.
+`Line`. `text.plain(str, Style)` builds the common single-span line.
 
 ```text
-var spans = new list(text.Span)
+var spans = new list[text.Span]
 spans.append(text.Span(text = "let ", style = keyword))
 spans.append(text.Span(text = "x", style = plain))
 let line = text.Line(spans = spans)
@@ -124,7 +124,7 @@ regions toward their floors in order. A hidden region is a zero-length item,
 which yields an empty rectangle and draws nothing.
 
 ```text
-var columns = new list(layout.Length)
+var columns = new list[layout.Length]
 columns.append(layout.Length.between(low = 18, high = 24, ratio = 25))
 columns.append(layout.Length.grow(weight = 1))
 let panes = layout.Row.solve(area, 0, columns)
@@ -178,14 +178,14 @@ only new sizes flowing through the same layout, frame and present path.
 
 ```text
 interface View:
-    func measure(area: termui.Rect) -> (long, long)
+    func measure(area: termui.Rect) -> (i64, i64)
     func draw(into: surface.Surface, area: termui.Rect)
 ```
 
 A view receives the surface for one draw call; it does not retain the surface,
 terminal, event stream, or application model. `Text` draws a block of styled
 `Line`s; `Fill` paints a rectangle of one repeated cell. These values can be
-mixed in `list(View)`, `map(string, View)`, arrays, and fields because
+mixed in `list[View]`, `map[str, View]`, arrays, and fields because
 interfaces are nominal and heterogeneous.
 
 `Rows` and `Viewport` follow one pattern: the **state** value lives with the
@@ -206,7 +206,7 @@ rules](/guide/reference/types/#interface) for conformance and lifetime rules.
 closed
 resize
 key(pressed: Key)
-text(typed: string)
+text(typed: str)
 mouse(pointer: Mouse)
 ```
 

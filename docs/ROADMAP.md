@@ -42,9 +42,15 @@ ARC contract:
   and heterogeneous containers. Dispatch is intentionally read-only today,
   and the representation is not yet the final owned existential model.
 - Lambdas are one expression and cannot capture a local.
-- `weak` references do not exist.
-- The public scalar spellings are still `byte`, `short`, `int`, `long`,
-  `half`, `float`, `double`, and `string`.
+- Zeroing `weak` storage is complete for built-in ARC objects in locals and
+  fields. Reads upgrade to owned optional snapshots; generation-safe zeroing,
+  copies, aliases, worker refusals, verifier defenses, and recursive
+  struct/container back-edges agree on both engines. Classes and the final
+  owned interface representation will reuse this runtime path.
+- The public scalar spellings are explicit: `u8` through `u64`, `i8` through
+  `i64`, `f16` through `f64`, plus `char`, `str`, and `bytes`. Contextual
+  literals, same-concrete-type operations, checked widths, explicit
+  conversions, scalar-indexed text, and immutable binary data are complete.
 - Transparent `alias Name = Type` declarations are complete: type positions,
   constructors and static/member namespaces, chains, forward references,
   visibility, re-exports, constants, and diagnostics agree on both engines,
@@ -342,7 +348,7 @@ reproducible baseline numbers.
 
 Completion evidence: the deterministic repository gate runs every current
 specification on the compiled path and differential oracle with the zero-live-
-object census enabled; the public site compiles 50 pages and verifies 196
+object census enabled; the public site compiles 50 pages and verifies 188
 samples; the macOS ARM64 release archive installs twice in one isolated smoke
 without duplicating PATH state and compiles/runs both executable and `.lc`
 workflows. [CODEGEN.md](CODEGEN.md) records the value-heavy and reference-heavy
@@ -403,7 +409,7 @@ later ARC phases consume. Its manifest names every compiler, runtime,
 userland, tooling, documentation, ABI, and release surface that must move in
 the atomic cut; the documentation catalogue and executable-sample guard pass.
 
-### Phase 3 — migrate the type vocabulary atomically
+### Phase 3 — migrate the type vocabulary atomically — complete
 
 1. Add the complete internal type table and real arithmetic behavior for all
    widths.
@@ -420,7 +426,16 @@ the atomic cut; the documentation catalogue and executable-sample guard pass.
 Exit: the old vocabulary is absent outside migration tests and history; the
 full width/conversion matrix agrees on both engines.
 
-### Phase 4 — build the weak-reference foundation
+Completed on 2026-08-16. All scalar widths have real compile-time and runtime
+semantics on the interpreter and LLVM paths; literals, operations,
+conversions, constants, aggregates, optionals, containers, serialization,
+verification, ABI boundaries, packages, examples, editor syntax data, and
+diagnostics use the explicit names. `char`, scalar-indexed `str`, and
+immutable `bytes` separate text from binary data. Retired spellings produce
+direct replacement diagnostics, and the documentation guard now checks live
+inline signatures and explanatory fences as well as executable samples.
+
+### Phase 4 — build the weak-reference foundation — complete
 
 1. Design the runtime weak table/control block so zeroing precedes storage
    reuse and cannot race with ordinary release inside one runtime.
@@ -433,6 +448,15 @@ full width/conversion matrix agrees on both engines.
 
 Exit: a recursive value-struct/container graph can use a weak back-edge and
 reach zero live objects without dangling access.
+
+Completed on 2026-08-16. Weak locals and fields accept the current built-in
+ARC object families, initialize and clear as absence, copy without retaining,
+upgrade a live target to an owned snapshot, and zero before an object-table
+row can be reused. The runtime uses generation-checked handles shared by both
+engines; MIR verification rejects malformed weak operations; resources,
+functions, values, interfaces, and worker transfer are refused precisely.
+The focused differential lane includes a real recursive struct/container
+cycle and every successful case ends at the zero-live-object census.
 
 ### Phase 5 — complete class reference semantics
 

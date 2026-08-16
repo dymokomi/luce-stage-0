@@ -927,9 +927,9 @@ const PreparedTarget = struct {
     present: bool,
 };
 
-/// Whether `actual` reaches `expected` through the two widenings
-/// `fit` applies — the compatibility half of `fit`, for the shaped
-/// receives whose per-value fits are re-derived by lower.
+/// Whether `actual` reaches `expected` through exact matching or optional
+/// wrapping — the compatibility half of `fit`, for shaped receives whose
+/// per-value fits are re-derived by lower.
 fn fitsInto(actual: Type, expected: Type) bool {
     if (actual.eql(expected)) return true;
     if (actual.widensTo(expected)) return true;

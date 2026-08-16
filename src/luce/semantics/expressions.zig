@@ -370,12 +370,9 @@ pub fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted
         return null;
     const elements = run.values;
     const element_type = wanted_element orelse unified: {
-        // The elements meet where two operands of an operator meet
-        // and for the same reason: `[1, 2.5]` and `[2.5, 1]` are
-        // the same list, as `1 + 2.5` and `2.5 + 1` are the same
-        // sum (docs/TYPES.md §2).  A non-numeric element stops the
-        // fold and the first element decides, which is what the
-        // mismatch below then reports.
+        // Without an annotation, the first concrete element supplies the
+        // type. Later literals can land there; differently typed concrete
+        // values are rejected rather than unified.
         var meeting = elements[0].value_type;
         for (elements[1..]) |element| {
             meeting = Type.unified(meeting, element.value_type) orelse
@@ -384,9 +381,8 @@ pub fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted
         break :unified meeting;
     };
     for (elements, literal.elements) |*element, expression| {
-        // A `list(double)` takes narrower elements by widening
-        // them, and so does a list the fold above landed on
-        // (docs/TYPES.md §2): `[1.5, 2]` is a `list(double)`.
+        // This branch is intentionally inert under the explicit-width
+        // contract. Contextual literals already have `element_type`.
         if (element.value_type.widensTo(element_type)) {
             element.* = try self.widenNumeric(element.*, element_type);
         }
@@ -1252,26 +1248,9 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
     };
 }
 
-/// `1 < 1.5`, `9007199254740993 == 9007199254740992.0`: a
-/// comparison whose sides sit on different ladders compares the
-/// **numbers** and not a conversion of them (docs/NUMERICS.md §5).
-///
-/// Four pairs reach here now — `{int, long} x {float, double}` —
-/// and one function answers all four, because widening the integer
-/// to `i64` and the float to `f64` is lossless by construction.
-/// So the operands widen into the pair the intrinsic already
-/// speaks and nothing new is written (docs/TYPES.md §5).
-///
-/// **An `int` against a `double` skips the call.**  Every i32 is
-/// exactly representable in binary64, so widening decides it and
-/// an ordinary `fcmp` is the whole comparison — an optimisation
-/// the two-type language could not have, because it had no integer
-/// narrower than the mantissa.
-///
-/// The runtime answers one shape — the integer first — so an
-/// operator written the other way round is **mirrored** rather
-/// than given a second implementation.  Only the ordering
-/// operators have a mirror image; equality is its own.
+/// Legacy exact cross-family comparison lowering. Concrete numeric operands
+/// no longer mix, so source programs cannot reach this helper; it remains
+/// temporarily while the old HIR replay shape is retired.
 fn lowerExactCompare(
     self: *FunctionBuilder,
     operation: mir.BinaryOp,
@@ -1284,9 +1263,7 @@ fn lowerExactCompare(
     var whole = if (int_first) left else right;
     var fraction = if (int_first) right else left;
 
-    // A storage width promotes before anything else (D5), so what
-    // reaches the pairs below is still `{int, long}` against
-    // `{float, double}` and there are still four of them.
+    // Historical promotion hooks are identities under the current contract.
     whole = try self.promoted(whole);
     fraction = try self.promoted(fraction);
 
@@ -1492,24 +1469,21 @@ fn lowerShortCircuit(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
 
 pub fn lowerUnary(self: *FunctionBuilder, unary: ast.Unary, wanted: ?Type) Error!?Typed {
     // -9223372036854775808 is one literal, not a negated one: the
-    // magnitude alone is past long's maximum, so the sign has to
-    // fold in before the range is checked or the smallest long is
+    // magnitude alone is past i64's maximum, so the sign has to
+    // fold in before the range is checked or the smallest i64 is
     // the one number nobody can write.
     if (unary.op == .negate and unary.operand.* == .int_literal) {
         return self.lowerIntLiteral(unary.operand.int_literal, unary.span, true, wanted);
     }
     // A minus does not change where a literal lands, so the
-    // landing type passes straight through it: `let x: double =
+    // landing type passes straight through it: `let x: f64 =
     // -1.5` reads its text at a float exactly as `1.5` would.
     //
     // **No test kills this line yet, and none can.**  A negated
     // *integer* literal takes the branch above; what is left is a
-    // negated float literal, which lands on a float whether it was
-    // told to or not, and a negated name, which widens afterwards
-    // to the same value.  At one integer width and one float width
-    // the line is an equivalent mutant — it becomes load-bearing
-    // at the resize, where landing and widening-afterwards stop
-    // agreeing, and a spec for it belongs in that step.
+    // negated floating literal, which lands on a floating type whether it
+    // was told to or not, and a negated name, whose concrete type is
+    // unchanged. Explicit-width tests now make this landing rule observable.
     if (unary.op == .negate) self.wanted = wanted;
     const operand = (try self.lowerExpression(unary.operand, false)) orelse return null;
     switch (unary.op) {
@@ -1520,10 +1494,8 @@ pub fn lowerUnary(self: *FunctionBuilder, unary: ast.Unary, wanted: ?Type) Error
                 });
                 return null;
             }
-            // A storage width negates at its arithmetic type,
-            // like every other operator (D5): `-b` on a `byte` is
-            // an `int`, which is also the only answer that could
-            // be right — a `byte` has no negatives to hold.
+            // Every numeric width computes as itself. Unsigned operands are
+            // rejected by the operator checks below.
             const at = try self.promoted(operand);
             return .{
                 .node = try recorder.recordNode(self, .{ .unary = .{
@@ -1551,9 +1523,8 @@ pub fn lowerUnary(self: *FunctionBuilder, unary: ast.Unary, wanted: ?Type) Error
             };
         },
         .bit_not => {
-            // Integers only (docs/BITWISE.md D2); a storage width
-            // complements at its arithmetic type, like every other
-            // operator (docs/TYPES.md D5).
+            // Integers only (docs/BITWISE.md D2); the operand's explicit
+            // width is also the result width.
             if (!operand.value_type.isNumeric() or operand.value_type.isFloating()) {
                 try self.fail("luce.sema.type", unary.span, "~ works on integers; {s} has no bits a program may see", .{
                     try self.analyzer.typeName(operand.value_type),

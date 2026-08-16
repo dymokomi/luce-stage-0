@@ -101,7 +101,7 @@ first second
 2 2
 ```
 
-The titles are independent string values. The `values` fields refer to one
+The titles are independent `str` values. The `values` fields refer to one
 list. This value/reference distinction is part of each field's type; it is not
 changed by how the enclosing struct is passed.
 
@@ -115,6 +115,40 @@ statement unless another place retained it.
 
 The optimizer may remove a retain/release pair only when that cannot change
 resource cleanup, traps, or any other observable result.
+
+## Break cycles with `weak`
+
+ARC cannot reclaim a graph whose objects keep one another alive. Mark the
+back-edge as weak so it observes the object without owning it:
+
+```luce run
+struct Link:
+    weak root: list[Link]?
+
+func main():
+    let root: list[Link] = [Link()]
+    root[0].root = root
+    let snapshot = root[0].root else [Link()]
+    print(str(len(snapshot)))
+```
+
+```output
+1
+```
+
+Weakness belongs to a local or field, not to a standalone type. A weak place
+has an explicit optional `list`, `map`, `array`, or `builder` type and starts
+as `none`. Assignment does not keep the target alive. A read of a live target
+creates an ordinary owned snapshot; after the final strong reference goes
+away, the weak place reads `none`.
+
+Read once, unwrap, and use that snapshot. A separate read may happen after the
+last strong reference disappears, so testing a weak place does not permanently
+narrow later reads.
+
+Files, tasks, functions, interfaces, scalars, text values, and value structs
+cannot be weak targets. Weak handles also cannot cross a worker boundary.
+Classes will use this same storage rule when class reference semantics ship.
 
 ## Files and tasks must close deterministically
 
@@ -146,9 +180,8 @@ second ownership language.
 
 ## What has not shipped yet
 
-ARC does not collect a strong cycle, and `weak` is not current syntax. `class`
-is only a compiler scaffold; mutable owned interface values and capturing
-closures have not shipped either. [Status](/status/) gives their order.
+`class` is only a compiler scaffold; mutable owned interface values and
+capturing closures have not shipped. [Status](/status/) gives their order.
 
 The [Memory Management reference](/guide/reference/memory/) gives the exact
 current rules. [Concurrency](/guide/concurrency/) applies them at the worker

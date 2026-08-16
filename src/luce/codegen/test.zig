@@ -173,9 +173,9 @@ test "a union builds through the struct path and is read inline" {
 
 test "the runtime library is called, not reimplemented" {
     const gpa = std.testing.allocator;
-    // A Map, because a Map is the container that stays a call: a hash
+    // A map, because a map is the container that stays a call: a hash
     // probe is genuinely call-worthy where an element load is not, and
-    // `len` of a List or an Array is generated inline (docs/CODEGEN.md).
+    // `len` of a list or an array is generated inline (docs/CODEGEN.md).
     const rendered = (try render(
         \\func main():
         \\    let xs = new list[i64]
@@ -344,7 +344,7 @@ test "a hoisted container read lands on the retired row when the handle is null"
     // suggests: it is the name of a private constant this backend
     // emits, and the only place a lifted container read can point when
     // the handle it lifted is null.  Loop hoisting is what asks for
-    // it, so an Array indexed in a loop — the shape loops.zig was
+    // it, so an array indexed in a loop — the shape loops.zig was
     // written for — is what proves it is there, and that it carries
     // the retired generation, which is what makes the read resolve to
     // "nothing" rather than to whoever holds that row next.
@@ -662,7 +662,7 @@ test "a compiled program prints through the host table" {
     try std.testing.expectEqual(@as(?mir.TrapCode, null), capture.trap_code);
 }
 
-test "arithmetic, comparison, control flow, locals, and String(long) run" {
+test "arithmetic, comparison, control flow, locals, and str(i64) run" {
     var capture: Capture = .{};
 
     const status = try run(
@@ -1157,7 +1157,7 @@ test "an index out of bounds agrees" {
 // Floats
 // ---------------------------------------------------------------------------
 //
-// The special values travel through a `List(double)`, which no optimizer
+// The special values travel through a `list[f64]`, which no optimizer
 // can see into: without that, LLVM would fold the whole table at
 // compile time and the test would only prove that its constant folder
 // agrees, not that the generated instructions do.
@@ -1211,7 +1211,7 @@ test "negating a float flips the sign bit, so -0.0 survives" {
 // must answer what the interpreter's one-at-a-time loop answers, down to
 // which signed zero it kept; target-specific min/max instructions are not
 // allowed to change that choice.  Nothing below is a constant to the
-// optimizer: the values come out of a List and the length out of `len`,
+// optimizer: the values come out of a list and the length out of `len`,
 // so the reductions stay loops long enough to exercise the lowering.
 test "min and max reductions over an array agree, signed zeros and all" {
     try agree(
@@ -1370,7 +1370,7 @@ test "nested struct equality recurses into fields, not the slots holding them" {
     );
 }
 
-test "a struct carrying a String copies by value and agrees" {
+test "a struct carrying a str copies by value and agrees" {
     try agree(
         \\struct Person:
         \\    name: str
@@ -1416,8 +1416,8 @@ test "zero-initialized structs agree, nested ones included" {
 }
 
 test "an inline array access agrees on every element kind and rank" {
-    // Since `Array` storage is typed (`runtime/heap.zig`), a double
-    // array is `f64`s and a Bool array is bytes, while a String or an
+    // Since `array` storage is typed (`runtime/heap.zig`), an f64
+    // array is `f64`s and a bool array is bytes, while a str or an
     // object element keeps the 24-byte slot — and compiled code reads
     // each one inline rather than through the runtime.  Four kinds,
     // two ranks, both engines.
@@ -1455,7 +1455,7 @@ test "an inline array access agrees on every element kind and rank" {
 }
 
 test "a resolution lifted out of a loop still traps where the access is" {
-    // `loops.zig` reads an Array's row once per loop instead of once per
+    // `loops.zig` reads an array's row once per loop instead of once per
     // access.  What must not move with it is the *deciding*: an index
     // past the end still traps at the access it was made at, with the
     // loop's resolution already lifted above it.
@@ -1734,7 +1734,7 @@ test "a heap optional agrees, and holding none owns nothing (S43)" {
 test "optionals in a loop agree, boxed into container cells and back" {
     // Three seams at once: a `T?` rebuilt every iteration through the
     // one scratch box the call site owns, a `T?` local carrying loop
-    // state, and structs with an optional field stored in a `List` —
+    // state, and structs with an optional field stored in a `list` —
     // where the field is a `runtime.Value` in a container cell rather
     // than in a frame slot.
     try agree(
@@ -1785,7 +1785,7 @@ test "every payload a T? can hold survives being returned" {
     // A returned `T?` travels through `%out`, whose `dereferenceable`
     // comes from `resultSize` — a hand-written table, and the one place
     // a wrong number would be a fault rather than a wrong answer.
-    // `Bool?` is the corner: `{i1, i1}` really is two bytes, not the
+    // `bool?` is the corner: `{i1, i1}` really is two bytes, not the
     // eight every other payload rounds up to.
     try agree(
         \\struct Point:
@@ -1834,7 +1834,7 @@ test "every payload a T? can hold survives being returned" {
 test "the null object put in a T? is present, because absence is not a handle" {
     // The case that decides the representation.  `raw` is the zero of
     // an object-typed place — the null handle, a value that is *there*
-    // and traps on use (S40) — and borrowing it into a `List(long)?`
+    // and traps on use (S40) — and borrowing it into a `list[i64]?`
     // is accepted without a diagnostic.  The interpreter answers
     // "present" because absence there is the tag.  Had the lowering
     // spent the null index on `none`, as docs/FAILURE.md first
@@ -1975,7 +1975,7 @@ test "the file services beyond read and write agree, and so does what they refus
     );
 }
 
-test "a directory listing is a List(String) the program owns, on both engines" {
+test "a directory listing is a list[str] the program owns, on both engines" {
     try agree(
         \\func main() -> !:
         \\    let names = try dir_list(".")
@@ -2090,7 +2090,7 @@ test "error() crosses several frames, and the origin is the raise site" {
     );
 }
 
-test "an error path releases the objects and the String storage it owns" {
+test "an error path releases the objects and the str storage it owns" {
     // The leak census is the proof: every frame the error left
     // through released what it owned, so a caught error leaves the
     // heap exactly where a returning call would (S4, S34).
@@ -2141,7 +2141,7 @@ test "a caught error leaves the value it never produced releasable" {
     // A fallible function that errors writes nothing through `%out`,
     // and the store that carries its result across the branch runs on
     // that path too.  So the errored edge empties `%out` on the way
-    // out, and what the caller carries is the empty String rather than
+    // out, and what the caller carries is the empty str rather than
     // whatever the stack held — which the census then proves.
     try agree(
         \\func load(path: str) -> str!:
@@ -2172,7 +2172,7 @@ test "a fallible call handing back an object gives it up on both paths" {
 }
 
 test "an argument index out of range traps index_bounds on both engines" {
-    // `args` is an ordinary List, so reading past it is the language's
+    // `args` is an ordinary list, so reading past it is the language's
     // own bounds trap and not a channel of its own (docs/LANGUAGE.md).
     try agree(
         \\func main(args: list[str]):
@@ -2200,7 +2200,7 @@ test "a withheld service group fails closed on both engines" {
     , .{ .terminal = false });
 }
 
-test "owned String bytes agree, census included" {
+test "owned str bytes agree, census included" {
     // docs/STRINGS.md's store sites, all on one page: a returned view
     // of a parameter, a container that keeps what it is handed, a copy
     // that outlives its original, a field assigned twice, a map's keys
@@ -2276,7 +2276,7 @@ test "text agrees on both sides of the boundary between its two forms" {
     // (docs/STRINGS.md), and the two engines choose the same form for
     // the same bytes — but nothing in the language says so, which is
     // exactly why every length around the boundary is checked here on
-    // every path a String can take: a binding, a container element, a
+    // every path a str can take: a binding, a container element, a
     // map key, a struct field, a return, a slice, and a concat.
     //
     // 22 is `runtime.inline_capacity`.  If that number ever moves,
@@ -2331,7 +2331,7 @@ test "text agrees on both sides of the boundary between its two forms" {
         \\    print(joined)
         \\
     );
-    // A long String cut down to short, kept, and then the original
+    // A long str cut down to a short one, kept, and then the original
     // overwritten — the case where a borrow of the long bytes would
     // still be looking at them.
     try agree(
@@ -2378,7 +2378,7 @@ test "a loop name agrees whether it borrows its element or copies it" {
     );
 }
 
-test "a trap agrees while every frame is still holding String bytes" {
+test "a trap agrees while every frame is still holding str bytes" {
     try agree(
         \\struct Tag:
         \\    label: str

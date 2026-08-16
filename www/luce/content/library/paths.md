@@ -13,11 +13,11 @@ import std.paths
 
 | Signature | Result |
 |---|---|
-| `paths.is_absolute(path: string) -> bool` | whether `path` starts with `/` |
-| `paths.base(path: string) -> string` | the last non-empty component; `/` is the base of the root |
-| `paths.dir(path: string) -> string` | everything before the last component; a bare name and an empty path answer `.` |
-| `paths.extension(path: string) -> string` | the final suffix including its dot, or `""`; a leading dot is not an extension |
-| `paths.stem(path: string) -> string` | the base without its extension |
+| `paths.is_absolute(path: str) -> bool` | whether `path` starts with `/` |
+| `paths.base(path: str) -> str` | the last non-empty component; `/` is the base of the root |
+| `paths.dir(path: str) -> str` | everything before the last component; a bare name and an empty path answer `.` |
+| `paths.extension(path: str) -> str` | the final suffix including its dot, or `""`; a leading dot is not an extension |
+| `paths.stem(path: str) -> str` | the base without its extension |
 
 For a normal path, `paths.stem(path) + paths.extension(path)` is
 `paths.base(path)`. Trailing separators are ignored when selecting the base

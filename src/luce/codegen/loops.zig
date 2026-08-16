@@ -1,7 +1,7 @@
 //! Where a container's row can be read once instead of once per
 //! iteration.
 //!
-//! Stage 10 indexes a List or an Array inline (`lower.zig`), and every access
+//! Stage 10 indexes a list or an array inline (`lower.zig`), and every access
 //! begins by *resolving* the handle: load the object table's base out
 //! of the runtime, step to the row, then load the row's generation,
 //! its element count, and its element pointer.  Four loads before the
@@ -47,7 +47,7 @@
 //! refinement this stage can make and that one cannot — an
 //! `index_set` whose element type owns nothing frees nothing.
 //!
-//! **A List is lifted under exactly that gate and needs no other.**
+//! **A list is lifted under exactly that gate and needs no other.**
 //! Its buffer moves under `append` and `insert` — and both, like every
 //! call, are already outside `viewStable`, so a loop that could move a
 //! buffer never reaches the lifting in the first place.  What is left
@@ -73,7 +73,7 @@ pub const Hoist = struct {
     /// The local whose handle is resolved.
     local: mir.LocalId,
     /// The container shape it holds, from the program's heap-type
-    /// table.  A List is rank 1.
+    /// table. A list is rank 1.
     element: types.Type,
     rank: u8,
 };
@@ -204,7 +204,7 @@ fn madeAlready(hoists: []const Hoist, readable: []const u32, local: mir.LocalId)
 
 const Shape = struct { element: types.Type, rank: u8 };
 
-/// The shape of the List or Array a type names — the same question
+/// The shape of the list or array a type names — the same question
 /// `lower.zig`'s `elementShape` asks, of a type rather than a
 /// register, and the two must answer alike or a lifted resolution
 /// would be read by an access that did not expect one.
@@ -212,7 +212,7 @@ fn storedShape(program: *const mir.Program, of: types.Type) ?Shape {
     if (of != .heap) return null;
     return switch (program.heap_types[of.heap]) {
         .array => |shape| .{ .element = shape.element, .rank = shape.rank },
-        // A List has one bound and it is `count`, which is where a
+        // A list has one bound and it is `count`, which is where a
         // rank-1 array's bound already comes from.
         .list => |element| .{ .element = element, .rank = 1 },
         .map, .builder, .file, .task => null,
@@ -227,7 +227,7 @@ fn stable(program: *const mir.Program, function: *const mir.Function, loop: Loop
             if (optimize.effects.viewStable(instruction)) continue;
             // The one refinement this stage can make and stage 9
             // cannot: writing an element frees the element it replaced
-            // (S22), and a double, a long or a String owns nothing to
+            // (S22), and an f64, an i64 or a str owns nothing to
             // free.  Stage 9 has the instruction but not the program's
             // heap-type table, so it answers conservatively.
             if (!writesPlainElement(program, function, instruction)) return false;
@@ -274,7 +274,7 @@ fn writesPlainElement(
     };
 }
 
-/// Which List and Array locals the loop reads through, and which it
+/// Which list and array locals the loop reads through, and which it
 /// assigns.
 fn collect(
     program: *const mir.Program,

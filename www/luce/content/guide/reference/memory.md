@@ -9,7 +9,7 @@ flow; source code has no ownership operations. The teaching chapter is
 
 ### M1 — value types copy {#m1}
 
-Numbers, `bool`, `string`, structs, enums, unions, and plain function values
+Numbers, `bool`, `char`, `str`, `bytes`, structs, enums, unions, and plain function values
 are value types. Assignment, argument passing, and return copy the value.
 
 A value may contain reference fields. Ordinary current paths copy the value
@@ -17,7 +17,7 @@ while making both copies name the same referenced object.
 
 ### M2 — built-in reference types share {#m2}
 
-`list(T)`, `map(K, V)`, `array(T, ...)`, `builder`, `file`, and `task(...)` are
+`list[T]`, `map[K, V]`, `array[T, ...]`, `builder`, `file`, and `task(...)` are
 reference types. Assignment and ordinary calls share one runtime object.
 Mutation through one reference is visible through the others. A `let` prevents
 rebinding; it does not make the referenced object immutable.
@@ -26,6 +26,21 @@ rebinding; it does not make the referenced object immutable.
 
 `class` is a front-end scaffold. Current lowering still gives it value-struct
 behavior. The intended class rules are design, not executable language.
+
+### M3a — weak storage observes without owning {#m3a}
+
+`weak var` and `weak` fields hold an optional `list`, `map`, `array`, or
+`builder` without retaining it. They initialize to `none`; weak fields have an
+implicit `none` default. Assignment records a generation-checked handle.
+
+Reading a live weak place retains and answers an owned `T?` snapshot. Reading
+after the target's final strong release answers `none`. Reusing the same
+object-table row cannot revive the old handle. Weak storage is a place
+property, not a type, and does not persistently narrow across separate reads.
+
+Weak targets exclude values, value structs, interfaces, function values,
+files, and tasks. A value that contains a weak field has no implicit equality
+or collection-search semantics. Weak handles cannot cross worker runtimes.
 
 ## ARC operations
 
@@ -115,8 +130,8 @@ Capture-free lambdas hold no enclosing-local environment.
 
 Each worker has its own runtime. Values copy directly; permitted container
 graphs are rebuilt recursively in the receiving runtime. The source and
-destination share no object identity. A graph carrying a `file`, `task`, or
-function value is refused as an argument or result.
+destination share no object identity. A graph carrying a `file`, `task`,
+function value, or weak field is refused as an argument or result.
 
 The copier preserves aliases within one graph and across separate argument
 roots. The caller keeps an independently mutable source graph. Allocation or
@@ -135,6 +150,8 @@ an unfinished worker and discards its unobserved result.
 - List slices, `map.values()`, and array fill retain reference elements.
 - Worker snapshots preserve aliases and cycles, leave the caller graph alive,
   and roll failed copies back.
+- Weak storage breaks recursive struct/container cycles, upgrades live reads,
+  zeroes after final release, and cannot revive on object-table reuse.
 - The damaged-module corpus rejects or cleanly runs every mutation without a
   host-language panic.
 

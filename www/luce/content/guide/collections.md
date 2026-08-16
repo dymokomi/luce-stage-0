@@ -5,9 +5,9 @@ your data, not from which API looks familiar.
 
 | Relationship | Type | Use it for |
 |---|---|---|
-| Values have an order and the count may change | `list(T)` | queues, records, children, tokens |
-| Values are addressed by a runtime key | `map(K, V)` | indexes, counters, configuration |
-| Numeric or tabular data has a fixed shape | `array(T, ...)` | vectors, images, matrices, grids |
+| Values have an order and the count may change | `list[T]` | queues, records, children, tokens |
+| Values are addressed by a runtime key | `map[K, V]` | indexes, counters, configuration |
+| Numeric or tabular data has a fixed shape | `array[T, ...]` | vectors, images, matrices, grids |
 
 All three are mutable reference types managed by ARC. Assignment and argument
 passing share the same collection. A list slice creates a new list and
@@ -17,9 +17,9 @@ creating an independent outer collection.
 
 ## Lists
 
-A `list(T)` is a growable, ordered sequence. A nonempty literal infers its
+A `list[T]` is a growable, ordered sequence. A nonempty literal infers its
 element type. An empty literal needs an annotation, or you can use
-`new list(T)`.
+`new list[T]`.
 
 ```luce run
 func main():
@@ -46,7 +46,7 @@ Indexing is zero-based. Reading or writing an index outside
 
 ### Searching and sorting
 
-`find(value)` returns `long?`, which keeps absence separate from index
+`find(value)` returns `i64?`, which keeps absence separate from index
 zero. `contains(value)` returns `bool`. `sort()` is stable and sorts
 in place; `reverse()` reverses in place.
 
@@ -132,9 +132,9 @@ shared 3, independent 2
 
 ## Maps
 
-A `map(K, V)` is an insertion-ordered dictionary. Keys are `long` or
-`string`. A literal creates a fresh mutable map; an empty map needs
-`new map(K, V)`.
+A `map[K, V]` is an insertion-ordered dictionary. Keys are integers, `str`,
+or enums. A literal creates a fresh mutable map; an empty map needs
+`new map[K, V]`.
 
 ```luce run
 func main():

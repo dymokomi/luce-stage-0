@@ -1,4 +1,4 @@
-//! List, Map, Array, and Builder — every container operation Luce has,
+//! list, map, array, and builder — every container operation Luce has,
 //! and the `copy` verb that deep-copies a whole object.
 //!
 //! Each function here takes values rather than IR registers, so the
@@ -22,8 +22,8 @@ const Error = heap.Error;
 const Runtime = heap.Runtime;
 const Value = value.Value;
 
-/// `len(x)`: bytes for a String, elements for a list, entries for a
-/// map, the first axis for an array, bytes for a Builder.
+/// `len(x)`: Unicode scalars for a str, bytes for bytes, elements for a
+/// list, entries for a map, the first axis for an array, bytes for a builder.
 pub fn length(runtime: *Runtime, target: Value) Error!Value {
     if (target.tag == .str or target.tag == .bytes) return text.length(runtime, target);
     const measured: usize = switch (target.tag) {
@@ -199,14 +199,14 @@ pub fn listSlice(runtime: *Runtime, target: Value, start: i64, end: i64) Error!V
 /// not — it copies bytes into a buffer of its own and the text stays
 /// the caller's, which is what it always did.
 pub fn append(runtime: *Runtime, target: Value, held: Value) Error!void {
-    // A List consumes `held` even when the immutable backstop rejects
-    // the write; a Builder only borrows it.  Resolve once to learn
+    // A list consumes `held` even when the immutable backstop rejects
+    // the write; a builder only borrows it. Resolve once to learn
     // which contract applies, then enter the one mutable gate in the
     // matching arm.
     const object = try runtime.resolve(target);
     switch (object.data) {
         .list => {
-            // A List consumes `held`, even when the immutable backstop
+            // A list consumes `held`, even when the immutable backstop
             // rejects the write: the store consumes its input.
             errdefer runtime.freeValue(held);
             try runtime.requireMutable(object);
@@ -222,7 +222,7 @@ pub fn append(runtime: *Runtime, target: Value, held: Value) Error!void {
 }
 
 /// `b.append_ascii(code)`.  ASCII only: the builder's bytes become a
-/// String, and String is valid UTF-8.  Anything wider goes through
+/// str, and str is valid UTF-8. Anything wider goes through
 /// chr(), which encodes the codepoint.
 pub fn appendAscii(runtime: *Runtime, target: Value, code: i64) Error!void {
     const object = try runtime.resolveMutable(target);
@@ -275,7 +275,7 @@ pub fn remove(runtime: *Runtime, target: Value, which: Value) Error!void {
             try requireMapKey(runtime, which);
             if (map.find(&which)) |at| {
                 const removed = map.removeAt(at);
-                // A key is a `long` or a String, storage only; a value can
+                // A key is an integer, a str, or an enum, storage only; a value can
                 // hold a reference, so it is released, not just dropped.
                 runtime.dropStorage(removed.key);
                 runtime.freeValue(removed.value);
@@ -436,7 +436,7 @@ pub fn clear(runtime: *Runtime, target: Value) Error!void {
 }
 
 /// `m.keys()` — a fresh list of the keys. Integer and enum keys own no
-/// there is no object to own; a String key's bytes belong to the map's
+/// there is no object to own; a str key's bytes belong to the map's
 /// entry, so the list takes its own copy (docs/STRINGS.md).
 ///
 /// `zero` is the key type's zero, here for the reason `newList` takes
@@ -467,7 +467,7 @@ pub fn mapKeys(runtime: *Runtime, target: Value, zero: Value) Error!Value {
 /// (`Object.ElementKind.of`).
 ///
 /// **A `list(T)` is packed whoever built it** (docs/BYTES.md R1).  A
-/// `.value` cell would hold a long or a String equally well and hand
+/// `.value` cell would hold an i64 or a str equally well and hand
 /// back exactly what was put in it, so a boxed run is never *wrong*;
 /// what it is is a different storage for the same type depending on
 /// which code made the list.  Compiled code reads a list's cells
@@ -475,13 +475,13 @@ pub fn mapKeys(runtime: *Runtime, target: Value, zero: Value) Error!Value {
 /// fact of the *type* rather than of the builder — so every
 /// list-producing operation here takes the element zero and packs
 /// exactly as `new list(T)` does, and the ones that can only ever
-/// produce a `List(String)` say `.value` in full below, which is what
-/// a String's zero would have said.
+/// produce a `list[str]` say `.value` in full below, which is what
+/// a str's zero would have said.
 fn emptyList(zero: Value) heap.Object.Elements {
     return .{ .kind = .of(zero) };
 }
 
-/// The one element type that needs no parameter: a String, which is
+/// The one element type that needs no parameter: a str, which is
 /// stored boxed because its length is not a fact of the type.
 const text_list: heap.Object.Elements = .{ .kind = .value };
 
@@ -493,7 +493,7 @@ fn dropBuilt(runtime: *Runtime, listed: *heap.Object.Elements) void {
     listed.deinit(runtime.objects);
 }
 
-/// `dir_list(path)` — a fresh `List(String)` the caller owns, holding
+/// `dir_list(path)` — a fresh `list[str]` the caller owns, holding
 /// its own copy of every name.  Each engine reaches this with the
 /// shape its host handed over, and the list they build is the same.
 pub fn listOfText(runtime: *Runtime, names: []const []const u8) Error!Value {
@@ -542,7 +542,7 @@ pub const ArgumentFn = *const fn (
     length: *i64,
 ) callconv(.c) i32;
 
-/// `main`'s `args`: the command line as the `List(String)` the entry
+/// `main`'s `args`: the command line as the `list[str]` the entry
 /// receives, owned by `main`'s scope (MEMORY.md).
 ///
 /// A third spelling beside `listOfText` and `listOfJoinedText`, and for

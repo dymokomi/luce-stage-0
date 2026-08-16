@@ -123,9 +123,9 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:5:18: reading of Gauge is private to gauge [luce.sema.private]
-        print(string(g.reading))
-                     ^~~~~~~~~
+main.luc:5:15: reading of Gauge is private to gauge [luce.sema.private]
+        print(str(g.reading))
+                  ^~~~~~~~~
 ```
 
 Visibility hides names, not the fact that a public struct value exists. An
@@ -164,8 +164,8 @@ Luce 40
 Type aliases follow the same file boundary:
 
 ```text
-private alias InternalId = long
-public alias UserId = long
+private alias InternalId = i64
+public alias UserId = i64
 ```
 
 A public alias may re-export a public type. It cannot expose a private

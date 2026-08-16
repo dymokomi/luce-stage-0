@@ -1,6 +1,6 @@
 //! Which heap-valued MIR registers may name an immutable program constant.
 //!
-//! Inline List and Array writes bypass `Runtime.requireMutable`, so lowering
+//! Inline list and array writes bypass `Runtime.requireMutable`, so lowering
 //! must keep its `immutable_object` guard whenever the receiver might have
 //! arrived from `const_container`. A trusted bit in MIR would let a decoded
 //! module forge that answer. This pass derives it from the final, verified

@@ -18,21 +18,21 @@ Management](/guide/reference/memory/#m7).
 
 | Signature | Result |
 |---|---|
-| `files.kind(path: string) -> Kind?!` | `Kind.file`, `Kind.directory`, or `Kind.other`; `none` when absent |
-| `files.exists(path: string) -> bool!` | whether anything is present; refusal remains an error |
-| `files.is_file(path: string) -> bool!` | whether the path names an ordinary file |
-| `files.is_dir(path: string) -> bool!` | whether the path names a directory |
-| `files.read(path: string) -> string!` | reads the whole file as text |
-| `files.write(path: string, text: string) -> !` | creates or replaces a text file |
-| `files.read_lines(path: string) -> list(string)!` | lines without newline bytes; a final newline adds no empty line |
-| `files.write_lines(path: string, lines: list(string)) -> !` | writes one newline after each line; an empty list writes an empty file |
-| `files.append_text(path: string, text: string) -> !` | appends text and creates the file if needed |
-| `files.append_lines(path: string, lines: list(string)) -> !` | appends newline-terminated lines; an empty list does nothing |
-| `files.delete(path: string) -> !` | removes a path; absence is an `io_failed` error |
-| `files.rename(from: string, to: string) -> !` | moves a path and replaces an existing target |
-| `files.make_directory(path: string) -> !` | creates the directory and missing parents; an existing directory is success |
-| `files.list(path: string) -> list(string)!` | sorted names in the directory |
-| `files.entries(path: string) -> list(Entry)!` | sorted entries with their names, paths, and kinds |
+| `files.kind(path: str) -> Kind?!` | `Kind.file`, `Kind.directory`, or `Kind.other`; `none` when absent |
+| `files.exists(path: str) -> bool!` | whether anything is present; refusal remains an error |
+| `files.is_file(path: str) -> bool!` | whether the path names an ordinary file |
+| `files.is_dir(path: str) -> bool!` | whether the path names a directory |
+| `files.read(path: str) -> str!` | reads the whole file as text |
+| `files.write(path: str, text: str) -> !` | creates or replaces a text file |
+| `files.read_lines(path: str) -> list[str]!` | lines without newline bytes; a final newline adds no empty line |
+| `files.write_lines(path: str, lines: list[str]) -> !` | writes one newline after each line; an empty list writes an empty file |
+| `files.append_text(path: str, text: str) -> !` | appends text and creates the file if needed |
+| `files.append_lines(path: str, lines: list[str]) -> !` | appends newline-terminated lines; an empty list does nothing |
+| `files.delete(path: str) -> !` | removes a path; absence is an `io_failed` error |
+| `files.rename(from: str, to: str) -> !` | moves a path and replaces an existing target |
+| `files.make_directory(path: str) -> !` | creates the directory and missing parents; an existing directory is success |
+| `files.list(path: str) -> list[str]!` | sorted names in the directory |
+| `files.entries(path: str) -> list[Entry]!` | sorted entries with their names, paths, and kinds |
 
 `Kind` has three members: `file`, `directory`, and `other`. Links are
 followed; a dangling link is absent. `Entry` has public fields `name`,
@@ -72,23 +72,23 @@ already exists; it fails when a file occupies the requested name.
 ## Byte files
 
 Use the byte API when the file is not necessarily UTF-8. It treats a file as
-`list(byte)` and leaves text validation to `std.strings.from_bytes`.
+`list[u8]` and leaves text validation to `std.strings.from_bytes`.
 
 | Signature | Result |
 |---|---|
-| `files.open(path: string) -> file!` | opens from the beginning for reading |
-| `files.create(path: string) -> file!` | opens for writing, creating and truncating |
-| `files.append_to(path: string) -> file!` | opens for writing at the end, creating if needed |
-| `files.read_bytes(path: string) -> list(byte)!` | reads the complete file as bytes |
-| `files.write_bytes(path: string, bytes: list(byte)) -> !` | replaces the file with bytes |
-| `files.append_bytes(path: string, bytes: list(byte)) -> !` | appends bytes |
+| `files.open(path: str) -> file!` | opens from the beginning for reading |
+| `files.create(path: str) -> file!` | opens for writing, creating and truncating |
+| `files.append_to(path: str) -> file!` | opens for writing at the end, creating if needed |
+| `files.read_bytes(path: str) -> list[u8]!` | reads the complete file as bytes |
+| `files.write_bytes(path: str, data: list[u8]) -> !` | replaces the file with bytes |
+| `files.append_bytes(path: str, data: list[u8]) -> !` | appends bytes |
 
 An owned `file` has three methods:
 
 | Method | Behavior |
 |---|---|
-| `f.read(into: array(byte, _)) -> long!` | fills a caller-owned buffer and returns the number of bytes read; `0` means end of file |
-| `f.write(from: array(byte, _), count: long) -> long!` | writes at most `count` bytes and returns how many were written |
+| `f.read(into: array[u8, _]) -> i64!` | fills a caller-owned buffer and returns the number of bytes read; `0` means end of file |
+| `f.write(from: array[u8, _], count: i64) -> i64!` | writes at most `count` bytes and returns how many were written |
 | `f.flush() -> !` | asks the host to flush pending writes |
 
 Reads may be short and writes may accept fewer bytes than requested. The
@@ -99,8 +99,8 @@ import std.files
 import std.strings
 
 func main() -> !:
-    var bytes: list[u8] = [0, 255, 128]
-    try files.write_bytes("data.bin", bytes)
+    var data: list[u8] = [0, 255, 128]
+    try files.write_bytes("data.bin", data)
     let loaded = try files.read_bytes("data.bin")
     print(str(len(loaded)))
     print(strings.from_bytes(loaded) else "(not text)")

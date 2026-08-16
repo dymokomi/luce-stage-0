@@ -1,9 +1,9 @@
 //! The object heap — the heart of `libluce_rt`.
 //!
-//! Luce's heap objects (`List`, `Map`, `Array`, `Builder`, and resources)
+//! Luce's heap objects (`list`, `map`, `array`, `builder`, and resources)
 //! are reference counted.  A row is destroyed when its last owning value
 //! is released; `Runtime.deinit` is the backstop that sweeps only genuine
-//! program leaks.  Value storage — a String's bytes and a struct or
+//! program leaks. Value storage — a str's bytes and a struct or
 //! function value's run — has the same explicit copy/destroy boundary:
 //! `copyValue` duplicates storage and retains carried references, while
 //! `freeValue` releases those references and drops the storage.
@@ -93,14 +93,14 @@ pub const Memory = struct {
     /// is copied into owned storage.  The caller drops it whole once it
     /// has read whatever it publishes.
     ///
-    /// **String bytes and struct field runs no longer live here**
+    /// **str bytes and struct field runs no longer live here**
     /// (docs/STRINGS.md).  They have an owner and a death point now, so
     /// they come from `objects` like everything else that is freed.
     arena: Allocator,
 
-    /// Everything with a death point: the elements of every List, Map,
-    /// and Array, a Builder's bytes, a Map's hash index, the object
-    /// table — and, since copy-on-store, every String's bytes and every
+    /// Everything with a death point: the elements of every list, map,
+    /// and array, a builder's bytes, a map's hash index, the object
+    /// table — and, since copy-on-store, every str's bytes and every
     /// struct value's field run.  Scope ownership frees them while the
     /// program runs, so this allocator has to give memory back, which
     /// an arena cannot.  Pass an ordinary freeing allocator; under
@@ -181,11 +181,11 @@ pub const Object = struct {
     /// reaches zero (docs/MEMORY.md).  A constant row ignores it.
     references: u32 = 1,
 
-    /// The elements of a List or an Array — a field of the row rather
+    /// The elements of a list or an array — a field of the row rather
     /// than a payload inside `data`, which is a deliberate exception
     /// and the only one.
     ///
-    /// Compiled code indexes an Array *inline*: no runtime call, no
+    /// Compiled code indexes an array *inline*: no runtime call, no
     /// boxed subscript, just the bounds check and the element load
     /// docs/CODEGEN.md describes.  To emit that it needs the byte
     /// offset of the element pointer and the count at **compile**
@@ -199,7 +199,7 @@ pub const Object = struct {
     /// otherwise, and `.empty` again once the object is released.
     elements: Elements = .empty,
 
-    /// An Array's axis lengths, `rank` of them, immutable after `new`.
+    /// An array's axis lengths, `rank` of them, immutable after `new`.
     /// A row field for the same reason `elements` is one: a rank-2
     /// index is generated inline and reads this at a measured offset.
     /// Meaningful exactly when `data == .array`.
@@ -208,7 +208,7 @@ pub const Object = struct {
     data: Data,
 
     pub const Data = union(enum) {
-        /// The elements are `Object.elements`, which for a List is
+        /// The elements are `Object.elements`, which for a list is
         /// allocated ahead of `count` — see `Elements.capacity`.
         list,
         map: Map,
@@ -269,7 +269,7 @@ pub const Object = struct {
     };
 
     /// A run of elements stored at their real width — the storage a
-    /// List and an Array share.
+    /// list and an array share.
     ///
     /// **The elements are stored as themselves, not as `Value`s.**  An
     /// `array(double, n)` is `f64`s, a `list(byte)` is bytes, a
@@ -285,12 +285,12 @@ pub const Object = struct {
     /// type, and nothing outside this struct needs to know the
     /// difference: `at` and `put` speak `Value` on both sides.
     ///
-    /// A List reached this mechanism after `std.zip` measured what the
+    /// A list reached this mechanism after `std.zip` measured what the
     /// boxed slot costs: `list(byte)` was twenty-four bytes an element
     /// and is now one (docs/BYTES.md R1).  The only difference between
-    /// the two containers here is that a List's `bytes` runs ahead of
-    /// its `count` so that `append` is amortized, and an Array's does
-    /// not because an Array never grows.
+    /// the two containers here is that a list's `bytes` runs ahead of
+    /// its `count` so that `append` is amortized, and an array's does
+    /// not because an array never grows.
     pub const Elements = struct {
         /// How one element is stored.
         kind: ElementKind = .value,
@@ -300,7 +300,7 @@ pub const Object = struct {
         /// is satisfied by.  Its length is the *capacity* in bytes;
         /// `count` says how many of them hold an element.
         bytes: Storage = &.{},
-        /// How many elements there are: for an Array the product of
+        /// How many elements there are: for an array the product of
         /// `dims`, and for a rank-1 array its one and only bound.
         /// Compiled code bound-checks a rank-1 index against this
         /// rather than against `dims[0]`, which saves it the load
@@ -397,7 +397,7 @@ pub const Object = struct {
             return self.bytes[start * width ..][0 .. many * width];
         }
 
-        // -- growth, which only a List does ------------------------------
+        // -- growth, which only a list does ------------------------------
 
         /// Room for `wanted` elements, growing geometrically.  The
         /// storage is the caller's allocator's; a run that cannot grow
@@ -506,9 +506,9 @@ pub const Object = struct {
         }
     };
 
-    /// How a List or an Array stores one element.
+    /// How a list or an array stores one element.
     pub const ElementKind = enum(u32) {
-        /// A 24-byte `Value`: a String, a struct, or an object handle
+        /// A 24-byte `Value`: a str, a struct, or an object handle
         /// — anything the element type does not settle to one machine
         /// word.  The only kind that can own something.
         value,
@@ -536,7 +536,7 @@ pub const Object = struct {
         /// A Unicode scalar occupies one 32-bit cell.
         char = 13,
 
-        /// The cell type `Array.cells` reads, so a switch with an
+        /// The cell type `array` storage reads, so a switch with an
         /// `inline else` gets the storage type for free.
         pub fn Cell(comptime self: ElementKind) type {
             return switch (self) {
@@ -613,14 +613,14 @@ pub const Object = struct {
     /// and this only reclaims what the object was holding.
     ///
     /// Releasing twice reclaims nothing the second time: an empty
-    /// List, Map or Builder holds no allocation and an empty slice
+    /// list, map or builder holds no allocation and an empty slice
     /// frees nothing.  That is what lets `Runtime.deinit` sweep every
     /// row without first asking which of them are still occupied.
     ///
     /// The kind is kept on purpose.  Nothing reads a freed object's
     /// data — the row's generation has moved on, so `resolve` traps
     /// `use_after_free` and the ownership walks skip it — but an empty
-    /// List is a far better thing for a bug to find than a dangling
+    /// list is a far better thing for a bug to find than a dangling
     /// pointer, and it costs a store.
     pub fn release(self: *Object, allocator: Allocator) void {
         switch (self.data) {
@@ -656,7 +656,7 @@ pub const Object = struct {
     }
 };
 
-/// A Luce Map: entries in insertion order, plus a hash index into them.
+/// A Luce map: entries in insertion order, plus a hash index into them.
 ///
 /// Insertion order is part of the language — `key_at`, `value_at`, and
 /// `for key in m` all read the entries by position — so the entries
@@ -672,7 +672,7 @@ pub const Object = struct {
 /// against the same integer-width and text payloads for that reason.
 /// An enum key arrives at its backing width (`mir.mapKeyStorage`).
 // ---------------------------------------------------------------------------
-// The map behind a Map
+// The map behind a Luce map
 // ---------------------------------------------------------------------------
 
 pub const Map = struct {
@@ -845,7 +845,7 @@ fn proofCeiling(comptime magnitude: i128) usize {
 
 /// Where an object row's fields sit, in bytes, for the one reader that
 /// cannot call a function to ask: generated machine code
-/// (`codegen/lower.zig`), which indexes a `List` or an `Array` inline.
+/// (`codegen/lower.zig`), which indexes a `list` or an `array` inline.
 ///
 /// Nothing here is *written down* — every offset is measured from the
 /// Zig types above with `@offsetOf`, so the two cannot drift, and the
@@ -877,15 +877,15 @@ pub const layout = struct {
     /// the compiled path enforces constant immutability through now that
     /// the retired owner-root guard is gone.
     pub const constant = @offsetOf(Object, "constant");
-    /// `Object.dims.ptr` — `[*]i64`, one entry per axis.  An Array's
-    /// alone: a List has no shape but its length.  The rank is a
+    /// `Object.dims.ptr` — `[*]i64`, one entry per axis. An array's
+    /// alone: a list has no shape but its length. The rank is a
     /// compile-time fact, so the length is not read, and only a
     /// rank-2-or-higher access reads this at all — rank 1 and every
-    /// List bound-check against `elements_count`, one load nearer.
+    /// list bound-check against `elements_count`, one load nearer.
     pub const array_dims = @offsetOf(Object, "dims") + slice_pointer;
     /// `Object.elements.bytes.ptr` — the elements, in the element
     /// kind's own storage (`Object.ElementKind`), which the program
-    /// knows statically.  A List's and an Array's alike: the run is
+    /// knows statically. A list's and an array's alike: the run is
     /// one field, shared, at one offset (`Object.elements`).
     pub const elements_pointer = @offsetOf(Object, "elements") +
         @offsetOf(Object.Elements, "bytes") + slice_pointer;
@@ -896,7 +896,7 @@ pub const layout = struct {
     /// `(count + 1) * width` rather than a count.
     pub const elements_capacity = @offsetOf(Object, "elements") +
         @offsetOf(Object.Elements, "bytes") + slice_count;
-    /// `Object.elements.count` — a List's length, an Array's product
+    /// `Object.elements.count` — a list's length, an array's product
     /// of the axes, and the one bound a rank-1 index is checked
     /// against.  An inline `append` writes it.
     pub const elements_count = @offsetOf(Object, "elements") +
@@ -921,7 +921,7 @@ pub const layout = struct {
 // ---------------------------------------------------------------------------
 
 pub const Runtime = struct {
-    /// Run-lifetime storage — `Memory.arena`.  String bytes, struct
+    /// Run-lifetime storage — `Memory.arena`. str bytes, struct
     /// field runs, and the words of a trap come from here and live
     /// until the caller drops the arena.
     arena: Allocator,
@@ -962,8 +962,8 @@ pub const Runtime = struct {
     /// owner is `.program` and own no value storage themselves.
     constant_roots: []Value = &.{},
 
-    /// Live rows owned by the program root.  These rows are excluded
-    /// from the ownership leak census and are reclaimed only by abort
+    /// Live rows owned by the program root. These rows are excluded from the
+    /// ARC leak census and are reclaimed only by abort
     /// or by the runtime's final sweep (CONSTANTS.md R-C).
     program_root_count: u32 = 0,
 
@@ -979,10 +979,9 @@ pub const Runtime = struct {
     /// allocation costs two loads, and neither can fail.
     free_row: u32 = value.null_index,
 
-    /// Objects allocated and not yet freed — the leak census the host
-    /// reports when a program returns (`Success.leaked_objects`).
-    /// Memory is explicit in Luce, so what a program did not free is
-    /// part of what it did.
+    /// Objects allocated and still strongly alive — the leak census the host
+    /// reports when a program returns (`Success.leaked_objects`). A nonzero
+    /// result exposes a surviving cycle or an ARC implementation bug.
     live: u32 = 0,
 
     /// The trap raised by the operation that most recently returned
@@ -1100,16 +1099,15 @@ pub const Runtime = struct {
     /// End the run: give back the object table and the contents of
     /// everything still alive in it.
     ///
-    /// Scope ownership frees objects as their scopes end, but a run
-    /// does not always end at the bottom of a scope — a trap unwinds
-    /// past every release (S34), and a program that leaks is reported
-    /// rather than corrected.  Whatever ownership did not free is
-    /// released here, so a run's memory always comes back, and a leak
-    /// stays a number in the census rather than becoming a leak of the
-    /// host's memory too.
+    /// ARC releases objects as strong references disappear, but a run does
+    /// not always end through ordinary control flow — a native trap can jump
+    /// past generated releases, and a strong cycle remains live by design.
+    /// The census is captured before this final sweep. The sweep then returns
+    /// every allocation to the host, so a language-level leak stays a number
+    /// rather than leaking the embedding process too.
     ///
     /// The storage a container still holds goes with it: a leaked
-    /// `List(String)` leaked its strings too, and they come from the
+    /// `list[str]` leaked its text values too, and they come from the
     /// same allocator now (docs/STRINGS.md).  What this cannot reach is
     /// storage held only by a *binding* of a frame a trap unwound past
     /// — the engines sweep their own frames for that, because only they
@@ -1223,7 +1221,7 @@ pub const Runtime = struct {
     /// unwinds *past* every release, so nothing gives the bytes back
     /// before the report reads them.  That argument was about the wrong
     /// hazard.  Nothing frees a trap message and the words still go: a
-    /// String short enough to live *inside* its value (`value.zig`) has
+    /// str short enough to live *inside* its value (`value.zig`) has
     /// no allocation at all, and the value it lives in is a slot in the
     /// frame that raised the trap — an `alloca` on the compiled path, a
     /// register on the interpreter's.  The trap edge returns out of that
@@ -1264,7 +1262,7 @@ pub const Runtime = struct {
     ///
     /// **The words are copied here, and that is not optional.**  An
     /// error unwinds *through* releases — that is the whole difference
-    /// from a trap, which unwinds past them — so `error("x: " + String(n))`
+    /// from a trap, which unwinds past them — so `error("x: " + str(n))`
     /// hands over bytes a statement temporary is about to give back.
     /// The copy goes in the values arena, which nothing releases and
     /// the run drops whole.  An arena that cannot hold it falls back
@@ -1547,7 +1545,7 @@ pub const Runtime = struct {
             .bytes = elements,
             .count = total,
         };
-        // `fillElements` can allocate one owned String/struct/function run
+        // `fillElements` can allocate one owned str/struct/function run
         // per cell before it reports failure, and `attach` can still refuse
         // the object-table row after the run is complete.  The raw byte
         // buffer is not enough to roll either path back: release each value
@@ -1617,7 +1615,7 @@ pub const Runtime = struct {
 
     // -- value storage ---------------------------------------------------
     //
-    // A String's bytes and a struct value's field run are *storage*: a
+    // A str's bytes and a struct value's field run are *storage*: a
     // heap allocation with exactly one owner — the binding, container
     // element, map key, struct field, or statement temporary that holds
     // it (docs/STRINGS.md).
@@ -1711,7 +1709,7 @@ pub const Runtime = struct {
     /// what reading an unassigned local always was.
     pub fn emptied(held: Value) Value {
         return switch (held.tag) {
-            // An emptied String is inline and zero bytes long, which
+            // An emptied str is inline and zero bytes long, which
             // reads as `""` — the same thing it read as before, and
             // nothing to free.
             .str, .bytes, .strukt, .function => .{ .tag = held.tag },
@@ -1730,7 +1728,7 @@ pub const Runtime = struct {
     /// handle — is already frame-independent and moves untouched.
     ///
     /// This is a *transfer*, not a copy: the caller of a
-    /// String-returning function owns exactly one allocation either
+    /// str-returning function owns exactly one allocation either
     /// way, which is why `ret` costs no more allocations than it did
     /// before short text lived in the value at all.
     pub fn exportValue(self: *Runtime, held: Value) Error!Value {
@@ -2069,7 +2067,7 @@ pub const Runtime = struct {
                 },
                 .map => |map| for (map.entries.items) |entry| {
                     // A map owns its keys' storage as well as its
-                    // values'; keys are long or String, so there is
+                    // values'; keys are integers, str, or enums, so there is
                     // never an object in one.
                     self.dropStorage(entry.key);
                     self.releaseValue(entry.value, pending);

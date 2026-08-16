@@ -48,9 +48,9 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:4:18: 'not' binds tighter than '==': write '(not a) == …' for this reading, or 'not (a == …)' for Python's [luce.parse.precedence]
-        print(string(not a == b))
-                     ^~~
+main.luc:4:15: 'not' binds tighter than '==': write '(not a) == …' for this reading, or 'not (a == …)' for Python's [luce.parse.precedence]
+        print(str(not a == b))
+                  ^~~
 ```
 
 ### Chained comparison
@@ -65,9 +65,9 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:2:24: chained comparison: write '1 < 2 and 2 < 3' [luce.parse.chain]
-        print(string(1 < 2 < 3))
-                           ^
+main.luc:2:21: chained comparison: write '1 < 2 and 2 < 3' [luce.parse.chain]
+        print(str(1 < 2 < 3))
+                        ^
 ```
 
 This costs nothing — `(a < b) < c` was always a type error one stage
@@ -76,8 +76,13 @@ legal, because the parentheses start a new chain.
 
 ## Arithmetic
 
-`+ - * / // %` on `long` and on `double`. `+` also concatenates
-`string`s. Mixing a `long` and a `double` widens the `long`.
+`+ - * / // %` apply to concrete numeric types. Binary operands must
+have the same type; there is no implicit widening, signedness change, or
+integer-to-float conversion. `+` also concatenates two `str` values.
+
+Integer `+`, `-`, and `*` preserve the operand type. Integer `/` returns
+`f64`; floating-point `/` preserves the operand type. Explicit conversions
+make every other combination visible in source.
 
 `//` is **floor division** and `%` is the modulus that pairs with it:
 they floor together, so `%` takes the sign of the divisor and
@@ -90,19 +95,19 @@ they floor together, so `%` takes the sign of the divisor and
 | 7 | −3 | −3 | −2 |
 | −7 | −3 | 2 | −1 |
 
-`long` arithmetic is checked: overflow, and `//` or `%` by zero, are
-traps in every build mode. `double` arithmetic is IEEE and does not
-trap.
+Integer arithmetic is checked at every width: overflow, and `//` or `%` by
+zero, trap in every build mode. Floating-point arithmetic is IEEE and does
+not trap.
 
 ## Comparison
 
-`== != < <= > >=` order numbers and `string`. `==` and `!=` also
+`== != < <= > >=` order same-typed numbers and `str`. `==` and `!=` also
 apply to `bool` and enums. Enums have no ordering. Object equality
 compares identity. Unions have no `==` at all: `match` on each value
 and compare what the arms carry. Function values have neither `==` nor
 an order: a function value is the function it names *and* the receiver
 it may carry, its type cannot say which, and comparing the names is
-what a program usually meant — compare `string(f)`.
+what a program usually meant — compare `str(f)`.
 
 ## Logic
 
@@ -122,7 +127,7 @@ than a complaint about the second character:
 | `!x` | `not x` |
 | `===`, `!==` | `==`, `!=` — which already compare by value |
 | `<>` | `!=` |
-| `**` | `math.pow(x, y)`, or `math.ipow(x, y)` for `long` |
+| `**` | `math.pow(x, y)`, or `math.ipow(x, y)` for `i64` |
 
 ```luce fail
 func main():
@@ -211,8 +216,8 @@ A top-level or static namespace function name is a value where a
 [function type](../types/#function) is expected. So is
 `receiver.method` for a **reading** method: the value carries the
 receiver, and the written type drops the receiver's parameter, so a
-method taking one `long` at its call site binds as a
-`func(long) -> long`. The receiver is copied into the value at the bind.
+method taking one `i64` at its call site binds as a
+`func(i64) -> i64`. The receiver is copied into the value at the bind.
 Value fields form a snapshot; reference fields still name the same objects.
 The bound value retains those references until it is destroyed, so it may
 outlive the original receiver binding. A value is called with ordinary
@@ -241,7 +246,7 @@ method.
 Function values copy freely. Equality and ordering are both refused —
 a function type cannot say which of its values carries a receiver, so
 `f == g` would call two binds of one method equal whatever they carry
-— and `string(f)` gives a declared function's qualified name or a
+— and `str(f)` gives a declared function's qualified name or a
 lambda's distinct compiler-generated name, which is how a program asks
 what a value names.
 
@@ -290,7 +295,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:9:11: rows.render is (func(long) -> string)? and may hold none; only a local or a parameter narrows, so bind it first (let render = rows.render), test it (if render != none:), then call render(…) [luce.sema.call]
+main.luc:9:11: rows.render is (func(i64) -> str)? and may hold none; only a local or a parameter narrows, so bind it first (let render = rows.render), test it (if render != none:), then call render(…) [luce.sema.call]
         print(rows.render(3))
               ^~~~~~~~~~~~~~
 ```
@@ -342,7 +347,7 @@ apart out loud, because a struct in Luce is used for both:
 > that distinguishes them is the declaration: a plain member has
 > implied self, and a namespace member says `static`.
 
-Methods on a `string` other than `byte_at` and `find_byte` route to the
+Methods on a `str` other than `byte_at` and `find_byte` route to the
 `strings` standard module: `s.split(",")` *is* `strings.split(s, ",")`
 and needs `import std.strings` in scope, or it is a `luce.sema.import`
 diagnostic naming the missing import.
@@ -377,7 +382,7 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:3:15: argument 1 of append is long, got string [luce.sema.type]
+main.luc:3:15: argument 1 of append is i64, got str [luce.sema.type]
         xs.append("hello")
                   ^~~~~~~
 ```
@@ -406,7 +411,7 @@ main.luc:3:17: list has no method has (has append insert remove pop sort reverse
 | `grid[r, c]` | multi-dimensional array element |
 | `m[k]` | map get; a missing key traps |
 | `xs[a:b]` | a **new list**; value elements copy and reference elements are retained and remain shared |
-| `s[a:b]` | a `string` slice; still a value; checks UTF-8 boundaries |
+| `s[a:b]` | a `str` slice at Unicode-scalar positions; still a value |
 
 Open slice ends default to `0` and to the length.
 
@@ -416,23 +421,23 @@ Open slice ends default to `0` and to the length.
 [1, 2, 3]                  a list literal; element type inferred
 []                         empty; needs an annotated binding
 {"one": 1, "two": 2}       a map literal; key and value inferred
-new list(T)
-new map(K, V)
-new array(T, size, ...)
-new builder()
+new list[T]
+new map[K, V]
+new array[T](size, ...)
+new builder
 Struct(field = expr, ...)  every field, by name
 ```
 
 A map literal evaluates its entries in written order and creates a
 fresh mutable map. A later equal key replaces the earlier value while
-keeping its insertion position. An unannotated integer key is `long`.
+keeping its insertion position. An unannotated integer key is `i64`.
 Empty `{}` is refused because it supplies neither `K` nor `V`; write
-`new map(K, V)`. At file scope the same nonempty literal may initialize
+`new map[K, V]`. At file scope the same nonempty literal may initialize
 an immutable [constant container](../statements/#file-scope-constants).
 
 ## Reference construction and sharing
 
-`new list(T)`, `new map(K, V)`, `new array(T, ...)`, and `new builder()`
+`new list[T]`, `new map[K, V]`, `new array[T](...)`, and `new builder`
 create reference objects. List and map literals also create fresh reference
 objects. Assignment, calls, returns, fields, optionals, and container stores
 share them through ARC; no ownership operator appears in the expression.
@@ -492,7 +497,7 @@ CALL catch NAME:           the same block, with the error's message bound
 
 The block form attaches to a call written as a statement, a
 single-place assignment, or an existing-name multi-return assignment,
-and to nothing else. `NAME` is an immutable `string` scoped to the
+and to nothing else. `NAME` is an immutable `str` scoped to the
 handler; the expression form takes no binding. A failed multi-return
 call performs none of its assignment's replacement stores before
 entering the handler; evaluating the right side is not rolled back.

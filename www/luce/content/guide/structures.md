@@ -18,8 +18,8 @@ of the same type. A field with a default may be omitted.
 
 ```text
 struct Point:
-    x: double
-    y: double
+    x: f64
+    y: f64
 ```
 
 The important property is value semantics: copying a struct copies its value

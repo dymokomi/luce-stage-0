@@ -470,13 +470,11 @@ pub fn absenceAdvice(self: *FunctionBuilder, of: Type, from: ?*const ast.Express
     );
 }
 
-/// The advice a number earns when it turns up where a *narrower*
-/// number belongs.  Narrowing is implicit in no direction and no
-/// context (docs/TYPES.md §2), and a mismatch that says only that
-/// leaves the reader to guess whether there is a way across at
-/// all — there is, spelled with the name of the type it produces.
+/// The advice a concrete number earns when another representation was
+/// expected. Numeric conversion is implicit in no direction or context, and
+/// the repair is spelled with the destination type's constructor.
 ///
-/// Empty for every pair that is not a numeric narrowing, so a
+/// Empty for every pair that is not a numeric mismatch, so a
 /// caller may append it beside `absenceAdvice` and say nothing
 /// extra when there is nothing extra to say.
 pub fn narrowingAdvice(self: *FunctionBuilder, expected: Type, actual: Type) Error![]const u8 {

@@ -11,11 +11,11 @@ import std.os
 
 | Signature | Meaning |
 |---|---|
-| `os.total_memory() -> long` | physical memory in bytes; fixed for the run |
-| `os.available_memory() -> long` | memory the host could currently hand out; changes between calls |
-| `os.cpu_count() -> long` | logical processors the host schedules work onto |
-| `os.used_memory() -> long` | the host's total-minus-available reading |
-| `os.shell.run(command: string) -> string!` | runs one command through the host shell and returns captured output plus its exit status |
+| `os.total_memory() -> i64` | physical memory in bytes; fixed for the run |
+| `os.available_memory() -> i64` | memory the host could currently hand out; changes between calls |
+| `os.cpu_count() -> i64` | logical processors the host schedules work onto |
+| `os.used_memory() -> i64` | the host's total-minus-available reading |
+| `os.shell.run(command: str) -> str!` | runs one command through the host shell and returns captured output plus its exit status |
 
 The memory values are measurements, not reservations. `available_memory()`
 can change before an allocation, and `used_memory()` takes its own pair of

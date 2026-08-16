@@ -251,7 +251,7 @@ const Module = struct {
 
     /// `{ ptr, ptr, ptr, ptr }` — the `abi.Host` table.
     host_type: Builder.Type = .none,
-    /// `{ ptr, i64 }` — how a Luce String travels in generated code.
+    /// `{ ptr, i64 }` — how a Luce `str` travels in generated code.
     string_type: Builder.Type = .none,
     /// `{ i64, i64, i64 }` — `runtime.Value`, how anything travels into
     /// `libluce_rt`.  The layout is asserted against the Zig struct in
@@ -412,12 +412,12 @@ const Module = struct {
             // and that index is already spoken for: the null handle is
             // the zero of an object-typed place (S40), a value that is
             // *present* and traps on use, and a program can put one in
-            // a `T?` — `look(raw)` against `func look(xs: List(long)?)`
+            // a `T?` — `look(raw)` against `func look(xs: list[i64]?)`
             // borrows one in without a diagnostic, and the interpreter
             // answers "present" because absence there is the tag, not
             // the payload.  A sentinel would answer "absent" and the
-            // two engines would part company.  long, double, Bool,
-            // String and structs have no spare value to sentinel with
+            // two engines would part company. i64, f64, bool,
+            // str and structs have no spare value to sentinel with
             // anyway, so the bit is what the other six payloads cost;
             // spending it on the seventh buys nothing and costs the
             // one representation both engines can be checked against.
@@ -653,7 +653,7 @@ const Module = struct {
         return made;
     }
 
-    /// A `{ ptr, i64 }` constant for `text` — how a Luce String travels
+    /// A `{ ptr, i64 }` constant for `text` — how a Luce `str` travels
     /// through generated code.  The builder interns constants, so
     /// asking twice costs nothing twice.
     fn textConstant(self: *Module, text: []const u8) Error!Builder.Constant {
@@ -953,7 +953,7 @@ const Module = struct {
 
     /// One field of a zero struct, as a constant `runtime.Value`.  The
     /// zeroes here are the interpreter's (`Machine.zeroValue`): an empty
-    /// String is length zero, and an object-typed field is the null
+    /// `str` is length zero, and an object-typed field is the null
     /// handle, which traps rather than touching anything.
     fn zeroField(self: *Module, written: types.Type) Error!Builder.Constant {
         // A struct's enum field zeroes at its **first member**, which
@@ -1018,7 +1018,7 @@ const Module = struct {
             .function => mir.function_run_length,
             else => 0,
         };
-        // An empty String's zero says its bytes are outside, at the
+        // An empty str's zero says its bytes are outside, at the
         // null address, none of them — which reads as `""` and owns
         // nothing, the same value `Value.ofStr("")` is.
         const form: u8 = switch (of) {
@@ -2199,10 +2199,10 @@ const Module = struct {
             .u32, .i32, .f32, .char => 4,
             // A function value travels as the pointer to its run.
             .u64, .i64, .f64, .strukt, .variant, .function, .heap => 8,
-            // `{ ptr, i64 }` — how a String travels.
+            // `{ ptr, i64 }` — how a str travels.
             .str, .bytes => 16,
             // `{T, i1}`: the payload, then one byte for the bit,
-            // rounded up to the payload's own alignment.  A Bool
+            // rounded up to the payload's own alignment. A bool
             // payload aligns to 1, so `{i1, i1}` really is two bytes —
             // and `dereferenceable` must not claim more than the
             // caller's `alloca` provides.
@@ -2236,7 +2236,7 @@ const Module = struct {
     /// the same way — the host supplies effects, not memory.
     fn lowerEntry(self: *Module) Error!void {
         const entry = &self.program.functions[self.program.entry_function];
-        // `func main():` or `func main(args: List(String)):`, with or
+        // `func main():` or `func main(args: list[str]):`, with or
         // without `-> !`, and nothing else — stage 4's `checkEntry` is
         // what says so, and this is the shape that survived it.
         if (entry.parameter_count > 1) return self.fail("an entry function with more than one parameter");
@@ -2688,9 +2688,9 @@ const Module = struct {
         wip.cursor = .{ .block = quiet };
     }
 
-    /// Tell the host what the run did not free, when it has somewhere
-    /// to put it and the runtime opened successfully.  Exhaustion has
-    /// no reliable runtime to count, so that path is skipped.
+    /// Tell the host what remained alive after ARC cleanup, when it has
+    /// somewhere to put the census and the runtime opened successfully.
+    /// Exhaustion has no reliable runtime to count, so that path is skipped.
     fn reportLeaks(
         self: *Module,
         wip: *Builder.WipFunction,
@@ -2794,7 +2794,7 @@ const Module = struct {
 // ---------------------------------------------------------------------------
 
 /// What one IR register produced.  Three facts about the same register,
-/// written at the same sites — a runtime call that answers a String into
+/// written at the same sites — a runtime call that answers a str into
 /// a slot sets all three in three consecutive lines — so they are three
 /// columns of one row and not three arrays that happen to share a key.
 /// Go's register allocator keeps the same shape (`ssa/regalloc.go`'s
@@ -2812,7 +2812,7 @@ const Produced = struct {
     /// run, a local's own slot.  `.none` for a register built any other
     /// way.
     ///
-    /// It exists because unboxing a String throws away which form its
+    /// It exists because unboxing a str throws away which form its
     /// text was in, and three places need that back: a store into a slot
     /// that owns its storage, which must keep short text short;
     /// `drop_storage`, which must not free a pointer into a frame; and
@@ -2958,7 +2958,7 @@ const Body = struct {
         for (function.blocks, self.blocks, 0..) |block, llvm_block, index| {
             self.block = @intCast(index);
             self.seek(llvm_block);
-            // A resolved Array is SSA, so it reaches only the blocks
+            // A resolved array is SSA, so it reaches only the blocks
             // the one it was resolved in dominates.  A basic block is
             // the horizon MIR registers already keep to, and it is the
             // horizon a *block-local* view keeps to for the same
@@ -3037,11 +3037,11 @@ const Body = struct {
     ///
     /// A slot that owns its storage holds a whole `runtime.Value`,
     /// because that is the only shape short text fits in: unbox a
-    /// String into `{ptr, i64}` and the form is gone, so a slot that
+    /// str into `{ptr, i64}` and the form is gone, so a slot that
     /// stored one would be pointing at whatever scratch the runtime
     /// answered into (docs/STRINGS.md).  Every other slot — a
     /// parameter, a spill, anything that borrows — keeps the register
-    /// shape it always had, which is what keeps a String parameter's
+    /// shape it always had, which is what keeps a str parameter's
     /// inner loop two words in registers.
     fn slotType(self: *Body, local: mir.Local) Error!Builder.Type {
         if (local.owns_storage or local.weak) return self.module.value_type;
@@ -3213,7 +3213,7 @@ const Body = struct {
 
     /// What a slot that owns its storage holds before anything is
     /// stored in it: the same shape, owning nothing, so the release it
-    /// is going to get frees nothing (docs/STRINGS.md).  A String's
+    /// is going to get frees nothing (docs/STRINGS.md). A str's
     /// zero is already empty; a struct's is a null run, which
     /// `luce_rt_drop_storage` answers for.
     fn emptyValue(self: *Body, of: types.Type) Error!Builder.Value {
@@ -3255,7 +3255,7 @@ const Body = struct {
     ///
     /// **Two of the three words are facts about the type, not the
     /// value**, and MIR knows the type at compile time: the tag always,
-    /// and the length for everything but a String.  Those are written
+    /// and the length for everything but a str. Those are written
     /// once beside the `alloca` in the entry block; only the payload is
     /// stored where the value is produced.  A box inside a loop is
     /// therefore one store per iteration rather than three.
@@ -3366,7 +3366,7 @@ const Body = struct {
     /// Element `index` of a run, filled with a value the run is going
     /// to **keep**.
     ///
-    /// A store must not lose which form a String's text was in, so a
+    /// A store must not lose which form a str's text was in, so a
     /// register that was read out of a box is copied across whole, the
     /// way `emitLocalSet` fills a slot that owns its storage; a
     /// register with no box behind it is outside text by construction
@@ -3443,7 +3443,7 @@ const Body = struct {
     }
 
     /// The `length` word a value of `of` puts in a box.  Every type but
-    /// String has one the type alone decides, which is what lets
+    /// str has one the type alone decides, which is what lets
     /// `fillBoxShape` write it once in the entry block.
     fn boxLength(self: *Body, written: types.Type, held: Builder.Value) Error!Builder.Value {
         const builder = self.module.builder;
@@ -3490,7 +3490,7 @@ const Body = struct {
     }
 
     /// Whether `of`'s length is settled by the type rather than the
-    /// value — true for everything but a String, whose length travels
+    /// value — true for everything but a str, whose length travels
     /// with its bytes.
     fn boxLengthIsFixed(of: types.Type) bool {
         return of != .str and of != .bytes;
@@ -3507,7 +3507,7 @@ const Body = struct {
         const builder = self.module.builder;
         const tag = try self.boxTag(of);
         try self.storeBoxByte(slot, box_tag, try builder.intValue(.i8, @intFromEnum(tag)));
-        // **Generated code never writes inline text.**  A String in a
+        // **Generated code never writes inline text.** A str in a
         // register is `{ptr, i64}` and boxing one says so, which is
         // what keeps a box one store per word; the runtime is the side
         // that decides to inline, at the store sites where it copies
@@ -3525,7 +3525,7 @@ const Body = struct {
         return self.module.builder.intValue(.i8, runtime.text_outside);
     }
 
-    /// The word — or, for a String, the two words — that carry the
+    /// The word — or, for a str, the two words — that carry the
     /// value itself, stored where the value is produced.
     fn fillBoxValue(self: *Body, slot: Builder.Value, of: types.Type, held: Builder.Value) Error!void {
         if (of == .none) return;
@@ -3564,7 +3564,7 @@ const Body = struct {
             "box.tag",
         ));
         // Absence is the `none` tag, and nothing reads the form byte of
-        // a value that is not text, so a present String's constant
+        // a value that is not text, so a present str's constant
         // serves for both.
         if (of == .str or of == .bytes) {
             try self.storeBoxByte(slot, box_inline_length, try self.outsideText());
@@ -3645,7 +3645,7 @@ const Body = struct {
         };
     }
 
-    /// The `{ptr, i64}` a String travels in, read out of a box in
+    /// The `{ptr, i64}` a str travels in, read out of a box in
     /// whichever form the text is in.
     ///
     /// **The pointer this answers may be into the box itself.**  Short
@@ -3806,7 +3806,7 @@ const Body = struct {
     /// The subscripts of one indexing operation, as a run of boxed
     /// values, plus how many there are.
     ///
-    /// Each is boxed as a map key would be. List and array indices are
+    /// Each is boxed as a map key would be. Sequence indexes are
     /// already `i64`; enum map keys use their exact backing width.
     fn subscripts(self: *Body, of: []const mir.Register) Error!struct { Builder.Value, Builder.Value } {
         const run = try self.scratchRun(
@@ -3830,8 +3830,8 @@ const Body = struct {
 
     // -- Lists and Arrays, without the runtime call ------------------------
     //
-    // `xs[i]`, `grid[r, c]`, `len(xs)` and `xs.append(v)` on a List or
-    // an Array are generated here rather than called: the object table
+    // `xs[i]`, `grid[r, c]`, `len(xs)` and `xs.append(v)` on a list or
+    // an array are generated here rather than called: the object table
     // row, the bounds check, and the element load, inline.  A call
     // cannot be: a boxed subscript is a store the loop cannot hoist, so
     // the call stays pinned inside the loop however precisely it is
@@ -3845,9 +3845,9 @@ const Body = struct {
     // whoever built the object (`runtime/containers.zig`'s `emptyList`),
     // so a cell's width is a constant here.
     //
-    // **A List's storage moves and an Array's does not**, and that is
-    // the whole difference between them.  An Array's `dims` and
-    // `elements` never move while it lives; a List's `elements` move
+    // **A list's storage moves and an array's does not**, and that is
+    // the whole difference between them. An array's `dims` and
+    // `elements` never move while it lives; a list's `elements` move
     // under `append`, and its `count` moves with them.  So a resolved
     // view is only ever reused across instructions that cannot move a
     // buffer — `optimize.effects.viewStable`, which already answers
@@ -3859,16 +3859,16 @@ const Body = struct {
     // types with `@offsetOf` and checked against a real `Runtime` by a
     // test beside them.
 
-    /// The shape of the List or Array a register holds, or null when it
-    /// holds anything else — a Map, a Builder, or no object at all.
+    /// The shape of the list or array a register holds, or null when it
+    /// holds anything else — a map, a builder, or no object at all.
     const ElementShape = struct {
         element: types.Type,
-        /// One for a List, which has a length and no other shape.
+        /// One for a list, which has a length and no other shape.
         rank: u8,
         /// Whether the storage can move under the program's feet.  A
-        /// List's does, under `append` and `insert`; an Array's never
-        /// does.  What reads it: `dim_size`, which is an Array's
-        /// question, and the append path, which is a List's.
+        /// list's does, under `append` and `insert`; an array's never
+        /// does. What reads it: `dim_size`, which is an array's
+        /// question, and the append path, which is a list's.
         growable: bool,
     };
 
@@ -3891,7 +3891,7 @@ const Body = struct {
     /// A store into a container frees the element it replaced and
     /// adopts the one arriving (S20, S22).  Neither happens for a
     /// scalar, so those write inline; anything that owns something —
-    /// an object, and since copy-on-store a String's bytes or a
+    /// an object, and since copy-on-store a str's bytes or a
     /// struct's field run (docs/STRINGS.md) — goes on calling the
     /// runtime, which is the one place that walk is written.
     ///
@@ -4089,7 +4089,7 @@ const Body = struct {
         return row;
     }
 
-    /// One List or Array, resolved: the element base and one axis
+    /// One list or array, resolved: the element base and one axis
     /// length per rank, all as SSA values.
     ///
     /// **Where the resolve happens is the whole point.**  Resolving at
@@ -4108,7 +4108,7 @@ const Body = struct {
     /// in ends at every instruction that could free anything
     /// (`effects.viewStable`).
     ///
-    /// That same line is what makes a view of a *List* sound, and it
+    /// That same line is what makes a view of a *list* sound, and it
     /// is one sentence: a view dies at every instruction that could
     /// move a buffer — every call, every append, every insert — which
     /// is precisely the set `viewStable` already refuses.  Nothing is
@@ -4120,7 +4120,7 @@ const Body = struct {
         /// after the ordinary null/stale checks, without giving up the
         /// scalar path.
         row: Builder.Value,
-        /// `Object.dims.ptr`, or `.none` for a List and for a rank-1
+        /// `Object.dims.ptr`, or `.none` for a list and for a rank-1
         /// array, neither of which reads it: their one bound is
         /// `Object.elements.count`, a word in the row rather than a
         /// word behind a pointer in the row.  That saved load is not a
@@ -4140,10 +4140,10 @@ const Body = struct {
         }
     };
 
-    /// The LLVM type one cell of an `Array(element)` is.
+    /// The LLVM type one cell of an `array[element]` is.
     ///
     /// It mirrors `runtime.Object.ElementKind`, which is what the
-    /// runtime actually allocates: an `Array(double)` is `f64`s, so
+    /// runtime actually allocates: an `array[f64]` is `f64`s, so
     /// reading one is a `load double` and nothing else.  The two are
     /// held together by the byte-offset test in `runtime/test.zig`,
     /// which reads a double array's element as an `f64`.
@@ -4350,7 +4350,7 @@ const Body = struct {
         return index;
     }
 
-    /// The List or Array in `register`, resolved — reusing the
+    /// The list or array in `register`, resolved — reusing the
     /// resolution already made in this block if there is one.
     fn elementView(self: *Body, register: mir.Register, shape: ElementShape) Error!ElementView {
         for (self.views.items) |found| {
@@ -4384,7 +4384,7 @@ const Body = struct {
         if (shape.rank == 1) {
             // `count` is the product of the axes, so for one axis it
             // *is* that axis — one load nearer than `dims[0]`.  A
-            // List has no `dims` at all and this is its length.
+            // A list has no `dims` at all and this is its length.
             try self.view_bounds.append(gpa, try self.rowLoad(
                 .normal,
                 .i64,
@@ -4533,7 +4533,7 @@ const Body = struct {
         }
     }
 
-    /// `len(xs)`: a List's element count, an Array's first axis.
+    /// `len(xs)`: a list's element count, an array's first axis.
     fn emitInlineLength(
         self: *Body,
         register: mir.Register,
@@ -4548,7 +4548,7 @@ const Body = struct {
         self.produced[register].value = view.bounds(self)[0];
     }
 
-    /// `xs.append(v)` on a List whose elements own nothing: the store
+    /// `xs.append(v)` on a list whose elements own nothing: the store
     /// and the count bump, inline, with the runtime called only to
     /// grow the buffer.
     ///
@@ -4568,10 +4568,10 @@ const Body = struct {
     /// resolves a second time, which costs one walk on the path that
     /// was about to allocate.
     ///
-    /// The element type is the gate.  A List append never *frees*
+    /// The element type is the gate. A list append never *frees*
     /// anything — it only adopts what arrives — so the rule is not
     /// `index_set`'s: what it needs is that nothing has to be adopted,
-    /// which is `ownsNothing`.  A String, a struct and an object all
+    /// which is `ownsNothing`. A str, a struct and an object all
     /// go on calling `luce_rt_append`, which is the one place the
     /// ownership walk is written.
     /// Trap `immutable_object` when an inline container write may target a
@@ -4675,7 +4675,7 @@ const Body = struct {
         self.seek(done);
     }
 
-    /// `a.dim(k)` on an Array.  The rank is a compile-time fact, so the
+    /// `a.dim(k)` on an array. The rank is a compile-time fact, so the
     /// axis check is against a constant.
     fn emitArrayDimSize(
         self: *Body,
@@ -4712,7 +4712,7 @@ const Body = struct {
 
     // -- Strings, without the runtime call --------------------------------
     //
-    // A String already travels through generated code as an unboxed
+    // A str already travels through generated code as an unboxed
     // `{ ptr, i64 }`, so `len`, `byte_at` and a slice are a compare and
     // a load — and boxing one to ask the runtime for it costs more than
     // the answer.  These are the same three checks `runtime/text.zig`
@@ -4722,7 +4722,7 @@ const Body = struct {
     /// Trap unless `index` falls between UTF-8 sequences: `index ==
     /// length`, or a byte that is not a continuation.
     /// `text.isStringBoundary`, inline — **including its
-    /// short-circuit**, which is not decoration: the end of a String is
+    /// short-circuit**, which is not decoration: the end of a str is
     /// a legal slice bound, and the byte there is one past the last,
     /// which is not ours to read.  So the load sits behind the branch,
     /// exactly as the `or` puts it behind one in Zig.
@@ -5182,7 +5182,7 @@ const Body = struct {
 
     /// A host service that answers text it may not have: `read_line`
     /// at end of input, `env` for a variable nobody set.  Both take one
-    /// String and hand back a `String?`.
+    /// str and hand back a `str?`.
     ///
     /// No branch: the answer becomes the `present` flag `luce_rt_maybe_text`
     /// reads, which parks `Value.none` in the box when the host said
@@ -5276,7 +5276,7 @@ const Body = struct {
     }
 
     /// `dir_list(path)` — the names the host joined, as the
-    /// `List(String)` the program asked for.
+    /// `list[str]` the program asked for.
     ///
     /// Two sides that do genuinely different things, like `file_read`:
     /// only the side the host said yes on has a buffer to split, and
@@ -5341,7 +5341,7 @@ const Body = struct {
         );
     }
 
-    /// The address and length of the String in `register`, as the two
+    /// The address and length of the str in `register`, as the two
     /// arguments a host service takes.
     fn textParts(
         self: *Body,
@@ -5680,7 +5680,7 @@ const Body = struct {
     /// Store a register into a local's slot.
     ///
     /// A slot that owns its storage holds a whole `runtime.Value`, and
-    /// a String's form has to survive the store: if the register was
+    /// a str's form has to survive the store: if the register was
     /// read out of a box, the twenty-four bytes are copied across
     /// whole, so short text stays short and long text keeps pointing
     /// where it did.  A register with no box behind it is outside text
@@ -6412,7 +6412,7 @@ const Body = struct {
             return self.wip.fcmp(.normal, condition, left, right, "compare");
         }
 
-        // String and struct comparison are content, not address: the
+        // str and struct comparison are content, not address: the
         // runtime owns both, and a struct comparison recurses into
         // nested fields rather than comparing the slots that hold them.
         if (operation.operand_type == .str or operation.operand_type == .bytes or operation.operand_type == .strukt) {
@@ -6974,7 +6974,7 @@ const Body = struct {
     /// The box `drop_storage` gives back — **the place itself**, not a
     /// fresh box built from the register.
     ///
-    /// Boxing an unboxed String says its text is outside, because that
+    /// Boxing an unboxed str says its text is outside, because that
     /// is all a `{ptr, i64}` can say; handing that to the runtime with
     /// short text in the slot would ask it to free a pointer into this
     /// frame.  The register being dropped was always read out of the
@@ -7056,7 +7056,7 @@ const Body = struct {
             //
             // All three cross into `libluce_rt` as a boxed value, like
             // every other store site, so the unboxed `{ptr, i64}` a
-            // String lives in between them does not move
+            // str lives in between them does not move
             // (docs/STRINGS.md).
             .own_storage => try self.callAnswering(register, .luce_rt_own_storage, &.{
                 rt,
@@ -7392,8 +7392,8 @@ const Body = struct {
                 self.produced[of[1]].value,
             }),
             .dim_size => {
-                // An Array's question and only an Array's: `dim` is
-                // not a List method, and a List has no `dims` to read.
+                // An array's question and only an array's: `dim` is
+                // not a list method, and a list has no `dims` to read.
                 // A hand-built module that asks one anyway goes to the
                 // runtime, which answers `index_bounds` — the same
                 // sentence the oracle answers.
@@ -7885,7 +7885,7 @@ const Body = struct {
             },
             .term_flush => _ = try self.callHost(.term_flush, &.{}, "flushed"),
             .key_read => {
-                // `String?`, and the answer is what decides which.
+                // `str?`, and the answer is what decides which.
                 // This is where the answer used to be dropped: only
                 // `exhausted` was read, so a host saying "no key will
                 // ever come" was indistinguishable from one that had
@@ -8102,12 +8102,12 @@ const Body = struct {
         );
     }
 
-    /// `new List(T)` / `new Map(K, V)` / `new Array(T, ...)` / `new
-    /// Builder`.  The shape is a compile-time fact, so the kind picks
+    /// `new list[T]` / `new map[K, V]` / `new array[T](...)` / `new
+    /// builder`. The shape is a compile-time fact, so the kind picks
     /// the entry point and only an array's sizes travel at runtime.
     // -- objects, ownership, and the words a trap carries -----------------
 
-    /// The element zero of the List an intrinsic answers, boxed.
+    /// The element zero of the list an intrinsic answers, boxed.
     ///
     /// `m.keys()` and `m.values()` build a list out of values the
     /// runtime is holding, and which *kind* its cells are is a fact of

@@ -17,9 +17,11 @@ defines the complete precedence table and every accepted spelling.
 
 ## Arithmetic
 
-`+`, `-`, and `*` preserve the common numeric type. `/` is real
-division and returns `double`. `//` is floor division, and `%` is the
-remainder that pairs with it.
+`+`, `-`, and `*` preserve their operands' concrete numeric type. `/` is
+true division: integer operands return `f64`, while floating-point operands
+preserve their width. `//` is floor division, and `%` is its paired
+remainder. Both operands must have the same concrete type; convert explicitly
+when they do not.
 
 ```luce run
 func main():
@@ -54,22 +56,22 @@ loom: trap: integer overflow [integer_overflow]
     at main (main.luc:4:5)
 ```
 
-Floating-point arithmetic follows IEEE rules. Adding two strings
+Floating-point arithmetic follows IEEE rules. Adding two `str` values
 concatenates them; use a [string builder](/guide/strings/#building-text)
 when assembling many pieces.
 
 ## Comparison
 
 Equality and order comparisons work on the scalar types that define those
-operations. Numeric operands may use different widths without losing the
-exact integer value being compared.
+operations. Numeric operands must have the same concrete type, so a possible
+change of width, signedness, or precision is visible in source.
 
 ```luce run
 func main():
     let after: i64 = 9007199254740993
     let rounded: f64 = 9007199254740992.0
-    print(str(1 < 1.5))
-    print(str(after == rounded))
+    print(str(f64(1) < 1.5))
+    print(str(after == i64(rounded)))
 ```
 
 ```output
@@ -90,9 +92,9 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:5:24: chained comparison: write 'a < b and b < c' [luce.parse.chain]
-        print(string(a < b < c))
-                           ^
+main.luc:5:21: chained comparison: write 'a < b and b < c' [luce.parse.chain]
+        print(str(a < b < c))
+                        ^
 ```
 
 ## Boolean logic

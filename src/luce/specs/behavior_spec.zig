@@ -4339,7 +4339,7 @@ test "trap: an explicit trap call" {
 }
 
 test "a built trap message survives the frame that built it" {
-    // GitHub #28.  The words are a String built at the trap site, so
+    // GitHub #28. The words are a str built at the trap site, so
     // they live in the trapping frame — short enough to sit *inside*
     // the value, which on the compiled path is an `alloca`.  The trap
     // channel used to keep that borrow, and the report is only read
@@ -5498,7 +5498,7 @@ test "f16: integers are exact to 2048 and step by two after it" {
 }
 
 test "f16: overflow reaches infinity rather than trapping" {
-    // Float to narrower float is IEEE and does not trap (§3), so
+    // Floating-point narrowing is IEEE and does not trap (§3), so
     // 1e300 lands on `inf` — and `half` acquires one far more easily
     // than `double` does, which is the whole reason the language does
     // not grow a second story about infinity for it.

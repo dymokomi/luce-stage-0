@@ -206,7 +206,7 @@ pub export fn luce_rt_exit(runtime: *Runtime, status: i64) callconv(.c) void {
 ///
 /// `message` is borrowed for the length of this call and no longer:
 /// the trap channel copies it (`heap.failMessage`), because a Luce
-/// String short enough to live inside its value points into the
+/// str short enough to live inside its value points into the
 /// caller's own frame, and that frame goes as soon as this returns.
 /// `code` is `vocabulary.TrapCode` from
 /// the build that generated the code, which is this one — an artifact
@@ -266,7 +266,7 @@ pub export fn luce_rt_report(
 // ---------------------------------------------------------------------------
 
 /// `error("…")` — the program raised an error of its own.  The words
-/// are a Luce String, which outlives the run.  `function` and
+/// are a Luce str, which outlives the run. `function` and
 /// `instruction` say where it was written, and are resolved here and
 /// only here: an error records its raise site and nothing else.
 pub export fn luce_rt_raise_error(
@@ -358,7 +358,7 @@ pub export fn luce_rt_exhaust(runtime: *Runtime) callconv(.c) void {
     runtime.exhausted = true;
 }
 
-/// Copy host-owned bytes into fresh owned storage as a Luce String.
+/// Copy host-owned bytes into fresh owned storage as a Luce str.
 /// Every string a host service hands back is borrowed for the duration
 /// of that call only; this is where it becomes a value the program can
 /// keep — owned by the statement that asked for it until something
@@ -403,7 +403,7 @@ pub export fn luce_rt_maybe_text(
     return survived;
 }
 
-/// A directory listing, as the `List(String)` `dir_list` answers.
+/// A directory listing, as the `list[str]` `dir_list` answers.
 ///
 /// The names arrive NUL-separated in one borrowed buffer, which is the
 /// one shape the host ABI already carries — a service hands back bytes
@@ -424,7 +424,7 @@ pub export fn luce_rt_names_list(
     return survived;
 }
 
-/// `main`'s `args`: the command line as the `List(String)` the entry's
+/// `main`'s `args`: the command line as the `list[str]` the entry's
 /// parameter receives (MEMORY.md).
 ///
 /// The two vtable slots are handed straight over rather than read out
@@ -1407,7 +1407,7 @@ fn requireScalarOut(comptime T: type, runtime: *Runtime, out: [*c]T) bool {
 // Containers
 // ---------------------------------------------------------------------------
 //
-// List, Map, Array and Builder, reached through the `target` they act
+// list, map, array and builder, reached through the `target` they act
 // on.  `target` is always a borrow, and a wrong shape, a bad index, a
 // missing key or a freed object is a trap rather than a return value —
 // which is why most of these answer nothing but "did the program
@@ -1415,7 +1415,7 @@ fn requireScalarOut(comptime T: type, runtime: *Runtime, out: [*c]T) bool {
 //
 // **What is consumed is called out per symbol**, because it is not
 // uniform: a container that takes ownership of what it is handed says
-// so, and one that copies instead (a Builder's bytes, a Map's key) says
+// so, and one that copies instead (a builder's bytes, a map's key) says
 // that.  Everything unmarked borrows.  What comes back through `out` is
 // owned by the statement that asked for it, including the fresh Lists
 // `list_slice`, `map_keys` and `map_values` build.
@@ -1478,7 +1478,7 @@ pub export fn luce_rt_list_slice(
     return survived;
 }
 
-/// A list consumes `held`; a Builder copies its bytes and borrows —
+/// A list consumes `held`; a builder copies its bytes and borrows —
 /// see `containers.append`.
 pub export fn luce_rt_append(
     runtime: *Runtime,
@@ -1718,8 +1718,8 @@ pub export fn luce_rt_array_fill(
 // Strings and conversions
 // ---------------------------------------------------------------------------
 //
-// The String primitives and the pure conversions.  Every argument is
-// borrowed and nothing here mutates: a Luce String is a value, so each
+// The str primitives and the pure conversions. Every argument is
+// borrowed and nothing here mutates: a Luce str is a value, so each
 // of these answers a *new* one through `out`, owned by the statement
 // that asked for it (docs/STRINGS.md).
 //
@@ -1822,7 +1822,7 @@ pub export fn luce_rt_ord(runtime: *Runtime, held: [*c]const Value, out: [*c]Val
 // ---------------------------------------------------------------------------
 
 /// Comparison for the types generated code cannot compare inline —
-/// String, structs.  The one export that answers its result
+/// str, structs. The one export that answers its result
 /// directly rather than through an out-pointer, because comparison is
 /// the one operation here that cannot fail.  `op` is `vocabulary.BinaryOp`.
 pub export fn luce_rt_compare(

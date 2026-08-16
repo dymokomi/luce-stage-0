@@ -152,7 +152,7 @@ pub fn refuseOptionalPart(
 fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Type {
     // Before anything else, including the arity checks: a name the
     // language used to answer to is answered by name, whatever
-    // shape it was written in.  `List(long)` must be told that
+    // shape it was written in. `List[i64]` must be told that
     // `List` is `list` and not that it "takes no type arguments",
     // which is a sentence about a struct nobody declared.
     if (types.retiredSpelling(written.name)) |now| {

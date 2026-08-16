@@ -111,7 +111,7 @@ the write did not land
 ```
 
 The block form can bind the error message. The binding is an immutable
-`string` scoped to the handler:
+`str` scoped to the handler:
 
 ```luce run
 func parse_count(text: str) -> i64!:
@@ -184,7 +184,7 @@ the condition that produces it.
 ## A complete example
 
 `examples/calc/calc.luc` in the repository is a recursive-descent
-calculator — a `double` one, because `/` is real division and a pocket
+calculator — an `f64` one, because integer `/` is true division and a pocket
 calculator that answers `3` to `7 / 2` is broken. Every way it can be
 defeated is a way the *user* defeated it, so the parser says
 `-> Step!` and raises with `error(...)`; `try` carries the failure up

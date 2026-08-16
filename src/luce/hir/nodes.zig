@@ -1109,7 +1109,7 @@ pub fn provenance(expression: *const Expression) Provenance {
         // The slot only ferries the call's value across the branch;
         // the storage question belongs to the call.
         .carried_get => |payload| provenance(payload.origin),
-        // String `+` allocates the joined bytes; every numeric binary
+        // str `+` allocates the joined bytes; every numeric binary
         // answers a scalar.
         .binary => |payload| if (payload.result == .str or payload.result == .bytes) .fresh else .plain,
         .convert, .unary, .compare => .plain,
@@ -1524,7 +1524,7 @@ test "provenance mirrors the storage categories the walk stamps" {
     const folded_text = try node(arena, .{ .constant_ref = .{ .constant = 1, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.plain, provenance(folded_text));
 
-    // String `+` allocates; numeric binaries answer scalars.
+    // str `+` allocates; numeric binaries answer scalars.
     const join = try node(arena, .{ .binary = .{ .op = .add, .left = name, .right = text, .result = .str, .span = test_span } });
     try testing.expectEqual(Provenance.fresh, provenance(join));
     const sum = try node(arena, .{ .binary = .{ .op = .add, .left = name, .right = name, .result = .i64, .span = test_span } });

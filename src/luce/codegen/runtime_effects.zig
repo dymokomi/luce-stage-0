@@ -53,14 +53,14 @@
 //!     memory is based on nothing, so an object's element buffer is
 //!     **not** argmem even though `%rt` is how the runtime finds it.
 //!   * **inaccessiblemem** — the run's private storage: the value
-//!     arena (String bytes, struct field runs), a List's, Map's or
-//!     Builder's element buffer, and the unwind trace.  Generated code
+//!     arena (str bytes, struct field runs), a list's, map's or
+//!     builder's element buffer, and the unwind trace. Generated code
 //!     cannot reach any of it — it holds Strings as `{ptr, len}` pairs
 //!     it never loads through, and it has no way at all to find a
-//!     List's buffer.  That is exactly LangRef's "not accessible by
+//!     list's buffer. That is exactly LangRef's "not accessible by
 //!     the current module".
 //!   * **the default** — globals, and **the object heap**: the table's
-//!     rows, and the `dims` and `elements` of an Array.  Generated code
+//!     rows, and the `dims` and `elements` of an array. Generated code
 //!     *does* reach those: since inline container access
 //!     (docs/CODEGEN.md) it loads the table base out of `%rt`, tests a
 //!     row's generation, and loads and stores array elements
@@ -91,7 +91,7 @@
 //!     exactly one: `luce_rt_open`'s function table, which the run
 //!     reads back when it unwinds.  A trap's message is not among them
 //!     — the trap channel copies its words rather than keeping the
-//!     caller's, because a short String lives in the frame that raised
+//!     caller's, because a short str lives in the frame that raised
 //!     the trap (`heap.failMessage`).
 //!   * A pointer that came from a *host* service gets no `nonnull`, no
 //!     `dereferenceable`, and no `noundef`.  The host fills those slots,
@@ -277,7 +277,7 @@ pub const Parameter = enum {
     /// Where the answer goes: a `*Value` the callee writes and never
     /// reads.
     value_out,
-    /// Borrowed bytes — a String's, or a buffer a host service filled
+    /// Borrowed bytes — a str's, or a buffer a host service filled
     /// in.  Read, not kept, and nothing else is promised, because the
     /// host end of the pair is not ours to promise for.
     bytes_in,
@@ -345,7 +345,7 @@ pub const Effect = struct {
 // decided by one question: **does it resolve an object handle?**  If it
 // does it touches the object table, which generated code can now reach,
 // and it must name the default location.  If it only moves bytes
-// through the arena or a String, it does not.
+// through the arena or a str, it does not.
 
 /// Touches no memory whatsoever: everything it needs arrives in
 /// registers and the answer goes back the same way.
@@ -379,8 +379,8 @@ const touches_heap: Memory = .{
     .other = .readwrite,
 };
 /// Reads the object heap and writes the run's private storage:
-/// `String(x)` and `Builder.build()`,
-/// which renders a Builder's bytes into fresh arena text.
+/// `str(x)` and `builder.build()`,
+/// which renders a builder's bytes into fresh arena text.
 const reads_heap_makes_text: Memory = .{
     .argmem = .readwrite,
     .inaccessiblemem = .readwrite,
@@ -556,14 +556,14 @@ pub fn describe(service: Service) Effect {
             .memory = touches_text,
             .parameters = &.{ .run, .plain, .bytes_in, .plain, .value_out },
         },
-        // Splits the host's joined names and builds a List of them,
+        // Splits the host's joined names and builds a list of them,
         // which takes a table row: the object heap moves, so this one
         // names the default location as well.
         .luce_rt_names_list => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .bytes_in, .plain, .value_out },
         },
-        // The command line, as the `List(String)` the entry receives.
+        // The command line, as the `list[str]` the entry receives.
         // It calls back into the host through the two function pointers
         // it is handed, so nothing about memory can be narrowed beyond
         // "the heap moves": a host callback is anybody's code.
@@ -775,7 +775,7 @@ pub fn describe(service: Service) Effect {
 
         // -- value storage --------------------------------------------
         //
-        // One allocates a String's bytes or a struct's field run, the
+        // One allocates a str's bytes or a struct's field run, the
         // other gives them back (docs/STRINGS.md).  Neither resolves a
         // handle, so neither names the default location; both write the
         // run's private storage, so neither may be folded or sunk.
@@ -950,7 +950,7 @@ pub fn describe(service: Service) Effect {
 
         // -- operators ------------------------------------------------
         //
-        // `compare` reads both values, and the String and struct storage
+        // `compare` reads both values, and the str and struct storage
         // behind them, and cannot fail — it takes no runtime at all.
         .luce_rt_compare => .{
             .memory = reads_private,

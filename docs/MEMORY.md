@@ -12,7 +12,7 @@ Every runtime value is either copied as a value or shared as a reference:
 
 | Kind | Current and planned examples | Assignment and passing | Lifetime rule |
 |---|---|---|---|
-| Value | numbers, `bool`, `string`, `struct`, `enum`, `union` | copy the value | storage leaves with the containing value |
+| Value | numbers, `bool`, `char`, `str`, `bytes`, `struct`, `enum`, `union` | copy the value | storage leaves with the containing value |
 | Reference | `list`, `map`, `array`, `builder`; future `class` and closure environments | retain and share one identity | last strong release destroys the object |
 | Resource reference | `file`, `task`, windows, surfaces | retain and share one identity | last strong release closes, joins, or releases the resource |
 
@@ -37,7 +37,9 @@ The current tree implements ARC for every built-in reference and resource:
 - retain/release emission across locals, replacement, aggregates, optionals,
   unions, failures, loops, interfaces, bound methods, and container stores;
 - last-release close for files and join for unfinished tasks;
-- graph-preserving worker snapshots with rollback; and
+- graph-preserving worker snapshots with rollback;
+- zeroing `weak` locals and fields for built-in ARC objects, with owned
+  upgrades and generation-safe object-table reuse; and
 - a zero-live-object gate for every successful differential spec.
 
 For example, both names below observe one list:
@@ -58,11 +60,11 @@ to a clean outcome without a host-language panic.
 
 ## What remains outside the current model
 
-ARC does not collect a strong cycle. Luce does not yet have `weak`, so a
-program must avoid strong back-edges in recursive container graphs. Classes
-and capturing closures are future reference types; they do not weaken the
-current built-in ARC contract. The current interface representation is safe
-for read-only dispatch but will be replaced before mutable class dispatch.
+ARC does not collect a strong cycle. A program must make at least one
+back-edge weak when a graph would otherwise keep itself alive. Classes and
+capturing closures are future reference types; they do not weaken the current
+built-in ARC contract. The current interface representation is safe for
+read-only dispatch but will be replaced before mutable class dispatch.
 
 ## ARC behavior
 
@@ -119,21 +121,47 @@ copy directly. Permitted container graphs are rebuilt recursively in the
 receiving runtime, preserving relationships within the copied graph but
 sharing no object identity with the sender.
 
-Resources and function values are refused transitively. Future classes, weak
-references, and capturing closure environments are non-sendable in this
-milestone. That boundary makes ordinary data races over Luce objects
-unrepresentable without introducing a second ownership language.
+Resources, function values, and values containing weak storage are refused
+transitively. A weak handle names one runtime's object table and therefore
+cannot be copied into another. Future classes and capturing closure
+environments are non-sendable in this milestone. That boundary makes ordinary
+data races over Luce objects unrepresentable without introducing a second
+ownership language.
 
 ## Cycles and weak references
 
-ARC does not collect a strong cycle. A recursive struct can already form one
-through a container, although the current language has no `weak` syntax to
-break it. The target weak storage therefore covers built-in ARC objects as
-well as classes and reference-backed interface values. Resources and function
-values stay strong-only in the first model. Classes and capturing closures
-make back-edges common, so `weak` must ship before those features are called
-complete. Debug leak reporting must make an accidental surviving cycle
-diagnosable rather than silently treating it as collection.
+ARC does not collect a strong cycle. `weak` makes a storage place non-owning:
+
+```luce
+struct Link:
+    weak root: list[Link]?
+
+func main():
+    let root: list[Link] = [Link()]
+    root[0].root = root
+    let snapshot = root[0].root else [Link()]
+    assert(len(snapshot) == 1)
+```
+
+A weak place always has an explicit optional type and initializes to `none`.
+Current targets are `list`, `map`, `array`, and `builder`. Assigning a live
+target records its handle without retaining it; assigning `none` clears the
+place. After the target's last strong release, every later read answers
+`none`, even if the object-table row is reused.
+
+A successful read is an owned strong snapshot. It keeps the target alive for
+the ordinary lifetime of that expression or binding. Because another strong
+reference may disappear between reads, testing a weak place does not
+permanently narrow it; bind one read and unwrap that snapshot before using it.
+
+Weak storage is a property of a local or field, not a `weak[T]` value type.
+Weak value types, resources, function values, interfaces, and ordinary value
+structs are rejected as targets. A value containing a weak field has no
+implicit equality or collection-search behavior, because the hidden handle is
+not a semantic value. Weak handles never cross worker runtime tables.
+
+Classes will use the same storage path once their heap representation lands.
+Reference-backed interfaces and closure capture lists remain later phases.
 
 ## Release-gate evidence
 
@@ -148,6 +176,9 @@ diagnosable rather than silently treating it as collection.
 - Bound methods and interface values keep carrying receivers alive.
 - Slices of lists, map value lists, and array fill obey ordinary ARC element
   semantics.
+- Weak fields and locals break recursive container cycles, upgrade live
+  targets to owned snapshots, zero after final release, and never revive when
+  an object-table row is reused.
 - The damaged-module corpus is total: reject or run cleanly, never panic.
 
 A change to retain/release instructions or type tags bumps the module format.

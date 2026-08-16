@@ -930,11 +930,9 @@ pub fn lowerIntrinsic(
             arguments[0] = try self.promoted(arguments[0]);
             result = arguments[0].value_type;
         },
-        // `min`, `max` and `clamp` unify their arguments the way a
-        // binary operator unifies its operands: one double among
-        // them makes them all Floats (docs/NUMERICS.md).  Anything
-        // else would make `clamp(x, 0, 10)` a type error for a
-        // double `x` in a language where `x < 0` is not.
+        // `min`, `max` and `clamp` require one concrete numeric type. A
+        // literal can land on a typed argument; two already-typed values do
+        // not convert or unify implicitly.
         .min, .max => {
             _ = try self.unifyNumeric(&arguments[0], &arguments[1]);
             if (!arguments[0].value_type.isNumeric() or
@@ -953,16 +951,10 @@ pub fn lowerIntrinsic(
             result = arguments[0].value_type;
         },
         .sqrt, .floor, .ceil, .trunc => {
-            // Whichever float width it was given, and the same one
-            // back (docs/TYPES.md §9).  `sqrt` of a `float`
-            // answering a `double` would be a narrowing waiting to
-            // happen at the next store, and `llvm.sqrt.f32` exists
-            // — so there is nothing to buy by widening and a
-            // diagnostic to pay for it with.
+            // Whichever floating width it was given, and the same one back.
             if (!arguments[0].value_type.isFloating())
                 return failIntrinsic(self, call, "this builtin takes f32 or f64");
-            // A `half` arrives promoted to a `float`, so there is
-            // no binary16 square root to ask any target for (D5).
+            // The runtime supplies the operation at each supported width.
             arguments[0] = try self.promoted(arguments[0]);
             result = arguments[0].value_type;
         },

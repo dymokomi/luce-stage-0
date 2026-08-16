@@ -1,10 +1,9 @@
 //! `libluce_rt` — the Luce runtime library, and re-export barrel.
 //!
-//! Luce's semantics below the instruction level live here: the object
-//! the object heap and ARC (docs/MEMORY.md), lists, maps, arrays,
-//! `Builder`, string storage and the small String primitive set,
-//! `String`/`parse_int`/`parse_float`/`chr`/`ord`, checked arithmetic, and
-//! the trap channel they all report through.
+//! Luce's semantics below the instruction level live here: the object heap
+//! and ARC (docs/MEMORY.md), containers, `str` and `bytes` storage, scalar
+//! conversions, checked arithmetic, and the trap channel they all report
+//! through.
 //!
 //! It exists as a library rather than a struct inside an engine
 //! because a `.lc` is a shared library and a standalone executable has
@@ -21,12 +20,10 @@
 //!                    takes, plus the tagged-union `view()` Zig callers
 //!                    switch on.
 //!   heap.zig       — `Runtime` (the two allocators a run draws on,
-//!                    the object table, serials, the trap channel),
-//!                    objects, and the ownership walks S1–S46 are
-//!                    written in terms of.
-//!   containers.zig — List, Map, Array, Builder, and the `free`/`give`/
-//!                    `copy` verbs.
-//!   text.zig       — String storage and the pure conversions.
+//!                    the object table, generations, weak handles, ARC, and
+//!                    the trap channel) and object storage.
+//!   containers.zig — list, map, array, and builder operations.
+//!   text.zig       — `str`/`bytes` storage and pure conversions.
 //!   operators.zig  — checked arithmetic, comparison, conversions, and
 //!                    the math builtins.
 //!   trace.zig      — the call trace a trapped compiled program builds
@@ -56,7 +53,7 @@ pub const flattenIndex = @import("runtime/heap.zig").flattenIndex;
 /// reused, so that generations never wrap (docs/MEMORY.md).
 pub const retired = @import("runtime/heap.zig").retired;
 /// Where an object row's fields sit, for the one reader that cannot
-/// call a function to ask: generated code walking an Array inline.
+/// call a function to ask: generated code walking an array inline.
 pub const layout = @import("runtime/heap.zig").layout;
 /// The most elements a container of one element kind may hold — the
 /// per-width ceilings docs/VECTOR.md's proof needs, in place of the

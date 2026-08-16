@@ -292,8 +292,8 @@ the existing elements without changing their ARC lifetimes.
 | `has(key) -> bool` | |
 | `get(key) -> V?` | absence when missing — never traps; `m.get(k) else d` is the fallback form |
 | `remove(key)` | a no-op when absent |
-| `keys() -> list(K)` | a fresh list |
-| `values() -> list(V)` | a fresh outer list; reference values remain shared |
+| `keys() -> list[K]` | a fresh list |
+| `values() -> list[V]` | a fresh outer list; reference values remain shared |
 | `clear()` | |
 
 Plus `len`, `m[k]` — which traps `key_missing` when the key is
@@ -385,7 +385,7 @@ The language keeps only these:
 | `s[a:b]` | scalar-position slice |
 | `len(s)` | Unicode scalar count |
 | `s.byte_at(index) -> u8` | raw UTF-8 byte at a byte position |
-| `s.find_byte(byte, start) -> i64` | raw byte offset or `-1`; `byte` is `u8` and `start` is a byte position |
+| `s.find_byte(value, start) -> i64` | raw byte offset or `-1`; `value` is `u8` and `start` is a byte position |
 
 Every other `str` method routes to [`std.strings`](/library/strings/) and
 needs `import std.strings` in scope.

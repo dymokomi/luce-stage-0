@@ -86,9 +86,9 @@ func main():
 
 ```output
 luce: compile failed
-main.luc:4:18: helper is private to geo [luce.sema.private]
-        print(string(geo.helper()))
-                     ^~~~~~~~~~~~
+main.luc:4:15: helper is private to geo [luce.sema.private]
+        print(str(geo.helper()))
+                  ^~~~~~~~~~~~
 ```
 
 The public surface crosses untouched — and a public constant may fold

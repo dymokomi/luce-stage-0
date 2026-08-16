@@ -17,7 +17,7 @@ const Runtime = heap.Runtime;
 const Value = value.Value;
 
 /// One binary operator applied to two values of the same Luce type.
-/// Comparison answers a Bool; arithmetic answers the operand type.
+/// Comparison answers a bool; arithmetic answers the operand type.
 pub fn binary(runtime: *Runtime, op: vocabulary.BinaryOp, left: Value, right: Value) Error!Value {
     switch (op) {
         .add,
@@ -151,7 +151,7 @@ fn boxFloating(comptime T: type, held: T) Value {
     };
 }
 
-/// Float arithmetic, at whichever of the two widths the operands
+/// Floating-point arithmetic, at whichever width the operands
 /// arrived at: plain IEEE 754, which never traps.
 fn floating(op: vocabulary.BinaryOp, comptime T: type, left_float: T, right_float: T) Error!Value {
     // IEEE 754 semantics: division by zero and overflow produce
@@ -198,8 +198,8 @@ fn ordered(op: vocabulary.BinaryOp, left: anytype, right: @TypeOf(left)) bool {
 }
 
 /// Comparison, for every type the analyzer admits one on.  Equality on
-/// Bool, structs, and objects; full ordering on every number and on
-/// String.
+/// bool, structs, and objects; full ordering on every number and on
+/// str.
 pub fn compare(op: vocabulary.BinaryOp, left: Value, right: Value) bool {
     if (!left.hasValidRepresentation() or !right.hasValidRepresentation()) return false;
     // Absence, before the payload dispatch below, because absence has
@@ -210,7 +210,7 @@ pub fn compare(op: vocabulary.BinaryOp, left: Value, right: Value) bool {
     //
     // A struct reaches this by recursing into a `T?` field, which is
     // the only way `op` can be anything but `.equal`/`.not_equal`
-    // here: the analyzer admits ordering on long, double and String
+    // here: the analyzer admits ordering on same-typed numbers and str
     // alone, and `T?` is none of those.  Ordering a `T?` would be a
     // front-end bug, and answering `false` for it is a wrong answer
     // rather than a crash, so it is handled with the rest.

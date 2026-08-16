@@ -1320,7 +1320,7 @@ pub const Machine = struct {
         return held;
     }
 
-    /// The element type of the List an intrinsic answers, read off the
+    /// The element type of the list an intrinsic answers, read off the
     /// program's type table.
     ///
     /// `m.keys()` and `m.values()` build a list out of values the
@@ -1334,7 +1334,7 @@ pub const Machine = struct {
         return switch (self.program.heap_types[answered.heap]) {
             .list => |element| element,
             // The verifier admits nothing else here: keys and values
-            // answer a List and only a List.
+            // answer a list and only a list.
             .map, .array, .builder, .file, .task => unreachable,
         };
     }

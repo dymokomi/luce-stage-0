@@ -1,13 +1,11 @@
-//! The guard on the rename: **no Luce source in this repository may
-//! spell a builtin type with its retired TitleCase name.**
+//! The guard on the rename: **no Luce source or live documentation code in
+//! this repository may spell a builtin type with a retired name.**
 //!
 //! `docs/TYPES.md` asks for this one by name, and gives the reason.
-//! The rename it guards was mechanically safe while `Int` and `Float`
-//! were aliases for the types `long` and `double` name; the resize
-//! after it is safe only if the rename was *complete*.  A missed
-//! `array(Float, ...)` is the single migration failure that
-//! type-checks: it would quietly become a 32-bit array and change
-//! results with no diagnostic anywhere, in a program nobody edited.
+//! Luce has gone through two spelling migrations: TitleCase builtins became
+//! lowercase, then scalar names became explicit about representation. A
+//! missed inline signature is still a lie even when every runnable sample is
+//! green, so the site scan includes inline code and explanatory fences.
 //!
 //! So the check is a grep that fails the build, and it looks in the
 //! three places Luce source lives:
@@ -46,10 +44,18 @@ const catalogue = @import("documents.zig");
 /// to disagree with the tree and a shared constant would let one edit
 /// silence both halves.
 const retired = [_]struct { was: []const u8, now: []const u8 }{
-    .{ .was = "Int", .now = "long" },
-    .{ .was = "Float", .now = "double" },
+    .{ .was = "byte", .now = "u8" },
+    .{ .was = "short", .now = "i16" },
+    .{ .was = "int", .now = "i32" },
+    .{ .was = "long", .now = "i64" },
+    .{ .was = "half", .now = "f16" },
+    .{ .was = "float", .now = "f32" },
+    .{ .was = "double", .now = "f64" },
+    .{ .was = "string", .now = "str" },
+    .{ .was = "Int", .now = "i64" },
+    .{ .was = "Float", .now = "f64" },
     .{ .was = "Bool", .now = "bool" },
-    .{ .was = "String", .now = "string" },
+    .{ .was = "String", .now = "str" },
     .{ .was = "List", .now = "list" },
     .{ .was = "Map", .now = "map" },
     .{ .was = "Array", .now = "array" },
@@ -64,6 +70,10 @@ const Scope = enum {
     /// because a current document's sentences are as normative as its
     /// samples.
     markdown_prose,
+    /// Fenced examples and inline code spans, but not surrounding prose.
+    /// This permits ordinary English words such as “byte” while refusing a
+    /// stale signature such as `func read() -> string`.
+    markdown_code,
     /// Only the lines inside a fenced ```luce block.
     fenced_luce,
     /// Only the lines that are Zig multiline-string continuations.
@@ -76,7 +86,7 @@ const trees = [_]Tree{
     .{ .path = "examples", .suffix = ".luc", .scope = .whole_file },
     .{ .path = "bench", .suffix = ".luc", .scope = .whole_file },
     .{ .path = "src/luce/std", .suffix = ".luc", .scope = .whole_file },
-    .{ .path = "www/luce/content", .suffix = ".md", .scope = .fenced_luce },
+    .{ .path = "www/luce/content", .suffix = ".md", .scope = .markdown_code },
     .{ .path = "src/luce/specs", .suffix = ".zig", .scope = .zig_multiline },
 };
 
@@ -172,6 +182,7 @@ fn scan(
     scope: Scope,
 ) !void {
     var inside_fence = false;
+    var scan_fence = false;
     var suppressed = false;
     var number: usize = 0;
     var lines = std.mem.splitScalar(u8, text, '\n');
@@ -181,6 +192,26 @@ fn scan(
         if (std.mem.indexOf(u8, line, resume_scan) != null) suppressed = false;
         if (suppressed) continue;
         const trimmed = std.mem.trimStart(u8, line, " \t");
+        if (scope == .markdown_code) {
+            if (std.mem.startsWith(u8, trimmed, "```")) {
+                if (inside_fence) {
+                    inside_fence = false;
+                    scan_fence = false;
+                } else {
+                    inside_fence = true;
+                    const info = std.mem.trim(u8, trimmed[3..], " \t\r");
+                    scan_fence = std.mem.startsWith(u8, info, "luce") or
+                        std.mem.eql(u8, info, "text");
+                }
+                continue;
+            }
+            if (inside_fence and scan_fence) {
+                try scanCodeWords(gpa, into, where, number, line, retired[0..]);
+            } else if (!inside_fence) {
+                try scanInlineCode(gpa, into, where, number, line);
+            }
+            continue;
+        }
         const looking = switch (scope) {
             .whole_file, .markdown_prose => true,
             .fenced_luce => fence: {
@@ -193,17 +224,66 @@ fn scan(
                 break :fence inside_fence;
             },
             .zig_multiline => std.mem.startsWith(u8, trimmed, "\\\\"),
+            .markdown_code => unreachable,
         };
         if (!looking) continue;
-        for (retired) |gone| {
-            if (!wordIn(line, gone.was)) continue;
-            try into.append(gpa, .{
-                .file = try gpa.dupe(u8, where),
-                .line = number,
-                .was = gone.was,
-                .now = gone.now,
-            });
-        }
+        // Ordinary prose and source strings may legitimately use words such
+        // as “byte” and “string”. The lowercase migration is guarded in
+        // documentation code, where those words claim to be spellings.
+        try scanWords(gpa, into, where, number, line, retired[8..]);
+    }
+}
+
+fn scanInlineCode(
+    gpa: std.mem.Allocator,
+    into: *std.ArrayList(Sighting),
+    where: []const u8,
+    number: usize,
+    line: []const u8,
+) !void {
+    var at: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, line, at, '`')) |opening| {
+        const closing = std.mem.indexOfScalarPos(u8, line, opening + 1, '`') orelse return;
+        try scanCodeWords(gpa, into, where, number, line[opening + 1 .. closing], retired[0..]);
+        at = closing + 1;
+    }
+}
+
+fn scanWords(
+    gpa: std.mem.Allocator,
+    into: *std.ArrayList(Sighting),
+    where: []const u8,
+    number: usize,
+    line: []const u8,
+    names: []const @TypeOf(retired[0]),
+) !void {
+    for (names) |gone| {
+        if (!wordIn(line, gone.was)) continue;
+        try into.append(gpa, .{
+            .file = try gpa.dupe(u8, where),
+            .line = number,
+            .was = gone.was,
+            .now = gone.now,
+        });
+    }
+}
+
+fn scanCodeWords(
+    gpa: std.mem.Allocator,
+    into: *std.ArrayList(Sighting),
+    where: []const u8,
+    number: usize,
+    line: []const u8,
+    names: []const @TypeOf(retired[0]),
+) !void {
+    for (names) |gone| {
+        if (!wordInCode(line, gone.was)) continue;
+        try into.append(gpa, .{
+            .file = try gpa.dupe(u8, where),
+            .line = number,
+            .was = gone.was,
+            .now = gone.now,
+        });
     }
 }
 
@@ -221,6 +301,42 @@ fn wordIn(line: []const u8, word: []const u8) bool {
         if (found > 0 and line[found - 1] == '.') continue;
         const after = found + word.len;
         if (after < line.len and isWordByte(line[after])) continue;
+        return true;
+    }
+    return false;
+}
+
+/// Like `wordIn`, but ignores comments and quoted value data. A program is
+/// allowed to print the English word “string” or use `"double"` as a map key;
+/// neither claims that the word names a type.
+fn wordInCode(line: []const u8, word: []const u8) bool {
+    var at: usize = 0;
+    var quote: ?u8 = null;
+    while (at < line.len) {
+        const byte = line[at];
+        if (quote) |closing| {
+            if (byte == '\\' and at + 1 < line.len) {
+                at += 2;
+                continue;
+            }
+            if (byte == closing) quote = null;
+            at += 1;
+            continue;
+        }
+        if (byte == '#') return false;
+        if (byte == '"' or byte == '\'') {
+            quote = byte;
+            at += 1;
+            continue;
+        }
+        if (!isWordByte(byte)) {
+            at += 1;
+            continue;
+        }
+        const start = at;
+        while (at < line.len and isWordByte(line[at])) at += 1;
+        if (!std.mem.eql(u8, line[start..at], word)) continue;
+        if (start > 0 and line[start - 1] == '.') continue;
         return true;
     }
     return false;
@@ -291,7 +407,7 @@ test "the guard finds a stale name in every scope it scans" {
     // the page's luce fence is a sighting for each name; one `Float`
     // in the spec's program; and `List(String)` in a current
     // document's *prose*, which is a sighting for each name.
-    try testing.expectEqual(@as(usize, 8), found.items.len);
+    try testing.expectEqual(@as(usize, 9), found.items.len);
 
     var per_tree: [trees.len]usize = @splat(0);
     for (found.items) |item| {

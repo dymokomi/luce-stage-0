@@ -16,20 +16,21 @@ Every type is one of two kinds, and the kind decides what assignment
 and passing do (`docs/MEMORY.md`).
 
 A **value type** copies. Assigning it or passing it to a function makes
-an independent value. The value types are the seven numbers, `bool`,
-`string`, a `struct`, an `enum`, a `union`, and a plain function value.
+an independent value. The value types are the eleven numbers, `bool`,
+`char`, `str`, `bytes`, a `struct`, an `enum`, a `union`, and a plain function value.
 A copied value may contain references; copying it retains those fields.
 
 A **reference type** is a shared object. Assigning it or passing it shares the
 *same* object — a mutation through one name is seen through every other. The
 ARC runtime frees it after the last strong reference.
-The reference types implemented today are the containers `list(T)`,
-`map(K, V)`, `array(T, ...)`, and `builder`, together with the resources
+The reference types implemented today are the containers `list[T]`,
+`map[K, V]`, `array[T, ...]`, and `builder`, together with the resources
 `file` and `task(...)`.
 
+`weak` is non-owning storage for an optional built-in ARC reference. It is a
+property of a local or field rather than a type; see [Weak storage](#weak-storage).
 User-defined reference types are not complete. `class` is accepted as a
-front-end scaffold but still lowers with value-struct behavior; `weak` is
-not syntax. Do not use either as if the target semantics had shipped.
+front-end scaffold but still lowers with value-struct behavior.
 [ROADMAP.md](ROADMAP.md) specifies their destination and acceptance tests.
 [MEMORY.md](MEMORY.md) is the source of truth for current behavior.
 
@@ -132,14 +133,14 @@ relation.
 The four containers are reference types, created with `new` or a
 literal, and parameterized by their element types:
 
-- `list(T)` — a growable sequence. `xs.append(v)`, `xs[i]`, `xs[a:b]`,
+- `list[T]` — a growable sequence. `xs.append(v)`, `xs[i]`, `xs[a:b]`,
   `for x in xs:`.
-- `map(K, V)` — an associative table. `m.has(k)`, `m.get(k)` (which
+- `map[K, V]` — an associative table. `m.has(k)`, `m.get(k)` (which
   answers `V?`), `m[k] = v`.
-- `array(T, _, ...)` — a fixed-shape, densely packed grid. Each `_` is
-  one rank; the extents are given at construction (`new array(int, rows,
-  cols)`) and indexed `grid[r, c]`. An `array` of a storage type packs
-  at that type's width.
+- `array[T, _, ...]` — a fixed-shape, densely packed grid. Each `_` is
+  one rank; the extents are given at construction (`new array[i32](rows,
+  cols)`) and indexed `grid[r, c]`. An `array` packs each element at
+  that type's width.
 - `builder` — an append-only text buffer, finished with `b.build()`.
 
 ```luce fragment
@@ -152,6 +153,35 @@ print(str(xs[0] + (totals.get("a") else 0)))
 
 Sharing a struct that holds a container shares the container: the
 reference is what copies, and both struct values see the one object.
+
+## Weak storage
+
+`weak` qualifies one mutable storage place; it does not construct a type.
+The declared type must be an optional `list`, `map`, `array`, or `builder`:
+
+```luce
+func main():
+    weak var observed: list[i64]?
+    assert(observed == none)
+    if true:
+        let values = [42]
+        observed = values
+        let snapshot = observed else [0]
+        assert(snapshot[0] == 42)
+    assert(observed == none)
+```
+
+A weak field has the same rule and an implicit `none` default. Assignment
+does not retain the target. Reading a live weak place retains and returns an
+owned `T?` snapshot; reading after final strong release returns `none`.
+Generation checks prevent a freed object-table row from reviving an old weak
+handle.
+
+Weak storage cannot target a scalar, text value, value struct, interface,
+function, `file`, or `task`, and cannot cross a worker boundary. A struct that
+contains a weak field has no synthesized equality or collection-search
+semantics. Classes will become valid targets when class reference lowering is
+complete.
 
 ## Structs, enums, unions, and interfaces
 
@@ -169,8 +199,8 @@ func main():
 ```
 
 An `enum` is a set of named constants stored at one integer width
-(`docs/ENUMS.md`); members are always namespaced, `int(m)` and
-`string(m)` convert out, and `Suit(n)` — answering `Suit?` — is the only
+(`docs/ENUMS.md`); members are always namespaced, an explicit integer
+constructor and `str(m)` convert out, and `Suit(n)` — answering `Suit?` — is the only
 way in.
 
 ```luce
@@ -194,24 +224,25 @@ A **function value** — `func(T, ...) -> R`, or the storable form
 
 ## The names the language answers to
 
-The builtin type names are **lowercase**: `byte`, `short`, `int`,
-`long`, `half`, `float`, `double`, `bool`, `string`, and the containers
-`list`, `map`, `array`, `builder`, plus the resources `file` and `task`.
+The builtin type names are **lowercase**: `bool`; `u8`, `u16`, `u32`,
+`u64`; `i8`, `i16`, `i32`, `i64`; `f16`, `f32`, `f64`; `char`, `str`,
+`bytes`; the containers `list`, `map`, `array`, `builder`; and the resources
+`file` and `task`.
 A name you declare — a type alias, struct, enum, union, or interface — is TitleCase
 by convention, so the case of a type name says who defined it. `class`
 will join that set only when its reference lowering is complete.
 
 Parentheses in a type are grouping: `(T)` is `T`, accepted wherever a
-type may stand and required nowhere. `long?` and `(long)?` are the same
+type may stand and required nowhere. `i64?` and `(i64)?` are the same
 type. The one place the grouping is load-bearing is the storable
-function value: a bare `func(long) -> string?` is a function *answering*
-a `string?`, so "a function that may be absent" is written
-`(func(long) -> string)?`.
+function value: a bare `func(i64) -> str?` is a function *answering*
+a `str?`, so "a function that may be absent" is written
+`(func(i64) -> str)?`.
 
 ## Transparent aliases
 
 `alias Name = Type` creates another source name for exactly the resolved
-target type. It does not create an eighth numeric type, a wrapper, a distinct
+target type. It does not create another numeric type, a wrapper, a distinct
 nominal identity, or a runtime representation.
 
 An alias may stand anywhere its target type can stand and may use the target's
@@ -224,8 +255,9 @@ erasure.
 
 ## Conversions
 
-Every numeric type has a conversion constructor named for it — `byte(x)`,
-`short(x)`, `int(x)`, `long(x)`, `half(x)`, `float(x)`, `double(x)` —
-and `string(x)` converts a number, `bool`, enum member, union member, or
+Every numeric type has a conversion constructor named for it — `u8(x)`,
+`u16(x)`, `u32(x)`, `u64(x)`, `i8(x)`, `i16(x)`, `i32(x)`, `i64(x)`,
+`f16(x)`, `f32(x)`, and `f64(x)` — and `str(x)` converts a number,
+`bool`, enum member, union member, or
 function value to text. What each one rounds, and when it traps, is in
 `docs/NUMERICS.md`.

@@ -1,6 +1,6 @@
 # std.lists
 
-`std.lists` adds one method to every `list(T)`: `sort_by`. It is a method
+`std.lists` adds one method to every `list[T]`: `sort_by`. It is a method
 route, not a namespace function, so write `values.sort_by(comparator)` after
 importing the module.
 

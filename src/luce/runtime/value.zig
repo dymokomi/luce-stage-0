@@ -22,7 +22,7 @@
 //! **Short text lives in the value.**  The tag needs one byte, not
 //! eight, and the seven that frees plus `bits` and `length` are
 //! twenty-two contiguous bytes at offset 2 — enough for the strings
-//! this language actually moves around (`String(long)` is at most twenty,
+//! this language actually moves around (`str(i64)` is at most twenty,
 //! a split piece averages twelve), and the same twenty-two libc++
 //! reaches in the same twenty-four.  `inline_length` says which form
 //! the text is in: a count from 0 to `inline_capacity` when the bytes
@@ -400,10 +400,10 @@ pub const Value = extern struct {
         return std.enums.fromInt(Tag, raw);
     }
 
-    /// Whether the String representation can be read without leaving the
+    /// Whether the str representation can be read without leaving the
     /// value's declared storage.  The tag is not enough at the C/MIR seam:
     /// an invalid inline length would slice past the value, and a non-empty
-    /// outside String with a null pointer would turn a borrowed payload into
+    /// outside str with a null pointer would turn a borrowed payload into
     /// a native memory fault.
     pub fn hasValidStringRepresentation(self: Value) bool {
         const tag = self.validTag() orelse return false;
@@ -530,7 +530,7 @@ pub const Value = extern struct {
 
     /// True when this is the absent value of a `T?`.  One tag test for
     /// every payload type: a present `long?` is tagged `int` and a
-    /// present `List(T)?` is tagged `object`, so absence needs no
+    /// present `list[T]?` is tagged `object`, so absence needs no
     /// per-type encoding and no second word (docs/FAILURE.md).  It is
     /// *not* the null object, which is a present handle to nothing.
     pub fn isNone(self: Value) bool {
@@ -618,7 +618,7 @@ pub const View = union(enum) {
     weak: Handle,
 };
 
-/// Map keys compare by content. Integer keys retain their exact width,
+/// map keys compare by content. Integer keys retain their exact width,
 /// enum keys use their exact backing width, and text compares by bytes.
 pub fn keyEquals(left: *const Value, right: *const Value) bool {
     const left_tag = left.validTag() orelse return false;

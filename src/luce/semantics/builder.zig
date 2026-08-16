@@ -702,22 +702,16 @@ pub const FunctionBuilder = struct {
 
     // Landing ---------------------------------------------------------------
     //
-    // Getting a checked value into the place that expects it: the
-    // implicit widenings (docs/TYPES.md), the numeric unification two
-    // operands meet at, and the one function every place calls to say
-    // yes or no.  What is said when the answer is no is `refusals.zig`.
+    // Getting a checked value into the place that expects it. Concrete
+    // numeric values never convert here; literals have already landed at
+    // their contextual type. Optional wrapping and nominal interface
+    // conversion are the two representation changes this boundary may add.
+    // What is said when the answer is no lives in `refusals.zig`.
 
-    /// Make an already-lowered value fit `expected`, applying the two
-    /// widenings the language has: `long` into `double`
-    /// (docs/NUMERICS.md) and `T` into `T?` (S43 — the widened value
-    /// owns exactly what it owned before).  Null means it does not fit
-    /// and the caller reports.
-    ///
-    /// **This is the one place promotion happens**, which is why every
-    /// site that already called it — annotation, argument, return,
-    /// element, field — gets promotion consistently and none of them
-    /// had to learn about it.  The two widenings compose in the one
-    /// order that makes sense: `let x: double? = 1` widens, then wraps.
+    /// Make an already-lowered value fit `expected`. Exact values pass
+    /// unchanged, a conforming struct can become an interface existential,
+    /// and a present `T` can become `T?`. Null means it does not fit and the
+    /// caller reports. Numeric representation changes are never implicit.
     pub fn fit(self: *FunctionBuilder, value: Typed, expected: Type) Error!?Typed {
         if (value.value_type.eql(expected)) return value;
         if (value.value_type.widensTo(expected)) return try self.widenNumeric(value, expected);
@@ -765,10 +759,8 @@ pub const FunctionBuilder = struct {
         }
         const payload = expected.held() orelse return null;
         const inner = (try self.fit(value, payload)) orelse return null;
-        // The `T <: T?` widening is a node of its own
-        // (`wrap_optional`), recorded here at the one place promotion
-        // is spelled — as `convert` is at `widenNumeric` — so every
-        // site that wraps records without knowing it.
+        // The `T <: T?` inclusion is a node of its own (`wrap_optional`),
+        // recorded here so every assignment-like boundary agrees.
         return .{
             .node = try recorder.recordNode(self, .{ .wrap_optional = .{
                 .operand = inner.node,
@@ -779,19 +771,10 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    /// Widen a number to a wider one along `Type.widensTo` — the whole
-    /// of the language's unwritten numeric conversion (docs/TYPES.md
-    /// §2).  Four pairs: `int` to `long` and to `double`, `long` to
-    /// `double`, `float` to `double`.  Never the reverse, and never
-    /// across a ladder into a *narrow* float, because implicit
-    /// narrowing is what would make a lost digit silent.
-    ///
-    /// A widened *literal* costs nothing: the conversion of a constant
-    /// is folded before any machine code exists.  A widened variable
-    /// costs one instruction.
-    ///
-    /// The caller has already asked `widensTo`; this asserts it rather
-    /// than re-deciding it, so there is one statement of the lattice.
+    /// Record an implicit numeric conversion admitted by `Type.widensTo`.
+    /// The explicit-width contract currently admits none; keeping this
+    /// assertion at old call sites makes any accidental reintroduction fail
+    /// loudly until those sites are removed.
     pub fn widenNumeric(self: *FunctionBuilder, value: Typed, to: Type) Error!Typed {
         std.debug.assert(value.value_type.widensTo(to));
         return self.convertNumeric(value, to);
@@ -802,10 +785,8 @@ pub const FunctionBuilder = struct {
     /// specified f64 result; source-level conversions use the same node.
     pub fn convertNumeric(self: *FunctionBuilder, value: Typed, to: Type) Error!Typed {
         std.debug.assert(value.value_type.isNumeric() and to.isNumeric());
-        // The widening is a node of its own (`convert`), so an operand
-        // tree says where every conversion stands — and recording it
-        // here covers every site that widens, because this is the one
-        // place widening is spelled.
+        // A conversion is a node of its own, so the tree records the exact
+        // source boundary that changes representation.
         return .{
             .node = try recorder.recordNode(self, .{ .convert = .{
                 .operand = value.node,
@@ -816,18 +797,9 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    /// Bring an already-lowered value to `want` when it gets there by
-    /// widening, and say whether it is there afterwards.
-    ///
-    /// The builtins ask this rather than comparing types, because
-    /// "an index is a `long`" has always meant *an integer*, and an
-    /// `int` is one — it reaches a `long` place with nothing written
-    /// down, exactly as it does at an argument or a store
-    /// (docs/TYPES.md §2).  Comparing exactly would refuse
-    /// `xs[i]` for the commonest `int` there is, a loop counter.
-    ///
-    /// The value is rewritten in place, because the register the
-    /// caller goes on to pass is this one.
+    /// Check whether an already-lowered value is exactly `want`. The helper
+    /// retains its historical name until its call sites are collapsed; under
+    /// the explicit-width contract `Type.widensTo` is always false.
     pub fn widensInto(self: *FunctionBuilder, held: *Typed, want: Type) Error!bool {
         if (held.value_type.eql(want)) return true;
         if (!held.value_type.widensTo(want)) return false;
@@ -869,7 +841,7 @@ pub const FunctionBuilder = struct {
             // optional places — and a bare function name, a lambda and
             // a bind land on the signature *inside* one exactly as they
             // land on a bare `func` place.  `fit` then wraps the value
-            // it made, which is the same two steps `let x: double? = 1`
+            // it made, which is the same two steps `let x: f64? = 1`
             // takes; `literalLandingType` looks through the same layer
             // one line above, for the same reason.
             .optional => |payload| switch (payload) {
@@ -880,18 +852,16 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    /// A number at the type an operator computes it at — `int` for a
-    /// `byte` or a `short`, `float` for a `half`, and itself for the
-    /// four that already do arithmetic (D5).  The one place that
-    /// promotion is spelled for a *single* operand; `unifyNumeric` is
-    /// the same rule for a pair.
+    /// A number at the type an operator computes it at. Every explicit-width
+    /// numeric type computes as itself, so this is now an identity helper
+    /// retained while old call sites are simplified.
     pub fn promoted(self: *FunctionBuilder, value: Typed) Error!Typed {
         _ = self;
         return value;
     }
 
-    /// Bring two numeric operands to the type they meet at
-    /// (`Type.unified`).  True when it moved either of them.
+    /// Check the single concrete numeric type two operands share. With no
+    /// implicit numeric conversion, this never moves either operand.
     pub fn unifyNumeric(self: *FunctionBuilder, left: *Typed, right: *Typed) Error!bool {
         const meeting = Type.unified(left.value_type, right.value_type) orelse return false;
         var moved = false;

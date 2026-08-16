@@ -23,7 +23,7 @@ handler.
 
 | Code | Message | Raised when |
 |---|---|---|
-| `integer_overflow` | integer overflow | Checked `int` or `long` arithmetic leaves its width. |
+| `integer_overflow` | integer overflow | Checked integer arithmetic leaves its concrete type's range. |
 | `divide_by_zero` | division by zero | Integer `//` or `%` has a zero divisor. Real `/` is IEEE and does not trap. |
 | `conversion_range` | conversion out of range | An explicit conversion cannot represent its input. |
 | `assertion_failed` | assertion failed | `assert(false)` runs. |
@@ -38,7 +38,7 @@ handler.
 | `empty_collection` | pop from an empty list | `pop()` runs on an empty list. |
 | `use_after_free` | object used after free | A consumed resource is used again, or damaged IR presents a stale handle. Ordinary ARC container aliases remain live together. |
 | `null_object` | null object reference | An unfilled container or resource slot is used. |
-| `bad_codepoint` | invalid character code | `chr` receives an invalid Unicode scalar, or `append_ascii` receives a value outside 0..127. |
+| `bad_codepoint` | invalid character code | `char` receives an invalid Unicode scalar, or `append_ascii` receives a value outside 0..127. |
 | `not_owned` | object is owned by a container | A forged or damaged module reaches an operation with the wrong runtime value shape. Correctly compiled source does not emit that path. |
 | `shift_out_of_range` | shift count out of range | A shift count is negative or at least the operand width. |
 | `allocation_failed` | not enough memory for this container | The allocator cannot create container or resource storage. |
@@ -105,7 +105,7 @@ On a successful multi-return assignment all replacement stores happen;
 on failure none do. Side effects from evaluating the call are not rolled
 back. `catch VALUE` supplies one value and cannot supply a return shape.
 
-`NAME` is an immutable `string` scoped to the handler. It contains the
+`NAME` is an immutable `str` scoped to the handler. It contains the
 error message, not its code or source location. The expression form
 does not bind a name. A fallible call with neither `try` nor `catch` is
 `luce.sema.fallible`.
