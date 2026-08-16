@@ -185,7 +185,7 @@ pub fn lowerConstruct(
         });
         return null;
     }
-    const result_type: Type = .{ .strukt = layout_index };
+    const result_type = try resolve.nominalType(self.analyzer, layout_index);
     return .{
         // Every field is accounted for by now — written or
         // defaulted — so the batch covers the layout exactly.
@@ -601,7 +601,7 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
         const byte_sequence = if (self.analyzer.heapOf(value.value_type)) |descriptor| switch (descriptor) {
             .list => |element| element == .u8,
             .array => |shape| shape.rank == 1 and shape.element == .u8,
-            .map, .builder, .file, .task => false,
+            .class, .map, .builder, .file, .task => false,
         } else false;
         if (value.value_type != .str and !byte_sequence) {
             return failConvert(self, call, value, produces);
@@ -972,7 +972,7 @@ pub fn lowerIntrinsic(
                 const descriptor = self.analyzer.heapOf(arguments[0].value_type) orelse break :measure false;
                 break :measure switch (descriptor) {
                     .list, .map, .array, .builder => true,
-                    .file, .task => false,
+                    .class, .file, .task => false,
                 };
             };
             if (!measurable) {

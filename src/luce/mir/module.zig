@@ -193,7 +193,13 @@ pub const magic = "LUCE";
 /// record weak slots, the instruction set gains dedicated weak load/store
 /// operations, and reference layouts carry their identity bit. A 49 module
 /// cannot distinguish owning from non-owning storage.
-pub const format_version: u32 = 50;
+///
+/// 51 — final class identity joins the heap descriptor table.
+///
+/// 52 — reference layouts may name a hidden deinitializer function, and
+/// `class_resurrection` joins the trap vocabulary. A 51 module cannot say
+/// which class release executes user code and must not be guessed at.
+pub const format_version: u32 = 52;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -231,6 +237,8 @@ pub fn encode(gpa: Allocator, program: *const mir.Program) error{OutOfMemory}![]
         try writer.blob(layout.name);
         try writer.int(u8, @intFromBool(layout.interface));
         try writer.int(u8, @intFromBool(layout.reference));
+        try writer.int(u8, @intFromBool(layout.deinitializer != null));
+        if (layout.deinitializer) |function| try writer.int(u32, function);
         try writer.int(u32, @intCast(layout.fields.len));
         for (layout.fields) |field| {
             try writer.blob(field.name);
@@ -324,6 +332,7 @@ const Writer = struct {
     fn heapType(self: *Writer, descriptor: types.HeapType) error{OutOfMemory}!void {
         try self.int(u8, @intFromEnum(std.meta.activeTag(descriptor)));
         switch (descriptor) {
+            .class => |layout| try self.int(u32, layout),
             .list => |element| try self.valueType(element),
             .map => |pair| {
                 try self.valueType(pair.key);
@@ -564,6 +573,10 @@ pub fn decode(gpa: Allocator, data: []const u8) DecodeError!mir.Program {
         layout.name = try arena.dupe(u8, try reader.blob());
         layout.interface = (try reader.int(u8)) != 0;
         layout.reference = (try reader.int(u8)) != 0;
+        layout.deinitializer = if ((try reader.int(u8)) != 0)
+            try reader.int(u32)
+        else
+            null;
         const field_count = try reader.count();
         const fields = try arena.alloc(types.StructField, field_count);
         for (fields) |*field| {
@@ -730,6 +743,7 @@ const Reader = struct {
     fn heapType(self: *Reader) DecodeError!types.HeapType {
         const tag = try self.enumTag(std.meta.Tag(types.HeapType));
         return switch (tag) {
+            .class => .{ .class = try self.int(u32) },
             .list => .{ .list = try self.valueType() },
             .map => .{ .map = .{
                 .key = try self.valueType(),
@@ -1372,6 +1386,50 @@ test "weak locals, fields, and operations round-trip through the current format"
     try testing.expect(std.mem.indexOf(u8, dump, "weak target: list[i64]?") != null);
     try testing.expect(std.mem.indexOf(u8, dump, "weak_local_get") != null);
     try testing.expect(std.mem.indexOf(u8, dump, "weak_struct_set") != null);
+
+    const again = try encode(testing.allocator, &loaded);
+    defer testing.allocator.free(again);
+    try testing.expectEqualSlices(u8, encoded, again);
+}
+
+test "a class heap descriptor and hidden deinitializer round-trip together" {
+    var program = try compileScript(
+        \\class Resource:
+        \\    value: i64
+        \\    deinit:
+        \\        self.value += 1
+        \\
+        \\func main():
+        \\    let resource = Resource(value = 1)
+        \\
+    );
+    defer program.deinit();
+
+    const encoded = try encode(testing.allocator, &program);
+    defer testing.allocator.free(encoded);
+    var loaded = try decode(testing.allocator, encoded);
+    defer loaded.deinit();
+
+    try testing.expectEqual(@as(usize, 1), loaded.structs.len);
+    try testing.expect(loaded.structs[0].reference);
+    const finalizer = loaded.structs[0].deinitializer orelse
+        return error.TestUnexpectedResult;
+    try testing.expect(finalizer < loaded.functions.len);
+    try testing.expectEqualStrings("Resource.deinit", loaded.functions[finalizer].name);
+    try testing.expectEqual(@as(u32, 1), loaded.functions[finalizer].parameter_count);
+    try testing.expectEqual(types.Type.none, loaded.functions[finalizer].return_type);
+
+    var class_heap: ?u32 = null;
+    for (loaded.heap_types, 0..) |descriptor, index| switch (descriptor) {
+        .class => |layout| if (layout == 0) {
+            class_heap = @intCast(index);
+        },
+        else => {},
+    };
+    try testing.expect(class_heap != null);
+    try testing.expect(loaded.functions[finalizer].locals[0].local_type.eql(.{
+        .heap = class_heap.?,
+    }));
 
     const again = try encode(testing.allocator, &loaded);
     defer testing.allocator.free(again);
@@ -2027,8 +2085,12 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // 49 -> 50: locals and struct fields record weak storage, reference
     // layouts record identity, and four dedicated weak operations join
     // `Instruction`.
-    try testing.expectEqual(@as(u32, 50), format_version);
-    try testing.expectEqual(@as(u64, 14287404226476713161), hasher.final());
+    // 50 -> 51: the appended class heap descriptor gives reference-kind
+    // layouts an ARC object-handle machine type.
+    // 51 -> 52: class layouts name their hidden deinitializer and the trap
+    // vocabulary appends class_resurrection.
+    try testing.expectEqual(@as(u32, 52), format_version);
+    try testing.expectEqual(@as(u64, 17758753207193102360), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

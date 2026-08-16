@@ -745,6 +745,11 @@ fn lowerBinding(
     weak: bool,
     span: Span,
 ) Error!void {
+    const previous_permission = self.allow_deinitializer_self;
+    defer self.allow_deinitializer_self = previous_permission;
+    if (self.is_deinitializer and weak and builder.isBareSelf(value_expression)) {
+        self.allow_deinitializer_self = true;
+    }
     // A binding whose initializer failed still declares a name the
     // reader meant; remembering it keeps one mistake from
     // producing an "unknown name" per later use.
@@ -1302,6 +1307,10 @@ fn lowerForEach(self: *FunctionBuilder, loop: ast.ForEach) Error!void {
     // in c:` binds position then payload.
     var position_type: Type = .i64;
     const payload_type: Type = scalar_element orelse switch (descriptor.?) {
+        .class => {
+            try self.fail("luce.sema.loop", loop.span, "a class is not iterable", .{});
+            return;
+        },
         .list => |element| element,
         .array => |shape| blk: {
             if (shape.rank != 1) {

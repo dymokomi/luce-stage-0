@@ -432,7 +432,7 @@ fn foldSequence(
                 wanted_element = shape.element;
                 expected_container = place;
             },
-            .map, .builder, .file, .task => {},
+            .class, .map, .builder, .file, .task => {},
         };
     }
     if (literal.elements.len == 0 and wanted_element == null) {
@@ -1324,6 +1324,9 @@ fn foldBinary(analyzer: *Analyzer, module: usize, binary: ast.Binary, wanted: ?T
     if (binary.op == .catch_error) {
         return constantError(analyzer, binary.span, "catch has nothing to do in a constant: nothing is called there", .{});
     }
+    if (binary.op == .identity) {
+        return constantError(analyzer, binary.span, "is compares class identity at runtime and cannot be used in a constant", .{});
+    }
     // Where each side lands, by the two rules the lowering walk
     // uses (`builder.lowerBinaryOperands`), because a file-scope
     // `const` and a local expression must agree about what `2 * 0.1` is:
@@ -1481,6 +1484,6 @@ fn foldBinary(analyzer: *Analyzer, module: usize, binary: ast.Binary, wanted: ?T
             };
             return .{ .value = .{ .boolean = folded }, .value_type = .boolean };
         },
-        .coalesce, .catch_error => unreachable, // answered above
+        .coalesce, .catch_error, .identity => unreachable, // answered above
     }
 }

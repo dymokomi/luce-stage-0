@@ -226,6 +226,9 @@ pub const TrapCode = enum {
     /// weak storage from something other than a supported ARC object.
     /// Source programs are refused earlier with `luce.sema.weak.target`.
     invalid_weak_target,
+    /// A retain attempted to create a new strong reference after a class's
+    /// last strong release had begun its `deinit:` body.
+    class_resurrection,
 
     /// A static string; the caller owns nothing.
     pub fn message(self: TrapCode) []const u8 {
@@ -252,6 +255,7 @@ pub const TrapCode = enum {
             .immutable_object => "constant container is immutable",
             .ownership_cycle => "attempted store would create an ownership cycle",
             .invalid_weak_target => "invalid weak-reference target",
+            .class_resurrection => "deinit cannot create a new strong self reference",
         };
     }
 };

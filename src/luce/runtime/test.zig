@@ -3637,7 +3637,7 @@ test "failed struct and function construction consume their owned fields" {
     const receiver = try function_runtime.newList(Value.none);
     // Keep one caller edge while handing another to the constructor.  Its
     // allocation failure must consume only the edge it was given.
-    function_runtime.retainValue(receiver);
+    try function_runtime.retainValue(receiver);
     function_objects.fail_index = function_objects.alloc_index;
 
     try testing.expectError(
@@ -4259,9 +4259,9 @@ test "cross-runtime copy preserves aliases across roots and nested edges" {
     const leaf = try source.newList(Value.none);
     try containers.append(&source, leaf, Value.ofI64(7));
     const outer = try source.newList(Value.none);
-    source.retainValue(leaf);
+    try source.retainValue(leaf);
     try containers.append(&source, outer, leaf);
-    source.retainValue(leaf);
+    try source.retainValue(leaf);
     try containers.append(&source, outer, leaf);
 
     const copied = try target.copyValuesFrom(&source, &.{ outer, leaf });
@@ -4305,7 +4305,7 @@ test "cross-runtime copy rolls a partially copied cycle back on refusal" {
     const root = try source.newList(Value.none);
     const file = try source.newFile(17, "cycle-resource.bin");
     try containers.append(&source, root, file);
-    source.retainValue(root);
+    try source.retainValue(root);
     try containers.append(&source, root, root);
 
     try expectTrap(.not_owned, &target, target.copyFrom(&source, root));
@@ -8251,6 +8251,235 @@ test "an array's cells are exactly as wide as its element, which is the prize" {
 // ARC — the reference count (docs/MEMORY.md, Sub-cut B)
 // ---------------------------------------------------------------------------
 
+test "ARC class: aliases share fields and final release walks owned children" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{ .arena = arena.allocator(), .objects = testing.allocator });
+    defer {
+        runtime.deinit();
+        arena.deinit();
+    }
+
+    const child = try runtime.newList(Value.none);
+    try runtime.retain(child.asObject()); // the field edge; `child` remains owned here
+    const instance = try runtime.newClass(7, null, &.{ Value.ofI64(1), child });
+    const same = try runtime.copyValue(instance);
+    try testing.expect(instance.asObject().same(same.asObject()));
+    try testing.expectEqual(@as(u32, 2), (try runtime.resolve(instance)).references);
+    try testing.expectEqual(@as(i64, 1), (try runtime.classField(same, 7, 0)).asI64());
+
+    try runtime.setClassField(same, 7, 0, Value.ofI64(42));
+    try testing.expectEqual(@as(i64, 42), (try runtime.classField(instance, 7, 0)).asI64());
+    try testing.expectEqual(@as(u32, 2), (try runtime.resolve(child)).references);
+
+    runtime.freeValue(instance);
+    try testing.expectEqual(@as(u32, 1), (try runtime.resolve(same)).references);
+    runtime.freeValue(same); // destroys the class and releases its child edge
+    try testing.expectEqual(@as(u32, 1), (try runtime.resolve(child)).references);
+    runtime.freeValue(child);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
+const ClassFinalizerProbe = struct {
+    calls: u32 = 0,
+    function: i64 = -1,
+    depth: i64 = -1,
+    value: i64 = -1,
+    weak: Value = .none,
+    weak_was_zero: bool = false,
+    saw_finalizing: bool = false,
+    resurrect: bool = false,
+
+    fn run(
+        context: ?*anyopaque,
+        runtime: *Runtime,
+        function: i64,
+        receiver: *const Value,
+        depth: i64,
+    ) callconv(.c) i32 {
+        const self: *ClassFinalizerProbe = @ptrCast(@alignCast(context.?));
+        self.calls += 1;
+        self.function = function;
+        self.depth = depth;
+        const object = runtime.resolve(receiver.*) catch return 1;
+        self.saw_finalizing = object.finalizing and object.references == 0;
+        self.value = (runtime.classField(receiver.*, 17, 0) catch return 1).asI64();
+        const upgraded = runtime.strengthen(self.weak) catch return 1;
+        self.weak_was_zero = upgraded.isNone();
+        if (self.resurrect) {
+            runtime.retain(receiver.asObject()) catch return 1;
+        }
+        runtime.setClassField(receiver.*, 17, 0, Value.ofI64(self.value + 1)) catch return 1;
+        return 0;
+    }
+};
+
+test "ARC class: finalizer runs once with live fields before child teardown" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{ .arena = arena.allocator(), .objects = testing.allocator });
+    defer {
+        runtime.deinit();
+        arena.deinit();
+    }
+
+    var probe: ClassFinalizerProbe = .{};
+    runtime.finalizers = .{ .context = &probe, .run = ClassFinalizerProbe.run, .depth = 73 };
+    const child = try runtime.newList(Value.none);
+    try runtime.retain(child.asObject());
+    const instance = try runtime.newClass(17, 41, &.{ Value.ofI64(9), child });
+    probe.weak = try runtime.weaken(instance);
+    const alias = try runtime.copyValue(instance);
+
+    runtime.freeValue(instance);
+    try testing.expectEqual(@as(u32, 0), probe.calls);
+    runtime.freeValue(alias);
+    try testing.expectEqual(@as(u32, 1), probe.calls);
+    try testing.expectEqual(@as(i64, 41), probe.function);
+    try testing.expectEqual(@as(i64, 73), probe.depth);
+    try testing.expectEqual(@as(i64, 9), probe.value);
+    try testing.expect(probe.saw_finalizing);
+    try testing.expect(probe.weak_was_zero);
+    try testing.expect((try runtime.strengthen(probe.weak)).isNone());
+    // The class's field edge was released after the callback; the local edge
+    // remains and proves child storage was alive throughout `deinit`.
+    try testing.expectEqual(@as(u32, 1), (try runtime.resolve(child)).references);
+    runtime.freeValue(child);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
+test "ARC class: resurrection traps but final storage teardown remains total" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{ .arena = arena.allocator(), .objects = testing.allocator });
+    defer {
+        runtime.deinit();
+        arena.deinit();
+    }
+
+    var probe: ClassFinalizerProbe = .{ .resurrect = true };
+    runtime.finalizers = .{ .context = &probe, .run = ClassFinalizerProbe.run, .depth = 4 };
+    const instance = try runtime.newClass(17, 2, &.{Value.ofI64(1)});
+    probe.weak = try runtime.weaken(instance);
+    runtime.freeValue(instance);
+    try testing.expectEqual(@as(u32, 1), probe.calls);
+    try testing.expectEqual(vocabulary.TrapCode.class_resurrection, runtime.pending.?.code);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+    try testing.expect((try runtime.strengthen(probe.weak)).isNone());
+}
+
+test "ARC class: missing finalizer engine traps after reclaiming the class" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{ .arena = arena.allocator(), .objects = testing.allocator });
+    defer {
+        runtime.deinit();
+        arena.deinit();
+    }
+
+    const instance = try runtime.newClass(17, 3, &.{Value.ofI64(1)});
+    const weak = try runtime.weaken(instance);
+    runtime.freeValue(instance);
+    try testing.expectEqual(vocabulary.TrapCode.host_unavailable, runtime.pending.?.code);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+    try testing.expect((try runtime.strengthen(weak)).isNone());
+}
+
+test "ARC class: rollback and final sweep never execute user deinitializers" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{ .arena = arena.allocator(), .objects = testing.allocator });
+    var probe: ClassFinalizerProbe = .{};
+    runtime.finalizers = .{ .context = &probe, .run = ClassFinalizerProbe.run, .depth = 4 };
+
+    const rolled_back = try runtime.newClass(17, 3, &.{Value.ofI64(1)});
+    runtime.freeObject(rolled_back.asObject());
+    try testing.expectEqual(@as(u32, 0), probe.calls);
+    _ = try runtime.newClass(17, 3, &.{Value.ofI64(2)});
+    runtime.deinit();
+    try testing.expectEqual(@as(u32, 0), probe.calls);
+    arena.deinit();
+}
+
+test "ARC class: weak identity zeroes and a reused row cannot revive it" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{ .arena = arena.allocator(), .objects = testing.allocator });
+    defer {
+        runtime.deinit();
+        arena.deinit();
+    }
+
+    const instance = try runtime.newClass(3, null, &.{Value.ofI64(9)});
+    const handle = instance.asObject();
+    const weak = try runtime.weaken(instance);
+    runtime.freeValue(instance);
+    try testing.expect((try runtime.strengthen(weak)).isNone());
+
+    const replacement = try runtime.newClass(3, null, &.{Value.ofI64(10)});
+    defer runtime.freeValue(replacement);
+    try testing.expectEqual(handle.index, replacement.asObject().index);
+    try testing.expect(handle.generation != replacement.asObject().generation);
+    try testing.expect((try runtime.strengthen(weak)).isNone());
+}
+
+test "ARC class: malformed field doors consume replacements without corrupting the instance" {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{ .arena = arena.allocator(), .objects = testing.allocator });
+    defer {
+        runtime.deinit();
+        arena.deinit();
+    }
+
+    const instance = try runtime.newClass(11, null, &.{Value.ofI64(7)});
+    defer runtime.freeValue(instance);
+    const replacement = try runtime.newList(Value.none);
+    try expectTrap(.not_owned, &runtime, runtime.setClassField(instance, 12, 0, replacement));
+    runtime.pending = null;
+    try testing.expectEqual(@as(i64, 7), (try runtime.classField(instance, 11, 0)).asI64());
+    try expectTrap(.use_after_free, &runtime, runtime.resolve(replacement));
+    runtime.pending = null;
+
+    try expectTrap(.index_bounds, &runtime, runtime.classField(instance, 11, 1));
+    runtime.pending = null;
+    try expectTrap(.not_owned, &runtime, runtime.classField(Value.ofI64(1), 11, 0));
+}
+
+fn buildClassWithAllocator(allocator: std.mem.Allocator) !void {
+    var arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    var runtime: Runtime = .init(.{ .arena = arena.allocator(), .objects = allocator });
+    defer {
+        runtime.deinit();
+        arena.deinit();
+    }
+
+    const text_value = try runtime.ownValue(Value.ofStr(
+        "a class field whose text storage must be consumed on every failure",
+    ));
+    const instance = try runtime.newClass(5, null, &.{text_value});
+    runtime.freeValue(instance);
+    try testing.expectEqual(@as(u32, 0), runtime.live);
+}
+
+test "ARC class: construction rolls back every allocation failure" {
+    try testing.checkAllAllocationFailures(
+        testing.allocator,
+        buildClassWithAllocator,
+        .{},
+    );
+}
+
+test "ARC class: cross-runtime graph copying is refused without a target shell" {
+    var source_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer source_arena.deinit();
+    var source: Runtime = .init(.{ .arena = source_arena.allocator(), .objects = testing.allocator });
+    defer source.deinit();
+
+    var target_arena: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer target_arena.deinit();
+    var target: Runtime = .init(.{ .arena = target_arena.allocator(), .objects = testing.allocator });
+    defer target.deinit();
+
+    const instance = try source.newClass(4, null, &.{Value.ofI64(1)});
+    defer source.freeValue(instance);
+    try expectTrap(.not_owned, &target, target.copyFrom(&source, instance));
+    try testing.expectEqual(@as(u32, 0), target.live);
+}
+
 test "ARC: retain and release count references, and zero frees the object" {
     var arena: std.heap.ArenaAllocator = .init(testing.allocator);
     var runtime: Runtime = .init(.{ .arena = arena.allocator(), .objects = testing.allocator });
@@ -8264,7 +8493,7 @@ test "ARC: retain and release count references, and zero frees the object" {
     try testing.expectEqual(@as(u32, 1), (try runtime.resolve(list)).references);
     const live = runtime.live;
 
-    runtime.retain(handle);
+    try runtime.retain(handle);
     try testing.expectEqual(@as(u32, 2), (try runtime.resolve(list)).references);
 
     runtime.release(handle);
@@ -8290,10 +8519,10 @@ test "ARC: a shared element outlives the container that let it go" {
 
     const a = try runtime.newList(Value.none);
     try containers.append(&runtime, a, leaf);
-    runtime.retain(leaf_handle); // a now names leaf
+    try runtime.retain(leaf_handle); // a now names leaf
     const b = try runtime.newList(Value.none);
     try containers.append(&runtime, b, leaf);
-    runtime.retain(leaf_handle); // b now names leaf
+    try runtime.retain(leaf_handle); // b now names leaf
     try testing.expectEqual(@as(u32, 3), (try runtime.resolve(leaf)).references);
 
     runtime.release(leaf_handle); // drop the local name: a and b still hold it
@@ -8392,7 +8621,7 @@ test "ARC ownership walks preserve weak cells without retaining their targets" {
     const aggregate = try runtime.makeStruct(&.{weak});
     defer runtime.dropStorage(aggregate);
 
-    runtime.retainValue(aggregate);
+    try runtime.retainValue(aggregate);
     runtime.freeObjectsIn(aggregate);
     try testing.expectEqual(@as(u32, 1), (try runtime.resolve(target)).references);
 

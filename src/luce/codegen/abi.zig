@@ -245,7 +245,11 @@ const trace = @import("../runtime/trace.zig");
 /// `luce_rt_weak_store`/`luce_rt_weak_load` services. `Value` remains 24
 /// bytes, but generated code and the runtime must agree on the new tag and
 /// upgrade protocol.
-pub const version: u32 = 22;
+///
+/// 23 — nominal class instances add three runtime services for consuming
+/// construction, borrowed field reads, and shared in-place field writes.
+/// The value representation stays an ordinary ARC object handle.
+pub const version: u32 = 23;
 
 /// The symbol a compiled Luce artifact exports for a loader to call.
 /// What the thing being called *is* — the machine, the ABI version, the

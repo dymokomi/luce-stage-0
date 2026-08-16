@@ -62,6 +62,7 @@ pub fn functionReachable(self: *FunctionBuilder, function_index: u32, span: Span
     if (info.enclosing) |owner| {
         const declaration = switch (owner) {
             .strukt => |index| self.analyzer.struct_decls.items[index].declaration.visibility,
+            .class => |heap| self.analyzer.struct_decls.items[self.analyzer.heap_types.items[heap].class].declaration.visibility,
             .enumeration => |reference| self.analyzer.enum_decls.items[reference.index].declaration.visibility,
             .variant => |index| self.analyzer.variant_decls.items[index].declaration.visibility,
         };
@@ -69,6 +70,7 @@ pub fn functionReachable(self: *FunctionBuilder, function_index: u32, span: Span
             try self.fail("luce.sema.private", span, "{s} is private to {s}", .{
                 switch (owner) {
                     .strukt => |index| self.analyzer.struct_decls.items[index].declaration.name,
+                    .class => |heap| self.analyzer.struct_decls.items[self.analyzer.heap_types.items[heap].class].declaration.name,
                     .enumeration => |reference| self.analyzer.enum_decls.items[reference.index].declaration.name,
                     .variant => |index| self.analyzer.variant_decls.items[index].declaration.name,
                 },

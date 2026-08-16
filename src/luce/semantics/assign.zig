@@ -75,33 +75,9 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
     };
     std.mem.reverse(*const ast.Expression, steps.items);
 
-    // **Does this store land in the root's own slot?**  It does
-    // when every step is a field: the rebuild below functionally
-    // updates each struct outward and finishes with a `store` into
-    // the local, so the local is genuinely reassigned and `let`
-    // forbids it.  It does *not* when any step is an index: the
-    // rebuild stops at the innermost `index_set`, which writes
-    // through the object reference and never reaches the local
-    // (`mir/build.zig`'s `rebuild` — "the object mutated in
-    // place").
-    //
-    // `let` freezes the binding, not the object, everywhere else
-    // in the language — `xs.append(v)`, `xs.sort()`, `xs[0] = v`
-    // and `bag.counts[0] = v` are all legal through an immutable
-    // name, because none of them writes the name.  Asking `var` of
-    // `xs[0].field = v` alone made two spellings of one store
-    // disagree, and said so in a sentence about a reassignment the
-    // emitted code provably does not perform.
-    var writes_root = true;
-    for (steps.items) |node| {
-        if (node.* == .index) {
-            writes_root = false;
-            break;
-        }
-    }
-
-    // The root must be a usable local, and a mutable one when the
-    // store lands in it.
+    // The root must first be a usable local. Whether it must be mutable is
+    // answered after its type is known: a value-only path rebuilds the root
+    // binding, while an index or class boundary mutates an object in place.
     if (std.mem.eql(u8, root.text, "input") or std.mem.eql(u8, root.text, "output")) {
         try self.fail("luce.sema.name", root.span, "ports are not nested places", .{});
         return;
@@ -116,12 +92,39 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
         return;
     };
     const info = found.info;
+    const root_local = info.local;
+    const root_type = recorder.localType(self, root_local);
+
+    // **Does this store land in the root's own slot?** Value-struct fields
+    // rebuild outward and eventually store the root. An index or a class
+    // field writes through identity and stops the rebuild. This silent type
+    // walk only answers the mutability question; the checked descent below
+    // owns all path diagnostics.
+    var writes_root = true;
+    var probe_type = root_type;
+    for (steps.items) |node| {
+        switch (node.*) {
+            .field => |field| {
+                const layout_index = self.analyzer.nominalLayout(probe_type) orelse break;
+                const layout = self.analyzer.structs.items[layout_index];
+                if (layout.reference) {
+                    writes_root = false;
+                    break;
+                }
+                const field_index = layout.findField(field.name) orelse break;
+                probe_type = layout.fields[field_index].field_type;
+            },
+            .index => {
+                writes_root = false;
+                break;
+            },
+            else => break,
+        }
+    }
     if (!info.mutable and writes_root) {
         try self.fail("luce.sema.let", root.span, "{s} is let-bound; use var for reassignment", .{root.text});
         return;
     }
-    const root_local = info.local;
-    const root_type = recorder.localType(self, root_local);
 
     // Lower every subscript across the chain plus the right-hand
     // side in one pass: lowerOperands keeps the batch's rewrite
@@ -161,13 +164,12 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
     for (steps.items, recorded_steps, 0..) |node, *recorded_step, step_index| {
         switch (node.*) {
             .field => |field| {
-                if (current_type != .strukt) {
+                const layout_index = self.analyzer.nominalLayout(current_type) orelse {
                     try self.fail("luce.sema.field", field.span, "{s} has no fields", .{
                         try self.analyzer.typeName(current_type),
                     });
                     return;
-                }
-                const layout_index = current_type.strukt;
+                };
                 const layout = self.analyzer.structs.items[layout_index];
                 const field_index = layout.findField(field.name) orelse {
                     try refusals.failUnknownField(self, "luce.sema.field", layout_index, field.name, field.span);
@@ -440,7 +442,14 @@ fn lowerAssignName(self: *FunctionBuilder, base: []const u8, span: Span, assign:
     const combine_type = if (narrowed_place) local_type.held().? else local_type;
     const wanted = if (assign.compound != null) combine_type else local_type;
 
-    const fitted = (try self.lowerTyped(assign.value, wanted, assign.span, base)) orelse return;
+    const fitted = lifecycle_fit: {
+        const previous_permission = self.allow_deinitializer_self;
+        defer self.allow_deinitializer_self = previous_permission;
+        if (self.is_deinitializer and info.weak and builder.isBareSelf(assign.value)) {
+            self.allow_deinitializer_self = true;
+        }
+        break :lifecycle_fit (try self.lowerTyped(assign.value, wanted, assign.span, base)) orelse return;
+    };
     const value = fitted.value;
     // What the slot now holds decides whether the name reads as
     // its payload from here on: a plain `T` is present, a `T?` or
@@ -502,21 +511,20 @@ fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast
         return;
     };
     const info = found.info;
-    if (!info.mutable) {
-        try self.fail("luce.sema.let", target.span, "{s} is let-bound; use var for reassignment", .{target.base});
-        return;
-    }
     const local = info.local;
     const local_type = recorder.localType(self, local);
-    if (local_type != .strukt) {
-        try self.fail("luce.sema.field", target.span, "{s} is {s}, not a struct", .{
+    const layout_index = self.analyzer.nominalLayout(local_type) orelse {
+        try self.fail("luce.sema.field", target.span, "{s} is {s}, not a struct or class", .{
             target.base,
             try self.analyzer.typeName(local_type),
         });
         return;
-    }
-    const layout_index = local_type.strukt;
+    };
     const layout = self.analyzer.structs.items[layout_index];
+    if (!info.mutable and !layout.reference) {
+        try self.fail("luce.sema.let", target.span, "{s} is let-bound; use var for reassignment", .{target.base});
+        return;
+    }
     const field_index = layout.findField(target.field) orelse {
         try refusals.failUnknownField(self, "luce.sema.field", layout_index, target.field, target.span);
         return;
@@ -533,7 +541,14 @@ fn lowerAssignField(self: *FunctionBuilder, target: ast.FieldTarget, assign: ast
         return;
     }
     const named = try std.fmt.allocPrint(self.arena(), "{s}.{s}", .{ target.base, target.field });
-    const value = ((try self.lowerTyped(assign.value, expected, assign.span, named)) orelse return).value;
+    const value = lifecycle_value: {
+        const previous_permission = self.allow_deinitializer_self;
+        defer self.allow_deinitializer_self = previous_permission;
+        if (self.is_deinitializer and layout.fields[field_index].weak and builder.isBareSelf(assign.value)) {
+            self.allow_deinitializer_self = true;
+        }
+        break :lifecycle_value ((try self.lowerTyped(assign.value, expected, assign.span, named)) orelse return).value;
+    };
     // The new field is a store into the run `struct_set` builds,
     // decided here and spelled by lower.  A field that carries
     // objects stores the reference plainly; only value storage — a
@@ -673,6 +688,10 @@ pub fn checkIndex(
     }
 
     switch (descriptor) {
+        .class => {
+            try self.fail("luce.sema.index", span, "{s} is a class and cannot be indexed", .{try self.analyzer.typeName(object_type)});
+            return null;
+        },
         .list => |element| {
             if (indices.len != 1 or !try self.widensInto(&indices[0], .i64)) {
                 try self.fail("luce.sema.index", span, "lists index with one i64", .{});

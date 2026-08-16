@@ -768,6 +768,7 @@ test "the precedence table binds exactly as docs/LANGUAGE.md states" {
         \\    let i = (not a) == b
         \\    let j = not a
         \\    let k = (a < b) == (c < d)
+        \\    let identity = a is b
         \\
     );
     defer parsed.deinit();
@@ -817,6 +818,7 @@ test "the precedence table binds exactly as docs/LANGUAGE.md states" {
     try testing.expectEqual(ast.BinaryOp.equal, k.op);
     try testing.expectEqual(ast.BinaryOp.less, k.left.binary.op);
     try testing.expectEqual(ast.BinaryOp.less, k.right.binary.op);
+    try testing.expectEqual(ast.BinaryOp.identity, body.statements[11].let.value.binary.op);
 }
 
 test "every adjacent pair of precedence levels binds the tighter one first" {

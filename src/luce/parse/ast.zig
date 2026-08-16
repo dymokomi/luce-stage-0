@@ -52,6 +52,8 @@ pub const BinaryOp = enum {
     modulo,
     equal,
     not_equal,
+    /// Reference identity, admitted only for two values of the same class.
+    identity,
     less,
     less_equal,
     greater,
@@ -456,6 +458,10 @@ pub const StructDecl = struct {
     name_span: Span,
     fields: []Field,
     functions: []FuncDecl,
+    /// The class-only lifecycle hook. It uses the ordinary function body
+    /// representation after the parser fixes its signature to implied
+    /// `self`, no written parameters, no result, and no fallibility.
+    deinitializer: ?FuncDecl = null,
     /// Interfaces this struct explicitly promises to implement.  The
     /// parser keeps the written type names; stage 4 checks the promise
     /// against the completed method table.

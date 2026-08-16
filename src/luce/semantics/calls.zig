@@ -1112,6 +1112,7 @@ fn lowerAliasCall(
             if (target == .heap) {
                 const heap = self.analyzer.heapOf(target).?;
                 switch (heap) {
+                    .class => |layout| return construct.lowerConstruct(self, call.arguments, call.span, layout),
                     .list, .map, .array, .builder => {
                         try self.fail(
                             "luce.sema.call",
@@ -1314,6 +1315,20 @@ fn lowerValueMethod(
         }
     }
 
+    // A class has declared methods but still lives in the heap-type table.
+    // Route it before builtin object dispatch: its identity is the implicit
+    // receiver of an ordinary declared call, not a container descriptor.
+    if (self.analyzer.classLayout(receiver.value_type) != null) {
+        return lowerReceiverCall(
+            self,
+            method,
+            run,
+            as_statement,
+            fallible_allowed,
+            shape_position,
+        );
+    }
+
     const found: MethodFound = blk: {
         if (receiver.value_type == .str) {
             // The primitives above, and nothing else: every other
@@ -1490,6 +1505,10 @@ pub fn structMethod(self: *FunctionBuilder, receiver: Type, name: []const u8) Er
 pub fn declaredName(self: *const FunctionBuilder, of: Type) ?[]const u8 {
     return switch (of) {
         .strukt => |index| self.analyzer.structs.items[index].name,
+        .heap => if (self.analyzer.classLayout(of)) |index|
+            self.analyzer.structs.items[index].name
+        else
+            null,
         .enumeration => |reference| self.analyzer.enums.items[reference.index].name,
         .variant => |index| self.analyzer.variants.items[index].name,
         else => null,
@@ -1918,8 +1937,7 @@ fn failFieldIsNotAMethod(
     receiver: Type,
     method: ast.Method,
 ) Error!bool {
-    if (receiver != .strukt) return false;
-    const layout_index = receiver.strukt;
+    const layout_index = self.analyzer.nominalLayout(receiver) orelse return false;
     const layout = self.analyzer.structs.items[layout_index];
     const field_index = layout.findField(method.name) orelse return false;
     const field_type = layout.fields[field_index].field_type;
@@ -2041,6 +2059,7 @@ pub fn methodParameters(self: *FunctionBuilder, receiver: Type, name: []const u8
     }
     const descriptor = self.analyzer.heapOf(receiver) orelse return null;
     return switch (descriptor) {
+        .class => null,
         .list => |element| sequenceParameters(self, name, element, true),
         .array => |shape| blk: {
             if (std.mem.eql(u8, name, "dim")) break :blk try typeList(self, &.{.i64});
@@ -2443,6 +2462,7 @@ fn failNoObjectMethod(self: *FunctionBuilder, method: ast.Method, descriptor: ty
     const name = method.name;
     var suggestion = helpers.Suggestion.init(name);
     switch (descriptor) {
+        .class => unreachable, // nominal methods are resolved before builtin dispatch
         .list => {
             suggestion.offerAll(&list_methods);
             if (suggestion.best()) |closest| {
@@ -2582,6 +2602,7 @@ fn objectMethod(
 ) Error!?MethodFound {
     const name = method.name;
     switch (descriptor) {
+        .class => unreachable, // nominal methods are resolved before builtin dispatch
         .list => |element| return sequenceMethod(self, method, receiver, element, true, arguments),
         .array => |shape| {
             if (std.mem.eql(u8, name, "dim")) {

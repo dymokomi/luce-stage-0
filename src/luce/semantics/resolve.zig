@@ -115,6 +115,10 @@ pub fn resolveAlias(
 pub fn namespaceName(self: *Analyzer, target: Type) ?[]const u8 {
     return switch (target) {
         .strukt => |index| self.structs.items[index].name,
+        .heap => |index| switch (self.heap_types.items[index]) {
+            .class => |layout| self.structs.items[layout].name,
+            else => null,
+        },
         .enumeration => |reference| self.enums.items[reference.index].name,
         .variant => |index| self.variants.items[index].name,
         else => null,
@@ -361,7 +365,7 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
                 );
                 return null;
             }
-            return .{ .strukt = index };
+            return try nominalType(self, index);
         }
         if (self.enum_names.get(key)) |index| {
             const info = self.enum_decls.items[index];
@@ -395,7 +399,7 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
     const local = try naming.qualify(self, self.modules[module].prefix, written.name);
     if (self.alias_names.get(local)) |index| return resolveAlias(self, module, index, written.span);
     if (self.interface_names.get(local)) |interface_index| return .{ .strukt = self.interface_decls.items[interface_index].layout };
-    if (self.struct_names.get(local)) |index| return .{ .strukt = index };
+    if (self.struct_names.get(local)) |index| return try nominalType(self, index);
     if (self.enum_names.get(local)) |index| return self.enumType(index);
     if (self.variant_names.get(local)) |index| return .{ .variant = index };
     try failUnknownType(self, module, written);
@@ -504,6 +508,14 @@ pub fn internHeapType(self: *Analyzer, descriptor: types.HeapType) Error!Type {
     }
     try self.heap_types.append(self.arena, descriptor);
     return .{ .heap = @intCast(self.heap_types.items.len - 1) };
+}
+
+/// The source declaration indexed by `layout` has one of two machine
+/// meanings. Value structs travel as field runs; classes travel as ARC
+/// object handles. Resolve that distinction once, at the nominal name.
+pub fn nominalType(self: *Analyzer, layout: u32) Error!Type {
+    if (!self.structs.items[layout].reference) return .{ .strukt = layout };
+    return internHeapType(self, .{ .class = layout });
 }
 
 /// Intern one function signature and answer the type that names it.

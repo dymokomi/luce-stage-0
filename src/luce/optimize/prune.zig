@@ -39,6 +39,14 @@ pub fn prune(arena: Allocator, program: *Program) Allocator.Error!void {
     var pending: std.ArrayList(u32) = .empty;
     reachable[program.entry_function] = true;
     try pending.append(arena, program.entry_function);
+    // A class release is an implicit call edge. The layout is its only
+    // spelling, so seed every deinitializer before following ordinary calls.
+    for (program.structs) |layout| {
+        const finalizer = layout.deinitializer orelse continue;
+        if (reachable[finalizer]) continue;
+        reachable[finalizer] = true;
+        try pending.append(arena, finalizer);
+    }
     while (pending.pop()) |index| {
         for (program.functions[index].instructions) |*instruction| {
             const called = (functionSlot(instruction) orelse continue).*;
@@ -68,6 +76,9 @@ pub fn prune(arena: Allocator, program: *Program) Allocator.Error!void {
     }
     program.functions = functions;
     program.entry_function = renumbered[program.entry_function];
+    for (program.structs) |*layout| {
+        if (layout.deinitializer) |function| layout.deinitializer = renumbered[function];
+    }
 }
 
 /// The function index an instruction names, or null — **the one place

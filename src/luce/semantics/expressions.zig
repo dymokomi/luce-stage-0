@@ -340,7 +340,7 @@ pub fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted
                 wanted_element = shape.element;
                 expected_container = place;
             },
-            .map, .builder, .file, .task => {},
+            .class, .map, .builder, .file, .task => {},
         }
     }
     if (literal.elements.len == 0 and wanted_element == null) {
@@ -871,16 +871,22 @@ pub fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Typed {
         }
         if (try refusals.failUnimportedNamespace(self, base, field.span)) return null;
     }
-    const target = (try self.lowerExpression(field.target, false)) orelse return null;
-    if (target.value_type != .strukt) {
+    const target = lifecycle_target: {
+        const previous_permission = self.allow_deinitializer_self;
+        defer self.allow_deinitializer_self = previous_permission;
+        if (self.is_deinitializer and builder.isBareSelf(field.target)) {
+            self.allow_deinitializer_self = true;
+        }
+        break :lifecycle_target (try self.lowerExpression(field.target, false)) orelse return null;
+    };
+    const layout_index = self.analyzer.nominalLayout(target.value_type) orelse {
         try self.fail("luce.sema.field", field.span, "{s} has no fields{s}", .{
             try self.analyzer.typeName(target.value_type),
             try refusals.absenceAdvice(self, target.value_type, field.target),
         });
         return null;
-    }
-    const layout_index = target.value_type.strukt;
-    if (self.analyzer.interfaceForLayout(layout_index) != null) {
+    };
+    if (target.value_type == .strukt and self.analyzer.interfaceForLayout(layout_index) != null) {
         try self.fail(
             "luce.sema.interface",
             field.span,
@@ -1037,6 +1043,7 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
     switch (binary.op) {
         .logic_and, .logic_or => return lowerShortCircuit(self, binary),
         .coalesce => return lowerCoalesce(self, binary),
+        .identity => return lowerIdentity(self, binary),
         else => {},
     }
     if (binary.left.* == .none_literal or binary.right.* == .none_literal) {
@@ -1064,7 +1071,7 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
         .bit_xor => .bit_xor,
         .shift_left => .shift_left,
         .shift_right => .shift_right,
-        .logic_and, .logic_or, .coalesce, .catch_error => unreachable, // answered above
+        .logic_and, .logic_or, .coalesce, .catch_error, .identity => unreachable, // answered above
     };
 
     // A literal may take the other operand's type in
@@ -1217,6 +1224,15 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
         try self.fail("luce.sema.type", binary.span, "value has no type", .{});
         return null;
     }
+    if (self.analyzer.classLayout(operand_type) != null) {
+        try self.fail(
+            "luce.sema.class.equality",
+            binary.span,
+            "class values have identity, not value equality; write 'left is right' (or 'not (left is right)')",
+            .{},
+        );
+        return null;
+    }
     // **Both refusals below are about the whole compared value, not
     // about its outermost tag.**  A struct's `==` is field-by-field
     // `==` (`runtime/operators.zig`), so a struct whose field is a
@@ -1238,6 +1254,46 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
     return .{
         .node = try recorder.recordNode(self, .{ .compare = .{
             .op = operation,
+            .left = left.node,
+            .right = right.node,
+            .result = .boolean,
+            .span = binary.span,
+            .sides = pair.sides,
+        } }),
+        .value_type = .boolean,
+    };
+}
+
+/// `a is b` — identity of two references to the same nominal class.
+/// The MIR already compares object handles by row and generation, so the
+/// distinct source operator is a semantic gate and lowers to that primitive
+/// equality only after both class rules have been proved.
+fn lowerIdentity(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
+    const pair = (try lowerBinaryOperands(self, binary, null)) orelse return null;
+    const left = pair.values[0];
+    const right = pair.values[1];
+    const left_layout = self.analyzer.classLayout(left.value_type) orelse {
+        try self.fail("luce.sema.class.identity", binary.left.span(), "the left side of 'is' is {s}, not a class reference", .{
+            try self.analyzer.typeName(left.value_type),
+        });
+        return null;
+    };
+    const right_layout = self.analyzer.classLayout(right.value_type) orelse {
+        try self.fail("luce.sema.class.identity", binary.right.span(), "the right side of 'is' is {s}, not a class reference", .{
+            try self.analyzer.typeName(right.value_type),
+        });
+        return null;
+    };
+    if (left_layout != right_layout) {
+        try self.fail("luce.sema.class.identity", binary.span, "'is' needs two references to the same class, got {s} and {s}", .{
+            try self.analyzer.typeName(left.value_type),
+            try self.analyzer.typeName(right.value_type),
+        });
+        return null;
+    }
+    return .{
+        .node = try recorder.recordNode(self, .{ .compare = .{
+            .op = .equal,
             .left = left.node,
             .right = right.node,
             .result = .boolean,

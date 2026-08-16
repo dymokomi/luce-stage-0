@@ -354,6 +354,7 @@ pub fn spawn(
     child.graphics = parent.graphics;
     child.workers = parent.workers;
     child.nursery = parent.nursery;
+    child.finalizers = parent.finalizers;
     child.effects = effects;
     child.depth_budget = parent.depth_budget;
 
@@ -501,7 +502,7 @@ fn take(joiner: *Runtime, task: Value) heap.Error!*Worker {
         },
         // The verifier admits only a task here; IR that arrived some
         // other way is refused rather than reinterpreted.
-        .list, .map, .array, .builder, .file => return joiner.fail(.not_owned),
+        .instance, .list, .map, .array, .builder, .file => return joiner.fail(.not_owned),
     }
 }
 

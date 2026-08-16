@@ -474,6 +474,14 @@ pub fn collectStructs(self: *Analyzer) Error!void {
     for (self.struct_decls.items) |info| {
         const declaration = info.declaration;
         self.diagnostics.scope = self.modules[info.module].file;
+        if (declaration.deinitializer != null and declaration.kind != .reference) {
+            try self.fail(
+                "luce.sema.class.lifecycle",
+                declaration.deinitializer.?.span,
+                "deinit belongs to a class; a struct is a value and has no identity lifetime to end",
+                .{},
+            );
+        }
         const qualified = try naming.qualify(self, self.modules[info.module].prefix, declaration.name);
         const index = self.struct_names.get(qualified) orelse continue;
         var fields: std.ArrayList(types.StructField) = .empty;
@@ -584,8 +592,13 @@ pub fn collectStructs(self: *Analyzer) Error!void {
                 }
             }
         }
-        if (fields.items.len == 0 and declaration.functions.len == 0) {
-            try self.fail("luce.sema.struct", declaration.span, "struct {s} has an empty body", .{declaration.name});
+        if (fields.items.len == 0 and declaration.functions.len == 0 and declaration.deinitializer == null) {
+            try self.fail(
+                "luce.sema.struct",
+                declaration.span,
+                "{s} {s} has an empty body",
+                .{ if (declaration.kind == .reference) "class" else "struct", declaration.name },
+            );
         }
         self.structs.items[index].fields = try fields.toOwnedSlice(self.arena);
         self.struct_decls.items[index].field_defaults = try field_defaults.toOwnedSlice(self.arena);

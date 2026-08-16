@@ -50,13 +50,9 @@ pub fn weakTarget(self: *const Analyzer, of: Type) bool {
     const held = of.held() orelse return false;
     return switch (held) {
         .heap => |index| switch (self.heap_types.items[index]) {
-            .list, .map, .array, .builder => true,
+            .class, .list, .map, .array, .builder => true,
             .file, .task => false,
         },
-        // The class scaffold records reference identity on its nominal
-        // layout. Phase 5 supplies the heap representation; value structs
-        // and today's interface witness runs are not weak targets.
-        .strukt => |index| self.structs.items[index].reference,
         else => false,
     };
 }
@@ -98,6 +94,9 @@ pub fn carriesObjects(self: *const Analyzer, of: Type) bool {
 /// the worker boundary and by nothing else that needs to see through a
 /// container — *is one of these anywhere in this type*.
 pub const Carried = enum {
+    /// A class handle belongs to one Runtime object table. It has shared
+    /// identity and is never rebuilt as a worker value snapshot.
+    class,
     /// A function value cannot cross a worker boundary because its code
     /// identity is local to one compiled module/runtime.  The type cannot
     /// say whether a value is bound, so the boundary refuses the type — and
@@ -152,6 +151,7 @@ pub fn carries(self: *const Analyzer, of: Type, sought: Carried) Error!bool {
                 if (seen_heaps[index]) continue;
                 seen_heaps[index] = true;
                 switch (self.heap_types.items[index]) {
+                    .class => if (sought == .class) return true,
                     .list => |element| try pending.append(self.temporary, element),
                     .map => |pair| {
                         try pending.append(self.temporary, pair.key);

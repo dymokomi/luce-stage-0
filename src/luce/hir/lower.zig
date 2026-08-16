@@ -2229,8 +2229,9 @@ const Replay = struct {
                 .field = place.field,
                 .value = stored_field.register,
             } },
-            local_type,
+            if (layout.reference) .none else local_type,
         );
+        if (layout.reference) return;
         try self.code.release(place.base, self.code.localOwnsStorage(place.base));
         try self.code.store(place.base, updated);
     }

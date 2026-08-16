@@ -136,6 +136,10 @@ pub fn privateMentioned(self: *const Analyzer, of: Type) ?[]const u8 {
         else
             null,
         .heap => |index| switch (self.heap_types.items[index]) {
+            .class => |layout| if (self.struct_decls.items[layout].declaration.visibility == .private)
+                self.struct_decls.items[layout].declaration.name
+            else
+                null,
             .list => |element| privateMentioned(self, element),
             // A map key is a long, a string or an **enum**, and an enum
             // can be private (docs/ENUMS.md, As built 2026-08-12), so

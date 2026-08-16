@@ -128,6 +128,17 @@ pub const Typed = struct {
 /// node kind by `nodes.provenance` and never stamped by hand.
 pub const Provenance = nodes.Provenance;
 
+/// The one source expression that names the class object whose lifetime is
+/// ending. Lifecycle checking grants this borrow only as a field/method
+/// receiver or when it is stored weakly; every strong value use is a
+/// resurrection attempt and is diagnosed before ownership lowering.
+pub fn isBareSelf(expression: *const ast.Expression) bool {
+    return switch (expression.*) {
+        .name => |name| std.mem.eql(u8, name.text, "self"),
+        else => false,
+    };
+}
+
 /// Whether a call answering a return shape is being received by a
 /// destructuring statement, refused in an ordinary value position, or
 /// returned directly (docs/RETURNS.md and the SELF polish ruling).
@@ -272,6 +283,11 @@ pub const FunctionBuilder = struct {
     /// Whether the declaration wrote `!` — what `raise` and the
     /// try-pass-through check against (docs/FAILURE.md).
     fallible: bool = false,
+    /// True only while checking a class's hidden `deinit:` function.
+    is_deinitializer: bool = false,
+    /// A tightly scoped permission for the bare `self` borrow. Callers save
+    /// and restore it around a direct receiver or weak-store expression.
+    allow_deinitializer_self: bool = false,
     /// This declaration sits inside a struct/enum but said `static`,
     /// so a use of `self` gets the teaching sentence rather than an
     /// ordinary unknown-name report.
@@ -709,19 +725,20 @@ pub const FunctionBuilder = struct {
     // What is said when the answer is no lives in `refusals.zig`.
 
     /// Make an already-lowered value fit `expected`. Exact values pass
-    /// unchanged, a conforming struct can become an interface existential,
+    /// unchanged, a conforming nominal type can become an interface existential,
     /// and a present `T` can become `T?`. Null means it does not fit and the
     /// caller reports. Numeric representation changes are never implicit.
     pub fn fit(self: *FunctionBuilder, value: Typed, expected: Type) Error!?Typed {
         if (value.value_type.eql(expected)) return value;
         if (value.value_type.widensTo(expected)) return try self.widenNumeric(value, expected);
-        // A concrete struct may be passed to a nominal interface only
+        // A concrete struct or class may be passed to a nominal interface only
         // after it explicitly promised that interface.  The conversion
         // records one bound method per contract slot; lower reuses the
         // ordinary function-value ABI for those slots.
-        if (value.value_type == .strukt and expected == .strukt) {
+        if (expected == .strukt) {
             if (self.analyzer.interfaceForLayout(expected.strukt)) |interface_index| {
-                if (self.analyzer.conformance(value.value_type.strukt, interface_index)) |conformance| {
+                const concrete_layout = self.analyzer.nominalLayout(value.value_type) orelse return null;
+                if (self.analyzer.conformance(concrete_layout, interface_index)) |conformance| {
                     const contract = self.analyzer.interface_decls.items[interface_index];
                     const methods = try self.arena().alloc(nodes.Expression.InterfaceMethod, contract.methods.len);
                     for (conformance.methods, contract.methods, methods) |function, method, *slot| {
@@ -816,7 +833,7 @@ pub const FunctionBuilder = struct {
         return switch (descriptor) {
             .list, .map => expected,
             .array => |shape| if (shape.rank == 1) expected else null,
-            .builder, .file, .task => null,
+            .class, .builder, .file, .task => null,
         };
     }
 
@@ -1393,7 +1410,7 @@ pub const FunctionBuilder = struct {
                     .list => |element| element,
                     .array => |shape| shape.element,
                     .map => |pair| pair.value,
-                    .builder, .file, .task => null,
+                    .class, .builder, .file, .task => null,
                 });
             },
             .subscripts => {
@@ -1428,8 +1445,8 @@ pub const FunctionBuilder = struct {
         for (path.steps) |node| {
             switch (node.*) {
                 .field => |field| {
-                    if (reached != .strukt) return null;
-                    const layout = self.analyzer.structs.items[reached.strukt];
+                    const layout_index = self.analyzer.nominalLayout(reached) orelse return null;
+                    const layout = self.analyzer.structs.items[layout_index];
                     const field_index = layout.findField(field.name) orelse return null;
                     reached = layout.fields[field_index].field_type;
                 },
@@ -1442,7 +1459,7 @@ pub const FunctionBuilder = struct {
                         .list => |element| element,
                         .array => |shape| shape.element,
                         .map => |pair| pair.value,
-                        .builder, .file, .task => return null,
+                        .class, .builder, .file, .task => return null,
                     };
                 },
                 else => return null, // only field and index steps are collected
@@ -1461,7 +1478,7 @@ pub const FunctionBuilder = struct {
         return switch (descriptor) {
             .list, .array => .i64,
             .map => |pair| pair.key,
-            .builder, .file, .task => null,
+            .class, .builder, .file, .task => null,
         };
     }
 
@@ -1534,11 +1551,21 @@ pub const FunctionBuilder = struct {
             // on supplies one, whichever way the batch knows the place
             // — written down up front (`.places`) or answered by the
             // receiver (`.method`), the same answer either way.
-            const value = if (expression.* == .none_literal and place != null)
-                ((try self.lowerTyped(expression, place.?, expression.span(), "this place")) orelse
-                    return null).value
-            else
-                (try self.lowerExpression(expression, false)) orelse return null;
+            const value = lifecycle_value: {
+                const previous_permission = self.allow_deinitializer_self;
+                defer self.allow_deinitializer_self = previous_permission;
+                if (self.is_deinitializer and index == 0 and isBareSelf(expression)) {
+                    switch (landing) {
+                        .method => self.allow_deinitializer_self = true,
+                        else => {},
+                    }
+                }
+                break :lifecycle_value if (expression.* == .none_literal and place != null)
+                    ((try self.lowerTyped(expression, place.?, expression.span(), "this place")) orelse
+                        return null).value
+                else
+                    (try self.lowerExpression(expression, false)) orelse return null;
+            };
             values[index] = value;
             // The residual hazard copy-on-store leaves open
             // (docs/STRINGS.md): this value may be a *borrow* of an
@@ -1729,6 +1756,18 @@ pub const FunctionBuilder = struct {
                 };
             },
             .name => |name| {
+                if (self.is_deinitializer and
+                    std.mem.eql(u8, name.text, "self") and
+                    !self.allow_deinitializer_self)
+                {
+                    try self.fail(
+                        "luce.sema.class.lifecycle",
+                        name.span,
+                        "deinit may use self only to read or mutate its fields, call one of its methods, or store a weak reference; a new strong self reference would resurrect the class",
+                        .{},
+                    );
+                    return null;
+                }
                 const found = self.findLocal(name.text) orelse {
                     // Not a local: perhaps a file-scope constant.
                     const qualified = try naming.qualify(self.analyzer, self.prefix, name.text);

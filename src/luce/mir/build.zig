@@ -545,9 +545,10 @@ pub const Lowering = struct {
             at -= 1;
             switch (steps[at]) {
                 .field => |field| {
-                    // struct_set copies the parent struct with one
-                    // field replaced, so its result type is the parent
-                    // register's type.
+                    const reference = self.structs[field.layout].reference;
+                    // A value struct is rebuilt. A class mutates the shared
+                    // instance and ends the write-back walk at that identity
+                    // boundary, just as a container index does.
                     updated = try self.emit(
                         if (field.weak) .{ .weak_struct_set = .{
                             .target = field.parent,
@@ -560,8 +561,9 @@ pub const Lowering = struct {
                             .field = field.field_index,
                             .value = updated,
                         } },
-                        self.resultType(field.parent),
+                        if (reference) .none else self.resultType(field.parent),
                     );
+                    if (reference) return;
                 },
                 .index => |step| {
                     const arguments = try self.arena.alloc(Register, step.subscripts.len + 2);

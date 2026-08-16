@@ -66,6 +66,7 @@ pub fn run(
     // and a `Runtime` are a self-contained pair by construction, so a
     // worker here is a second one of exactly what the root run is.
     var nursery: Nursery = .{ .program = program, .host = host, .base = memory.objects };
+    machine.runtime.finalizers = nursery.finalizerChannel(@intCast(budget.call_depth));
     if (host) |given| {
         machine.runtime.workers = given.workers;
         machine.runtime.nursery = nursery.channel();
@@ -177,6 +178,14 @@ const Nursery = struct {
         };
     }
 
+    fn finalizerChannel(self: *Nursery, depth: i64) runtime.Finalizers {
+        return .{
+            .context = self,
+            .run = runFinalizer,
+            .depth = depth,
+        };
+    }
+
     fn open(context: ?*anyopaque) callconv(.c) ?*runtime.Runtime {
         const self: *Nursery = @ptrCast(@alignCast(context.?));
         const owned = self.base.create(Owned) catch return null;
@@ -239,6 +248,82 @@ const Nursery = struct {
         // arguments.  The machine borrows it rather than making one.
         const outcome = self.execute(&machine, worker, function_index, arguments[0..argument_count], out);
         return outcome;
+    }
+
+    /// Run the hidden `Class.deinit` body in a fresh interpreter machine
+    /// against the same runtime.  A separate machine keeps a nested finalizer
+    /// call from reallocating the suspended caller's frame arrays, while
+    /// moving the runtime in and back preserves the one object table in which
+    /// the receiver lives.
+    fn runFinalizer(
+        context: ?*anyopaque,
+        runtime_pointer: *runtime.Runtime,
+        function: i64,
+        receiver: *const runtime.Value,
+        depth: i64,
+    ) callconv(.c) i32 {
+        const self: *Nursery = @ptrCast(@alignCast(context orelse {
+            _ = runtime_pointer.fail(.host_unavailable) catch {};
+            return runtime.workers.raised_trap;
+        }));
+        const function_index = std.math.cast(u32, function) orelse {
+            _ = runtime_pointer.fail(.host_unavailable) catch {};
+            return runtime.workers.raised_trap;
+        };
+        const max_depth = std.math.cast(u32, depth) orelse {
+            _ = runtime_pointer.fail(.host_unavailable) catch {};
+            return runtime.workers.raised_trap;
+        };
+        if (function_index >= self.program.functions.len) {
+            _ = runtime_pointer.fail(.host_unavailable) catch {};
+            return runtime.workers.raised_trap;
+        }
+
+        var scratch: std.heap.ArenaAllocator = .init(runtime_pointer.objects);
+        defer scratch.deinit();
+        var machine: Machine = .{
+            .arena = scratch.allocator(),
+            .runtime = runtime_pointer.*,
+            .program = self.program,
+            .max_depth = max_depth,
+            .host = self.host,
+        };
+        defer runtime_pointer.* = machine.runtime;
+
+        const arguments = [_]runtime.Value{receiver.*};
+        const outcome = machine.call(function_index, &arguments) catch |mistake| {
+            if (mistake == error.OutOfMemory) machine.runtime.exhausted = true;
+            machine.releaseFrameStorage();
+            return runtime.workers.raised_trap;
+        };
+        return switch (outcome) {
+            .value => |answered| successful: {
+                // Verification requires `none`; clean up defensively if a
+                // malformed engine callback nevertheless hands back storage.
+                machine.runtime.freeValue(answered);
+                break :successful runtime.workers.survived;
+            },
+            .errored => malformed: {
+                machine.runtime.forget();
+                _ = machine.runtime.fail(.host_unavailable) catch {};
+                machine.recordUnwind();
+                machine.releaseFrameStorage();
+                break :malformed runtime.workers.raised_trap;
+            },
+            .exited => stopped: {
+                machine.releaseFrameStorage();
+                break :stopped runtime.workers.raised_trap;
+            },
+            .trap => |trapped| trapped_outcome: {
+                machine.runtime.pending = .{
+                    .code = trapped.code,
+                    .message = trapped.message,
+                };
+                machine.recordUnwind();
+                machine.releaseFrameStorage();
+                break :trapped_outcome runtime.workers.raised_trap;
+            },
+        };
     }
 
     /// The body of `runWorker`, with the machine already standing.
@@ -653,6 +738,7 @@ pub const Machine = struct {
         current: *RuntimeValue,
     ) EvalError!RuntimeValue {
         switch (self.program.heap_types[declared.heap]) {
+            .class => unreachable, // classes are runtime values, never constants
             .list => |element| {
                 current.* = try self.runtime.newList(try self.zeroValue(element));
                 for (declared.payload.sequence) |encoded| {
@@ -1027,23 +1113,48 @@ pub const Machine = struct {
                             else
                                 registers[field_register]);
                         }
-                        registers[item] = self.runtime.makeStruct(self.field_scratch.items) catch |mistake|
+                        registers[item] = (if (layout.reference)
+                            self.runtime.newClass(
+                                make.layout,
+                                layout.deinitializer,
+                                self.field_scratch.items,
+                            )
+                        else
+                            self.runtime.makeStruct(self.field_scratch.items)) catch |mistake|
                             return self.caught(mistake);
                     },
                     .struct_get => |get| {
-                        registers[item] = registers[get.target].asStruct()[get.field];
+                        registers[item] = if (self.program.structs[get.layout].reference)
+                            self.runtime.classField(registers[get.target], get.layout, get.field) catch |mistake|
+                                return self.caught(mistake)
+                        else
+                            registers[get.target].asStruct()[get.field];
                     },
                     .weak_struct_get => |get| {
                         registers[item] = self.runtime.strengthen(
-                            registers[get.target].asStruct()[get.field],
+                            if (self.program.structs[get.layout].reference)
+                                self.runtime.classField(registers[get.target], get.layout, get.field) catch |mistake|
+                                    return self.caught(mistake)
+                            else
+                                registers[get.target].asStruct()[get.field],
                         ) catch |mistake| return self.caught(mistake);
                     },
                     .struct_set => |set| {
-                        registers[item] = self.runtime.setField(
-                            registers[set.target],
-                            set.field,
-                            registers[set.value],
-                        ) catch |mistake| return self.caught(mistake);
+                        if (self.program.structs[set.layout].reference) {
+                            self.runtime.setClassField(
+                                registers[set.target],
+                                set.layout,
+                                set.field,
+                                registers[set.value],
+                            ) catch |mistake| return self.caught(mistake);
+                            registers[item] = .none;
+                        } else {
+                            registers[item] = self.runtime.setField(
+                                registers[set.target],
+                                set.field,
+                                registers[set.value],
+                            ) catch |mistake| return self.caught(mistake);
+                        }
                     },
                     // A union value is a struct value whose slot 0 is
                     // the member index (docs/UNION.md D8): the same
@@ -1068,11 +1179,21 @@ pub const Machine = struct {
                     .weak_struct_set => |set| {
                         const weak = self.runtime.weaken(registers[set.value]) catch |mistake|
                             return self.caught(mistake);
-                        registers[item] = self.runtime.setField(
-                            registers[set.target],
-                            set.field,
-                            weak,
-                        ) catch |mistake| return self.caught(mistake);
+                        if (self.program.structs[set.layout].reference) {
+                            self.runtime.setClassField(
+                                registers[set.target],
+                                set.layout,
+                                set.field,
+                                weak,
+                            ) catch |mistake| return self.caught(mistake);
+                            registers[item] = .none;
+                        } else {
+                            registers[item] = self.runtime.setField(
+                                registers[set.target],
+                                set.field,
+                                weak,
+                            ) catch |mistake| return self.caught(mistake);
+                        }
                     },
                     .variant_tag => |tag| {
                         registers[item] = registers[tag.target].asStruct()[0];
@@ -1247,6 +1368,15 @@ pub const Machine = struct {
                         continue :dispatch;
                     },
                 }
+                // Some ownership operations return no value yet may release
+                // the last reference to a class.  Its deinitializer runs
+                // inside that runtime operation and can trap, exit, or
+                // exhaust the run; surface that terminal state before the
+                // next Luce instruction executes.
+                if (self.runtime.exhausted) return error.OutOfMemory;
+                if (self.runtime.pending != null or self.runtime.exit_status != null) {
+                    return self.caught(error.Trap);
+                }
             }
             unreachable; // the verifier guarantees a terminator
         }
@@ -1268,6 +1398,7 @@ pub const Machine = struct {
         registers: []const RuntimeValue,
     ) EvalError!RuntimeValue {
         switch (self.program.heap_types[new.heap]) {
+            .class => unreachable, // constructed through the nominal aggregate path
             .list => |element| return self.runtime.newList(try self.zeroValue(element)),
             .map => return self.runtime.newMap(),
             .builder => return self.runtime.newBuilder(),
@@ -1335,7 +1466,7 @@ pub const Machine = struct {
             .list => |element| element,
             // The verifier admits nothing else here: keys and values
             // answer a list and only a list.
-            .map, .array, .builder, .file, .task => unreachable,
+            .class, .map, .array, .builder, .file, .task => unreachable,
         };
     }
 
@@ -1604,7 +1735,7 @@ pub const Machine = struct {
             // names.  The oracle counts exactly as `libluce_rt` does, so
             // both engines agree on when an object is reclaimed.
             .retain => {
-                self.runtime.retainValue(registers[arguments[0]]);
+                try self.runtime.retainValue(registers[arguments[0]]);
                 return .none;
             },
             .release => {

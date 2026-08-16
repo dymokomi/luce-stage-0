@@ -8131,3 +8131,208 @@ test "luce.sema.own: weak handles never cross worker runtime tables" {
         \\
     , "luce.sema.own", "cannot cross back through wait");
 }
+
+// ---------------------------------------------------------------------------
+// ARC classes
+// ---------------------------------------------------------------------------
+
+test "class: value equality points to identity syntax" {
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\
+        \\func main():
+        \\    let left = Box(value = 1)
+        \\    let right = Box(value = 1)
+        \\    assert(left == right)
+        \\
+    , "luce.sema.class.equality", "write 'left is right'");
+}
+
+test "class: is rejects value types and names the offending side" {
+    try expectSaying(
+        \\struct Point:
+        \\    x: i64
+        \\
+        \\func main():
+        \\    let left = Point(x = 1)
+        \\    let right = Point(x = 1)
+        \\    assert(left is right)
+        \\
+    , "luce.sema.class.identity", "left side of 'is' is Point, not a class reference");
+    try expectSaying(
+        \\class Box:
+        \\    value: i64
+        \\
+        \\func main():
+        \\    let box = Box(value = 1)
+        \\    assert(box is 1)
+        \\
+    , "luce.sema.class.identity", "right side of 'is' is i64, not a class reference");
+}
+
+test "class: is rejects references of different nominal classes" {
+    try expectSaying(
+        \\class Left:
+        \\    value: i64
+        \\
+        \\class Right:
+        \\    value: i64
+        \\
+        \\func main():
+        \\    let left = Left(value = 1)
+        \\    let right = Right(value = 1)
+        \\    assert(left is right)
+        \\
+    , "luce.sema.class.identity", "same class, got Left and Right");
+}
+
+test "class: let still rejects mutation of a value struct field" {
+    try expectSaying(
+        \\struct Point:
+        \\    x: i64
+        \\
+        \\func main():
+        \\    let point = Point(x = 1)
+        \\    point.x = 2
+        \\
+    , "luce.sema.let", "point is let-bound; use var for reassignment");
+}
+
+test "class: a non-interface cannot be used as inheritance" {
+    try expectSaying(
+        \\class Parent:
+        \\    value: i64
+        \\
+        \\class Child: Parent:
+        \\    value: i64
+        \\
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.interface", "Parent is not an interface");
+}
+
+test "class: only classes may declare one bare deinit lifecycle body" {
+    try expectSaying(
+        \\struct Value:
+        \\    number: i64
+        \\    deinit:
+        \\        return
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.lifecycle", "deinit belongs to a class");
+    try expectSaying(
+        \\class Resource:
+        \\    deinit:
+        \\        return
+        \\    deinit:
+        \\        return
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.lifecycle", "may declare deinit only once");
+}
+
+test "class: deinit has no parameters result fallibility or visibility" {
+    try expectSaying(
+        \\class Resource:
+        \\    deinit(value: i64):
+        \\        return
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.lifecycle", "deinit takes no parameters or result");
+    try expectSaying(
+        \\class Resource:
+        \\    deinit -> i64:
+        \\        return 1
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.lifecycle", "deinit takes no parameters or result");
+    try expectSaying(
+        \\class Resource:
+        \\    public deinit:
+        \\        return
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.lifecycle", "deinit has no visibility");
+}
+
+test "class: deinit is not a method static member or callable value" {
+    try expectSaying(
+        \\class Resource:
+        \\    func deinit():
+        \\        return
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.lifecycle", "not a method");
+    try expectSaying(
+        \\class Resource:
+        \\    static deinit:
+        \\        return
+        \\func main():
+        \\    return
+        \\
+    , "luce.sema.class.lifecycle", "not a static member");
+    try expectSaying(
+        \\class Resource:
+        \\    deinit:
+        \\        return
+        \\func main():
+        \\    let resource = Resource()
+        \\    resource.deinit()
+        \\
+    , "luce.sema.class.lifecycle", "called only by ARC");
+}
+
+test "class: deinit cannot create a new strong self reference" {
+    try expectSaying(
+        \\class Resource:
+        \\    deinit:
+        \\        let copy = self
+        \\func main():
+        \\    let resource = Resource()
+        \\
+    , "luce.sema.class.lifecycle", "new strong self reference would resurrect");
+    try expectSaying(
+        \\func keep(resource: Resource):
+        \\    return
+        \\class Resource:
+        \\    deinit:
+        \\        keep(self)
+        \\func main():
+        \\    let resource = Resource()
+        \\
+    , "luce.sema.class.lifecycle", "new strong self reference would resurrect");
+    try expectSaying(
+        \\class Resource:
+        \\    next: Resource?
+        \\    deinit:
+        \\        self.next = self
+        \\func main():
+        \\    let resource = Resource()
+        \\
+    , "luce.sema.class.lifecycle", "new strong self reference would resurrect");
+    try expectSaying(
+        \\class Resource:
+        \\    items: list[Resource]
+        \\    deinit:
+        \\        self.items.append(self)
+        \\func main():
+        \\    let resource = Resource(items = new list[Resource])
+        \\
+    , "luce.sema.class.lifecycle", "new strong self reference would resurrect");
+    try expectSaying(
+        \\class Resource:
+        \\    deinit:
+        \\        return self
+        \\func main():
+        \\    let resource = Resource()
+        \\
+    , "luce.sema.class.lifecycle", "new strong self reference would resurrect");
+}

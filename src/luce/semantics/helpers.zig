@@ -95,6 +95,7 @@ pub fn comparisonOf(op: ast.BinaryOp) ?vocabulary.BinaryOp {
         .logic_or,
         .coalesce,
         .catch_error,
+        .identity,
         => null,
     };
 }

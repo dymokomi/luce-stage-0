@@ -135,6 +135,7 @@ pub fn operatorText(op: ast.BinaryOp) []const u8 {
         .modulo => "%",
         .equal => "==",
         .not_equal => "!=",
+        .identity => "is",
         .less => "<",
         .less_equal => "<=",
         .greater => ">",
@@ -309,12 +310,15 @@ pub const Analyzed = mir.build.Lowered;
 /// rather than a crash.
 pub const Enclosing = union(enum) {
     strukt: u32,
+    /// Heap-type index whose descriptor is `.class = layout`.
+    class: u32,
     enumeration: Type.EnumRef,
     variant: u32,
 
     pub fn asType(self: Enclosing) Type {
         return switch (self) {
             .strukt => |index| .{ .strukt = index },
+            .class => |index| .{ .heap = index },
             .enumeration => |reference| .{ .enumeration = reference },
             .variant => |index| .{ .variant = index },
         };
@@ -380,6 +384,10 @@ pub const FunctionDeclInfo = struct {
     /// (docs/FAILURE.md).
     fallible: bool,
     is_entry: bool,
+    /// The class-only, non-callable `deinit:` body. Its fixed signature is
+    /// still represented as an ordinary function so every checker and both
+    /// engines execute one body model.
+    is_deinitializer: bool = false,
     /// Set only on the function a **lambda** became (docs/FUNCTIONS.md
     /// D2): every local in scope where the lambda was written.
     ///

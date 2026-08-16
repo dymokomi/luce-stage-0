@@ -1211,6 +1211,7 @@ pub const Parser = struct {
         defer fields.deinit(self.arena);
         var functions: std.ArrayList(ast.FuncDecl) = .empty;
         defer functions.deinit(self.arena);
+        var deinitializer: ?ast.FuncDecl = null;
         while (self.peekKind() != .dedent and self.peekKind() != .end_of_file) {
             if (self.accept(.newline) != null) continue;
             if (self.peekKind() == .indent) {
@@ -1220,7 +1221,7 @@ pub const Parser = struct {
             if (self.peekKind() == .keyword_public or self.peekKind() == .keyword_private) {
                 // `private:` opens a region; `private` fronts one member.
                 if (self.peekAhead(1) == .colon) {
-                    try self.structRegion(&fields, &functions);
+                    try self.structRegion(&fields, &functions, &deinitializer);
                     continue;
                 }
                 const marker = self.advance();
@@ -1236,10 +1237,10 @@ pub const Parser = struct {
                 }
                 const visibility: ast.Visibility =
                     if (marker.kind == .keyword_private) .private else .public;
-                try self.structMember(&fields, &functions, visibility);
+                try self.structMember(&fields, &functions, &deinitializer, visibility);
                 continue;
             }
-            try self.structMember(&fields, &functions, .none);
+            try self.structMember(&fields, &functions, &deinitializer, .none);
         }
         _ = self.accept(.dedent);
         return .{
@@ -1247,6 +1248,7 @@ pub const Parser = struct {
             .name_span = name.span,
             .fields = try fields.toOwnedSlice(self.arena),
             .functions = try functions.toOwnedSlice(self.arena),
+            .deinitializer = deinitializer,
             .interfaces = try interfaces.toOwnedSlice(self.arena),
             .kind = kind,
             .span = .{ .start = start.span.start, .end = name.span.end },
@@ -1407,17 +1409,59 @@ pub const Parser = struct {
         self: *Parser,
         fields: *std.ArrayList(ast.Field),
         functions: *std.ArrayList(ast.FuncDecl),
+        deinitializer: *?ast.FuncDecl,
         visibility: ast.Visibility,
     ) Error!void {
         const weak_marker = self.accept(.keyword_weak);
         if (weak_marker != null and
-            (self.peekKind() == .keyword_func or self.peekKind() == .keyword_static))
+            (self.peekKind() == .keyword_func or
+                self.peekKind() == .keyword_static or
+                self.peekKind() == .keyword_deinit))
         {
             try self.report(
                 "luce.parse.weak",
                 weak_marker.?.span,
                 "weak modifies stored fields, not methods",
                 .{},
+            );
+            self.recover();
+            return;
+        }
+        if (self.peekKind() == .keyword_deinit) {
+            const parsed = (try self.deinitDecl()) orelse {
+                self.recover();
+                return;
+            };
+            if (visibility != .none) {
+                try self.report(
+                    "luce.sema.class.lifecycle",
+                    parsed.span,
+                    "deinit has no visibility: it is called only by ARC at the class's last strong release",
+                    .{},
+                );
+            }
+            if (deinitializer.* != null) {
+                try self.report(
+                    "luce.sema.class.lifecycle",
+                    parsed.span,
+                    "a class has one lifetime and may declare deinit only once",
+                    .{},
+                );
+                return;
+            }
+            deinitializer.* = parsed;
+            return;
+        }
+        if ((self.peekKind() == .keyword_static or self.peekKind() == .keyword_func) and
+            self.peekAhead(1) == .keyword_deinit)
+        {
+            const marker = self.advance();
+            const lifecycle = self.advance();
+            try self.report(
+                "luce.sema.class.lifecycle",
+                .{ .start = marker.span.start, .end = lifecycle.span.end },
+                "deinit is an ARC lifecycle body, not a {s}; write 'deinit:'",
+                .{if (marker.kind == .keyword_static) "static member" else "method"},
             );
             self.recover();
             return;
@@ -1488,6 +1532,7 @@ pub const Parser = struct {
         self: *Parser,
         fields: *std.ArrayList(ast.Field),
         functions: *std.ArrayList(ast.FuncDecl),
+        deinitializer: *?ast.FuncDecl,
     ) Error!void {
         const label = self.advance(); // public or private
         _ = self.advance(); // the colon
@@ -1514,16 +1559,41 @@ pub const Parser = struct {
                 try self.markerInRegion(word);
                 if (self.peekKind() == .keyword_func or
                     self.peekKind() == .keyword_static or
+                    self.peekKind() == .keyword_deinit or
                     self.peekKind() == .keyword_weak or
                     self.peekKind() == .identifier)
                 {
-                    try self.structMember(fields, functions, visibility);
+                    try self.structMember(fields, functions, deinitializer, visibility);
                 }
                 continue;
             }
-            try self.structMember(fields, functions, visibility);
+            try self.structMember(fields, functions, deinitializer, visibility);
         }
         _ = self.accept(.dedent);
+    }
+
+    /// `deinit:` — deliberately smaller than a function declaration. The
+    /// spelling has no parameter list, result, fallibility, visibility, or
+    /// callable name; the analyzer later installs its implied class `self`.
+    fn deinitDecl(self: *Parser) Error!?ast.FuncDecl {
+        const marker = self.advance(); // deinit
+        if (self.peekKind() != .colon) {
+            try self.report(
+                "luce.sema.class.lifecycle",
+                .{ .start = marker.span.start, .end = self.peek().span.end },
+                "deinit takes no parameters or result: write 'deinit:'",
+                .{},
+            );
+            return null;
+        }
+        const body = (try self.block("deinit")) orelse return null;
+        return .{
+            .name = "deinit",
+            .name_span = marker.span,
+            .parameters = &.{},
+            .body = body,
+            .span = marker.span,
+        };
     }
 
     /// A visibility word standing inside a region: one way to say a
@@ -1551,6 +1621,7 @@ pub const Parser = struct {
             .keyword_func => if (self.peekAhead(1) == .identifier) self.tokenAhead(1) else null,
             .keyword_static => if (self.peekAhead(1) == .keyword_func and
                 self.peekAhead(2) == .identifier) self.tokenAhead(2) else null,
+            .keyword_deinit => self.peek(),
             .keyword_weak => if (self.peekAhead(1) == .identifier) self.tokenAhead(1) else null,
             .identifier => self.peek(),
             else => null,
@@ -3142,6 +3213,7 @@ pub fn describe(kind: Kind) []const u8 {
         .keyword_static => "the keyword 'static'",
         .keyword_struct => "the keyword 'struct'",
         .keyword_class => "the keyword 'class'",
+        .keyword_deinit => "the keyword 'deinit'",
         .keyword_interface => "the keyword 'interface'",
         .keyword_alias => "the keyword 'alias'",
         .keyword_enum => "the keyword 'enum'",
@@ -3163,6 +3235,7 @@ pub fn describe(kind: Kind) []const u8 {
         .keyword_and => "the keyword 'and'",
         .keyword_or => "the keyword 'or'",
         .keyword_not => "the keyword 'not'",
+        .keyword_is => "the keyword 'is'",
         .keyword_self => "the keyword 'self'",
         .keyword_true => "'true'",
         .keyword_false => "'false'",

@@ -184,6 +184,48 @@ test "function pruning does not retain an orphaned function reference" {
     }
 }
 
+test "class deinitializers and their callees survive implicit lifetime reachability" {
+    var program = try compileRaw(
+        \\func unused():
+        \\    print("never")
+        \\
+        \\class Resource:
+        \\    name: str
+        \\    func announce():
+        \\        print(self.name)
+        \\    deinit:
+        \\        self.announce()
+        \\
+        \\func main():
+        \\    print("done")
+        \\
+    );
+    defer program.deinit();
+
+    const layout = for (program.structs, 0..) |declared, index| {
+        if (std.mem.eql(u8, declared.name, "Resource")) break index;
+    } else return error.TestUnexpectedResult;
+    const before = program.structs[layout].deinitializer orelse
+        return error.TestUnexpectedResult;
+    try testing.expectEqualStrings("Resource.deinit", program.functions[before].name);
+
+    try optimize.prune(program.arena.allocator(), &program);
+    try mir.verify(testing.allocator, &program);
+
+    const after = program.structs[layout].deinitializer orelse
+        return error.TestUnexpectedResult;
+    try testing.expect(after < program.functions.len);
+    try testing.expectEqualStrings("Resource.deinit", program.functions[after].name);
+    var kept_method = false;
+    var kept_unused = false;
+    for (program.functions) |function| {
+        kept_method = kept_method or std.mem.eql(u8, function.name, "Resource.announce");
+        kept_unused = kept_unused or std.mem.eql(u8, function.name, "unused");
+    }
+    try testing.expect(kept_method);
+    try testing.expect(!kept_unused);
+}
+
 test "running the stage twice changes nothing the second time" {
     var program = try compileRaw(
         \\func main():

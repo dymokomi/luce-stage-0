@@ -247,6 +247,14 @@ pub const Service = enum {
     luce_rt_weak_store,
     luce_rt_weak_load,
 
+    // -- nominal class references ------------------------------------
+    // Appended so existing service tags remain stable even though generated
+    // code resolves every service by its published symbol.
+    luce_rt_class_make,
+    luce_rt_class_get,
+    luce_rt_class_set,
+    luce_rt_finalizers_install,
+
     /// The C symbol this service is declared under: a static string —
     /// the enum's own tag name — that the caller owns nothing of.
     pub fn symbol(self: Service) []const u8 {
@@ -592,6 +600,10 @@ pub fn describe(service: Service) Effect {
             .memory = touches_run,
             .parameters = &.{ .run, .unknown, .unknown, .unknown, .unknown, .unknown, .plain },
         },
+        .luce_rt_finalizers_install => .{
+            .memory = touches_run,
+            .parameters = &.{ .run, .unknown, .unknown, .plain },
+        },
         .luce_rt_spawn => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .plain, .unknown, .plain, .value_out },
@@ -798,9 +810,14 @@ pub fn describe(service: Service) Effect {
         // the other drops it and reclaims the objects whose last name is
         // gone.  Both resolve handles and touch the heap, and read a
         // value in without writing one out.
-        .luce_rt_retain, .luce_rt_release => .{
+        .luce_rt_retain => .{
             .memory = touches_heap,
             .parameters = &.{ .run, .value_in },
+        },
+        .luce_rt_release => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in },
+            .willreturn = false,
         },
         .luce_rt_weak_store, .luce_rt_weak_load => .{
             .memory = touches_heap,
@@ -817,6 +834,20 @@ pub fn describe(service: Service) Effect {
         .luce_rt_struct_set => .{
             .memory = touches_text,
             .parameters = &.{ .run, .value_in, .plain, .value_in, .value_out },
+        },
+        .luce_rt_class_make => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .plain, .plain, .values_in, .plain, .value_out },
+            .willreturn = false,
+        },
+        .luce_rt_class_get => .{
+            .memory = reads_heap,
+            .parameters = &.{ .run, .value_in, .plain, .plain, .value_out },
+        },
+        .luce_rt_class_set => .{
+            .memory = touches_heap,
+            .parameters = &.{ .run, .value_in, .plain, .plain, .value_in },
+            .willreturn = false,
         },
 
         // -- containers that only look --------------------------------
@@ -1127,6 +1158,9 @@ test "exactly callbacks, waits, deep copies, and release-reachable services with
             .luce_rt_constants_abort,
             .luce_rt_discard_loose,
             .luce_rt_copy,
+            .luce_rt_release,
+            .luce_rt_class_make,
+            .luce_rt_class_set,
             .luce_rt_index_set,
             .luce_rt_list_slice,
             .luce_rt_remove,

@@ -112,6 +112,14 @@ const survived: i32 = 0;
 const raised_trap: i32 = 1;
 const raised_error: i32 = 2;
 
+/// The answer after an operation which can release an owned edge.  Class
+/// deinitializers run inside those releases, so a semantically `void`
+/// operation can still stop the program and must publish that fact through
+/// the ordinary runtime outcome channel.
+fn completed(runtime: *const Runtime) i32 {
+    return if (runtime.stopped()) raised_trap else survived;
+}
+
 /// The runtime plus the memory it draws on, for the C entry point that
 /// has no allocator to be given.  Heap-allocated and never moved: the
 /// runtime holds an allocator pointing into `arena`.
@@ -374,7 +382,7 @@ pub export fn luce_rt_intern_text(
         return failed(runtime, mistake);
     out.* = text.ownHost(runtime, borrowed) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 /// The same, for a service that may have nothing to hand over:
@@ -394,13 +402,13 @@ pub export fn luce_rt_maybe_text(
         return failed(runtime, mistake);
     if (!is_present) {
         out.* = Value.none;
-        return survived;
+        return completed(runtime);
     }
     const borrowed = checkedBytes(runtime, bytes, length) catch |mistake|
         return failed(runtime, mistake);
     out.* = text.ownHost(runtime, borrowed) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 /// A directory listing, as the `list[str]` `dir_list` answers.
@@ -421,7 +429,7 @@ pub export fn luce_rt_names_list(
         return failed(runtime, mistake);
     out.* = containers.listOfJoinedText(runtime, joined) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 /// `main`'s `args`: the command line as the `list[str]` the entry's
@@ -445,7 +453,7 @@ pub export fn luce_rt_args_list(
     const total: i64 = if (count) |callback| callback(context) else 0;
     out.* = containers.listOfArguments(runtime, total, context, get) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 /// Remember the text payload of the key just read, for `key_text`.
@@ -461,7 +469,7 @@ pub export fn luce_rt_set_key_text(
         return failed(runtime, mistake);
     runtime.setKeyText(borrowed) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 /// A copy of a value whose storage nothing else owns — what every
@@ -476,7 +484,7 @@ pub export fn luce_rt_own_storage(
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireValueInput(runtime, held)) return raised_trap;
     out.* = runtime.ownValue(held.*) catch |mistake| return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 /// A value with storage that outlives the frame that made it — what
@@ -491,7 +499,7 @@ pub export fn luce_rt_export_storage(
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireValueInput(runtime, held)) return raised_trap;
     out.* = runtime.exportValue(held.*) catch |mistake| return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 /// Give back the storage a value owns, and answer the emptied value
@@ -511,17 +519,19 @@ pub export fn luce_rt_drop_storage(
 
 /// Raise by one the reference count of every object a value names: a new
 /// name — a binding, a cell, a field — now holds it (docs/MEMORY.md).
-pub export fn luce_rt_retain(runtime: *Runtime, held: [*c]const Value) callconv(.c) void {
-    if (!requireValueInput(runtime, held)) return;
-    runtime.retainValue(held.*);
+pub export fn luce_rt_retain(runtime: *Runtime, held: [*c]const Value) callconv(.c) i32 {
+    if (!requireValueInput(runtime, held)) return raised_trap;
+    runtime.retainValue(held.*) catch |mistake| return failed(runtime, mistake);
+    return completed(runtime);
 }
 
 /// Drop one reference to every object a value names.  The objects it
 /// named are reclaimed the moment their last reference goes; a shared one
 /// only loses a count.  This is ARC's scope-end and overwrite release.
-pub export fn luce_rt_release(runtime: *Runtime, held: [*c]const Value) callconv(.c) void {
-    if (!requireValueInput(runtime, held)) return;
+pub export fn luce_rt_release(runtime: *Runtime, held: [*c]const Value) callconv(.c) i32 {
+    if (!requireValueInput(runtime, held)) return raised_trap;
     runtime.freeObjectsIn(held.*);
+    return completed(runtime);
 }
 
 /// Convert a strong optional object into non-owning weak storage. The answer
@@ -535,7 +545,7 @@ pub export fn luce_rt_weak_store(
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireValueInput(runtime, held)) return raised_trap;
     out.* = runtime.weaken(held.*) catch |mistake| return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 /// Upgrade one weak storage cell to an owned optional object. A live target
@@ -548,7 +558,7 @@ pub export fn luce_rt_weak_load(
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireValueInput(runtime, held)) return raised_trap;
     out.* = runtime.strengthen(held.*) catch |mistake| return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 /// The text payload of the most recent `key_read`.
@@ -583,7 +593,7 @@ pub export fn luce_rt_parse_str(
     if (!requireValueInput(runtime, held)) return raised_trap;
     out.* = text.parseStr(runtime, held.*) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 /// `bytes(value)` — copy text or a packed one-dimensional u8
@@ -597,7 +607,7 @@ pub export fn luce_rt_bytes(
     if (!requireValueInput(runtime, held)) return raised_trap;
     out.* = text.bytes(runtime, held.*) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 // ---------------------------------------------------------------------------
@@ -647,6 +657,18 @@ pub export fn luce_rt_workers_install(
     runtime.depth_budget = depth;
 }
 
+/// Install this artifact's hidden class-deinitializer dispatcher.  The
+/// callback is engine-owned just like a worker runner: the runtime owns the
+/// moment an object dies, while generated code owns Luce call frames.
+pub export fn luce_rt_finalizers_install(
+    runtime: *Runtime,
+    context: ?*anyopaque,
+    run: ?heap.FinalizerRunFn,
+    depth: i64,
+) callconv(.c) void {
+    runtime.finalizers = .{ .context = context, .run = run, .depth = depth };
+}
+
 /// `spawn f(args)` — the arguments arrive as a run of boxes and are
 /// copied into the worker's runtime here, on this thread, before the
 /// thread starts (docs/THREADS.md D2).
@@ -672,7 +694,7 @@ pub export fn luce_rt_spawn(
         arguments[0..argument_count];
     workers.spawn(runtime, function, passed, out) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 /// `t.wait()` — join, and move the worker's result here (D4).
@@ -766,7 +788,7 @@ pub export fn luce_rt_gpu_backend(
 ) callconv(.c) i32 {
     if (!requireScalarOut(i64, runtime, out)) return raised_trap;
     out.* = graphics.backend(runtime) catch |mistake| return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_ui_window_open(
@@ -791,7 +813,7 @@ pub export fn luce_rt_ui_window_open(
     } else {
         runtime.raiseIo(.open, named, runtime.frameAt(function, instruction));
     }
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_ui_window_surface(
@@ -812,7 +834,7 @@ pub export fn luce_rt_ui_window_surface(
     } else {
         runtime.raiseIo(.open, "ui.window", runtime.frameAt(function, instruction));
     }
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_gpu_surface_size(
@@ -835,7 +857,7 @@ pub export fn luce_rt_gpu_surface_size(
         "gpu.surface",
         runtime.frameAt(function, instruction),
     );
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_gpu_surface_clear(
@@ -855,7 +877,7 @@ pub export fn luce_rt_gpu_surface_clear(
         return failed(runtime, mistake);
     ok.* = @intFromBool(answered);
     if (!answered) runtime.raiseIo(.write, "gpu.surface", runtime.frameAt(function, instruction));
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_gpu_surface_fill_rect(
@@ -889,7 +911,7 @@ pub export fn luce_rt_gpu_surface_fill_rect(
     ) catch |mistake| return failed(runtime, mistake);
     ok.* = @intFromBool(answered);
     if (!answered) runtime.raiseIo(.write, "gpu.surface", runtime.frameAt(function, instruction));
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_gpu_surface_present(
@@ -905,7 +927,7 @@ pub export fn luce_rt_gpu_surface_present(
         return failed(runtime, mistake);
     ok.* = @intFromBool(answered);
     if (!answered) runtime.raiseIo(.flush, "gpu.surface", runtime.frameAt(function, instruction));
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_file_open(
@@ -932,7 +954,7 @@ pub export fn luce_rt_file_open(
     } else {
         runtime.raiseIo(.open, named, runtime.frameAt(function, instruction));
     }
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_file_read(
@@ -957,7 +979,7 @@ pub export fn luce_rt_file_read(
         files.pathOf(runtime, held.*),
         runtime.frameAt(function, instruction),
     );
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_file_write(
@@ -983,7 +1005,7 @@ pub export fn luce_rt_file_write(
         files.pathOf(runtime, held.*),
         runtime.frameAt(function, instruction),
     );
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_file_flush(
@@ -1004,7 +1026,7 @@ pub export fn luce_rt_file_flush(
         files.pathOf(runtime, held.*),
         runtime.frameAt(function, instruction),
     );
-    return survived;
+    return completed(runtime);
 }
 
 /// `file_read(path)` — the whole file as a `string`, open-read-close
@@ -1030,7 +1052,7 @@ pub export fn luce_rt_file_read_text(
     } else {
         runtime.raiseIo(.read, named, runtime.frameAt(function, instruction));
     }
-    return survived;
+    return completed(runtime);
 }
 
 /// `file_write(path, text)` at `mode` 1 and `file_append(path, text)`
@@ -1066,7 +1088,7 @@ pub export fn luce_rt_file_write_text(
         named,
         runtime.frameAt(function, instruction),
     );
-    return survived;
+    return completed(runtime);
 }
 
 /// Record allocation failure and report the call as trapped.  Every
@@ -1142,7 +1164,7 @@ fn checkedBytes(runtime: *Runtime, bytes: [*c]const u8, raw: i64) heap.Error![]c
 /// returned or retained on failure; the trap waits in `runtime.pending`.
 pub export fn luce_rt_constants_begin(runtime: *Runtime, count: u32) callconv(.c) i32 {
     runtime.beginConstants(count) catch |mistake| return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 /// Publish a completed loose object at `slot`.  On failure the object
@@ -1154,7 +1176,7 @@ pub export fn luce_rt_constant_publish(
 ) callconv(.c) i32 {
     if (!requireValueInput(runtime, held)) return raised_trap;
     runtime.publishConstant(slot, held.*) catch |mistake| return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 /// Load the borrowed program-root handle at a verified pool slot.
@@ -1214,19 +1236,19 @@ pub export fn luce_rt_new_list(
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireValueInput(runtime, zero)) return raised_trap;
     out.* = runtime.newList(zero.*) catch |mistake| return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_new_map(runtime: *Runtime, out: [*c]Value) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = runtime.newMap() catch |mistake| return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_new_builder(runtime: *Runtime, out: [*c]Value) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = runtime.newBuilder() catch |mistake| return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_new_array(
@@ -1242,7 +1264,7 @@ pub export fn luce_rt_new_array(
         return failed(runtime, mistake);
     out.* = runtime.newArray(dims[0..dimension_count], zero.*) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_copy(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32 {
@@ -1250,7 +1272,7 @@ pub export fn luce_rt_copy(runtime: *Runtime, held: [*c]const Value, out: [*c]Va
     if (!requireValueInput(runtime, held)) return raised_trap;
     out.* = containers.copyVerb(runtime, held.*) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 // ---------------------------------------------------------------------------
@@ -1280,7 +1302,7 @@ pub export fn luce_rt_struct_make(
         return failed(runtime, mistake);
     out.* = runtime.makeStruct(fields[0..field_count]) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 /// A function value's run: `count` consecutive `Value`s under the tag
@@ -1300,7 +1322,7 @@ pub export fn luce_rt_function_make(
         return failed(runtime, mistake);
     out.* = runtime.makeFunction(slots[0..slot_count]) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_struct_set(
@@ -1316,7 +1338,70 @@ pub export fn luce_rt_struct_set(
     const index = std.math.cast(usize, field) orelse return rejected(runtime, .index_bounds);
     out.* = runtime.setField(held.*, index, to.*) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
+}
+
+// ---------------------------------------------------------------------------
+// Class instances
+// ---------------------------------------------------------------------------
+
+/// Build one nominal class object. Like struct construction this consumes
+/// every field, but the resulting value is an ARC handle whose field run is
+/// shared and mutable rather than an independently owned value run.
+pub export fn luce_rt_class_make(
+    runtime: *Runtime,
+    layout: i64,
+    deinitializer: i64,
+    fields: [*c]const Value,
+    count: i64,
+    out: [*c]Value,
+) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
+    if (!requireValueInput(runtime, fields)) return raised_trap;
+    const layout_index = std.math.cast(u32, layout) orelse return rejected(runtime, .not_owned);
+    const finalizer_index: ?u32 = if (deinitializer == -1)
+        null
+    else
+        std.math.cast(u32, deinitializer) orelse return rejected(runtime, .not_owned);
+    const field_count = checkedCount(runtime, count) catch |mistake|
+        return failed(runtime, mistake);
+    out.* = runtime.newClass(layout_index, finalizer_index, fields[0..field_count]) catch |mistake|
+        return failed(runtime, mistake);
+    return completed(runtime);
+}
+
+/// Borrow one field from a class object. The generated expression decides
+/// whether that borrow is retained/copied before it escapes.
+pub export fn luce_rt_class_get(
+    runtime: *Runtime,
+    held: [*c]const Value,
+    layout: i64,
+    field: i64,
+    out: [*c]Value,
+) callconv(.c) i32 {
+    if (!requireValueOut(runtime, out)) return raised_trap;
+    if (!requireValueInput(runtime, held)) return raised_trap;
+    const layout_index = std.math.cast(u32, layout) orelse return rejected(runtime, .not_owned);
+    const field_index = std.math.cast(usize, field) orelse return rejected(runtime, .index_bounds);
+    out.* = runtime.classField(held.*, layout_index, field_index) catch |mistake|
+        return failed(runtime, mistake);
+    return completed(runtime);
+}
+
+/// Mutate one field through a class reference and consume the replacement.
+pub export fn luce_rt_class_set(
+    runtime: *Runtime,
+    held: [*c]const Value,
+    layout: i64,
+    field: i64,
+    to: [*c]const Value,
+) callconv(.c) i32 {
+    if (!requireValueInput(runtime, held) or !requireValueInput(runtime, to)) return raised_trap;
+    const layout_index = std.math.cast(u32, layout) orelse return rejected(runtime, .not_owned);
+    const field_index = std.math.cast(usize, field) orelse return rejected(runtime, .index_bounds);
+    runtime.setClassField(held.*, layout_index, field_index, to.*) catch |mistake|
+        return failed(runtime, mistake);
+    return completed(runtime);
 }
 
 /// Turn an invalid scalar supplied across the C boundary into the same
@@ -1425,7 +1510,7 @@ pub export fn luce_rt_len(runtime: *Runtime, target: [*c]const Value, out: [*c]V
     if (!requireValueInput(runtime, target)) return raised_trap;
     out.* = containers.length(runtime, target.*) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_index_get(
@@ -1442,7 +1527,7 @@ pub export fn luce_rt_index_get(
     if (!requireIndexableInput(runtime, target)) return raised_trap;
     out.* = containers.indexGet(runtime, target.*, indices[0..index_count]) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 /// Consumes `held` — see `containers.indexSet`.  The key stays a
@@ -1461,7 +1546,7 @@ pub export fn luce_rt_index_set(
     if (!requireObjectInput(runtime, target)) return raised_trap;
     containers.indexSet(runtime, target.*, indices[0..index_count], held.*) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_list_slice(
@@ -1475,7 +1560,7 @@ pub export fn luce_rt_list_slice(
     if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.listSlice(runtime, target.*, start, end) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 /// A list consumes `held`; a builder copies its bytes and borrows —
@@ -1489,7 +1574,7 @@ pub export fn luce_rt_append(
     if (!requireObjectInput(runtime, target)) return raised_trap;
     containers.append(runtime, target.*, held.*) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_append_ascii(
@@ -1500,7 +1585,7 @@ pub export fn luce_rt_append_ascii(
     if (!requireObjectInput(runtime, target)) return raised_trap;
     containers.appendAscii(runtime, target.*, code) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_pop(runtime: *Runtime, target: [*c]const Value, out: [*c]Value) callconv(.c) i32 {
@@ -1508,7 +1593,7 @@ pub export fn luce_rt_pop(runtime: *Runtime, target: [*c]const Value, out: [*c]V
     if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.pop(runtime, target.*) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 /// Consumes `held` — see `containers.insert`.
@@ -1522,7 +1607,7 @@ pub export fn luce_rt_insert(
     if (!requireObjectInput(runtime, target)) return raised_trap;
     containers.insert(runtime, target.*, index, held.*) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_remove(
@@ -1534,7 +1619,7 @@ pub export fn luce_rt_remove(
     if (!requireObjectInput(runtime, target)) return raised_trap;
     containers.remove(runtime, target.*, which.*) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_has_key(
@@ -1548,7 +1633,7 @@ pub export fn luce_rt_has_key(
     if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.hasKey(runtime, target.*, key.*) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_key_at(
@@ -1561,7 +1646,7 @@ pub export fn luce_rt_key_at(
     if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.keyAt(runtime, target.*, index) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_value_at(
@@ -1574,7 +1659,7 @@ pub export fn luce_rt_value_at(
     if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.valueAt(runtime, target.*, index) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_dim_size(
@@ -1587,19 +1672,19 @@ pub export fn luce_rt_dim_size(
     if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.dimSize(runtime, target.*, axis) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_sort(runtime: *Runtime, target: [*c]const Value) callconv(.c) i32 {
     if (!requireObjectInput(runtime, target)) return raised_trap;
     containers.sort(runtime, target.*) catch |mistake| return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_reverse(runtime: *Runtime, target: [*c]const Value) callconv(.c) i32 {
     if (!requireObjectInput(runtime, target)) return raised_trap;
     containers.reverse(runtime, target.*) catch |mistake| return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_find(
@@ -1613,7 +1698,7 @@ pub export fn luce_rt_find(
     if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.find(runtime, target.*, wanted.*) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_contains(
@@ -1628,14 +1713,14 @@ pub export fn luce_rt_contains(
     const at = containers.find(runtime, target.*, wanted.*) catch |mistake|
         return failed(runtime, mistake);
     out.* = Value.ofBoolean(!at.isNone());
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_clear(runtime: *Runtime, target: [*c]const Value) callconv(.c) i32 {
     if (!requireValueInput(runtime, target)) return raised_trap;
     if (!requireObjectInput(runtime, target)) return raised_trap;
     containers.clear(runtime, target.*) catch |mistake| return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 /// `zero` is the element zero of the list this answers, exactly as
@@ -1653,7 +1738,7 @@ pub export fn luce_rt_map_keys(
     if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.mapKeys(runtime, target.*, zero.*) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_map_values(
@@ -1667,7 +1752,7 @@ pub export fn luce_rt_map_values(
     if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.mapValues(runtime, target.*, zero.*) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_map_get(
@@ -1681,7 +1766,7 @@ pub export fn luce_rt_map_get(
     if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.mapGet(runtime, target.*, key.*) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 /// The key and the zero are both borrows the map copies for itself
@@ -1699,7 +1784,7 @@ pub export fn luce_rt_map_place(
     if (!requireObjectInput(runtime, target)) return raised_trap;
     out.* = containers.mapPlace(runtime, target.*, key.*, zero.*) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_array_fill(
@@ -1711,7 +1796,7 @@ pub export fn luce_rt_array_fill(
     if (!requireObjectInput(runtime, target)) return raised_trap;
     containers.arrayFill(runtime, target.*, held.*) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 // ---------------------------------------------------------------------------
@@ -1739,7 +1824,7 @@ pub export fn luce_rt_concat(
     if (!requireTextLikeInput(runtime, left) or !requireTextLikeInput(runtime, right)) return raised_trap;
     out.* = text.concat(runtime, left.*, right.*) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_string_slice(
@@ -1753,7 +1838,7 @@ pub export fn luce_rt_string_slice(
     if (!requireTextLikeInput(runtime, held)) return raised_trap;
     out.* = text.slice(runtime, held.*, start, end) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_string_byte(
@@ -1766,7 +1851,7 @@ pub export fn luce_rt_string_byte(
     if (!requireStringInput(runtime, held)) return raised_trap;
     out.* = text.byteAt(runtime, held.*, index) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_string_find_byte(
@@ -1780,41 +1865,41 @@ pub export fn luce_rt_string_find_byte(
     if (!requireStringInput(runtime, held)) return raised_trap;
     out.* = text.findByte(runtime, held.*, byte, start) catch |mistake|
         return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_str(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireValueInput(runtime, held)) return raised_trap;
     out.* = text.str(runtime, held.*) catch |mistake| return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_parse_int(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireStringInput(runtime, held)) return raised_trap;
     out.* = text.parseInt(runtime, held.*) catch |mistake| return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_parse_float(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireStringInput(runtime, held)) return raised_trap;
     out.* = text.parseFloat(runtime, held.*) catch |mistake| return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_chr(runtime: *Runtime, code: i64, out: [*c]Value) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
     out.* = text.chr(runtime, code) catch |mistake| return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 pub export fn luce_rt_ord(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireStringInput(runtime, held)) return raised_trap;
     out.* = text.ord(runtime, held.*) catch |mistake| return failed(runtime, mistake);
-    return survived;
+    return completed(runtime);
 }
 
 // ---------------------------------------------------------------------------

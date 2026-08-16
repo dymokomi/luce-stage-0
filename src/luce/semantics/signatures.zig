@@ -61,7 +61,7 @@ pub fn collectFunctions(self: *Analyzer) Error!void {
         self.diagnostics.scope = module.file;
         for (module.tree.functions) |*declaration| {
             const qualified = try naming.qualify(self, module.prefix, declaration.name);
-            try collectFunction(self, declaration, qualified, module_index, true, null);
+            try collectFunction(self, declaration, qualified, module_index, true, null, false);
         }
         for (module.tree.structs) |*declaration| {
             const owner = self.struct_names.get(
@@ -79,8 +79,36 @@ pub fn collectFunctions(self: *Analyzer) Error!void {
                     qualified,
                     module_index,
                     false,
-                    if (owner) |index| .{ .strukt = index } else null,
+                    if (owner) |index| blk: {
+                        const owner_type = try resolve.nominalType(self, index);
+                        break :blk if (owner_type == .heap)
+                            .{ .class = owner_type.heap }
+                        else
+                            .{ .strukt = index };
+                    } else null,
+                    false,
                 );
+            }
+            if (declaration.deinitializer) |*deinitializer| {
+                if (declaration.kind != .reference) continue;
+                const layout = owner orelse continue;
+                const owner_type = try resolve.nominalType(self, layout);
+                if (owner_type != .heap) continue;
+                const member = try std.fmt.allocPrint(self.arena, "{s}.deinit", .{declaration.name});
+                const qualified = try naming.qualify(self, module.prefix, member);
+                const before = self.functions.items.len;
+                try collectFunction(
+                    self,
+                    deinitializer,
+                    qualified,
+                    module_index,
+                    false,
+                    .{ .class = owner_type.heap },
+                    true,
+                );
+                if (self.functions.items.len != before) {
+                    self.structs.items[layout].deinitializer = @intCast(before);
+                }
             }
         }
         // An enum's functions are collected exactly as a struct's
@@ -103,6 +131,7 @@ pub fn collectFunctions(self: *Analyzer) Error!void {
                     module_index,
                     false,
                     if (owner) |index| .{ .enumeration = self.enumType(index).enumeration } else null,
+                    false,
                 );
             }
         }
@@ -127,6 +156,7 @@ pub fn collectFunctions(self: *Analyzer) Error!void {
                     module_index,
                     false,
                     if (owner) |index| .{ .variant = index } else null,
+                    false,
                 );
             }
         }
@@ -145,9 +175,10 @@ fn collectFunction(
     /// It is what gives `self` its type, and what makes `self` at
     /// file scope a diagnostic rather than a crash.
     enclosing: ?context.Enclosing,
+    is_deinitializer: bool,
 ) Error!void {
     const in_root = self.modules[module].prefix.len == 0;
-    if (isReserved(declaration.name)) {
+    if (!is_deinitializer and isReserved(declaration.name)) {
         try self.fail("luce.sema.reserved", declaration.name_span, "{s} is a reserved name", .{declaration.name});
         return;
     }
@@ -187,6 +218,7 @@ fn collectFunction(
     const surface = declaration.visibility != .private and
         (enclosing == null or switch (enclosing.?) {
             .strukt => |index| self.struct_decls.items[index].declaration.visibility != .private,
+            .class => |heap| self.struct_decls.items[self.heap_types.items[heap].class].declaration.visibility != .private,
             .enumeration => |reference| self.enum_decls.items[reference.index].declaration.visibility != .private,
             .variant => |index| self.variant_decls.items[index].declaration.visibility != .private,
         });
@@ -297,6 +329,7 @@ fn collectFunction(
         .return_type = return_type,
         .fallible = declaration.fallible,
         .is_entry = is_entry,
+        .is_deinitializer = is_deinitializer,
     });
 }
 

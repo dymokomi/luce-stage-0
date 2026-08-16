@@ -139,13 +139,14 @@ fn keywordClass(kind: luce.lex.Kind) ?Class {
         .keyword_match,
         => .control,
 
-        .keyword_and, .keyword_or, .keyword_not => .word_operator,
+        .keyword_and, .keyword_or, .keyword_not, .keyword_is => .word_operator,
 
         .keyword_func,
         .keyword_struct,
         // `class` declares a reference type beside `struct`'s value type
         // (docs/MEMORY.md), and wears its class.
         .keyword_class,
+        .keyword_deinit,
         .keyword_interface,
         .keyword_alias,
         // `enum` and `union` declare types beside `struct`, and wear

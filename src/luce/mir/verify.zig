@@ -63,6 +63,10 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
         try verifyType(program, signature.result);
     }
     for (program.heap_types) |descriptor| switch (descriptor) {
+        .class => |layout| {
+            if (layout >= program.structs.len or !program.structs[layout].reference)
+                return error.BadStruct;
+        },
         // **A bare function type is not an element type**
         // (docs/BINDING.md D7): the storable form is
         // `(func(...) -> R)?`, and a cell has no shape for a function
@@ -100,6 +104,10 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
     };
     for (program.structs) |layout| {
         if (layout.interface and layout.reference) return error.BadStruct;
+        if (layout.deinitializer) |function| {
+            if (!layout.reference or layout.interface or function >= program.functions.len)
+                return error.BadStruct;
+        }
         for (layout.fields) |field| {
             try verifyFieldType(program, field.field_type, layout.interface);
             if (field.weak and (layout.interface or !isWeakTarget(program, field.field_type)))
@@ -150,6 +158,37 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
             if (index != 0 or function.parameter_count == 0) return error.BadLocal;
         }
     }
+    // A deinitializer is one ordinary body behind a non-callable layout
+    // edge: exactly one borrowed class receiver, no result, no failure
+    // channel. Check the edge and also refuse any instruction that tries to
+    // turn it back into a source-callable function.
+    for (program.structs, 0..) |layout, layout_index| {
+        const finalizer = layout.deinitializer orelse continue;
+        const function = &program.functions[finalizer];
+        const receiver = try nominalType(program, @intCast(layout_index));
+        if (function.parameter_count != 1 or
+            function.locals.len == 0 or
+            function.locals[0].inout or
+            !function.locals[0].local_type.eql(receiver) or
+            function.return_type != .none or
+            function.fallible)
+        {
+            return error.BadFunction;
+        }
+        for (program.functions) |candidate| {
+            for (candidate.instructions) |instruction| {
+                const named: ?u32 = switch (instruction) {
+                    .call, .spawn => |call| call.function,
+                    .call_inout => |call| call.function,
+                    .const_function => |bound| bound.function,
+                    else => null,
+                };
+                if (named) |target| {
+                    if (target == finalizer) return error.BadFunction;
+                }
+            }
+        }
+    }
     for (program.functions) |*function| {
         try verifyFunction(allocator, program, function);
     }
@@ -186,17 +225,17 @@ fn isWeakTarget(program: *const Program, of: Type) bool {
         .heap => |index| if (index >= program.heap_types.len)
             false
         else switch (program.heap_types[index]) {
-            .list, .map, .array, .builder => true,
+            .class, .list, .map, .array, .builder => true,
             .file, .task => false,
         },
-        .strukt => |index| index < program.structs.len and program.structs[index].reference,
         else => false,
     };
 }
 
 fn verifyType(program: *const Program, of: Type) VerifyError!void {
     switch (of) {
-        .strukt => |index| if (index >= program.structs.len) return error.BadStruct,
+        .strukt => |index| if (index >= program.structs.len or program.structs[index].reference)
+            return error.BadStruct,
         .variant => |index| if (index >= program.variants.len) return error.BadStruct,
         .heap => |index| if (index >= program.heap_types.len) return error.BadStruct,
         .function => |index| if (index >= program.signatures.len) return error.BadFunction,
@@ -236,6 +275,19 @@ fn verifyType(program: *const Program, of: Type) VerifyError!void {
         .bytes,
         => {},
     }
+}
+
+/// The machine type of one nominal aggregate layout. A value struct is its
+/// field run; a class is the unique heap descriptor that points back to the
+/// reference layout.
+fn nominalType(program: *const Program, layout: u32) VerifyError!Type {
+    if (layout >= program.structs.len) return error.BadStruct;
+    if (!program.structs[layout].reference) return .{ .strukt = layout };
+    for (program.heap_types, 0..) |descriptor, index| {
+        if (descriptor == .class and descriptor.class == layout)
+            return .{ .heap = @intCast(index) };
+    }
+    return error.BadStruct;
 }
 
 /// Source structs cannot declare bare function fields, but compiler-generated
@@ -320,6 +372,7 @@ fn typeTableCycle(allocator: Allocator, program: *const Program) VerifyError!?Ty
 /// row, or null after its last edge.
 fn typeReferenceAt(program: *const Program, node: usize, edge: usize) ?Type {
     if (node < program.heap_types.len) return switch (program.heap_types[node]) {
+        .class => null,
         .list => |element| if (edge == 0) element else null,
         .map => |pair| switch (edge) {
             0 => pair.key,
@@ -615,6 +668,7 @@ fn verifyContainerConstant(
 
     if (constant.heap >= program.heap_types.len) return error.BadConstant;
     switch (program.heap_types[constant.heap]) {
+        .class => return error.BadConstant,
         .list => |element| switch (constant.payload) {
             .sequence => |values| for (values) |value| {
                 try verifyConstantValue(program, value, element, false, 0);
@@ -995,7 +1049,7 @@ fn verifyInstruction(
                 const value = try operandType(function, defined, field_register);
                 try expectType(value, field.field_type);
             }
-            try expectType(result, .{ .strukt = make.layout });
+            try expectType(result, try nominalType(program, make.layout));
         },
         .struct_get => |get| {
             if (get.layout >= program.structs.len) return error.BadStruct;
@@ -1003,7 +1057,7 @@ fn verifyInstruction(
             if (get.field >= layout.fields.len) return error.BadStruct;
             if (layout.fields[get.field].weak) return error.BadStruct;
             const target = try operandType(function, defined, get.target);
-            try expectType(target, .{ .strukt = get.layout });
+            try expectType(target, try nominalType(program, get.layout));
             try expectType(result, layout.fields[get.field].field_type);
         },
         .struct_set => |set| {
@@ -1012,10 +1066,10 @@ fn verifyInstruction(
             if (set.field >= layout.fields.len) return error.BadStruct;
             if (layout.fields[set.field].weak) return error.BadStruct;
             const target = try operandType(function, defined, set.target);
-            try expectType(target, .{ .strukt = set.layout });
+            try expectType(target, try nominalType(program, set.layout));
             const value = try operandType(function, defined, set.value);
             try expectType(value, layout.fields[set.field].field_type);
-            try expectType(result, .{ .strukt = set.layout });
+            try expectType(result, if (layout.reference) .none else Type{ .strukt = set.layout });
         },
         .weak_struct_get => |get| {
             if (get.layout >= program.structs.len) return error.BadStruct;
@@ -1023,7 +1077,7 @@ fn verifyInstruction(
             if (get.field >= layout.fields.len or !layout.fields[get.field].weak)
                 return error.BadStruct;
             const target = try operandType(function, defined, get.target);
-            try expectType(target, .{ .strukt = get.layout });
+            try expectType(target, try nominalType(program, get.layout));
             try expectType(result, layout.fields[get.field].field_type);
         },
         .weak_struct_set => |set| {
@@ -1032,10 +1086,10 @@ fn verifyInstruction(
             if (set.field >= layout.fields.len or !layout.fields[set.field].weak)
                 return error.BadStruct;
             const target = try operandType(function, defined, set.target);
-            try expectType(target, .{ .strukt = set.layout });
+            try expectType(target, try nominalType(program, set.layout));
             const value = try operandType(function, defined, set.value);
             try expectType(value, layout.fields[set.field].field_type);
-            try expectType(result, .{ .strukt = set.layout });
+            try expectType(result, if (layout.reference) .none else Type{ .strukt = set.layout });
         },
         // The variant trio reads `program.variants` and only that
         // table, exactly as the struct trio reads `program.structs`
@@ -1115,14 +1169,16 @@ fn verifyInstruction(
             // a resource (a defensive trap) or a function value (a
             // borrowed receiver with no valid owner on the far side).
             for (callee.locals[0..callee.parameter_count]) |parameter| {
-                if (try typeCarriesWorker(allocator, program, parameter.local_type, .resource) or
+                if (try typeCarriesWorker(allocator, program, parameter.local_type, .class) or
+                    try typeCarriesWorker(allocator, program, parameter.local_type, .resource) or
                     try typeCarriesWorker(allocator, program, parameter.local_type, .function) or
                     try typeCarriesWorker(allocator, program, parameter.local_type, .weak))
                 {
                     return error.BadFunction;
                 }
             }
-            if (try typeCarriesWorker(allocator, program, callee.return_type, .resource) or
+            if (try typeCarriesWorker(allocator, program, callee.return_type, .class) or
+                try typeCarriesWorker(allocator, program, callee.return_type, .resource) or
                 try typeCarriesWorker(allocator, program, callee.return_type, .function) or
                 try typeCarriesWorker(allocator, program, callee.return_type, .weak))
             {
@@ -1161,6 +1217,7 @@ fn verifyInstruction(
             const expected_dims: usize = switch (program.heap_types[new.heap]) {
                 .array => |shape| shape.rank,
                 .list, .map, .builder => 0,
+                .class => return error.BadIntrinsic,
                 // Resources enter through their dedicated runtime
                 // doors.  Treating one as an ordinary heap allocation
                 // leaves the interpreter at `unreachable` and gives
@@ -1390,7 +1447,7 @@ fn verifyIntrinsic(
                 if (arguments[0] != .heap) return error.BadIntrinsic;
                 switch (try heapShape(program, arguments[0])) {
                     .list, .map, .array, .builder => {},
-                    .file, .task => return error.BadIntrinsic,
+                    .class, .file, .task => return error.BadIntrinsic,
                 }
             }
             try expectType(result, .i64);
@@ -1511,7 +1568,7 @@ fn verifyIntrinsic(
                     for (arguments[1 .. 1 + shape.rank]) |index| try expectType(index, .i64);
                     break :blk shape.element;
                 },
-                .builder, .file, .task => return error.BadIntrinsic,
+                .class, .builder, .file, .task => return error.BadIntrinsic,
             };
             if (reads) {
                 try expectType(result, element);
@@ -1640,7 +1697,7 @@ fn verifyIntrinsic(
             try exactly(arguments, 1);
             switch (try heapShape(program, arguments[0])) {
                 .list, .map, .builder => {},
-                .array, .file, .task => return error.BadIntrinsic,
+                .class, .array, .file, .task => return error.BadIntrinsic,
             }
             try expectType(result, .none);
         },
@@ -1719,7 +1776,7 @@ fn verifyIntrinsic(
                 break :accepted switch (shape) {
                     .list => |element| element == .u8,
                     .array => |array| array.rank == 1 and array.element == .u8,
-                    .map, .builder, .file, .task => false,
+                    .class, .map, .builder, .file, .task => false,
                 };
             } else false;
             if (!accepted) return error.BadIntrinsic;
@@ -2051,7 +2108,7 @@ fn typeCanOwnStorage(of: Type) bool {
     };
 }
 
-const WorkerCarry = enum { resource, function, weak };
+const WorkerCarry = enum { class, resource, function, weak };
 
 /// Whether a type graph contains a value that cannot cross a worker
 /// boundary.  The source checker asks the same question through
@@ -2110,6 +2167,7 @@ fn typeCarriesWorker(
                 if (seen_heaps[index]) continue;
                 seen_heaps[index] = true;
                 switch (program.heap_types[index]) {
+                    .class => if (sought == .class) return true,
                     .file, .task => if (sought == .resource) return true,
                     .list => |element| try pending.append(allocator, element),
                     .map => |pair| {

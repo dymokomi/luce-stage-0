@@ -492,6 +492,25 @@ pub fn build(b: *std.Build) void {
     );
     test_weak_references_step.dependOn(&b.addRunArtifact(weak_reference_tests).step);
 
+    const class_tests = b.addTest(.{
+        .root_module = specs,
+        .filters = &.{ "specs.classes_spec.", "class:" },
+        .test_runner = progress_test_runner,
+    });
+    const test_classes_step = b.step(
+        "test-classes",
+        "Run ARC class identity, mutation, and lifetime specifications",
+    );
+    test_classes_step.dependOn(&addProgressTestRun(b, class_tests, "classes").step);
+    const class_runtime_tests = b.addTest(.{
+        .root_module = luce,
+        .filters = &.{"ARC class:"},
+        .test_runner = progress_test_runner,
+    });
+    test_classes_step.dependOn(
+        &addProgressTestRun(b, class_runtime_tests, "class-runtime").step,
+    );
+
     const thread_registry_tests = b.addTest(.{
         .root_module = specs,
         .filters = &.{ "full table", "closes publication" },

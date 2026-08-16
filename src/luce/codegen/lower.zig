@@ -344,6 +344,12 @@ const Module = struct {
     /// this is the switch that turns the first back into a call.
     worker_entry: ?Builder.Function.Index = null,
 
+    /// The engine callback `Runtime` enters when a class reaches its last
+    /// strong reference.  It dispatches a verified hidden function index to
+    /// the corresponding Luce body and is absent from programs with no
+    /// deinitializers.
+    finalizer_entry: ?Builder.Function.Index = null,
+
     /// One entry per program function: the adapter a value of it is
     /// called through, or `null` for a function no value ever names.
     ///
@@ -1221,6 +1227,7 @@ const Module = struct {
 
         self.spawned = try self.collectSpawned();
         if (self.spawned.len != 0) try self.lowerWorkerEntry();
+        try self.lowerFinalizerEntry();
 
         try self.lowerValueEntries();
 
@@ -1337,6 +1344,7 @@ const Module = struct {
 
             const descriptor = self.program.heap_types[constant.heap];
             switch (descriptor) {
+                .class => unreachable, // classes are runtime values, never constants
                 .list => |element| {
                     _ = try wip.store(
                         .normal,
@@ -1498,7 +1506,7 @@ const Module = struct {
                 .map => |pair| for (constant.payload.map) |_| {
                     count += 1 + @as(usize, @intFromBool(constantOwnsStorage(pair.value)));
                 },
-                .builder, .file, .task => {},
+                .class, .builder, .file, .task => {},
             }
         }
         return @intCast(count);
@@ -1922,6 +1930,97 @@ const Module = struct {
             wip.cursor = .{ .block = done };
         }
         _ = try wip.ret(outcome);
+    }
+
+    /// Build the one C-shaped dispatcher class releases call back through.
+    /// Layout metadata is the only way a finalizer can be named; the MIR
+    /// verifier rejects every ordinary call, spawn, and function value edge
+    /// to these hidden bodies.
+    fn lowerFinalizerEntry(self: *Module) Error!void {
+        var count: usize = 0;
+        for (self.program.structs) |layout| {
+            if (layout.deinitializer != null) count += 1;
+        }
+        if (count == 0) return;
+
+        const signature_type = try self.builder.fnType(
+            .i32,
+            &.{ .ptr, .ptr, .i64, .ptr, .i64 },
+            .normal,
+        );
+        const declared = try self.builder.addFunction(
+            signature_type,
+            try self.builder.strtabString("luce.finalize"),
+            .default,
+        );
+        declared.setLinkage(.internal, self.builder);
+        self.finalizer_entry = declared;
+
+        var wip: Builder.WipFunction = try .init(self.builder, .{
+            .function = declared,
+            .strip = true,
+        });
+        defer wip.deinit();
+        const entry = try wip.block(0, "entry");
+        wip.cursor = .{ .block = entry };
+        const host = wip.arg(0);
+        const started = wip.arg(1);
+        const which = wip.arg(2);
+        const receiver = wip.arg(3);
+        const depth = wip.arg(4);
+
+        const refused = try wip.block(1, "no.such.finalizer");
+        var blocks: std.ArrayList(BlockIndex) = .empty;
+        defer blocks.deinit(self.gpa);
+        var functions: std.ArrayList(u32) = .empty;
+        defer functions.deinit(self.gpa);
+        for (self.program.structs) |layout| {
+            const function = layout.deinitializer orelse continue;
+            try functions.append(self.gpa, function);
+            try blocks.append(self.gpa, try wip.block(1, "finalizer"));
+        }
+
+        var chosen = try wip.@"switch"(which, refused, @intCast(functions.items.len), .none);
+        for (functions.items, blocks.items) |function, block| {
+            try chosen.addCase(try self.builder.intConst(.i64, function), block, &wip);
+        }
+        chosen.finish(&wip);
+        wip.cursor = .{ .block = refused };
+        _ = try wip.ret(try self.builder.intValue(.i32, outcome_trapped));
+
+        for (functions.items, blocks.items) |function_index, block| {
+            wip.cursor = .{ .block = block };
+            const function = &self.program.functions[function_index];
+            std.debug.assert(function.parameter_count == 1);
+            std.debug.assert(function.return_type == .none);
+            var arm: Body = .{
+                .module = self,
+                .wip = &wip,
+                .function = function,
+                .index = function_index,
+                .host = host,
+                .runtime = started,
+                .depth = depth,
+                .entry_block = entry,
+            };
+            defer arm.deinit();
+            const self_value = try arm.unboxed(
+                function.locals[0].local_type,
+                receiver,
+                "finalizer.self",
+            );
+            const target = self.functions[function_index];
+            _ = try wip.ret(try wip.call(
+                .normal,
+                Builder.CallConv.default,
+                .none,
+                target.typeOf(self.builder),
+                target.toValue(self.builder),
+                &.{ host, started, depth, self_value },
+                "finalizer.outcome",
+            ));
+        }
+        try wip.finish();
     }
 
     /// Stamp the artifact with what it is: the magic, the tag's own
@@ -2428,6 +2527,15 @@ const Module = struct {
             }, "");
         }
 
+        if (self.finalizer_entry) |entry_point| {
+            _ = try self.callService(&wip, .luce_rt_finalizers_install, .void, &.{
+                started,
+                host,
+                entry_point.toValue(self.builder),
+                limit,
+            }, "");
+        }
+
         // A host that allows no frames at all refuses the entry
         // function itself, exactly as the interpreter's frame stack
         // does before it pushes anything.  Nothing ran, so the trap
@@ -2543,7 +2651,7 @@ const Module = struct {
         // The parameter was a borrow, so `main` left the list alive; the
         // entry that built it releases it now, before the census is read.
         if (args_box) |box| {
-            _ = try self.callService(&wip, .luce_rt_release, .void, &.{ started, box }, "");
+            _ = try self.callService(&wip, .luce_rt_release, .i32, &.{ started, box }, "release.args");
         }
         _ = try wip.br(ending);
 
@@ -3882,7 +3990,7 @@ const Body = struct {
                 .growable = false,
             },
             .list => |element| .{ .element = element, .rank = 1, .growable = true },
-            .map, .builder, .file, .task => null,
+            .class, .map, .builder, .file, .task => null,
         };
     }
 
@@ -5567,6 +5675,15 @@ const Body = struct {
             .struct_make => |make| try self.emitStructMake(register, make.layout, make.fields),
             .struct_get => |get| {
                 const layout = self.module.program.structs[get.layout];
+                if (layout.reference) {
+                    try self.callAnswering(register, .luce_rt_class_get, &.{
+                        self.runtime,
+                        try self.boxedRegister(get.target, "class"),
+                        try self.module.builder.intValue(.i64, get.layout),
+                        try self.module.builder.intValue(.i64, get.field),
+                    });
+                    return;
+                }
                 const address = try self.wip.gep(
                     .inbounds,
                     self.module.value_type,
@@ -5582,6 +5699,18 @@ const Body = struct {
                 self.produced[register].box = address;
             },
             .weak_struct_get => |get| {
+                if (self.module.program.structs[get.layout].reference) {
+                    const weak = try self.scratch(self.module.value_type, value_alignment, "weak.class.field");
+                    try self.callChecked(.luce_rt_class_get, &.{
+                        self.runtime,
+                        try self.boxedRegister(get.target, "class"),
+                        try self.module.builder.intValue(.i64, get.layout),
+                        try self.module.builder.intValue(.i64, get.field),
+                        weak,
+                    });
+                    try self.callAnswering(register, .luce_rt_weak_load, &.{ self.runtime, weak });
+                    return;
+                }
                 const address = try self.wip.gep(
                     .inbounds,
                     self.module.value_type,
@@ -5629,7 +5758,15 @@ const Body = struct {
                 );
                 self.produced[register].box = address;
             },
-            .struct_set => |set| try self.callAnswering(register, .luce_rt_struct_set, &.{
+            .struct_set => |set| if (self.module.program.structs[set.layout].reference) {
+                try self.callChecked(.luce_rt_class_set, &.{
+                    self.runtime,
+                    try self.boxedRegister(set.target, "class"),
+                    try self.module.builder.intValue(.i64, set.layout),
+                    try self.module.builder.intValue(.i64, set.field),
+                    try self.storageOf(set.value),
+                });
+            } else try self.callAnswering(register, .luce_rt_struct_set, &.{
                 self.runtime,
                 try self.boxedRegister(set.target, "target"),
                 try self.module.builder.intValue(.i64, set.field),
@@ -5638,12 +5775,22 @@ const Body = struct {
             .weak_struct_set => |set| {
                 const weak = try self.scratch(self.module.value_type, value_alignment, "weak.field");
                 try self.emitWeakStore(weak, set.value);
-                try self.callAnswering(register, .luce_rt_struct_set, &.{
-                    self.runtime,
-                    try self.boxedRegister(set.target, "target"),
-                    try self.module.builder.intValue(.i64, set.field),
-                    weak,
-                });
+                if (self.module.program.structs[set.layout].reference) {
+                    try self.callChecked(.luce_rt_class_set, &.{
+                        self.runtime,
+                        try self.boxedRegister(set.target, "class"),
+                        try self.module.builder.intValue(.i64, set.layout),
+                        try self.module.builder.intValue(.i64, set.field),
+                        weak,
+                    });
+                } else {
+                    try self.callAnswering(register, .luce_rt_struct_set, &.{
+                        self.runtime,
+                        try self.boxedRegister(set.target, "target"),
+                        try self.module.builder.intValue(.i64, set.field),
+                        weak,
+                    });
+                }
             },
             .call => |called| try self.emitCall(register, called),
             .call_inout => |called| try self.emitInoutCall(register, called),
@@ -6024,11 +6171,24 @@ const Body = struct {
                 try self.storedAt(run, index, field);
             }
         }
-        try self.callAnswering(register, .luce_rt_struct_make, &.{
-            self.runtime,
-            run,
-            try self.module.builder.intValue(.i64, shape.fields.len),
-        });
+        if (shape.reference) {
+            try self.callAnswering(register, .luce_rt_class_make, &.{
+                self.runtime,
+                try self.module.builder.intValue(.i64, layout),
+                try self.module.builder.intValue(
+                    .i64,
+                    if (shape.deinitializer) |function| @as(i64, @intCast(function)) else -1,
+                ),
+                run,
+                try self.module.builder.intValue(.i64, shape.fields.len),
+            });
+        } else {
+            try self.callAnswering(register, .luce_rt_struct_make, &.{
+                self.runtime,
+                run,
+                try self.module.builder.intValue(.i64, shape.fields.len),
+            });
+        }
     }
 
     /// A union value is built by the struct path with one more slot in
@@ -7086,14 +7246,14 @@ const Body = struct {
             // A retain and a release cross as a boxed value and answer
             // nothing; the runtime touches only the objects the value
             // names, and a value naming none is a no-op (docs/MEMORY.md).
-            .retain => _ = try self.callRuntime(.luce_rt_retain, .void, &.{
+            .retain => try self.callChecked(.luce_rt_retain, &.{
                 rt,
                 try self.boxedRegister(of[0], "held"),
-            }, ""),
-            .release => _ = try self.callRuntime(.luce_rt_release, .void, &.{
+            }),
+            .release => try self.callChecked(.luce_rt_release, &.{
                 rt,
                 try self.boxedRegister(of[0], "held"),
-            }, ""),
+            }),
 
             // -- errors -----------------------------------------------
             //
@@ -8121,7 +8281,7 @@ const Body = struct {
         if (of != .heap) return self.fail("keys or values answering no object");
         const element = switch (self.module.program.heap_types[of.heap]) {
             .list => |written| written,
-            .map, .array, .builder, .file, .task => return self.fail(
+            .class, .map, .array, .builder, .file, .task => return self.fail(
                 "keys or values answering something other than a list",
             ),
         };
@@ -8130,6 +8290,7 @@ const Body = struct {
 
     fn emitHeapNew(self: *Body, register: mir.Register, new: mir.Instruction.HeapNew) Error!void {
         switch (self.module.program.heap_types[new.heap]) {
+            .class => return self.fail("class construction uses its nominal field initializer"),
             .list => |element| try self.callAnswering(register, .luce_rt_new_list, &.{
                 self.runtime,
                 try self.boxed(element, try self.zeroValue(element), "element.zero"),

@@ -36,7 +36,7 @@ pub fn length(runtime: *Runtime, target: Value) Error!Value {
                 .builder => |builder| builder.items.len,
                 // The verifier admits no file here: a file is not a
                 // container and has no length.
-                .file, .task => return runtime.fail(.not_owned),
+                .instance, .file, .task => return runtime.fail(.not_owned),
             };
         },
         else => return runtime.fail(.not_owned),
@@ -76,7 +76,7 @@ pub fn indexGet(runtime: *Runtime, target: Value, indices: []const Value) Error!
                 return runtime.fail(.index_bounds);
             return object.elements.at(flat);
         },
-        .builder, .file, .task => return runtime.fail(.not_owned),
+        .instance, .builder, .file, .task => return runtime.fail(.not_owned),
     }
 }
 
@@ -138,7 +138,7 @@ pub fn indexSet(runtime: *Runtime, target: Value, indices: []const Value, held: 
             }
             object.elements.put(flat, stored);
         },
-        .builder, .file, .task => return runtime.fail(.not_owned),
+        .instance, .builder, .file, .task => return runtime.fail(.not_owned),
     }
 }
 
@@ -150,7 +150,7 @@ fn requireIndexRank(runtime: *Runtime, object: *const heap.Object, indices: []co
     const wanted = switch (object.data) {
         .list, .map => 1,
         .array => object.dims.len,
-        .builder, .file, .task => return runtime.fail(.not_owned),
+        .instance, .builder, .file, .task => return runtime.fail(.not_owned),
     };
     if (indices.len != wanted) return runtime.fail(.index_bounds);
 }
@@ -174,7 +174,7 @@ pub fn listSlice(runtime: *Runtime, target: Value, start: i64, end: i64) Error!V
     const object = try runtime.resolve(target);
     switch (object.data) {
         .list => {},
-        .map, .array, .builder, .file, .task => return runtime.fail(.not_owned),
+        .instance, .map, .array, .builder, .file, .task => return runtime.fail(.not_owned),
     }
     const source = object.elements;
     if (start < 0 or end < start or end > source.count) return runtime.fail(.index_bounds);
@@ -217,7 +217,7 @@ pub fn append(runtime: *Runtime, target: Value, held: Value) Error!void {
             if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
             try object.data.builder.appendSlice(runtime.objects, held.asStr());
         },
-        .map, .array, .file, .task => return runtime.fail(.not_owned),
+        .instance, .map, .array, .file, .task => return runtime.fail(.not_owned),
     }
 }
 
@@ -229,7 +229,7 @@ pub fn appendAscii(runtime: *Runtime, target: Value, code: i64) Error!void {
     if (code < 0 or code > 0x7F) return runtime.fail(.bad_codepoint);
     switch (object.data) {
         .builder => |*builder| try builder.append(runtime.objects, @intCast(code)),
-        .list, .map, .array, .file, .task => return runtime.fail(.not_owned),
+        .instance, .list, .map, .array, .file, .task => return runtime.fail(.not_owned),
     }
 }
 
@@ -239,7 +239,7 @@ pub fn pop(runtime: *Runtime, target: Value) Error!Value {
     const object = try runtime.resolveMutable(target);
     switch (object.data) {
         .list => {},
-        .map, .array, .builder, .file, .task => return runtime.fail(.not_owned),
+        .instance, .map, .array, .builder, .file, .task => return runtime.fail(.not_owned),
     }
     return object.elements.pop() orelse return runtime.fail(.empty_collection);
 }
@@ -251,7 +251,7 @@ pub fn insert(runtime: *Runtime, target: Value, index: i64, held: Value) Error!v
     const object = try runtime.resolveMutable(target);
     switch (object.data) {
         .list => {},
-        .map, .array, .builder, .file, .task => return runtime.fail(.not_owned),
+        .instance, .map, .array, .builder, .file, .task => return runtime.fail(.not_owned),
     }
     if (index < 0 or index > object.elements.count) return runtime.fail(.index_bounds);
     try object.elements.insert(runtime.objects, @intCast(index), held);
@@ -281,7 +281,7 @@ pub fn remove(runtime: *Runtime, target: Value, which: Value) Error!void {
                 runtime.freeValue(removed.value);
             }
         },
-        .array, .builder, .file, .task => return runtime.fail(.not_owned),
+        .instance, .array, .builder, .file, .task => return runtime.fail(.not_owned),
     }
 }
 
@@ -292,7 +292,7 @@ pub fn hasKey(runtime: *Runtime, target: Value, key: Value) Error!Value {
             try requireMapKey(runtime, key);
             break :blk Value.ofBoolean(map.find(&key) != null);
         },
-        .list, .array, .builder, .file, .task => runtime.fail(.not_owned),
+        .instance, .list, .array, .builder, .file, .task => runtime.fail(.not_owned),
     };
 }
 
@@ -302,7 +302,7 @@ pub fn keyAt(runtime: *Runtime, target: Value, index: i64) Error!Value {
     const object = try runtime.resolve(target);
     const entries = switch (object.data) {
         .map => |map| map.entries.items,
-        .list, .array, .builder, .file, .task => return runtime.fail(.not_owned),
+        .instance, .list, .array, .builder, .file, .task => return runtime.fail(.not_owned),
     };
     if (index < 0 or index >= entries.len) return runtime.fail(.index_bounds);
     return entries[@intCast(index)].key;
@@ -312,7 +312,7 @@ pub fn valueAt(runtime: *Runtime, target: Value, index: i64) Error!Value {
     const object = try runtime.resolve(target);
     const entries = switch (object.data) {
         .map => |map| map.entries.items,
-        .list, .array, .builder, .file, .task => return runtime.fail(.not_owned),
+        .instance, .list, .array, .builder, .file, .task => return runtime.fail(.not_owned),
     };
     if (index < 0 or index >= entries.len) return runtime.fail(.index_bounds);
     return entries[@intCast(index)].value;
@@ -322,7 +322,7 @@ pub fn dimSize(runtime: *Runtime, target: Value, axis: i64) Error!Value {
     const object = try runtime.resolve(target);
     const dims = switch (object.data) {
         .array => object.dims,
-        .list, .map, .builder, .file, .task => return runtime.fail(.not_owned),
+        .instance, .list, .map, .builder, .file, .task => return runtime.fail(.not_owned),
     };
     if (axis < 0 or axis >= dims.len) return runtime.fail(.index_bounds);
     return Value.ofI64(dims[@intCast(axis)]);
@@ -348,7 +348,7 @@ pub fn sort(runtime: *Runtime, target: Value) Error!void {
                 std.sort.block(Cell, object.elements.cells(Cell), {}, cellBefore(kind).before);
             },
         },
-        .map, .builder, .file, .task => return runtime.fail(.not_owned),
+        .instance, .map, .builder, .file, .task => return runtime.fail(.not_owned),
     }
 }
 
@@ -361,7 +361,7 @@ pub fn reverse(runtime: *Runtime, target: Value) Error!void {
                 object.elements.cells(kind.Cell()),
             ),
         },
-        .map, .builder, .file, .task => return runtime.fail(.not_owned),
+        .instance, .map, .builder, .file, .task => return runtime.fail(.not_owned),
     }
 }
 
@@ -377,7 +377,7 @@ pub fn find(runtime: *Runtime, target: Value, wanted: Value) Error!Value {
                 if (operators.compare(.equal, stored.at(at), wanted)) return Value.ofI64(@intCast(at));
             }
         },
-        .map, .builder, .file, .task => return runtime.fail(.not_owned),
+        .instance, .map, .builder, .file, .task => return runtime.fail(.not_owned),
     }
     return Value.none;
 }
@@ -431,7 +431,7 @@ pub fn clear(runtime: *Runtime, target: Value) Error!void {
             map.clear();
         },
         .builder => |*builder| builder.clearRetainingCapacity(),
-        .array, .file, .task => return runtime.fail(.not_owned),
+        .instance, .array, .file, .task => return runtime.fail(.not_owned),
     }
 }
 
@@ -450,7 +450,7 @@ pub fn mapKeys(runtime: *Runtime, target: Value, zero: Value) Error!Value {
     const object = try runtime.resolve(target);
     const entries = switch (object.data) {
         .map => |map| map.entries.items,
-        .list, .array, .builder, .file, .task => return runtime.fail(.not_owned),
+        .instance, .list, .array, .builder, .file, .task => return runtime.fail(.not_owned),
     };
     var listed = emptyList(zero);
     errdefer dropBuilt(runtime, &listed);
@@ -596,7 +596,7 @@ pub fn mapValues(runtime: *Runtime, target: Value, zero: Value) Error!Value {
     const object = try runtime.resolve(target);
     const entries = switch (object.data) {
         .map => |map| map.entries.items,
-        .list, .array, .builder, .file, .task => return runtime.fail(.not_owned),
+        .instance, .list, .array, .builder, .file, .task => return runtime.fail(.not_owned),
     };
     var listed = emptyList(zero);
     errdefer dropBuilt(runtime, &listed);
@@ -625,7 +625,7 @@ pub fn mapGet(runtime: *Runtime, target: Value, key: Value) Error!Value {
             else
                 Value.none;
         },
-        .list, .array, .builder, .file, .task => runtime.fail(.not_owned),
+        .instance, .list, .array, .builder, .file, .task => runtime.fail(.not_owned),
     };
 }
 
@@ -669,7 +669,7 @@ pub fn mapPlace(runtime: *Runtime, target: Value, key: Value, zero: Value) Error
             try map.insert(runtime.objects, .{ .key = owned_key, .value = owned_zero });
             return owned_zero;
         },
-        .list, .array, .builder, .file, .task => return runtime.fail(.not_owned),
+        .instance, .list, .array, .builder, .file, .task => return runtime.fail(.not_owned),
     }
 }
 
@@ -680,7 +680,7 @@ pub fn arrayFill(runtime: *Runtime, target: Value, held: Value) Error!void {
     const object = try runtime.resolveMutable(target);
     switch (object.data) {
         .array => {},
-        .list, .map, .builder, .file, .task => return runtime.fail(.not_owned),
+        .instance, .list, .map, .builder, .file, .task => return runtime.fail(.not_owned),
     }
     // A Value cell may need storage allocation and may carry references.
     // Build the full replacement offside so allocation failure cannot make

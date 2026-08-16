@@ -368,6 +368,30 @@ pub const Analyzer = struct {
         return self.heap_types.items[of.heap];
     }
 
+    /// The nominal layout behind a class reference, or null for every
+    /// other type. Keeping this question here prevents users of `Type.heap`
+    /// from each inventing a slightly different class test.
+    pub fn classLayout(self: *const Analyzer, of: Type) ?u32 {
+        if (of != .heap) return null;
+        return switch (self.heap_types.items[of.heap]) {
+            .class => |layout| layout,
+            else => null,
+        };
+    }
+
+    /// The declaration layout behind either nominal aggregate kind.
+    /// Structs carry their layout directly; classes carry it through the
+    /// interned heap descriptor that gives them reference identity.  Field,
+    /// method, construction, and conformance code ask this one question so
+    /// they cannot accidentally make `class` struct-shaped again.
+    pub fn nominalLayout(self: *const Analyzer, of: Type) ?u32 {
+        return switch (of) {
+            .strukt => |layout| layout,
+            .heap => self.classLayout(of),
+            else => null,
+        };
+    }
+
     /// The enum a written name resolves to, with its width — the one
     /// place an `EnumRef` is built, so the width beside an index is
     /// always the width that index declares.
@@ -459,6 +483,7 @@ pub const Analyzer = struct {
             .results = info.results,
             .return_type = info.return_type,
             .fallible = info.fallible,
+            .is_deinitializer = info.is_deinitializer,
             .static_member = info.enclosing != null and info.receiver == .not,
             .enclosing_locals = info.enclosing_locals,
         };

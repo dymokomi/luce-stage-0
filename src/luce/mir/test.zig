@@ -32,6 +32,85 @@ test "runtime-mediated file services need no engine Effects guard" {
     try testing.expect(defs.Intrinsic.file_delete.reachesHost());
 }
 
+test "class deinitializer metadata is exact and never source-callable" {
+    var program: Program = .{ .arena = std.heap.ArenaAllocator.init(testing.allocator) };
+    defer program.deinit();
+    const arena = program.arena.allocator();
+
+    program.structs = try arena.dupe(types.StructLayout, &.{.{
+        .name = "Resource",
+        .fields = &.{},
+        .reference = true,
+        .deinitializer = 1,
+    }});
+    program.heap_types = try arena.dupe(types.HeapType, &.{.{ .class = 0 }});
+    const functions = try arena.alloc(Function, 2);
+    functions[0] = .{
+        .name = "main",
+        .parameter_count = 0,
+        .return_type = .none,
+        .locals = &.{},
+        .instructions = try arena.dupe(Instruction, &.{.{ .ret = null }}),
+        .result_types = try arena.dupe(types.Type, &.{.none}),
+        .blocks = try arena.dupe(Block, &.{.{
+            .items = try arena.dupe(Register, &.{0}),
+        }}),
+    };
+    functions[1] = .{
+        .name = "Resource.deinit",
+        .parameter_count = 1,
+        .return_type = .none,
+        .locals = try arena.dupe(Local, &.{.{
+            .name = "self",
+            .local_type = .{ .heap = 0 },
+        }}),
+        .instructions = try arena.dupe(Instruction, &.{.{ .ret = null }}),
+        .result_types = try arena.dupe(types.Type, &.{.none}),
+        .blocks = try arena.dupe(Block, &.{.{
+            .items = try arena.dupe(Register, &.{0}),
+        }}),
+    };
+    program.functions = functions;
+    program.entry_function = 0;
+    try verify_mod.verify(testing.allocator, &program);
+
+    program.structs[0].reference = false;
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
+    program.structs[0].reference = true;
+    program.structs[0].deinitializer = 9;
+    try testing.expectError(error.BadStruct, verify_mod.verify(testing.allocator, &program));
+    program.structs[0].deinitializer = 1;
+
+    functions[1].parameter_count = 0;
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    functions[1].parameter_count = 1;
+    functions[1].locals[0].inout = true;
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    functions[1].locals[0].inout = false;
+    functions[1].locals[0].local_type = .i64;
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    functions[1].locals[0].local_type = .{ .heap = 0 };
+    functions[1].fallible = true;
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    functions[1].fallible = false;
+    functions[1].return_type = .i64;
+    try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    functions[1].return_type = .none;
+
+    const ordinary = functions[0].instructions[0];
+    inline for (.{
+        Instruction{ .call = .{ .function = 1, .arguments = &.{} } },
+        Instruction{ .spawn = .{ .function = 1, .arguments = &.{} } },
+        Instruction{ .call_inout = .{ .function = 1, .receiver = 0, .arguments = &.{} } },
+        Instruction{ .const_function = .{ .function = 1 } },
+    }) |edge| {
+        functions[0].instructions[0] = edge;
+        try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
+    }
+    functions[0].instructions[0] = ordinary;
+    try verify_mod.verify(testing.allocator, &program);
+}
+
 test "a struct graph is checked for cycles in one pass, not one per path" {
     // Forty layouts, each holding the next one twice: no cycle, but
     // 2^39 distinct paths from the first to the last.  A per-path walk

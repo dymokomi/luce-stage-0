@@ -173,6 +173,13 @@ pub const Object = struct {
     /// retained or released: it outlives every count.
     constant: bool = false,
 
+    /// True while a class's last strong release is running its user
+    /// deinitializer.  The row deliberately remains generation-live so the
+    /// borrowed `self` can read and mutate its fields, but no operation may
+    /// turn that borrow back into a strong reference.  Weak upgrades answer
+    /// `none` during this interval and `retain` traps resurrection.
+    finalizing: bool = false,
+
     /// The ARC reference count: how many live references name this
     /// object — a binding, a container cell, a struct field, a map
     /// value.  Set to 1 when the object is created (the creator holds
@@ -208,6 +215,10 @@ pub const Object = struct {
     data: Data,
 
     pub const Data = union(enum) {
+        /// A nominal class instance. Its field run belongs to this object
+        /// and is mutated in place; copying the surrounding `Value` copies
+        /// only the object handle and therefore shares this run.
+        instance: Instance,
         /// The elements are `Object.elements`, which for a list is
         /// allocated ahead of `count` — see `Elements.capacity`.
         list,
@@ -240,6 +251,17 @@ pub const Object = struct {
         /// does otherwise; a task whose worker is gone is spent, and
         /// touching it again traps `use_after_free`.
         task: ?*workers.Worker,
+    };
+
+    pub const Instance = struct {
+        /// Nominal layout index from the verified MIR type table. Runtime
+        /// doors carry the expected index too, so damaged generated code
+        /// cannot read one class through another class's field shape.
+        layout: u32,
+        /// The hidden Luce function which implements `deinit`, when this
+        /// class declared one.  It is metadata, not a callable member.
+        deinitializer: ?u32 = null,
+        fields: []Value,
     };
 
     /// An open file: the number the host knows it by, and the path it
@@ -624,6 +646,10 @@ pub const Object = struct {
     /// pointer, and it costs a store.
     pub fn release(self: *Object, allocator: Allocator) void {
         switch (self.data) {
+            .instance => |*instance| {
+                allocator.free(instance.fields);
+                instance.fields = &.{};
+            },
             .list => self.elements.deinit(allocator),
             .map => |*map| {
                 map.deinit(allocator);
@@ -653,6 +679,27 @@ pub const Object = struct {
             // ownership already joined.
             .task => self.data = .{ .task = null },
         }
+    }
+};
+
+/// Run one class deinitializer in the engine which owns this runtime.  The
+/// runtime owns object lifetime; the interpreter and LLVM backend own Luce
+/// frames, so this deliberately narrow callback is their only meeting point.
+pub const FinalizerRunFn = *const fn (
+    context: ?*anyopaque,
+    runtime: *Runtime,
+    function: i64,
+    receiver: *const Value,
+    depth: i64,
+) callconv(.c) i32;
+
+pub const Finalizers = struct {
+    context: ?*anyopaque = null,
+    run: ?FinalizerRunFn = null,
+    depth: i64 = 0,
+
+    pub fn available(self: Finalizers) bool {
+        return self.run != null and self.depth >= 0;
     }
 };
 
@@ -1065,6 +1112,12 @@ pub const Runtime = struct {
     /// here and nowhere else.
     nursery: workers.Nursery = .{},
 
+    /// The engine callback used only at a class's last strong release.
+    /// Unlike a worker nursery this never opens another runtime: the
+    /// deinitializer executes against this exact object table so `self`
+    /// preserves identity and its fields remain alive through the body.
+    finalizers: Finalizers = .{},
+
     /// The one lock every runtime in this program shares, or null when
     /// nothing has spawned (docs/THREADS.md D9, D11).  Allocated by the
     /// **root** runtime at its first spawn and handed down to every
@@ -1150,6 +1203,7 @@ pub const Runtime = struct {
     /// directly because every row is swept exactly once at teardown.
     fn sweep(self: *Runtime, object: *Object) void {
         switch (object.data) {
+            .instance => |instance| for (instance.fields) |field| self.dropStorage(field),
             // Only a `Value` element can be holding storage; a packed
             // cell owns nothing (docs/BYTES.md R1).
             .list, .array => if (object.elements.kind == .value) {
@@ -1422,7 +1476,7 @@ pub const Runtime = struct {
     /// names that object yet.
     pub fn abortConstants(self: *Runtime) void {
         for (self.constant_roots) |*root| {
-            if (root.tag == .object) self.destroyObject(root.asObject());
+            if (root.tag == .object) self.destroyObject(root.asObject(), false);
             root.* = .none;
         }
         if (self.constant_roots.len != 0) self.objects.free(self.constant_roots);
@@ -1439,7 +1493,7 @@ pub const Runtime = struct {
         const handle = held.asObject();
         const object = self.liveObject(handle) orelse return;
         if (object.constant) return;
-        self.destroyObject(handle);
+        self.destroyObject(handle, false);
     }
 
     /// A fresh empty list whose elements are stored at the width of
@@ -1461,6 +1515,87 @@ pub const Runtime = struct {
 
     pub fn newBuilder(self: *Runtime) Error!Value {
         return self.attach(.{ .data = .{ .builder = .empty } });
+    }
+
+    /// Construct one nominal class object and consume every supplied field.
+    /// The caller has already made each value suitable for a store; the
+    /// object adopts those values without copying their private storage or
+    /// incrementing their references a second time.
+    pub fn newClass(
+        self: *Runtime,
+        layout_index: u32,
+        deinitializer: ?u32,
+        fields: []const Value,
+    ) Error!Value {
+        for (fields) |field| {
+            if (!field.hasValidRepresentation()) {
+                for (fields) |owned| self.freeValue(owned);
+                return self.fail(.not_owned);
+            }
+        }
+        const stored = self.objects.alloc(Value, fields.len) catch |mistake| {
+            for (fields) |field| self.freeValue(field);
+            return mistake;
+        };
+        @memcpy(stored, fields);
+        return self.attach(.{ .data = .{ .instance = .{
+            .layout = layout_index,
+            .deinitializer = deinitializer,
+            .fields = stored,
+        } } }) catch |mistake| {
+            for (stored) |field| self.freeValue(field);
+            self.objects.free(stored);
+            return mistake;
+        };
+    }
+
+    /// Borrow one class field. Ownership stays with the object; ordinary
+    /// expression/store lowering retains or copies only if that borrow
+    /// escapes its statement.
+    pub fn classField(self: *Runtime, held: Value, layout_index: u32, field: usize) Error!Value {
+        if (!held.hasValidRepresentation() or held.tag != .object)
+            return self.fail(.not_owned);
+        const object = try self.resolve(held);
+        const instance = switch (object.data) {
+            .instance => |instance| instance,
+            else => return self.fail(.not_owned),
+        };
+        if (instance.layout != layout_index) return self.fail(.not_owned);
+        if (field >= instance.fields.len) return self.fail(.index_bounds);
+        return instance.fields[field];
+    }
+
+    /// Replace one class field in place and consume `to`. Every alias sees
+    /// the write because all aliases resolve to this same object row.
+    pub fn setClassField(
+        self: *Runtime,
+        held: Value,
+        layout_index: u32,
+        field: usize,
+        to: Value,
+    ) Error!void {
+        if (!held.hasValidRepresentation() or held.tag != .object) {
+            self.freeValue(to);
+            return self.fail(.not_owned);
+        }
+        const object = self.resolveMutable(held) catch |mistake| {
+            self.freeValue(to);
+            return mistake;
+        };
+        const instance = switch (object.data) {
+            .instance => |*instance| instance,
+            else => {
+                self.freeValue(to);
+                return self.fail(.not_owned);
+            },
+        };
+        if (instance.layout != layout_index or field >= instance.fields.len) {
+            self.freeValue(to);
+            return self.fail(if (instance.layout != layout_index) .not_owned else .index_bounds);
+        }
+        const replaced = instance.fields[field];
+        instance.fields[field] = to;
+        self.freeValue(replaced);
     }
 
     /// A fresh object naming a file the host has already opened
@@ -1914,9 +2049,10 @@ pub const Runtime = struct {
     /// Raise an object's reference count by one: a new name now holds it.
     /// A stale handle and a program constant are both no-ops — the first
     /// names nothing, the second outlives every count (docs/MEMORY.md).
-    pub fn retain(self: *Runtime, handle: Handle) void {
+    pub fn retain(self: *Runtime, handle: Handle) Error!void {
         const object = self.liveObject(handle) orelse return;
         if (object.constant) return;
+        if (object.finalizing) return self.fail(.class_resurrection);
         object.references += 1;
     }
 
@@ -1952,6 +2088,7 @@ pub const Runtime = struct {
             return self.fail(.invalid_weak_target);
         const handle = held.asWeak();
         const object = self.liveObject(handle) orelse return .none;
+        if (object.finalizing) return .none;
         if (!object.constant) object.references += 1;
         return Value.ofObject(handle);
     }
@@ -1963,12 +2100,42 @@ pub const Runtime = struct {
     /// stale handle and a program constant are no-ops.
     pub fn release(self: *Runtime, handle: Handle) void {
         const object = self.liveObject(handle) orelse return;
-        if (object.constant) return;
+        if (object.constant or object.finalizing) return;
         if (object.references > 1) {
             object.references -= 1;
             return;
         }
-        self.destroyObject(handle);
+        self.destroyObject(handle, true);
+    }
+
+    /// Whether execution has crossed a terminal runtime boundary.  A raised
+    /// Luce error is intentionally absent: error propagation still performs
+    /// ordinary ARC releases, and those releases must run deinitializers.
+    pub fn stopped(self: *const Runtime) bool {
+        return self.pending != null or self.exhausted or self.exit_status != null;
+    }
+
+    fn runFinalizer(self: *Runtime, function: u32, receiver: Value) void {
+        // Once one deinitializer stops the run, later objects still tear down
+        // but user code does not continue executing during the unwind.
+        if (self.stopped()) return;
+        const run = self.finalizers.run orelse {
+            _ = self.fail(.host_unavailable) catch {};
+            return;
+        };
+        if (!self.finalizers.available()) {
+            _ = self.fail(.host_unavailable) catch {};
+            return;
+        }
+        const outcome = run(
+            self.finalizers.context,
+            self,
+            @intCast(function),
+            &receiver,
+            self.finalizers.depth,
+        );
+        if (outcome == 0) return;
+        if (!self.stopped()) _ = self.fail(.host_unavailable) catch {};
     }
 
     /// Free one object and release everything it named, give its storage
@@ -1988,15 +2155,15 @@ pub const Runtime = struct {
         // final sweep or a materialization abort, never by an ordinary
         // release reached through a rollback walk.
         if (object.constant) return;
-        self.destroyObject(handle);
+        self.destroyObject(handle, false);
     }
 
     /// End a live object regardless of whether it is a program
     /// constant.  Ordinary releases enter through `freeObject`; only
     /// failed materialization uses this on constant rows.
-    fn destroyObject(self: *Runtime, handle: Handle) void {
+    fn destroyObject(self: *Runtime, handle: Handle, run_deinitializer: bool) void {
         var pending = value.null_index;
-        self.scheduleDestroy(handle, &pending, true);
+        self.scheduleDestroy(handle, &pending, true, run_deinitializer);
         self.releaseScheduled(&pending);
     }
 
@@ -2009,9 +2176,27 @@ pub const Runtime = struct {
         handle: Handle,
         pending: *u32,
         allow_program: bool,
+        run_deinitializer: bool,
     ) void {
         const object = self.liveObject(handle) orelse return;
-        if (!allow_program and object.constant) return;
+        if ((!allow_program and object.constant) or object.finalizing) return;
+
+        if (run_deinitializer) {
+            switch (object.data) {
+                .instance => |instance| if (instance.deinitializer != null) {
+                    // Keep the live generation until the callback returns:
+                    // `self` is a borrow into this row for the duration of
+                    // the body.  The zero count and finalizing bit close
+                    // every path that could manufacture a new owner.
+                    object.references = 0;
+                    object.finalizing = true;
+                    object.next_free = pending.*;
+                    pending.* = handle.index;
+                    return;
+                },
+                else => {},
+            }
+        }
 
         // Mark the row dead before examining its children.  Besides
         // making a damaged cycle harmless, this prevents two aliases
@@ -2038,7 +2223,7 @@ pub const Runtime = struct {
                     object.references -= 1;
                     return;
                 }
-                self.scheduleDestroy(handle, pending, false);
+                self.scheduleDestroy(handle, pending, false, true);
             },
             .strukt, .function => |fields| for (fields) |field| self.releaseValue(field, pending),
             else => {},
@@ -2051,11 +2236,31 @@ pub const Runtime = struct {
     fn releaseScheduled(self: *Runtime, pending: *u32) void {
         while (pending.* != value.null_index) {
             const index = pending.*;
+            pending.* = self.table.items[index].next_free;
+            self.table.items[index].next_free = value.null_index;
+
+            if (self.table.items[index].finalizing) {
+                const generation = self.table.items[index].generation;
+                const deinitializer = self.table.items[index].data.instance.deinitializer.?;
+                const receiver = Value.ofObject(.{ .index = index, .generation = generation });
+                self.runFinalizer(deinitializer, receiver);
+
+                // The callback may allocate and move `table`, so resolve by
+                // index again rather than retaining a pointer across it.
+                const finalized = &self.table.items[index];
+                std.debug.assert(finalized.finalizing);
+                finalized.finalizing = false;
+                finalized.generation += 1;
+                self.live -= 1;
+            }
+
             const object = &self.table.items[index];
-            pending.* = object.next_free;
-            object.next_free = value.null_index;
 
             switch (object.data) {
+                .instance => |instance| for (instance.fields) |field| {
+                    self.releaseValue(field, pending);
+                    self.dropStorage(field);
+                },
                 // Only a `Value` element can hold an object; a `f64`,
                 // an `i64` or a byte cell owns nothing and has nothing
                 // to walk.
@@ -2112,11 +2317,34 @@ pub const Runtime = struct {
     /// Retaining is shallow: it counts the new value edge, never the
     /// elements already owned by the referenced object.  Struct and
     /// function runs are both walked.
-    pub fn retainValue(self: *Runtime, held: Value) void {
+    pub fn retainValue(self: *Runtime, held: Value) Error!void {
+        try self.canRetainValue(held);
+        self.retainValueUnchecked(held);
+    }
+
+    /// Validate a whole value before changing a single count.  A struct or
+    /// bound function can carry several object references; preflight keeps a
+    /// resurrection failure atomic instead of retaining its prefix.
+    fn canRetainValue(self: *Runtime, held: Value) Error!void {
         if (!held.hasValidRepresentation()) return;
         switch (held.view()) {
-            .object => |handle| self.retain(handle),
-            .strukt, .function => |fields| for (fields) |field| self.retainValue(field),
+            .object => |handle| {
+                const object = self.liveObject(handle) orelse return;
+                if (object.finalizing) return self.fail(.class_resurrection);
+            },
+            .strukt, .function => |fields| for (fields) |field| try self.canRetainValue(field),
+            else => {},
+        }
+    }
+
+    fn retainValueUnchecked(self: *Runtime, held: Value) void {
+        if (!held.hasValidRepresentation()) return;
+        switch (held.view()) {
+            .object => |handle| {
+                const object = self.liveObject(handle) orelse return;
+                if (!object.constant) object.references += 1;
+            },
+            .strukt, .function => |fields| for (fields) |field| self.retainValueUnchecked(field),
             else => {},
         }
     }
@@ -2127,7 +2355,10 @@ pub const Runtime = struct {
     /// inverse is `freeValue`.
     pub fn copyValue(self: *Runtime, held: Value) Error!Value {
         const copied = try self.ownValue(held);
-        self.retainValue(copied);
+        self.retainValue(copied) catch |mistake| {
+            self.dropStorage(copied);
+            return mistake;
+        };
         return copied;
     }
 
@@ -2155,6 +2386,7 @@ pub const Runtime = struct {
     /// outer object's own buffers still live only in `storage`.
     fn discardCopiedObject(self: *Runtime, storage: *Object) void {
         switch (storage.data) {
+            .instance => unreachable, // classes preserve identity and are never deep-copied
             .list, .array => if (storage.elements.kind == .value) {
                 for (storage.elements.cells(Value)) |item| self.freeValue(item);
             },
@@ -2316,13 +2548,14 @@ pub const Runtime = struct {
                     return;
                 }
                 if (aliases.get(task.source.bits)) |duplicate| {
-                    self.retain(duplicate.asObject());
+                    try self.retain(duplicate.asObject());
                     task.destination.* = duplicate;
                     return;
                 }
                 const source_object = source.liveObject(handle) orelse
                     return self.fail(.use_after_free);
                 var storage: Object = switch (source_object.data) {
+                    .instance => return self.fail(.not_owned),
                     .list => blk: {
                         const run = source_object.elements;
                         var elements: Object.Elements = .{ .kind = run.kind };
@@ -2406,6 +2639,7 @@ pub const Runtime = struct {
                 // longer guaranteed to point into the table.
                 const source_after = source.liveObject(handle) orelse unreachable;
                 switch (source_after.data) {
+                    .instance => unreachable,
                     .list, .array => if (source_after.elements.kind == .value) {
                         const cells = destination.elements.cells(Value);
                         for (source_after.elements.cells(Value), 0..) |item, at| {

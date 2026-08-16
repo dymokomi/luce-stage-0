@@ -33,6 +33,10 @@ pub const Kind = enum {
     /// identity, heap-allocated, freed by ARC at the last reference.  Its
     /// declaration grammar is a struct's; only the kind differs.
     keyword_class,
+    /// `deinit:` inside a class — the one non-callable lifecycle hook.
+    /// It runs at the last strong release while the instance fields are
+    /// still alive.
+    keyword_deinit,
     /// `interface Name:` — a named set of method contracts that a
     /// struct may explicitly implement.
     keyword_interface,
@@ -73,6 +77,9 @@ pub const Kind = enum {
     keyword_and,
     keyword_or,
     keyword_not,
+    /// `a is b` compares the identity of two references to the same
+    /// nominal class. Value equality remains `==`.
+    keyword_is,
     keyword_true,
     keyword_false,
     keyword_new,
@@ -196,6 +203,7 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "static", .kind = .keyword_static },
     .{ .word = "struct", .kind = .keyword_struct },
     .{ .word = "class", .kind = .keyword_class },
+    .{ .word = "deinit", .kind = .keyword_deinit },
     .{ .word = "interface", .kind = .keyword_interface },
     .{ .word = "alias", .kind = .keyword_alias },
     .{ .word = "enum", .kind = .keyword_enum },
@@ -217,6 +225,7 @@ pub const keywords = [_]struct { word: []const u8, kind: Kind }{
     .{ .word = "and", .kind = .keyword_and },
     .{ .word = "or", .kind = .keyword_or },
     .{ .word = "not", .kind = .keyword_not },
+    .{ .word = "is", .kind = .keyword_is },
     .{ .word = "true", .kind = .keyword_true },
     .{ .word = "false", .kind = .keyword_false },
     .{ .word = "new", .kind = .keyword_new },

@@ -506,9 +506,15 @@ pub const HeapType = union(enum) {
     /// tasks that differ in it are two different obligations, and a
     /// `list(task(double))` may not hold both.
     task: struct { result: Type, fallible: bool },
+    /// One instance of a nominal `class` layout. Unlike a value struct,
+    /// copying this type copies one object handle and therefore shares
+    /// identity. Appended so every existing serialized heap-shape tag keeps
+    /// its meaning.
+    class: u32,
 
     pub fn eql(self: HeapType, other: HeapType) bool {
         return switch (self) {
+            .class => |layout| other == .class and other.class == layout,
             .list => |element| other == .list and element.eql(other.list),
             .map => |pair| other == .map and
                 pair.key.eql(other.map.key) and pair.value.eql(other.map.value),
@@ -662,6 +668,10 @@ pub const StructLayout = struct {
     /// identity, heap-allocated, ARC-freed. A plain `struct` is a value.
     /// Recorded from stage 3; read by the runtime and MIR once ARC lands.
     reference: bool = false,
+    /// The hidden function ARC invokes at the last strong release, while
+    /// every field is still alive. Null for value structs and classes that
+    /// declare no `deinit:` hook.
+    deinitializer: ?u32 = null,
 
     pub fn findField(self: StructLayout, name: []const u8) ?u32 {
         for (self.fields, 0..) |field, index| {
@@ -871,6 +881,7 @@ fn writeTypeName(
         .enumeration => |reference| try written.appendSlice(allocator, enums[reference.index].name),
         .variant => |index| try written.appendSlice(allocator, variants[index].name),
         .heap => |index| switch (heap_types[index]) {
+            .class => |layout| try written.appendSlice(allocator, layouts[layout].name),
             .list => |element| {
                 try written.appendSlice(allocator, "list[");
                 try writeTypeName(written, allocator, layouts, heap_types, enums, variants, signatures, element);

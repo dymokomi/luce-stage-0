@@ -43,6 +43,10 @@ pub fn inferReceiverWrites(self: *Analyzer) Error!void {
         changed = false;
         for (self.functions.items) |*info| {
             if (info.receiver != .reads) continue;
+            // A class method never replaces the caller's reference. Field
+            // assignment mutates the shared instance through that reference,
+            // so it remains a read receiver and is callable through `let`.
+            if (info.enclosing != null and info.enclosing.? == .class) continue;
             if (!blockWritesReceiver(self, info, info.declaration.body)) continue;
             info.receiver = .writes;
             changed = true;

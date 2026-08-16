@@ -50,6 +50,8 @@ pub const interfaces = @import("specs/interfaces_spec.zig");
 pub const aliases = @import("specs/aliases_spec.zig");
 /// Zeroing non-owning storage and owned upgrade snapshots.
 pub const weak_references = @import("specs/weak_references_spec.zig");
+/// Final ARC reference types with identity and shared mutation.
+pub const classes = @import("specs/classes_spec.zig");
 /// Implied receivers, inferred writers, and the `static` boundary
 /// (docs/SELF.md).
 pub const self = @import("specs/self_spec.zig");
@@ -112,6 +114,7 @@ comptime {
         _ = interfaces;
         _ = aliases;
         _ = weak_references;
+        _ = classes;
         _ = self;
         _ = binding;
         _ = constants;

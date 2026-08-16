@@ -47,7 +47,7 @@ fn binaryPrecedence(kind: Kind) Precedence {
     return switch (kind) {
         .keyword_or => .logic_or,
         .keyword_and => .logic_and,
-        .equal, .not_equal, .less, .less_equal, .greater, .greater_equal => .comparison,
+        .equal, .not_equal, .keyword_is, .less, .less_equal, .greater, .greater_equal => .comparison,
         .keyword_else, .keyword_catch => .coalesce,
         // Go's precedence for the bit set (docs/BITWISE.md R1): `|`
         // and `^` bind with `+`, `&` and the shifts with `*` — which
@@ -97,6 +97,7 @@ fn binaryOp(kind: Kind) ast.BinaryOp {
         .keyword_catch => .catch_error,
         .equal => .equal,
         .not_equal => .not_equal,
+        .keyword_is => .identity,
         .less => .less,
         .less_equal => .less_equal,
         .greater => .greater,
@@ -453,6 +454,16 @@ fn postfixExpression(self: *Parser) Error!?*ast.Expression {
     var value = (try primaryExpression(self)) orelse return null;
     while (true) {
         if (self.accept(.dot) != null) {
+            if (self.peekKind() == .keyword_deinit) {
+                const lifecycle = self.advance();
+                try self.report(
+                    "luce.sema.class.lifecycle",
+                    lifecycle.span,
+                    "deinit is called only by ARC at the last strong release; it is not a method or function value",
+                    .{},
+                );
+                return null;
+            }
             const field = (try self.expect(.identifier, "a field or function name after '.'")) orelse
                 return null;
             if (self.peekKind() == .left_paren) {
