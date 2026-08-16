@@ -86,7 +86,7 @@ parameter, refuses itself through ordinary name resolution.
   beside the test file, and that limitation is reported when an import
   actually fails.
 - **The entry is synthesized.** Each test file compiles once with a
-  compiler-written `func main(args: list(string)) -> !` — the fourth of
+  compiler-written `func main(args: list[str]) -> !` — the fourth of
   the four entry shapes, built as real AST and checked, lowered,
   verified, optimized and emitted like any other function, so no source
   may declare it. The entry reads the test name from `args` and runs

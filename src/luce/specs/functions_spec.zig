@@ -24,7 +24,7 @@
 //!     the two spellings are the same instruction, and the same
 //!     dispatch.
 //!   * **D3** — function values have no equality or ordering;
-//!     `string(f)` answers the function's name, and copying one costs
+//!     `str(f)` answers the function's name, and copying one costs
 //!     nothing and frees nothing.
 //!   * **D5** — a `give`-taking function is passable, and the call
 //!     *through the value* checks the verbs exactly as a direct call
@@ -272,7 +272,7 @@ test "the name a function value answers is what distinguishes two of them" {
     , "true\nfalse\n");
 }
 
-test "string of a function value is the function's name" {
+test "str of a function value is the function's name" {
     try agree.prints(
         \\struct Scale:
         \\    static func twice(n: i64) -> i64:
@@ -291,7 +291,7 @@ test "string of a function value is the function's name" {
     , "halve\nScale.twice\n");
 }
 
-test "string gives sibling lambdas distinct compiler function names" {
+test "str gives sibling lambdas distinct compiler function names" {
     try agree.prints(
         \\func main():
         \\    let twice: func(i64) -> i64 = (n) -> n * 2

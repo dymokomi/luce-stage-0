@@ -63,7 +63,7 @@ first 1, four at 3
 false
 ```
 
-`std.lists.sort_by` accepts a named comparator or a capture-free lambda.
+`std.lists.sort_by` accepts a named comparator, lambda, or capturing closure.
 It is also stable, so elements that compare equally keep their input order.
 
 ```luce run

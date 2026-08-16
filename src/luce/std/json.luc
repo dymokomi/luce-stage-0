@@ -74,9 +74,8 @@
 #   one number type and Luce has two, and a language with no implicit
 #   narrowing cannot hand a `i64` out of a `f64` without inventing
 #   or discarding information.  So `42` is `Json.integer` and `4.2`,
-#   `42.0` and `4.2e1` are all `Json.real` — the rule `as_long` used
-#   to enforce by re-reading the text is now the member the value
-#   holds, checked by the compiler.  Zig's `std.json`, serde_json,
+#   `42.0` and `4.2e1` are all `Json.real`; `as_i64` exposes that
+#   distinction without rounding or re-reading source text. Zig's `std.json`, serde_json,
 #   Jackson and System.Text.Json all split the same way and for the
 #   same reason.  A whole number too large for a `i64` is a `real`,
 #   which is where its precision honestly is.
@@ -197,21 +196,20 @@ union Json:
 
     # The number as a whole number — absent unless it was written as
     # one.  `42` answers 42; `4.2`, `42.0` and `4.2e1` all answer
-    # `none` and are read with `as_double`.  A number written as a
+    # `none` and are read with `as_f64`.  A number written as a
     # real is a real, and answering absence says so, where truncating
     # would throw information away silently and rounding would invent
     # it.
-    func as_long() -> i64?:
+    func as_i64() -> i64?:
         match self:
             integer(value):
                 return value
             else:
                 return none
 
-    # The number as a f64, whichever way it was written — a whole
-    # number widens, which is the one conversion Luce makes on its own
-    # (docs/TYPES.md).
-    func as_double() -> f64?:
+    # The number as f64, whichever numeric member it uses. Integer
+    # payloads are converted explicitly here.
+    func as_f64() -> f64?:
         match self:
             integer(value):
                 return f64(value)
@@ -654,10 +652,10 @@ private func read_number(content: str, from: i64) -> (Json, i64)!:
             at += 1
     let token = content[from:at]
     if whole:
-        let counted = parse_int(token)
+        let counted = parse_i64(token)
         if counted != none:
             return Json.integer(value = counted), at
-    let measured = parse_float(token)
+    let measured = parse_f64(token)
     if measured != none:
         return Json.real(value = measured), at
     error(f"json: the number at position {from} is past what an f64 can hold")

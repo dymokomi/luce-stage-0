@@ -137,9 +137,9 @@ as a `Length`:
 
 ```text
 union Length:
-    cells(count: long)                          # exactly count cells
-    grow(weight: long)                          # share the leftover by weight
-    between(low: long, high: long, ratio: long) # ratio% of the axis, clamped [low, high]
+    cells(count: i64)                          # exactly count cells
+    grow(weight: i64)                          # share the leftover by weight
+    between(low: i64, high: i64, ratio: i64) # ratio% of the axis, clamped [low, high]
 ```
 
 `between` is what a sidebar or output pane wants: a quarter of the axis,
@@ -147,13 +147,13 @@ but never below a minimum nor above a maximum, giving way before a `grow`
 sibling starves. Pure ratio and pure min/max are special cases of it, so
 the surface stays three members.
 
-`resolve(total, gap, items) -> list(long)` solves one axis and is total: a
+`resolve(total, gap, items) -> list[i64]` solves one axis and is total: a
 preferred pass fixes `cells` and clamps `between`, then any surplus is
 shared among `grow` items and any deficit is taken from flexible space
 first — so an oversubscribed axis (a small terminal) shrinks in a
 min-respecting order rather than going negative. `Row.solve(area, gap,
 items)` walks columns left to right and `Column.solve(...)` walks rows top
-to bottom, each answering a `list(Rect)`. A hidden pane is a zero-length
+to bottom, each answering a `list[Rect]`. A hidden pane is a zero-length
 item that yields an empty `Rect`, which draws nothing — never a flag and
 never a branch, because every `Rect` operation is total.
 
@@ -185,7 +185,7 @@ automatically.
 closed
 resize
 key(pressed: Key)
-text(typed: string)
+text(typed: str)
 mouse(pointer: Mouse)
 ```
 
@@ -204,13 +204,13 @@ application's business.
 
 ```text
 interface View:
-    func measure(area: termui.Rect) -> (long, long)
+    func measure(area: termui.Rect) -> (i64, i64)
     func draw(into: surface.Surface, area: termui.Rect)
 ```
 
-Under Luce's read-only interface rule a view may change the surface handed
-to it but cannot hide a mutable receiver, so composition stays honest — the
-app keeps the model and hands a fresh projection to `draw`. Two plain
+Under Luce's current value-struct interface rule a view may change the surface
+handed to it but cannot hide a mutable value receiver. The app keeps the model
+and hands a fresh projection to `draw`. Two plain
 concretes ship: `Text` (a block of `text.Line`s, so one line may carry many
 styles) and `Fill` (a rectangle of one repeated cell — a selection bar, a
 cleared pane). There is no `Panel` or `Split`: their jobs are `frame.Frame`
@@ -221,9 +221,9 @@ and `layout` respectively.
 Both follow the state/view pattern exactly. `Rows` is the app-owned
 selection state (`count`, `top`, `selected`, with `adjust`, `move_by`,
 `choose`) — it holds no container, only counters — and `RowsView` is the
-read-only projection that draws a `func(long) -> string` provider,
-highlighting the selected row. The provider is a bound method, so the
-widget reads app data through the receiver without owning it. `Rows`
+read-only projection that draws a `func(i64) -> str` provider,
+highlighting the selected row. The provider is a bound method, so the widget
+owns its receiver snapshot and retains every reference that snapshot carries. `Rows`
 answers a small `RowsEvent` union (`moved`/`chosen`) that the app matches
 to decide what "chosen" means.
 

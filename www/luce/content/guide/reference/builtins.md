@@ -21,16 +21,16 @@ enabled compilation and may report `host_unavailable` at run time.
 | `sqrt(value)` | `f16`, `f32`, or `f64`, and **the same width back** |
 | `floor(value)`, `ceil(value)` | ″ |
 | `trunc(value)` | ″; toward zero, and `math.round` is the fourth |
-| `parse_int(text: str) -> i64?` | `none` when the text is not an integer |
-| `parse_float(text: str) -> f64?` | `none` when the text is not a number |
+| `parse_i64(text: str) -> i64?` | `none` when the text is not an integer |
+| `parse_f64(text: str) -> f64?` | `none` when the text is not a number |
 | `parse_str(data: bytes) -> str?` | decoded text, or `none` when the bytes are not valid UTF-8 |
 | `u8(x)`, `u16(x)`, `u32(x)`, `u64(x)`, `i8(x)`, `i16(x)`, `i32(x)`, `i64(x)`, `f16(x)`, `f32(x)`, `f64(x)` | explicit numeric conversions. Float to integer truncates toward zero; integer conversion checks range; float narrowing rounds to nearest, ties to even, and may reach infinity |
 | `char(x)`, `str(x)`, `bytes(x)` | checked Unicode scalar conversion, textual rendering, and immutable binary copying |
 
-The numeric builtins that answer their operand's own type land
-their arguments where the whole call lands, so `let x: f64 =
-sqrt(2.0)` reads `2.0` at binary64 rather than widening binary32's
-answer into it. Unannotated, a float literal is an `f64`.
+The numeric builtins that answer their operand's own type contextualize
+literal arguments from the surrounding place. Thus `let x: f64 = sqrt(2.0)`
+reads `2.0` and computes directly at binary64. Unannotated, a float literal is
+an `f64`.
 
 ```luce run
 func main():
@@ -44,8 +44,8 @@ func main():
     print(str(i64(2.5)) + " " + str(i64(-2.5)) + " " + str(i64(2.4)))
     print(str(char(9731)))
     print(str(u32('A')))
-    print(str(parse_int("17") else -1))
-    print(str(parse_float("nope") else -1.0))
+    print(str(parse_i64("17") else -1))
+    print(str(parse_f64("nope") else -1.0))
 ```
 
 ```output
@@ -282,7 +282,7 @@ the process working directory, and absolute paths are allowed. The
 Plus `len`, `xs[i]`, `xs[i] = v`, and `xs[a:b]` — which allocates a
 new outer list, copies value elements, and retains reference elements. The new
 list and the source therefore share any referenced objects.
-`sort_by` accepts a named function or capture-free lambda. Sorting rearranges
+`sort_by` accepts a named function, lambda, or capturing closure. Sorting rearranges
 the existing elements without changing their ARC lifetimes.
 
 ## map[K, V]

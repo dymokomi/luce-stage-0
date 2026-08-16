@@ -11,7 +11,7 @@ func main(args: list[str]):
         return
     var values: list[f64] = []
     for written in args:
-        let number = parse_float(written)
+        let number = parse_f64(written)
         if number == none:
             print("stats: not a number: " + written)
             return

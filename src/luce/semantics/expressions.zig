@@ -312,8 +312,8 @@ fn lowerArrayDimensions(
     }
     const run = (try self.lowerOperandsIntoTracking(new.dims, .nothing)) orelse return null;
     const dimensions = run.values;
-    for (dimensions, new.dims) |*dimension, expression| {
-        if (!try self.widensInto(dimension, .i64)) {
+    for (dimensions, new.dims) |dimension, expression| {
+        if (!dimension.value_type.eql(.i64)) {
             try self.fail("luce.sema.container.type", expression.span(), "array dimensions are i64", .{});
             return null;
         }
@@ -355,12 +355,11 @@ pub fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted
     // **The elements land on the element type when the place names
     // one.**  A literal has no type until it meets one
     // (docs/TYPES.md §1), and what it meets here is the annotation:
-    // without this, `var xs: list(byte) = [1, 2, 3]` reads its
-    // three literals at `int` and is then refused for narrowing
-    // nobody wrote.  That was invisible while every element type
-    // was `long` or wider; `list(byte)` at one byte an element
-    // (docs/BYTES.md R1) is what made it reachable, and the same
-    // landing is what `xs.append(1)` has always had.
+    // without this, `var xs: list[u8] = [1, 2, 3]` reads its
+    // three literals at `i32` and is then refused for narrowing
+    // nobody wrote. Contextual literal landing makes `list[u8]` occupy
+    // one byte per element without an implicit conversion, and the same
+    // landing is what `xs.append(1)` uses.
     const landing: Landing = if (wanted_element) |element| places: {
         const places = try self.arena().alloc(Type, literal.elements.len);
         @memset(places, element);
@@ -380,12 +379,7 @@ pub fn lowerListLiteral(self: *FunctionBuilder, literal: ast.ListLiteral, wanted
         }
         break :unified meeting;
     };
-    for (elements, literal.elements) |*element, expression| {
-        // This branch is intentionally inert under the explicit-width
-        // contract. Contextual literals already have `element_type`.
-        if (element.value_type.widensTo(element_type)) {
-            element.* = try self.widenNumeric(element.*, element_type);
-        }
+    for (elements, literal.elements) |element, expression| {
         if (!element.value_type.eql(element_type)) {
             try self.fail("luce.sema.type", expression.span(), "container elements are all {s}, got {s}", .{
                 try self.analyzer.typeName(element_type),
@@ -446,7 +440,7 @@ pub fn lowerMapLiteral(self: *FunctionBuilder, literal: ast.MapLiteral, wanted_c
         const first = lowered[0].value_type;
         if (first == .str) break :inferred .str;
         // An enum key keys by *itself*, not by its number: the whole
-        // point is that `{Key.left: …}` stays a `map(Key, V)` and comes
+        // point is that `{Key.left: …}` stays a `map[Key, V]` and comes
         // back out as a `Key` (docs/ENUMS.md, As built 2026-08-12).
         if (first == .enumeration) break :inferred first;
         if (first.isInteger()) break :inferred first;
@@ -466,9 +460,8 @@ pub fn lowerMapLiteral(self: *FunctionBuilder, literal: ast.MapLiteral, wanted_c
     };
 
     for (literal.entries, 0..) |entry, index| {
-        const key = &lowered[index * 2];
-        const value = &lowered[index * 2 + 1];
-        if (key.value_type.widensTo(key_type)) key.* = try self.widenNumeric(key.*, key_type);
+        const key = lowered[index * 2];
+        const value = lowered[index * 2 + 1];
         if (!key.value_type.eql(key_type)) {
             try self.fail("luce.sema.type", entry.key.span(), "map keys are all {s}, got {s}", .{
                 try self.analyzer.typeName(key_type),
@@ -476,7 +469,6 @@ pub fn lowerMapLiteral(self: *FunctionBuilder, literal: ast.MapLiteral, wanted_c
             });
             return null;
         }
-        if (value.value_type.widensTo(value_type)) value.* = try self.widenNumeric(value.*, value_type);
         if (!value.value_type.eql(value_type)) {
             try self.fail("luce.sema.type", entry.value.span(), "map values are all {s}, got {s}", .{
                 try self.analyzer.typeName(value_type),
@@ -563,8 +555,8 @@ pub fn lowerSliceRange(self: *FunctionBuilder, slice: ast.SliceRange) Error!?Typ
         return null;
     }
     const lowered_bounds = sequence[1..];
-    for (lowered_bounds) |*value| {
-        if (!try self.widensInto(value, .i64)) {
+    for (lowered_bounds) |value| {
+        if (!value.value_type.eql(.i64)) {
             try self.fail("luce.sema.type", slice.span, "slice bounds are i64", .{});
             return null;
         }
@@ -937,16 +929,14 @@ pub fn lowerField(self: *FunctionBuilder, field: ast.FieldAccess) Error!?Typed {
 /// operator:
 ///
 ///   * **Both sides untyped** — `2 * 0.1` — and the *place* the
-///     whole expression lands in decides, so `let x: double =
-///     2 * 0.1` computes at binary64 throughout.  `wanted` is
+///     whole expression lands in decides, so `let x: f64 =
+///     2 * 0.1` computes at binary64 throughout. `wanted` is
 ///     pushed into both and reaches every literal under them.
 ///   * **One side typed** — `x * 0.1` — and that side decides,
 ///     because what the literal met is `x`.  This is Go's rule and
-///     Luce needs it for Go's reason: without it the literal takes
-///     the default `float`, and `double_x * float(0.1)` is not
-///     `double_x * 0.1` — binary32's nearest 0.1 is a different
-///     number, and the widening that follows cannot put back what
-///     the parse threw away.
+///     Luce needs it for the same reason: binary32's nearest 0.1 is
+///     not binary64's nearest 0.1. The literal must take the concrete
+///     typed operand's width rather than its context-free f64 default.
 ///
 /// In the second case the typed side is lowered **first**, so its
 /// type is known before the literal is parsed.  That reorders
@@ -1074,23 +1064,14 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
         .logic_and, .logic_or, .coalesce, .catch_error, .identity => unreachable, // answered above
     };
 
-    // A literal may take the other operand's type in
-    // `lowerBinaryOperands`; two already-concrete numeric values never
-    // convert implicitly.
-    if (left.value_type.isNumeric() and right.value_type.isNumeric()) {
-        _ = try self.unifyNumeric(&left, &right);
-    }
-
-    // `/` is **real division** and always answers a float, so two
-    // integers widen here too and there is no integer `/` left in
+    // `/` is **real division** and always answers `f64` for integer
+    // operands, so there is no integer `/` left in
     // the IR (docs/NUMERICS.md §2).  `1 / 2` is `0.5`; the
     // quotient that answers `0` is `1 // 2`.
     //
-    // They widen to `double` at **either** integer width, which is
-    // the cross-family rule and not a special case: `int / int` is
-    // a `double` because that is where an integer meets a float,
-    // and a `float` result would lose everything above 2^24 from
-    // operands that reach it (docs/TYPES.md §2).
+    // This one operator has an explicit result rule independent of operand
+    // width. Use `//` for an integer quotient or convert both inputs before
+    // `/` when the result must have another floating width.
     if (operation == .divide and left.value_type.isInteger() and right.value_type.isInteger()) {
         left = try self.convertNumeric(left, .f64);
         right = try self.convertNumeric(right, .f64);
@@ -1132,7 +1113,7 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
     };
     if (arithmetic) {
         // The bit set operates on the integers and nothing else
-        // (docs/BITWISE.md D2): a double has no bits a program may
+        // (docs/BITWISE.md D2): a float has no bits a program may
         // see, and the sentence says which fact refused it.
         switch (operation) {
             .bit_and, .bit_or, .bit_xor, .shift_left, .shift_right => {
@@ -1180,8 +1161,8 @@ pub fn lowerBinary(self: *FunctionBuilder, binary: ast.Binary, wanted: ?Type) Er
         };
     }
 
-    // Comparisons: equality everywhere; ordering for long, double,
-    // and string.
+    // Comparisons: equality everywhere; ordering for numeric values,
+    // char, str, and bytes.
     const ordering = operation != .equal and operation != .not_equal;
     if (ordering and !(operand_type.isNumeric() or operand_type == .char or operand_type == .str or operand_type == .bytes)) {
         // **An enum is a set of names, not a number line**
@@ -1304,66 +1285,6 @@ fn lowerIdentity(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
     };
 }
 
-/// Legacy exact cross-family comparison lowering. Concrete numeric operands
-/// no longer mix, so source programs cannot reach this helper; it remains
-/// temporarily while the old HIR replay shape is retired.
-fn lowerExactCompare(
-    self: *FunctionBuilder,
-    operation: mir.BinaryOp,
-    left: Typed,
-    right: Typed,
-    sides: nodes.Expression.Sides,
-    span: Span,
-) Error!?Typed {
-    const int_first = left.value_type.isInteger();
-    var whole = if (int_first) left else right;
-    var fraction = if (int_first) right else left;
-
-    // Historical promotion hooks are identities under the current contract.
-    whole = try self.promoted(whole);
-    fraction = try self.promoted(fraction);
-
-    if (whole.value_type == .i32 and fraction.value_type == .f64) {
-        const widened = try self.widenNumeric(whole, .f64);
-        return .{
-            .node = try exactCompareNode(self, operation, int_first, widened, fraction, sides, span),
-            .value_type = .boolean,
-        };
-    }
-
-    if (whole.value_type == .i32) whole = try self.widenNumeric(whole, .i64);
-    if (fraction.value_type == .f32) fraction = try self.widenNumeric(fraction, .f64);
-
-    return .{
-        .node = try exactCompareNode(self, operation, int_first, whole, fraction, sides, span),
-        .value_type = .boolean,
-    };
-}
-
-/// The `compare` node for an exact cross-ladder comparison, with
-/// the operands back in written order — the mirroring the emission
-/// performs is the emission's fact, not the tree's.
-fn exactCompareNode(
-    self: *FunctionBuilder,
-    operation: mir.BinaryOp,
-    int_first: bool,
-    whole: Typed,
-    fraction: Typed,
-    sides: nodes.Expression.Sides,
-    span: Span,
-) Error!nodes.NodeRef {
-    const written_left = if (int_first) whole else fraction;
-    const written_right = if (int_first) fraction else whole;
-    return try recorder.recordNode(self, .{ .compare = .{
-        .op = operation,
-        .left = written_left.node,
-        .right = written_right.node,
-        .result = .boolean,
-        .span = span,
-        .sides = sides,
-    } });
-}
-
 /// `x == none` / `x != none` — the test that narrows.  It is the
 /// one comparison `none` takes part in: absence has no ordering
 /// and nothing else to be equal to.
@@ -1431,8 +1352,8 @@ fn lowerCoalesce(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
     const left = (try self.lowerExpression(binary.left, false)) orelse return null;
     const payload = left.value_type.held() orelse {
         // A name already proved present is the likely case, and
-        // "long always has a value" would only puzzle a reader who
-        // wrote `long?`.
+        // "i64 always has a value" would only puzzle a reader who
+        // wrote `i64?`.
         if (already) |name| {
             try self.fail("luce.sema.absent", binary.span, "{s} already holds a value here, so the else can never run; drop it", .{name});
             return null;
@@ -1480,7 +1401,7 @@ fn lowerShortCircuit(self: *FunctionBuilder, binary: ast.Binary) Error!?Typed {
         // operand has its own span, so underlining both of them and
         // naming neither — which is what "and needs bool operands"
         // did — throws away everything the reader needs.
-        // `condition must be bool, not long` is the model.
+        // `condition must be bool, not i64` is the model.
         try self.fail("luce.sema.type", binary.left.span(), "the left operand of {s} must be bool, not {s}{s}", .{
             operator,
             try self.analyzer.typeName(left.value_type),
@@ -1533,7 +1454,7 @@ pub fn lowerUnary(self: *FunctionBuilder, unary: ast.Unary, wanted: ?Type) Error
     }
     // A minus does not change where a literal lands, so the
     // landing type passes straight through it: `let x: f64 =
-    // -1.5` reads its text at a float exactly as `1.5` would.
+    // -1.5` reads its text at a f32 exactly as `1.5` would.
     //
     // **No test kills this line yet, and none can.**  A negated
     // *integer* literal takes the branch above; what is left is a
@@ -1550,17 +1471,14 @@ pub fn lowerUnary(self: *FunctionBuilder, unary: ast.Unary, wanted: ?Type) Error
                 });
                 return null;
             }
-            // Every numeric width computes as itself. Unsigned operands are
-            // rejected by the operator checks below.
-            const at = try self.promoted(operand);
             return .{
                 .node = try recorder.recordNode(self, .{ .unary = .{
                     .op = .negate,
-                    .operand = at.node,
-                    .result = at.value_type,
+                    .operand = operand.node,
+                    .result = operand.value_type,
                     .span = unary.span,
                 } }),
-                .value_type = at.value_type,
+                .value_type = operand.value_type,
             };
         },
         .logic_not => {
@@ -1587,15 +1505,14 @@ pub fn lowerUnary(self: *FunctionBuilder, unary: ast.Unary, wanted: ?Type) Error
                 });
                 return null;
             }
-            const at = try self.promoted(operand);
             return .{
                 .node = try recorder.recordNode(self, .{ .unary = .{
                     .op = .bit_not,
-                    .operand = at.node,
-                    .result = at.value_type,
+                    .operand = operand.node,
+                    .result = operand.value_type,
                     .span = unary.span,
                 } }),
-                .value_type = at.value_type,
+                .value_type = operand.value_type,
             };
         },
     }

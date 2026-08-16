@@ -294,12 +294,12 @@ pub const Object = struct {
     /// list and an array share.
     ///
     /// **The elements are stored as themselves, not as `Value`s.**  An
-    /// `array(double, n)` is `f64`s, a `list(byte)` is bytes, a
-    /// `list(long)` is `i64`s; only the kinds whose tag or length is
+    /// `array[f64, n]` is `f64`s, a `list[u8]` is bytes, a
+    /// `list[i64]` is `i64`s; only the kinds whose tag or length is
     /// not a compile-time fact — Strings, structs, objects — keep the
     /// 24-byte slot.  Three reasons, in the order they matter:
     /// compiled code loads and stores an element with one instruction
-    /// and no unboxing; a `double` array is a third of the memory
+    /// and no unboxing; a `f64` array is a third of the memory
     /// traffic of a boxed one, which is what a numeric loop is bound
     /// by; and a run of tagged slots is not something that can ever be
     /// handed to a SIMD unit or a GPU.  `Value` is the *boundary* type
@@ -308,7 +308,7 @@ pub const Object = struct {
     /// difference: `at` and `put` speak `Value` on both sides.
     ///
     /// A list reached this mechanism after `std.zip` measured what the
-    /// boxed slot costs: `list(byte)` was twenty-four bytes an element
+    /// boxed slot costs: `list[u8]` was twenty-four bytes an element
     /// and is now one (docs/BYTES.md R1).  The only difference between
     /// the two containers here is that a list's `bytes` runs ahead of
     /// its `count` so that `append` is amortized, and an array's does
@@ -537,17 +537,17 @@ pub const Object = struct {
         f64 = 1,
         i64 = 2,
         boolean,
-        /// The narrow widths, **appended**: an `array(int, n)` is
-        /// `i32` cells and an `array(float, n)` is `f32` cells, which
+        /// The narrow widths, **appended**: an `array[i32, n]` is
+        /// `i32` cells and an `array[f32, n]` is `f32` cells, which
         /// is half the memory and twice the lanes in the same vector
         /// register (docs/TYPES.md §6).
         f32 = 4,
         i32 = 5,
-        /// The storage widths, appended in their turn.  These are what
-        /// the narrow types are *for* (§10): an `array(byte, n)` is one
-        /// byte an element, an eighth of what the same array of `long`
-        /// costs, and the same vector register that holds two `double`s
-        /// holds eight `half`s.
+        /// The remaining concrete widths, appended in their turn. An
+        /// `array[u8, n]` is one
+        /// byte an element, an eighth of what the same array of `i64`
+        /// costs, and the same vector register that holds two `f64`s
+        /// holds eight `f16`s.
         f16 = 6,
         i16 = 7,
         u8 = 8,
@@ -842,7 +842,7 @@ pub const Map = struct {
 /// **The flat `max_array_elements = 1 << 24` is gone.**  It was a
 /// safety valve rather than a design limit, and it was denominated in
 /// the wrong unit (docs/TYPES.md): it counted elements, so an
-/// `array(byte, n)` was refused at 16 MB and an `array(double, n)` at
+/// `array[u8, n]` was refused at 16 MB and an `array[f64, n]` at
 /// 128 MB, for no reason either of them could see.  A machine's memory
 /// is what limits an array, and a request the machine cannot meet is an
 /// `allocation_failed` trap at the site that asked — located like every
@@ -854,25 +854,25 @@ pub const Map = struct {
 /// and `M` the element type's largest magnitude.  That proof needs a
 /// ceiling per element width and not one number, so the ceilings here
 /// are computed from the proof's own obligations — the largest `N` that
-/// keeps `N·M` inside a `long` — in `i128`, because `i64` is the width
+/// keeps `N·M` inside a `i64` — in `i128`, because `i64` is the width
 /// the arithmetic is *about* and a wrapped bound reports that
 /// everything fits.
 ///
-/// Kinds no integer reduction can name — `long` (no row qualifies),
+/// Kinds no integer reduction can name — `i64` (no row qualifies),
 /// the floats, `bool`, and the boxed slot — carry no proof obligation,
 /// so their only ceiling is the one that keeps a byte count from
 /// overflowing a `usize`.  RAM decides, and says so by failing.
 pub fn maxElements(kind: Object.ElementKind) usize {
     return switch (kind) {
-        // `byte × short`, the widest provable term a `byte` element
+        // `u8 × i16`, the widest provable term a `u8` element
         // takes part in (VECTOR.md's multiply-accumulate table).
         .u8 => proofCeiling(255 * 32768),
         .i8 => proofCeiling(128 * 128),
         .u16 => proofCeiling(@as(i128, std.math.maxInt(u16)) * std.math.maxInt(u16)),
-        // `short × short`, evaluated at `int`.
+        // `i16 × i16`, evaluated at `i32`.
         .i16 => proofCeiling(1 << 30),
         .u32 => proofCeiling(std.math.maxInt(u32)),
-        // A plain `int` sum; no `int` product qualifies at any width.
+        // A plain `i32` sum; no `i32` product qualifies at any width.
         .i32 => proofCeiling(1 << 31),
         .value, .f64, .u64, .i64, .f32, .f16, .char, .boolean => std.math.maxInt(usize) /
             kind.width(),
@@ -880,7 +880,7 @@ pub fn maxElements(kind: Object.ElementKind) usize {
 }
 
 /// The largest element count that keeps `count · magnitude` inside a
-/// `long`, computed in `i128` at comptime.
+/// `i64`, computed in `i128` at comptime.
 fn proofCeiling(comptime magnitude: i128) usize {
     const bound = @divFloor(@as(i128, std.math.maxInt(i64)), magnitude);
     return @intCast(@min(bound, @as(i128, std.math.maxInt(usize))));

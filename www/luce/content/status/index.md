@@ -1,105 +1,82 @@
 # Where Luce stands
 
-Updated for release 0.18. This page is the boundary between the language you
-can use now and the language being designed. The [Tour](/tour/),
-[Guide](/guide/), and [Library](/library/) describe the current toolchain only.
+Updated for release 0.18. This page separates the language implemented today
+from work that is still design. The [Tour](/tour/), [Guide](/guide/), and
+[Library](/library/) describe current behavior only.
 
 ## Available today
 
 ### Language
 
-- Static types with inference, checked fixed-width integer arithmetic,
-  contextual literals, and explicit representation conversions.
-- The current scalar names `bool`; `u8`, `u16`, `u32`, `u64`; `i8`, `i16`,
+- Explicit scalar types: `bool`; `u8`, `u16`, `u32`, `u64`; `i8`, `i16`,
   `i32`, `i64`; `f16`, `f32`, `f64`; `char`, `str`, and `bytes`.
-- Value structs, enums, tagged unions, nominal interfaces, named functions,
-  bound methods, and capture-free one-expression lambdas.
-- Transparent file-scope type aliases, including chains, forward references,
-  constructors, static/member namespaces, visibility, and module re-exports.
+  Arithmetic is checked at its concrete width and conversions are explicit.
+- Transparent `alias Name = Type` declarations, including chains, forward
+  references, visibility, constructors, member namespaces, and re-exports.
+- Structures, enumerations, tagged unions, and final ARC classes. Classes
+  share mutable identity, compare identity with `is`, support weak edges and
+  run `deinit` once at the last strong release.
+- Named functions, one-expression lambdas, bound methods, and ARC block
+  closures. Closures retain immutable captures, share mutable cells, and
+  support explicit snapshot and zeroing weak captures.
+- Nominal interfaces with multiple methods, multi-value answers, directional
+  failure matching, heterogeneous collections, and mutable class dispatch.
+  A writing value-structure method is not yet an interface witness.
 - Lists, maps, fixed-shape arrays, builders, optionals, recoverable errors,
-  and multiple returns.
-- ARC for lists, maps, arrays, builders, files, and tasks. Assignment shares
-  reference objects; the last strong release reclaims containers, closes
-  files, and joins unfinished tasks on both engines.
-- Zeroing `weak` fields and locals for optional lists, maps, arrays, and
-  builders. Live reads become owned snapshots; dead targets read `none`; row
-  reuse cannot revive a handle; weak storage never crosses a worker.
-- Explicit nominal interfaces with multiple methods, multi-value answers,
-  directional failure matching, returns, optionals, and heterogeneous
-  containers. Interface dispatch is read-only today.
-- Isolated workers. Permitted container graphs are copied between runtimes and
-  object identity is never shared. Aliases remain aliases inside the worker's
-  independent snapshot, and the caller keeps its source graph.
-- Modules, visibility, constants, exact-version package consumption, and Luce
-  tests.
+  multiple returns, constants, modules, access control, packages, and tests.
+- ARC across reference objects, resources, class instances, bound methods,
+  interface dispatch values, and closure environments. Files close and
+  unfinished tasks join at the last strong release.
+- Zeroing `weak` locals, fields, and closure captures for weak-capable ARC
+  objects. A live read becomes an owned optional snapshot; a dead target reads
+  `none`; generation checks prevent stale handles from reviving.
+- Isolated workers. Permitted values and container graphs are copied into a
+  private runtime while preserving aliases inside the snapshot. Object
+  identity is never shared between workers.
 
-The old source-level ownership operations do not exist. There is no `give`,
-`copy`, or `free` syntax and no borrow annotation. Every successful
-differential specification requires zero live objects, resource lifecycle
-tests are active, and the serialized-module mutation corpus must reject or run
-cleanly without a host-language panic. [Memory Management](/guide/reference/memory/#implementation-evidence)
-lists the evidence.
+There is no source-level retain, release, give, copy, free, move, clone, or
+borrow operation. Every successful differential language specification must
+finish with zero live runtime objects, and malformed serialized modules must
+trap or be rejected without a host-language panic.
 
 ### Toolchain and libraries
 
 `luce build FILE.luc` creates a native executable named after the source by
 default. `luce check`, `luce ir`, and `luce test` provide focused development
-workflows. `loom` runs a native `.lc` library when that artifact form is useful.
-The release also includes the terminal editor and local VS Code/Cursor syntax
-extension.
+workflows. `loom` loads a compiled `.lc` library when that artifact form is
+useful. The release also contains the terminal editor and a local VS Code or
+Cursor extension.
 
-The shipped standard library includes `std.math`, `std.files`, `std.strings`,
-`std.lists`, `std.paths`, `std.os`, `std.term`, `std.zip`, `std.json`,
-`std.gpu`, and `std.ui`. The maintained `termui` package is a low-level,
-deterministic terminal renderer and layout library.
+The embedded standard library includes `std.math`, `std.files`,
+`std.strings`, `std.lists`, `std.paths`, `std.os`, `std.term`, `std.zip`,
+`std.json`, `std.gpu`, and `std.ui`. The maintained `termui` package provides
+deterministic terminal rendering, layout, text, input, and view primitives.
 
-## The language we are building
+The current serialized-module format is 54 and the host ABI is 23. Loaders
+refuse incompatible artifacts rather than guessing.
 
-The north star is one memory sentence:
+## The memory model
+
+The language is organized around one sentence:
 
 > Values copy. References share identity. ARC keeps references alive. Weak
 > references break cycles. Resources close at the last strong release.
 > Workers never share object identity.
 
-### Classes
+| Kind | Examples | Assignment and passing |
+|---|---|---|
+| Value | numbers, `bool`, `char`, `str`, `bytes`, structs, enums, unions | copy the value |
+| Reference | classes, lists, maps, arrays, builders, closure environments | retain and share one identity |
+| Resource reference | files, tasks, windows, GPU surfaces | retain and share; clean up at zero |
 
-`class` will be a final ARC reference type with shared identity and ordinary
-mutation. Assignment will share the same object; methods will be callable
-through a `let` reference; `deinit` will run once at the last strong release.
-There is no planned class inheritance.
+An interface currently owns bound dispatch state: a structure conformance
+owns a receiver snapshot and a class conformance retains shared identity.
+[Memory and ARC](/guide/memory/) teaches the model; [Memory
+Management](/guide/reference/memory/) states its exact rules.
 
-`class` already parses as a front-end scaffold, but it still lowers with value
-behavior. That is not a usable class implementation and the Guide does not
-present it as one.
+## Explicit type names
 
-### Interfaces
-
-Interface values will become one owned existential payload plus concrete
-metadata and a witness table. A struct payload will be boxed as a value; a
-class payload will retain the shared object. That representation enables
-mutable dispatch and keeps heterogeneous lists and maps independent of the
-frame that created each value.
-
-The first complete model does not include interface inheritance, default
-method bodies, associated types, or runtime casting.
-
-### Capturing closures
-
-Weak storage is current for built-in ARC containers and will also accept
-classes once class heap lowering exists. Resources, function values, current
-interface values, and value types remain strong-only. A weak reference never
-dangles, and there is no unsafe `unowned` form.
-
-Capturing closures will share the ordinary function type. Immutable values
-capture a snapshot; mutable locals share an environment cell; references are
-strongly captured by default. Explicit capture lists request a weak reference
-or a named value snapshot when needed. Strong capture remains the normal safe
-case—the compiler will not demand weak capture merely because a closure
-escapes.
-
-### Explicit type names
-
-The current core type vocabulary is:
+The completed core vocabulary is:
 
 ```text
 bool
@@ -119,73 +96,53 @@ func(T, ...) -> R
 T?
 ```
 
-The migration is complete. Retired spellings are not aliases; the compiler
-rejects each one with its direct replacement so a pre-release language does
-not carry two vocabularies.
+These are the only built-in type names. A second spelling for any of them does
+not exist.
+`none` is an absence value, not a type. `char` is one Unicode scalar, `str` is
+immutable UTF-8, and `bytes` is immutable binary data. There is no generic
+`f8`; a future 8-bit floating representation must name its format.
 
-`none` remains an absence value, not a type. `char` is one Unicode scalar,
-not a borrowed view or a grapheme cluster. `str` is immutable UTF-8 and
-`bytes` is immutable binary data. There is no generic `f8`; any future 8-bit
-float names its format explicitly.
+Trees, stacks, matrices, and specialized vectors belong in libraries after
+generics rather than in the primitive vocabulary. `map` is the associative
+container; `dict` and `hash` are not aliases.
 
-`tree`, `stack`, matrices, and specialized vectors are library types after
-generics, not primitive keywords. `map` is the one associative container;
-`dict` and `hash` are not aliases. A compiler `vec[T, N]` is justified only by
-real SIMD and ABI semantics.
+## Remaining language work
 
-## Ordered work
+### Interfaces {#interfaces}
 
-The implementation order is chosen to avoid rewriting the same compiler and
-documentation seams twice:
+The present representation stores one owned bound dispatch value per required
+method. It is safe and complete for current read-only structure witnesses and
+mutable class witnesses, but it repeats receiver state.
 
-1. **ARC foundation — complete.** Every feature-related skip and relaxed
-   census gate is gone; resources close or join exactly once, bound receivers
-   retain their graphs, worker snapshots preserve aliases, derived collections
-   retain elements, and malformed modules fail closed.
-2. **Transparent type aliases — complete.** `alias Name = Type` works through
-   type positions, constructors, members, constants and modules; cycles,
-   privacy violations and namespace collisions have exact diagnostics.
-3. **Freeze the type and closure contracts — complete.** Decide literal, conversion,
-   Unicode, container-type, block-closure, capture-list, and diagnostic rules
-   before changing code.
-4. **Migrate type names atomically — complete.** Update compiler, runtime, module format,
-   standard library, examples, editor grammar, packages, and documentation in
-   one pre-release cut; old spellings become direct diagnostics rather than
-   long-lived aliases.
-5. **Build weak references — complete.** Safe zeroing for built-in ARC objects, lifecycle
-   integration, cycle diagnostics, and both-engine agreement.
-6. **Complete classes.** Heap lowering, sharing, mutation, identity,
-   construction, teardown, weak fields, errors, optionals, containers, and
-   workers.
-7. **Replace interface storage.** Owned existentials for structs and classes,
-   then weak storage, mutable dispatch, and the full negative conformance
-   matrix.
-8. **Add capturing closures.** ARC environments, shared mutable captures,
-   strong/weak/snapshot capture, block bodies, and cycle diagnostics.
-9. **Prove the model in userland.** Build a retained UI layer over `std.ui`,
-   `std.gpu`, and termui; migrate the editor as the end-to-end proof.
-10. **Add generics later.** Monomorphized generic functions and types with
-   interface bounds, followed by a small library of justified data structures.
-11. **Lock the release.** Full deterministic tests, hardening, site build,
-    installer smoke test, benchmark comparison, and a final documentation and
-    diagnostics audit.
+The next representation step is one owned existential payload, concrete type
+metadata, and a static witness table. A structure payload will be boxed as a
+value; a class payload will retain its object. This enables writing structure
+witnesses without changing interface syntax or function types.
 
-During a phase, focused language, library, host, backend, editor, or tools
-tests are the inner loop. The complete release gate runs at the phase boundary,
-with visible progress and heartbeat output. A feature is complete only when
-positive programs, common user mistakes, runtime lifetime checks, both
-engines, public examples, and performance evidence agree.
+The first existential model still excludes interface inheritance, default
+methods, associated types, and runtime casts.
 
-## Not part of this roadmap
+### Generics and library data structures
 
-- class inheritance;
-- interface default methods or inheritance;
-- garbage collection or user-visible manual retain/release;
+Generics remain design work. The intended direction is monomorphized generic
+functions and types with interface bounds. Trees, stacks, matrices, and other
+data structures can then be ordinary library types rather than compiler
+keywords.
+
+Generics are not required for the current classes, closures, interfaces,
+containers, standard library, or applications.
+
+## Deliberate non-goals
+
+- class inheritance, `override`, and `super`;
+- interface default methods or interface inheritance;
+- garbage collection or user-visible manual retain and release;
 - unsafe pointers or unsafe non-owning references;
 - shared mutable state between workers;
 - operator overloading, reflection, macros, or metaclasses; and
 - higher-kinded or variadic generics.
 
-There is no release date implied by this order. The purpose of the list is to
-make dependencies and completion criteria visible before implementation
-starts.
+There are currently no confirmed bugs in the repository's internal bug
+ledger. That is a statement about reproduced current defects, not a claim that
+unfinished features already exist or that future testing cannot find another
+bug.

@@ -2,18 +2,16 @@
 
 A **bound method** is `receiver.method` written where a `func(T, ...) ->
 R` value is expected: a function value whose environment is the receiver.
-Nothing anonymous enters the language — the environment is a struct or
-enum the program declared, with a name, a layout, and visible
-fields. This is the reference for how a bind is spelled, typed, stored,
-and called. Plain function values and lambdas have their own reference
-(`docs/FUNCTIONS.md`).
+This is the reference for how a bind is spelled, typed, stored, and called.
+Named functions, lambdas, and capturing closures have their own reference in
+[FUNCTIONS.md](FUNCTIONS.md).
 
 One sentence carries the feature: **a bound method is a function value
 that carries its receiver.** A value receiver — a plain `struct` or an
 `enum` — is copied into the value. Reference fields inside that receiver remain
 aliases of the same objects and are retained by the bind until the function
-value dies. User-defined class receivers and capturing closure environments
-are planned rather than current behavior.
+value dies. A class receiver is retained by identity, so the bound method
+observes later mutations of the same object.
 
 ## The bind, spelled and typed
 
@@ -40,18 +38,19 @@ func main():
     print(str(f(10)))
 ```
 
-`Scale.times` is declared `func times(n: long) -> long` with an implied
-`self`; bound, it wears `func(long) -> long` — the receiver parameter
+`Scale.times` is declared `func times(n: i64) -> i64` with an implied
+`self`; bound, it wears `func(i64) -> i64` — the receiver parameter
 gone, the passed parameter kept. Stage 4 resolves the bind in the same
 `.field` arm that resolves `Struct.helper`: when the head does not name a
 declaration, the target lowers as a value and its type is asked for a
 method of that name. A miss is *not a bind*, and the field path says what
 it always said about `p.x`.
 
-The receiver a bind carries is its own value copy, so writing the original
-afterwards does not reach its value fields. References inside that copied
-receiver name the same objects and are retained by the function value.
-Returning or storing the bound value therefore keeps its receiver graph alive.
+A value receiver is copied, so writing the original afterwards does not reach
+its value fields. References inside that copy name the same objects and are
+retained by the function value. A class receiver is instead the same retained
+identity. Returning or storing either form therefore keeps its receiver graph
+alive.
 
 ## No equality, no ordering
 
@@ -66,10 +65,10 @@ the walk `==` itself uses (`semantics/shapes.zig`'s
 `incomparablePart`): it descends a struct's field run, a union's run and
 an optional's payload, and it **stops at a reference**, because `==` does —
 reference equality is identity and never reads the contents. So a struct
-holding `list(Button)` still compares by the references it holds, an
+holding `list[Button]` still compares by the references it holds, an
 honest `==`. `mir/verify.zig` refuses the same shape in a decoded
 module, which makes the runtime comparator's function arm unreachable
-rather than merely unreached. `string(f)` is how a program asks what a
+rather than merely unreached. `str(f)` is how a program asks what a
 value names, and the honest workaround for a search is to keep a name or
 an enum beside the values and search that.
 
@@ -98,14 +97,14 @@ func main():
 
 ### The grammar rule: a parenthesized type is that type
 
-`func(long) -> string?` already means *a function answering an optional
+`func(i64) -> str?` already means *a function answering an optional
 string* — the result type is parsed by the ordinary type production and
-consumes its own `?` first, which is how `parse_int` is written as a
+consumes its own `?` first, which is how `parse_i64` is written as a
 value. To say "a function that may be absent" the function type must close
 before the `?` reaches it. The rule is uniform: **`(T)` is `T`**, accepted
-wherever a type may stand and required nowhere. `long?` is unchanged,
-`(long)?` parses to the same type and says nothing extra, and
-`(func(long) -> string)?` is the one thing that becomes newly writable. In
+wherever a type may stand and required nowhere. `i64?` is unchanged,
+`(i64)?` parses to the same type and says nothing extra, and
+`(func(i64) -> str)?` is the one thing that becomes newly writable. In
 return position the arity separates the two productions — one type in
 parentheses is a parenthesized type, two or more is a return shape.
 `writeTypeName` parenthesizes a function payload and nothing else, so a
@@ -122,7 +121,7 @@ those references exactly once.
 | slot | written | why |
 |---|---|---|
 | struct field | `(func(...) -> R)?` | `var row: Row` creates it zeroed |
-| array cell | `(func(...) -> R)?` | `new array(T, n)` creates it filled |
+| array cell | `(func(...) -> R)?` | `new array[T](n)` creates it filled |
 | list element | `(func(...) -> R)?` | uniform with the two above |
 | union payload field | `(func(...) -> R)?` | a union's zero is its first member, fields at their own zeros |
 | **map value** | `func(...) -> R` | see below |
@@ -131,9 +130,9 @@ those references exactly once.
 A **map value** is the one slot no container ever creates: it exists
 because `put` created it, and `m.get(k)` already answers `V?`. So the
 absence is the missing key, the type is written bare, and
-`map(K, (func(...) -> R)?)` is refused because it would make `get` answer
+`map[K, (func(...) -> R)?]` is refused because it would make `get` answer
 a `V??`, which has no representation. `m.values()` is refused on that one
-map — it answers `list(V)`, and a bare `func` type is legal as a map value
+map — it answers `list[V]`, and a bare `func` type is legal as a map value
 but not as a list element, so `values()` would manufacture a type no
 program can write; the refusal names the loop that works (walk `m.keys()`
 and read `m.get(k)`). `m.keys()` is untouched, because every key type is
@@ -160,7 +159,7 @@ tested, and called through the local. The refusal names the field, says
 it may hold none, and writes out the three lines that work:
 
 ```text
-rows.render is (func(long) -> string)? and may hold none; only a local
+rows.render is (func(i64) -> str)? and may hold none; only a local
 or a parameter narrows, so bind it first (let render = rows.render),
 test it (if render != none:), then call render(…) [BINDING.md]
 ```
@@ -187,7 +186,7 @@ func main():
             print("quit")
 ```
 
-`Msg.query_changed` where a `func(string) -> Msg` lands is the constructor
+`Msg.query_changed` where a `func(str) -> Msg` lands is the constructor
 for that member: the payload fields are the parameters in declaration
 order, and the union is the result. A payload-less member — `Msg.quit` —
 stays a value, not a function, and the landing place says which it wanted.
@@ -198,10 +197,10 @@ head so an imported union resolves from the reference site's own module.
 
 ## Refusals
 
-- **A writing method does not bind.** A writer requires one bare mutable
-  receiver aliased in place (`docs/SELF.md`); binding one would make an
-  inout closure whose store-back discipline is a separate question. The
-  refusal names the reading form.
+- **A writing value method does not bind.** A `struct` or `enum` writer
+  requires one bare mutable receiver aliased in place (`docs/SELF.md`);
+  binding it would require store-back into that original value. A class writer
+  may bind because the function value retains and mutates the shared identity.
 - **A fallible function type does not exist.** `func(T) -> R!` and
   `func() -> !` are refused where they are written, so a fallible method
   does not bind and `try EXPR(args)` on a function value is refused by
@@ -212,9 +211,6 @@ head so an imported union resolves from the reference site's own module.
   (`docs/MEMORY.md`, `docs/THREADS.md`).
   A call *through* a value type-checks its arguments exactly as a direct
   call does.
-- **Captures are refused today.** A lambda that needs state currently
-  names a struct and binds a method. ARC closure environments are planned
-  in `docs/ROADMAP.md`.
 
 ## Representation and dispatch
 
@@ -226,7 +222,8 @@ built the same way whether the value carries a receiver or not, which
 costs a plain function value one allocation it would not otherwise make
 and buys the thing worth having: no reader of a function value branches on
 boundness, so a place that holds a `func(...)` cannot tell — and must not
-be able to tell — which of a plain function, a lambda, or a bind it holds.
+be able to tell — which of a plain function, a lambda, a capturing closure,
+or a bind it holds.
 `luce_rt_function_make` is the run's constructor beside
 `luce_rt_struct_make`; copying a function value copies the two-slot run
 and shares whatever reference sits in slot 1.
@@ -237,7 +234,7 @@ whether the value in its hand carries a receiver — one `func(Point, Point)
 signature is chosen at compile time. So the function table holds one
 adapter per function some `const_function` names: `luce.bound.N` takes a
 receiver slot after the depth, unboxes it into the callee's parameter zero
-when the value is a bind, and ignores it when it is not. Every indirect
+when the value is a bind or closure, and ignores it when it is not. Every indirect
 call passes the receiver slot of the run it is calling through, at the
 price of one extra call frame per call *through a function value* — the
 alternative was two calling conventions at a site that cannot tell them

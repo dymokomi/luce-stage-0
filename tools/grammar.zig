@@ -27,7 +27,7 @@
 //!   ownership the same table's `new` and `spawn`
 //!   symbols   `lex/token.zig`'s `Kind`, one row per punctuation
 //!             and operator token — map braces and the bit set included
-//!   types     `support/types.zig`'s `builtin_names`, plus `None`
+//!   types     `support/types.zig`'s `builtin_names`
 //!   builtins  `semantics/builtins.zig`'s `builtins`
 //!   methods   the same file's receiver-method tables
 //!
@@ -434,21 +434,13 @@ fn spelling(kind: luce.lex.Kind) []const u8 {
     unreachable; // every kind `keywordClass` names is in the table.
 }
 
-/// The type names the language itself spells: the capitalised half of
-/// the reserved list.  Any *other* capitalised name is a type too —
-/// that is the convention the language enforces for structs — and the
-/// grammar has a second, looser rule for those.
 /// The builtin type names, read from the compiler's own table rather
-/// than guessed from a name's case.  It used to take every reserved
-/// name that began with a capital, which stopped being a description
-/// of anything the moment the language's own names became lowercase
-/// (docs/TYPES.md D8) — `long` is a type and `String` is one only
-/// until the rename retires it, and neither fact is in a first letter.
+/// than guessed from a name's case. User-declared types follow their own
+/// capitalized-name grammar rule.
 fn typeNames(gpa: Allocator) Allocator.Error!Words {
     var words: Words = .{ .gpa = gpa };
     errdefer words.deinit();
     try words.addAll(&luce.types.builtin_names);
-    try words.add("None");
     return words;
 }
 
@@ -543,7 +535,7 @@ fn escaped(arena: Allocator, text: []const u8) Allocator.Error![]const u8 {
 }
 
 /// Every name that means the language only behind a `.`: the four
-/// receiver tables plus the two String primitives.  Several of them —
+/// receiver tables plus the two `str` primitives. Several of them —
 /// `find`, `get`, `clear`, `values` — are words a program may
 /// perfectly well use for a function of its own, which is why they are
 /// coloured after the dot and never before it.
@@ -975,7 +967,7 @@ pub fn emit(gpa: Allocator) Error![]u8 {
     // A name starts with a letter, so a word that opens with an
     // underscore is `luce.lex.name` and not a name at all
     // [VISIBILITY.md R3].  The lone `_` is left alone: it is the
-    // array-shape wildcard (`array(double, _, _)`) and declares
+    // array-shape wildcard (`array[f64, _, _]`) and declares
     // nothing, so it is neither a name nor a mistake.
     const name_rules = [_]Rule{
         .{ .match = .{

@@ -105,19 +105,19 @@ pub fn concat(runtime: *Runtime, left: Value, right: Value) Error!Value {
 /// `held` is a copy of the caller's, so a view of it would be a view of
 /// something about to go (docs/STRINGS.md).
 pub fn slice(runtime: *Runtime, held: Value, start: i64, end: i64) Error!Value {
-    if (start < 0 or end < start) return runtime.fail(.string_bounds);
+    if (start < 0 or end < start) return runtime.fail(.str_bounds);
     const source_bytes: []const u8, const start_index: usize, const end_index: usize = switch (held.tag) {
         .str => blk: {
             if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
             const text = held.asStr();
-            const first = scalarOffset(text, @intCast(start)) orelse return runtime.fail(.string_bounds);
-            const last = scalarOffset(text, @intCast(end)) orelse return runtime.fail(.string_bounds);
+            const first = scalarOffset(text, @intCast(start)) orelse return runtime.fail(.str_bounds);
+            const last = scalarOffset(text, @intCast(end)) orelse return runtime.fail(.str_bounds);
             break :blk .{ text, first, last };
         },
         .bytes => blk: {
             if (!held.hasValidBytesRepresentation()) return runtime.fail(.not_owned);
             const data = held.asBytes();
-            if (end > data.len) return runtime.fail(.string_bounds);
+            if (end > data.len) return runtime.fail(.str_bounds);
             break :blk .{ data, @intCast(start), @intCast(end) };
         },
         else => return runtime.fail(.not_owned),
@@ -142,20 +142,20 @@ pub fn length(runtime: *Runtime, held: Value) Error!Value {
 }
 
 pub fn at(runtime: *Runtime, held: Value, index: i64) Error!Value {
-    if (index < 0) return runtime.fail(.string_bounds);
+    if (index < 0) return runtime.fail(.str_bounds);
     return switch (held.tag) {
         .str => blk: {
             if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
             const text = held.asStr();
-            const first = scalarOffset(text, @intCast(index)) orelse return runtime.fail(.string_bounds);
-            if (first == text.len) return runtime.fail(.string_bounds);
+            const first = scalarOffset(text, @intCast(index)) orelse return runtime.fail(.str_bounds);
+            if (first == text.len) return runtime.fail(.str_bounds);
             const scalar_length = std.unicode.utf8ByteSequenceLength(text[first]) catch unreachable;
             break :blk Value.ofChar(std.unicode.utf8Decode(text[first..][0..scalar_length]) catch unreachable);
         },
         .bytes => blk: {
             if (!held.hasValidBytesRepresentation()) return runtime.fail(.not_owned);
             const data = held.asBytes();
-            if (index >= data.len) return runtime.fail(.string_bounds);
+            if (index >= data.len) return runtime.fail(.str_bounds);
             break :blk Value.ofU8(data[@intCast(index)]);
         },
         else => runtime.fail(.not_owned),
@@ -185,7 +185,7 @@ fn scalarOffset(text: []const u8, wanted: usize) ?usize {
 pub fn byteAt(runtime: *Runtime, held: Value, index: i64) Error!Value {
     if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
     const text = held.asStr();
-    if (index < 0 or index >= text.len) return runtime.fail(.string_bounds);
+    if (index < 0 or index >= text.len) return runtime.fail(.str_bounds);
     return Value.ofU8(text[@intCast(index)]);
 }
 
@@ -196,7 +196,7 @@ pub fn findByte(runtime: *Runtime, held: Value, byte: i64, start: i64) Error!Val
     if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
     const text = held.asStr();
     if (byte < 0 or byte > 0xFF) return runtime.fail(.bad_codepoint);
-    if (start < 0 or start > text.len) return runtime.fail(.string_bounds);
+    if (start < 0 or start > text.len) return runtime.fail(.str_bounds);
     const from: usize = @intCast(start);
     const found_at = std.mem.indexOfScalarPos(u8, text, from, @intCast(byte)) orelse
         return Value.ofI64(-1);
@@ -218,7 +218,7 @@ pub fn str(runtime: *Runtime, held: Value) Error!Value {
     if (!held.hasValidRepresentation()) return runtime.fail(.not_owned);
     switch (held.view()) {
         // Twenty digits and a sign is the longest an i64 gets, so a
-        // number's text always fits inside the value and `string(i)` in
+        // number's text always fits inside the value and `str(i)` in
         // a loop allocates nothing at all.
         .u8 => |number| return digitsOf(number),
         .u16 => |number| return digitsOf(number),
@@ -236,7 +236,7 @@ pub fn str(runtime: *Runtime, held: Value) Error!Value {
         },
         // `{d}` on a float is the shortest representation that round
         // trips **at its own width** — Zig's Ryū-derived formatter,
-        // which is width-generic, so `string(float(1.0) / float(3.0))`
+        // which is width-generic, so `str(f32(1.0) / f32(3.0))`
         // is "0.33333334" and not binary64's seventeen digits
         // (docs/TYPES.md §3).
         .f16 => |number| return floatText(runtime, number),
@@ -299,8 +299,8 @@ fn digitsOf(number: anytype) Value {
 /// invalid operation produces (`0.0 / 0.0` is a positive quiet NaN on
 /// aarch64 and the negative "real indefinite" on x86-64), and this
 /// formatter is the one place a Luce program could ever observe the
-/// difference — comparisons answer false, `parse_float` refuses NaN,
-/// and `long(NaN)` traps.  Canonicalizing here makes every
+/// difference — comparisons answer false, `parse_f64` refuses NaN,
+/// and `i64(NaN)` traps.  Canonicalizing here makes every
 /// NaN-producing operation print identically on every host, so the
 /// backend needs no per-operation canonicalization at all.
 fn floatText(runtime: *Runtime, number: anytype) Error!Value {
@@ -315,19 +315,19 @@ fn floatText(runtime: *Runtime, number: anytype) Error!Value {
     return runtime.ownValue(Value.ofStr(rendered));
 }
 
-/// `parse_int(s) -> long?`.  "Not a number" is the same reason every
+/// `parse_i64(s) -> i64?`.  "Not a number" is the same reason every
 /// time and the function's name already implies it, so the answer is
 /// absence rather than a trap or an error (docs/FAILURE.md).
-pub fn parseInt(runtime: *Runtime, held: Value) Error!Value {
+pub fn parseI64(runtime: *Runtime, held: Value) Error!Value {
     if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
     const parsed = std.fmt.parseInt(i64, held.asStr(), 10) catch return Value.none;
     return Value.ofI64(parsed);
 }
 
-/// `parse_float(s) -> double?`.  Refuses what `str` would never produce
+/// `parse_f64(s) -> f64?`.  Refuses what `str` would never produce
 /// as a number: NaN and the infinities parse, and are answered absent
-/// here so a double that came from text is always finite.
-pub fn parseFloat(runtime: *Runtime, held: Value) Error!Value {
+/// here so an f64 that came from text is always finite.
+pub fn parseF64(runtime: *Runtime, held: Value) Error!Value {
     if (!held.hasValidStringRepresentation()) return runtime.fail(.not_owned);
     const parsed = std.fmt.parseFloat(f64, held.asStr()) catch return Value.none;
     if (std.math.isNan(parsed) or std.math.isInf(parsed)) return Value.none;

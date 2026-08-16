@@ -1,12 +1,12 @@
 # Interfaces
 
-This is the current interface contract. The owned existential representation
-and mutable class dispatch planned for the ARC language are separate work in
-[ROADMAP.md](ROADMAP.md).
+This is the current interface contract. Classes and value structures both
+conform today. A later owned-existential representation remains separate work
+in [ROADMAP.md](ROADMAP.md).
 
-An interface is a nominal set of method requirements. A struct opts in by
+An interface is a nominal set of method requirements. A struct or class opts in by
 listing the interface and must implement the complete contract. A matching
-struct that does not list the interface does not conform.
+type that does not list the interface does not conform.
 
 ```luce
 interface UIElement:
@@ -42,7 +42,7 @@ For each required method, the witness must agree on:
 - the number and types of returned values; and
 - the failure direction.
 
-A concrete struct may define additional methods. A static function cannot
+A concrete type may define additional methods. A static function cannot
 satisfy an instance requirement. Interface requirements do not declare
 default arguments.
 
@@ -73,17 +73,17 @@ func main():
     print(str(total(Range(width = 7))))
 ```
 
-## Read-only dispatch is a current limitation
+## Receiver mutation
 
-A writing struct method cannot satisfy an interface requirement today. The
-compiler infers whether a method writes `self`; conformance rejects a writer
-with `luce.sema.interface`.
+A writing value-struct method cannot satisfy an interface requirement today.
+The compiler infers whether a method writes `self`; conformance rejects a
+value writer with `luce.sema.interface` because the current bound witness owns
+a snapshot rather than an inout path back to the source value.
 
-This restriction is not the target design. It exists because the current
-interface representation binds value receivers into dispatch fields. The
-roadmap replaces that representation with one owned payload plus metadata and
-a witness table. Only after that change may a value existential mutate its
-boxed copy and a class existential mutate its shared object safely.
+A class witness may write `self` now. Its bound receiver retains the shared
+class identity, so dispatch mutates the same object every class alias sees.
+The roadmap's owned existential is still required before a value existential
+can mutate its own boxed copy cleanly.
 
 Mutation of a reference passed as an ordinary parameter is different. A
 read-only struct witness may still mutate a `list`, `map`, or other reference
@@ -93,10 +93,10 @@ struct receiver itself.
 ## Storage and heterogeneous collections
 
 Interface values may be local variables, return values, optional values,
-struct fields, and elements of lists, maps, and arrays. Each dispatch value
-owns its copied value receiver and retains the references that receiver
-carries, so an interface value may outlive the concrete binding that formed
-it.
+struct fields, and elements of lists, maps, and arrays. A struct witness owns
+its copied receiver and retains the references that receiver carries. A class
+witness retains its receiver identity. Either form may outlive the concrete
+binding that formed it.
 
 ```luce
 interface Named:
@@ -122,20 +122,20 @@ func main():
     print(values[1].name())
 ```
 
-The same collection may therefore contain different concrete structs. A
-struct may list more than one interface, and each conversion selects the
+The same collection may therefore contain different concrete structs and
+classes. A concrete type may list more than one interface, and each conversion selects the
 contract requested by the destination type.
 
 ## Runtime shape today
 
 The current implementation lowers an interface to a hidden value layout of
-bound function values, one per method. Each bound value owns the concrete
-struct receiver snapshot and retains every reference inside it. Copying and
-destroying the interface therefore preserve the receiver graph correctly.
+bound function values, one per method. Each bound value owns a concrete struct
+receiver snapshot or retains a concrete class identity. Copying and destroying
+the interface therefore preserve the receiver graph correctly.
 
 This representation scales receiver storage with method count and cannot give
-mutable dispatch the semantics wanted for classes.
-It is explicitly scheduled for replacement, not documented as the final ABI.
+a mutable value payload its own stable box. It is explicitly scheduled for
+replacement, not documented as the final ABI.
 
 ## Deliberately absent today
 
@@ -144,11 +144,12 @@ It is explicitly scheduled for replacement, not documented as the final ABI.
 - interface inheritance or composition syntax;
 - associated types;
 - runtime casting;
-- class-only interfaces; and
 - generic constraints.
 
 The executable positive specification is
 [`src/luce/specs/interfaces_spec.zig`](../src/luce/specs/interfaces_spec.zig).
+Class conformance and mutable class dispatch are exercised in
+[`src/luce/specs/classes_spec.zig`](../src/luce/specs/classes_spec.zig).
 Conformance and call-site refusals live in
 [`src/luce/specs/errors_spec.zig`](../src/luce/specs/errors_spec.zig). Any new
 observable interface rule belongs in those differential specifications before

@@ -963,7 +963,7 @@ test "'not' in front of a comparison is refused, naming both readings" {
 
 test "comparison does not chain, and the fix is written out" {
     // docs/LANGUAGE.md: `a < b < c` is one comparison in Python and a
-    // bool-versus-long type error here.  Refuse it in the parser, where
+    // bool-versus-i64 type error here. Refuse it in the parser, where
     // the operators are still in hand.
     try expectDiagnostics("func main():\n    let x = a < b < c\n", &.{
         .{ .code = "luce.parse.chain", .line = 2, .column = 19, .contains = "write 'a < b and b < c'" },
@@ -1501,7 +1501,7 @@ test "the mistakes a beginner actually makes name the Luce spelling" {
             .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "write 'func', not 'Func'" },
         },
         .{
-            .source = "STRUCT Point:\n    x: long\n",
+            .source = "STRUCT Point:\n    x: i64\n",
             .wanted = .{ .code = "luce.parse.top", .line = 1, .column = 1, .contains = "write 'struct'" },
         },
         // Tuples do not exist, and "expected ')' , found ','" does not
@@ -2204,7 +2204,7 @@ test "static composes with direct visibility, regions, and enums" {
     try testing.expectEqual(ast.Visibility.public, methods[1].visibility);
 }
 
-test "written self parameters are refused with the migration" {
+test "written self parameters are refused with one diagnostic" {
     const teaching = "self is implied; remove the parameter";
     try expectDiagnostics(
         \\func f(self):
@@ -2822,7 +2822,7 @@ test "a call is a postfix suffix, on the same footing as an index" {
     try testing.expectEqualStrings("chooser", first.value_call.callee.call.callee);
     try testing.expectEqual(@as(usize, 1), first.value_call.arguments.len);
 
-    // `actions["double"](21)` — a call suffix on an index.
+    // `actions["f64"](21)` — a call suffix on an index.
     const second = body[1].expression.value.call.arguments[0].value;
     try testing.expect(second.* == .value_call);
     try testing.expect(second.value_call.callee.* == .index);

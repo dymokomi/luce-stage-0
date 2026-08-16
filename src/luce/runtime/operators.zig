@@ -1,5 +1,5 @@
 //! Operators and scalar builtins: arithmetic, comparison, negation,
-//! the long/double conversions, and the pure math intrinsics.
+//! explicit numeric conversions, and the pure math intrinsics.
 //!
 //! Luce arithmetic is checked, and every check here is part of the
 //! language rather than a debug aid: integer overflow, division by
@@ -60,14 +60,13 @@ pub fn binary(runtime: *Runtime, op: vocabulary.BinaryOp, left: Value, right: Va
     }
 }
 
-/// Checked integer arithmetic, at whichever of the two widths the
-/// operands arrived at.
+/// Checked integer arithmetic at the operands' exact width.
 ///
 /// The checks are the language and not a debug aid: overflow, division
-/// by zero and `minInt // -1` trap with stable codes at **both**
-/// widths, so an `int` counter multiplied past 2^31 stops with a
-/// location exactly as a `long` past 2^63 does (docs/TYPES.md §4).
-/// One body, so the two can never come to differ.
+/// by zero and `minInt // -1` trap with stable codes at every width,
+/// so an `i32` counter multiplied past 2^31 stops with a
+/// location exactly as a `i64` past 2^63 does (docs/TYPES.md §4).
+/// One body keeps every width on the same rule.
 fn integer(runtime: *Runtime, op: vocabulary.BinaryOp, comptime T: type, left: T, right: T) Error!Value {
     const answer = switch (op) {
         .add => @addWithOverflow(left, right),
@@ -161,10 +160,8 @@ fn floating(op: vocabulary.BinaryOp, comptime T: type, left_float: T, right_floa
         .subtract => left_float - right_float,
         .multiply => left_float * right_float,
         .divide => left_float / right_float,
-        // `%` floors with the integer one, or promotion
-        // would introduce a discontinuity: `-7 % 3` answering
-        // `2` and `-7 % 3.0` answering `-1.0`, with an
-        // invisible widening choosing between them.  It
+        // `%` floors just like the integer operator: `-7 % 3`
+        // answers `2`, and `-7.0 % 3.0` does too. It
         // imports one known wart with it — floor-mod on
         // floats can return the divisor, `-1e-100 % 1.0`
         // being `1.0` exactly, because the true answer is a
@@ -182,7 +179,7 @@ fn floating(op: vocabulary.BinaryOp, comptime T: type, left_float: T, right_floa
     return boxFloating(T, computed);
 }
 
-/// The six comparisons on a number, at any of the four widths.  NaN
+/// The six comparisons on a number at any concrete width. NaN
 /// falls out of the operators themselves — it compares false with
 /// everything, `!=` included, which is what IEEE says.
 fn ordered(op: vocabulary.BinaryOp, left: anytype, right: @TypeOf(left)) bool {
@@ -378,8 +375,8 @@ test "comparison rejects mixed and malformed payloads without access faults" {
 /// **Not Zig's `@mod`.**  Zig's integer `@mod` floors and pairs with
 /// `@divFloor`, but its *float* `@mod` only forces a non-negative
 /// answer: `@mod(7.0, -3.0)` is `1.0` where flooring says `-2.0`.
-/// Using it would put the discontinuity promotion is meant to remove
-/// back one type over — `7 % -3` answering `-2` and `7 % -3.0`
+/// Using it would create a family-dependent discontinuity —
+/// `7 % -3` answering `-2` and `7.0 % -3.0`
 /// answering `1.0`.  So this is written out, and it is the one shape
 /// both engines call.
 ///
@@ -397,7 +394,7 @@ pub fn floorMod(comptime T: type, left: T, right: T) T {
     return remainder;
 }
 
-test "float % floors with //, and the identity holds" {
+test "floating % floors with //, and the identity holds" {
     const cases = [_][3]f64{
         // left, right, expected
         .{ 7.0, 3.0, 1.0 },
@@ -429,98 +426,6 @@ test "float % floors with //, and the identity holds" {
     try std.testing.expectEqual(std.math.inf(f64), floorMod(f64, -5.0, std.math.inf(f64)));
     try std.testing.expect(std.math.isNan(floorMod(f64, std.math.inf(f64), 3.0)));
     try std.testing.expect(std.math.isNan(floorMod(f64, 1.0, 0.0)));
-}
-
-/// Comparison across the long/double line, on the mathematical values
-/// rather than on a conversion (docs/NUMERICS.md §5).
-///
-/// The naive lowering — widen the long with `sitofp`, then compare —
-/// is wrong from exactly 2^53 upward, where an `long` no longer
-/// survives the trip: `9007199254740993 == 9007199254740992.0` is
-/// false mathematically and true under widening.  Approximation in
-/// `+` is expected; an `==` that answers true for two different
-/// numbers is a defect, and ordering has to agree with it or
-/// `a == b` and `not (a < b) and not (b < a)` part company.  Python's
-/// `float_richcompare` is the reference and reaches the same answers.
-///
-/// **The long is always the left operand.**  Stage 4 mirrors the
-/// operator when the double was written first, so there is one shape
-/// here and one to prove.
-pub fn compareI64F64(op: vocabulary.BinaryOp, left: i64, right: f64) bool {
-    // NaN is unordered with everything, itself included, so only `!=`
-    // is true of it — the same answer `compare` gives above.
-    if (std.math.isNan(right)) return op == .not_equal;
-
-    const order: std.math.Order = if (right >= 9223372036854775808.0)
-        // Past the top of the i64 range the double wins on magnitude
-        // alone; +inf arrives here too.  2^63 is exactly
-        // representable, which is what makes `>=` the right edge.
-        .lt
-    else if (right < -9223372036854775808.0)
-        .gt
-    else compared: {
-        // In range, so the integral part converts exactly and the two
-        // integers decide it; a tie is broken by the fraction, whose
-        // sign says which side of the whole number the double sits on.
-        const whole = @trunc(right);
-        const whole_as_int: i64 = @intFromFloat(whole);
-        if (left != whole_as_int) break :compared if (left < whole_as_int) .lt else .gt;
-        const fraction = right - whole;
-        if (fraction == 0.0) break :compared .eq;
-        break :compared if (fraction > 0.0) .lt else .gt;
-    };
-
-    return switch (op) {
-        .equal => order == .eq,
-        .not_equal => order != .eq,
-        .less => order == .lt,
-        .less_equal => order != .gt,
-        .greater => order == .gt,
-        .greater_equal => order != .lt,
-        // The analyzer emits this intrinsic for comparisons only.
-        .add,
-        .subtract,
-        .multiply,
-        .divide,
-        .floor_divide,
-        .modulo,
-        .bit_and,
-        .bit_or,
-        .bit_xor,
-        .shift_left,
-        .shift_right,
-        => unreachable,
-    };
-}
-
-test "mixed comparison is exact at 2^53, where widening stops being" {
-    const two53: i64 = 9007199254740992;
-    const as_float: f64 = 9007199254740992.0;
-
-    // The number that does not survive `sitofp`.
-    try std.testing.expect(!compareI64F64(.equal, two53 + 1, as_float));
-    try std.testing.expect(compareI64F64(.greater, two53 + 1, as_float));
-    try std.testing.expect(!compareI64F64(.less_equal, two53 + 1, as_float));
-    // And the one that does.
-    try std.testing.expect(compareI64F64(.equal, two53, as_float));
-    try std.testing.expect(compareI64F64(.less_equal, two53, as_float));
-
-    // Fractions on both sides of zero.
-    try std.testing.expect(compareI64F64(.less, 1, 1.5));
-    try std.testing.expect(compareI64F64(.greater, -1, -1.5));
-    try std.testing.expect(compareI64F64(.equal, 1, 1.0));
-
-    // The infinities and NaN.
-    try std.testing.expect(compareI64F64(.less, std.math.maxInt(i64), std.math.inf(f64)));
-    try std.testing.expect(compareI64F64(.greater, std.math.minInt(i64), -std.math.inf(f64)));
-    try std.testing.expect(compareI64F64(.not_equal, 0, std.math.nan(f64)));
-    try std.testing.expect(!compareI64F64(.equal, 0, std.math.nan(f64)));
-    try std.testing.expect(!compareI64F64(.less, 0, std.math.nan(f64)));
-    try std.testing.expect(!compareI64F64(.greater_equal, 0, std.math.nan(f64)));
-
-    // The i64 edges, where the bound itself is representable.
-    try std.testing.expect(compareI64F64(.equal, std.math.minInt(i64), -9223372036854775808.0));
-    try std.testing.expect(compareI64F64(.less, std.math.maxInt(i64), 9223372036854775808.0));
 }
 
 /// Ordering for sort: elements are numbers of any width, or Strings
@@ -594,12 +499,10 @@ pub fn logicalNot(operand: Value) Value {
 }
 
 /// Every numeric conversion, from the value's own tag to the tag `to`
-/// names — the whole of `byte(x)`, `short(x)`, `int(x)`, `long(x)`,
-/// `half(x)`, `float(x)`, `double(x)` and the widenings the language
-/// inserts for itself (docs/TYPES.md §3).  Seven types is up to
-/// forty-two ordered pairs; what is written below is four functions,
-/// because a conversion is a *family* question and only then a width
-/// one.
+/// names — the whole of `u8(x)`, `i16(x)`, `i32(x)`, `i64(x)`,
+/// `f16(x)`, `f32(x)`, and `f64(x)` (docs/TYPES.md §3). The same path handles
+/// the compiler's explicit integer-to-f64 step for true division. A conversion
+/// is a family question and only then a width question.
 ///
 /// The runtime speaks tags rather than the program's types, which is
 /// all it needs: the source is what the value is carrying and the
@@ -622,16 +525,16 @@ pub fn convert(runtime: *Runtime, operand: Value, to: value.Tag) Error!Value {
         if (to != .u32) return runtime.fail(.not_owned);
         return Value.ofU32(operand.asChar());
     }
-    // Each family is read at its widest member first, which is exact
-    // for every source: every integer width fits an `i64`, and `half`
-    // and `float` are both exactly representable in `f64`.  So the
+    // Each family is read through one exact common representation: every
+    // integer width fits in `i128`, and `f16`
+    // and `f32` are both exactly representable in `f64`.  So the
     // conversion that follows is the *only* rounding there is, and the
     // double-rounding a decimal → binary64 → binary32 path would have
     // is unreachable by construction (docs/TYPES.md §1's argument, one
     // stage down).
     if (integerTag(operand.tag)) {
         const whole = wideInteger(operand);
-        if (integerTag(to)) return narrowInteger(runtime, whole, to);
+        if (integerTag(to)) return integerToInteger(runtime, whole, to);
         return floatFromInteger(whole, to);
     }
     const held = wideFloat(operand);
@@ -639,8 +542,7 @@ pub fn convert(runtime: *Runtime, operand: Value, to: value.Tag) Error!Value {
     return narrowFloat(held, to);
 }
 
-/// Whether a tag names an integer.  `byte` is one of them and is
-/// unsigned; the other three are signed (docs/TYPES.md D4).
+/// Whether a tag names one of the eight integer types.
 fn integerTag(tag: value.Tag) bool {
     return switch (tag) {
         .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64 => true,
@@ -649,8 +551,7 @@ fn integerTag(tag: value.Tag) bool {
     };
 }
 
-/// An integer of any width, read at `i64` — exact for all four,
-/// with `byte` read as the magnitude its bits are (D4).
+/// An integer of any width, read at `i128` without losing signedness or range.
 fn wideInteger(operand: Value) i128 {
     return switch (operand.tag) {
         .u8 => operand.asU8(),
@@ -675,12 +576,10 @@ fn wideFloat(operand: Value) f64 {
     };
 }
 
-/// An integer landing on an integer: outside the destination's range
-/// it stops, because `int(3000000000)` is not three billion modulo
-/// anything and `byte(300)` is not 44.  A widening cannot fail and
-/// takes the same path, which is what keeps one statement of the
-/// bounds rather than one per direction.
-fn narrowInteger(runtime: *Runtime, held: i128, to: value.Tag) Error!Value {
+/// An integer converted to another integer stops outside the destination's
+/// range: `i32(3000000000)` is not three billion modulo anything and
+/// `u8(300)` is not 44. One checked path covers every source width.
+fn integerToInteger(runtime: *Runtime, held: i128, to: value.Tag) Error!Value {
     switch (to) {
         .u8 => {
             if (held < 0 or held > std.math.maxInt(u8)) return runtime.fail(.conversion_range);
@@ -729,7 +628,7 @@ fn narrowInteger(runtime: *Runtime, held: i128, to: value.Tag) Error!Value {
 /// An integer landing on a float: one `@floatFromInt` straight to the
 /// destination width, so there is exactly one rounding.  Never traps —
 /// every integer has a nearest float, `inf` included once the
-/// magnitude passes the top of a `half`.
+/// magnitude passes the top of a `f16`.
 fn floatFromInteger(held: i128, to: value.Tag) Value {
     return switch (to) {
         .f16 => Value.ofF16(@floatFromInt(held)),
@@ -741,7 +640,7 @@ fn floatFromInteger(held: i128, to: value.Tag) Value {
 
 /// A float landing on a narrower float: rounds to nearest, ties to
 /// even, and reaches `inf` rather than trapping — IEEE, with no
-/// second story about infinity bolted on.  `double` to `half` is one
+/// second story about infinity bolted on.  `f64` to `f16` is one
 /// `@floatCast` and therefore one rounding, not a detour through
 /// binary32 (docs/TYPES.md §7).
 fn narrowFloat(held: f64, to: value.Tag) Value {
@@ -753,26 +652,12 @@ fn narrowFloat(held: f64, to: value.Tag) Value {
     };
 }
 
-/// `long(x)` and its four siblings **round half away from zero** and
-/// trap outside the destination's range — NaN and infinities included
-/// (docs/NUMERICS.md §7).
-///
-/// Half away from zero, and not IEEE's half-to-even, for one reason
-/// that outranks the numerical arguments: `math.round` already
-/// existed, was already documented as rounding that way, and is
-/// already what `strings.format_float` uses.  A language with two
-/// roundings that disagree has a bug in it, and the one already
-/// ratified wins.
-///
-/// The range check is the same one in the same three places — here,
-/// the constant folder, and `codegen/lower.zig` — because a
-/// conversion that disagrees at the boundary is a different language.
-/// It runs **after** the rounding, on what rounding produced: NaN and
-/// the infinities survive `@round` unchanged so the one check still
-/// catches them, and a value rounding carried past the top of the
-/// range is refused rather than wrapped.
+/// A floating value landing on an integer truncates toward zero, then traps if
+/// the truncated result is outside the destination range. NaN and infinities
+/// trap as well. The constant folder and LLVM lowering implement this same
+/// order (docs/NUMERICS.md §7).
 fn floatToInteger(runtime: *Runtime, held: f64, to: value.Tag) Error!Value {
-    const rounded = @trunc(held);
+    const truncated = @trunc(held);
     // The bottom of the range and *one past* the top, tested with
     // `>=`: every one of those eight bounds is a small integer or a
     // power of two and therefore exact in binary64, while `maxInt`
@@ -788,18 +673,18 @@ fn floatToInteger(runtime: *Runtime, held: f64, to: value.Tag) Error!Value {
         .i64 => .{ .lowest = -9223372036854775808.0, .past_top = 9223372036854775808.0 },
         else => unreachable,
     };
-    if (std.math.isNan(rounded) or rounded < bounds.lowest or rounded >= bounds.past_top) {
+    if (std.math.isNan(truncated) or truncated < bounds.lowest or truncated >= bounds.past_top) {
         return runtime.fail(.conversion_range);
     }
     return switch (to) {
-        .u8 => Value.ofU8(@intFromFloat(rounded)),
-        .u16 => Value.ofU16(@intFromFloat(rounded)),
-        .u32 => Value.ofU32(@intFromFloat(rounded)),
-        .u64 => Value.ofU64(@intFromFloat(rounded)),
-        .i8 => Value.ofI8(@intFromFloat(rounded)),
-        .i16 => Value.ofI16(@intFromFloat(rounded)),
-        .i32 => Value.ofI32(@intFromFloat(rounded)),
-        .i64 => Value.ofI64(@intFromFloat(rounded)),
+        .u8 => Value.ofU8(@intFromFloat(truncated)),
+        .u16 => Value.ofU16(@intFromFloat(truncated)),
+        .u32 => Value.ofU32(@intFromFloat(truncated)),
+        .u64 => Value.ofU64(@intFromFloat(truncated)),
+        .i8 => Value.ofI8(@intFromFloat(truncated)),
+        .i16 => Value.ofI16(@intFromFloat(truncated)),
+        .i32 => Value.ofI32(@intFromFloat(truncated)),
+        .i64 => Value.ofI64(@intFromFloat(truncated)),
         else => unreachable,
     };
 }
@@ -819,7 +704,7 @@ pub fn roundHalfAway(comptime T: type, held: T) T {
     return @round(held);
 }
 
-test "long(x) rounds half away from zero, on both sides of it" {
+test "roundHalfAway rounds ties away from zero on both sides" {
     try std.testing.expectEqual(@as(f64, 3.0), roundHalfAway(f64, 2.5));
     try std.testing.expectEqual(@as(f64, -3.0), roundHalfAway(f64, -2.5));
     try std.testing.expectEqual(@as(f64, 1.0), roundHalfAway(f64, 0.5));
@@ -932,7 +817,7 @@ fn pick(wants_minimum: bool, left: anytype, right: @TypeOf(left)) @TypeOf(left) 
     return if (left > right) left else right;
 }
 
-test "float extrema choose the canonical signed zero" {
+test "floating extrema choose the canonical signed zero" {
     const zeros = [_]f64{ 0.0, -0.0 };
     for (zeros) |left| {
         for (zeros) |right| {
@@ -945,7 +830,7 @@ test "float extrema choose the canonical signed zero" {
     }
 }
 
-test "float extrema keep the number when one operand is NaN" {
+test "floating extrema keep the number when one operand is NaN" {
     const nan = std.math.nan(f64);
     try std.testing.expectEqual(@as(f64, 1.5), extremum(true, Value.ofF64(nan), Value.ofF64(1.5)).asF64());
     try std.testing.expectEqual(@as(f64, 1.5), extremum(false, Value.ofF64(1.5), Value.ofF64(nan)).asF64());
@@ -974,7 +859,7 @@ pub fn clamp(held: Value, low: Value, high: Value) Value {
 }
 
 /// The float-only builtins, each answering **its operand's own
-/// width**: `sqrt` of a `float` is a `float`, because a `double`
+/// width**: `sqrt` of a `f32` is a `f32`, because a `f64`
 /// answer would be a narrowing waiting to happen at the next store
 /// (docs/TYPES.md §9).
 pub fn squareRoot(operand: Value) Value {
@@ -989,7 +874,7 @@ pub fn ceil(operand: Value) Value {
     return atOwnWidth(.ceil, operand);
 }
 
-/// `trunc(x)` — toward zero.  The fourth rounding, added when `long(x)`
+/// `trunc(x)` — toward zero.  The fourth rounding, added when `i64(x)`
 /// stopped being the way to spell it (docs/NUMERICS.md §7).
 pub fn truncate(operand: Value) Value {
     return atOwnWidth(.truncate, operand);

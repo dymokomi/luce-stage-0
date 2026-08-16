@@ -2,7 +2,7 @@
 //!
 //! The decisions this file is the executable form of: the C rule for
 //! member values (D1), the backing width (D2), namespaced members (D3),
-//! no implicit conversion in either direction (D4), `string(m)` as the
+//! no implicit conversion in either direction (D4), `str(m)` as the
 //! member's *name* (D5), equality only (D6), the methods and namespace
 //! functions a struct has (D7), members that fold (D8), containers at
 //! the backing width (D9), and dispatch that a member added later
@@ -159,7 +159,7 @@ test "equality: members compare with == and !=, at any width" {
 // Conversions, both directions (D4, R2)
 // ---------------------------------------------------------------------------
 
-test "int(m): the member's number, at every constructor's width" {
+test "explicit numeric conversions read an enum member at every width" {
     try agree.ok(
         \\enum Method:
         \\    stored = 0
@@ -178,7 +178,7 @@ test "int(m): the member's number, at every constructor's width" {
     );
 }
 
-test "byte(m): a member past the destination traps like any narrowing" {
+test "u8(m): a member past the destination traps like any narrowing" {
     try agree.trap(
         \\enum Big(i64):
         \\    small = 1
@@ -264,10 +264,10 @@ test "Method(n): the answer narrows and is then a member like any other" {
 }
 
 // ---------------------------------------------------------------------------
-// string(m), and the f-string hole that is one (D5)
+// str(m), and the f-string hole that is one (D5)
 // ---------------------------------------------------------------------------
 
-test "string(m): the member's name, from a variable and from a constant" {
+test "str(m): the member's name, from a variable and from a constant" {
     try agree.prints(
         \\enum Method(u8):
         \\    stored = 0
@@ -301,7 +301,7 @@ test "str(m): a one-member enum needs no comparison at all" {
     );
 }
 
-test "string(m): the name is a borrow, and a binding that keeps it copies" {
+test "str(m): the name is a borrow, and a binding that keeps it copies" {
     try agree.ok(
         \\enum Method:
         \\    stored
@@ -605,7 +605,7 @@ test "containers: a list, a map, an array and a struct field all hold members" {
 //
 // An enum is an integer at a chosen width whose entire comparison
 // surface is equality, which is exactly and only what a key needs.  It
-// reaches `libluce_rt` as the integer a `long` key would be
+// reaches `libluce_rt` as the integer a `i64` key would be
 // (`mir.mapKeyStorage`) and comes back narrowed to its own width, so the
 // runtime hashes and compares the two payloads it always did — and these
 // rows are what prove the round trip on *both* engines, where a widening
@@ -648,9 +648,9 @@ test "a map keys by an enum: put, get, has, remove, and absence" {
 
 test "a key comes back out as the enum it went in as" {
     // The honest half of the feature: a key that went in a `Key` and
-    // came back a `long` would be the representation leaking.  The loop
+    // came back a `i64` would be the representation leaking.  The loop
     // name and every element of `keys()` land on `Key`-typed places and
-    // are dispatched on with `match`, neither of which a `long` compiles
+    // are dispatched on with `match`, neither of which a `i64` compiles
     // into — and the order is the insertion order `for` promises.
     try agree.prints(
         \\enum Key:
@@ -699,7 +699,7 @@ test "a key comes back out as the enum it went in as" {
 }
 
 test "a key round trip survives every backing width, negative members included" {
-    // The widening is a `zext` for `byte` and a `sext` for the other
+    // The widening is a `zext` for `u8` and a `sext` for the other
     // three (docs/TYPES.md D4), and the narrowing back is a truncation:
     // a member at -2 that came back as 4294967294 would fail here.
     try agree.ok(
@@ -769,7 +769,7 @@ test "a map keyed by one enum holds another" {
 }
 
 test "a const keymap lives in the program root, keyed by the enum" {
-    // The keymap docs/TERMUI.md D10 had to write with `int(...)` at
+    // The keymap docs/TERMUI.md D10 had to write with `i32(...)` at
     // every row and every lookup, written the way it reads.
     try agree.prints(
         \\enum Key:

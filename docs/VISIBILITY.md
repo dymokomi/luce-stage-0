@@ -66,9 +66,9 @@ On a struct field, the marker goes on the field's own line:
 
 ```text
 struct Session:
-    name: string
-    private id: long
-    private token: long = 0
+    name: str
+    private id: i64
+    private token: i64 = 0
 ```
 
 ### Regions inside struct bodies
@@ -120,13 +120,13 @@ mentions it is refused at the declaration:
 
 ```luce refused
 private struct Inner:
-    n: long
+    n: i64
 
 func read() -> Inner:
     return Inner(n = 1)
 
 func main():
-    print(string(read().n))
+    print(str(read().n))
 ```
 
 ```text
@@ -164,11 +164,11 @@ follows three rules:
 ```text
 # session.luc
 struct Session:
-    name: string                       # public by default
-    private token: long = 0            # marked, defaulted: outsiders never say it
-    private id: long                   # marked, required: outsiders cannot build one
+    name: str                       # public by default
+    private token: i64 = 0            # marked, defaulted: outsiders never say it
+    private id: i64                   # marked, required: outsiders cannot build one
 
-func open(name: string) -> Session:
+func open(name: str) -> Session:
     return Session(name = name, id = next_id())
 
 # main.luc
@@ -203,8 +203,8 @@ privacy composing with the construction rule, not a new mechanism:
 # handle.luc
 struct Handle:
     private:
-        slot: long                 # no default: not constructible outside
-        generation: long
+        slot: i64                 # no default: not constructible outside
+        generation: i64
 
 func fresh() -> Handle:
     return Handle(slot = next_slot(), generation = 1)
@@ -214,7 +214,7 @@ func alive(h: Handle) -> bool:
 ```
 
 An importer can hold a `Handle`, pass it back to `handle.alive`, store it
-in its own structs, and put it in a `list(handle.Handle)` — and cannot
+in its own structs, and put it in a `list[handle.Handle]` — and cannot
 read `slot`, construct one, or write a field. Methods mean across the
 boundary exactly what they mean inside it, because a method's own body
 runs in its declaring file, where the fields are visible.
@@ -251,15 +251,15 @@ inside the declaring file and what crosses the boundary is the value:
 
 ```text
 # geo.luc
-private const seed: long = 41      # geo's own business
-const answer: long = seed + 1      # public by default; folds to 42 in geo
+private const seed: i64 = 41      # geo's own business
+const answer: i64 = seed + 1      # public by default; folds to 42 in geo
 
 # main.luc
 import geo
 
 func main():
-    print(string(geo.answer))      # 42 — the value crossed, not the name
-    print(string(geo.seed))        # seed is private to geo
+    print(str(geo.answer))      # 42 — the value crossed, not the name
+    print(str(geo.seed))        # seed is private to geo
 ```
 
 The same clause serves parameter defaults: a public function whose default
@@ -275,7 +275,7 @@ Independent of visibility but decided beside it: an identifier starts with
 a letter. A leading underscore is refused at the lexer with
 `luce.lex.name` (`a name starts with a letter: _total is not a name`),
 everywhere and for every use. The lone `_` is the array-shape wildcard
-(`array(long, _)`) and declares nothing; using it as a name — `let _ =
+(`array[i64, _]`) and declares nothing; using it as a name — `let _ =
 f()`, `func _()` — is refused with a sentence teaching the one place `_` is
 legal. Interior and trailing underscores are the house style (`word_end`,
 `fold_case`) and are untouched.
@@ -311,7 +311,7 @@ existing `luce.parse.*` codes.
 | `private:` at file scope | `luce.parse.*` | `a visibility region belongs inside a struct; at file scope mark each declaration` |
 | a per-declaration marker inside a matching region | `luce.parse.*` | `state is inside a private region, which already says it` |
 | `let _total = 1`, or any `_`-leading word | `luce.lex.name` | `a name starts with a letter: _total is not a name` |
-| `let _ = f()` | `luce.parse.*` | `_ is the array-shape wildcard, not a name (array(long, _)); a binding needs a name` |
+| `let _ = f()` | `luce.parse.*` | `_ is the array-shape wildcard, not a name (array[i64, _]); a binding needs a name` |
 
 Because privacy is always an explicit act, every `luce.sema.private`
 traces to a `private` marker someone wrote — the refusal can cite an

@@ -275,8 +275,8 @@ pub fn remove(runtime: *Runtime, target: Value, which: Value) Error!void {
             try requireMapKey(runtime, which);
             if (map.find(&which)) |at| {
                 const removed = map.removeAt(at);
-                // A key is an integer, a str, or an enum, storage only; a value can
-                // hold a reference, so it is released, not just dropped.
+                // A key is an integer, a str, or an enum and owns no heap
+                // state; a value can hold a reference, so it is released.
                 runtime.dropStorage(removed.key);
                 runtime.freeValue(removed.value);
             }
@@ -332,7 +332,7 @@ pub fn dimSize(runtime: *Runtime, target: Value, axis: i64) Error!Value {
 ///
 /// Stable, and O(n log n): `std.sort.block` is an in-place merge sort
 /// (Wikisort), so it needs no scratch allocation and cannot fail.
-/// Stability is not decoration — sort admits double elements, and
+/// Stability is not decoration — sort admits f64 elements, and
 /// `-0.0` and `0.0` compare equal while printing differently, so an
 /// unstable order would be observable in a program's output.  It
 /// replaces an insertion sort that was stable too, and quadratic.
@@ -365,7 +365,7 @@ pub fn reverse(runtime: *Runtime, target: Value) Error!void {
     }
 }
 
-/// `xs.find(v) -> long?` — the index of the first equal element, or
+/// `xs.find(v) -> i64?` — the index of the first equal element, or
 /// absence: the same rule `m.get` follows, so no caller ever compares
 /// against a sentinel.
 pub fn find(runtime: *Runtime, target: Value, wanted: Value) Error!Value {
@@ -442,7 +442,7 @@ pub fn clear(runtime: *Runtime, target: Value) Error!void {
 /// `zero` is the key type's zero, here for the reason `newList` takes
 /// one: it names the *kind* the elements are stored at (`emptyList`).
 ///
-/// **That is also what gives an enum-keyed map its `list(Key)`.**  A key
+/// **That is also what gives an enum-keyed map its `list[Key]`.**  A key
 /// is stored at its exact backing width (docs/ENUMS.md), and the zero of
 /// an enum key names the corresponding packed cell kind. This function
 /// therefore does not need to know that enums exist.
@@ -466,7 +466,7 @@ pub fn mapKeys(runtime: *Runtime, target: Value, zero: Value) Error!Value {
 /// program's element type says — the zero's tag *is* that type
 /// (`Object.ElementKind.of`).
 ///
-/// **A `list(T)` is packed whoever built it** (docs/BYTES.md R1).  A
+/// **A `list[T]` is packed whoever built it** (docs/BYTES.md R1).  A
 /// `.value` cell would hold an i64 or a str equally well and hand
 /// back exactly what was put in it, so a boxed run is never *wrong*;
 /// what it is is a different storage for the same type depending on
@@ -474,7 +474,7 @@ pub fn mapKeys(runtime: *Runtime, target: Value, zero: Value) Error!Value {
 /// inline (docs/CODEGEN.md), and it can only do that if the kind is a
 /// fact of the *type* rather than of the builder — so every
 /// list-producing operation here takes the element zero and packs
-/// exactly as `new list(T)` does, and the ones that can only ever
+/// exactly as `new list[T]` does, and the ones that can only ever
 /// produce a `list[str]` say `.value` in full below, which is what
 /// a str's zero would have said.
 fn emptyList(zero: Value) heap.Object.Elements {

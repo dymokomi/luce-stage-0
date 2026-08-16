@@ -1,106 +1,183 @@
-# The pipeline — what each stage does, and how complete it is
+# The compiler pipeline
 
-`src/luce/compile.zig` is the driver: it loads the root's module graph,
-walks each module through the source stages, then carries the resolved
-program through every later stage in order to verified MIR. Each stage
-is named for the responsibility it owns. The sequence lives in the
-driver and the module root instead of being encoded in filenames:
+`src/luce/compile.zig` is the driver. It loads the root module graph, sends
+each source file through the front end, joins the resolved program, lowers it
+to verified MIR, optimizes it, and hands that program to code generation or
+the test-only interpreter.
 
 ```text
-src/luce/
-  luce.zig        the module root: one exported name per stage
-  compile.zig     THE DRIVER — the stage sequence, in order
-  source/      load
-  lex/         lex
-  parse/       parse
-  semantics/   resolve, type-check, record the typed tree
-  hir/         lower the recorded tree — the one emission
-  mir/         build MIR — and its verifier, printer, module format
-  optimize/    optimize MIR
-  codegen/        lower MIR to machine code
-  compile/        the driver's implementation siblings
-  runtime/        libluce_rt — the semantics both engines call
-  interpreter/    the differential oracle — ships in nothing
-  support/        diagnostics, types — cross-cutting, not a stage
-  std/            the Luce standard library, in Luce
-  specs/          the executable specification — its own module
+source -> lex -> parse -> semantics -> HIR -> MIR -> optimize -> codegen
+                                                   \-> interpreter oracle
 ```
 
-The module root exports those same responsibility names (`luce.mir`,
-`luce.codegen`). A stage that needs several files has a directory and a
-same-named barrel; a small stage may remain one file.
+The folder names state responsibilities rather than historical step numbers.
+Each multi-file stage has a same-named barrel file; that barrel is the stage's
+public surface.
 
-## Status
+## Stage map
 
-| # | Stage | Folder | Input | Output | Status |
-|---|-------|--------|-------|--------|--------|
-| 1 | Loading | `source/` | a module name, plus the root's bytes | a `Sources` registry: one `FileId` per file, with its path, prepared text, and line index | **Locked.** `load.zig` is the one place that answers "what are the bytes of module X". The two namespaces are disjoint rather than ordered: `import std.NAME` is the embedded standard library and `import NAME` is the host's `Loader` (`src/apps/files.zig`), so no name is reserved but `std` and no file can be shadowed or hidden. Both resolve through the same call and land in the same registry, and every failure — missing, unreadable, not text, too large, wrong encoding, self-import, a module the library does not have (`luce.import.standard`), `import std` itself (`luce.import.reserved`), and `import std.math` colliding with a sibling `math.luc` over the one binding they share (`luce.import.collision`) — is a `luce.source.*` / `luce.import.*` diagnostic naming the file *and the line and column inside it*. Every byte passes `encoding.prepare`, so later stages may assume valid UTF-8, no BOM, LF endings, no NUL, and ≤ 64 MiB; a UTF-16 or UTF-32 byte-order mark is refused by name rather than as generic mojibake. A `Span` indexes the *prepared* text and the registry turns it into `path:line:column` (binary search over the line index, ~7 ns, shared with the per-instruction debug origins) or into the text of the line, which is what puts a caret under a diagnostic. The compiler still never opens a file itself — that is the host's, on purpose, and the host carries the two obligations it alone can meet: an import matches the real directory entry (so `import geo` never quietly opens `Geo.luc` on a case-insensitive filesystem) and must be a regular file (a fifo would register as an empty module — and block the compiler in `open`). The root is deliberately permissive: `-`, a pipe, or a `<(…)` process substitution all read. **`Span` still carries no `FileId`, and that is the design:** the file is known where a diagnostic is made, and what leaves the compiler is `diagnostics.Rendered` — path, line, column, end line, end column, source line, code, message — the shape Python gives `SyntaxError`, self-contained enough to log, serialise, or hand to an editor. `prepare` and the loader are property-fuzzed. Decisions taken *not* to act are recorded in the headers: BOM-less UTF-16 (guessing renames a real problem), and a warning when a std name shadows a neighbouring file (built, measured, two false positives out of two firings in this repository — and then made moot: with `std.` namespaced there is no shadowing left to warn about). |
-| 2 | Lexing | `lex/` | stage 1's prepared text | `[]Token`, layout resolved | **Locked.** Its input is stage 1's prepared text as a *precondition* — valid UTF-8, LF only, no NUL, no BOM — documented and asserted in Debug, so encoding is decided in one layer and this one has no CRLF path, no `luce.lex.utf8`, and nothing to disagree about. Indentation becomes `indent`/`dedent`/`newline`, and the four-space step is **enforced** rather than merely canonical (a block opens exactly four columns deeper; tabs are rejected outright and recovered as four-column stops; nesting is bounded by `max_indent_depth`, CPython's `MAXINDENT` for CPython's reason). A source file must also read the way it runs: bidirectional controls are refused everywhere including strings and comments (`luce.lex.bidi`, CVE-2021-42574), raw control bytes are refused inside literal text, and a Unicode look-alike is named with its `U+XXXX` and the ASCII to write instead. Never fails hard: bad input yields `luce.lex.*` diagnostics plus the closest reasonable stream, including a recovery token where a value was clearly meant, and reporting is bounded twice — a run of one stray character collapses into a single counted message, then a hard cap (`luce.lex.limit`) — so untrusted bytes cannot flood memory. Proven by its focused tests plus two property-fuzz targets — random prepared bytes, and random *Luce fragments*, which reach the states a scanner only gets into after several correct decisions in a row — whose strongest invariant is that **when nothing is reported, no byte was silently dropped**; 2M generated inputs clean, and a deliberately mutated lexer is caught by that invariant within a second. ~490 MiB/s on a dense corpus (interleaved same-slot A/B; 2.4x what it was, because the keyword table became a comptime `StaticStringMap` instead of twenty-two `memcmp`s per identifier — the new per-byte text checks cost 6% of that). What it does *not* accept is a language decision, not a gap, and each is diagnosed by name: octal literals, leading zeros on a decimal integer (`0755` is not octal here, and must not look as though it might be), `.5` without its leading digit, escapes beyond `\n \t \\ \"`, non-ASCII identifiers, `//` and `/* */` comments, character literals. The escape set is the one thing this stage cannot change alone — the lexer validates an escape, stage 3 decodes it. |
-| 3 | Parsing | `parse/` | `[]Token` | untyped `ast.Program` | **Complete for the grammar**, with one wart: it desugars f-strings into `string(x) + …` and `elif` chains into nested `if`s while it still has only syntax. That belongs in stage 5. Recovery is per line *and* per block — a header that fails takes its orphaned body with it, so five unrelated mistakes yield five diagnostics rather than one plus four cascades — and where the intent is unmistakable it reads on as if the reader had written it (`if x = 1:` becomes the comparison), so the block below is still checked. Messages name the fix, not the parser's predicament: `missing ',' before 'y'` rather than "expected ')'", `unclosed '['` at the opener whenever a list runs out of input, `write 'elif'`, `a call needs its parentheses`, `this 'while' block is empty`, and the Luce spelling for a word that declares in some other language (`def`, `Func`). `func(T, ...) -> R` is parsed in type position, and `(a, b) -> expression` is recognized as a lambda by looking one token past the matching `)`; no new token or keyword was needed. Two shapes are refused on purpose because Python and C read them differently and both readings parse: `not` in front of a comparison (`luce.parse.precedence`) and a chained comparison (`luce.parse.chain`) — see docs/LANGUAGE.md. Stage 2's recovery tokens are treated as recovery tokens, so an unterminated string is one diagnostic, not two. Every recursion — statements, conditionals, expressions, prefix chains, type arguments — is depth-bounded; reporting is capped like stage 2's. Fuzzed both ways: random bytes through stage 1's gate, and *nearly valid* programs assembled from real fragments, which is what finds recovery bugs. ~100 MB/s end to end. |
-| 4 | Name resolution | `semantics/` | `ast.Program` per module, options | `Analyzed`: struct layouts, enum tables, heap-type shapes, interned function signatures, the scalar constant pool, the container-constant pool, the entry, and one function's decided operations per declaration | **Complete, and fused on purpose.** Stages 4, 5 and 6 are mutually recursive — resolving `xs.append(v)` needs the receiver's type — so they are one subsystem, not three folders. Their separate rows explain separate responsibilities; the `semantics/` boundary owns their necessary recursion. A name that resolves to nothing names the closest thing in scope (`unknown name totl; did you mean total?`), the way rustc's resolver does, at every site: locals, functions, struct fields, methods, and types. A binding whose initializer failed is remembered rather than dropped, so one mistake costs one message instead of an "unknown name" per later use. This walk decides *what* the program does and records each decision the moment it is reached, on the typed tree row 7 consumes; nothing is emitted here, and how MIR is made is not here (see rows 7 and 8). **Twenty-three files, and the split between them is an API boundary rather than a page count** (docs/CODING_GUIDE.md): `declarations.zig` collects (layouts, enum tables, signatures, folded constants, container constructions, the entry) and drives; `builder.zig` is the checked walk of a body; `context.zig` is the vocabulary both speak; `constants.zig` is the compile-time evaluator every constant, enum value and default folds through — it answers with a *value* and never emits, which is what makes it a file; `builtins.zig` is what the language spells for itself, read by the walk and by `tools/grammar.zig` and `www/luce/src/coverage.zig`, which is why a copy of it was never acceptable; `effects.zig` answers "could running this subtree release something a container is holding", asked before anything is typed; `helpers.zig` holds the bounded predicates both passes share. Function declarations intern signatures here; a lambda takes one from its landing place, is checked against capture, and becomes a synthesized top-level function in the same lowering walk. Plain struct and enum members receive implied `self`; `static func` members do not. A fixed-point walk infers whether each method writes its receiver, including forward and transitive `self.method()` calls while leaving object-content mutation through a reference as a read. **Both passes are families of files over one type**, each cut where its concerns had names of their own rather than where a page ended. Pass one keeps its spine in `declarations.zig` — the `Analyzer` and its tables, the report cap, the order the collectors run in, the drive of pass two, and the accessors that read one table and nothing more (`fail`, `typeName`, `heapOf`, `signatureOf`, `enumType`) — and each concern beside it holds free functions over `*Analyzer`: `naming.zig` (what a declaration is called, where it was written, and who may see it — qualification, the import lookup, the visibility rule and the transitive "does this type mention a private one"), `resolve.zig` (a written type name to a `Type`, the builtin arms, the written function type, the did-you-mean, and the interning that keeps one row per distinct heap shape and signature), `shapes.zig` (what a type carries and how wide it is, and the one Tarjan walk over the combined struct/union containment graph that marks every cycle and sums every shape, with the two reports it feeds), `layouts.zig` (the declared enum, union and struct tables: names first, contents after, in the order the language's own rules impose), `signatures.zig` (the function table — one collector for every spelling, the lambda and the standard specialization the compiler adds to it, the entry, and the synthesized layout a return shape rides in), `defaults.zig` (the folded defaults of a parameter, a struct field and a union payload field: eager at the declaration, lazy and cycle-checked underneath), `receiver.zig` (the fixed-point walk above). The checked walk is the other: the seam took its emission away and the 12,532 lines left were still one file, so `builder.zig` keeps the spine — `FunctionBuilder` itself, its scopes and locals, name resolution, the landing rules, the operand batch and the expression dispatch — and each concern that can be named on its own is a file beside it holding free functions over `*FunctionBuilder`: `flow.zig` (narrowing and root provenance: save, restore, join), `ledger.zig` (the statement-temporary ledger), `recorder.zig` (the typed tree's recording API, and the one file that builds a node), `refusals.zig` (the unknown name refusal), `statements.zig` (the statement walk, and pass one's entry to it), `assign.zig` (assignment and the three shapes of place), `expressions.zig` (the expression forms, one at a time), `calls.zig` (which callable a call names and which slot each argument fills), `construct.zig` (construction, conversion and the free builtins). A file boundary in Zig is a privacy boundary, so the price is stated where it is paid: `pub` inside that family means *visible to the walker's own files*, and the stage's outside surface is unchanged — pass one makes a `FunctionBuilder`, declares its parameters, calls `lowerBlock` and takes `recorded_body`. |
-| 5 | Type checking | `semantics/` | ″ | ″ | ″ — seven numeric types on two ladders, four of them arithmetic, with the whole of the implicit conversion stated once in `types.Type.widensTo`: each rung reaches every rung above it, and across the ladders the answer is always `double` (docs/TYPES.md §2, docs/NUMERICS.md §6). **Narrowing is implicit in no direction and no context** — not at a store, an argument or a return — and a refused one names the constructor that would do it. Immutable `let`, no shadowing, definite initialization. **A literal has no type until it lands on one** (D3): it is read from its text at the width of the place it reaches, so no decimal ever goes through binary64 on its way to a binary32 and `double(0.1)` is binary64's 0.1 rather than binary32's widened. The landing travels through an annotation, an argument, a return, a struct field, a container element, a subscript, a conversion constructor and the width-polymorphic builtins, through a minus, and into a bare function name or lambda whose place supplies an interned signature. Function values otherwise have exact signature identity, and calls through one enforce its arity and types. `-9223372036854775808` folds its sign before its range so `long`'s minimum is writable, `-2147483648` does the same for `int`'s, and `1e400` is refused rather than quietly becoming infinity — as is `1e300` on a `float` place, which names `double` as the width that would hold it. `ord("(")` folds to its codepoint in expressions and in constants, which is why the language needs no character-literal syntax. |
-| 6 | Semantic validation | `semantics/` | ″ | ″ | ″ — `return` on every path, struct cycles refused, the host gate, the no-capture line for lambdas, transitive privacy through nested function signatures, and the boundary checks `spawn` adds: values and permitted container graphs cross by recursive copy into the other runtime, while `file`, `task`, function values, interfaces carrying dispatch functions, and anything containing them are refused in both directions (docs/MEMORY.md, docs/THREADS.md). (`allow_host` is the only gate there is.) **This is the last word on the source memory model**: the MIR verifier does not re-run source meaning, so `let` immutability, the worker-boundary rules, `fill` on an array of objects, and the host gate are enforced here and nowhere else. The verifier does defend the serialized instruction protocol as well: no-result registers, retain/release operands, worker-boundary shapes, and the local `producer; errored; [park]; branch` form for fallible outcomes must be valid before either engine receives a `.lc`. Bounded against hostile-but-parseable input: reporting is capped (`luce.sema.limit`), the expression walk has its own depth bound (`luce.sema.nesting` — stage 3 bounds recursive *descent*, which a flat `1 + 1 + ...` chain or a long f-string never exercises), and struct layouts are bounded by how many values they flatten to. Struct-cycle detection and "does this carry an object" are linear graph passes; resource reachability is a separate iterative visited walk through both struct and heap-shape graphs, because a container can make that graph cyclic. |
-| 7 | High-level lowering | `hir.zig` + `hir/` | `nodes.Body` — the typed tree stage 4 records | instructions on stage 6's tape | **Built: the check/lower seam, and the one emission.** `nodes.zig` is the typed tree's vocabulary — expressions with resolved callees and operand batches, statements that keep the written sugar (`compound_assign`, `for_in`, `match`, `try`/`catch`) as structured nodes, a per-body locals table, parks, store kinds, and the recorded batch rewrites — and `lower.zig` consumes it: a mechanical, diagnostic-free pass whose error set is `OutOfMemory` alone, driven per clean body by `semantics/declarations.zig` because only the analyzer holds the settled declaration tables it reads. Everything else it re-derives from the tree and the declaration facts: the prologue and the outer parameter releases, loop machinery, fallible branches and their failing sides, retain-or-copy stores, zero fills, member-name chains. The seam landed family by family under a Debug dual-emission gate that held this pass byte-identical to the fused walk's emissions over the whole suite and a 1637-program corpus of recorded MIR; the flip then deleted the fused emissions, and both the gate and the corpus went with the scaffolding — what proves this pass now is the suite, where every spec program still runs on both engines and is compared on prints, traps, traces and leaks. The barrel's header records the six couplings the seam dissolved. The spill guess is gone: `splitsBlocks` was an AST scan of a basic-block property, made before anything had a type and over-matching on purpose, and it is now `nodes.splitsBlocks`, an exact computed property of the typed tree that lower reads to decide and make its own spill slots — 715 spills over the 253-program corpus became 63, with every benchmark inside noise.  One deliberate residue remains: stage 3 still desugars f-strings and `elif`, so those arrive pre-expanded. The one rule the stage may not break is written at the top of the file: **whole-array operations survive as single nodes**, because a scalar loop is information no later pass recovers. |
-| 8 | Mid-level lowering | `mir/` | `Lowered` — stage 4's hand-over value | `mir.Program` — instruction pool + basic blocks | **Complete.** `build.zig` owns the emitter and the assembly: register numbering, block bookkeeping, the local table, the retain/release instruction pairs, the scalar and container constant pools, the signature table, `const_function`, `const_container`, `call_indirect`, and `call_inout`, the shape every structured construct takes in basic blocks (`if`, `while`, counted and iterating `for`, short-circuit `and`/`or`, `match`'s compare-and-branch tree, nested-place write-back), sealing every block with a terminator, resolving each instruction's recorded source *offset* into a line and a column, and building the `Program`. `call_inout` is the one writing-method edge: it carries an explicit receiver local beside the caller-written arguments, and the callee's local zero is marked `inout` so both engines alias the caller's slot and owner identity. The serialized module is format **47** and the published host ABI **19**; later host services and instruction changes moved both forward under the append-only discipline, and a stale module recompiles from source. `defs.zig` is the instruction set, `verify.zig` the invariants (including one iterative check for direct struct-layout cycles and a second combined check for anonymous heap-type/signature cycles — unreachable from source, but a hand-written or fuzzed `.lcm` reaches `decode` and must neither hang verification nor recurse forever while rendering a type), `print.zig` the `luce ir` dump, `module.zig` the serialized-module format. **What stage 4 still does is choose**, in the same visit as the check that decides it — `add` or string concat, this intrinsic or that, retained or aliased — and record it in the typed tree's nodes; row 7 is what turns those recorded choices into instructions on this stage's tape. The choice *is* the type check — the seam moved the emission, never the decision. What crosses the seam is a plain value (`Lowered`) with no path back into the checker, which is why stage 6 closes it long after stage 4 has finished. Two things the interleaving keeps on stage 4's side and would not otherwise: the scalar and container constant pools live here but are filled there (a literal is a constant the moment it type-checks, and its slot number is baked into the instruction), and inlining a folded file-scope constant walks a stage-4 fold result. |
-| 9 | MIR optimization | `optimize/` | verified MIR | smaller MIR, re-verified | **Two passes, and deliberately no more.** `prune` drops functions the entry cannot reach and treats every `const_function` as a reachability edge (`import std.strings` then one call: 26 functions become 2); `dead` sweeps unread instructions and then compacts the instruction pool. Each is independently switchable (`optimize.Passes`) so a bisect can name the one that broke something, and the stage re-verifies afterwards. Over the bundled programs and benchmarks, raw lowering against optimized: **-44.9% instructions, -48.6% blocks**, almost all of it `prune`. **Two passes went with the interpreter's retirement** (docs/ENGINE.md step 7): `flow` threaded jumps and merged blocks, `values` did block-local value numbering, both were written for the dispatch loop, and both measured -2.5% of LLVM compile time and 0% of compiled runtime — `default<O3>` had already found everything they found. Deleting them cost +0.1% of `luce build --release` and nothing at all on `bench/compare.sh`. Do not write their successors. **What is deliberately absent is the larger half of this row.** Constant folding, inlining, LICM, unrolling, strength reduction, and bounds-check elimination are `default<O3>`'s (docs/CODEGEN.md) and reimplementing them here would cost compile time to be slower. Typed container instructions were *not* the lever for the container gap either, and that gap is now closed: the fix was an inline specialized access, expressible only in LLVM IR since MIR has no load, no GEP, and no pointer (row 10, docs/CODEGEN.md). What it decomposed into, measured one variable at a time on the real emitted code rather than modelled: the opaque call per element **7.8x**, then — jointly, and near-worthless apart, because together they buy exactly one thing, vectorization — lifting the handle resolution out of the loop and unboxing the elements, **4.7x** between them. matmul went 73.9x to 0.97x of C, arrays 12.7x to 1.06x, stats 8.5x to 0.99x. The backend helper `effects.viewStable` is consulted by that work to answer which instructions can disturb a resolved row; it is not a third optimizer pass. CSE of container reads *would* be genuinely ours (LLVM sees opaque calls and must assume the world is clobbered) and is still unwritten because a scan of `examples/` and `bench/` finds zero pairs to fold. |
-| 10 | LLVM lowering | `codegen/` | optimized MIR | LLVM IR → relocatable object | **Integers, floats, strings, structs, function values, all four container kinds, file/task resources and worker operations, `T?`, `T!`, reference counting, the math builtins and every host service lower.** A function value is a two-slot `runtime.Value` run — the `i32` program index beside the receiver it carries or `none` (docs/BINDING.md) — built by the same `luce_rt_struct_make` a struct literal calls; an indirect call reads the index, loads an adapter's pointer from a module table, passes the run's receiver slot, uses the written signature, and keeps the same depth/outcome/unwind convention as a direct call. The pointer and name tables are emitted lazily, so a program that makes no function value pays for neither. A `T?` is `{T, i1}` for every payload — the payload beside a bit — and the four intrinsics are register moves SROA takes apart; where it has to become a `runtime.Value` absence boxes as `Value.none`, which is what makes absence cost no code on either engine. The sentinel docs/FAILURE.md first proposed is refused with its reason in docs/CODEGEN.md: the null index already names a *present* value, and a program can put one in a `T?`. **The lowering is total**: every remaining `.unsupported` refuses IR that could only arrive damaged. No `else` arms and no `unreachable`-for-"not yet": an unlowered tag returns `.unsupported` naming itself, so a gap would be a message rather than wrong code. **The hot container shapes are generated rather than called** — an `array` element, `len`, `dim`, and the string primitives are the bounds check and the load they are, with no boxed subscript; this is the one stage that *can* do it, because the element kind is a compile-time fact here (MIR's type table) and a pointer is expressible here (LLVM IR), and neither is true one stage up or one layer down. `loops.zig` is the piece LLVM cannot supply for itself: it reads an array's row once in a loop's preheader instead of once per access, which LICM will not do because the loop also stores an element and nothing in the IR separates the two. The loads move and the checks stay, so a trap fires exactly where it did. `mutability.zig` derives a conservative may-be-constant plan from final MIR and permits the inline constant-flag guard to disappear only for provably fresh `heap_new` locals; parameters, calls and aliases remain guarded, with no wire or ABI change. `runtime/heap.zig`'s `layout` is the one place the row's byte offsets are written down, measured with `@offsetOf` and checked against a real `Runtime`. **The output reaches a person**: every module is stamped with `artifact.Artifact` (`codegen/artifact.zig`, its own file and its own version, deliberately not `abi.zig`) — magic, ABI version, machine (`artifact.machine`, from `builtin` and not from LLVM, so a loader reads it without libLLVM) and a content hash of the program — and `src/apps/luce/object.zig` emits the object and links it with `cc` into **the `.lc`** a loader opens or a standalone executable a shell runs, refusing a mismatched artifact by name. **Only `emit.zig` calls libLLVM, and it is its own module**: `luce` links it, `loom` does not, and a machine that only runs Luce programs needs no LLVM at all. No wasm emit mode yet. `lower.zig` is the authority, docs/CODEGEN.md the prose. |
+| Stage | Input | Output | Responsibility |
+|---|---|---|---|
+| `source` | root bytes and a host loader | prepared UTF-8 files and module graph | encoding, line endings, positions, size, exact module loading |
+| `lex` | one prepared file | layout-resolved tokens | indentation, literals, operators, keywords, bounded recovery |
+| `parse` | tokens | arena-owned AST | declarations, statements, Pratt expressions, syntax recovery |
+| `semantics` | ASTs and compile options | analyzed declarations plus typed HIR bodies | names, types, effects, flow, diagnostics, all source meaning |
+| `hir` | checked typed tree | MIR-building operations | mechanical desugaring, ownership/store decisions already recorded |
+| `mir` | lowered operations | verified typed program | instructions, blocks, locals, layouts, serialization, hostile-input verification |
+| `optimize` | verified MIR | smaller verified MIR | reachability pruning, dead instructions, register compaction |
+| `codegen` | optimized MIR | LLVM IR, object, native artifact | ABI lowering, optimization through LLVM, emission and linking |
 
-### Constant containers across the seams
+## Source
 
-This feature deliberately crosses almost every row and is easiest to
-audit as one path. Stage 2 recognizes file-scope `const` and treats
-braces like parentheses and brackets for layout. Stage 3 keeps a
-`map_literal` node rather than desugaring `{key: value}`. Stage 4 folds
-value constants as before, records each flat list, map or rank-1 array
-construction separately, checks public element-type visibility, and
-refuses every mutation or escape whose program-root
-provenance remains visible.
+`source/encoding.zig` validates UTF-8, normalizes supported line endings,
+rejects binary and oversized input, and makes every later stage operate on one
+trusted representation. `source/sources.zig` owns file identities and line
+indexes. `source/load.zig` owns the language-facing module request; actual
+filesystem access remains a host responsibility.
 
-MIR carries `container_constants` beside scalar text constants and a
-`const_container` load instruction; this wire surface is why the
-serialized module first moved to format **33** while the host ABI
-remained **13** at that point in the history.  The current format is
-**47** and the host ABI **19**, after later host services and
-instruction changes moved both forward under the append-only
-discipline.
-After dead instructions are removed, `prune` deletes unreachable rows,
-compacts the pool and remaps the surviving loads. Both execution arms
-eagerly materialize those rows through the runtime before user code.
-Each worker has its own runtime and therefore its own roots. Runtime
-mutators and LLVM's inline stores provide the parameter-hidden
-`immutable_object` backstop, while teardown releases program roots
-after the user leak census.
+Standard imports and project/package imports enter the same `Sources`
+registry. A module is loaded once. Module cycles are allowed because Luce has
+no module initialization phase; finer semantic cycles such as recursive
+constants and unbounded value layouts are rejected by their owning stage.
 
-Ten conceptual stages, **seven** folders.  Stages 4-6 collapse into
-`semantics/` by design, and stage 7 is a barrel with no folder
-because nothing is written for it yet; every other number maps
-one-to-one.
+## Lexing and parsing
 
-## Not stages
+The lexer turns four-space indentation into `indent` and `dedent` tokens,
+validates literal spellings and source controls, and bounds nesting and
+diagnostic volume. It recovers to a usable token stream instead of failing
+hard on the first malformed byte.
 
-| Folder | What it is |
-|--------|------------|
-| `compile/` | the driver's implementation siblings: `modules.zig` (the import *graph* — breadth-first from the root, stages 1-3 per module, each loaded once; resolution itself is stage 1's, and so is refusing one binding for two modules; **cycles are allowed on purpose** — a Luce module has no initialization phase to catch half done, so there is no "partially initialized module" to inherit, and what may not be circular is refused finer down: a constant that depends on itself is `luce.sema.const`, a struct that contains itself is `luce.sema.struct`, and a module importing itself is `luce.import.self`) and `test.zig` (whole-compiler integration coverage). |
-| `runtime/` | `libluce_rt`: the object heap, reference counting including program roots, containers, file/task resources and workers, strings, conversions, checked arithmetic, the trap channel. One implementation of every semantic, called by the interpreter *and* by compiled code. |
-| `interpreter/` | **the differential oracle, and it ships in nothing** — the dispatch loop, the explicit frame stack, the traceback, host effects. Everything below the instruction level is a `runtime` call. `interpreter.zig` is its header as well as its barrel: `Host`, `Budget`, `Result`, `Trap` and `Raised` are its shapes, and were `backend.zig`'s until stage 10 turned out to bring its own published ABI rather than slot in behind them (docs/ENGINE.md step 6). Its own suite is two tests, both about the frame stack: what it *computes* is proved in `specs/`, on both engines. |
-| `support/` | `diagnostics.zig` and `types.zig`: cross-cutting, used by every stage, owned by none. |
-| `std/` | the standard library, written in Luce and embedded with `@embedFile`. |
-| `specs/` | the registered feature packages in the executable specification: adventure, behaviour, bytes, constant containers, editor, enums, errors, serialized format, function values and lambdas, bound methods, host, `std.json`, modules, optimization, memory management, implied self, std, unions, workers, and `std.zip`. `agree.zig` and `hosts.zig` are their harness and fixtures rather than two more features. **Its own module**, not part of `luce`: every test that runs a program runs it on both engines and compares them (`specs/agree.zig`), which needs `emit` and the libLLVM `luce` does not link (docs/ENGINE.md). |
+The parser owns syntax only. It uses recursive descent for declarations and
+statements and Pratt parsing for expressions. It builds an arena-owned AST,
+keeps recovery local to a line or block, and reports the reader's correction
+rather than an internal parser state.
 
-## Where the two arms meet
+Current syntax includes transparent aliases, interfaces, final classes,
+`deinit`, weak fields/locals, expression lambdas, block closures and capture
+lists. The parser does not decide conformance, ownership, capture kind, or
+class lifetime; those are semantic questions.
 
-`compileProject` stops at stage 9.  That verified, optimized MIR is
-the whole of what the front end produces, and there are exactly two
-things done with it.
+## Semantics
 
-**Stage 10 compiles it**, which is what `luce build` does in all three
-of its shapes and the only way a Luce program is ever run: the `.lc`
-it writes *is* the machine code, and `loom run` opens and calls it.
+`semantics/` is one subsystem because name resolution, type checking, flow,
+and call selection are mutually dependent. It has two spines:
 
-**`interpreter.run` executes it**, which nothing that ships does.  It
-is the differential oracle: `specs/agree.zig` takes one program, sends
-it down both arms against one shared world, and demands the same
-printed bytes, trap code, trap message, call trace frame for frame,
-raised error, leak census, and world left behind.  Both arms call
-`runtime`, which is why they agree; every spec is a detector for the
-day they do not (docs/ENGINE.md).
+- `Analyzer` collects declarations, names, layouts, aliases, signatures,
+  defaults, interfaces, constants, and the entry point.
+- `FunctionBuilder` checks one body, manages scopes and narrowing, and records
+  a typed tree containing every later lowering decision.
+
+Concern files expose small operations over one of those types:
+
+| File | Owns |
+|---|---|
+| `aliases.zig` / `resolve.zig` | transparent type names and written-type resolution |
+| `layouts.zig` / `shapes.zig` | structures, classes, enums, unions, interfaces, recursive width/carry facts |
+| `signatures.zig` / `receiver.zig` | function contracts, return shapes, implied receiver effects |
+| `interfaces.zig` | nominal conformance and witness construction |
+| `closures.zig` | capture planning, ARC environments, shared cells, cycle refusals |
+| `flow.zig` | optional narrowing and branch joins |
+| `ledger.zig` | statement temporaries and their release points |
+| `recorder.zig` | the only API that creates HIR nodes |
+| `statements.zig` / `expressions.zig` | checked source walks |
+| `assign.zig` | local, field, index, chain, compound, and parallel assignment places |
+| `calls.zig` / `construct.zig` | callable selection, arguments, construction, conversions |
+| `refusals.zig` | user-facing rejection paths shared by the walk |
+
+Semantics implements the explicit numeric model: literals are contextual,
+all eight integer widths compute with checked same-type arithmetic, all three
+floating widths retain their representation, and concrete conversions are
+explicit. Aliases are erased here; HIR and every later stage see only the
+resolved target.
+
+This is also the last word on source-level rules: `let`, visibility,
+conformance, return paths, worker sendability, strong/weak/snapshot capture,
+class resurrection, and the host gate are checked here. The MIR verifier
+defends the instruction protocol; it does not reconstruct source intent.
+
+## HIR
+
+`hir/nodes.zig` is the typed check/lower seam. It preserves structured source
+meaning—loops, matches, compound and parallel assignment, fallible control,
+resolved calls, capture environments—while recording types, store kinds,
+temporary parks, and source spans.
+
+`hir/lower.zig` is mechanical and diagnostic-free. Its only error is
+`OutOfMemory`; if it discovers that a legal source shape cannot lower, the
+semantic representation is incomplete. Whole-array operations stay whole so
+later stages retain information that a synthesized scalar loop would destroy.
+
+## MIR and serialization
+
+`mir/build.zig` constructs functions, blocks, registers, locals, layouts,
+constants, and retain/release operations. `mir/defs.zig` is the instruction
+and program vocabulary. `mir/verify.zig` rejects malformed types, layouts,
+instructions, ownership claims, worker boundaries, and control flow before
+either execution path receives a program.
+
+`mir/module.zig` encodes the verified front-end handoff. The current
+`format_version` is **54**. The format includes explicit-width types, weak
+storage, class reference layouts and deinitializers, closure-only layouts, and
+boxed non-owning closure bridges. It is a cache seam, not a stable distribution
+format: incompatible modules recompile from source.
+
+A change to an instruction, intrinsic, type tag, trap/error code, encoded
+layout/local field, or another wire meaning bumps the format and updates the
+round-trip fingerprint and hostile decoder tests.
+
+## Optimization
+
+MIR optimization is intentionally small:
+
+- `prune` removes declarations unreachable from the selected entry and follows
+  every function value, witness, class deinitializer, and closure edge;
+- `dead` removes unread instructions; and
+- `registers` compacts the surviving register space.
+
+Each pass re-verifies the result. General constant folding, inlining, loop
+optimization, vectorization, and instruction selection belong to LLVM rather
+than a second optimizer written in Luce's front end.
+
+## Code generation and artifacts
+
+`codegen/lower.zig` lowers every verified MIR instruction to LLVM IR.
+`codegen/loops.zig` and `codegen/mutability.zig` derive the narrow facts LLVM
+cannot infer through opaque runtime calls. `codegen/emit.zig` is the only file
+that calls libLLVM; it runs the selected optimization pipeline and emits an
+object. Application code links that object with `libluce_rt` into an
+executable or `.lc` library.
+
+Generated code reaches host effects only through the versioned table in
+`codegen/abi.zig`. The current host ABI version is **23**. Internal runtime
+changes do not bump it; changing a table field, order, signature, or published
+value representation does. Before 1.0, a coherent change may remove or reorder
+fields; every host and generated slot moves atomically, and stale artifacts are
+refused rather than adapted.
+
+Every artifact records its machine, ABI, content identity, and generator.
+Loaders refuse a stale or foreign artifact by name. There is no interpreter
+fallback.
+
+## Supporting modules, not stages
+
+| Module | Role |
+|---|---|
+| `runtime/` | the one implementation of ARC, classes, weak handles, closures, containers, resources, text, operators, workers, and traps |
+| `interpreter/` | differential-oracle dispatch, frames, traces, and host adaptation; ships in nothing |
+| `support/` | diagnostics, types, and trap/error vocabulary shared across stages |
+| `std/` | embedded standard modules written in Luce |
+| `specs/` | executable language specification, built as its own module with LLVM available |
+| `compile/` | module-graph orchestration and whole-compiler integration tests |
+
+## Where the two execution paths meet
+
+The front end produces one optimized, verified `mir.Program`.
+
+- The shipping path lowers it to native code and links an artifact.
+- The oracle interprets the same MIR only inside tests.
+
+Both call `runtime/` for dynamic semantics. Each program specification runs on
+both paths and compares output, raised error, trap code and text, frame trace,
+host world, and live-object census. Agreement is evidence of one language;
+duplicating a semantic above this seam creates two languages and is therefore
+a bug.

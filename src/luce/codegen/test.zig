@@ -78,7 +78,7 @@ test "an optional lowers to its payload beside a presence bit" {
     const gpa = std.testing.allocator;
     const rendered = (try render(
         \\func main(args: list[str]):
-        \\    let n = parse_int(args[0])
+        \\    let n = parse_i64(args[0])
         \\    print(str(n else 0))
         \\
     )).?;
@@ -710,7 +710,7 @@ test "calls and recursion carry values back and traps forward" {
     try std.testing.expectEqualStrings("fib\n6765\n", capture.printed());
 }
 
-test "string of an unwritten function traps null_object on both engines" {
+test "str of an unwritten function traps null_object on both engines" {
     var program = try spec.program(
         \\func twice(n: i64) -> i64:
         \\    return n * 2
@@ -1272,7 +1272,7 @@ test "clamp agrees when the bounds cross and when they are not numbers" {
     );
 }
 
-test "the float builtins agree" {
+test "the floating builtins agree" {
     try agree(
         \\func main():
         \\    let xs = new list[f64]
@@ -1288,7 +1288,7 @@ test "the float builtins agree" {
     );
 }
 
-test "long(double) agrees at the range boundaries" {
+test "i64(f64) agrees at the range boundaries" {
     try agree(
         \\func main():
         \\    var scale = 1.0
@@ -1305,7 +1305,7 @@ test "long(double) agrees at the range boundaries" {
     );
 }
 
-test "long(NaN) and long(infinity) trap the same way" {
+test "i64(NaN) and i64(infinity) trap the same way" {
     try agree(
         \\func main():
         \\    let nan = 0.0 / 0.0
@@ -1322,7 +1322,7 @@ test "long(NaN) and long(infinity) trap the same way" {
     );
 }
 
-test "the long math builtins agree, and abs of the smallest long traps" {
+test "the i64 math builtins agree, and abs of the smallest i64 traps" {
     try agree(
         \\func main():
         \\    let xs = new list[i64]
@@ -1613,17 +1613,17 @@ test "the else fallback runs only where there was no value, and chains" {
     );
 }
 
-test "parse_int and parse_float agree when the text is a number and when it is not" {
-    // The `long?`/`double?` that made optionals load-bearing on day one.
+test "parse_i64 and parse_f64 agree when the text is a number and when it is not" {
+    // The `i64?`/`f64?` that made optionals load-bearing on day one.
     try agree(
         \\func main():
-        \\    print(str(parse_int("41") else -1))
-        \\    print(str(parse_int("") else -1))
-        \\    print(str(parse_int("12x") else -1))
-        \\    print(str(parse_int("-9") else -1))
-        \\    print(str(parse_float("2.5") else -1.0))
-        \\    print(str(parse_float("nope") else -1.0))
-        \\    let n = parse_int("77")
+        \\    print(str(parse_i64("41") else -1))
+        \\    print(str(parse_i64("") else -1))
+        \\    print(str(parse_i64("12x") else -1))
+        \\    print(str(parse_i64("-9") else -1))
+        \\    print(str(parse_f64("2.5") else -1.0))
+        \\    print(str(parse_f64("nope") else -1.0))
+        \\    let n = parse_i64("77")
         \\    if n != none:
         \\        print("narrowed=" + str(n + 1))
         \\
@@ -1635,7 +1635,7 @@ test "x else trap is the assert-unwrap, and it traps where it is written" {
     // match — which is the whole of `calc.luc`'s error path.
     try agree(
         \\func want(text: str) -> i64:
-        \\    return parse_int(text) else trap("not a number: " + text)
+        \\    return parse_i64(text) else trap("not a number: " + text)
         \\
         \\func middle(text: str) -> i64:
         \\    return want(text) + 1

@@ -523,7 +523,7 @@ test "luce.parse.expression: a broken f-string hole reports the sub-parse error"
 }
 
 test "luce.sema.convert: an f-string hole must be a scalar" {
-    // A hole is a `string(...)` the reader did not write, so a list in
+    // A hole is a `str(...)` the reader did not write, so a list in
     // one is answered by the constructor's own message, at the hole.
     try expectRejected(
         \\func main():
@@ -717,10 +717,10 @@ test "luce.parse.type: the three shapes a return list is not" {
     , "luce.parse.type", "a function that answers nothing writes no arrow");
 
     // A nested list is still refused, and now by the sentence that says
-    // what parentheses around one type *do* mean: `(long, long)` is a
+    // what parentheses around one type *do* mean: `(i64, i64)` is a
     // return shape wherever it is written, and a return shape is not a
-    // type (docs/RETURNS.md).  `-> (long)` is no longer here, because a
-    // parenthesized type is that type and it means `-> long`.
+    // type (docs/RETURNS.md).  `-> (i64)` is no longer here, because a
+    // parenthesized type is that type and it means `-> i64`.
     try expectSaying(
         \\func f() -> ((i64, i64), i64):
         \\    return 1
@@ -1042,7 +1042,7 @@ test "luce.sema.call: a return shape is never an ordinary tuple value" {
 // Methods: implied `self`
 // ---------------------------------------------------------------------------
 
-test "luce.parse.self: an explicit receiver parameter is retired everywhere" {
+test "luce.parse.self: an explicit receiver parameter is rejected everywhere" {
     try expectSaying(
         \\func loose(self) -> i64:
         \\    return 1
@@ -1323,7 +1323,7 @@ test "luce.sema.union: a struct carrying a union is not compared either (UNION.m
     // struct that holds one asks exactly the refused question through a
     // wrapper — and answered it by walking the inactive payload slot,
     // whose shape differs per arm.  With a `Point` on one side and a
-    // `long` on the other that is two runs of different lengths: a
+    // `i64` on the other that is two runs of different lengths: a
     // panic in a checked build, a read off the end of a slice in an
     // unchecked one.
     try expectSaying(
@@ -1530,8 +1530,8 @@ test "luce.sema.type: len measures a container, and a resource is not one" {
 
 test "luce.sema.type: values() of a map of function values is refused (BINDING.md D7)" {
     // A map value is the one slot written bare, because `get` already
-    // answers `V?` — so `map(string, func(long) -> long)` is legal
-    // while `list(func(long) -> long)` is a type no program can write.
+    // answers `V?` — so `map[str, func(i64) -> i64]` is legal
+    // while `list[func(i64) -> i64]` is a type no program can write.
     // `values()` manufactured one anyway: `luce check` said ok and
     // `luce build` aborted the compiler with no diagnostic at all,
     // because a list cell has no shape for a bare function value.
@@ -1991,51 +1991,6 @@ test "luce.sema.main: the entry takes at most the one parameter" {
     );
 }
 
-test "luce.sema.retired: arg and arg_count name their replacement" {
-    // A name the language used to spell is not a typo, and the site
-    // still teaches the old one; a bare `unknown function arg` points
-    // nowhere.  One release of a pointer (docs/LANGUAGE.md).
-    try expectHostSaying(
-        \\func main():
-        \\    print(arg(0))
-        \\
-    ,
-        "luce.sema.retired",
-        "arg was retired: declare func main(args: list[str]): and index args",
-    );
-    try expectHostSaying(
-        \\func main():
-        \\    print(str(arg_count()))
-        \\
-    ,
-        "luce.sema.retired",
-        "arg_count was retired: declare func main(args: list[str]): and write len(args)",
-    );
-}
-
-test "arg is an ordinary word again, and a program that declares one gets its own" {
-    // The retirement message is reached only once nothing else
-    // resolved: the two names left `reserved_names` with the builtins,
-    // so they are available to a program like any other.
-    var result = try compile_mod.compile(testing.allocator,
-        \\func arg(index: i64) -> i64:
-        \\    return index * 2
-        \\
-        \\func main():
-        \\    let arg_count = arg(3)
-        \\    assert(arg_count == 6)
-        \\
-    , script);
-    defer result.deinit();
-    switch (result) {
-        .success => {},
-        .failure => |diagnostics| {
-            printAll(&diagnostics);
-            return error.TestUnexpectedResult;
-        },
-    }
-}
-
 test "luce.sema.main: all four legal entry shapes compile" {
     // `-> !:` is how a program says the world can stop it, and the
     // command line composes with it (docs/LANGUAGE.md).  The parameter's
@@ -2063,7 +2018,7 @@ test "luce.sema.main: all four legal entry shapes compile" {
 // Compound assignment (value-only arithmetic sugar)
 // ---------------------------------------------------------------------------
 
-test "luce.sema.type: compound assignment is numbers, or += on string" {
+test "luce.sema.type: compound assignment is numbers, or += on str" {
     // Objects have no compound assignment.
     try expectRejected("func main():\n    var xs = [1, 2]\n    xs *= 3\n", "luce.sema.type");
     // Non-+ operators do not apply to string.
@@ -2341,9 +2296,8 @@ test "luce.sema.type: an annotation says so when nothing converts" {
 // Integer division always answers f64. It cannot be stored back into an
 // integer place without choosing integer division or converting it.
 
-test "luce.sema.type: n /= 2 on an int place names the one-character fix" {
-    // The migration's sharpest edge (docs/NUMERICS.md §9): `/` answers
-    // a double, so this is a narrowing nobody wrote.  That it is an
+test "luce.sema.type: n /= 2 on an inferred i64 place names the one-character fix" {
+    // `/` answers f64, so this is a narrowing nobody wrote. That it is an
     // error rather than a silent truncation is the whole safety story.
     try expectOnlySayingAt(
         \\func main():
@@ -2358,24 +2312,7 @@ test "luce.sema.type: n /= 2 on an int place names the one-character fix" {
     );
 }
 
-test "luce.sema.type: n /= 2 on a long place says the same thing" {
-    // The guard is per-width or it is nothing: naming one integer
-    // type and letting the other through would leave `/=` silently
-    // truncating at exactly the width the resize made the default.
-    try expectOnlySayingAt(
-        \\func main():
-        \\    var n: i64 = 10
-        \\    n /= 2
-        \\
-    ,
-        "luce.sema.type",
-        "/ answers f64 and this place is i64; write '//=' for the integer quotient",
-        3,
-        5,
-    );
-}
-
-test "luce.sema.type: a double where a long is required is still refused" {
+test "luce.sema.type: an f64 where i64 is required is refused" {
     try expectRejectedAt(
         \\func take(n: i64) -> i64:
         \\    return n
@@ -2406,7 +2343,7 @@ test "luce.sema.type: a double where a long is required is still refused" {
 // kind of mistake seven types create that two did not, so these are
 // the messages the whole change is judged by.
 
-test "luce.sema.literal: an integer past an int names the width that holds it" {
+test "luce.sema.literal: an integer past i32 names the width that holds it" {
     try expectOnlySayingAt(
         \\func main():
         \\    var n: i32 = 3000000000
@@ -2431,7 +2368,7 @@ test "luce.sema.literal: an integer past an int names the width that holds it" {
     );
 }
 
-test "luce.sema.literal: a float past a float names the width that holds it" {
+test "luce.sema.literal: a literal past f32 names the width that holds it" {
     try expectOnlySayingAt(
         \\func main():
         \\    var x: f32 = 1.0e300
@@ -2456,7 +2393,7 @@ test "luce.sema.literal: a float past a float names the width that holds it" {
 
 test "luce.sema.type: a refused narrowing names the constructor that would do it" {
     // The tail used to say "and there is no conversion between them",
-    // which was true when `long` against `double` was the only
+    // which was true when `i64` against `f64` was the only
     // mismatch a constructor could repair and is false the moment
     // there is a ladder: there *is* a conversion, and what Luce
     // refuses is performing it unasked.
@@ -2467,7 +2404,7 @@ test "luce.sema.type: a refused narrowing names the constructor that would do it
         \\
     ,
         "luce.sema.type",
-        "narrow declared i32 but initialized with i64; narrowing is never implicit — write i32(…)",
+        "narrow declared i32 but initialized with i64; numeric conversion is never implicit — write i32(…)",
         3,
         5,
     );
@@ -2478,7 +2415,7 @@ test "luce.sema.type: a refused narrowing names the constructor that would do it
         \\
     ,
         "luce.sema.type",
-        "narrow declared f32 but initialized with f64; narrowing is never implicit — write f32(…)",
+        "narrow declared f32 but initialized with f64; numeric conversion is never implicit — write f32(…)",
         3,
         5,
     );
@@ -2507,7 +2444,7 @@ test "luce.sema.type: a narrowing argument earns the same sentence" {
         \\
     ,
         "luce.sema.type",
-        "argument 1 of take is i32, got i64; narrowing is never implicit — write i32(…)",
+        "argument 1 of take is i32, got i64; numeric conversion is never implicit — write i32(…)",
         6,
         20,
     );
@@ -2559,7 +2496,7 @@ test "luce.sema.const: a folded f32-to-integer is range-checked at its own width
         \\    print(str(narrowed))
         \\
     , "luce.sema.const", "constant conversion out of range", 2, 18);
-    // The same value reaches a `long` without complaint, which is what
+    // The same value reaches a `i64` without complaint, which is what
     // makes the message above a statement about the width rather than
     // about the number.
     try expectCompiles(
@@ -2573,7 +2510,7 @@ test "luce.sema.const: a folded f32-to-integer is range-checked at its own width
 }
 
 // `and`/`or` used to underline both operands and name neither, in a
-// compiler where `condition must be bool, not long` already did both.
+// compiler where `condition must be bool, not i64` already did both.
 //
 // The left-operand case pins its *end* as well as its start, because
 // those are the same column here: `n and true` and `n` both begin at
@@ -2723,7 +2660,7 @@ test "luce.sema.import: a format spec is std.strings, and says so" {
     // reported per file").
 }
 
-test "luce.sema.convert: string() names its value domain and build() for a builder" {
+test "luce.sema.convert: str() names its value domain and build() for a builder" {
     // The one reason `str` could not simply be renamed: it took a heap
     // object, and a scalar constructor should not (docs/NUMERICS.md §7).
     try expectOnlySayingAt(
@@ -2751,14 +2688,6 @@ test "luce.sema.convert: string() names its value domain and build() for a build
     );
 }
 
-test "luce.sema.type.retired: the old text conversion names its replacement" {
-    try expectSaying(
-        \\func main():
-        \\    let text = string(1)
-        \\
-    , "luce.sema.type.retired", "string is retired; write str");
-}
-
 test "luce.sema.type: a condition must be bool" {
     try expectRejected("func main():\n    if 1:\n        return\n", "luce.sema.type");
 }
@@ -2767,7 +2696,7 @@ test "luce.sema.type: an annotation must match the initializer" {
     try expectRejected("func main():\n    let a: i64 = \"x\"\n", "luce.sema.type");
 }
 
-test "luce.sema.convert: long and double convert only their opposite" {
+test "luce.sema.convert: numeric constructors reject non-numeric values" {
     try expectRejected("func main():\n    let a = i64(\"x\")\n", "luce.sema.convert");
     try expectRejected("func main():\n    let a = f64(true)\n", "luce.sema.convert");
 }
@@ -3107,7 +3036,7 @@ test "luce.sema.host: host builtins are gated off by default" {
     );
 }
 
-test "luce.sema.type: exit takes a long status, said when it is not one" {
+test "luce.sema.type: exit takes an i64 status, said when it is not one" {
     try expectRejectedOptions(
         "func main():\n    exit(\"done\")\n",
         hosted,
@@ -3273,7 +3202,7 @@ test "luce.parse.expression: '**' names the std function that does it" {
 }
 
 test "luce.sema.type: the bit set works on integers, said with the fact that refused it" {
-    // docs/BITWISE.md D2: a double has no bits a program may see.
+    // docs/BITWISE.md D2: a float has no bits a program may see.
     try expectRejected(
         "func main():\n    let a = 1.5 & 2.0\n    print_error(str(a))\n",
         "luce.sema.type",
@@ -3555,51 +3484,6 @@ test "luce.sema.reserved: a struct cannot take a type keyword's name" {
     try expectRejected("struct i64:\n    x: i64\n\nfunc main():\n    return\n", "luce.sema.reserved");
 }
 
-// spelling:off — these two programs exist to be refused, so they are
-// the one place in the tree that still writes the retired names.
-//
-// The rename is a breaking change and every program written before it
-// says `Int`.  A reader who writes one of the retired spellings is
-// told what it is called now, by name, in both places one can appear:
-// a type annotation and a conversion call.  Edit distance cannot find
-// `i64` from `Int`, so nothing else would answer at all.
-test "luce.sema.type.retired: a retired TitleCase type name names its replacement" {
-    try expectMessage(
-        \\func main():
-        \\    let n: Int = 1
-        \\    assert(n == 1)
-        \\
-    , "Int is retired; write i64");
-    try expectMessage(
-        \\func main():
-        \\    let x: Float = 1.5
-        \\    assert(x == 1.5)
-        \\
-    , "Float is retired; write f64");
-    try expectMessage(
-        \\func main():
-        \\    var xs: List[i64] = []
-        \\    assert(len(xs) == 0)
-        \\
-    , "List is retired; write list");
-}
-
-test "luce.sema.type.retired: a retired conversion constructor names its replacement" {
-    try expectMessage(
-        \\func main():
-        \\    let n = Int(1.5)
-        \\    assert(n == 2)
-        \\
-    , "Int is retired; write i64");
-    try expectMessage(
-        \\func main():
-        \\    assert(String(1) == "1")
-        \\
-    , "String is retired; write str");
-}
-
-// spelling:on
-
 test "luce.sema.reserved: a struct cannot take a builtin type's name" {
     // Lowercase names are the language's (docs/TYPES.md D8).  A struct
     // spelled `list` would be a type nothing could write down, because
@@ -3707,11 +3591,11 @@ test "luce.sema.type: and needs bool operands" {
     try expectRejected("func main():\n    let a = 1 and 2\n", "luce.sema.type");
 }
 
-test "luce.sema.type: string has no arithmetic operator" {
+test "luce.sema.type: str has no arithmetic operator" {
     try expectRejected("func main():\n    let a = \"x\" - \"y\"\n", "luce.sema.type");
 }
 
-test "luce.sema.type: range bounds must be long" {
+test "luce.sema.type: range bounds must be i64" {
     try expectRejected("func main():\n    for i in range(1.0, 2.0):\n        return\n", "luce.sema.type");
 }
 
@@ -4020,7 +3904,7 @@ test "luce.sema.type: a named argument's type mistake names the parameter" {
     , "luce.sema.type", "height of size is i64, got str");
 }
 
-test "luce.sema.call: a None function's result is not a value" {
+test "luce.sema.call: a function with no result is not a value" {
     try expectRejected(
         \\func f():
         \\    return
@@ -4139,7 +4023,7 @@ test "luce.sema.method: a builtin method's arguments are positional" {
     );
 }
 
-test "luce.sema.method: a routed string method stays positional and names the spelling that isn't" {
+test "luce.sema.method: a routed str method stays positional and names the spelling that isn't" {
     try expectSaying(
         \\import std.strings
         \\
@@ -4222,15 +4106,15 @@ test "luce.sema.method: map has no such method" {
 // luce.sema.index — distinct paths
 // ---------------------------------------------------------------------------
 
-test "luce.sema.index: only a string is sliced, so a number is refused" {
+test "luce.sema.index: only str is sliced, so a number is refused" {
     try expectRejected("func main():\n    let text = 1[0:1]\n", "luce.sema.index");
 }
 
-test "luce.sema.index: a string index must be i64" {
+test "luce.sema.index: a str index must be i64" {
     try expectRejected("func main():\n    let s = \"abc\"\n    let c = s[true]\n", "luce.sema.index");
 }
 
-test "luce.sema.index: a list indexes with a long, not a bool" {
+test "luce.sema.index: a list indexes with i64, not bool" {
     try expectRejected("func main():\n    var xs = [1]\n    let a = xs[true]\n", "luce.sema.index");
 }
 
@@ -4368,17 +4252,6 @@ test "luce.sema.fallible: an ignored files.kind is refused too" {
     , "luce.sema.fallible", "files.kind can fail");
 }
 
-test "luce.sema.retired: file_exists names what replaced it" {
-    // A published builtin for the whole of v2, and on the
-    // documentation site — so a reader who types it is owed the
-    // replacement rather than "unknown function".
-    try expectHostSaying(
-        \\func main():
-        \\    print(str(file_exists("notes.txt")))
-        \\
-    , "luce.sema.retired", "file_exists was retired");
-}
-
 test "luce.sema.fallible: a handle's read is fallible like every file service" {
     try expectRejected(
         \\import std.files
@@ -4450,7 +4323,7 @@ test "luce.sema.return: a typed function must return a value" {
     , "luce.sema.return");
 }
 
-test "luce.sema.return: a None function returns no value" {
+test "luce.sema.return: a function with no result returns no value" {
     try expectRejected(
         \\func f():
         \\    return 1
@@ -4509,7 +4382,7 @@ test "luce.sema.const: a constant container cannot contain another container" {
 }
 
 test "luce.sema.const: a bare none is still refused — nothing says what is absent" {
-    // `const x: long? = none` folds (docs/ARGS.md D9); without the
+    // `const x: i64? = none` folds (docs/ARGS.md D9); without the
     // annotation there is no type to be absent at, and the refusal
     // stands.
     try expectSaying(
@@ -4549,13 +4422,13 @@ test "luce.sema.literal: an over-large integer literal is rejected" {
     try expectRejected("func main():\n    let a = 99999999999999999999\n", "luce.sema.literal");
 }
 
-test "luce.sema.literal: a negated literal past long's minimum is rejected too" {
+test "luce.sema.literal: a negated literal past i64 minimum is rejected too" {
     try expectRejected("func main():\n    let a = -9223372036854775809\n", "luce.sema.literal");
     try expectRejected("func main():\n    let a = 9223372036854775808\n", "luce.sema.literal");
 }
 
 test "luce.sema.literal: a float literal that is not finite is rejected" {
-    // parseFloat is happy to hand back infinity; a program that says
+    // parseF64 is happy to hand back infinity; a program that says
     // 1e400 did not ask for infinity, it made a mistake.
     try expectRejected("func main():\n    let a = 1e400\n", "luce.sema.literal");
     try expectRejected("func main():\n    let a = -1e400\n", "luce.sema.literal");
@@ -4605,7 +4478,7 @@ test "luce.sema.nesting: a flat chain in a constant is bounded too" {
 }
 
 test "luce.sema.nesting: an f-string with thousands of holes is bounded" {
-    // f"{x}{x}..." desugars to string(x) + string(x) + ..., which is the
+    // f"{x}{x}..." desugars to str(x) + str(x) + ..., which is the
     // same flat chain wearing different clothes.
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(testing.allocator);
@@ -4636,13 +4509,13 @@ test "an ordinary deep expression still compiles" {
 test "luce.sema.absent: a T? in an operator says how to make it a T" {
     try expectRejected(
         \\func main():
-        \\    let n = parse_int("1")
+        \\    let n = parse_i64("1")
         \\    let doubled = n * 2
         \\
     , "luce.sema.type");
     try expectMessage(
         \\func main():
-        \\    let n = parse_int("1")
+        \\    let n = parse_i64("1")
         \\    let doubled = n * 2
         \\
     , "test it first (if n != none:) or supply a fallback (n else …)");
@@ -4729,7 +4602,7 @@ test "luce.sema.absent: none needs somewhere to be none of" {
     // Absence has no ordering, and nothing to be equal to but a T?.
     try expectRejected(
         \\func main():
-        \\    let n = parse_int("1")
+        \\    let n = parse_i64("1")
         \\    assert(n < none)
         \\
     , "luce.sema.absent");
@@ -4803,7 +4676,7 @@ test "luce.sema.absent: narrowing does not survive what could undo it" {
         \\    return n != none
         \\
         \\func main():
-        \\    let n = parse_int("1")
+        \\    let n = parse_i64("1")
         \\    if check(n):
         \\        let doubled = n * 2
         \\
@@ -4984,10 +4857,7 @@ test "a misspelled function, field, type, and method each suggest the real one" 
         \\    assert(p.acros == 1)
         \\
     , "did you mean across?");
-    // The builtin names are lowercase, so a typo of one is lowercase
-    // too.  A reader who writes the retired TitleCase spelling exactly
-    // is answered by name instead, which is a better sentence than any
-    // guess (docs/TYPES.md D8) — the spec for it is below.
+    // Builtin names are lowercase, so a typo of one is lowercase too.
     try expectMessage(
         \\func main():
         \\    let a: strr = "x"
@@ -5029,7 +4899,7 @@ test "a function that can fall off the end names the type it owes" {
 }
 
 test "an f-string hole is underlined, not the whole literal" {
-    // The synthesized `string(...)` used to carry the whole f-string's
+    // The synthesized `str(...)` used to carry the whole f-string's
     // span, so a reader with four holes on one line was shown all four
     // and told one of them was wrong.
     try expectHostSayingAt(
@@ -5476,7 +5346,7 @@ test "luce.sema.struct: a struct that expands past the value limit is rejected" 
     try expectRejected(text.items, "luce.sema.struct");
 }
 
-/// `struct S0: v: long`, then `levels` layouts of two fields each, so
+/// `struct S0: v: i64`, then `levels` layouts of two fields each, so
 /// `S{levels}` is exactly `2^levels` values.  The header of `S{k}` is
 /// on line `3k` and its first field on line `3k + 1`.
 fn doublingStructs(text: *std.ArrayList(u8), levels: usize) !void {
@@ -5525,9 +5395,9 @@ test "luce.sema.struct: the value limit is exact in both directions" {
 }
 
 test "luce.sema.struct: a struct too wide from its own fields names no field" {
-    // 4097 long fields: nothing is nested, so there is no widest
+    // 4097 i64 fields: nothing is nested, so there is no widest
     // struct field to point at and the shorter sentence is the honest
-    // one.  Naming `f0: long` as the culprit would be advice that does
+    // one.  Naming `f0: i64` as the culprit would be advice that does
     // not work.
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(testing.allocator);
@@ -5852,8 +5722,8 @@ test "luce.sema.main: a script entry may say ! and nothing else" {
 //     all four callers compare the place with the value first.
 //   * `luce.sema.type` "value has no type" — a `none` operand is
 //     "returns nothing" one check earlier.
-//   * `luce.sema.type` "None? is not a type" — `resolveBase` never
-//     answers `none`, so the `?` never has nothing to widen.
+//   * the internal no-result optional guard — `resolveBase` never
+//     answers the no-result type, so source cannot reach that arm.
 //   * `luce.sema.fallible` and `luce.sema.call` in `stringsCall` — no
 //     function in std `strings` is fallible or returns nothing.  These
 //     two are the only ones a *library* change makes reachable, and
@@ -6148,10 +6018,10 @@ test "luce.sema.method: each receiver kind names the methods it has" {
 //
 // `lowerUserCall` has always written two different sentences for two
 // different mistakes — "add takes 2 arguments, got 1" for a count and
-// "argument 2 of add is long, got string" for a type, the latter
+// "argument 2 of add is i64, got str" for a type, the latter
 // underlined at the argument itself.  The built-in methods wrote one
 // sentence for both, phrased as a count: `xs.append("hi")` on a
-// `list(long)` was told "append takes one element value" while holding
+// `list[i64]` was told "append takes one element value" while holding
 // exactly one element value, and the caret covered the whole call.
 //
 // These pin the sentence, the code and the caret column together,
@@ -6359,12 +6229,10 @@ test "luce.sema.type: a written type is checked against the arguments it may tak
         \\    var p: Point[i64] = Point(x = 1)
         \\
     , "luce.sema.type", "Point takes no type arguments");
-    // `None?` has no test because it has no input: `resolveBase`
-    // answers bool, long, double, string, a struct or a heap type and
-    // nothing else, and `Type.optionalOf` refuses only `none` and a
-    // second `?`.  Writing `None?` is `unknown type None` one step
-    // earlier.  The guard stays because it is the null arm of a shared
-    // helper, but there is no program that reaches it.
+    // A no-result function type cannot be made optional because there
+    // is no source type spelling for "no result." `resolveBase` can
+    // therefore never feed that internal type to `Type.optionalOf`.
+    // The helper still guards its internal null arm defensively.
 }
 
 test "luce.sema.struct: a struct whose fields all fell away has an empty body" {
@@ -6402,11 +6270,10 @@ test "luce.sema.duplicate: two file-scope constants cannot share a name" {
     , "luce.sema.duplicate", "duplicate name width");
 }
 
-// The storage widths' own diagnostics (docs/TYPES.md step 5).  These
-// are the three rungs `rangeMessage` used to answer for with `long`'s
-// sentence — a literal past a `byte` was told about nine quintillion,
-// and a `half` literal was called an integer.
-test "luce.sema.literal: an integer past a byte names byte's range and a short" {
+// Every concrete width owns its diagnostics (docs/TYPES.md). A literal
+// past a `u8` must describe `u8`, and an out-of-range `f16` literal must
+// be described as a floating-point failure rather than an integer one.
+test "luce.sema.literal: an integer past u8 names its range and i16" {
     try expectOnlySayingAt(
         \\func main():
         \\    var b: u8 = 300
@@ -6417,8 +6284,8 @@ test "luce.sema.literal: an integer past a byte names byte's range and a short" 
         2,
         17,
     );
-    // A byte is the one unsigned type there is (D4), so below zero is
-    // out of range in exactly the same way as above 255.
+    // u8 is unsigned, so below zero is out of range in exactly the same
+    // way as above 255.
     try expectOnlySayingAt(
         \\func main():
         \\    var b: u8 = -1
@@ -6431,7 +6298,7 @@ test "luce.sema.literal: an integer past a byte names byte's range and a short" 
     );
 }
 
-test "luce.sema.literal: an integer past a short names short's range and an int" {
+test "luce.sema.literal: an integer past i16 names its range and i32" {
     try expectOnlySayingAt(
         \\func main():
         \\    var s: i16 = 32768
@@ -6444,7 +6311,7 @@ test "luce.sema.literal: an integer past a short names short's range and an int"
     );
 }
 
-test "luce.sema.literal: a float past a half names half's range and a float" {
+test "luce.sema.literal: a literal past f16 names its range and f32" {
     try expectOnlySayingAt(
         \\func main():
         \\    var h: f16 = 100000.0
@@ -6457,7 +6324,7 @@ test "luce.sema.literal: a float past a half names half's range and a float" {
     );
 }
 
-test "luce.sema.type: narrowing into a storage width is refused like any other" {
+test "luce.sema.type: numeric conversions are explicit at every width" {
     try expectOnlySayingAt(
         \\func main():
         \\    var wide: i64 = 5
@@ -6465,7 +6332,7 @@ test "luce.sema.type: narrowing into a storage width is refused like any other" 
         \\
     ,
         "luce.sema.type",
-        "narrow declared u8 but initialized with i64; narrowing is never implicit — write u8(…)",
+        "narrow declared u8 but initialized with i64; numeric conversion is never implicit — write u8(…)",
         3,
         5,
     );
@@ -6476,21 +6343,13 @@ test "luce.sema.type: narrowing into a storage width is refused like any other" 
         \\
     ,
         "luce.sema.type",
-        "narrow declared f16 but initialized with f64; narrowing is never implicit — write f16(…)",
+        "narrow declared f16 but initialized with f64; numeric conversion is never implicit — write f16(…)",
         3,
         5,
     );
 }
 
-test "luce.sema.type: a byte reaches a double unbidden but never a float" {
-    // Rule 3 of the ladder: widening is implicit along a ladder, and
-    // *across* the two only into `double`.  A `byte` is exact in a
-    // `float`, which is exactly why this has to be refused on purpose
-    // rather than by accident — the rule is about there being one
-    // cross-family answer, not about which values happen to fit.
-    // Java's `int -> float` is the widening this declines to grow, one
-    // rung lower down.  The allowed direction, `double d = b`, is in
-    // behavior_spec beside the rest of the promotion.
+test "luce.sema.type: cross-width and cross-family values require conversion" {
     try expectOnlySayingAt(
         \\func main():
         \\    var b: u8 = 7
@@ -6498,13 +6357,21 @@ test "luce.sema.type: a byte reaches a double unbidden but never a float" {
         \\
     ,
         "luce.sema.type",
-        "f declared f32 but initialized with u8; narrowing is never implicit — write f32(…)",
+        "f declared f32 but initialized with u8; numeric conversion is never implicit — write f32(…)",
         3,
         5,
     );
-    // A `short` is the same decision one rung up, and a `half` is the
-    // mirror image on the other ladder: it reaches a `float` and a
-    // `double` and no integer at all.
+    try expectOnlySayingAt(
+        \\func main():
+        \\    var b: u8 = 7
+        \\    var f: f64 = b
+        \\
+    ,
+        "luce.sema.type",
+        "f declared f64 but initialized with u8; numeric conversion is never implicit — write f64(…)",
+        3,
+        5,
+    );
     try expectOnlySayingAt(
         \\func main():
         \\    var h: f16 = 1.5
@@ -6512,7 +6379,7 @@ test "luce.sema.type: a byte reaches a double unbidden but never a float" {
         \\
     ,
         "luce.sema.type",
-        "n declared i64 but initialized with f16; narrowing is never implicit — write i64(…)",
+        "n declared i64 but initialized with f16; numeric conversion is never implicit — write i64(…)",
         3,
         5,
     );
@@ -6957,10 +6824,10 @@ test "luce.sema.type: a map keys by every integer width, str, or an enum" {
 }
 
 test "luce.sema.type: an enum key is that enum, and no other type reaches it" {
-    // The hole this closes: `map(Key, V)` typed at `Key` accepts a
+    // The hole this closes: `map[Key, V]` typed at `Key` accepts a
     // `Key`, and a number is a type error rather than a coercion — an
     // enum reaches no number with nothing written down and no number
-    // reaches an enum at all (D4, `Type.widensTo`).
+    // reaches an enum at all.
     try expectSaying(
         \\enum Key:
         \\    left

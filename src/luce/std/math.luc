@@ -15,15 +15,10 @@
 # written back, not an object that is mutated through a borrow; no
 # hidden globals.
 
-# These five are annotated `f64` on purpose, and it is the one
-# annotation in this module that is load-bearing rather than tidy.
-# Each carries twenty or twenty-one significant digits so that it
-# rounds to the nearest binary64, and the module's accuracy promise
-# above — ~1e-14 relative for exp and ln — is a claim about that
-# rounding.  An unannotated literal takes the default width, and the
-# default is not this one; at binary32 the epsilon is 1.19e-7 and
-# every sentence at the top of this file becomes false (docs/TYPES.md,
-# the unannotated-site audit).
+# These constants state `f64` explicitly because the module's accuracy
+# promises are binary64 promises. Their decimal spellings round directly
+# to the nearest binary64 value; the annotation keeps that precision part
+# of the API even though `f64` is also the context-free float default.
 const pi: f64 = 3.14159265358979323846
 const tau: f64 = 6.28318530717958647692
 const e: f64 = 2.71828182845904523536

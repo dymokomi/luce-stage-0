@@ -3,17 +3,17 @@
 Luce has value semantics for values and automatic reference counting for
 references. The compiler derives every retain and release from types and
 control flow; programs do not spell ownership operations. This page states
-the behavior implemented by both execution paths and the limits that remain
-for future types.
+the behavior implemented by both execution paths, including classes and
+capturing closures.
 
 ## The language contract
 
 Every runtime value is either copied as a value or shared as a reference:
 
-| Kind | Current and planned examples | Assignment and passing | Lifetime rule |
+| Kind | Examples | Assignment and passing | Lifetime rule |
 |---|---|---|---|
 | Value | numbers, `bool`, `char`, `str`, `bytes`, `struct`, `enum`, `union` | copy the value | storage leaves with the containing value |
-| Reference | `list`, `map`, `array`, `builder`; future `class` and closure environments | retain and share one identity | last strong release destroys the object |
+| Reference | `class`, `list`, `map`, `array`, `builder`, closure environments | retain and share one identity | last strong release destroys the object |
 | Resource reference | `file`, `task`, windows, surfaces | retain and share one identity | last strong release closes, joins, or releases the resource |
 
 There are no source-level retain, release, move, clone, borrow, or free
@@ -38,8 +38,12 @@ The current tree implements ARC for every built-in reference and resource:
   unions, failures, loops, interfaces, bound methods, and container stores;
 - last-release close for files and join for unfinished tasks;
 - graph-preserving worker snapshots with rollback;
-- zeroing `weak` locals and fields for built-in ARC objects, with owned
+- zeroing `weak` locals and fields for built-in ARC objects and classes, with owned
   upgrades and generation-safe object-table reuse; and
+- final class identity, shared mutation, interface dispatch, and deterministic
+  `deinit`;
+- ARC closure environments, shared mutable cells, strong/weak/snapshot
+  captures, nested closures, and returned function values; and
 - a zero-live-object gate for every successful differential spec.
 
 For example, both names below observe one list:
@@ -58,13 +62,18 @@ The differential specifications exercise that behavior on both engines.
 Malformed serialized modules are separately required to be rejected or run
 to a clean outcome without a host-language panic.
 
-## What remains outside the current model
+## What ARC deliberately does not do
 
 ARC does not collect a strong cycle. A program must make at least one
-back-edge weak when a graph would otherwise keep itself alive. Classes and
-capturing closures are future reference types; they do not weaken the current
-built-in ARC contract. The current interface representation is safe for
-read-only dispatch but will be replaced before mutable class dispatch.
+back-edge weak when a graph would otherwise keep itself alive. The compiler
+diagnoses the direct case where a class stores a closure that strongly
+captures the same `self`; indirect application cycles remain the program's
+responsibility.
+
+The current interface representation is a hidden set of bound witnesses. It
+owns struct receiver snapshots and retains class identities safely. A class
+witness may mutate its shared object; a writing value-struct witness remains
+refused until interfaces use one owned payload and a witness table.
 
 ## ARC behavior
 
@@ -103,16 +112,18 @@ one-shot state.
 
 ### Bound methods, interfaces, and closures
 
-A bound method copies its value receiver and retains reference fields in that
-copy. The function value can therefore be returned or stored independently of
-the original binding. A current interface value stores one such bound witness
-per method; every witness owns its receiver snapshot safely. The planned
-existential representation stores one payload plus metadata and a witness
-table, avoiding repeated receiver storage and enabling mutable dispatch.
+A bound method copies a value receiver and retains reference fields in that
+copy. A class bound method retains and shares its receiver identity. The
+function value can therefore be returned or stored independently of the
+original binding. A current interface value stores one bound witness per
+method; a struct witness owns its receiver snapshot, while a class witness
+retains the shared object.
 
 Capturing closure environments are ARC objects. Immutable value captures are
-snapshots, mutable local captures use a shared cell, and reference captures
+snapshots, mutable local captures use one shared cell, and reference captures
 are strong unless a capture list says `weak` or requests an explicit snapshot.
+Copying a function value retains its environment; the last release destroys
+the environment and releases each capture once.
 
 ## Workers
 
@@ -121,12 +132,12 @@ copy directly. Permitted container graphs are rebuilt recursively in the
 receiving runtime, preserving relationships within the copied graph but
 sharing no object identity with the sender.
 
-Resources, function values, and values containing weak storage are refused
-transitively. A weak handle names one runtime's object table and therefore
-cannot be copied into another. Future classes and capturing closure
-environments are non-sendable in this milestone. That boundary makes ordinary
-data races over Luce objects unrepresentable without introducing a second
-ownership language.
+Resources, classes, function values, and values containing weak storage are
+refused transitively. A weak handle, class identity, or closure environment
+names one runtime's object table and therefore cannot be copied into another.
+A worker may construct and destroy its own classes and closures inside its
+private runtime. That boundary makes ordinary data races over Luce objects
+unrepresentable without introducing a second ownership language.
 
 ## Cycles and weak references
 
@@ -144,7 +155,7 @@ func main():
 ```
 
 A weak place always has an explicit optional type and initializes to `none`.
-Current targets are `list`, `map`, `array`, and `builder`. Assigning a live
+Current targets are `class`, `list`, `map`, `array`, and `builder`. Assigning a live
 target records its handle without retaining it; assigning `none` clears the
 place. After the target's last strong release, every later read answers
 `none`, even if the object-table row is reused.
@@ -160,8 +171,10 @@ structs are rejected as targets. A value containing a weak field has no
 implicit equality or collection-search behavior, because the hidden handle is
 not a semantic value. Weak handles never cross worker runtime tables.
 
-Classes will use the same storage path once their heap representation lands.
-Reference-backed interfaces and closure capture lists remain later phases.
+Closure capture lists use the same weak path. `[weak name]` records a
+non-owning reference in the closure environment and exposes an optional
+snapshot inside the closure body. Interface values and resources are not weak
+targets.
 
 ## Release-gate evidence
 
@@ -179,6 +192,12 @@ Reference-backed interfaces and closure capture lists remain later phases.
 - Weak fields and locals break recursive container cycles, upgrade live
   targets to owned snapshots, zero after final release, and never revive when
   an object-table row is reused.
+- Class aliases share mutation and identity; `deinit` runs once before fields
+  release on success, recoverable error, trap unwinding, and worker-local
+  teardown.
+- Returned and nested closures retain immutable captures, share mutable cells,
+  preserve function/interface dispatch, break object cycles with weak capture,
+  and finish at zero live objects on both engines.
 - The damaged-module corpus is total: reject or run cleanly, never panic.
 
 A change to retain/release instructions or type tags bumps the module format.

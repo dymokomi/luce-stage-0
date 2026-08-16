@@ -102,8 +102,10 @@ not trap.
 ## Comparison
 
 `== != < <= > >=` order same-typed numbers and `str`. `==` and `!=` also
-apply to `bool` and enums. Enums have no ordering. Object equality
-compares identity. Unions have no `==` at all: `match` on each value
+apply to `bool` and enums. Enums have no ordering. Built-in container and
+resource equality compares identity. `left is right` compares two references
+of the same nominal class type for identity; classes do not have `==` or an
+order. Unions have no `==` at all: `match` on each value
 and compare what the arms carry. Function values have neither `==` nor
 an order: a function value is the function it names *and* the receiver
 it may carry, its type cannot say which, and comparing the names is
@@ -214,19 +216,19 @@ receiver.method(args)       sugar; see below
 
 A top-level or static namespace function name is a value where a
 [function type](../types/#function) is expected. So is
-`receiver.method` for a **reading** method: the value carries the
+`receiver.method` for a compatible method: the value carries the
 receiver, and the written type drops the receiver's parameter, so a
 method taking one `i64` at its call site binds as a
-`func(i64) -> i64`. The receiver is copied into the value at the bind.
-Value fields form a snapshot; reference fields still name the same objects.
-The bound value retains those references until it is destroyed, so it may
-outlive the original receiver binding. A value is called with ordinary
-parentheses, and its arguments are checked against the signature exactly as a
-direct call's are.
+`func(i64) -> i64`. A structure receiver is copied into the value at the bind:
+value fields form a snapshot and reference fields remain shared and retained.
+A class receiver retains its identity, so later class mutation remains visible
+and a writing class method may be bound. The value may outlive the binding it
+came from. It is called with ordinary parentheses, and its arguments are
+checked against the signature exactly as a direct call's are.
 
-Two binds are refused, each by name: a **writing** method (call it on the
-mutable receiver directly) and a **fallible** method (a function type carries
-no `!`).
+A writing **structure** method cannot bind because the snapshot is not a
+mutable place. A fallible method cannot bind because a function type carries
+no `!`.
 
 A lambda is parenthesized parameter names, `->`, and one expression:
 
@@ -237,11 +239,41 @@ A lambda is parenthesized parameter names, `->`, and one expression:
 
 Parameter and result types come from the function type at the place
 where the lambda lands. With no expected function type it is refused.
-The body may name its parameters, visible functions and file-scope
-constants; it may not name a local from the surrounding function,
-including a function-valued local used as a callee. A lambda carries
-no environment. State that travels with behavior is a struct with a
-method.
+The body may name its parameters, visible functions and file-scope constants;
+it may not name a local from the surrounding function. This concise form has
+no environment.
+
+A capturing block closure begins with `func(parameters):` and an indented
+ordinary body:
+
+```luce run
+func make_adder(start: i64) -> func(i64) -> i64:
+    var total = start
+    return func(amount):
+        total += amount
+        return total
+
+func main():
+    let add: func(i64) -> i64 = make_adder(40)
+    print(str(add(1)))
+    print(str(add(1)))
+```
+
+```output
+41
+42
+```
+
+Its parameter and result types come from the destination exactly as an
+expression lambda's do. Immutable captures are snapshots; captured `var`
+locals share one cell with the surrounding scope and sibling closures.
+`[saved = expression] func():` evaluates an explicit snapshot once, and
+`[weak name] func():` captures a weak-capable reference as an optional.
+The closure environment is ARC-managed and may outlive its creating frame.
+
+Because layout is suspended inside call parentheses, an indented closure body
+cannot begin there. Bind the closure first and pass the value, or return it
+directly from an ordinary block.
 
 Function values copy freely. Equality and ordering are both refused —
 a function type cannot say which of its values carries a receiver, so
@@ -426,6 +458,7 @@ new map[K, V]
 new array[T](size, ...)
 new builder
 Struct(field = expr, ...)  every field, by name
+Class(field = expr, ...)   one new class identity; every required field, by name
 ```
 
 A map literal evaluates its entries in written order and creates a
@@ -437,10 +470,11 @@ an immutable [constant container](../statements/#file-scope-constants).
 
 ## Reference construction and sharing
 
-`new list[T]`, `new map[K, V]`, `new array[T](...)`, and `new builder`
-create reference objects. List and map literals also create fresh reference
-objects. Assignment, calls, returns, fields, optionals, and container stores
-share them through ARC; no ownership operator appears in the expression.
+`new list[T]`, `new map[K, V]`, `new array[T](...)`, `new builder`, and a class
+constructor create reference objects. List and map literals also create fresh
+reference objects. A capturing block closure creates an ARC environment.
+Assignment, calls, returns, fields, optionals, and container stores retain and
+share these references; no ownership operator appears in the expression.
 
 Values copy according to their type. There is no general deep-copy expression.
 A list slice and particular library transformations create independent values

@@ -3,7 +3,7 @@
 Luce is statically typed with inference. Every expression has exactly
 one type, fixed at compile time. An annotation is optional wherever the
 initializer decides the type and required where nothing does — an empty
-container literal, or a `var` declared without a value.
+container literal or a `var` declared without a value.
 
 This page is the reference for what the types are. The numeric
 *semantics* — division, checked arithmetic, and the conversion
@@ -23,15 +23,13 @@ A copied value may contain references; copying it retains those fields.
 A **reference type** is a shared object. Assigning it or passing it shares the
 *same* object — a mutation through one name is seen through every other. The
 ARC runtime frees it after the last strong reference.
-The reference types implemented today are the containers `list[T]`,
-`map[K, V]`, `array[T, ...]`, and `builder`, together with the resources
-`file` and `task(...)`.
+The reference types implemented today are user-declared `class` types; the
+containers `list[T]`, `map[K, V]`, `array[T, ...]`, and `builder`; and the
+resources `file` and `task[...]`. Capturing closures use an internal ARC
+environment while retaining the ordinary function-value type.
 
-`weak` is non-owning storage for an optional built-in ARC reference. It is a
+`weak` is non-owning storage for an optional ARC object reference. It is a
 property of a local or field rather than a type; see [Weak storage](#weak-storage).
-User-defined reference types are not complete. `class` is accepted as a
-front-end scaffold but still lowers with value-struct behavior.
-[ROADMAP.md](ROADMAP.md) specifies their destination and acceptance tests.
 [MEMORY.md](MEMORY.md) is the source of truth for current behavior.
 
 ## Numeric types
@@ -157,7 +155,8 @@ reference is what copies, and both struct values see the one object.
 ## Weak storage
 
 `weak` qualifies one mutable storage place; it does not construct a type.
-The declared type must be an optional `list`, `map`, `array`, or `builder`:
+The declared type must be an optional class, `list`, `map`, `array`, or
+`builder`:
 
 ```luce
 func main():
@@ -178,12 +177,12 @@ Generation checks prevent a freed object-table row from reviving an old weak
 handle.
 
 Weak storage cannot target a scalar, text value, value struct, interface,
-function, `file`, or `task`, and cannot cross a worker boundary. A struct that
+function, `file`, or `task`, and cannot cross a worker boundary. A value that
 contains a weak field has no synthesized equality or collection-search
-semantics. Classes will become valid targets when class reference lowering is
-complete.
+semantics. `[weak name]` uses the same runtime representation for a closure
+capture.
 
-## Structs, enums, unions, and interfaces
+## Structs, classes, enums, unions, and interfaces
 
 A `struct` is a value aggregate of named, typed fields, built by naming
 each field:
@@ -197,6 +196,13 @@ func main():
     let p = Point(x = 1.0, y = 2.0)
     print(str(p.x))
 ```
+
+A `class` declares fields and methods with the same memberwise construction
+shape, but its value is an ARC reference with identity. Assignment shares the
+object, `let` permits object-field mutation, and `left is right` compares
+identity. A class may conform to interfaces, appear in ordinary storage, and
+declare one ARC-driven `deinit`. [CLASSES.md](CLASSES.md) is the complete
+contract.
 
 An `enum` is a set of named constants stored at one integer width
 (`docs/ENUMS.md`); members are always namespaced, an explicit integer
@@ -228,9 +234,8 @@ The builtin type names are **lowercase**: `bool`; `u8`, `u16`, `u32`,
 `u64`; `i8`, `i16`, `i32`, `i64`; `f16`, `f32`, `f64`; `char`, `str`,
 `bytes`; the containers `list`, `map`, `array`, `builder`; and the resources
 `file` and `task`.
-A name you declare — a type alias, struct, enum, union, or interface — is TitleCase
-by convention, so the case of a type name says who defined it. `class`
-will join that set only when its reference lowering is complete.
+A name you declare — a type alias, struct, class, enum, union, or interface —
+is TitleCase by convention, so the case of a type name says who defined it.
 
 Parentheses in a type are grouping: `(T)` is `T`, accepted wherever a
 type may stand and required nowhere. `i64?` and `(i64)?` are the same

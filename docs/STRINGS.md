@@ -56,7 +56,7 @@ func main():
 ```
 
 Indexes are non-negative `i64` values. An out-of-range index or slice traps
-`string_bounds`. UTF-8 is variable-width, so scalar length and random access
+`str_bounds`. UTF-8 is variable-width, so scalar length and random access
 are linear unless the optimizer can prove a cheaper path; the API does not
 pretend byte offsets are characters.
 

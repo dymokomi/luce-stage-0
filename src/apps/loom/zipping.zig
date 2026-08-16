@@ -146,7 +146,7 @@ const Yard = struct {
 /// these rows carry them out to a disk and back through two more
 /// processes, so both halves are talking about one archive.  They are
 /// copied rather than shared because `specs/` is a module of its own
-/// and holds them as Luce source (a `list(byte)` literal a program
+/// and holds them as Luce source (a `list[u8]` literal a program
 /// builds), which is not a thing Zig can read.  Anyone changing one
 /// copy is changing what the other proves.
 const stored_archive = [_]u8{

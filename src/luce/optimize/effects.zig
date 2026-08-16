@@ -115,11 +115,10 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
             (if (binary.operand_type == .function) .stable else .pure)
         else if (binary.operand_type.isFloating())
             // IEEE arithmetic answers everything, `/0` included, so
-            // every double operator is pure — and since `/` is real
-            // division and always answers a double
-            // (docs/NUMERICS.md §2), `/` is now always in this arm.
-            // The operators that can still trap are `//` and `%`, the
-            // two that produce a long.
+            // every floating-point operator is pure. Integer `/`
+            // becomes `f64` before MIR (docs/NUMERICS.md §2), so `/`
+            // is always in this arm. The integer operators that can
+            // still trap are `//` and `%`.
             .pure
         else if (binary.operand_type == .str)
             // string `+` allocates bytes somebody has to free.
@@ -180,8 +179,8 @@ pub fn classify(function: *const Function, at: defs.Register) Effect {
 fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
     return switch (kind) {
         // Arithmetic on values.  `abs` is `stable` rather than `pure`
-        // for the same reason `negate` is: abs(long.min) overflows.
-        .min, .max, .clamp, .sqrt, .floor, .ceil, .trunc, .compare_i64_f64 => .pure,
+        // for the same reason `negate` is: abs of a signed minimum overflows.
+        .min, .max, .clamp, .sqrt, .floor, .ceil, .trunc => .pure,
         .abs => if (first_argument) |argument|
             (if (argument.isFloating()) .pure else .stable)
         else
@@ -211,8 +210,8 @@ fn intrinsicEffect(kind: Intrinsic, first_argument: ?Type) Effect {
         // Text.  A string is a value, so these read nothing another
         // instruction can change.  The parsers answer absence rather
         // than trapping, so they are pure; the rest can trap.
-        .parse_int,
-        .parse_float,
+        .parse_i64,
+        .parse_f64,
         => .pure,
 
         // `parse_str` validates immutable bytes and makes fresh owned
@@ -420,12 +419,11 @@ pub fn viewStable(instruction: Instruction) bool {
             .floor,
             .ceil,
             .trunc,
-            .compare_i64_f64,
             .string_slice,
             .string_byte,
             .string_find_byte,
-            .parse_int,
-            .parse_float,
+            .parse_i64,
+            .parse_f64,
             .parse_str,
             .chr_code,
             .ord_text,

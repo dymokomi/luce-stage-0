@@ -1,9 +1,9 @@
 # Interfaces
 
 Use an interface when the caller needs one small behavior but should not
-choose which struct provides it. An interface is a named contract. A struct
-opts in explicitly, and the compiler checks the whole contract before the
-first value is converted.
+choose which concrete type provides it. An interface is a named contract. A
+struct or class opts in explicitly, and the compiler checks the whole contract
+before the first value is converted.
 
 ## Start with the behavior
 
@@ -58,16 +58,17 @@ that belonged to the concrete value that created it. The same pattern works
 with `map[str, Drawable]`, arrays, and struct fields.
 
 The conversion is implicit at an interface-typed destination. There is no
-cast syntax and no structural conformance: a struct must write
-`struct Name: Drawable:`. A struct may have extra methods; they are simply
-not visible through `Drawable`.
+cast syntax and no structural conformance: a declaration must write
+`struct Name: Drawable:` or `class Name: Drawable:`. A conforming type may
+have extra methods; they are simply not visible through `Drawable`.
 
 ## Let the compiler check the contract
 
 Every declared method is required. The implementation must match its name,
 parameter count, parameter types, result count, and result types. The receiver
-is implied by the method declaration. Interface methods are currently
-read-only, so a method that writes `self` cannot be a witness.
+is implied by the method declaration. A class witness may mutate its shared
+object. A writing value-struct method cannot currently be a witness, because
+interface dispatch does not expose mutable value storage.
 
 Failure effects are directional. A non-fallible implementation may satisfy
 a fallible requirement, so a caller may still write `try`. A fallible
@@ -115,16 +116,16 @@ its components first. A fallible multi-value method follows the ordinary
 ## Values remain alive
 
 Converting a struct to an interface value captures a copy of the concrete
-receiver. The interface value owns that copy: any list, map, array, builder,
-file, or task fields remain alive for as long as dispatch can reach them, even
-after the original concrete value leaves scope. Releasing the interface value
-releases that captured graph exactly once.
+receiver. Converting a class retains its shared identity. In both cases the
+interface owns everything its dispatch can reach, even after the original
+binding leaves scope. A class mutation through the interface remains visible
+through every alias of that class.
 
 The current representation stores one bound dispatch value per required
 method. It is correct but intentionally not the final representation. The
-[status page](/status/#interfaces) describes the planned move to
-one owned payload and a witness table before mutable interface dispatch is
-added.
+[status page](/status/#interfaces) describes the planned move to one owned
+payload and a witness table. Mutable class dispatch is already supported; a
+future owned value payload is what enables writing struct witnesses.
 
 The [memory guide](/guide/memory/) explains the lifetime rule. The [interface
 reference](/guide/reference/types/#interface) gives the exact matching,
@@ -145,4 +146,4 @@ implementations cannot meaningfully provide.
 For exact syntax and every refusal, see
 [Types: Interface](/guide/reference/types/#interface).
 For the broader choice between structs, unions, and interfaces, see
-[Structures](/guide/structures/).
+[Structures](/guide/structures/) and [Classes](/guide/classes/).

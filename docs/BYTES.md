@@ -5,7 +5,7 @@
 - `len(data)` counts bytes and answers `i64`;
 - `data[index]` answers `u8`;
 - `data[start:end]` answers `bytes`;
-- `for byte in data` iterates `u8` values;
+- `for value in data` iterates `u8` values;
 - `+` concatenates; and
 - equality and ordering are lexicographic over unsigned bytes.
 

@@ -26,8 +26,8 @@ reason worth carrying, it is neither — it is `T?`.
 
 So reading a file is an error (asking whether a file exists before
 opening it is a TOCTOU race), a bad index is a trap (the caller could
-have checked `len`), and a failed number parse is absence (`parse_int`
-answers `long?`, because "not a number" is the same reason every time and
+have checked `len`), and a failed number parse is absence (`parse_i64`
+answers `i64?`, because "not a number" is the same reason every time and
 the name already says it).
 
 ## Absence is a value; failure is an event
@@ -71,7 +71,7 @@ is the whole coalescing story — there is no separate `??`.
 
 ```luce
 func main():
-    let count = parse_int("42") else 0
+    let count = parse_i64("42") else 0
     print(f"{count}")
 ```
 
@@ -80,7 +80,7 @@ program — and it is greppable:
 
 ```luce
 func main():
-    let n = parse_int("42") else trap("not a number")
+    let n = parse_i64("42") else trap("not a number")
     print(f"{n}")
 ```
 
@@ -97,7 +97,7 @@ field, or a parameter, and the value the function answers is an ordinary
 `T`.
 
 ```text
-func read(path: string) -> string!:
+func read(path: str) -> str!:
     return try file_read(path)
 ```
 
@@ -107,11 +107,11 @@ type, `return x` in a `-> T!` function just returns
 `x` — Ok-wrapping is free.
 
 `error(message)` raises. It is written as a statement (it diverges), and
-the message is any `string`:
+the message is any `str`:
 
 ```luce
 func checked(s: str) -> i64!:
-    let n = parse_int(s)
+    let n = parse_i64(s)
     if n == none:
         error("not a number: " + s)
     return n
@@ -164,7 +164,7 @@ func main() -> !:
         print("failed: " + reason)
 ```
 
-The bound name is a `string` — the message, and only the message. An
+The bound name is a `str` — the message, and only the message. An
 error's code and origin are not a handler's business: a caught error is
 one nobody is reporting, and the call that raised it already answered
 which kind it was. `catch` is deliberately distinct from `else`: `else`
@@ -197,8 +197,8 @@ The trap codes are a closed set:
 | `explicit_trap` | `trap(message)` was called |
 | `missing_return` | a function ended without returning its value |
 | `call_depth_exceeded` | the call stack reached its depth budget |
-| `string_bounds` | a string index or slice was out of bounds |
-| `string_boundary` | a string slice split a UTF-8 sequence |
+| `str_bounds` | a string index or slice was out of bounds |
+| `str_boundary` | a string slice split a UTF-8 sequence |
 | `host_unavailable` | an effect was used with no host service behind it |
 | `index_bounds` | a `list`, `array`, or string index was out of bounds |
 | `key_missing` | a `map` was indexed at an absent key |
@@ -211,7 +211,7 @@ The trap codes are a closed set:
 
 Two of these have optional-returning or absent-answering siblings so a
 program need not risk them: `key_missing` versus `m.get(k) -> V?`, and
-parse failure answered as `long?` rather than a trap.
+parse failure answered as `i64?` rather than a trap.
 
 ## Cleanup on the error path
 

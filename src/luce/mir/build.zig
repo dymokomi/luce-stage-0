@@ -448,7 +448,7 @@ pub const Lowering = struct {
             // and `match` leans on that promise to let its last arm be
             // the fallthrough (docs/ENUMS.md).  So the first member is
             // what `var m: Method` starts at and what an
-            // `array(Method, n)` is filled with.
+            // `array[Method, n]` is filled with.
             .enumeration => |reference| try self.emit(
                 .{ .const_integer = self.enums[reference.index].members[0].value },
                 of,
@@ -719,7 +719,7 @@ pub const Lowering = struct {
         self.switchTo(loop.exit);
     }
 
-    /// A long local, one higher.
+    /// An i64 loop counter, one higher.
     fn advance(self: *Lowering, counter: LocalId) Error!void {
         const current = try self.load(counter);
         const one = try self.emit(.{ .const_integer = 1 }, .i64);

@@ -20,13 +20,9 @@
 # polynomial 0xEDB88320, preconditioned with ones and post-
 # conditioned by complement, exactly as APPNOTE 4.4.7 states it.
 #
-# **Bytes are a `list[u8]`, one u8 to an element** — one u8 of
-# memory, too, since `list` gave up the boxed slot (docs/BYTES.md R1).
-# This module is where that cost was first measured: it used to say
-# "bytes are a `list(long)`" and explain that a `list[u8]` cost the
-# same eight bytes an element *and* a conversion at every store, so the
-# honest choice was the width the arithmetic happens at.  That is no
-# longer true, and the buffers are a quarter of what they were.
+# **Bytes are a `list[u8]`, one u8 to an element** — one byte of
+# memory too, because packed scalar lists store their declared width
+# (docs/BYTES.md R1).
 #
 # One thing the narrower element made explicit rather than changed: a
 # `u8` widens to `i32` in an operator (docs/TYPES.md D5), so a `u32`

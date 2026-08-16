@@ -377,7 +377,7 @@ compile module
     resolve imports
     malloc 48 bytes
     check types
-    write byte 0x7f
+    write u8 0x7f
     optimize
 ```
 

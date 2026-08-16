@@ -10,7 +10,7 @@
 //! keeps one index per distinct heap shape and signature.
 //!
 //! **The interning is here because resolution is what mints a row.**
-//! A `list(long)` a program wrote and a `list(long)` a checked
+//! A `list[i64]` a program wrote and a `list[i64]` a checked
 //! `xs[a:b]` needs are the same row, and keeping the mint beside the
 //! only spelling that reaches it from source is what makes two rows
 //! for one shape hard to write.  What the tables mean once they are
@@ -132,7 +132,7 @@ pub fn namespaceName(self: *Analyzer, target: Type) ?[]const u8 {
 /// transfers.
 ///
 /// **A function payload is the one exception, and it is not one**:
-/// `(func() -> long)?` is the *only* form a function value takes in a
+/// `(func() -> i64)?` is the *only* form a function value takes in a
 /// slot (docs/BINDING.md D7), because a function value has no zero and
 /// a slot exists before anything fills it.  So the absence is not a
 /// second way to spell an element type here; it is the element type,
@@ -154,20 +154,6 @@ pub fn refuseOptionalPart(
 }
 
 fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Type {
-    // Before anything else, including the arity checks: a name the
-    // language used to answer to is answered by name, whatever
-    // shape it was written in. `List[i64]` must be told that
-    // `List` is `list` and not that it "takes no type arguments",
-    // which is a sentence about a struct nobody declared.
-    if (types.retiredSpelling(written.name)) |now| {
-        try self.fail(
-            "luce.sema.type.retired",
-            written.span,
-            "{s} is retired; write {s}",
-            .{ written.name, now },
-        );
-        return null;
-    }
     // `func(T, ...) -> R`.  Not in the builtin table because it is
     // not a name a program could have written for something else:
     // `func` is a keyword, so this shape reaches here from the
@@ -294,9 +280,8 @@ fn resolveBase(self: *Analyzer, module: usize, written: ast.TypeName) Error!?Typ
             }
             return try internHeapType(self, .file);
         },
-        // `task(...)` holds a **return shape**, written exactly as
-        // it would be after `->`: `task(double)`, `task(double!)`,
-        // `task(!)`, and a bare `task` for a worker that answers
+        // `task[...]` holds one **return shape**, written as
+        // `task[f64]`, `task[f64!]`, `task[!]`, or bare `task` for a worker that answers
         // nothing and cannot fail (docs/THREADS.md D3).  The `!` is
         // the spawned function's own attribute travelling with the
         // call the task carries — `types.Type` is untouched by it,
@@ -456,17 +441,6 @@ pub fn refuseFunctionPart(
 /// see.  A misremembered `Str` or `Bolean` is the commonest of all
 /// type errors and the cheapest to answer well.
 fn failUnknownType(self: *Analyzer, module: usize, written: ast.TypeName) Error!void {
-    // A name the language used to answer to gets its exact replacement,
-    // never an edit-distance guess.
-    if (types.retiredSpelling(written.name)) |now| {
-        try self.fail(
-            "luce.sema.type.retired",
-            written.span,
-            "{s} is retired; write {s}",
-            .{ written.name, now },
-        );
-        return;
-    }
     const builtin_types = types.builtin_names;
     const prefix = self.modules[module].prefix;
     var suggestion = helpers.Suggestion.init(written.name);

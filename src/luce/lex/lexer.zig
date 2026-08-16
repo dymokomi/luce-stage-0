@@ -781,7 +781,7 @@ const Lexer = struct {
         // after '.', found end of line" about what is plainly an
         // unfinished float; `.5` has had the model message all along.
         // A word start after the point really is member access
-        // (`5.foo`), and long saying it has no fields is the right
+        // (`5.foo`), and i64 saying it has no fields is the right
         // answer to that one, so it is left alone.
         var unfinished_point = false;
         if (!is_float and self.offset < self.source.len and self.source[self.offset] == '.' and
@@ -1123,7 +1123,7 @@ const Lexer = struct {
         }
         const span: Span = .{ .start = start, .end = self.offset };
         try self.report("luce.lex.str", span, "unterminated f-string", .{});
-        // Recovery, as for `string()`: the parser slices off `f"` and
+        // Recovery, as for `str()`: the parser slices off `f"` and
         // the closing quote, so three bytes is the minimum it can hold.
         if (span.end - span.start >= 3) try self.emit(.fstring, span);
     }

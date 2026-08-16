@@ -757,7 +757,7 @@ fn lowerBinding(
     var value: Typed = undefined;
     // The annotation said `T?` and the initializer handed over a
     // plain `T`, so the binding starts out present.
-    var widened = false;
+    var wrapped_optional = false;
     if (weak and annotation == null) {
         try self.fail(
             "luce.sema.weak.target",
@@ -787,14 +787,9 @@ fn lowerBinding(
             const initializer = (try self.lowerExpression(value_expression, false)) orelse
                 return refusals.forgetName(self, name);
             value = (try self.fit(initializer, expected)) orelse {
-                // `let f: double = 1` used to arrive here and be
-                // told to write `double(...)`; it widens on its own
-                // now (docs/NUMERICS.md).  What is left is two
-                // sentences, and which one is true depends on the
-                // pair: a `long` into an `int` *has* a conversion
-                // and is refused because narrowing is never
-                // implicit, while a `string` into an `int` has
-                // none at all (docs/TYPES.md §11).
+                // Numeric representations have explicit constructors;
+                // unrelated types do not. The suffix distinguishes those
+                // two errors without implying either conversion is hidden.
                 const narrowing = try refusals.narrowingAdvice(self, expected, initializer.value_type);
                 try self.fail(
                     "luce.sema.type",
@@ -810,7 +805,7 @@ fn lowerBinding(
                 );
                 return refusals.forgetName(self, name);
             };
-            widened = !initializer.value_type.eql(expected);
+            wrapped_optional = !initializer.value_type.eql(expected);
         }
     } else {
         value = (try self.lowerExpression(value_expression, false)) orelse
@@ -822,10 +817,10 @@ fn lowerBinding(
         try self.declareLocal(name, value.value_type, mutable, name_span)) orelse
         return refusals.forgetName(self, name);
     const store = ledger.storeOwnedKind(self, local, value);
-    // `let x: long? = 5` is optional in its type and present in
+    // `let x: i64? = 5` is optional in its type and present in
     // fact, and the reader should not have to test what they just
     // wrote.
-    if (widened and !weak) try flow.narrow(self, local);
+    if (wrapped_optional and !weak) try flow.narrow(self, local);
     try recorder.recordStatement(self, .{ .declare = .{
         .local = local,
         .value = value.node,
@@ -945,7 +940,6 @@ const PreparedTarget = struct {
 /// per-value fits are re-derived by lower.
 fn fitsInto(actual: Type, expected: Type) bool {
     if (actual.eql(expected)) return true;
-    if (actual.widensTo(expected)) return true;
     const payload = expected.held() orelse return false;
     return fitsInto(actual, payload);
 }
@@ -1019,10 +1013,9 @@ fn lowerAssignMany(self: *FunctionBuilder, assigned: ast.AssignMany) Error!void 
     defer self.temporary().free(prepared);
     const stores = try self.arena().alloc(nodes.StoreKind, targets.len);
     for (targets, received.layout.fields, 0..) |target, field, position| {
-        // A field read is a view into the shape's run, and the two
-        // widenings are the only roads between its type and the
-        // target's (`fit`'s rule, decided here and re-derived by
-        // lower from the same pair of types).
+        // A field read is a view into the shape's run. It either matches
+        // the target exactly or injects `T` into `T?`; lowering derives
+        // the same decision from this pair of types.
         if (!fitsInto(field.field_type, target.value_type)) {
             try self.fail(
                 "luce.sema.type",
@@ -1264,10 +1257,7 @@ fn lowerForRange(self: *FunctionBuilder, loop: ast.ForRange) Error!void {
     const temps_floor = self.temps.items.len;
     const bounds_run = (try self.lowerOperandsIntoTracking(&.{ loop.start, loop.end }, .nothing)) orelse return;
     const bounds = bounds_run.values;
-    // Widened *before* the registers are read: a bound written as
-    // an `int` reaches a `long` loop by widening, and the counted
-    // loop the IR opens is a `long` one (docs/TYPES.md §2).
-    if (!try self.widensInto(&bounds[0], .i64) or !try self.widensInto(&bounds[1], .i64)) {
+    if (!bounds[0].value_type.eql(.i64) or !bounds[1].value_type.eql(.i64)) {
         try self.fail("luce.sema.type", loop.span, "range bounds must be i64", .{});
         return;
     }
@@ -1323,7 +1313,7 @@ fn lowerForEach(self: *FunctionBuilder, loop: ast.ForEach) Error!void {
         return;
     }
     // Each collection has a "position" (a map's key, or a
-    // list/array's long index) and a "payload" (a map's value, or
+    // list/array's i64 index) and a "payload" (a map's value, or
     // the element).  `for x in c:` binds the payload for
     // sequences and the key for maps (Python's habit); `for a, b
     // in c:` binds position then payload.

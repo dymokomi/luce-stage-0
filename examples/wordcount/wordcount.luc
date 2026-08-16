@@ -50,7 +50,7 @@ func main(args: list[str]) -> !:
     let path = args[0]
     var top: i64 = 5
     if len(args) > 1:
-        top = parse_int(args[1]) else top
+        top = parse_i64(args[1]) else top
 
     # One read, and its answer is the whole story.  The exists-then-
     # read this used to write had a window between the two calls that

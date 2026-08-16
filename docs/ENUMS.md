@@ -71,15 +71,15 @@ alias is a `let` if a program wants one.)
 
 ## The backing width
 
-The default backing width is `int`. Writing the width in parentheses picks
-another rung of the integer ladder — `byte`, `short`, `int`, or `long`:
+The default backing width is `i32`. Writing the width in parentheses chooses
+any of the eight integer types:
 
 ```text
-enum Small(byte):
+enum Small(u8):
     off = 0
     on = 255
 
-enum Wide(long):
+enum Wide(i64):
     huge = 9223372036854775807
     tiny = -9223372036854775808
 ```
@@ -103,7 +103,7 @@ are spelled.
 
 **Enum to number** uses the numeric conversion constructors, which accept
 an enum operand because they are named for what they produce. Every
-numeric constructor takes an enum, not only `int` and `long`:
+numeric constructor takes an enum, not only `i32` and `i64`:
 
 ```luce
 enum Method:
@@ -132,8 +132,8 @@ func main():
     print(str(u8(m)))    # traps conversion_range before it prints
 ```
 
-**`string(m)` answers the member's name** — the name, not the number — and
-an f-string hole follows, because a hole is a `string(...)` the reader did
+**`str(m)` answers the member's name** — the name, not the number — and
+an f-string hole follows, because a hole is a `str(...)` the reader did
 not write:
 
 ```luce
@@ -190,7 +190,7 @@ wanted.
 ## Equality
 
 Enums compare with `==` and `!=` and nothing else. `<` on enums is refused
-by a sentence naming `int(m)`: an enum is a set of names, not a number
+by a sentence naming `i32(m)`: an enum is a set of names, not a number
 line, so code that means the number says the number.
 
 ```luce
@@ -319,15 +319,14 @@ func main():
 
 ## Containers, and maps keyed by an enum
 
-Containers hold enums like any scalar, at the backing width: `list(Method)`,
-`map(string, Method)`, `array(Method, n)`, and a struct field. An array of
+Containers hold enums like any scalar, at the backing width: `list[Method]`,
+`map[str, Method]`, `array[Method, _]`, and a struct field. An array of
 enums fills with the first member (the enum's zero, below).
 
-An enum may also be a map **key**, wherever a `long` or `string` key
-stands, because an enum is an integer whose entire comparison surface is
-equality — which is exactly what a key is for. A key travels internally as
-the integer a `long` key would be and comes back out as the enum it went in
-as, so `for k in m` binds `k` at the enum type and `m.keys()` answers a
+An enum may also be a map **key**, wherever an integer or `str` key stands,
+because an enum's comparison surface is equality—which is exactly what a key
+needs. A key comes back out as the enum it went in as, so `for k in m` binds
+`k` at the enum type and `m.keys()` answers a
 `list` of the enum:
 
 ```luce
@@ -353,17 +352,16 @@ func main():
         print(f"{str(k)} {str(bindings[k])}")
 ```
 
-Two enum types never collide as a key, and neither do an enum and a
-`long`: `map(Key, V)` accepts a `Key` and nothing else. A duplicate enum
+Two enum types never collide as a key, and neither do an enum and an integer:
+`map[Key, V]` accepts a `Key` and nothing else. A duplicate enum
 key in a `const` literal is refused and the diagnostic names the member.
-Still not keys: `double`, `bool`, a struct, and the containers — and
-`map(int, V)` is refused too, because the narrow widths are storage, not
-key types.
+Still not keys: floats, `bool`, structs, classes, and containers. Every
+concrete integer width is a valid key type and remains distinct.
 
 ## The zero value
 
 An enum's zero is its first declared member. A late `var` starts there, an
-`array(Method, n)` fills every cell with it, and any place that has a zero
+`array[Method, _]` fills every cell with it, and any place that has a zero
 value has that one:
 
 ```luce
@@ -388,7 +386,7 @@ In the compiler an enum value is its backing integer, and the type carries
 both the enum-table index and the rung of the integer ladder its members
 are stored at. `match` lowers to the compare-and-branch tree LLVM turns
 into a jump table; with every member named, the last arm is the fallthrough
-and no test rejects a value that cannot occur. `string(m)` lowers to the
+and no test rejects a value that cannot occur. `str(m)` lowers to the
 same compare-and-branch tree, answering a member name interned in the
 program's constant pool. A hand-made module that puts a number no member
 holds into an enum register is refused by the verifier.

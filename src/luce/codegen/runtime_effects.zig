@@ -223,8 +223,8 @@ pub const Service = enum {
     luce_rt_string_byte,
     luce_rt_string_find_byte,
     luce_rt_str,
-    luce_rt_parse_int,
-    luce_rt_parse_float,
+    luce_rt_parse_i64,
+    luce_rt_parse_f64,
     luce_rt_parse_str,
     luce_rt_chr,
     luce_rt_ord,
@@ -232,7 +232,6 @@ pub const Service = enum {
 
     // -- operators ----------------------------------------------------
     luce_rt_compare,
-    luce_rt_compare_i64_f64,
     luce_rt_float_mod,
     luce_rt_float32_mod,
 
@@ -948,7 +947,7 @@ pub fn describe(service: Service) Effect {
             .memory = reads_text,
             .parameters = &.{ .run, .value_in, .plain, .plain, .value_out },
         },
-        .luce_rt_parse_int, .luce_rt_parse_float, .luce_rt_ord => .{
+        .luce_rt_parse_i64, .luce_rt_parse_f64, .luce_rt_ord => .{
             .memory = reads_text,
             .parameters = &.{ .run, .value_in, .value_out },
         },
@@ -986,13 +985,6 @@ pub fn describe(service: Service) Effect {
         .luce_rt_compare => .{
             .memory = reads_private,
             .parameters = &.{ .plain, .value_in, .value_in },
-        },
-        // Three scalars in, an answer out: it reads nothing at all,
-        // which is the strongest summary in this file and the only
-        // service that earns it.
-        .luce_rt_compare_i64_f64 => .{
-            .memory = reads_nothing,
-            .parameters = &.{ .plain, .plain, .plain },
         },
         // Two scalars in, one out, and the same nothing read — at
         // either float width.

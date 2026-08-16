@@ -9,7 +9,7 @@
 //! every payload field at its own zero (D13, BYTES B2), recursion
 //! through owning containers rather than through the layout (D12),
 //! `Shape?` as the recursion terminator that is not a container (D14),
-//! `string(u)` as the member's name (D16), and the exhaustive match
+//! `str(u)` as the member's name (D16), and the exhaustive match
 //! whose last arm is the fallthrough (A4 via ENUMS R1).
 //!
 //! Every program here runs twice, interpreted and compiled, and the
@@ -543,10 +543,10 @@ test "D14: a Shape? holds none or a value, narrows on the test, and matches once
 }
 
 // ---------------------------------------------------------------------------
-// string(u): the member's name, never the payload (D16)
+// str(u): the member's name, never the payload (D16)
 // ---------------------------------------------------------------------------
 
-test "D16: string(u) answers the member's name for every member" {
+test "D16: str(u) answers the member's name for every member" {
     try agree.ok(
         \\union Json:
         \\    null

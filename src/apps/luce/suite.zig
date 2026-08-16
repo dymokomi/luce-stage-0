@@ -3,7 +3,7 @@
 //!
 //! **The CLI drives and the artifact answers one test per call.**  Each
 //! file is compiled once, with a compiler-synthesized
-//! `func main(args: list(string)) -> !` over the names discovery found
+//! `func main(args: list[str]) -> !` over the names discovery found
 //! (`discover.zig`, `luce.types.Entry`); the artifact is opened once;
 //! and then `luce_main` is called once *per test*, with that test's
 //! name as the whole command line.  Every call is a fresh `Runtime`, so

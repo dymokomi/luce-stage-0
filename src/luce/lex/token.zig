@@ -127,7 +127,7 @@ pub const Kind = enum {
     char_literal,
     /// `"..."`, quotes included; escapes are decoded by the parser.
     string_literal,
-    /// f"...{expr}..." — the parser expands it into string()-wrapped
+    /// f"...{expr}..." — the parser expands it into str()-wrapped
     /// concatenation; the token spans the whole f"..." including the
     /// leading f and both quotes.
     fstring,
@@ -144,9 +144,9 @@ pub const Kind = enum {
     comma,
     colon,
     dot,
-    /// `?`, and only ever after a type name: `long?`, `User?`.
+    /// `?`, and only ever after a type name: `i64?`, `User?`.
     question,
-    /// `!`, and only ever after a return type: `-> string!`, `-> !`.
+    /// `!`, and only ever after a return type: `-> str!`, `-> !`.
     /// Never a prefix operator — `not` is the negation, and a `!x`
     /// that mis-lexes against `!=` is the mistake this grammar
     /// declines to make twice.

@@ -264,7 +264,7 @@ test "self: writer results with owned storage survive binding and statement disc
     );
 }
 
-test "self: an earlier optional string argument outlives a later receiver write" {
+test "self: an earlier optional str argument outlives a later receiver write" {
     try agree.ok(
         \\const first_text = "the first optional string is long enough to live in owned outside storage"
         \\const second_text = "the second optional string is likewise long enough to live outside inline storage"

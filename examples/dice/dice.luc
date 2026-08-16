@@ -18,9 +18,9 @@ func main(args: list[str]) -> !:
     var seed: i64 = 2026
     var count: i64 = 20
     if len(args) > 0:
-        seed = parse_int(args[0]) else seed
+        seed = parse_i64(args[0]) else seed
     if len(args) > 1:
-        count = parse_int(args[1]) else count
+        count = parse_i64(args[1]) else count
 
     var rng = math.rng(seed)
     var rolls: list[str] = []

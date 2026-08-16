@@ -77,8 +77,8 @@ text s
 | `json.quote(content: str) -> str` | a JSON string literal with quotes and escapes |
 | `value.is_null() -> bool` | whether the member is `null` |
 | `value.as_bool() -> bool?` | boolean payload, or `none` for another member |
-| `value.as_long() -> i64?` | integer payload; a real number returns `none` |
-| `value.as_double() -> f64?` | either numeric member, converting an integer explicitly inside the library |
+| `value.as_i64() -> i64?` | integer payload; a real number returns `none` |
+| `value.as_f64() -> f64?` | either numeric member, converting an integer explicitly inside the library |
 | `value.as_text() -> str?` | text payload, or `none` |
 | `value.count() -> i64` | array elements or object members; `0` for a leaf |
 | `value.member(name: str) -> Json?` | object member as a value, or `none` when absent/not an object |
@@ -100,7 +100,7 @@ func main() -> !:
     match doc:
         object(fields):
             print(fields["name"].as_text() else "?")
-            print(str(fields["port"].as_long() else 0))
+            print(str(fields["port"].as_i64() else 0))
             print(str(fields["debug"].as_bool() else true))
         else:
             print("not an object")
@@ -148,8 +148,8 @@ no JSON-specific arena or cleanup call.
 ## Numbers and round trips
 
 The notation determines the numeric member: `42` is `integer`, while `42.0`,
-`4.2`, and `4.2e1` are `real`. `as_long` does not silently round a real;
-`as_double` explicitly converts either numeric member. A whole number too
+`4.2`, and `4.2e1` are `real`. `as_i64` does not silently round a real;
+`as_f64` explicitly converts either numeric member. A whole number too
 large for an `i64` is represented as a `real`, where its precision is
 explicit.
 
@@ -162,8 +162,8 @@ import std.json
 
 func main() -> !:
     let doc = try json.parse("[42, 42.0, 4.2e1, \"\\u0041\"]")
-    print(str(doc.element(0).as_long() else -1))
-    print(str(doc.element(1).as_long() == none))
+    print(str(doc.element(0).as_i64() else -1))
+    print(str(doc.element(1).as_i64() == none))
     print(doc.write())
     print(json.quote("say \"hi\""))
 ```

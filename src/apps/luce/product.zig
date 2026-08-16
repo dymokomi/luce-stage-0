@@ -413,7 +413,7 @@ test "ir prints the program, and --full keeps what the entry never reaches" {
     try testing.expect(!tree.exists("shape.lc"));
 
     // A program that does not compile has no IR to print.
-    try tree.write("broken.luc", "func main():\n    let x: i64 = \"s\"\n    print(string(x))\n");
+    try tree.write("broken.luc", "func main():\n    let x: i64 = \"s\"\n    print(str(x))\n");
     const broken = try tree.at(gpa, "broken.luc");
     defer gpa.free(broken);
     var failed = try runLuce(gpa, &tree, &.{ "ir", broken }, null);
@@ -445,7 +445,7 @@ test "a program may arrive on standard input, and is named for what it is" {
         gpa,
         &tree,
         &.{ "check", "-" },
-        "func main():\n    let x: i64 = \"s\"\n    print(string(x))\n",
+        "func main():\n    let x: i64 = \"s\"\n    print(str(x))\n",
     );
     defer complained.deinit(gpa);
     try testing.expectEqual(@as(u8, 1), complained.status);

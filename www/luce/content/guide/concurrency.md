@@ -11,7 +11,7 @@ independent graph with no identity shared with the sender.
 
 ## Start one worker
 
-The worker target is a named function. `spawn` returns a `task(T)`, where `T`
+The worker target is a named function. `spawn` returns a `task[T]`, where `T`
 is the function's return type. `wait()` joins the worker and returns its answer:
 
 ```luce run

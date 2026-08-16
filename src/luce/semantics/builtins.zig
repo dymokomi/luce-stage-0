@@ -92,8 +92,8 @@ pub const builtins = [_]Builtin{
     .{ .name = "assert", .kind = .assert_true, .parameters = &.{.{ .name = "condition" }} },
     .{ .name = "trap", .kind = .trap_message, .parameters = &.{.{ .name = "message" }} },
     .{ .name = "error", .kind = .raise_error, .parameters = &.{.{ .name = "message" }}, .pure = false },
-    .{ .name = "parse_int", .kind = .parse_int, .parameters = &.{.{ .name = "text" }} },
-    .{ .name = "parse_float", .kind = .parse_float, .parameters = &.{.{ .name = "text" }} },
+    .{ .name = "parse_i64", .kind = .parse_i64, .parameters = &.{.{ .name = "text" }} },
+    .{ .name = "parse_f64", .kind = .parse_f64, .parameters = &.{.{ .name = "text" }} },
     .{ .name = "parse_str", .kind = .parse_str, .parameters = &.{.{ .name = "data" }} },
     .{ .name = "print", .kind = .print, .parameters = &.{.{ .name = "text" }}, .host = true },
     .{ .name = "file_read", .kind = .file_read, .parameters = &.{.{ .name = "path" }}, .host = true },
@@ -146,41 +146,12 @@ pub const builtins = [_]Builtin{
     .{ .name = "term_event_data", .kind = .term_event_data, .parameters = &.{.{ .name = "field" }}, .host = true },
 };
 
-/// Names the language spelled once and does not any more, and what to
-/// write instead.
-///
-/// **A table to empty, never to grow.**  A deleted builtin is normally
-/// just an unknown name, and that is the right answer for a private
-/// program — but these two are on a public documentation site, and
-/// `unknown function arg` points nowhere.  One release of a pointer is
-/// worth more here than the purity of having deleted the row; the row
-/// itself comes out when the site no longer teaches the old spelling.
-pub const retired_builtins = [_]struct {
-    name: []const u8,
-    instead: []const u8,
-}{
-    .{ .name = "arg", .instead = "declare func main(args: list[str]): and index args" },
-    .{ .name = "arg_count", .instead = "declare func main(args: list[str]): and write len(args)" },
-    // Retired at ABI 17 (docs/FILESYSTEM.md D13).  A row rather than
-    // a plain unknown name for the reason the two above have one: it
-    // was a published builtin for the whole of v2 and it is on the
-    // documentation site, and a reader who types it is asking a real
-    // question that now has a better answer.  The `try`/`catch` is
-    // part of the replacement and not decoration — the bool it
-    // answered could not tell "nothing is there" from "I was not
-    // allowed to look", which is why it went.
-    .{
-        .name = "file_exists",
-        .instead = "import std.files and write files.exists(p) with try or catch, or files.kind(p) for what is there",
-    },
-};
-
 /// Whether a call to this builtin can leave a container different
 /// from how it found it.  False for anything not named here,
 /// including every user function, which is the conservative answer
 /// `effects.mayMutateContainers` needs.
 pub fn isPure(callee: []const u8) bool {
-    // `long(...)` and `double(...)` are conversions rather than
+    // `i64(...)` and `f64(...)` are conversions rather than
     // intrinsics, so they are not in the table above; both are pure.
     if (conversionNamed(callee)) |produces| return produces != .str;
     for (builtins) |builtin| {
@@ -193,8 +164,8 @@ pub fn isPure(callee: []const u8) bool {
 // The methods each receiver kind answers to
 // ---------------------------------------------------------------------------
 
-/// The string methods the language keeps for itself, and what each
-/// lowers to.  Everything else a program writes on a string routes
+/// The primitive text methods the language keeps for itself, and what each
+/// lowers to. Everything else a program writes on `str` routes
 /// to the std `strings` module (`builder.zig`'s `stringsCall`,
 /// docs/STD.md), so this table is the whole closed set — a table
 /// rather than the two `if`s it used to be, because it is the only
@@ -207,12 +178,11 @@ pub const string_methods = [_]struct {
     result: Type,
 }{
     // The language's primitive byte access.
-    // **The one builtin that answers a `byte`** (docs/TYPES.md
+    // **The one builtin that answers a `u8`** (docs/TYPES.md
     // §9): its result is definitionally one, both engines have
     // always produced 0..255, and it is the natural producer for
-    // the one place an `array(byte, _)` gets filled from.  It
-    // costs nothing at a call site, because a `byte` reaches a
-    // `long` parameter and a comparison with nothing written down.
+    // an `array[u8, _]` gets filled from. A numeric literal compared with the
+    // result takes the result's u8 context.
     .{ .name = "byte_at", .kind = .string_byte, .takes = &.{.i64}, .result = .u8 },
     // The scanning primitive that `byte_at` is the access
     // primitive: std strings builds substring search on it, and it

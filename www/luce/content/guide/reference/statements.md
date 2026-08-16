@@ -3,7 +3,7 @@
 ## File structure
 
 A file may contain `import` lines and file-scope `alias`, `const`,
-`struct`, `interface`, `enum`, `union`, and `func` declarations in any
+`struct`, `class`, `interface`, `enum`, `union`, and `func` declarations in any
 order. It has no executable top-level statements and no top-level `var`.
 
 Each declaration form may carry a
@@ -64,13 +64,14 @@ arguments too (see [calls](../expressions/#calls)). Every path through
 a function that declares a value return type must return; the compiler
 checks it.
 
-A plain function member of a struct, enum or union is a [method](#methods):
+A plain function member of a struct, class, enum, or union is a [method](#methods):
 its receiver is the implied local `self`. A member written `static
 func` is instead a namespace function and has no receiver. There are
 no variadics. Top-level and static namespace functions can be used as
 values, returned and called indirectly through a [`func(...)`
-type](../types/#function); methods cannot. Capture-free lambdas are
-expressions rather than declarations.
+type](../types/#function); methods become values only when bound to a receiver.
+Expression lambdas and block closures are expressions rather than
+declarations.
 
 ## struct
 
@@ -95,6 +96,51 @@ Fields, implied-self methods and static namespace functions, in one indented blo
 names every field. A member may carry a [visibility](#visibility) word
 of its own, or sit in a region that carries one for the group; without
 either it is public.
+
+## class {#class}
+
+```
+class Name:
+    field: Type
+    weak parent: Name?
+
+    func method(...):
+        ...
+
+    deinit:
+        ...
+
+class Name: Interface, OtherInterface:
+    ...
+```
+
+A class has the same memberwise fields, defaults, visibility regions, methods,
+static namespace functions, and explicit interface-conformance list as a
+structure. Its values are ARC references: construction makes a new identity,
+assignment shares it, and methods may mutate the object through a `let`
+binding. `is` compares two references of the same nominal class type.
+
+One bare `deinit` block is permitted. It has no parameters, result,
+fallibility marker, visibility, or call syntax. ARC invokes it once at the
+last strong release before releasing fields. It may read or update fields and
+call methods, but cannot make its dying `self` strongly reachable again.
+
+Classes are final. There is no inheritance, `override`, `super`, custom
+initializer body, computed property, or class metatype.
+
+## interface {#interface}
+
+```
+interface Name:
+    func method(param: Type) -> Type
+    func fallible(param: Type) -> Type!
+```
+
+An interface body contains instance-method signatures without bodies. A
+conforming struct or class lists the interface after its name and must provide
+every requirement exactly. A non-fallible witness may satisfy a fallible
+requirement; the reverse is invalid. Interface declarations have no fields,
+static methods, default bodies, inheritance, or generic parameters.
 
 ## enum {#enum}
 
@@ -207,7 +253,7 @@ block. `else` is optional and comes last.
 
 ## Methods {#methods}
 
-A plain function declared inside a `struct`, an `enum` or a `union`
+A plain function declared inside a `struct`, `class`, `enum`, or `union`
 is a
 **method** with an implied `self`. A namespace member says `static`.
 
@@ -229,10 +275,12 @@ function type is expected, carrying `p`
 The compiler infers whether a method writes its receiver. A store to
 `self` or a value field, or a transitive call to another writer on
 `self`, makes it a writer. Mutating a referenced object through a field does
-not replace `self` and does not make the method a writer. A reader accepts a
-`let` or temporary. A writer requires an exact bare mutable binding;
-fields, indexes, narrowed values, `let` bindings, and temporaries are
-refused.
+not replace `self` and does not make the method a writer. For value receivers,
+a reader accepts a `let` or temporary while a writer requires a bare mutable binding;
+fields, indexes, narrowed values, `let` bindings, and
+temporaries are refused. A class method mutates the shared object without
+rebinding the receiver, so a `let` class reference, field, element, interface
+witness, or bound class method may call it.
 
 The writer aliases that caller slot in place, so it may replace a
 reference-carrying receiver. Writes completed before an
@@ -250,6 +298,7 @@ private func name(...)        public func name(...)
 private alias Name = Type     public alias Name = Type
 private const name = expr     public const name = expr
 private struct Name:          public struct Name:
+private class Name:           public class Name:
 private field: Type           public field: Type
 ```
 

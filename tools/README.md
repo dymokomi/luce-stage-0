@@ -5,8 +5,6 @@ Developer tooling that ships with the repo but isn't part of loom.
 - `doccheck.zig` — compiles every Luce sample in the catalogued current
   references, plans, and decision records, while keeping historical fences in
   decision records only.
-- `spelling.zig` — a rename guard: retired spellings are held out of current
-  reference prose and executable Luce source by name.
 - `grammar.zig` — generates `vscode-luce/`'s grammar from the
   compiler's own word and symbol tables rather than from a copy of
   them, and refuses to write one that is short a word.

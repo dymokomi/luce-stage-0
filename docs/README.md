@@ -4,16 +4,16 @@ The documents have three jobs, and the distinction is enforced by
 [`tools/documents.zig`](../tools/documents.zig):
 
 - **Current reference** describes the repository and language that exist now.
-  Every Luce fence compiles, refused examples must remain refused, and retired
-  type spellings are rejected from prose as well as code.
+  Every Luce fence compiles, refused examples must remain refused, and prose
+  and code use the same builtin type vocabulary.
 - **Plans** describe the language we intend to build. Syntax the compiler does
   not yet accept is written as `text`, never as a pasteable Luce example.
 - **Decision records** preserve a completed design in its historical context.
   Only these may use `luce historical` fences.
 
-This separation is an honesty boundary. A class that merely parses is not a
-working reference type, a planned type name is not a current spelling, and a
-completed implementation plan is not the language reference.
+This separation is an honesty boundary. A feature that merely parses is not a
+working language feature, a planned type name is not a current spelling, and
+a completed implementation plan is not the language reference.
 
 Start with [V2.md](V2.md) for the product north star and
 [ROADMAP.md](ROADMAP.md) for the ordered path from today's ARC foundation to
@@ -42,11 +42,12 @@ selected surface roster is checked during the site build.
 | [PIPELINE.md](PIPELINE.md) | The compiler stages and their current completion state. |
 | [CODING_GUIDE.md](CODING_GUIDE.md) | The repository's authoritative Zig style and testing rules. |
 | [SOFTWARE_DESIGN.md](SOFTWARE_DESIGN.md) | Deep modules, information hiding, naming, and complexity control. |
-| [INTERFACES.md](INTERFACES.md) | Current nominal interfaces, conformance, heterogeneous storage, and the read-only dispatch boundary. |
+| [INTERFACES.md](INTERFACES.md) | Current nominal interfaces, struct/class conformance, heterogeneous storage, and the value-mutation boundary. |
+| [CLASSES.md](CLASSES.md) | Final ARC classes, identity, mutation, weak edges, interfaces, and deterministic `deinit`. |
 | [UX_UI_DESIGN.md](UX_UI_DESIGN.md) | Operational product and interface-design guidance. |
 | [RETURNS.md](RETURNS.md) | Multiple returns without tuple values. |
-| [NUMERICS.md](NUMERICS.md) | Current promotion, division, conversion, and overflow semantics. |
-| [STRINGS.md](STRINGS.md) | Current UTF-8 string representation and lifetime behavior. |
+| [NUMERICS.md](NUMERICS.md) | Current explicit-width arithmetic, division, conversion, and overflow semantics. |
+| [STRINGS.md](STRINGS.md) | Current UTF-8 text representation and lifetime behavior. |
 | [FAILURE.md](FAILURE.md) | Absence, recoverable errors, traps, `try`, and `catch`. |
 | [TYPES.md](TYPES.md) | Current builtin types and type grammar. |
 | [ALIASES.md](ALIASES.md) | Transparent type aliases, visibility, construction, diagnostics, and compiler erasure. |
@@ -57,7 +58,7 @@ selected surface roster is checked during the site build.
 | [BYTES.md](BYTES.md) | Current byte storage and binary file APIs. |
 | [UNION.md](UNION.md) | Tagged unions and payload matching. |
 | [THREADS.md](THREADS.md) | Isolated workers and reference-counted task resources. |
-| [FUNCTIONS.md](FUNCTIONS.md) | Named function values and today's capture-free lambdas. |
+| [FUNCTIONS.md](FUNCTIONS.md) | Named functions, expression lambdas, ARC closures, captures, storage, and calls. |
 | [PACKAGES.md](PACKAGES.md) | The package consumer and manifest surface that exists today. |
 | [TESTING.md](TESTING.md) | Luce tests, engineering lanes, progress output, and the release gate. |
 | [BINDING.md](BINDING.md) | Current bound-method representation and lifetime rules. |
@@ -71,8 +72,7 @@ selected surface roster is checked during the site build.
 | File | What it decides |
 |---|---|
 | [V2.md](V2.md) | The product north star and the deliberately small language we are aiming for. |
-| [ROADMAP.md](ROADMAP.md) | The sequenced implementation and verification plan for ARC, the explicit type system, weak references, classes, interfaces, and closures. |
-| [TYPE_MIGRATION.md](TYPE_MIGRATION.md) | The frozen target contract and atomic migration manifest for explicit numbers, text, bytes, containers, weak storage, and class lifecycle syntax. |
+| [ROADMAP.md](ROADMAP.md) | Completed ARC/type/class/closure phases and the ordered path through owned interfaces, userland proof, generics, and release lock. |
 | [GENERICS.md](GENERICS.md) | A later monomorphized generics design; not a prerequisite for the ARC/class/closure milestone. |
 | [VECTOR.md](VECTOR.md) | A future optimization plan for checked vectorized reductions; not current language behavior. |
 

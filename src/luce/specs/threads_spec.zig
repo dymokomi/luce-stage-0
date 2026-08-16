@@ -52,7 +52,7 @@ const unthreaded: agree.Provided = row: {
 // The result crosses, at every width and every shape (D4)
 // ---------------------------------------------------------------------------
 
-test "a worker's long crosses the join" {
+test "a worker's i64 crosses the join" {
     try agree.prints(
         \\func twice(n: i64) -> i64:
         \\    return n * 2
@@ -104,7 +104,7 @@ test "every scalar width crosses a join intact" {
     , "200\n-30000\n2000000000\n9000000000\n0.5\n0.25\n0.125\ntrue\n");
 }
 
-test "a worker's string crosses the join, short and long" {
+test "a worker's str crosses the join in inline and allocated forms" {
     // Short text lives inside the value and long text is an
     // allocation of the worker's own arena; both have to be re-owned
     // into the joiner's, and the long one is the case that would leak

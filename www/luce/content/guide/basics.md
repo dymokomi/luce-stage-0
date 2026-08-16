@@ -46,12 +46,12 @@ func main(args: list[str]):
 3. hello, plum
 ```
 
-Arguments are `str` values. `parse_int` returns an `i64?` because some text
+Arguments are `str` values. `parse_i64` returns an `i64?` because some text
 is not an integer; `else` supplies a value when it is absent:
 
 ```luce run args=4
 func main(args: list[str]):
-    let times = parse_int(args[0]) else 1
+    let times = parse_i64(args[0]) else 1
     for i in range(0, times):
         print(f"line {i}")
 ```

@@ -22,7 +22,7 @@
 //!   * **D4, as amended** — a carrying receiver owns retained references:
 //!     handles inside the copied receiver alias the same graph (S26), and
 //!     ARC keeps that graph alive as long as the function value.
-//!   * **D6** — `string(f)` answers the method's qualified name.
+//!   * **D6** — `str(f)` answers the method's qualified name.
 //!   * **D11** — a union member constructor is a function value, with
 //!     the payload fields as parameters; a payload-less member stays a
 //!     value.
@@ -273,7 +273,7 @@ test "two binds of one method with different receivers sort differently" {
 // What a bound value says about itself (D6)
 // ---------------------------------------------------------------------------
 
-test "string of a bound value is the method's qualified name" {
+test "str of a bound value is the method's qualified name" {
     try agree.prints(
         \\struct Scale:
         \\    factor: i64
@@ -989,8 +989,8 @@ test "the leaf of a nested place names the width its value is read at" {
     // **Not a function-value rule.**  What a nested place had been
     // missing was the landing itself, and a number is the other thing
     // that has no type until it lands (docs/TYPES.md §1) — so `200`
-    // reaching a `byte` three steps in reads as a `byte`, exactly as it
-    // does one step in, rather than reading as an `int` and then being
+    // reaching a `u8` three steps in reads as a `u8`, exactly as it
+    // does one step in, rather than reading as an `i32` and then being
     // refused for not narrowing.  A compound assignment combines at the
     // same leaf.
     try agree.prints(

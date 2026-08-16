@@ -137,7 +137,7 @@ match, and the entry module stays first in that array.
 
 ### 3.1 `termui.luc` — the value vocabulary
 
-`Color` (16 names → int), `Style` (foreground/background/bold, a copied
+`Color` (16 names → `i32`), `Style` (foreground/background/bold, a copied
 value that allocates nothing), and `Rect` (total arithmetic: `is_empty`,
 `split_top/bottom/left/right`, `inset`). Carried over essentially as-is;
 this is settled. `Style` stays deliberately small — no theme, no
@@ -160,14 +160,14 @@ The abstraction the highlighter and every label need and v0.1 lacked.
 
 ```
 struct Span:
-    text: string
+    text: str
     style: Style
 
 struct Line:
-    spans: list(Span)          # a program root or app-owned; drawn, not retained
+    spans: list[Span]          # a program root or app-owned; drawn, not retained
 ```
 
-`Line.draw(into: Surface, area: Rect, row: long)` writes spans left to
+`Line.draw(into: Surface, area: Rect, row: i64)` writes spans left to
 right, clipped to the rectangle, tracking **display width**
 (`strings.width`, the one answer to "how wide does this draw") rather
 than byte length. `Line.width()` measures. This deletes every hand
@@ -186,9 +186,9 @@ implementation behind a small interface" test.
 
 ```
 union Length:
-    cells(count: long)                          # exactly count cells
-    grow(weight: long)                          # share the leftover by weight
-    between(min: long, max: long, ratio: long)  # ratio% of the axis, clamped [min,max]
+    cells(count: i64)                           # exactly count cells
+    grow(weight: i64)                           # share the leftover by weight
+    between(min: i64, max: i64, ratio: i64)     # ratio% of the axis, clamped [min,max]
 ```
 
 `between` is what the editor's sidebar and output pane want ("a quarter
@@ -196,8 +196,8 @@ of the width, but never below 18 or above 24, and give way before the
 text starves"). Pure `ratio` and pure `min`/`max` are special cases of
 it, so the surface stays three members, not six.
 
-**Solver** — `solve(total: long, gap: long, items: list(Length)) ->
-list(long)`, total and never trapping:
+**Solver** — `solve(total: i64, gap: i64, items: list[Length]) ->
+list[i64]`, total and never trapping:
 
 1. `usable = max(total - gap * (count - 1), 0)`.
 2. Preferred pass: `cells` → its count; `between` →
@@ -213,7 +213,7 @@ list(long)`, total and never trapping:
    clamp everything down so the sum never exceeds `usable` and no length
    is negative.
 
-`Row.solve(area, gap, items) -> list(Rect)` walks columns left to right;
+`Row.solve(area, gap, items) -> list[Rect]` walks columns left to right;
 `Column.solve(...)` walks rows top to bottom. A hidden pane is a
 zero-length item that yields an empty `Rect`, which draws nothing —
 never a flag and never a branch, because every `Rect` op is total.
@@ -231,7 +231,7 @@ rather than overwriting a rule).
 
 ```
 struct Frame:
-    title: string = ""
+    title: str = ""
     style: Style = Style()
     top: bool = true
     right: bool = true
@@ -267,7 +267,7 @@ modifiers on non-ctrl keys when a consumer needs them.
 
 ```
 interface View:
-    func measure(area: Rect) -> (long, long)
+    func measure(area: Rect) -> (i64, i64)
     func draw(into: Surface, area: Rect)
 ```
 
@@ -284,12 +284,12 @@ Both follow §2's pattern exactly: an app-owned **state** struct with the
 logic, and a pure **View** projection.
 
 - `Rows` (selection state: `count`, `top`, `selected`, `move_by`,
-  `choose`, `adjust`) + `RowsView` (draws a `func(long) -> Line`
+  `choose`, `adjust`) + `RowsView` (draws a `func(i64) -> Line`
   provider, highlighting the selected row). The provider stays a bound
   method so the widget reads app data through the receiver
   (docs/BINDING.md).
 - `Viewport` (scroll state: `top`, `total`, `height`, `scroll_by`
-  clamped) + `ViewportView` (draws a `func(long) -> Line` provider over
+  clamped) + `ViewportView` (draws a `func(i64) -> Line` provider over
   the visible window). This is the output pane, promoted out of the
   editor.
 
@@ -354,7 +354,7 @@ crossed by one undo; the bound evicts oldest first.
 
 ### 4.2 New capability: in-file search (UX §39)  — `search.luc` [pure]
 
-`Search { query, matches: list(long), current }`. `find(content,
+`Search { query, matches: list[i64], current }`. `find(content,
 query)` fills byte offsets via `strings.find`; `next`/`prev` move
 `current` and answer the offset the editor moves the cursor to. A new
 `Focus.search` puts keystrokes into the query; the status area shows the

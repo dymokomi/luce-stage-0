@@ -16,8 +16,8 @@ list map array builder
 file task
 ```
 
-User declarations add aliases, structs, enums, unions, and interfaces. Class
-reference semantics are not complete yet; [Status](/status/) owns that work.
+User declarations add aliases, structs, classes, enums, unions, and
+interfaces.
 
 ## Values and references
 
@@ -25,9 +25,9 @@ The kind of a type decides assignment, argument, and return behavior.
 
 | Kind | Current examples | Behavior |
 |---|---|---|
-| Value | numbers, `bool`, `char`, `str`, `bytes`, structs, enums, unions, function values | copy the value |
-| Reference | `list[T]`, `map[K, V]`, `array[T, ...]`, `builder` | share one ARC object |
-| Resource reference | `file`, `task(T)` | share one ARC object; close or join at the last release |
+| Value | numbers, `bool`, `char`, `str`, `bytes`, structs, enums, unions, function values | copy the value; a captured function retains its ARC environment |
+| Reference | classes, `list[T]`, `map[K, V]`, `array[T, ...]`, `builder` | share one ARC object |
+| Resource reference | `file`, `task[...]` | share one ARC object; close or join at the last release |
 
 A value may contain references. Copying the value copies its value fields and
 retains its reference fields. There are no source retain, release, borrow,
@@ -158,22 +158,27 @@ func(str)
 func(list[i64]) -> i64
 ```
 
-Named functions, static functions, capture-free lambdas, union member
-constructors, and compatible bound methods can land in a function-typed place.
-Calls through a value are positional. Function values may be stored and
-returned, but have no equality or ordering.
+Named functions, static functions, expression lambdas, block closures, union
+member constructors, and compatible bound methods can land in a
+function-typed place. Calls through a value are positional. Function values
+may be stored and returned, but have no equality or ordering.
 
-A lambda is `(parameters) -> expression`. Its parameter types come from the
-destination function type. Current lambdas cannot capture enclosing locals.
+A one-expression lambda is `(parameters) -> expression`; it does not capture
+locals. A block closure is `func(parameters):` followed by an indented body and
+may capture enclosing locals. Its parameter and result types come from the
+destination function type. Immutable captures are retained snapshots,
+captured mutable locals share one cell, `[name = expression]` captures an
+explicit snapshot, and `[weak name]` makes a zeroing optional capture.
 
-A bound method carries its receiver. A value receiver is copied; any reference
-fields in that copy remain shared and are retained for the bound value's
-lifetime.
+A bound method carries its receiver. A value receiver is copied and its
+reference fields are retained. A class receiver retains the same identity and
+observes later mutation. Captured environments and bound receivers release at
+the last function-value copy.
 
 ## Interfaces {#interface}
 
-An interface is a nominal set of instance-method requirements. A struct opts
-in by listing the interface and must implement every requirement:
+An interface is a nominal set of instance-method requirements. A struct or
+class opts in by listing the interface and must implement every requirement:
 
 ```luce run
 interface Named:
@@ -204,14 +209,17 @@ size:41
 Conformance is explicit, not structural. Method names, instance status,
 parameter names/order/types, and result arity/types must match. A non-fallible
 witness may satisfy a fallible requirement; the reverse is invalid. Static
-functions, incomplete conformers, duplicate witnesses, and writing receiver
-methods are rejected.
+functions, incomplete conformers, and duplicate witnesses are rejected. A
+class witness may mutate the shared class object; a writing value-struct
+witness is currently rejected.
 
 Interface values work as locals, parameters, results, optionals, fields, and
-heterogeneous list/map/array elements. Current dispatch is read-only and stores
-bound value receivers; [Status](/status/) records the later owned-existential
-and class-mutation work. There are no default methods, interface inheritance,
-associated types, runtime casts, or generic constraints.
+heterogeneous list/map/array elements. Current dispatch stores one owned bound
+function per requirement: a struct receiver is a snapshot and a class
+receiver retains identity. [Status](/status/#interfaces) records the planned
+one-payload existential representation. There are no default methods,
+interface inheritance, associated types, runtime casts, or generic
+constraints.
 
 ## Structs
 
@@ -234,6 +242,43 @@ called through the type name. The compiler infers whether a method writes
 
 Fields and methods are public by default. `private`/`public` regions and
 per-member marks follow the ordinary file visibility rules.
+
+## Classes {#classes}
+
+A class is a final ARC reference aggregate. Construction is memberwise like a
+structure, but assignment, parameters, results, fields, optionals, and
+container elements retain and share one object. A stable `let` class binding
+may mutate that object.
+
+```luce run
+class Counter:
+    value: i64
+
+    func add(amount: i64) -> i64:
+        self.value += amount
+        return self.value
+
+func main():
+    let first = Counter(value = 1)
+    let same = first
+    assert(first is same)
+    print(str(same.add(41)))
+    print(str(first.value))
+```
+
+```output
+42
+42
+```
+
+`is` accepts two operands of the same nominal class type and compares
+identity. Classes do not synthesize `==`, ordering, or hashing. A class may
+conform to interfaces, use weak class fields, and declare one bare `deinit`
+body that runs at the last strong release before its fields release. `deinit`
+cannot resurrect its dying `self`.
+
+There is no class inheritance, `override`, `super`, custom initializer,
+computed property, or class metatype.
 
 ## Enums {#enum}
 
@@ -331,10 +376,10 @@ and calls share one handle. The final strong release closes it; there is no
 manual `close`. Handle reads and writes use `array[u8, _]` buffers and are
 fallible. A file cannot cross a worker boundary or be weak.
 
-## `task(T)` {#task}
+## `task[...]` {#task}
 
 An ARC resource produced only by `spawn`. The result shape is written in
-parentheses: `task`, `task(!)`, `task(i64)`, or `task(i64!)`. Assignment shares
+brackets: `task`, `task[!]`, `task[i64]`, or `task[i64!]`. Assignment shares
 one worker handle. `wait()` observes the result once; the final release joins
 an unfinished worker. A task cannot cross another worker boundary or be weak.
 
@@ -364,7 +409,7 @@ container type.
 ## Weak storage
 
 `weak` qualifies a mutable local or field; it does not create a type. The
-declared type must be an optional `list`, `map`, `array`, or `builder`:
+declared type must be an optional class, `list`, `map`, `array`, or `builder`:
 
 ```luce run
 struct Link:
@@ -389,8 +434,8 @@ narrow one another.
 
 Weak targets exclude scalars, text values, value structs, interfaces,
 functions, files, and tasks. Weak fields disable implicit aggregate equality
-and collection search, and weak handles cannot cross worker runtimes. Classes
-will become valid targets when class reference semantics ship.
+and collection search, and weak handles cannot cross worker runtimes. A
+closure capture list may use `[weak name]` with the same target rules.
 
 ## Zero values and late initialization
 
@@ -407,7 +452,5 @@ and says so. `let` always requires an initializer.
 Value equality descends through value fields. Container and resource `==`/
 `!=` compare reference identity, never contents. Function values and values
 containing functions or weak fields have no equality. Floats follow IEEE
-rules, including NaN not equaling itself.
-
-Classes will introduce the distinct `is` identity operator when their ARC
-reference semantics are complete; it is not current syntax.
+rules, including NaN not equaling itself. Classes use `is` for identity;
+classes do not have `==` or ordering.

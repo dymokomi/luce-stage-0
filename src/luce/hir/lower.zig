@@ -741,24 +741,21 @@ const Replay = struct {
         /// The value's storage provenance as the batch leaves it —
         /// the checker's own answer, re-derived: the core's node-kind
         /// answer, made fresh by a borrow copy, made a view by a
-        /// spill reload, made plain by a widening or wrap.
+        /// spill reload, made plain by an optional wrap.
         provenance: nodes.Provenance = .plain,
     };
 
-    /// Peel the top `convert`/`wrap_optional` chain off a recorded
-    /// operand: a batch applies those *after* its cores (`fit`,
-    /// `widensInto`), so the emission does too.  Answers the wrapper
-    /// chain innermost-first.
+    /// Peel the top `wrap_optional` chain off a recorded operand. A fit into
+    /// a batch slot wraps after that batch has evaluated its source
+    /// expressions. Explicit numeric conversions are source expressions and
+    /// deliberately stay in the core, so a trapping left conversion happens
+    /// before the right expression runs.
     fn peel(self: *Replay, node: nodes.NodeRef) Error!BatchEntry {
         var wrappers: std.ArrayList(nodes.NodeRef) = .empty;
         defer wrappers.deinit(self.scratch());
         var core = node;
         while (true) {
             switch (core.*) {
-                .convert => |conversion| {
-                    try wrappers.append(self.scratch(), core);
-                    core = conversion.operand;
-                },
                 .wrap_optional => |wrapped| {
                     try wrappers.append(self.scratch(), core);
                     core = wrapped.operand;
@@ -867,16 +864,12 @@ const Replay = struct {
         }
     }
 
-    /// Apply one operand's wrapper chain, innermost first.  A widened
-    /// or wrapped value is a new value with no storage stamp of its
-    /// own (`fit`'s Typed defaults).
+    /// Apply one operand's optional wrappers, innermost first. A wrapped value
+    /// has no storage stamp of its own (`fit`'s Typed defaults).
     fn applyWrappers(self: *Replay, entry: *BatchEntry) Error!void {
         if (entry.wrappers.len != 0) entry.provenance = .plain;
         for (entry.wrappers) |wrapper| {
             switch (wrapper.*) {
-                .convert => |conversion| {
-                    entry.register = try self.code.emit(.{ .convert = entry.register }, conversion.result);
-                },
                 .wrap_optional => |wrapped| {
                     const arguments = try self.arena().alloc(Register, 1);
                     arguments[0] = entry.register;
@@ -885,7 +878,7 @@ const Replay = struct {
                         wrapped.result,
                     );
                 },
-                else => unreachable, // peel collects only the two wrapper kinds
+                else => unreachable, // peel collects only optional wraps
             }
         }
     }
@@ -933,35 +926,14 @@ const Replay = struct {
         return entries;
     }
 
-    /// Replay a batch's defaulted entries — each is a materialized
-    /// constant, emitted whole at the point the call fills the slot.  `peel_converts` reproduces the free-builtin shape, whose
-    /// post-batch widenings ride the default's node.
+    /// Replay a batch's defaulted entries. Each is an already-typed
+    /// materialized constant emitted whole when the call fills the slot.
     fn replayDefaultEntry(
         self: *Replay,
         entries: []BatchEntry,
         index: usize,
         node: nodes.NodeRef,
-        peel_converts: bool,
     ) Error!void {
-        if (peel_converts) {
-            var entry = try self.peel(node);
-            // Only widenings are post-batch here; a wrap belongs to
-            // the materialization and replays in place.
-            var replayed = entry;
-            var wrap_floor: usize = 0;
-            for (entry.wrappers) |wrapper| {
-                if (wrapper.* == .wrap_optional) wrap_floor += 1 else break;
-            }
-            if (wrap_floor != 0) {
-                // Re-wrap the core with the materialization's own
-                // wraps, keeping only the widenings for later.
-                replayed.core = entry.wrappers[wrap_floor - 1];
-                replayed.wrappers = entry.wrappers[wrap_floor..];
-            }
-            replayed.register = try self.replayValue(replayed.core);
-            entries[index] = replayed;
-            return;
-        }
         var entry: BatchEntry = .{ .core = node, .wrappers = &.{}, .provenance = nodes.provenance(node) };
         entry.register = try self.replayValue(node);
         entries[index] = entry;
@@ -969,16 +941,13 @@ const Replay = struct {
 
     // -- operators ----------------------------------------------------------
 
-    /// The two-operand pair walk: cores per the recorded evaluation
-    /// order and rewrites, reloads, then wrappers left-then-right —
-    /// except the exact cross-ladder comparison, whose promotions run
-    /// integer-side first (`lowerExactCompare`).
+    /// The two-operand pair walk: cores in recorded evaluation order with
+    /// their copy/spill rewrites, followed by optional wraps left-to-right.
     fn replaySides(
         self: *Replay,
         left: nodes.NodeRef,
         right: nodes.NodeRef,
         sides: nodes.Expression.Sides,
-        whole_first: bool,
     ) Error![2]BatchEntry {
         var entries: [2]BatchEntry = .{ try self.peel(left), try self.peel(right) };
         if (sides.right_first) {
@@ -998,49 +967,12 @@ const Replay = struct {
             self.assertSplitCarried(entries[0..1], opened_in);
             try self.reloadSpills(entries[0..]);
         }
-        // The pair's widenings run in *phases* — the unification, then
-        // the operator's own widening (`/`'s to double; the exact
-        // comparison's promote-then-widen) — each phase touching the
-        // first side then the second.  The chains are tail-aligned:
-        // the last wrapper of each side belongs to the last phase, so
-        // the rounds walk from the tails backward.  The exact
-        // cross-ladder comparison runs its phases integer side first.
-        const first: usize = if (whole_first and !entries[0].core.result().isInteger()) 1 else 0;
-        const second = 1 - first;
-        const longest = @max(entries[0].wrappers.len, entries[1].wrappers.len);
-        var round: usize = 0;
-        while (round < longest) : (round += 1) {
-            try self.applyWrapperRound(&entries[first], longest, round);
-            try self.applyWrapperRound(&entries[second], longest, round);
-        }
+        for (&entries) |*entry| try self.applyWrappers(entry);
         return entries;
     }
 
-    /// One phase of a pair's wrapper chains: the wrapper this round
-    /// names under tail alignment, if the side has one.
-    fn applyWrapperRound(self: *Replay, entry: *BatchEntry, longest: usize, round: usize) Error!void {
-        const skipped = longest - entry.wrappers.len;
-        if (round < skipped) return;
-        if (entry.wrappers.len != 0) entry.provenance = .plain;
-        const wrapper = entry.wrappers[round - skipped];
-        switch (wrapper.*) {
-            .convert => |conversion| {
-                entry.register = try self.code.emit(.{ .convert = entry.register }, conversion.result);
-            },
-            .wrap_optional => |wrapped| {
-                const arguments = try self.arena().alloc(Register, 1);
-                arguments[0] = entry.register;
-                entry.register = try self.code.emit(
-                    .{ .intrinsic = .{ .kind = .optional_wrap, .arguments = arguments } },
-                    wrapped.result,
-                );
-            },
-            else => unreachable, // peel collects only the two wrapper kinds
-        }
-    }
-
     fn replayBinary(self: *Replay, operation: nodes.Expression.Binary) Error!Register {
-        const entries = try self.replaySides(operation.left, operation.right, operation.sides, false);
+        const entries = try self.replaySides(operation.left, operation.right, operation.sides);
         return self.code.emit(.{ .binary = .{
             .op = operation.op,
             .operand_type = operation.result,
@@ -1064,41 +996,7 @@ const Replay = struct {
             if (comparison.op == .equal) return absent;
             return self.code.emit(.{ .unary = .{ .op = .logic_not, .operand = absent } }, .boolean);
         }
-        // The exact cross-ladder comparison compares the numbers: the
-        // recorded children are post-widening, so the split is read
-        // off the *cores* — the integer-ladder side is the whole.
-        const left_core_type = coreTypeOf(comparison.left);
-        const right_core_type = coreTypeOf(comparison.right);
-        const crosses = left_core_type.isNumeric() and right_core_type.isNumeric() and
-            (left_core_type.isInteger() != right_core_type.isInteger());
-        if (crosses) {
-            const int_first = left_core_type.isInteger();
-            const entries = try self.replaySides(comparison.left, comparison.right, comparison.sides, true);
-            const left_type = wrappedType(&entries[0]);
-            const right_type = wrappedType(&entries[1]);
-            if (left_type.eql(right_type)) {
-                // The int/double pair: widening decided it, and an
-                // ordinary compare is the whole comparison.
-                return self.code.emit(.{ .binary = .{
-                    .op = comparison.op,
-                    .operand_type = left_type,
-                    .left = entries[0].register,
-                    .right = entries[1].register,
-                } }, .boolean);
-            }
-            const spelled = if (int_first) comparison.op else comparison.op.mirrored();
-            const whole = if (int_first) entries[0].register else entries[1].register;
-            const fraction = if (int_first) entries[1].register else entries[0].register;
-            const arguments = try self.arena().alloc(Register, 3);
-            arguments[0] = try self.code.emit(.{ .const_integer = @intFromEnum(spelled) }, .i64);
-            arguments[1] = whole;
-            arguments[2] = fraction;
-            return self.code.emit(
-                .{ .intrinsic = .{ .kind = .compare_i64_f64, .arguments = arguments } },
-                .boolean,
-            );
-        }
-        const entries = try self.replaySides(comparison.left, comparison.right, comparison.sides, false);
+        const entries = try self.replaySides(comparison.left, comparison.right, comparison.sides);
         return self.code.emit(.{ .binary = .{
             .op = comparison.op,
             .operand_type = wrappedType(&entries[0]),
@@ -1225,7 +1123,7 @@ const Replay = struct {
         }
         // Defaults, in materialization order.
         for (batch.operands[batch.written..], batch.written..) |node, position| {
-            try self.replayDefaultEntry(entries, position, node, false);
+            try self.replayDefaultEntry(entries, position, node);
         }
         // Permute into declaration order.
         const registers = try self.arena().alloc(Register, info.parameter_types.len);
@@ -1305,13 +1203,11 @@ const Replay = struct {
         const batch = called.operands;
         const entries = try self.replayWrittenOperands(batch);
         defer self.scratch().free(entries);
-        // A free builtin's defaults materialize right after the batch,
-        // before the per-slot widenings; their widenings ride the
-        // default nodes and run in the wrapper phase.
+        // A free builtin's defaults materialize right after the batch.
         for (batch.operands[batch.written..], batch.written..) |node, position| {
-            try self.replayDefaultEntry(entries, position, node, true);
+            try self.replayDefaultEntry(entries, position, node);
         }
-        // The widenings, in slot order.
+        // Optional wraps, in slot order.
         const order = try self.scratch().alloc(usize, entries.len);
         defer self.scratch().free(order);
         for (order, 0..) |*slot, position| slot.* = position;
@@ -1370,7 +1266,7 @@ const Replay = struct {
         return self.code.emit(.{ .convert = operand }, produced);
     }
 
-    /// The two enum text forms — `string(m)` and `Method(n)` — told
+    /// The two enum text forms — `str(m)` and `Method(n)` — told
     /// apart by the result type (nodes.ResolvedCallee).
     fn replayEnumText(self: *Replay, called: nodes.Expression.Call, index: u32) Error!Register {
         const declared = self.code.enums[index];
@@ -1642,7 +1538,7 @@ const Replay = struct {
             }
         }
         for (batch.operands[batch.written..], batch.slots[batch.written..], batch.written..) |node, slot, position| {
-            try self.replayDefaultEntry(entries, position, node, false);
+            try self.replayDefaultEntry(entries, position, node);
             if (fields[slot].weak) {
                 registers[slot] = entries[position].register;
             } else {
@@ -1813,7 +1709,7 @@ const Replay = struct {
         defer self.scratch().free(entries);
         for (entries[0..batch.written]) |*entry| try self.applyWrappers(entry);
         for (batch.operands[batch.written..], batch.written..) |node, position| {
-            try self.replayDefaultEntry(entries, position, node, false);
+            try self.replayDefaultEntry(entries, position, node);
         }
         const registers = try self.arena().alloc(Register, info.parameter_types.len);
         for (entries, batch.slots) |entry, slot| registers[slot] = entry.register;
@@ -2065,27 +1961,20 @@ const Replay = struct {
                 .layout = shape_type.strukt,
                 .field = @intCast(position),
             } }, field.field_type);
-            // The fit into the target's type, re-derived: a widening,
-            // then the optional wrap.
+            // The fit into the target's type, re-derived: either exact or
+            // one optional wrap. Numeric representation never changes here.
             var fitted = held;
             var fitted_type = field.field_type;
             if (!fitted_type.eql(target_type)) {
-                if (fitted_type.widensTo(target_type)) {
-                    fitted = try self.code.emit(.{ .convert = fitted }, target_type);
-                    fitted_type = target_type;
-                } else {
-                    const payload = target_type.held().?;
-                    if (!fitted_type.eql(payload)) {
-                        fitted = try self.code.emit(.{ .convert = fitted }, payload);
-                    }
-                    const arguments = try self.arena().alloc(Register, 1);
-                    arguments[0] = fitted;
-                    fitted = try self.code.emit(
-                        .{ .intrinsic = .{ .kind = .optional_wrap, .arguments = arguments } },
-                        target_type,
-                    );
-                    fitted_type = target_type;
-                }
+                const payload = target_type.held().?;
+                std.debug.assert(fitted_type.eql(payload));
+                const arguments = try self.arena().alloc(Register, 1);
+                arguments[0] = fitted;
+                fitted = try self.code.emit(
+                    .{ .intrinsic = .{ .kind = .optional_wrap, .arguments = arguments } },
+                    target_type,
+                );
+                fitted_type = target_type;
             }
             const cell = if (assign.cells.len == 0) null else assign.cells[position];
             const weak_cell = if (cell) |place|
@@ -2181,37 +2070,24 @@ const Replay = struct {
         }
     }
 
-    /// The read-combine of `place OP= value`, re-derived from the
-    /// place's type (`compoundCombine`): promote both sides to the
-    /// arithmetic type, combine, and narrow back.
+    /// The read-combine of `place OP= value`, re-derived from the place's
+    /// type (`compoundCombine`). Both sides already have that exact type.
     fn replayCombine(
         self: *Replay,
         op: nodes.BinaryOp,
         current: Register,
         place_type: Type,
         value: Register,
-        value_is_place_typed: bool,
     ) Error!struct { register: Register, provenance: nodes.Provenance } {
-        const at = place_type.arithmeticType() orelse place_type;
-        var left = current;
-        if (!place_type.eql(at)) left = try self.code.emit(.{ .convert = left }, at);
-        var right = value;
-        if (value_is_place_typed and !place_type.eql(at)) {
-            right = try self.code.emit(.{ .convert = right }, at);
-        }
         const combined = try self.code.emit(.{ .binary = .{
             .op = op,
-            .operand_type = at,
-            .left = left,
-            .right = right,
-        } }, at);
-        const string_concat = op == .add and (place_type == .str or place_type == .bytes);
-        const narrowed = if (at.eql(place_type))
-            combined
-        else
-            try self.code.emit(.{ .convert = combined }, place_type);
-        if (string_concat) try self.parkDerivedStorage(narrowed, place_type);
-        return .{ .register = narrowed, .provenance = if (string_concat) .fresh else .plain };
+            .operand_type = place_type,
+            .left = current,
+            .right = value,
+        } }, place_type);
+        const text_concat = op == .add and (place_type == .str or place_type == .bytes);
+        if (text_concat) try self.parkDerivedStorage(combined, place_type);
+        return .{ .register = combined, .provenance = if (text_concat) .fresh else .plain };
     }
 
     fn replayAssignLocal(
@@ -2245,7 +2121,7 @@ const Replay = struct {
                     combine_type,
                 );
             }
-            const combined = try self.replayCombine(op, current, combine_type, register, true);
+            const combined = try self.replayCombine(op, current, combine_type, register);
             stored = combined.register;
             provenance = combined.provenance;
             if (narrowed_place) {
@@ -2308,7 +2184,7 @@ const Replay = struct {
                     combine_type,
                 );
             }
-            const combined = try self.replayCombine(op, old_value, combine_type, register, true);
+            const combined = try self.replayCombine(op, old_value, combine_type, register);
             stored = combined.register;
             provenance = combined.provenance;
             if (place.narrowed) {
@@ -2361,8 +2237,7 @@ const Replay = struct {
         run[run.len - 1] = .{ .node = value, .copied = value_copied };
         const entries = try self.replayOperandRun(run);
         defer self.scratch().free(entries);
-        // Subscript widenings, then the value's own (`checkIndex`,
-        // then the element-type widening).
+        // Optional wrappers for subscripts and the stored value.
         for (entries[1..]) |*entry| try self.applyWrappers(entry);
         const object = &entries[0];
         const value_entry = &entries[entries.len - 1];
@@ -2391,7 +2266,7 @@ const Replay = struct {
                     element_type,
                 );
             };
-            const combined = try self.replayCombine(op, current, element_type, stored, true);
+            const combined = try self.replayCombine(op, current, element_type, stored);
             stored = combined.register;
             provenance = combined.provenance;
         }
@@ -2459,8 +2334,7 @@ const Replay = struct {
                     current_type = layout.fields[field.field].field_type;
                 },
                 .index => |subscript_operands| {
-                    // The subscript widenings (`checkIndex`) run here,
-                    // inside the descent.
+                    // Optional subscript wrappers run here, inside the descent.
                     const lowered = entries[next_operand .. next_operand + subscript_operands.len];
                     next_operand += subscript_operands.len;
                     for (lowered) |*entry| try self.applyWrappers(entry);
@@ -2490,7 +2364,7 @@ const Replay = struct {
         var stored = value_entry.register;
         var provenance = nodes.provenance(value);
         if (compound) |op| {
-            const combined = try self.replayCombine(op, current, current_type, stored, true);
+            const combined = try self.replayCombine(op, current, current_type, stored);
             stored = combined.register;
             provenance = combined.provenance;
         }
@@ -2541,7 +2415,7 @@ const Replay = struct {
         const floor = self.temps.items.len;
         var entries: [2]BatchEntry = .{ try self.peel(loop.start), try self.peel(loop.stop) };
         // The bounds are one two-operand run: the first crosses a
-        // split in the second (bounds are `long`s, so the borrow copy
+        // split in the second (bounds are `i64`s, so the borrow copy
         // never applies).
         self.markSpills(entries[0..], &.{});
         try self.replayBatchOperand(&entries[0], false);

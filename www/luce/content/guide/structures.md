@@ -134,7 +134,7 @@ let job = Job(labels = labels)
 `job.labels` and `labels` now refer to the same list. Use
 `labels[0:len(labels)]` when the field needs an independent list. [Memory and
 ARC](/guide/memory/) explains sharing, replacement, and the deterministic
-resource-cleanup contract that the current ARC completion phase must finish.
+resource-cleanup contract.
 
 ## A practical review
 
@@ -154,3 +154,6 @@ For the exact grammar, defaults, methods, visibility regions, and assignment
 rules, use [Statements and Declarations](/guide/reference/statements/),
 [Types](/guide/reference/types/), and
 [Expressions](/guide/reference/expressions/).
+
+Continue with [Classes](/guide/classes/) when assignment should share mutable
+identity instead of copying a value.

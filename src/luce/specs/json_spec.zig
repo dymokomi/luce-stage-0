@@ -204,56 +204,54 @@ test "json: a number is read by the notation it was written in, and the notation
         \\    let doc = try json.parse("[42, -7, 4.2, 42.0, 4.2e1, 1e3, -0, 0]")
         \\
         \\    # Written whole, so it is a whole number — and the union
-        \\    # says so before any accessor is called.  This is the rule
-        \\    # `as_long` used to enforce by re-reading the text, now
-        \\    # held by the member the value is.
+        \\    # says so before any accessor is called. The member itself
+        \\    # preserves that distinction.
         \\    assert(name_of(doc.element(0)) == "integer")
         \\    assert(name_of(doc.element(2)) == "real")
-        \\    assert(doc.element(0).as_long() else -1 == 42)
-        \\    assert(doc.element(1).as_long() else 0 == -7)
-        \\    assert(doc.element(7).as_long() else -1 == 0)
+        \\    assert(doc.element(0).as_i64() else -1 == 42)
+        \\    assert(doc.element(1).as_i64() else 0 == -7)
+        \\    assert(doc.element(7).as_i64() else -1 == 0)
         \\
         \\    # Written with a fraction or an exponent, so it is not —
         \\    # not even when the value it names is whole.  Absence says
         \\    # "that is not how this was written", where truncating
         \\    # would throw the fraction away without saying so.
-        \\    assert(doc.element(2).as_long() == none)
-        \\    assert(doc.element(3).as_long() == none)
-        \\    assert(doc.element(4).as_long() == none)
-        \\    assert(doc.element(5).as_long() == none)
+        \\    assert(doc.element(2).as_i64() == none)
+        \\    assert(doc.element(3).as_i64() == none)
+        \\    assert(doc.element(4).as_i64() == none)
+        \\    assert(doc.element(5).as_i64() == none)
         \\
-        \\    # Every one of them is a f64, whole ones included: a
-        \\    # i64 widens, which is the one conversion Luce makes on
-        \\    # its own.
-        \\    assert(doc.element(0).as_double() else 0.0 == 42.0)
-        \\    assert(doc.element(3).as_double() else 0.0 == 42.0)
-        \\    assert(doc.element(4).as_double() else 0.0 == 42.0)
-        \\    assert(doc.element(5).as_double() else 0.0 == 1000.0)
+        \\    # `as_f64` explicitly converts the integer member and
+        \\    # directly returns the real member.
+        \\    assert(doc.element(0).as_f64() else 0.0 == 42.0)
+        \\    assert(doc.element(3).as_f64() else 0.0 == 42.0)
+        \\    assert(doc.element(4).as_f64() else 0.0 == 42.0)
+        \\    assert(doc.element(5).as_f64() else 0.0 == 1000.0)
         \\
         \\    # A negative zero written whole is the integer zero, as it
         \\    # is for Python's json and Go's encoding/json.  Written as
         \\    # a real it stays one, and survives the round trip.
         \\    assert(name_of(doc.element(6)) == "integer")
-        \\    assert(doc.element(6).as_long() else -1 == 0)
+        \\    assert(doc.element(6).as_i64() else -1 == 0)
         \\    let signed = try json.parse("-0.0")
         \\    assert(signed.write() == "-0.0")
         \\
     );
 }
 
-test "json: a whole number past a long is a real, and a number past a double is refused" {
+test "json: a whole number past i64 is real, and a number past f64 is refused" {
     try agreeOk(asks ++
         \\func main() -> !:
         \\    # Grammatical, so the document is valid — RFC 8259 section
         \\    # 6 sets no bound on the notation.  A whole number too
         \\    # large for a i64 is a real, which is where its precision
-        \\    # honestly is: `as_long` answers absence exactly as it did
+        \\    # honestly is: `as_i64` answers absence exactly as it did
         \\    # when the module re-read the text.
         \\    let doc = try json.parse("[9223372036854775808, -9223372036854775809]")
         \\    assert(str(doc.element(0)) == "real")
-        \\    assert(doc.element(0).as_long() == none)
-        \\    assert(doc.element(1).as_long() == none)
-        \\    assert(doc.element(0).as_double() != none)
+        \\    assert(doc.element(0).as_i64() == none)
+        \\    assert(doc.element(1).as_i64() == none)
+        \\    assert(doc.element(0).as_f64() != none)
         \\
         \\    # Past a f64 there is nothing left to hold it with, and
         \\    # section 6 lets an implementation set limits on the range
@@ -430,8 +428,8 @@ test "json: an array is values in order, and the punctuation is not optional" {
         \\
         \\    let doc = try json.parse("[10,20,30]")
         \\    assert(doc.count() == 3)
-        \\    assert(doc.element(0).as_long() else -1 == 10)
-        \\    assert(doc.element(2).as_long() else -1 == 30)
+        \\    assert(doc.element(0).as_i64() else -1 == 10)
+        \\    assert(doc.element(2).as_i64() else -1 == 30)
         \\
     );
 }
@@ -469,8 +467,8 @@ test "json: a member name is compared decoded, however it was written" {
         \\    # the way in, so a lookup is a map lookup and nothing is
         \\    # decoded twice.
         \\    let doc = try json.parse("{\"a\\nb\": 1, \"\\u0041\": 2, \"plain\": 3}")
-        \\    assert((child(doc, "a\nb").as_long() else -1) == 1)
-        \\    assert((child(doc, "A").as_long() else -1) == 2)
+        \\    assert((child(doc, "a\nb").as_i64() else -1) == 1)
+        \\    assert((child(doc, "A").as_i64() else -1) == 2)
         \\    assert(doc.member("plain") != none)
         \\    assert(doc.member("a\\nb") == none)
         \\    match doc:
@@ -630,18 +628,18 @@ test "json: an accessor of the wrong member answers absence, and null is not abs
         \\    let nothing = doc.element(4)
         \\
         \\    assert((text.as_text() else "") == "s")
-        \\    assert(text.as_long() == none)
-        \\    assert(text.as_double() == none)
+        \\    assert(text.as_i64() == none)
+        \\    assert(text.as_f64() == none)
         \\    assert(text.as_bool() == none)
         \\    assert(not text.is_null())
         \\
-        \\    assert(number.as_long() else -1 == 1)
+        \\    assert(number.as_i64() else -1 == 1)
         \\    assert(number.as_text() == none)
         \\    assert(number.as_bool() == none)
         \\
         \\    assert(yes.as_bool() else false)
         \\    assert(not (no.as_bool() else true))
-        \\    assert(yes.as_long() == none)
+        \\    assert(yes.as_i64() == none)
         \\
         \\    # JSON's null is a value that is there.  "There is no such
         \\    # member" is a different sentence, and `member` says that
@@ -682,16 +680,16 @@ test "json: element walks arrays and objects alike, and past the end is a bug th
         \\func main() -> !:
         \\    let doc = try json.parse("[1, [2, 3], {\"a\": 4}, 5]")
         \\    assert(doc.count() == 4)
-        \\    assert(doc.element(0).as_long() else -1 == 1)
-        \\    assert(doc.element(1).element(1).as_long() else -1 == 3)
-        \\    assert(child(doc.element(2), "a").as_long() else -1 == 4)
-        \\    assert(doc.element(3).as_long() else -1 == 5)
+        \\    assert(doc.element(0).as_i64() else -1 == 1)
+        \\    assert(doc.element(1).element(1).as_i64() else -1 == 3)
+        \\    assert(child(doc.element(2), "a").as_i64() else -1 == 4)
+        \\    assert(doc.element(3).as_i64() else -1 == 5)
         \\
         \\    # An object's members are positioned too, in the order
         \\    # they were first named.
         \\    let record = try json.parse("{\"a\": 1, \"b\": 2}")
-        \\    assert(record.element(0).as_long() else -1 == 1)
-        \\    assert(record.element(1).as_long() else -1 == 2)
+        \\    assert(record.element(0).as_i64() else -1 == 1)
+        \\    assert(record.element(1).as_i64() else -1 == 2)
         \\
         \\    # And what element hands back is a copy the caller owns,
         \\    # so it outlives the walk that found it.
@@ -706,7 +704,7 @@ test "json: element walks arrays and objects alike, and past the end is a bug th
         \\
         \\func main() -> !:
         \\    let doc = try json.parse("[1, 2]")
-        \\    print(str(doc.element(2).as_long() else -1))
+        \\    print(str(doc.element(2).as_i64() else -1))
         \\
     , budget, .explicit_trap);
 }
@@ -758,7 +756,7 @@ test "json: a parsed tree is walked, mutated through its containers, and written
         \\    match value:
         \\        object(fields):
         \\            if fields.has("port"):
-        \\                let held = fields["port"].as_long() else 0
+        \\                let held = fields["port"].as_i64() else 0
         \\                fields["port"] = json.Json.integer(value = held + 1)
         \\            for name, entry in fields:
         \\                bump(entry)
@@ -874,7 +872,7 @@ test "json: pretty indents by the count it is given" {
 
 test "json: a real that is not a number has no JSON to be written as" {
     // Nothing this module parses can hold an infinity — a number past
-    // a double is refused on the way in — but a program can build one
+    // an f64 is refused on the way in — but a program can build one
     // out of arithmetic, and there is no text that would read back as
     // what it was given (RFC 8259 section 6).
     try agree.trapGiven(
@@ -1127,8 +1125,8 @@ test "json: the JSONTestSuite i_ cases, which parsers disagree about, and what t
         \\    # precision honestly is.
         \\    assert(accepted("[100000000000000000000]"))
         \\    let big = try json.parse("[100000000000000000000]")
-        \\    assert(big.element(0).as_long() == none)
-        \\    assert(big.element(0).as_double() != none)
+        \\    assert(big.element(0).as_i64() == none)
+        \\    assert(big.element(0).as_f64() != none)
         \\
         \\    # i_number_huge_exp: refused, and this is the one row the
         \\    # union moved.  A lazy document could accept 1e999 and
@@ -1207,7 +1205,7 @@ test "json: the recipe for a file is three calls, and none of them is this modul
         \\            if fields.has("host"):
         \\                host = fields["host"].as_text() else "?"
         \\            if fields.has("port"):
-        \\                port = fields["port"].as_long() else 0
+        \\                port = fields["port"].as_i64() else 0
         \\            print(host + ":" + str(port))
         \\        else:
         \\            trap("a config file is an object")

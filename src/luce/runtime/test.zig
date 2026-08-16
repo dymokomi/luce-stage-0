@@ -3454,7 +3454,7 @@ test "runtime index and struct doors reject malformed rank without touching owne
         @as(?usize, null),
         heap.flattenIndex(&.{-1}, &.{Value.ofI64(0)}),
     );
-    // Every axis of a multidimensional store is a long.  The runtime must
+    // Every axis of a multidimensional store is an i64. The runtime must
     // reject a forged later index before flattenIndex reads its payload, and
     // the rejected store must leave the destination untouched.
     try expectTrap(
@@ -5247,7 +5247,7 @@ test "map keys hash as they compare, for i64 and for str" {
         (try containers.indexGet(runtime, map, &.{Value.ofStr("abc")})).asI64(),
     );
 
-    // Negative long keys travel through the same bit mixer as positive
+    // Negative i64 keys travel through the same bit mixer as positive
     // ones and come back.
     const numbers = try runtime.newMap();
     for ([_]i64{ -1, 0, 1, std.math.minInt(i64), std.math.maxInt(i64) }) |key| {
@@ -5689,10 +5689,10 @@ test "a list the runtime builds is packed the way its element type says" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    // The whole of the inline path below rests on this: an element's
-    // storage width is a fact of the program's type, not of the code
-    // that happened to build the list (docs/BYTES.md R1).  A map of
-    // long to double answers two *packed* lists.
+    // The whole inline path below rests on this: an element's concrete
+    // type is a fact of the program, not of the code that happened to
+    // build the list (docs/BYTES.md R1). A map from i64 to f64 answers
+    // two packed lists with those exact representations.
     const held = try runtime.newMap();
     try containers.indexSet(runtime, held, &.{Value.ofI64(7)}, Value.ofF64(0.5));
 
@@ -5738,7 +5738,7 @@ test "arrays flatten multi-dimensional indices and refuse an oversized shape" {
 
     // Both refusals happen before anything is allocated, which is what
     // makes them testable: the first shape's product overflows a
-    // `usize`, and the second is past the `byte` ceiling docs/VECTOR.md's
+    // `usize`, and the second is past the `u8` ceiling docs/VECTOR.md's
     // reduction proof depends on.  A shape that merely needs more memory
     // than the machine has reaches the same trap from the allocator.
     try testing.expectError(error.Trap, runtime.newArray(&.{ 1 << 40, 1 << 40 }, Value.none));
@@ -5749,7 +5749,7 @@ test "arrays flatten multi-dimensional indices and refuse an oversized shape" {
 
 test "the element ceilings are the ones docs/VECTOR.md's proof needs" {
     // Recomputed from the proof's own obligation rather than read off
-    // the table: `N · M` must stay inside a `long`, in `i128` because
+    // the table: `N · M` must stay inside a `i64`, in `i128` because
     // `i64` is the width the arithmetic is about.
     const largest: i128 = std.math.maxInt(i64);
     inline for (.{
@@ -5996,7 +5996,7 @@ test "string slicing uses Unicode scalar positions" {
     try testing.expectEqualStrings("a", (try text.slice(runtime, held, 0, 1)).asStr());
     try testing.expectEqualStrings("\xF0\x9F\x99\x82", (try text.slice(runtime, held, 1, 2)).asStr());
     try testing.expectEqualStrings("a\xF0\x9F\x99\x82", (try text.slice(runtime, held, 0, 2)).asStr());
-    try expectTrap(.string_bounds, runtime, text.slice(runtime, held, 0, 99));
+    try expectTrap(.str_bounds, runtime, text.slice(runtime, held, 0, 99));
 
     try testing.expectEqual(@as(u8, 0xf0), (try text.byteAt(runtime, held, 1)).asU8());
     try testing.expectEqual(@as(i64, 5), (try text.findByte(runtime, held, 'b', 0)).asI64());
@@ -6016,9 +6016,9 @@ test "direct text primitives reject non-string values before decoding payloads" 
     runtime.pending = null;
     try expectTrap(.not_owned, runtime, text.findByte(runtime, forged, 'x', 0));
     runtime.pending = null;
-    try expectTrap(.not_owned, runtime, text.parseInt(runtime, forged));
+    try expectTrap(.not_owned, runtime, text.parseI64(runtime, forged));
     runtime.pending = null;
-    try expectTrap(.not_owned, runtime, text.parseFloat(runtime, forged));
+    try expectTrap(.not_owned, runtime, text.parseF64(runtime, forged));
     runtime.pending = null;
     try expectTrap(.not_owned, runtime, text.ord(runtime, forged));
     runtime.pending = null;
@@ -6055,13 +6055,13 @@ test "the conversions round trip and refuse what they cannot represent" {
 
     // The parsers answer absence rather than trapping: "not a number"
     // is the same reason every time and the name says it already.
-    try testing.expectEqual(@as(i64, 42), (try text.parseInt(runtime, Value.ofStr("42"))).asI64());
-    try testing.expect((try text.parseInt(runtime, Value.ofStr("4 2"))).isNone());
-    try testing.expect((try text.parseInt(runtime, Value.ofStr(""))).isNone());
-    try testing.expectEqual(@as(f64, 1.5), (try text.parseFloat(runtime, Value.ofStr("1.5"))).asF64());
-    try testing.expect((try text.parseFloat(runtime, Value.ofStr("inf"))).isNone());
-    try testing.expect((try text.parseFloat(runtime, Value.ofStr("nan"))).isNone());
-    try testing.expect((try text.parseFloat(runtime, Value.ofStr("zero"))).isNone());
+    try testing.expectEqual(@as(i64, 42), (try text.parseI64(runtime, Value.ofStr("42"))).asI64());
+    try testing.expect((try text.parseI64(runtime, Value.ofStr("4 2"))).isNone());
+    try testing.expect((try text.parseI64(runtime, Value.ofStr(""))).isNone());
+    try testing.expectEqual(@as(f64, 1.5), (try text.parseF64(runtime, Value.ofStr("1.5"))).asF64());
+    try testing.expect((try text.parseF64(runtime, Value.ofStr("inf"))).isNone());
+    try testing.expect((try text.parseF64(runtime, Value.ofStr("nan"))).isNone());
+    try testing.expect((try text.parseF64(runtime, Value.ofStr("zero"))).isNone());
 
     try testing.expectEqualStrings(
         "\xF0\x9F\x99\x82",
@@ -6080,8 +6080,8 @@ test "integer arithmetic is checked and float arithmetic is IEEE" {
 
     const biggest = Value.ofI64(std.math.maxInt(i64));
     try expectTrap(.integer_overflow, runtime, operators.binary(runtime, .add, biggest, Value.ofI64(1)));
-    // The operators that still produce a long are the ones that still
-    // trap: `/` answers a double and is IEEE (docs/NUMERICS.md §4).
+    // The integer-preserving operators trap; `/` answers f64 and follows
+    // IEEE semantics (docs/NUMERICS.md §4).
     try expectTrap(.divide_by_zero, runtime, operators.binary(runtime, .floor_divide, biggest, Value.ofI64(0)));
     try expectTrap(.divide_by_zero, runtime, operators.binary(runtime, .modulo, biggest, Value.ofI64(0)));
     try expectTrap(
@@ -6438,8 +6438,8 @@ extern fn luce_rt_file_flush(
     instruction: u32,
 ) callconv(.c) i32;
 extern fn luce_rt_str(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32;
-extern fn luce_rt_parse_int(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32;
-extern fn luce_rt_parse_float(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32;
+extern fn luce_rt_parse_i64(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32;
+extern fn luce_rt_parse_f64(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32;
 extern fn luce_rt_chr(runtime: *Runtime, code: i64, out: [*c]Value) callconv(.c) i32;
 extern fn luce_rt_ord(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32;
 extern fn luce_rt_struct_set(
@@ -6450,7 +6450,6 @@ extern fn luce_rt_struct_set(
     out: [*c]Value,
 ) callconv(.c) i32;
 extern fn luce_rt_compare(op: i32, left: [*c]const Value, right: [*c]const Value) callconv(.c) i32;
-extern fn luce_rt_compare_i64_f64(op: i32, left: i64, right: f64) callconv(.c) i32;
 
 /// What a host learns from the trap callback, without allocating: these
 /// are entered from C and must stay simple.
@@ -6684,10 +6683,6 @@ test "C scalar lengths counts and tags fail closed without writing outputs" {
     runtime.pending = null;
 
     try testing.expectEqual(@as(i32, 0), luce_rt_compare(999, &Value.ofI64(1), &Value.ofI64(1)));
-    try testing.expectEqual(
-        @as(i32, 0),
-        luce_rt_compare_i64_f64(999, 1, 1.0),
-    );
 }
 
 test "C byte pointers reject null before slicing or host access" {
@@ -7061,8 +7056,8 @@ test "C Value output pointers reject null before work" {
     try expectCNullValueTrap(runtime, luce_rt_string_byte(runtime, &text_value, 0, null_out));
     try expectCNullValueTrap(runtime, luce_rt_string_find_byte(runtime, &text_value, 'v', 0, null_out));
     try expectCNullValueTrap(runtime, luce_rt_str(runtime, &held, null_out));
-    try expectCNullValueTrap(runtime, luce_rt_parse_int(runtime, &text_value, null_out));
-    try expectCNullValueTrap(runtime, luce_rt_parse_float(runtime, &text_value, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_parse_i64(runtime, &text_value, null_out));
+    try expectCNullValueTrap(runtime, luce_rt_parse_f64(runtime, &text_value, null_out));
     try expectCNullValueTrap(runtime, luce_rt_chr(runtime, 'v', null_out));
     try expectCNullValueTrap(runtime, luce_rt_ord(runtime, &text_value, null_out));
 
@@ -7258,8 +7253,8 @@ test "C borrowed Value and array pointers reject null before work" {
     try expectCNullValueTrap(runtime, luce_rt_string_byte(runtime, null_value, 0, &out));
     try expectCNullValueTrap(runtime, luce_rt_string_find_byte(runtime, null_value, 'b', 0, &out));
     try expectCNullValueTrap(runtime, luce_rt_str(runtime, null_value, &out));
-    try expectCNullValueTrap(runtime, luce_rt_parse_int(runtime, null_value, &out));
-    try expectCNullValueTrap(runtime, luce_rt_parse_float(runtime, null_value, &out));
+    try expectCNullValueTrap(runtime, luce_rt_parse_i64(runtime, null_value, &out));
+    try expectCNullValueTrap(runtime, luce_rt_parse_f64(runtime, null_value, &out));
     try expectCNullValueTrap(runtime, luce_rt_ord(runtime, null_value, &out));
 
     try testing.expectEqual(@as(i32, 0), luce_rt_compare(0, null_value, &held));
@@ -8099,7 +8094,7 @@ test "C string slices preserve scalar-positioned views" {
         luce_rt_string_slice(&runtime, &outside, 0, -1, &out),
     );
     try testing.expectEqual(@as(i64, 99), out.asI64());
-    try testing.expectEqual(vocabulary.TrapCode.string_bounds, runtime.pending.?.code);
+    try testing.expectEqual(vocabulary.TrapCode.str_bounds, runtime.pending.?.code);
     runtime.pending = null;
 
     out = Value.ofI64(99);
@@ -8116,7 +8111,7 @@ test "C string slices preserve scalar-positioned views" {
         luce_rt_string_slice(&runtime, &inline_text, 6, 99, &out),
     );
     try testing.expectEqual(@as(i64, 99), out.asI64());
-    try testing.expectEqual(vocabulary.TrapCode.string_bounds, runtime.pending.?.code);
+    try testing.expectEqual(vocabulary.TrapCode.str_bounds, runtime.pending.?.code);
     runtime.pending = null;
 }
 
@@ -8209,7 +8204,7 @@ test "a trace keeps the innermost frames and counts the rest" {
 }
 
 test "an array's cells are exactly as wide as its element, which is the prize" {
-    // The 8x saving `array(byte, n)` exists for is a *layout* claim,
+    // The 8x saving `array[u8, n]` exists for is a *layout* claim,
     // and nothing else in the suite would notice it going away: a
     // wider cell over-allocates and still reads back the right value,
     // so every behavioural test stays green while the memory quietly
@@ -8236,15 +8231,15 @@ test "an array's cells are exactly as wide as its element, which is the prize" {
     defer bench.deinit();
     const runtime = &bench.runtime;
 
-    // End to end: a byte array of a thousand elements occupies a
-    // thousand bytes and a long array of the same length eight
+    // End to end: a u8 array of a thousand elements occupies a
+    // thousand bytes and an i64 array of the same length eight
     // thousand.  The ratio is the measurement, and it is 8.
     const bytes = try runtime.newArray(&.{1000}, Value.ofU8(0));
-    const longs = try runtime.newArray(&.{1000}, Value.ofI64(0));
+    const i64s = try runtime.newArray(&.{1000}, Value.ofI64(0));
     const byte_row = try runtime.resolve(bytes);
-    const long_row = try runtime.resolve(longs);
+    const i64_row = try runtime.resolve(i64s);
     try testing.expectEqual(@as(usize, 1000), byte_row.elements.bytes.len);
-    try testing.expectEqual(@as(usize, 8000), long_row.elements.bytes.len);
+    try testing.expectEqual(@as(usize, 8000), i64_row.elements.bytes.len);
 
     // Every value a byte can hold survives the round trip through a
     // one-byte cell, which is what says the width is honest rather

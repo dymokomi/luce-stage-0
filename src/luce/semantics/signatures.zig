@@ -349,7 +349,7 @@ fn collectFunction(
 ///
 /// **One registration per reference site**, for both callers: two
 /// mentions of one lambda or one constructor are two functions with
-/// one name, which is what `string(f)` answers and all it promises.
+/// one name, which is what `str(f)` answers and all it promises.
 pub fn registerLambda(
     self: *Analyzer,
     declaration: *const ast.FuncDecl,
@@ -430,7 +430,7 @@ pub fn registerClosure(
 /// template at concrete monomorphic parameter types.
 ///
 /// Luce exposes no user generics.  `std.lists.sort_by` nevertheless
-/// has to serve `list(T)` for the receiver's actual T, so its routed
+/// has to serve `list[T]` for the receiver's actual T, so its routed
 /// method takes the same narrow route lambdas take: the ordinary
 /// Luce body is collected once, this method gives a clone concrete
 /// parameter types, and the normal lowering loop checks and lowers
@@ -507,7 +507,7 @@ pub fn registerStandardSpecialization(
 
 // -- pass one and a half: the layouts a return shape rides in -------
 //
-// `(double, double)` **is** a two-field product value, so it is
+// `(f64, f64)` **is** a two-field product value, so it is
 // lowered as one: `return low, high` is a `struct_make` and
 // `let low, high = …` is two `struct_get`s.  Nothing below stage 4
 // grows a case for multiple results — no MIR instruction, no wire
@@ -547,7 +547,7 @@ pub fn synthesizeShapes(self: *Analyzer) Error!void {
 /// The layout for one return shape, interned by the name the shape
 /// is written with.
 ///
-/// **The name is the shape as written** — `(double, double)` — and it
+/// **The name is the shape as written** — `(f64, f64)` — and it
 /// is unforgeable from source: a struct name is an identifier,
 /// qualified with a module prefix, so nothing a program can declare
 /// collides with a name containing `(`.  It reads correctly in
@@ -606,8 +606,8 @@ pub fn internResultShape(
     return .{ .strukt = index };
 }
 
-/// What a function answers, as a reader wrote it: `long` for one
-/// value, `(long, long)` for a shape, `None` for nothing.  Also the
+/// What a function answers, as a reader wrote it: `i64` for one
+/// value, `(i64, i64)` for a shape, `None` for nothing.  Also the
 /// synthesized layout's name, so the two can never disagree.
 pub fn writtenResults(self: *Analyzer, info: *const FunctionDeclInfo) Error![]const u8 {
     return writtenResultTypes(self, info.channel);

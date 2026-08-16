@@ -11,9 +11,9 @@
 //! the decimal bytes they are, and the programs read them.  A library
 //! that only reads what it wrote has proven nothing about ZIP.
 //!
-//! **Bytes are a `list(byte)`, one byte to an element**, because the
+//! **Bytes are a `list[u8]`, one byte to an element**, because the
 //! host cannot hand a program a file's bytes: `file_read` answers a
-//! `string` and a string is valid UTF-8, so an archive never survives
+//! `str` and a string is valid UTF-8, so an archive never survives
 //! the boundary.  Nothing here touches the world — `std.zip` is a
 //! pure module and these programs compile without host access — and
 //! that is the honest shape of the gap, not a convenience of the

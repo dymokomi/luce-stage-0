@@ -39,7 +39,7 @@ worker.
 The boundary copier recursively rebuilds permitted data in the destination
 runtime:
 
-- numbers, `bool`, strings, enums, and plain value fields copy;
+- numbers, `bool`, `char`, `str`, `bytes`, enums, and plain value fields copy;
 - structs, unions, optionals, lists, maps, arrays, and builders copy as one
   graph, preserving aliases within a root and between separate arguments but
   sharing no object with the source runtime; and
@@ -55,11 +55,10 @@ Three shapes are refused transitively:
 - a function value may carry a bound receiver, so its environment is not a
   sendable value.
 
-A struct, union, optional, container, or interface carrying one of those
-shapes is refused too. Current interface values contain bound dispatch
-functions, so they do not cross. Future classes, weak references, and capturing
-closure environments remain non-sendable unless a later design introduces a
-separate explicit snapshot abstraction.
+A struct, union, optional, or container carrying one of those shapes is
+refused too. Interfaces, classes, weak references, and function values with
+capturing closure environments are also non-sendable. A worker may create and
+use all of them locally; they simply do not cross object tables.
 
 ## `task`: an ARC resource
 
@@ -68,9 +67,9 @@ return shape:
 
 ```text
 task            answers nothing and cannot fail
-task(!)         answers nothing or a recoverable error
-task(double)    answers a double
-task(double!)   answers a double or a recoverable error
+task[!]         answers nothing or a recoverable error
+task[f64]       answers an f64
+task[f64!]      answers an f64 or a recoverable error
 ```
 
 Task references may be stored in fields, optionals, containers, and unions.
@@ -91,13 +90,13 @@ one-shot state.
   answer, error, or trap.
 
 A task cannot carry a multi-value return because there is no corresponding
-`task(A, B)` shape. Wrap the values in a struct. A worker return graph also may
+`task[A, B]` shape. Wrap the values in a struct. A worker return graph also may
 not transitively contain a file, task, or function value.
 
 ## Isolation and effects
 
 No Luce object identity is shared across runtimes. Ordinary data races over
-lists, maps, arrays, builders, future classes, or closure environments are
+lists, maps, arrays, builders, classes, or closure environments are
 therefore unrepresentable.
 
 Host effects are process services rather than Luce objects. The runtime

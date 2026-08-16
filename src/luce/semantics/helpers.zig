@@ -173,9 +173,9 @@ fn anyDeeperArgument(arguments: []const ast.Argument, budget: u32) bool {
 ///
 /// The sign has to fold *before* the range check or a width's minimum
 /// is unwritable: `-9223372036854775808` lexes as a minus and a
-/// literal whose magnitude is one past the largest positive `long`, so
+/// literal whose magnitude is one past the largest positive `i64`, so
 /// checking the magnitude alone rejects the one number that most needs
-/// spelling — and the same is true of `-2147483648` at `int`.
+/// spelling — and the same is true of `-2147483648` at `i32`.
 ///
 /// The answer is carried as an `i128` whatever the landing width. That
 /// carrier represents both `i64`'s minimum and `u64`'s maximum without
@@ -188,8 +188,8 @@ pub fn parseIntLiteral(text: []const u8, negated: bool, lands: Type) ?i128 {
     // octal by name and the compile has already failed.
     const magnitude = std.fmt.parseInt(u64, text, 0) catch return null;
     // The range of the width it landed on, both ends, carried at
-    // `i128` so that `long`'s own extremes are ordinary numbers here.
-    // One statement covers all four widths and both signs, including
+    // `i128` so that `i64`'s own extremes are ordinary numbers here.
+    // One statement covers every integer width and signedness, including
     // `-9223372036854775808`, whose magnitude is not itself an `i64`.
     const bounds = if (lands.isInteger()) lands.integerRange() else Type.integerRange(.i64);
     const signed: i128 = if (negated) -@as(i128, magnitude) else @as(i128, magnitude);
@@ -225,10 +225,10 @@ pub fn parseFloatLiteral(text: []const u8, lands: Type) ?f64 {
 }
 
 /// An **integer** literal's text read as a float, because that is the
-/// type it landed on: `let x: double = 7`.
+/// type it landed on: `let x: f64 = 7`.
 ///
 /// Reads the digits rather than converting `parseIntLiteral`'s result,
-/// so a literal too large for an `long` still lands correctly on a
+/// so a literal too large for an `i64` still lands correctly on a
 /// float that has room for it — and so the one rule "a literal is
 /// parsed at the width it lands on" has no exception for the integer
 /// spelling.  Null means malformed or not finite.
@@ -533,7 +533,7 @@ test "i64 minimum and u64 maximum retain their full source values" {
     try testing.expectEqual(@as(?i128, 0), parseIntLiteral("0", true, .i64));
 }
 
-test "a float literal that is not finite is refused, and underflow is not" {
+test "a floating literal that is not finite is refused, and underflow is not" {
     try testing.expectEqual(@as(?f64, null), parseFloatLiteral("1e400", .f64));
     try testing.expectEqual(@as(?f64, null), parseFloatLiteral("-1e400", .f64));
     try testing.expectEqual(@as(?f64, 0.0), parseFloatLiteral("1e-400", .f64));
@@ -541,17 +541,17 @@ test "a float literal that is not finite is refused, and underflow is not" {
     try testing.expectEqual(@as(?f64, null), parseFloatLiteral("nonsense", .f64));
 }
 
-test "an integer literal landing on a float reads its digits, not a long" {
+test "an integer literal landing on f64 reads its digits, not an i64" {
     // The ordinary cases agree with parseIntLiteral, sign and all.
     try testing.expectEqual(@as(?f64, 7.0), parseIntLiteralAsFloat("7", false, .f64));
     try testing.expectEqual(@as(?f64, -7.0), parseIntLiteralAsFloat("7", true, .f64));
     try testing.expectEqual(@as(?f64, 0.0), parseIntLiteralAsFloat("0", true, .f64));
     // And the case that is the whole reason it reads the digits: a
-    // magnitude past long's range is not a long, but it is a perfectly
-    // ordinary float, and the type it landed on is the float.
+    // magnitude past i64's range is not an i64, but it is a valid f64,
+    // and the type it landed on is f64.
     try testing.expectEqual(@as(?i128, null), parseIntLiteral("99999999999999999999", false, .i64));
     try testing.expectEqual(@as(?f64, 1e20), parseIntLiteralAsFloat("99999999999999999999", false, .f64));
-    // Past every float as well is still refused, and so is nonsense.
+    // Past every floating width as well is still refused, and so is nonsense.
     try testing.expectEqual(@as(?f64, null), parseIntLiteralAsFloat("1" ++ "0" ** 400, false, .f64));
     try testing.expectEqual(@as(?f64, null), parseIntLiteralAsFloat("nonsense", false, .f64));
 }

@@ -62,36 +62,6 @@ pub const BinaryOp = enum {
             else => false,
         };
     }
-
-    /// The same comparison with its operands the other way round.
-    ///
-    /// Exact long/double comparison is implemented once, in one shape —
-    /// the long on the left (docs/NUMERICS.md §5) — so a comparison
-    /// written the other way round arrives here rather than at a
-    /// second implementation of the same judgment.  Equality is its
-    /// own mirror image; arithmetic has none and is refused.
-    pub fn mirrored(self: BinaryOp) BinaryOp {
-        return switch (self) {
-            .equal => .equal,
-            .not_equal => .not_equal,
-            .less => .greater,
-            .less_equal => .greater_equal,
-            .greater => .less,
-            .greater_equal => .less_equal,
-            .add,
-            .subtract,
-            .multiply,
-            .divide,
-            .floor_divide,
-            .modulo,
-            .bit_and,
-            .bit_or,
-            .bit_xor,
-            .shift_left,
-            .shift_right,
-            => unreachable,
-        };
-    }
 };
 
 /// Why a call failed, from the closed set an error may carry
@@ -180,8 +150,8 @@ pub const TrapCode = enum {
     explicit_trap,
     missing_return,
     call_depth_exceeded,
-    string_bounds,
-    string_boundary,
+    str_bounds,
+    str_boundary,
     host_unavailable,
     index_bounds,
     key_missing,
@@ -240,8 +210,8 @@ pub const TrapCode = enum {
             .explicit_trap => "explicit trap",
             .missing_return => "function ended without returning a value",
             .call_depth_exceeded => "call depth exceeded",
-            .string_bounds => "string index out of bounds",
-            .string_boundary => "string slice splits a UTF-8 sequence",
+            .str_bounds => "string index out of bounds",
+            .str_boundary => "string slice splits a UTF-8 sequence",
             .host_unavailable => "host service unavailable",
             .index_bounds => "index out of bounds",
             .key_missing => "key not found in map",

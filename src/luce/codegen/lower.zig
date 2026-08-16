@@ -136,7 +136,7 @@ pub const Result = union(enum) {
     /// allocator it passed to `lower`.
     bitcode: []const u8,
     /// Some construct has no lowering yet.  The payload names it
-    /// ("intrinsic.map_get", "double") and is static storage — nothing
+    /// ("intrinsic.map_get", "opaque type") and is static storage — nothing
     /// was allocated, and there is nothing to free.
     unsupported: []const u8,
 };
@@ -276,7 +276,7 @@ const Module = struct {
     /// `program.functions`.
     functions: []Builder.Function.Index = &.{},
     /// The pointer table a call through a function value dispatches
-    /// through, and the name table `string(f)` reads — both built on
+    /// through, and the name table `str(f)` reads — both built on
     /// first use and null in a program that makes no function value
     /// (docs/FUNCTIONS.md D2, D3).
     function_table: ?Builder.Variable.Index = null,
@@ -920,7 +920,7 @@ const Module = struct {
         const span = declared.runLength();
         var slots: std.ArrayList(Builder.Constant) = .empty;
         defer slots.deinit(self.gpa);
-        // Member index zero boxes exactly as a `long` zero does, which
+        // Member index zero boxes exactly as a `i64` zero does, which
         // is what the interpreter parks in the same slot.
         try slots.append(self.gpa, try self.zeroField(.i64));
         for (declared.members[0].fields) |field| {
@@ -968,7 +968,7 @@ const Module = struct {
         const of = written.storage();
         const first_member: u64 = switch (written) {
             // Boxed the way `boxBits` boxes one: only the backing
-            // width's own bits, so a negative member at a `short` is
+            // width's own bits, so a negative member at a `i16` is
             // 0xffff and not a sign-extended word (`runtime.Value`).
             .enumeration => |reference| narrowBits(
                 self.program.enums[reference.index].members[0].value,
@@ -1044,7 +1044,7 @@ const Module = struct {
     /// One folded atom as the borrowed `runtime.Value` the
     /// materializer hands to `luce_rt_own_storage`.  The folded union
     /// carries a number at its widest family member; `wanted` supplies
-    /// the storage width and therefore the exact runtime tag, just as
+    /// the concrete width and therefore the exact runtime tag, just as
     /// an ordinary MIR result type does when `Body.boxed` lowers it.
     fn constantValue(
         self: *Module,
@@ -1427,7 +1427,7 @@ const Module = struct {
                     for (constant.payload.map) |entry_value| {
                         _ = try wip.store(
                             .normal,
-                            // A key is stored as the integer a `long`
+                            // A key is stored as the integer a `i64`
                             // key would be, folded or not
                             // (`mir.mapKeyStorage`): the materializer
                             // fills the same slot every lookup will.
@@ -2165,7 +2165,7 @@ const Module = struct {
     }
 
     /// The program's function *names*, one `{ptr, i64}` per function in
-    /// program order: what `string(f)` reads (docs/FUNCTIONS.md D3).
+    /// program order: what `str(f)` reads (docs/FUNCTIONS.md D3).
     /// Built lazily beside the table above, for the same reason.
     fn functionNames(self: *Module) Error!Builder.Variable.Index {
         if (self.function_names) |built| return built;
@@ -4252,11 +4252,11 @@ const Body = struct {
     ///
     /// It mirrors `runtime.Object.ElementKind`, which is what the
     /// runtime actually allocates: an `array[f64]` is `f64`s, so
-    /// reading one is a `load double` and nothing else.  The two are
+    /// reading one is a `load f64` and nothing else.  The two are
     /// held together by the byte-offset test in `runtime/test.zig`,
-    /// which reads a double array's element as an `f64`.
+    /// which reads an f64 array's element as an `f64`.
     fn cellType(self: *Body, written: types.Type) Builder.Type {
-        // An `array(Method, n)` is an array of the backing width, which
+        // An `array[Method, n]` is an array of the backing width, which
         // is what D9 means by "at the backing width, unboxed where
         // scalars are unboxed".
         const element = written.storage();
@@ -4865,7 +4865,7 @@ const Body = struct {
             try self.wip.bin(.@"and", byte, try builder.intValue(.i8, 0xc0), "top.bits"),
             try builder.intValue(.i8, @as(i8, @bitCast(@as(u8, 0x80)))),
             "continuation",
-        ), .string_boundary);
+        ), .str_boundary);
         _ = try self.wip.br(settled);
         self.seek(settled);
     }
@@ -4884,12 +4884,11 @@ const Body = struct {
         const above = try self.wip.icmp(.sge, index, length, "above");
         try self.check(
             try self.wip.bin(.@"or", below, above, "out.of.range"),
-            .string_bounds,
+            .str_bounds,
         );
-        // The byte itself, as an `i8`: `byte_at` answers a `byte` now,
-        // so the widening that used to happen here happens at whatever
-        // the caller does with it — a `zext`, because a byte's bits
-        // are a magnitude (D4).
+        // LLVM stores the byte in `i8`; the MIR type is `u8`. Any explicit
+        // later conversion uses zero extension because these bits are a
+        // magnitude (D4).
         self.produced[register].value = try self.wip.load(
             .normal,
             .i8,
@@ -4920,7 +4919,7 @@ const Body = struct {
             below,
             try self.wip.bin(.@"or", inverted, past, "misordered"),
             "out.of.range",
-        ), .string_bounds);
+        ), .str_bounds);
         try self.checkBoundary(text, length, first);
         try self.checkBoundary(text, length, end);
         self.produced[register].value = try self.wip.buildAggregate(self.module.string_type, &.{
@@ -5118,7 +5117,7 @@ const Body = struct {
         );
     }
 
-    /// `file_read(path)` — the whole file as a `string`.
+    /// `file_read(path)` — the whole file as a `str`.
     ///
     /// Open-read-close over the byte channel plus `libluce_rt`'s own
     /// UTF-8 validation since version 12 (docs/BYTES.md R2), so this is
@@ -5727,7 +5726,7 @@ const Body = struct {
                 make.fields,
             ),
             // The tag is slot 0 of the run, read the way `struct_get`
-            // reads a `long` field (docs/UNION.md D8).
+            // reads a `i64` field (docs/UNION.md D8).
             .variant_tag => |tag| {
                 const address = try self.wip.gep(
                     .inbounds,
@@ -5902,7 +5901,7 @@ const Body = struct {
         operand: mir.Register,
     ) Error!void {
         // **An enum converts as the integer it is stored at**
-        // (docs/ENUMS.md D4): `int(m)` reads the member's number, and
+        // (docs/ENUMS.md D4): `i32(m)` reads the member's number, and
         // from here on there is nothing enum-shaped left to know — a
         // conversion out of one is the conversion out of its width,
         // range check and all.  It is the only direction: nothing
@@ -5913,7 +5912,7 @@ const Body = struct {
         const held = self.produced[operand].value;
         const target = try self.module.valueType(to);
 
-        // `int(m)` at an `int` backing is the identity on the bits: the
+        // `i32(m)` at an `i32` backing is the identity on the bits: the
         // whole content of the conversion is the type it lands in.
         if (from.eql(to)) {
             self.produced[register].value = held;
@@ -5938,7 +5937,7 @@ const Body = struct {
 
         if (to.isFloating()) {
             self.produced[register].value = if (from.isInteger())
-                // A `byte`'s bits are a magnitude and every other
+                // A `u8`'s bits are a magnitude and every other
                 // integer's carry a sign (D4), which is the whole of
                 // what "unsigned" decides here.
                 try self.wip.cast(
@@ -5950,7 +5949,7 @@ const Body = struct {
             else if (to.numericBits() > from.numericBits())
                 try self.wip.cast(.fpext, held, target, "float")
             else
-                // One `fptrunc`, so `half(x)` from a `double` rounds
+                // One `fptrunc`, so `f16(x)` from a `f64` rounds
                 // once rather than twice through binary32 (§7).
                 try self.wip.cast(.fptrunc, held, target, "float");
             return;
@@ -6055,7 +6054,7 @@ const Body = struct {
         const past_top: f64 = @floatFromInt(bounds.high + 1);
         const not_a_number = try self.wip.fcmp(.normal, .uno, rounded, rounded, "is.nan");
         // **The bound may not be finite at the source's width.**  A
-        // `half` tops out at 65504, so `int`'s and `long`'s bounds
+        // `f16` tops out at 65504, so `i32`'s and `i64`'s bounds
         // both become infinities in binary16 — and there the test has
         // to include the bound rather than exclude it, because the
         // value it is catching *is* that infinity.  The upper test
@@ -6085,7 +6084,7 @@ const Body = struct {
     }
 
     /// What a bound becomes at the source float's own width, which is
-    /// where the comparison happens.  `half` is the width that cannot
+    /// where the comparison happens.  `f16` is the width that cannot
     /// hold every bound, and this is what says so.
     fn narrowedBound(_: *Body, from: types.Type, held: f64) f64 {
         return switch (from) {
@@ -6193,7 +6192,7 @@ const Body = struct {
 
     /// A union value is built by the struct path with one more slot in
     /// front (docs/UNION.md D8): slot 0 is the member index as a boxed
-    /// `long`, the member's payload fields follow, and the tail is
+    /// `i64`, the member's payload fields follow, and the tail is
     /// `none` padding up to the union's one static run length — so a
     /// value's box can be re-derived from its type alone, exactly as a
     /// struct's is (`types.VariantType.runLength`).
@@ -6416,8 +6415,8 @@ const Body = struct {
     /// exactly as they do in the interpreter.
     ///
     /// Two of the six are not one instruction.  `%` is the **floor**
-    /// modulus, pairing with `//` so that promotion introduces no
-    /// discontinuity (docs/NUMERICS.md §3), and it is neither `frem`
+    /// modulus, pairing with `//` under the same rule used for integers
+    /// (docs/NUMERICS.md §3), and it is neither `frem`
     /// nor any host `fmod`: it goes to `libluce_rt`, so there is one
     /// implementation of a rule with a zero case and a sign
     /// correction in it.  `//` is `floor(a / b)` and that really is
@@ -6490,7 +6489,7 @@ const Body = struct {
         // aarch64 and a negative one on x86-64), and generated code and
         // the oracle both take whatever the hardware gives: the sign is
         // unobservable in Luce, because the one surface that could show
-        // it — `string(x)`, in `libluce_rt` — renders every NaN "nan".
+        // it — `str(x)`, in `libluce_rt` — renders every NaN "nan".
         // So every arithmetic tag is exactly its instruction here, with
         // no canonicalizing select on the hot path.
         return self.wip.bin(tag, left, right, "float");
@@ -6591,8 +6590,8 @@ const Body = struct {
 
         // An enum compares as the integer it is stored at, at whichever
         // of the eight explicit widths that is — and equality is the
-        // whole of it (docs/ENUMS.md D6), so this is one `icmp` and no
-        // promotion.
+        // whole of it (docs/ENUMS.md D6), so this is one `icmp` with no
+        // numeric conversion.
         if (operation.operand_type == .enumeration) {
             const same: Builder.IntegerCondition = switch (operation.op) {
                 .equal => .eq,
@@ -7365,24 +7364,6 @@ const Body = struct {
             .ceil => self.produced[register].value = try self.emitFloatCall(.ceil, of[0]),
             .trunc => self.produced[register].value = try self.emitFloatCall(.trunc, of[0]),
 
-            // Comparison across the long/double line is exact, so it is
-            // a call and not a widening (docs/NUMERICS.md).  The
-            // operator arrives as a long register — a constant every
-            // time — and narrows to the `i32` the C surface takes.
-            .compare_i64_f64 => {
-                const answer = try self.callRuntime(.luce_rt_compare_i64_f64, .i32, &.{
-                    try self.wip.cast(.trunc, self.produced[of[0]].value, .i32, "op"),
-                    self.produced[of[1]].value,
-                    self.produced[of[2]].value,
-                }, "compared");
-                self.produced[register].value = try self.wip.icmp(
-                    .ne,
-                    answer,
-                    try self.module.builder.intValue(.i32, 0),
-                    "compare",
-                );
-            },
-
             // -- traps and effects, generated here --------------------
             .print => {
                 const text, const length = try self.textParts(of[0], "print");
@@ -7405,7 +7386,7 @@ const Body = struct {
             // Every one of them is a register shuffle: SROA takes the
             // pair apart and the bit becomes a flag the machine was
             // already carrying.  There is no call and no memory here,
-            // which is what makes `parse_int(s) else 0` cost what the
+            // which is what makes `parse_i64(s) else 0` cost what the
             // parse costs and nothing more.
             .none_value => {
                 self.produced[register].value = try self.zeroValue(
@@ -7538,7 +7519,7 @@ const Body = struct {
                 try self.boxedKey(of[1], "key"),
             }),
             // The answer is unboxed at the register's own type, which
-            // for an enum-keyed map truncates the stored `long` back to
+            // for an enum-keyed map truncates the stored `i64` back to
             // the enum's width — the inverse of `boxedKey`'s widening,
             // and the whole of what a key costs on the way out.
             .key_at => try self.callAnswering(register, .luce_rt_key_at, &.{
@@ -7628,7 +7609,7 @@ const Body = struct {
                 rt,
                 try self.boxedRegister(of[0], "held"),
             }),
-            // `string(f)` — one `getelementptr` into the name table and
+            // `str(f)` — one `getelementptr` into the name table and
             // one load; the bytes are the module's own constants and
             // nobody frees them (docs/FUNCTIONS.md D3).
             .function_name => {
@@ -7649,7 +7630,7 @@ const Body = struct {
                     "function.name",
                 );
             },
-            .parse_int => try self.callAnswering(register, .luce_rt_parse_int, &.{
+            .parse_i64 => try self.callAnswering(register, .luce_rt_parse_i64, &.{
                 rt,
                 try self.boxedRegister(of[0], "text"),
             }),
@@ -7657,7 +7638,7 @@ const Body = struct {
                 rt,
                 try self.boxedRegister(of[0], "bytes"),
             }),
-            .parse_float => try self.callAnswering(register, .luce_rt_parse_float, &.{
+            .parse_f64 => try self.callAnswering(register, .luce_rt_parse_f64, &.{
                 rt,
                 try self.boxedRegister(of[0], "text"),
             }),
@@ -8112,7 +8093,7 @@ const Body = struct {
 
     /// Which numeric type a math builtin was given — its own, at its
     /// own width, because `abs`, `min`, `max` and `clamp` answer the
-    /// type they were handed and `sqrt` of a `float` is a `float`.  The
+    /// type they were handed and `sqrt` of a `f32` is a `f32`.  The
     /// analyzer admits no other type; naming the rest keeps this file
     /// free of `else` arms.
     fn numeric(self: *Body, operand: mir.Register) Error!types.Type {
@@ -8136,7 +8117,8 @@ const Body = struct {
 
     /// `min` when `wants_minimum`, `max` otherwise.
     ///
-    /// A long is `llvm.smin`/`llvm.smax`, which mean exactly one thing.
+    /// Signed integers use `llvm.smin`/`llvm.smax`; unsigned integers
+    /// use `llvm.umin`/`llvm.umax`.
     ///
     /// Floating extrema spell out the semantic `operators.pick` in
     /// `libluce_rt` defines: keep the non-NaN operand, answer an ordered
@@ -8243,7 +8225,7 @@ const Body = struct {
 
     /// One of the float-only builtins, as its LLVM intrinsic, at the
     /// width its operand arrived at: `llvm.sqrt.f32` exists, and a
-    /// `sqrt` of a `float` answering a `double` would be a narrowing
+    /// `sqrt` of a `f32` answering a `f64` would be a narrowing
     /// waiting to happen at the next store.
     fn emitFloatCall(
         self: *Body,
@@ -8273,7 +8255,7 @@ const Body = struct {
     /// runtime is holding, and which *kind* its cells are is a fact of
     /// the program's element type rather than of the code that built
     /// it (`runtime/containers.zig`'s `emptyList`).  So the zero
-    /// travels with the call, exactly as it does for `new list(T)`,
+    /// travels with the call, exactly as it does for `new list[T]`,
     /// and the lowering below may read a list's cells knowing their
     /// width.
     fn answeredZero(self: *Body, register: mir.Register) Error!Builder.Value {

@@ -23,7 +23,7 @@ pub const TypeName = struct {
     arguments: []TypeName = &.{},
     wildcards: u8 = 0,
     optional: bool = false,
-    /// A `!` written inside `task(...)` — the spawned function's own
+    /// A `!` written inside `task[...]`—the spawned function's own
     /// fallibility, travelling with the call the task carries
     /// (docs/THREADS.md).  Only `task` takes one; it is not the `!`
     /// after a return type, which the declaration parser reads.
@@ -142,7 +142,7 @@ pub const ListLiteral = struct { elements: []*Expression, span: Span };
 /// pair itself are arena-owned with the program.
 pub const MapEntry = struct { key: *Expression, value: *Expression, span: Span };
 /// `{key: value, ...}` — a non-empty map literal.  Empty maps are
-/// constructed with `new map(K, V)`, where their types have somewhere
+/// constructed with `new map[K, V]`, where their types have somewhere
 /// to be written (docs/CONSTANTS.md R-B).
 pub const MapLiteral = struct { entries: []MapEntry, span: Span };
 pub const Index = struct { target: *Expression, indices: []*Expression, span: Span };
@@ -213,8 +213,8 @@ pub const Expression = union(enum) {
     value_call: ValueCall,
     binary: Binary,
     unary: Unary,
-    /// new list(long), new map(string, long), new array(long, 5, 5),
-    /// new builder().  Type arguments live in `type_name`; an array's
+    /// new list[i64], new map[str, i64], new array[i64](5, 5),
+    /// new builder. Type arguments live in `type_name`; an array's
     /// runtime dimension expressions live in `dims`.
     new_object: NewObject,
     /// [1, 2, 3] — a list literal typed by its elements.
@@ -538,12 +538,12 @@ pub const EnumMember = struct {
     span: Span,
 };
 
-/// `enum Method:` / `enum Method(byte):` — a set of named constants at
+/// `enum Method:` / `enum Method(u8):` — a set of named constants at
 /// one integer width, with the methods and namespace functions a
 /// struct has (docs/ENUMS.md D1, D2, D7).
 ///
 /// `backing` is the width written in parentheses after the name, null
-/// for the default `int`.  It is a `TypeName` rather than a resolved
+/// for the default `i32`.  It is a `TypeName` rather than a resolved
 /// width because stage 3 resolves nothing: `enum Method(Point):` is a
 /// stage-4 diagnostic about a width, not a parse error about a token.
 pub const EnumDecl = struct {

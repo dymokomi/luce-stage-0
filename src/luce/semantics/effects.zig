@@ -26,7 +26,7 @@ const builtins = @import("builtins.zig");
 /// That means a call to a declaration or any method — a method's
 /// receiver is the container in `xs.remove(0)`.  The free builtins
 /// move nothing (`optimize/effects.zig` answers the same question
-/// about instructions), so `string(i)` and `len(xs)` beside a
+/// about instructions), so `str(i)` and `len(xs)` beside a
 /// container read cost nothing.
 pub fn mayMutateContainers(expression: *const ast.Expression) bool {
     return switch (expression.*) {

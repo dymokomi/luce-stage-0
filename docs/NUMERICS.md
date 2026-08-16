@@ -175,6 +175,22 @@ Enum conversion uses the enum's declared integer backing type. An omitted
 backing defaults to `i32`. Converting out is explicit through that integer
 type or `str`; `Enum(value)` is the optional checked way in.
 
+## Text parsing
+
+The parser name states the result width. `parse_i64(text)` answers `i64?` and
+`parse_f64(text)` answers `f64?`; invalid or out-of-range text produces
+`none`. Neither name guesses a width, and neither silently narrows to another
+numeric type. Convert the parsed value explicitly when a different
+representation is required.
+
+```luce
+func main():
+    let count = parse_i64("42") else 0
+    let ratio = parse_f64("0.25") else 0.0
+    let small = u8(count)
+    print(f"{small} {ratio}")
+```
+
 ## Text formatting
 
 `str(x)` renders a number with the shortest text that round-trips at its own

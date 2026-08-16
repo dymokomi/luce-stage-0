@@ -26,14 +26,13 @@
 //! host calls, because they are the language rather than a capability
 //! the host may withhold (docs/CODEGEN.md).
 //!
-//! Compatibility rules for this file:
+//! Pre-1.0 change rules for this file:
 //!
-//!   * Fields are append-only and never reordered.  Their order is the
-//!     memory layout the generated code indexes with `getelementptr`.
-//!   * Any change to an existing field's meaning or signature bumps
-//!     `version`.
-//!   * A host that supplies a table built for an older `version` must
-//!     be refused by the loader, not tolerated.
+//!   * Field order is the memory layout generated code indexes with
+//!     `getelementptr`; every producer, consumer, and `Slot` moves together.
+//!   * Any layout, meaning, or signature change bumps `version`.
+//!   * Older versions are refused. There are no adapters, tombstones, or
+//!     migration paths added solely to keep a pre-1.0 artifact running.
 //!
 //! **What an artifact says about *itself* is not here.**  The tag a
 //! loader reads — the machine, the code generator, the program the
@@ -232,7 +231,7 @@ const trace = @import("../runtime/trace.zig");
 /// tags (`i8`, `u16`, `u32`, `u64`) and four packed container element kinds
 /// are appended; every existing numeric tag retains its value. Generated
 /// code now boxes, unboxes, compares, hashes, and stores each of the eight
-/// integer widths without the retired promotion ladder, so artifacts built
+/// integer widths with exact-type arithmetic, so artifacts built
 /// against the old reading must be rebuilt.
 ///
 /// 21 — `char` and `bytes` append two runtime value tags, packed character

@@ -12,7 +12,7 @@
 //! semantics, went wrong.
 //!
 //!   * **Bytes round-trip**, including bytes that are not text — which
-//!     is the finding the whole run came out of: `list(byte)` at one
+//!     is the finding the whole run came out of: `list[u8]` at one
 //!     byte an element, `strings.to_bytes` and `strings.from_bytes`,
 //!     and `parse_str` answering absent for a sequence UTF-8 does
 //!     not admit.
@@ -49,8 +49,8 @@ test "a str's bytes round-trip through list[u8]" {
 }
 
 test "bytes that are not UTF-8 answer absent rather than a broken string" {
-    // The parse case, and the reason `from_bytes` answers `string?`:
-    // 0xFF begins no UTF-8 sequence, and a `string` that held it would
+    // The parse case, and the reason `from_bytes` answers `str?`:
+    // 0xFF begins no UTF-8 sequence, and a `str` that held it would
     // make `len` and `s[a:b]` lies (docs/BYTES.md R3).
     try agree.prints(
         \\import std.strings
@@ -220,7 +220,7 @@ test "opening a file that is not there is an error, not a trap" {
 // ---------------------------------------------------------------------------
 
 test "read_bytes and write_bytes carry bytes that are not text" {
-    // The end of the run: a byte no `string` can hold makes the round
+    // The end of the run: a byte no `str` can hold makes the round
     // trip through a real file, which is the thing docs/BYTES.md
     // opened by saying Luce could not do.
     const world: agree.World = .{};

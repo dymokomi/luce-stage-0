@@ -206,7 +206,7 @@ pub fn open(runtime: *Runtime, path: []const u8, mode: i64) Error!?Value {
     return try runtime.newFile(handle, path);
 }
 
-/// `f.read(into)` — fill an `array(byte, n)` and answer how many bytes
+/// `f.read(into)` — fill an `array[u8, n]` and answer how many bytes
 /// landed.  Zero means the file is finished.
 pub fn read(runtime: *Runtime, held: Value, buffer: Value) Error!?i64 {
     const service = runtime.files.read orelse return runtime.fail(.host_unavailable);
@@ -228,7 +228,7 @@ pub fn read(runtime: *Runtime, held: Value, buffer: Value) Error!?i64 {
 }
 
 /// `f.write(from, count)` — write the first `count` bytes of an
-/// `array(byte, n)` and answer how many landed.
+/// `array[u8, n]` and answer how many landed.
 pub fn write(runtime: *Runtime, held: Value, buffer: Value, count: i64) Error!?i64 {
     const service = runtime.files.write orelse return runtime.fail(.host_unavailable);
     const handle = try handleOf(runtime, held);
@@ -313,7 +313,7 @@ pub fn pathOf(runtime: *Runtime, held: Value) []const u8 {
     };
 }
 
-/// `file_read(path)` — the whole file as a `string`, or null when it
+/// `file_read(path)` — the whole file as a `str`, or null when it
 /// could not be read *as a string*: the world said no, it is larger
 /// than the convenience carries, or its bytes are not text.
 ///

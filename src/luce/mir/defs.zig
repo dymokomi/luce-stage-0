@@ -103,19 +103,9 @@ pub const Intrinsic = enum {
     sqrt,
     floor,
     ceil,
-    /// `trunc(x)` — toward zero, the fourth of the four roundings.
-    /// It arrived with `long(x)`'s rounding: before that, `long(x)` was
-    /// the only way to say "toward zero" and taking it would have
-    /// punched a hole in a set that `floor`, `ceil` and `math.round`
-    /// otherwise complete (docs/NUMERICS.md §7).
+    /// `trunc(x)` — toward zero, alongside `floor`, `ceil`, and
+    /// `math.round` (docs/NUMERICS.md §7).
     trunc,
-    /// Comparison across the long/double line, exactly (docs/NUMERICS.md).
-    /// Three arguments — the operator as an `long`, then the `long`
-    /// operand, then the `double` one — because `Binary` carries a
-    /// single `operand_type` and cannot say that its two sides are
-    /// different types.  Stage 4 mirrors the operator when the double
-    /// was written on the left, so the long is always argument one.
-    compare_i64_f64,
     len,
     string_slice,
     string_byte,
@@ -185,21 +175,21 @@ pub const Intrinsic = enum {
     map_place,
     array_fill,
     str_value,
-    /// `string(f)` — the **name** of the function a function value
+    /// `str(f)` — the **name** of the function a function value
     /// names (docs/FUNCTIONS.md D3).  An intrinsic of its own rather
     /// than a case inside `str_value`, because it is a different act:
     /// `str_value` renders a number and this reads a name out of the
     /// program's own function table, which is a table only an engine
     /// holds.  Nothing about it reaches `libluce_rt`.
     function_name,
-    parse_int,
-    parse_float,
+    parse_i64,
+    parse_f64,
     /// `parse_str(data)` — immutable bytes as text, or absent when the
     /// bytes are not valid UTF-8.  The parse
     /// family's third member, named for what it produces exactly as
     /// its two siblings are: "not text" is the same reason every time,
     /// so absence carries all the information there is.  It is also
-    /// the one door into a `string` that did not come from a literal
+    /// the one door into a `str` that did not come from a literal
     /// or another string, which is why the validator behind it is
     /// `libluce_rt`'s and not a host's.
     parse_str,
@@ -220,7 +210,7 @@ pub const Intrinsic = enum {
     /// One line from standard input, with the prompt the host writes
     /// and flushes before it blocks — the same discipline `key_read`
     /// follows, and the reason a prompt is an argument rather than a
-    /// print of its own.  Answers `string?`: end of input is "there is
+    /// print of its own.  Answers `str?`: end of input is "there is
     /// nothing there", with no reason worth carrying (docs/FAILURE.md).
     read_line,
     /// A line to standard error.  A second console, not a second
@@ -325,7 +315,7 @@ pub const Intrinsic = enum {
     /// caller's scope owns and whose end closes it — there is no
     /// `close` intrinsic, because `free f` is the close and
     /// MEMORY.md already said what it means.  `handle_read` fills
-    /// an `array(byte, n)` and answers how many bytes landed, zero
+    /// an `array[u8, n]` and answers how many bytes landed, zero
     /// being the end of the file; `handle_write` writes the first
     /// `count` bytes of one and answers how many landed;
     /// `handle_flush` puts what was written on the device.  All four
@@ -363,7 +353,7 @@ pub const Intrinsic = enum {
     exit_program,
     /// The machine's own facts, behind `std.os`: bytes of physical
     /// memory, bytes of it still available to ask for, and how many
-    /// processors there are.  Each answers a `long` and none can be
+    /// processors there are.  Each answers a `i64` and none can be
     /// folded — `os_available_memory` moves under the program's feet,
     /// which is the whole reason to ask it — and the host answering
     /// "I cannot tell" is `host_unavailable`, the same refusal a
@@ -502,7 +492,6 @@ pub const Intrinsic = enum {
             .floor,
             .ceil,
             .trunc,
-            .compare_i64_f64,
             .len,
             .string_slice,
             .string_byte,
@@ -543,8 +532,8 @@ pub const Intrinsic = enum {
             .array_fill,
             .str_value,
             .function_name,
-            .parse_int,
-            .parse_float,
+            .parse_i64,
+            .parse_f64,
             .parse_str,
             .chr_code,
             .ord_text,
@@ -608,7 +597,6 @@ pub const Intrinsic = enum {
             .floor,
             .ceil,
             .trunc,
-            .compare_i64_f64,
             .len,
             .string_slice,
             .string_byte,
@@ -649,8 +637,8 @@ pub const Intrinsic = enum {
             .array_fill,
             .str_value,
             .function_name,
-            .parse_int,
-            .parse_float,
+            .parse_i64,
+            .parse_f64,
             .parse_str,
             .chr_code,
             .ord_text,
@@ -727,7 +715,6 @@ pub const Intrinsic = enum {
             .floor,
             .ceil,
             .trunc,
-            .compare_i64_f64,
             .len,
             // The name of a function is a constant of the program's
             // own, not bytes anybody has to give back
@@ -768,8 +755,8 @@ pub const Intrinsic = enum {
             .map_get,
             .map_place,
             .array_fill,
-            .parse_int,
-            .parse_float,
+            .parse_i64,
+            .parse_f64,
             .ord_text,
             .print,
             .file_write,
@@ -819,7 +806,7 @@ pub const Intrinsic = enum {
     /// `libluce_rt` keeps rather than reads — or null when none is.
     ///
     /// Stage 4 asks so a literal in that position lands at the
-    /// container's element width rather than at `int`, and so the
+    /// container's element width rather than at `i32`, and so the
     /// copy-on-store hazard is seen before a later operand can free
     /// the text being stored.  The receiver's own shape is the
     /// caller's business: these positions are the list methods', and a
@@ -837,7 +824,6 @@ pub const Intrinsic = enum {
             .floor,
             .ceil,
             .trunc,
-            .compare_i64_f64,
             .len,
             .string_slice,
             .string_byte,
@@ -876,8 +862,8 @@ pub const Intrinsic = enum {
             .array_fill,
             .str_value,
             .function_name,
-            .parse_int,
-            .parse_float,
+            .parse_i64,
+            .parse_f64,
             .parse_str,
             .chr_code,
             .ord_text,
@@ -950,11 +936,11 @@ pub const Instruction = union(enum) {
     /// This is the language's own rule about literals, kept one stage
     /// further down: a number has no type until it meets one
     /// (docs/TYPES.md D3), and what it meets here is the register.
-    /// Every value an `int` register can hold is exactly an `i64` and
-    /// every value a `float` register can hold is exactly an `f64`, so
+    /// Every value an `i32` register can hold is exactly an `i64` and
+    /// every value a `f32` register can hold is exactly an `f64`, so
     /// nothing is lost by carrying them this way and no width needs an
-    /// instruction of its own — which is why adding `byte`, `short`
-    /// and `half` will add none either.  `mir/verify.zig` checks
+    /// instruction of its own — which is why adding `u8`, `i16`
+    /// and `f16` will add none either.  `mir/verify.zig` checks
     /// the value really does fit the register it lands in.
     const_integer: i128,
     const_float: f64,
@@ -1005,7 +991,7 @@ pub const Instruction = union(enum) {
     /// never assigned into.
     variant_make: struct { variant: u32, member: u32, fields: []Register },
     /// The member index a union value holds — slot 0 of its run, as a
-    /// `long`.  What `match` dispatches on (docs/UNION.md D5).
+    /// `i64`.  What `match` dispatches on (docs/UNION.md D5).
     variant_tag: struct { target: Register },
     /// One payload field of a union value: slot `1 + field` of its run.
     /// Emitted only inside an arm that proved the member, so a
@@ -1212,7 +1198,7 @@ pub const Program = struct {
     /// verb each object parameter receives by, and what it answers.
     /// Read where a call through a value is checked and emitted, and by
     /// `luce ir`; never on the execution path, where a function value is
-    /// the `int` it is stored as.
+    /// the `i32` it is stored as.
     signatures: []types.Signature = &.{},
     functions: []Function = &.{},
     constants: []const []const u8 = &.{},

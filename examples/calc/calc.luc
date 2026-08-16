@@ -54,7 +54,7 @@ struct Scan:
         if stop == at:
             error("expected a number at position " + str(at))
         let digits = text[at:stop]
-        return f64(parse_int(digits) else error("not a number: " + digits)), stop
+        return f64(parse_i64(digits) else error("not a number: " + digits)), stop
 
 struct Parse:
     # expression = term (("+" | "-") term)*

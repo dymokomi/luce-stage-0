@@ -147,12 +147,10 @@ it — is a ```` ```text ```` fence and no business of the checker's.
 `historical` is the only exemption there is, and it belongs to
 decision records alone: `grep -rn 'luce historical' docs/` lists every
 use of it in one line each, and current references and plans carry none.
-`tools/documents.zig` is the one catalogue both `doccheck.zig` and
-`tools/spelling.zig` read, and a test pins its current, plan, and decision-record
-groups to the three tables in `docs/README.md`. The spelling guard refuses a
-retired TitleCase type name in a current document's *prose* as well as its
-code, because a sentence in a reference page is as normative as a sample in
-one. Future syntax in a plan uses a `text` fence until it is implemented.
+`tools/documents.zig` is the catalogue `doccheck.zig` reads, and a test pins its
+current, plan, and decision-record groups to the three tables in
+`docs/README.md`. Future syntax in a plan uses a `text` fence until it is
+implemented.
 
 ## Committing
 

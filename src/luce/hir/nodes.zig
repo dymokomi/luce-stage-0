@@ -298,7 +298,7 @@ pub const Expression = union(enum) {
     map_literal: MapLiteral,
     /// `xs[a:b]` / `s[a:b]`; a null bound is the defaulted end.
     slice: Slice,
-    /// `new list(T)`, `new array(T, n, ...)`, `new map(K, V)`,
+    /// `new list[T]`, `new array[T, n, ...]`, `new map[K, V]`,
     /// `new builder` — a fresh container object.
     new_object: NewObject,
     /// `spawn f(args)` — the call, made on a worker's own runtime
@@ -740,20 +740,20 @@ pub const ResolvedCallee = union(enum) {
     indirect: Indirect,
     /// A builtin that lowers to one MIR intrinsic — the resolved name
     /// of the operation, shared with stage 6 so it cannot drift.
-    /// `string(f)` records here as `function_name` rather than as a
+    /// `str(f)` records here as `function_name` rather than as a
     /// `.conversion`, because a function's name is a constant of the
     /// program's own, not the fresh bytes `.conversion` to string
     /// means (docs/FUNCTIONS.md D3).
     intrinsic: mir.Intrinsic,
     /// A conversion constructor (docs/NUMERICS.md §7), by the type it
-    /// produces.  Never the identity: `long(x)` on a `long` passes the
+    /// produces.  Never the identity: `i64(x)` on a `i64` passes the
     /// operand through whole, node included, so no call node exists
     /// to claim freshness the value does not have.
     conversion: Type,
-    /// The structural enum text pair — `string(m)` and `Method(n)` —
+    /// The structural enum text pair — `str(m)` and `Method(n)` —
     /// by enum table index; lower emits the member chain.
     enum_name: u32,
-    /// The union half of the text pair — `string(u)` — by union table
+    /// The union half of the text pair — `str(u)` — by union table
     /// index; lower emits the member chain over the tag
     /// (docs/UNION.md D16).
     variant_name: u32,
@@ -1169,7 +1169,7 @@ pub fn provenance(expression: *const Expression) Provenance {
             // whichever way the callee was named (docs/FUNCTIONS.md D2).
             .function, .indirect => .fresh,
             .intrinsic => |kind| ofIntrinsic(kind),
-            // `string(x)` allocates its text; the numeric conversions
+            // `str(x)` allocates its text; the numeric conversions
             // answer scalars.
             .conversion => |produced| if (produced == .str or produced == .bytes) .fresh else .plain,
             // The member chains answer a reload of their result slot.
@@ -1358,7 +1358,7 @@ fn splitsCall(called: Expression.Call, declared: Declarations) bool {
     if (splitsBatch(called.operands, declared)) return true;
     if (called.fallible) return true;
     return switch (called.callee) {
-        // `string(m)` over a one-member enum is that member's name and
+        // `str(m)` over a one-member enum is that member's name and
         // nothing else; every other chain compares and branches
         // (docs/ENUMS.md D5, R2).
         .enum_name => |index| called.result != .str or

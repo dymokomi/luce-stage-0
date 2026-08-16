@@ -226,7 +226,7 @@ pub const Landing = union(enum) {
     /// One type per operand, positionally.
     places: []const Type,
     /// One optional type per operand.  Runtime map literals use
-    /// this because their keys always have a landing (`long` when
+    /// this because their keys always have a landing (`i64` when
     /// unannotated), while their values only do when an annotated
     /// map names one.
     maybe_places: []const ?Type,
@@ -370,8 +370,8 @@ pub const FunctionBuilder = struct {
     shape_position: ShapePosition = .refused,
     /// The container type the next bracket or map literal should be
     /// built at, when the place it is going into names one —
-    /// `let xs: list(double) = [1, 2, 3]`, a rank-1 array annotation,
-    /// or `let names: map(string, long) = {"one": 1}`.  A literal has
+    /// `let xs: list[f64] = [1, 2, 3]`, a rank-1 array annotation,
+    /// or `let names: map[str, i64] = {"one": 1}`.  A literal has
     /// no annotation of its own, so the container supplies both its
     /// shape and the landing types of its contents.
     ///
@@ -379,10 +379,10 @@ pub const FunctionBuilder = struct {
     /// `lowerExpressionInner` reads and clears it, so it reaches the
     /// literal it was raised in front of and nothing nested inside it.
     /// Inference where nothing is expected is untouched — `let xs =
-    /// [1, 2, 3]` is still a `list(long)`.
+    /// [1, 2, 3]` is still a `list[i64]`.
     wanted_container: ?Type = null,
     /// The scalar type the next expression lands on, when the place it
-    /// is going into names one — `let x: double = 7` (docs/TYPES.md §1,
+    /// is going into names one — `let x: f64 = 7` (docs/TYPES.md §1,
     /// D3).  **A numeric literal has no type of its own**; it takes the
     /// type of its context if it fits, and this is how the context
     /// reaches it.
@@ -395,7 +395,7 @@ pub const FunctionBuilder = struct {
     wanted: ?Type = null,
     /// The signature the next expression lands on, when the place it is
     /// going into names one — `xs.sort_by(by_score)`, `let before:
-    /// func(long, long) -> bool = ascending` (docs/FUNCTIONS.md).
+    /// func(i64, i64) -> bool = ascending` (docs/FUNCTIONS.md).
     ///
     /// **A function value and a lambda are literals**, in exactly the
     /// sense a number is: a bare declaration name is not a value until
@@ -750,7 +750,6 @@ pub const FunctionBuilder = struct {
     /// caller reports. Numeric representation changes are never implicit.
     pub fn fit(self: *FunctionBuilder, value: Typed, expected: Type) Error!?Typed {
         if (value.value_type.eql(expected)) return value;
-        if (value.value_type.widensTo(expected)) return try self.widenNumeric(value, expected);
         // A concrete struct or class may be passed to a nominal interface only
         // after it explicitly promised that interface.  The conversion
         // records one bound method per contract slot; lower reuses the
@@ -808,15 +807,6 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    /// Record an implicit numeric conversion admitted by `Type.widensTo`.
-    /// The explicit-width contract currently admits none; keeping this
-    /// assertion at old call sites makes any accidental reintroduction fail
-    /// loudly until those sites are removed.
-    pub fn widenNumeric(self: *FunctionBuilder, value: Typed, to: Type) Error!Typed {
-        std.debug.assert(value.value_type.widensTo(to));
-        return self.convertNumeric(value, to);
-    }
-
     /// Record a numeric conversion required by a language construct rather
     /// than by implicit assignment. Integer `/` uses this to produce its
     /// specified f64 result; source-level conversions use the same node.
@@ -832,16 +822,6 @@ pub const FunctionBuilder = struct {
             } }),
             .value_type = to,
         };
-    }
-
-    /// Check whether an already-lowered value is exactly `want`. The helper
-    /// retains its historical name until its call sites are collapsed; under
-    /// the explicit-width contract `Type.widensTo` is always false.
-    pub fn widensInto(self: *FunctionBuilder, held: *Typed, want: Type) Error!bool {
-        if (held.value_type.eql(want)) return true;
-        if (!held.value_type.widensTo(want)) return false;
-        held.* = try self.widenNumeric(held.*, want);
-        return true;
     }
 
     /// The container place a literal can take its shape from.  Bracket
@@ -889,30 +869,6 @@ pub const FunctionBuilder = struct {
         };
     }
 
-    /// A number at the type an operator computes it at. Every explicit-width
-    /// numeric type computes as itself, so this is now an identity helper
-    /// retained while old call sites are simplified.
-    pub fn promoted(self: *FunctionBuilder, value: Typed) Error!Typed {
-        _ = self;
-        return value;
-    }
-
-    /// Check the single concrete numeric type two operands share. With no
-    /// implicit numeric conversion, this never moves either operand.
-    pub fn unifyNumeric(self: *FunctionBuilder, left: *Typed, right: *Typed) Error!bool {
-        const meeting = Type.unified(left.value_type, right.value_type) orelse return false;
-        var moved = false;
-        if (!left.value_type.eql(meeting)) {
-            left.* = try self.widenNumeric(left.*, meeting);
-            moved = true;
-        }
-        if (!right.value_type.eql(meeting)) {
-            right.* = try self.widenNumeric(right.*, meeting);
-            moved = true;
-        }
-        return moved;
-    }
-
     /// Lower an expression into a place whose type is already known —
     /// which is what gives `none` a type, since it has none of its
     /// own.  Reports and returns null on a mismatch; `subject` names
@@ -926,11 +882,8 @@ pub const FunctionBuilder = struct {
     ) Error!?Fitted {
         if (expression.* == .none_literal) {
             if (expected != .optional) {
-                // No article in front of a type name: "a long" reads as
-                // an adjective, and "a long is always there" says nothing
-                // besides.  The variants below sidestep it the same
-                // way, and this is the wording they are standardised
-                // on.
+                // Keep the type name unadorned so the same diagnostic
+                // reads naturally for every scalar and user type.
                 try self.fail("luce.sema.absent", expression.span(), "{s} is {s}, which is always there; only {s}? is ever none", .{
                     subject,
                     try self.analyzer.typeName(expected),
@@ -1065,7 +1018,7 @@ pub const FunctionBuilder = struct {
     ///
     /// The member's payload fields are the parameters, in declaration
     /// order, and the union is the result: `query_changed(query:
-    /// string)` is a `func(string) -> Msg`.  A field that carries
+    /// str)` is a `func(str) -> Msg`. A field that carries
     /// objects takes `give`, because that is the verb its construction
     /// takes (S24) and calling through a value checks argument verbs
     /// exactly as a direct call does (FUNCTIONS D5).
@@ -1274,11 +1227,9 @@ pub const FunctionBuilder = struct {
     /// demands: the same parameter types in the same order and the same
     /// answer.
     ///
-    /// **No widening anywhere.**  A `func(long)` place does not accept a
-    /// `func(double)` even though a `long` reaches a `double` on its
-    /// own: the widening happens at the *argument*, and a value that
-    /// stands in for the function has no argument yet to widen.  This is
-    /// the same reason a `list(int)` does not fit a `list(long)`.
+    /// **Exact and invariant.** A `func(i64)` place does not accept a
+    /// `func(f64)`, just as a `list[i32]` does not fit a `list[i64]`.
+    /// Callers write any representation change explicitly at the call.
     fn matchesSignature(
         self: *FunctionBuilder,
         info: context.FunctionDeclInfo,
@@ -1491,7 +1442,7 @@ pub const FunctionBuilder = struct {
 
     /// What a subscript of `container` lands on: a map takes its key
     /// type, and everything a position can address — a list, an array,
-    /// a string being sliced — takes a `long`.
+    /// a string being sliced — takes a `i64`.
     fn subscriptType(self: *FunctionBuilder, container: Type) ?Type {
         if (container == .str or container == .bytes) return .i64;
         const descriptor = self.analyzer.heapOf(container) orelse return null;
@@ -1547,15 +1498,15 @@ pub const FunctionBuilder = struct {
             // An argument and a returned value are both places with a
             // type written down, so a literal going into one lands
             // there (docs/TYPES.md D3, §1's *"an argument takes the
-            // parameter's type"*) rather than taking the default and
-            // widening afterwards.
+            // parameter's type"*) rather than taking a default type
+            // that the surrounding program never requested.
             //
-            // **Both hops, for the same reason.**  A `list(long)`
-            // parameter is a written-down type exactly as a `long` one
+            // **Both hops, for the same reason.**  A `list[i64]`
+            // parameter is a written-down type exactly as a `i64` one
             // is, and `[1, 2, 3]` has no element type until it lands —
             // so the literal reads its elements at the parameter's
             // width.  This is not covariance and does not become it: a
-            // *named* `list(int)` is still refused there, because it
+            // *named* `list[i32]` is still refused there, because it
             // already has a type and D6 says no list converts to
             // another.
             const place: ?Type = switch (try self.landsOn(landing, values, index, operands.len)) {
@@ -1688,14 +1639,14 @@ pub const FunctionBuilder = struct {
 
     /// Materialise an integer literal at the type it lands on
     /// (docs/TYPES.md D3).  `negated` folds the minus in first, so
-    /// `long`'s minimum stays writable; `wanted` is the landing type
+    /// `i64`'s minimum stays writable; `wanted` is the landing type
     /// the context asked for, and null means there is no context and
     /// the literal takes the default, which is `i64`.
     ///
     /// **The text is read at the width it lands on**, never at the
     /// widest and then narrowed: a float landing reads the *digits*
     /// rather than `parseIntLiteral`'s result, so an integer literal
-    /// past `long`'s range still lands correctly on a float that has
+    /// past `i64`'s range still lands correctly on a float that has
     /// room for it, and the one rule keeps its one spelling.
     pub fn lowerIntLiteral(
         self: *FunctionBuilder,
@@ -2010,7 +1961,7 @@ pub const FunctionBuilder = struct {
         declaration.* = .{
             // Unforgeable from source, and readable in a trace: no
             // identifier holds a parenthesis.  The source place makes
-            // sibling lambdas distinct too, so `string(f)` never gives
+            // sibling lambdas distinct too, so `str(f)` never gives
             // two unequal functions the same compiler name.
             .name = try std.fmt.allocPrint(
                 self.arena(),

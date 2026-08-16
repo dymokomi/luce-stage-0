@@ -85,6 +85,41 @@ Structs are values and copy when assigned. Lists, maps, arrays, and builders
 are shared reference objects. Luce keeps them alive with automatic reference
 counting.
 
+## Shared objects and closures
+
+A `class` is a final ARC reference type. Assignment shares one mutable
+identity, and `is` asks whether two names refer to that same object. A block
+closure can carry local state with the ordinary `func(...)` function type:
+
+```luce run
+class Counter:
+    value: i64
+
+    func reader() -> func() -> i64:
+        return func():
+            self.value += 1
+            return self.value
+
+func main():
+    let counter = Counter(value = 40)
+    let same = counter
+    let next: func() -> i64 = counter.reader()
+    assert(counter is same)
+    print(str(next()))
+    print(str(same.value))
+```
+
+```output
+41
+41
+```
+
+Closures retain captures by default. Captured mutable locals share one cell;
+a capture list requests a creation-time snapshot or a zeroing weak edge.
+Interfaces let different structures and classes provide one checked behavior.
+The Guide treats [classes](/guide/classes/), [functions and
+closures](/guide/functions/), and [interfaces](/guide/interfaces/) separately.
+
 ## Memory is automatic
 
 Assigning a list or passing it to a function shares the same object. A
@@ -106,7 +141,7 @@ for a violated program precondition, such as an out-of-bounds index.
 
 ```luce run
 func parse_port(text: str) -> i64!:
-    let port = parse_int(text) else error("not a number")
+    let port = parse_i64(text) else error("not a number")
     if port < 1 or port > 65535:
         error("port out of range")
     return port

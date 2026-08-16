@@ -282,7 +282,7 @@ test "closure: outer and closure writes share one optional cell" {
     );
 }
 
-test "closure: outer writes and closure writes share scalar string struct and optional cells" {
+test "closure: outer writes and closure writes share scalar str struct and optional cells" {
     try agree.prints(
         \\struct State:
         \\    count: i64

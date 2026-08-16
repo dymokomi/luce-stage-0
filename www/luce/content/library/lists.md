@@ -19,8 +19,8 @@ the receiver in place, is stable, and uses O(n log n) comparisons. When
 neither element precedes the other, their original order is preserved. Empty
 and one-element lists are unchanged.
 
-The comparator can be a named function, a static function, or a capture-free
-lambda. Its parameter type is the list's element type. Sorting calls the
+The comparator can be a named function, a static function, a lambda, or a
+capturing closure. Its parameter type is the list's element type. Sorting calls the
 function during the operation and only rearranges the list's existing
 elements; reference elements keep their identity.
 

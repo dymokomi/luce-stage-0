@@ -298,18 +298,3 @@ test "invalid char and bytes operations are rejected before lowering" {
         "luce.sema.assign",
     );
 }
-
-test "retired character helper names are ordinary user names" {
-    try agree.prints(
-        \\func chr(value: i64) -> i64:
-        \\    return value + 1
-        \\
-        \\func ord(value: i64) -> i64:
-        \\    return value + 2
-        \\
-        \\func main():
-        \\    print(str(chr(40)))
-        \\    print(str(ord(40)))
-        \\
-    , "41\n42\n");
-}

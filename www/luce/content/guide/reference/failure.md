@@ -30,8 +30,8 @@ handler.
 | `explicit_trap` | explicit trap | `trap(message)` runs. |
 | `missing_return` | function ended without returning a value | A defensive MIR check reaches a function that ended without a value. Correct source is rejected earlier. |
 | `call_depth_exceeded` | call depth exceeded | The call-depth budget is exhausted. |
-| `string_bounds` | string index out of bounds | A string index or slice endpoint is outside the string. |
-| `string_boundary` | string slice splits a UTF-8 sequence | A string slice splits a UTF-8 code point. |
+| `str_bounds` | string index out of bounds | A string index or slice endpoint is outside the string. |
+| `str_boundary` | string slice splits a UTF-8 sequence | A string slice splits a UTF-8 code point. |
 | `host_unavailable` | host service unavailable | A requested host service is not implemented. |
 | `index_bounds` | index out of bounds | A list or array index is outside the collection. |
 | `key_missing` | key not found in map | Map indexing (`m[k]`) names an absent key. `m.get(k)` returns `none` instead. |
@@ -45,11 +45,13 @@ handler.
 | `immutable_object` | constant container is immutable | A write reaches a file-scope constant container through hidden provenance. |
 | `ownership_cycle` | attempted store would create an ownership cycle | Reserved stable code from the retired manual-ownership model; current source does not raise it. |
 | `invalid_weak_target` | invalid weak-reference target | Damaged MIR asks the runtime to weaken a value or resource, or to upgrade something that is not weak storage. Correct source is rejected earlier. |
+| `class_resurrection` | deinit cannot create a new strong self reference | A class finalizer attempts to make its dying object strongly reachable again. Correct source is rejected at compile time; the runtime code defends damaged MIR. |
 
 `use_after_free`, `null_object`, `not_owned`, and `allocation_failed` use the
 runtime's broad *object* wording; a handle may also be a `file` or `task`.
-`not_owned`, `ownership_cycle`, and `invalid_weak_target` remain defensive
-runtime vocabulary; correctly compiled current source does not produce them.
+`not_owned`, `ownership_cycle`, `invalid_weak_target`, and
+`class_resurrection` remain defensive runtime vocabulary; correctly compiled
+current source does not produce them.
 
 ```luce trap
 func main():
@@ -138,7 +140,7 @@ There is no `errdefer`. ARC already releases local references on `return` and
 ## Absence
 
 `T?` means that a value may be absent. `none` is the only absent value.
-It carries no error code or message. `parse_int` and `parse_float` use
+It carries no error code or message. `parse_i64` and `parse_f64` use
 this form, as do the standard-library functions whose only unsuccessful
 case is an empty input (for example, `math.mean`).
 

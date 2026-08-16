@@ -30,7 +30,7 @@ const types = @import("../support/types.zig");
 const Allocator = std.mem.Allocator;
 
 pub const magic = "LUCE";
-/// 18 — `key_read` answers `string?` rather than `string`.  The
+/// 18 — `key_read` answers `str?` rather than `str`.  The
 /// intrinsic list is unchanged and the wire shape with it, but the
 /// *type* the verifier demands of `key_read`'s result is not, so a
 /// module written under 17 would either fail verification or, worse,
@@ -42,10 +42,10 @@ pub const magic = "LUCE";
 /// (`argument_bounds`), so every instruction tag after them renumbers;
 /// the entry may now carry one parameter, which the verifier checks.
 ///
-/// 22 — `byte`, `short` and `half` join `types.Type` (docs/TYPES.md
+/// 22 — `u8`, `i16` and `f16` join `types.Type` (docs/TYPES.md
 /// step 5).  A type travels as a bare `u8` of its tag's ordinal, and
 /// the three land *in ladder order* rather than on the end, so every
-/// tag from `int` up renumbers.  That is safe here for exactly one
+/// tag from `i32` up renumbers.  That is safe here for exactly one
 /// reason and it is this line: the version moved with them, so a
 /// module written under 21 is refused by name instead of decoded
 /// against the wrong tags.  Appending would have been the rule had
@@ -134,7 +134,7 @@ pub const magic = "LUCE";
 /// from a bare index to `{function, receiver}`: `const_function` writes
 /// an extra optional register, so its payload is wider than any 40
 /// decoder expects, and a function value's runtime shape moves from an
-/// `int` to a two-slot field run.  Nothing was appended and nothing
+/// `i32` to a two-slot field run.  Nothing was appended and nothing
 /// renumbered — one instruction's payload changed — which is exactly
 /// the kind of change a stale decoder would read straight past, so the
 /// version is what refuses it.
@@ -147,7 +147,7 @@ pub const magic = "LUCE";
 /// with them, so a module written under 41 is refused by name instead
 /// of decoded against the wrong tags.  Not a rename: the answer
 /// changed shape as well as spelling, from a bool that could not tell
-/// absence from refusal to a `long` beside the error channel.
+/// absence from refusal to a `i64` beside the error channel.
 ///
 /// 43 — function parameter ownership verbs join `mir.Function` so the
 /// verifier can tie a function value's `Signature.Parameter.gives` to the
@@ -202,7 +202,12 @@ pub const magic = "LUCE";
 /// preserve the boxed storage representation without owning it. A 52 module
 /// can describe neither a trusted compiler environment nor the inline-safe
 /// bridge into a mutable cell, and would misread every later field.
-pub const format_version: u32 = 53;
+///
+/// 54 — the unused cross-family numeric comparison intrinsic leaves the wire
+/// set; numeric parsing is named for its exact result (`parse_i64` and
+/// `parse_f64`); and the public text trap names become `str_bounds` and
+/// `str_boundary`. These changes alter serialized enum ordinals or names.
+pub const format_version: u32 = 54;
 
 /// What a serialized module is called when it has to sit on a disk.
 /// Named here because this file owns the format, and named at all
@@ -1595,7 +1600,7 @@ test "decoded function types and conversions are verified before execution" {
 
     // A function value is a run with a function index in it, and no
     // engine ever hands that index to a program: converting one to an
-    // `int` is not a language conversion and must not decode as one.
+    // `i32` is not a language conversion and must not decode as one.
     var function_value: ?mir.Register = null;
     var storing: ?mir.Register = null;
     for (entry.instructions, 0..) |instruction, register| switch (instruction) {
@@ -2074,12 +2079,12 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     //
     // **It fingerprints the names and nothing else**, so it catches an
     // intrinsic added, removed or renamed and cannot catch one whose
-    // *type* changed — `key_read` going from `string` to `string?`
+    // *type* changed — `key_read` going from `str` to `str?`
     // moved this number and left the hash alone.  A version bump is
     // still required for that, and this test is not what will remind
     // you.
     // 36 -> 37: `map_get` lost its fallback operand and answers `V?`;
-    // `list_find` answers `long?` — the instruction *names* are
+    // `list_find` answers `i64?` — the instruction *names* are
     // unchanged (the hash below did not move), which is exactly the
     // shape-changed case the paragraph above warns the hash cannot
     // catch.
@@ -2132,8 +2137,11 @@ test "the wire surface is fingerprinted: change it, bump format_version" {
     // 52 -> 53: layouts record private closure storage so bare function
     // captures remain valid without making them legal source fields, and
     // locals distinguish a boxed representation bridge from a storage owner.
-    try testing.expectEqual(@as(u32, 53), format_version);
-    try testing.expectEqual(@as(u64, 9736862314927419250), hasher.final());
+    // 53 -> 54: the obsolete cross-family numeric comparison intrinsic is
+    // removed, numeric parsing names its exact result widths, and the
+    // text-boundary trap names use the public `str` vocabulary.
+    try testing.expectEqual(@as(u32, 54), format_version);
+    try testing.expectEqual(@as(u64, 12373355455909797561), hasher.final());
 }
 
 test "an enum round-trips with its members, and a foreign width is rejected" {

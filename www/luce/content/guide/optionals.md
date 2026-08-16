@@ -6,9 +6,9 @@ story, with no reason worth carrying.
 
 ```luce run
 func main():
-    print(f"{parse_int("42") else -1}")
-    print(f"{parse_int("nonsense") else -1}")
-    print(f"{parse_float("2.5") else 0.0}")
+    print(f"{parse_i64("42") else -1}")
+    print(f"{parse_i64("nonsense") else -1}")
+    print(f"{parse_f64("2.5") else 0.0}")
 ```
 
 ```output
@@ -23,7 +23,7 @@ After a test the name *is* its payload. There is no unwrap operator.
 
 ```luce run
 func classify(text: str) -> str:
-    let n = parse_int(text)
+    let n = parse_i64(text)
     if n == none:
         return f"{text} is not a number"
     if n < 0:
@@ -48,7 +48,7 @@ most real code takes.
 ```luce run args=17
 func main(args: list[str]):
     let raw = args[0]
-    let n = parse_int(raw)
+    let n = parse_i64(raw)
     if n == none:
         print(f"not a number: {raw}")
         return
@@ -66,10 +66,10 @@ right and stops at the first one that is there.
 
 ```luce run
 func main():
-    let first = parse_int("x") else parse_int("y") else parse_int("3") else 0
+    let first = parse_i64("x") else parse_i64("y") else parse_i64("3") else 0
     print(str(first))
 
-    let n = parse_int("10")
+    let n = parse_i64("10")
     print(str(n else 0 > 5))     # else binds tighter than comparison
     print(str((n else 0) + 1))
 ```
@@ -115,7 +115,7 @@ and is greppable.
 ```luce trap
 func main():
     let config = "port=notanumber"
-    let port = parse_int(config[5:len(config)]) else trap("bad port in config")
+    let port = parse_i64(config[5:len(config)]) else trap("bad port in config")
     print(str(port))
 ```
 

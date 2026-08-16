@@ -948,7 +948,7 @@ test "a call agrees with the callee it names, argument for argument" {
 
     const functions = try arena.alloc(Function, 2);
     const arguments = try arena.dupe(Register, &.{0});
-    // f0: main — calls f1 with one long.
+    // f0: main — calls f1 with one i64.
     functions[0] = .{
         .name = "main",
         .parameter_count = 0,
@@ -964,7 +964,7 @@ test "a call agrees with the callee it names, argument for argument" {
             .{ .items = try arena.dupe(Register, &.{ 0, 1, 2 }) },
         }),
     };
-    // f1: twice(value: long) -> long
+    // f1: twice(value: i64) -> i64
     functions[1] = .{
         .name = "twice",
         .parameter_count = 1,
@@ -1398,7 +1398,7 @@ test "recursive heap and function type tables are rejected before names render" 
     try testing.expectError(error.BadFunction, verify_mod.verify(testing.allocator, &program));
 
     // A named struct is a printed leaf.  The legal recursive-data
-    // spelling `Node` through `list(Node)` must not be mistaken for a
+    // spelling `Node` through `list[Node]` must not be mistaken for a
     // recursively expanded anonymous type.
     program.signatures = &.{};
     program.heap_types = try arena.dupe(types.HeapType, &.{.{ .list = .{ .strukt = 0 } }});
@@ -1550,19 +1550,35 @@ test "an intrinsic is checked for its own arity and operand types" {
     defer program.deinit();
     try verify_mod.verify(testing.allocator, &program);
 
+    // Every explicit width is a computation width. The verifier must
+    // accept the narrowest float for float-only math and the narrowest
+    // integer for width-preserving scalar math.
+    program.functions[0].result_types[0] = .f16;
+    program.functions[0].result_types[1] = .f16;
+    try verify_mod.verify(testing.allocator, &program);
+    program.functions[0].instructions[0] = .{ .const_integer = 4 };
+    program.functions[0].instructions[1].intrinsic.kind = .abs;
+    program.functions[0].result_types[0] = .i8;
+    program.functions[0].result_types[1] = .i8;
+    try verify_mod.verify(testing.allocator, &program);
+
+    program.functions[0].instructions[0] = .{ .const_float = 4.0 };
+    program.functions[0].instructions[1].intrinsic.kind = .sqrt;
+    program.functions[0].result_types[0] = .f64;
+    program.functions[0].result_types[1] = .f64;
+
     // Too few arguments for what it does.
     program.functions[0].instructions[1].intrinsic.arguments = of[0..0];
     try testing.expectError(error.BadIntrinsic, verify_mod.verify(testing.allocator, &program));
 
-    // More than any intrinsic takes, refused before the operands are
-    // typed at all — the buffer that types them is six wide, and a
-    // module naming seven must not be allowed to reach it.
+    // More than this intrinsic takes. Operand collection has no fixed
+    // ceiling; the intrinsic's own signature is what refuses the call.
     program.functions[0].instructions[1].intrinsic.arguments = &seven;
     try testing.expectError(error.BadIntrinsic, verify_mod.verify(testing.allocator, &program));
 
     // The right arity and a float operand, but not the width the
     // result claims: `sqrt` answers whichever float it was handed
-    // (docs/TYPES.md §9), so a `float` in and a `double` out is a
+    // (docs/TYPES.md §9), so a `f32` in and a `f64` out is a
     // module that disagrees with itself.
     program.functions[0].instructions[1].intrinsic.arguments = &of;
     program.functions[0].result_types[0] = .f32;
@@ -1570,7 +1586,7 @@ test "an intrinsic is checked for its own arity and operand types" {
 
     // The right arity and no float anywhere.  That is not a width
     // mistake and does not answer as one: there is no `sqrt` of a
-    // `long` for the widths to disagree about.
+    // `i64` for the widths to disagree about.
     program.functions[0].instructions[0] = .{ .const_integer = 4 };
     program.functions[0].result_types[0] = .i64;
     try testing.expectError(error.BadIntrinsic, verify_mod.verify(testing.allocator, &program));

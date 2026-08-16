@@ -107,7 +107,7 @@ pub fn markedIn(self: *const Analyzer, module: usize) []const u8 {
 
 /// The name of the private declaration `of` mentions, if any —
 /// transitively through containers and optionals, because a
-/// `list(Inner)` in a public signature publishes Inner exactly as a
+/// `list[Inner]` in a public signature publishes Inner exactly as a
 /// bare `Inner` would (docs/VISIBILITY.md §2).  It does not look
 /// *into* a struct's fields: mentioning a public struct that
 /// privately holds hidden types publishes nothing, and those fields
@@ -141,11 +141,11 @@ pub fn privateMentioned(self: *const Analyzer, of: Type) ?[]const u8 {
             else
                 null,
             .list => |element| privateMentioned(self, element),
-            // A map key is a long, a string or an **enum**, and an enum
+            // A map key is an explicit integer width, `str`, or an **enum**, and an enum
             // can be private (docs/ENUMS.md, As built 2026-08-12), so
             // the key is walked exactly as the value is: a public
-            // `map(Key, long)` publishes `Key` no less than a public
-            // `list(Key)` does.
+            // `map[Key, i64]` publishes `Key` no less than a public
+            // `list[Key]` does.
             .map => |pair| privateMentioned(self, pair.key) orelse
                 privateMentioned(self, pair.value),
             .array => |shape| privateMentioned(self, shape.element),
@@ -153,8 +153,8 @@ pub fn privateMentioned(self: *const Analyzer, of: Type) ?[]const u8 {
             .task => |work| privateMentioned(self, work.result),
         },
         // A function type publishes every type in its signature.
-        // `func(Inner) -> long` on a public declaration is no less
-        // an exposure of private `Inner` than `list(Inner)` is;
+        // `func(Inner) -> i64` on a public declaration is no less
+        // an exposure of private `Inner` than `list[Inner]` is;
         // walking only the outer tag left a quiet second door
         // through VISIBILITY.md D4.
         .function => |index| blk: {

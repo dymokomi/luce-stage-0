@@ -1,18 +1,17 @@
 # Memory and ARC
 
-Luce's source language manages memory automatically: you do not write retain,
-release, move, clone, or free. Values copy; references share identity and are
-reclaimed by automatic reference counting.
+Luce manages memory automatically. Source code has no retain, release, move,
+clone, borrow, or free operation.
 
-The useful rule is short:
+The rule to keep in mind is:
 
-> Values copy. References share one object. Automatic reference counting
-> frees that object after its last reference goes away.
+> Values copy. References share identity. ARC keeps references alive. Weak
+> references break cycles. Resources close at the last strong release.
 
 ## Values copy
 
-Numbers, booleans, strings, structs, enums, unions, and plain function values
-are values. Assignment and function calls give the destination a value copy.
+Numbers, `bool`, `char`, `str`, `bytes`, structures, enumerations, and unions
+are values. Assignment and argument passing copy them.
 
 ```luce run
 struct Point:
@@ -30,57 +29,8 @@ func main():
 2 10
 ```
 
-The two points are independent. A struct may still contain a reference; in
-that case the struct itself copies while both copies may share the referenced
-object.
-
-## References share
-
-Lists, maps, arrays, and builders are reference objects. Files and tasks are
-reference resources. Assignment and parameter passing retain the same object
-instead of duplicating its contents.
-
-```luce run
-func add_one(values: list[i64]):
-    values.append(3)
-
-func main():
-    let first: list[i64] = [1, 2]
-    let second = first
-    add_one(second)
-    print(f"{len(first)} {first[2]}")
-```
-
-```output
-3 3
-```
-
-`first`, `second`, and the parameter temporarily name one list. Mutating the
-list does not reassign any binding, so a `let` reference may still mutate its
-object.
-
-Use an ordinary value transformation when you need independent data. A list
-slice creates a new list, for example:
-
-```luce run
-func main():
-    let source: list[i64] = [1, 2, 3]
-    let separate = source[0:len(source)]
-    separate.append(4)
-    print(f"{len(source)} {len(separate)}")
-```
-
-```output
-3 4
-```
-
-There is no universal deep-copy operator. A list slice creates a new outer
-list. Value elements copy; reference elements remain shared and are retained
-by the new list.
-
-## Structs may carry shared references
-
-Copying a struct copies its scalar fields and retains its reference fields:
+A value can contain references. Copying such a value copies its scalar fields
+and retains its reference fields:
 
 ```luce run
 struct Model:
@@ -101,88 +51,132 @@ first second
 2 2
 ```
 
-The titles are independent `str` values. The `values` fields refer to one
-list. This value/reference distinction is part of each field's type; it is not
-changed by how the enclosing struct is passed.
+The structures are independent values; both `values` fields name one list.
 
-## The release rule
+## References share identity
 
-Each reference-holding place contributes a strong reference. Reassignment
-releases the old value before the slot takes its new one. Leaving a function,
-returning, breaking, continuing, or propagating an error releases the locals
-that control-flow edge leaves behind. A temporary releases at the end of its
-statement unless another place retained it.
-
-The optimizer may remove a retain/release pair only when that cannot change
-resource cleanup, traps, or any other observable result.
-
-## Break cycles with `weak`
-
-ARC cannot reclaim a graph whose objects keep one another alive. Mark the
-back-edge as weak so it observes the object without owning it:
+Lists, maps, arrays, builders, classes, files, and tasks are references.
+Assignment, parameters, results, optionals, fields, and container elements all
+retain the same object.
 
 ```luce run
-struct Link:
-    weak root: list[Link]?
+class Counter:
+    value: i64
 
 func main():
-    let root: list[Link] = [Link()]
-    root[0].root = root
-    let snapshot = root[0].root else [Link()]
-    print(str(len(snapshot)))
+    let first = Counter(value = 1)
+    let second = first
+    second.value = 42
+    assert(first is second)
+    print(str(first.value))
 ```
 
 ```output
-1
+42
 ```
 
-Weakness belongs to a local or field, not to a standalone type. A weak place
-has an explicit optional `list`, `map`, `array`, or `builder` type and starts
-as `none`. Assignment does not keep the target alive. A read of a live target
-creates an ordinary owned snapshot; after the final strong reference goes
-away, the weak place reads `none`.
+`let` prevents rebinding a name; it does not make a referenced object
+immutable. A class uses `is` for identity. Built-in containers expose their
+identity through sharing and mutation rather than an identity operator.
 
-Read once, unwrap, and use that snapshot. A separate read may happen after the
-last strong reference disappears, so testing a weak place does not permanently
-narrow later reads.
+Use an operation that explicitly creates an independent outer object when
+that is what the program needs. A list slice does so:
 
-Files, tasks, functions, interfaces, scalars, text values, and value structs
-cannot be weak targets. Weak handles also cannot cross a worker boundary.
-Classes will use this same storage rule when class reference semantics ship.
+```luce run
+func main():
+    let source: list[i64] = [1, 2, 3]
+    let separate = source[0:len(source)]
+    separate.append(4)
+    print(f"{len(source)} {len(separate)}")
+```
 
-## Files and tasks must close deterministically
+```output
+3 4
+```
 
-A `file` closes at its last release. A task joins its worker at its last
-release, even when no code calls `wait()`. Sharing either reference shares one
-underlying resource.
+There is no universal deep-copy operator. The slice copies value elements and
+retains reference elements, so nested reference objects remain shared.
 
-## Interfaces and bound methods
+## What ARC does
 
-A current interface value carries bound dispatch values for one concrete
-struct. Each dispatch value owns its copied receiver and retains every
-reference that receiver carries. Interface dispatch is read-only today.
+Every reference-holding place contributes one strong reference. Storing into
+a new place retains the value. Replacing a place releases its old value.
+Leaving a scope through return, break, continue, error propagation, or normal
+fallthrough releases the locals that path abandons. A temporary releases at
+the end of its statement unless another place retained it.
 
-A bound method also carries a receiver. A struct receiver is copied into the
-function value; reference fields remain shared and are retained by the bound
-value. The callable may outlive the binding it came from.
+The final strong release destroys an ordinary object. For resources it also
+performs deterministic cleanup: a `file` closes, and an unfinished `task`
+joins its worker and discards the unobserved answer.
+
+A class can run its own `deinit` body at that point. The body runs once while
+the fields remain alive, then the fields release. See [Classes: Finish work in
+`deinit`](/guide/classes/#finish-work-in-deinit).
+
+## Break cycles with `weak`
+
+ARC cannot discover an unreachable cycle of strong references. Make the
+non-owning back-edge weak:
+
+```luce run
+class Node:
+    value: i64
+    weak parent: Node?
+
+func main():
+    weak var observed: Node?
+    if true:
+        let parent = Node(value = 42)
+        let child = Node(value = 1, parent = parent)
+        observed = parent
+        assert((child.parent else child) is parent)
+    print(str(observed == none))
+```
+
+```output
+true
+```
+
+Weakness belongs to a mutable local, field, or closure capture. Its type is
+optional because the target may already be gone. Assigning a weak place does
+not retain. Reading it once creates an ordinary owned optional snapshot: a
+live target becomes `T?`; a dead target becomes `none`.
+
+Weak targets are classes, lists, maps, arrays, and builders. Values,
+interfaces, function values, files, and tasks are not weak targets. A closure
+capture list uses `[weak name]` for the same rule. Weak storage cannot cross a
+worker boundary.
+
+## Closures own their environments
+
+A block closure retains its immutable captures and shares cells for captured
+mutable locals. Its last function value releases that environment. A bound
+structure method owns a receiver snapshot and retains the snapshot's reference
+fields. A bound class method retains the shared class identity.
+
+These ordinary strong edges can participate in cycles. If a class stores a
+closure that refers back to the class, capture the class weakly. [Functions
+and Closures](/guide/functions/#capture-lists) gives a complete example.
+
+## Interfaces preserve their concrete value
+
+An interface value owns the dispatch state for its concrete receiver. A
+structure conformance owns a receiver snapshot; a class conformance retains
+the class identity. A class method called through an interface may mutate that
+shared object. A writing value-structure witness is currently refused because
+the present interface representation does not expose a mutable value payload.
 
 ## Workers remain isolated
 
-Every worker has its own runtime and heap. Values copy directly, and permitted
-container graphs are rebuilt recursively in the receiving runtime. No object
-identity is shared. Aliases within and between argument roots remain aliases
-inside the snapshot, and the caller's graph remains independently usable.
-Graphs carrying a `file`, `task`, or function value are refused as arguments
-or results.
+Each worker has its own runtime and heap. Permitted value and container graphs
+are rebuilt in the destination runtime. Aliases inside the source graph remain
+aliases inside the independent snapshot, but no object identity is shared
+between caller and worker.
 
-That rule makes data races over Luce objects unrepresentable without adding a
-second ownership language.
+A class, file, task, function value, weak reference, interface value, or graph
+containing one cannot cross the boundary. A worker may create and use its own
+classes and closures locally. This keeps data races over Luce objects
+unrepresentable without introducing a second ownership model.
 
-## What has not shipped yet
-
-`class` is only a compiler scaffold; mutable owned interface values and
-capturing closures have not shipped. [Status](/status/) gives their order.
-
-The [Memory Management reference](/guide/reference/memory/) gives the exact
-current rules. [Concurrency](/guide/concurrency/) applies them at the worker
-boundary.
+The [Memory Management reference](/guide/reference/memory/) states every
+retain, release, weak, interface, closure, resource, and worker rule precisely.

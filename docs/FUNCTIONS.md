@@ -1,172 +1,218 @@
-# Functions as values
+# Function values and closures
 
-A function is a value in Luce. Where a `func(...)` type is expected, a
-named function stands as a value, and a one-expression **lambda** may be
-written in place. This is the reference for both forms: how they are
-spelled, how they are typed, and how a call through a value behaves.
-Bound methods — `receiver.method` as a value carrying its receiver — are
-a related form with their own reference (`docs/BINDING.md`).
+A Luce function may travel as a value. A named function, static function,
+union member constructor, bound method, expression lambda, and capturing block
+closure all use the same `func(...)` type and the same indirect-call path.
 
-## The line the feature draws
+The surface has two anonymous forms:
 
-An inline function that touches **only its own parameters** is a function
-pointer wearing clean syntax — no environment, nothing hidden. A function
-that reaches a variable from an enclosing scope is a *closure*, and
-closures carry an environment the reader cannot see on the page. Luce's
-lambdas are **capture-free**: the compiler enforces it today, and a body
-that needs state that travels with behavior names a struct
-with a method instead — the state explicit, named, and visible. Capturing
-closures are the memory model's direction (`docs/MEMORY.md`); until they
-land, the lambda stays capture-free.
-
-## A named function is a value
-
-A named top-level function, a `static func` member, and a function
-reached through an import are all values where a function type is
-expected. Write the bare name, no call parentheses:
-
-```luce
-import std.lists
-
-struct Player:
-    score: i64
-
-func by_score(a: Player, b: Player) -> bool:
-    return a.score < b.score
-
-func main():
-    var xs = [Player(score = 3), Player(score = 1), Player(score = 2)]
-    xs.sort_by(by_score)
-    for p in xs:
-        print(str(p.score))
-```
-
-Resolution runs through the same head-names-a-declaration path that
-serves `Struct.helper` and `module.func`. A **method** is not a plain
-value this way — it carries a receiver, and `receiver.method` is the form
-that binds it (`docs/BINDING.md`).
+- `(parameters) -> expression` is a concise, capture-free expression lambda;
+- `func(parameters):` opens a block closure that may capture enclosing locals.
 
 ## Function types
 
-`func(T, ...) -> R` in type position writes a function's shape:
-parameter types only, no names, and `-> R` optional exactly as it is on a
-declaration. It annotates a parameter, a `let`, a struct field, a
-container element, a map value, and a union payload field:
+`func(T, ...) -> R` writes parameter types and a result type. Parameter names
+and defaults belong to declarations, not to the function value type. Omitting
+`-> R` means no result.
+
+```luce
+func twice(value: i64) -> i64:
+    return value * 2
+
+func apply(value: i64, operation: func(i64) -> i64) -> i64:
+    return operation(value)
+
+func main():
+    let operation: func(i64) -> i64 = twice
+    assert(apply(21, operation) == 42)
+```
+
+A call through a value is positional. The type has no parameter names, so
+named arguments are unavailable at that boundary. Function types do not carry
+fallibility; a fallible declaration cannot become a function value.
+
+## Expression lambdas
+
+The short form takes bare parameter names and one expression. Its types come
+from the place where it lands:
 
 ```luce
 import std.lists
 
-struct Player:
-    score: i64
-
-func sort_players(xs: list[Player], before: func(Player, Player) -> bool):
-    xs.sort_by(before)
-
 func main():
-    var xs = [Player(score = 2), Player(score = 1)]
-    sort_players(xs, (a, b) -> a.score < b.score)
-    print(str(xs[0].score))
+    var values = [3, 1, 2]
+    values.sort_by((left, right) -> left < right)
+    assert(values[0] == 1)
 ```
 
-Where a value must exist before anything fills it — a field, an array
-cell, a list element, a union payload field — a function type is written
-as an **optional**, `(func(...) -> R)?`, because a function value has no
-zero and absence is that zero. The grammar and the storable form are set
-out in `docs/BINDING.md`.
+An expression lambda has no environment. It may use its parameters,
+file-scope constants, and visible declarations, but not an enclosing local.
+Use a block closure when behavior must carry local state.
 
-## The lambda: a parameter list, an arrow, one expression
+## Block closures
 
-A lambda is a parenthesized parameter list, an arrow, and a single
-expression:
+A block closure begins with `func(parameters):` and uses ordinary statements
+and return checking. It also needs a contextual function type, either from an
+annotated binding or from a declared function result:
 
 ```luce
-import std.lists
-
-struct Player:
-    score: i64
+func make_adder(start: i64) -> func(i64) -> i64:
+    var total = start
+    return func(amount):
+        total += amount
+        return total
 
 func main():
-    var xs = [Player(score = 3), Player(score = 1), Player(score = 2)]
-    xs.sort_by((a, b) -> a.score < b.score)
-    print(str(xs[0].score))
+    let add: func(i64) -> i64 = make_adder(10)
+    assert(add(2) == 12)
+    assert(add(5) == 17)
 ```
 
-- **Parameters are bare names.** Their types come from the function type
-  the lambda lands on — a lambda has no type until it lands on one, the
-  same rule a numeric literal lives by. A lambda in a place that expects
-  no function type is refused: *a lambda needs a place that expects a
-  function.*
-- **One expression, no block.** A body that wants statements is a named
-  function wanting a name. The single expression keeps the form from
-  secretly growing state and sidesteps the return-inside-lambda question.
-- **The parse is unambiguous.** `(a, b)` can open nothing else — there
-  are no tuples — and the single-parameter case `(x) -> …` resolves at
-  the arrow.
-- **No capture.** The body may name its parameters, file-scope constants,
-  and visible functions — the set a top-level function's body may name.
-  Reaching an enclosing local is refused: *a lambda carries no
-  environment; state that travels with behavior is a struct with a
-  method.*
+The parameter list contains names only. The contextual type supplies arity,
+parameter types, and results. A result-bearing closure must return on every
+path. A no-result closure may fall through like an ordinary no-result
+function.
 
-A lambda lowers to a compiler-named top-level function: after the
-analyzer runs it *is* the named case, the same MIR instruction and the
-same dispatch. Both forms dispatch through the program's function table,
-and `libluce_rt` learns nothing about lambdas as such.
+An indented block cannot begin inside call parentheses because layout is
+suspended there. Bind or return the closure first, then pass that value. A
+future trailing-closure convenience is not part of the current grammar.
 
-## Calling through a value
+## What a capture means
 
-A call through a value is positional. The interned function type states
-the arity and the argument types; a function type has no parameter names
-and no defaults, so a named argument is refused where it is written. A
-call suffix `EXPR(args)` applies to **any** expression whose type is a
-`func(...)`, and it is checked exactly as a call through a named value:
+The compiler discovers enclosing locals used by a block closure and gives the
+closure an ARC-managed environment:
+
+- an immutable value is a snapshot;
+- an immutable reference is retained strongly;
+- a mutable local moves into one shared cell used by its declaring scope and
+  every closure that captures it;
+- a captured function or interface retains its complete dispatch state; and
+- nested closures retain the environment chain they need.
+
+Two closures that capture the same `var` therefore observe one variable, not
+two copies:
 
 ```luce
-func scale(n: i64) -> i64:
-    return n * 2
+struct CounterPair:
+    add: (func(i64) -> i64)?
+    read: (func() -> i64)?
+
+func make_pair() -> CounterPair:
+    var total = 0
+    let add: func(i64) -> i64 = func(amount):
+        total += amount
+        return total
+    let read: func() -> i64 = func():
+        return total
+    return CounterPair(add = add, read = read)
 
 func main():
-    var actions: map[str, func(i64) -> i64] = {"double": scale}
-    print(str(actions["double"](21)))
+    let pair = make_pair()
+    let add = pair.add else (value) -> value
+    let read = pair.read else () -> -1
+    assert(add(40) == 40)
+    assert(add(2) == 42)
+    assert(read() == 42)
 ```
 
-`EXPR(args)` parses wherever `EXPR[i]` does — one more postfix suffix
-beside the index and the field access — so `chooser()(5)`, `m["a"](1)`
-and `(f)(x)` are all calls, not parse errors. The head-names-a-declaration
-forms — `f(x)`, `Struct.helper(x)`, `module.func(x)`,
-`receiver.method(x)`, `Union.member(field = v)`, `Enum(n)`, and every
-builtin — resolve through their written text and win; the suffix takes
-what is left, exactly the set that has no name to resolve. A call through
-a value is never fallible, because a function type carries no `!`, so
-`try EXPR(args)` is refused. `spawn` takes a declared call and nothing
-else.
+The shared-cell rule applies to scalars, text, value structs, optionals,
+destructured variables, and weak variables. It is a language rule rather than
+a special case for numeric counters.
 
-## No equality, no ordering
+## Capture lists
 
-Function values have no equality or ordering, and copying one costs
-nothing. `string(f)` answers the function's name:
+A capture list appears before `func` when creation-time behavior must be
+explicit:
+
+```text
+[name] func():                 # explicitly capture the local normally
+[weak model] func():           # non-owning optional reference
+[copy = expression] func():    # evaluate once and capture that value
+```
+
+An explicit normal capture follows the same value/reference/mutable-cell rule
+as an inferred capture. A named snapshot expression is evaluated exactly once
+when the closure is created:
 
 ```luce
-func by_score(a: i64, b: i64) -> bool:
-    return a < b
-
 func main():
-    let f: func(i64, i64) -> bool = by_score
-    print(str(f))
+    var number = 1
+    let read: func() -> i64 = [copy = number] func():
+        return copy
+    number = 42
+    assert(read() == 1)
 ```
 
-Two function values cannot be compared with `==` or `!=`: a value is the
-function it names *and* the receiver it may carry, and its type cannot
-say which, so comparing by function alone would call two binds of one
-method equal whatever they carry. The refusal is transitive — it reaches
-`==` on a struct that holds a function value and `find`/`contains` over a
-container of them — and the honest workaround is to keep a name or an
-enum beside the values and search that (`docs/BINDING.md`).
+`weak` accepts a class, list, map, array, or builder reference and exposes an
+optional value inside the body. It never dangles:
 
-## The standard-library customer
+```luce
+class Model:
+    value: i64
 
-`std.lists` provides stable `xs.sort_by(before)` for every list element
-type, taking a `func(T, T) -> bool`. It is routed through method syntax
-after `import std.lists`, not a runtime builtin. It is the proving
-customer for function values: sorting by a computed key is a comparator a
-call site writes, as a named function or a lambda, and hands in.
+func make_reader(model: Model) -> func() -> i64:
+    return [weak model] func():
+        let live = model else Model(value = 0)
+        return live.value
+
+func main():
+    let model = Model(value = 42)
+    let read: func() -> i64 = make_reader(model)
+    assert(read() == 42)
+```
+
+Capture names and parameter names must be unique. Luce does not shadow an
+enclosing local inside a lifted closure body; a duplicate declaration is
+diagnosed at the new name.
+
+## ARC and cycles
+
+A closure environment is a reference-counted object. Copying a function value
+retains its environment, and destroying the last copy releases every capture
+exactly once. A returned closure can therefore outlive the frame that created
+it without borrowing stack storage.
+
+Strong capture is the safe default. It can also form a cycle when an object
+stores a closure that captures the same object. Luce diagnoses the direct
+`self.field = func(): ... self ...` form and recommends `[weak self]`:
+
+```luce
+class Node:
+    value: i64
+    callback: (func() -> i64)?
+
+    func install():
+        self.callback = [weak self] func():
+            let live = self else Node(value = 0, callback = none)
+            return live.value
+
+func main():
+    let node = Node(value = 42, callback = none)
+    node.install()
+    let callback = node.callback else () -> 0
+    assert(callback() == 42)
+```
+
+ARC cannot discover every indirect application cycle. The program must make
+one back-edge weak when its object graph would otherwise retain itself.
+A `deinit` body cannot capture its dying `self`.
+
+## Storage and boundaries
+
+A function value may be returned, placed in an optional, stored in a struct or
+union, and used in lists, maps, and arrays. Slots that need an empty state use
+`(func(...) -> R)?`; a map value is written bare because `map.get` already
+provides the optional layer. [BINDING.md](BINDING.md) specifies these shapes
+and bound receiver ownership.
+
+Function values have no equality or ordering. `str(function)` answers the
+function's name for diagnostics and display, not a stable identity key.
+
+Function values cannot cross a worker boundary. A receiver or closure
+environment belongs to one runtime's object table, so `spawn` accepts only a
+declared call whose arguments and result contain no function value.
+
+The differential closure specification is
+[`src/luce/specs/closures_spec.zig`](../src/luce/specs/closures_spec.zig).
+Common capture, typing, cycle, and worker mistakes are pinned in
+[`src/luce/specs/errors_spec.zig`](../src/luce/specs/errors_spec.zig).

@@ -527,7 +527,7 @@ test "error() raises the program's own words, and catch discards them" {
 test "catch NAME: binds the words the error carried, whichever code it was" {
     // Both codes in one program, because the binding does not care
     // which: `error(...)` raises the program's own words and a refused
-    // write raises the library's, and the handler reads a `string`
+    // write raises the library's, and the handler reads a `str`
     // either way (docs/FAILURE.md).
     var session = try agree.compare(
         \\func check(n: i64) -> i64!:
@@ -873,7 +873,7 @@ test "exit unwinds a union carrying a callback and an owned list" {
 }
 
 test "a negative and a large status cross the boundary intact" {
-    // The host receives the long the program wrote; what an OS does
+    // The host receives the i64 the program wrote; what an OS does
     // with it is the loader's business (POSIX keeps the low byte),
     // and the boundary itself does not editorialize.
     try agree.exits(

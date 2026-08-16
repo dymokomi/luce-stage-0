@@ -319,7 +319,7 @@ fn bangIsNotAnOperator(self: *Parser) Error!void {
 }
 
 /// `a < b < c`.  Python reads it as `a < b and b < c`; this grammar
-/// reads it as `(a < b) < c`, which is a bool compared with a long and
+/// reads it as `(a < b) < c`, which is a bool compared with an i64 and
 /// so always a type error one stage later.  Report it here, with the
 /// `and` form written out in the reader's own words when their source
 /// is short enough to quote back.
@@ -1049,7 +1049,7 @@ pub fn make(self: *Parser, value: ast.Expression) Error!*ast.Expression {
     return node;
 }
 
-/// Expand f"...{expr}..." into a string-typed concatenation:
+/// Expand f"...{expr}..." into a str-typed concatenation:
 /// literal chunks (escapes and `{{`/`}}` decoded) joined with `+`,
 /// each `{expr}` wrapped in `str(expr)`.  A hole is sub-parsed
 /// against the real source with absolute spans, so diagnostics
@@ -1121,7 +1121,7 @@ fn expandFString(self: *Parser, item: Token) Error!?*ast.Expression {
                 // span, not the whole f-string's.  Everything stage 4
                 // says about this call is about what the reader wrote
                 // between the braces — `str()` converts numbers,
-                // bool, or string` for a list in a hole — and
+                // bool, or `str` for a list in a hole — and
                 // underlining the entire literal makes a reader with
                 // four holes in one line check all four.
                 try wrapStr(self, hole_expr, hole_expr.span());

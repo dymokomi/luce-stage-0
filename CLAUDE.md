@@ -1,95 +1,277 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This is the repository operating guide. Read it before changing the tree, then
+follow the deeper references it names.
 
-> **Memory model — READ FIRST.** Luce has **value types + reference types with
-> ARC**. A `struct` (and the scalars, `string`, `enum`) is a value and copies;
-> the containers `list`/`map`/`array`/`builder` and resources `file`/`task` are
-> references shared on assignment. Last release destroys the object and closes
-> or joins resources deterministically. Bound receivers retain reference
-> fields, and worker arguments cross runtimes as ownership-safe graph copies.
-> [docs/MEMORY.md](docs/MEMORY.md) is the source of truth. `class` is
-> currently a front-end scaffold; class reference
-> lowering, owned mutable interfaces, `weak`, capturing closures, and the
-> explicit type rename are planned in [docs/ROADMAP.md](docs/ROADMAP.md)
-> and must not be described as shipped before their phase gate passes.
+> **Memory model — read first.** Luce has value types and ARC reference types.
+> Numbers, `bool`, `char`, `str`, `bytes`, structures, enumerations, unions,
+> and value receivers copy. Classes, containers, closure environments, files,
+> and tasks are references. Assignment retains and shares a reference; the
+> last strong release destroys it and closes or joins resources. `weak` breaks
+> cycles without dangling. Workers own separate runtimes and never share
+> object identity. [docs/MEMORY.md](docs/MEMORY.md) is the source of truth.
 
 ## Guiding principle
 
-**Always decide for long-term success. No short-term stopgaps.** When a fix is available in two forms — a quick patch that makes the symptom go away, or the correct change that costs more now — take the correct change. Skipping a test, gating a capability off, hard-coding around a case, or "we'll clean it up later" are debts this codebase does not take on; they hide problems and rot the architecture. If the right fix is genuinely large, say so and scope it rather than papering over it. Cleanliness and organization are load-bearing here: the project is a language and its runtime, and every engine, stage, and tool must stay legible and honest. When in doubt, choose the option a careful maintainer would still be glad of a year from now.
+**Always decide for long-term success. No short-term stopgaps.** A skipped
+test, hard-coded exception, duplicated semantic, or knowingly temporary
+architecture hides complexity instead of removing it. If the right fix is
+large, scope and prove that fix. Do not make the wrong design permanent by
+calling it an intermediate step.
+
+[docs/SOFTWARE_DESIGN.md](docs/SOFTWARE_DESIGN.md) governs deep modules,
+information hiding, naming, and complexity. [docs/CODING_GUIDE.md](docs/CODING_GUIDE.md)
+governs Zig style and organization.
 
 ## Workflow
 
-Single-developer project: commit directly to `main` (no PRs, no feature branches) with git author `Dy Mokomi <dy@dymokomi.com>`.
+This is a single-developer project. Commit directly to `main` unless the
+maintainer asks for another workflow. Use author `Dy Mokomi
+<dy@dymokomi.com>`. Preserve unrelated working-tree changes.
 
-## Build and test
-
-Everything is Zig 0.16 (pinned in `build.zig.zon`) and runs on any host OS. **LLVM is a build prerequisite of `luce` and of nothing else; `cc` is a prerequisite of building at all**, because compiling a bundled program is a link — the code generator calls libLLVM in process, and `build.zig` locates it by asking `llvm-config` (on `PATH` or in the usual Homebrew/distribution prefixes; override with `-Dllvm-config=PATH`). Without it `zig build` fails with a message saying so. `loom` links no LLVM at all and neither does anything it loads, so a machine that only *runs* Luce programs needs none installed. The complete test gate also needs Node.js for the dependency-free VS Code extension tests; it is not a Luce build or runtime dependency.
+Meaningful phase commits are preferred to one undifferentiated final commit.
+Before committing, format the complete owned surface:
 
 ```sh
-./build.sh         # zig build --prefix build -Doptimize=ReleaseSafe: installs build/luce, build/loom, build/lib/libluce_rt.a, build/examples/<name>/<name>.lc
-zig build test     # the owner-grouped release gate; long targets print progress and a 15-second heartbeat
 zig fmt src/ build.zig www/luce/src/ tools/
 ```
 
-Tests are `test` blocks beside the code they prove, leak-checked under `std.testing.allocator`; `zig build test` discovers them through the module roots (`src/luce/luce.zig` re-exports every language package and lists them in its test roster; `src/apps/loom/main.zig` and `src/apps/luce/main.zig` do the same for their trees). A new language package must be added to `src/luce/luce.zig`'s re-exports and test roster; a new spec file to `src/luce/specs.zig`'s test-only import roster and exactly one owner in `tools/test_suites.zig`. **`specs/` is a module of its own**, not part of `luce`: every claim about a Luce program's observable behavior runs it on *both* engines and compares prints, trap code, trap message, call trace, leak census and the world left behind (`specs/agree.zig`), which needs the emitter and the libLLVM `luce` deliberately does not link. A test that inspects an otherwise-unobservable structure lives beside the code it proves even when a program is its fixture. The owner lanes, focused commands, and narrow structural exceptions are catalogued in `docs/TESTING.md`. Note: `zig build test` does not refresh installed binaries — run `./build.sh` for that (a bare `zig build` installs under `zig-out/`; both install trees are gitignored).
+## Build and test
 
-## What this project is
+The repository uses Zig 0.16, pinned in `build.zig.zon`. Building the compiler
+requires LLVM and `cc`; running an already compiled Luce artifact does not.
+The complete gate also needs Node.js for the dependency-free editor-extension
+tests.
 
-LuciaOS **v2** is language-first: **Luce**, the small statically typed language, and **loom**, the terminal that runs compiled Luce programs against ordinary OS files. v1 is retired and preserved only on the `main-v1` branch; do not build toward it from this tree. `docs/V2.md` is the north star. Deferred by design: persistence images, a user-facing Luce C FFI/ABI, network sync, multi-user, and the agent.  The runtime/host C ABI used by compiled artifacts is built.
+```sh
+./build.sh       # ReleaseSafe install under build/
+zig build test   # owner-grouped release gate with progress and heartbeat
+```
 
-Two binaries from one language module:
+`zig build test` does not refresh `build/`; run `./build.sh` when an installed
+product tree is part of the acceptance check. Use focused lanes during an
+implementation loop and the complete gate once at the phase boundary.
+[docs/TESTING.md](docs/TESTING.md) lists every lane and owner.
 
-- `luce` (src/apps/luce/) — the compiler and the test runner: `luce build FILE [-o OUT] [--release] [--emit=WHAT]`, `luce check`, `luce ir [--full]`, `luce test [PATH ...]`. `build` writes **machine code**: the default `--emit=library` is the `.lc` loom runs, `object` a relocatable `.o`, `exe` a standalone binary (`docs/CODEGEN.md`). `FILE` is a `.luc` or a `.lcm` — the serialized module, the front end's hand-over to the back end and not a distribution format — or `-` for standard input, which `build` then needs `-o` for. Debug builds (default) embed trap locations; `--release` strips them, changing nothing else (`docs/MODES.md`).  **`luce test` is the runner** (`docs/TESTING.md`): it discovers every top-level public zero-parameter `func test_*()` under `./tests` or the paths named, refuses by name the ones that could never run (`private` above all), compiles each file once with a **compiler-synthesized** `func main(args: list(string)) -> !` that calls one test by direct call, and calls the artifact once per test — one load per file, one `luce_main` per test, each a fresh `Runtime`, so per-test heap, leak census and trap report are machinery that already exists.  It takes no build options and always builds debug. **Each option may be given once**: a repeated `-o` or `--emit` is refused rather than resolved, because taking the last one writes a file of the wrong shape, or in the wrong place, and reports success — which is the one kind of failure a build system cannot see.
-- `loom` (src/apps/loom/) — the environment: an interactive colored shell (`run`, `luce`, `clear`, `exit`, bare `.lc`/`.luc` paths), plus direct CLI forms (`loom run FILE.lc [args]`, `loom luce FILE.luc`). `loom run FILE.lc` is one `dlopen`, one symbol lookup, one call — no compiler, no LLVM, no C toolchain. **Loom carries no editor**: the editor is an ordinary installed program (`build/editor`, `build/examples/editor/editor.lc`), so there is no `loom edit`, no embedded source and no `LOOM_EDITOR`.
+## Products
+
+LuciaOS v2 is language-first:
+
+- `luce` compiles and tests Luce. `luce build FILE.luc` creates a native
+  executable named after the source by default. `--emit=library` creates the
+  `.lc` library loom loads; `--emit=object` creates a relocatable object.
+  `luce check`, `luce ir`, and `luce test` are focused workflows.
+- `loom` is the terminal and `.lc` host. `loom run FILE.lc` loads machine code;
+  `loom luce FILE.luc` compiles and caches a library artifact before running
+  it. Loom contains no compiler, LLVM, or editor.
+- The terminal editor is an ordinary bundled Luce program. The release also
+  ships the local VS Code/Cursor syntax extension.
+
+The runtime/host C ABI used by generated artifacts is real and public inside
+the toolchain. A user-facing C FFI is not part of the language.
 
 ## Architecture
 
 ```text
-apps (luce CLI, loom terminal) → luce module (language)
-tests → the package under test
+apps (luce CLI, loom host) -> luce module
+specs -> compiled path + interpreter oracle
+both execution paths -> one runtime implementation
 ```
 
-**Where the tree stands.** There is exactly one code generator and one implementation of every semantic: **`libluce_rt`**, Luce's semantics as a linkable library behind a C ABI, and **one LLVM backend** over it. There is no hand-written emitter, no JIT, and no image cache; the serialized module's `format_version` is 47 and the published host `abi.version` is 19. `docs/CODEGEN.md` is the decision record for that seam — read it before touching the backend.
+There is one shipping engine: LLVM-generated machine code linked with
+`libluce_rt`. The interpreter ships in nothing; it is the differential oracle
+used by the specification suite. There is no JIT, bytecode VM, handwritten
+emitter, or runtime fallback.
 
-**There is one engine, and a `.lc` is machine code.** `luce build` writes a tagged shared library and calls it `.lc`; `loom run FILE.lc` opens it and calls it. `loom luce FILE.luc` compiles first and caches the result as `FILE.lc` beside the source, keyed on the program's bytes. Against the C twins (`bench/run.sh`'s floor-subtracted `compute` column, the one a code-generation change moves, and the table in `docs/CODEGEN.md` is the one place it is written down): 0.78–1.07× on five of the nine benchmarks; `strings` (3.87×), `lists` (2.61×), `arrays32` (7.77× compute) and `stats` (1.34×, the recorded price of the parked extremum vectorization) are the rows still behind. `strings` is the price of copying string bytes when they are stored, most of which small-string optimisation and move-instead-of-copy have since taken off again; what is left of that row is **not yet accounted for**, since the element copy it was long blamed on measures 1.3 ms and cannot be removed anyway, because a slice is a view with no allocation of its own (`docs/STRINGS.md`). `arrays32` is the price of checked integer arithmetic in a reduction — a value-dependent exit per element, which is why the loop does not vectorize (`docs/VECTOR.md`). `lists` was 29.10× and is 2.61× because `list` joined `array` on the inline path — element access is the row walk, the bounds check and the load, and `append` is a store and a count bump with the runtime called only to grow (`docs/CODEGEN.md`'s "Inline access"); **every reading phase of `bench/lists` is now at C's speed and the whole of the remaining gap is `append`**, which keeps a list's length in its row where C keeps it in a register, because the row is what every other name for the list reads. **The lowering is total**: everything a program can say lowers, `T?` included, and every `.unsupported` left in `lower.zig` refuses IR that could only arrive damaged. The handful of `unreachable`s beside them are *nevers*, not "not yet"s — a bare function type has no cell shape and no field zero, because the storable form is `(func(...) -> R)?` — and a never is honest only while something upstream refuses the shape it names; each one owes a stage-4 refusal **and** a `mir/verify.zig` arm, without both, an unsupported shape — an unwritable `list(func(...))`, say — can reach the backend and abort `luce build` with no diagnostic on a program `luce check` accepted. Every artifact records the machine, the host ABI and the code generator that produced it as well as the program, so a foreign or stale one is refused by name rather than run — there is no fallback and nothing to fall back to, and a `.luc` needs a compiler exactly as a `.c` does. Debug builds report `file:line:column` and a call trace on the compiled path; `--release` keeps function names. **The interpreter ships in nothing.** It survives as the differential oracle in the test suite, where every program in `specs/` runs on both it and the compiled path and the two are compared on prints, trap code, trap message, call trace frame for frame, leak census and the world each left behind (`docs/ENGINE.md`, and Miri is the precedent).
+The serialized MIR module format is **54**. The published host ABI is **23**.
+The declarations in `src/luce/mir/module.zig` and
+`src/luce/codegen/abi.zig` are authoritative; never copy the numbers into a
+new compatibility check.
 
-**`src/luce/` — the language, one responsibility-named surface (folder or barrel) per pipeline stage (`source` through `codegen`), re-exported by `src/luce/luce.zig` under those same names; `docs/PIPELINE.md` is the status table and `compile.zig` the driver that names every stage in order.** A stage that outgrew a single file becomes a directory beside a same-named barrel that re-exports its public API and pulls in its tests (`parse.zig` + `parse/`, `semantics.zig` + `semantics/`, `hir.zig` + `hir/`, `mir.zig` + `mir/`, `compile.zig` + `compile/`, `runtime.zig` + `runtime/`, `codegen.zig` + `codegen/`, `interpreter.zig` + `interpreter/`); the executable specs live in `specs/`, which is its own module (below). Split a file only where a subproblem has a one-to-three-function interface, never because the file is long (`docs/CODING_GUIDE.md`). Pipeline is `compile.zig`: indentation-aware lexer → recursive-descent/Pratt parser → arena AST → `semantics.zig` (**checking, and nothing else** — the walk resolves, types, narrows, diagnoses and records the typed tree; it emits no instruction: seven numeric types, four of them arithmetic, on two ladders and the whole of the implicit conversion stated once in `Type.widensTo` — `int` widens to `long`, `float` to `double`, and across the ladders the answer is always `double`; narrowing is implicit in no direction and no context, and a literal has no type until it lands on one, docs/TYPES.md — immutable `let`, no shadowing, return paths, struct cycles, builtin typing, interned function signatures, and capture-free lambdas synthesized as functions; twenty-three files, split where an API boundary honestly is — `context.zig` the vocabulary both passes speak, `constants.zig` the compile-time evaluator that answers with a *value* and never emits, `builtins.zig` what the language spells for itself and what each spelling lowers to, `effects.zig` what running a subtree could disturb, `helpers.zig` the bounded predicates both passes share; **both passes are families of files over one type**, since each was one file long past the point where its concerns had names. Pass one's spine is `declarations.zig` (the `Analyzer` and its tables, the collectors' order, the drive of pass two, and the accessors that read one table: `fail`, `typeName`, `heapOf`, `signatureOf`, `enumType`), with free functions over `*Analyzer` beside it: `naming.zig` what a declaration is called, where it was written and who may see it, `resolve.zig` a written type name to a `Type` and the interning behind it, `shapes.zig` what a type carries and how wide it is with the one cycle walk that settles both, `layouts.zig` the declared enum, union and struct tables, `signatures.zig` the function table with the entry and the layout a return shape rides in, `defaults.zig` the folded defaults of a parameter, a field and a union payload field, `receiver.zig` whether a method writes its implicit `self`. The checked walk of a body is the other family, since the seam took its emission away and what was left was still 12,500 lines — `builder.zig` is the spine (`FunctionBuilder` itself, scopes and locals, name resolution, landing, the expression dispatch) and each concern that can be named on its own is a file beside it holding free functions over `*FunctionBuilder`: `flow.zig` narrowing and root provenance, `ledger.zig` the statement-temporary ledger, `recorder.zig` the typed tree's recording API, `refusals.zig` what the walk says when it says no, `statements.zig` the statement walk, `assign.zig` assignment and its three shapes of place, `expressions.zig` the expression forms one at a time, `calls.zig` which callable a call names and which slot each argument fills, `construct.zig` construction, conversion and the free builtins — so `pub` inside that family means *visible to the walker's own files*, and the stage's outside surface is still `analyze`) → **`hir` — the check/lower seam, built** (`nodes.zig` is the resolved, typed tree where every piece of sugar is still a node, and `lower.zig` is the one mechanical, diagnostic-free pass that desugars it onto the tape; its error set is `OutOfMemory` alone, which is the structural proof that the tree carries everything the tape needs, and whole-array operations must survive it as single nodes) → typed Luce IR (`mir.zig`: instruction pool + basic blocks, interned function signatures, including `const_function`, `const_container`, `call_indirect`, `call_inout`, and the worker instructions; registers never cross blocks, mutable locals carry loop state; verifier + deterministic printer) → `optimize` (`prune` drops functions unreachable from the entry and follows every function value, so an unused std import costs nothing to ship or compile and a comparator is never deleted from under its value; `dead` compacts) → `codegen`, which lowers, emits and links, with pointer and name tables emitted only for a program that makes function values. The oracle enters at the same verified MIR through `interpreter.run`. Diagnostics carry stable codes (`luce.lex.*`, `luce.parse.*`, `luce.sema.*`) and byte spans. Two build modes (`docs/MODES.md`), **on both paths**: debug (default) embeds per-instruction origins so a runtime trap reports `file:line:column` plus a call trace — the interpreter walks its intact frame stack, the compiled artifact records the unwind path as each frame returns trapped — and origins are never read on the execution path, so both modes run at identical speed; `--release` strips the tables (function names still in traces, and only ~2% off an artifact, which is mostly `libluce_rt`). Semantics are identical in both modes — safety is the language, never a mode.
+Luce is pre-1.0 and has no source-compatibility contract. Rename, remove, or
+reshape a feature when that makes the language better; update the whole tree
+in one change. Do not add deprecated aliases, compatibility branches, or
+migration tests. MIR and host version checks exist only to reject stale binary
+artifacts safely, never to translate or continue running them.
 
-**`src/luce/runtime.zig` + `runtime/` — `libluce_rt`, the one implementation of every semantic.** The object heap and ARC, `list`/`map`/`array`/`builder`, file and task resources, worker runtimes, string storage and the string primitives, `string(x)`/`parse_int`/`parse_float`/`parse_string`/`chr`/`ord`, checked arithmetic, program roots, and the trap channel. It builds as a real static library, installs beside the binaries, and is linked into every artifact. **The oracle calls it too** — `interpreter/machine.zig` keeps only the dispatch loop, the frame stack, the traceback, and host effects, and `interpreter.zig` is its header (what `backend.zig` used to be). Never add a semantic to one side of that line: there is exactly one implementation, and the specs are what prove it.
+### Language pipeline
 
-**`src/luce/codegen.zig` + `codegen/` — the LLVM backend.** `lower.zig` walks the verified IR into LLVM IR with the vendored builder (`codegen/builder/` — `std.zig.llvm.Builder` taken in-tree so it can attach metadata to loads, stores and calls, every deviation marked `LUCE:`; pure Zig, links nothing; no `else` arms, no `unreachable` for "not yet" — an unlowered tag returns `.unsupported` naming itself); `loops.zig` proves where a resolved container row may leave a loop, and `mutability.zig` derives from final MIR which heap registers may name immutable program constants, conservatively omitting the inline constant-flag guard only for provably fresh `heap_new` locals; `emit.zig` is the only file that touches libLLVM and uses only its stable tier (parse bitcode, target machine, `default<O3>` pipeline and O3 codegen — one level, argued in the file, because the two knobs both mean "how hard to optimize", emit object); `abi.zig` is the **published host ABI** (`abi.version` is authoritative) — one exported `luce_main(const LuceHost*)` returning 0 ok / 1 trapped / 2 exhausted / 3 errored / 4 exited, and an append-only `LuceHost` vtable that generated code indexes with `getelementptr`: `trap` and `raised` required (a host that runs a program has to be able to say why it stopped, and those are two different sentences), every effect service optional and fail-closed (`host_unavailable`), every fallible one answering `yes`/`no`/`exhausted`. Fields are never reordered and any change to one bumps the version. `artifact.zig` — **not `abi.zig`; the split is argued in its own `//!` header** — carries `Artifact`, the tag stamped into every compiled module — machine, ABI version, a content hash of the program, and a `generator` identity that `build.zig` computes from the backend and runtime sources, the toolchain and the LLVM it found. `abi.zig` is what generated code and a host agree on; the tag is what a *loader* reads before it can believe any of that, including which host ABI the code was generated against, so the two carry their own version numbers and move on their own schedules, and the tag is what makes a stale `.lc` be refused instead of run. Effects travel in that table rather than as undefined symbols (an undefined symbol will not link into a two-level-namespace macOS dylib); semantics travel as `libluce_rt` calls. **The backend stage is named `codegen`, not `llvm`, on purpose**: Zig derives symbol names from source paths and LLVM reserves everything beginning `llvm.` for intrinsics. The responsibility name avoids that collision and keeps LLVM an implementation detail behind the code-generation boundary.
+`src/luce/compile.zig` drives the stages in this order:
 
-**The language surface** is specified in `docs/LANGUAGE.md`: values (scalars, string, plain structs, enums, function values) copy; reference objects (`list(T)`, `map(K,V)`, multi-dimensional `array(T, _, ...)`, `builder`, and the `file`/`task` resources) are created with `new`/literals, shared on assignment, and managed by **ARC** (`docs/MEMORY.md`); sharing retains one object identity, last release destroys it, and resources close or join deterministically; classes and `weak` are planned, not current. `let y = x` shares a reference or copies a value; passing a reference to a call passes the same object the caller holds. Indexing `a[i]`/`grid[r, c]`, list slices `xs[a:b]` and string slices `s[a:b]`, `for x in xs:` iteration, and the pure conversions (`string(x)`, `parse_int`, `parse_float`, `parse_string`, `chr`, `ord`) all lower to intrinsics; heap type shapes are interned into a per-program table (`types.HeapType`). Type-specific operations are methods — `xs.append(v)`, `m.has(k)`, `xs.sort()` — sugar the analyzer resolves by receiver type (namespaced `Struct.func`/`module.func` calls share the syntax and win when the head names a declaration); string keeps only the primitives (literals, f-strings, `+`, comparison, checked `s[a:b]`, `len`, `byte_at`, `find_byte` — the scanning primitive std's substring search builds on, and the seam SIMD enters through) and every other string method routes to the std `strings` module (`s.split(",")` is `strings.split(s, ",")`, a `luce.sema.import` without `import std.strings`); the generic free builtins stay Python-shaped (`len`, `print`), and the eight conversion constructors are named for the types they produce — one per numeric type plus `string(x)` (docs/NUMERICS.md §7, docs/TYPES.md §3). **Enums** (docs/ENUMS.md, built): `enum Method:` declares a set of named constants at one integer width — `enum Method(byte):` picks a rung, members are namespaced always (`Method.stored`), fold as constants, and hold their own numbers; `int(m)` and `string(m)` convert out (the name, not the number), `Method(n)` answers `Method?` and is the only way in, equality is the whole comparison surface, and an enum takes the methods and namespace functions a struct takes. `match m:` dispatches with bare member arms and, without an `else`, an arm for **every** member — so a member added later is a compile error at every match that missed it. In MIR an enum value is its backing integer and `Type.storage()` is the one sentence saying so; nothing new reaches `libluce_rt`. **Unions** (docs/UNION.md, built): `union Shape:` declares members that may carry named payload fields — `circle(radius: double)` — constructed as namespaced calls with named arguments and defaults through the checker structs already use; at least one member must carry a payload (an all-bare union is refused naming `enum`), and `match` is the **only door**: an arm binds each listed field by its own name as an alias in the arm's scope, a bare arm binds nothing, and wrong-arm access is unrepresentable rather than checked. Payload bindings alias the scrutinee, and a union that could contain itself unconditionally is refused through the struct-cycle walk with `?` and the containers as the fixes. The zero is the first declared member with every field at its own zero, `Shape?` is writable, `string(u)` answers the member's name, `==` is refused naming `match`, a union is no map key, and methods/static functions follow docs/SELF.md. A union value is a struct-shaped run whose slot 0 is the member index, padded to one static length per union (`1 +` the widest member's field count, `none` tails owning nothing — `types.VariantType.runLength`); `luce_rt_struct_make` builds it, `ownValue` copies it, `dropStorage` frees it, and `libluce_rt` learned nothing; in MIR the word is `variant` — three instructions, one table, reads as inline loads on the compiled path. **Function values and lambdas** (docs/FUNCTIONS.md, built): `func(T, ...) -> R` is a value type; a named top-level or namespace function becomes a value where that type is expected, and `(a, b) -> expression` is a lambda whose parameter types come from that landing place. Calls through a value are positional, function values copy freely, there is neither order nor equality, and `string(f)` gives the function's name. `std.lists` supplies stable `xs.sort_by(f)` as the proving customer; it is std-routed and requires `import std.lists`, not a runtime builtin. **Bound methods** (docs/BINDING.md, built): `receiver.method` written where a `func(T, ...) -> R` lands is a function value whose environment is the receiver, with the receiver's parameter dropped from the written type and no marker — the landing place is what makes it a bind. The value owns a copy of its receiver and retains every reference field reachable from that copy until the bound value is released. **Union member constructors are function values** (D11): `Msg.query_changed` lands as `func(string) -> Msg`, synthesized as the ordinary top-level function the reader would have written, while a payload-less member stays a value. In MIR a function value is `{function, receiver}` carried as a **two-slot field run**, and the compiled path dispatches through a table of adapters that take a receiver slot whether the value carries one or not, because a call site cannot tell which it holds. **A function value is storable** (D7, built): a struct field, a list element, an array cell and a union payload field hold one as `(func(...) -> R)?` — a slot exists before anything fills it, a function value has no zero, and absence is that zero — while a **map value is written bare**, because `m.get(k)` already answers `V?` and a second `?` would be a `V??`. The spelling rests on a general grammar rule (docs/TYPES.md): **a parenthesized type is that type**, accepted wherever a type stands and required nowhere, so `long?` and `func(string) -> long?` are unchanged and `(func(string) -> long)?` is the one thing newly writable; after `->` in a declaration the arity separates a parenthesized type from a return shape. Still refused by name: a **fallible** function type (`func(T) -> R!` does not exist, so a fallible method does not bind). **Workers** (docs/THREADS.md, built): `spawn f(args)` runs `f` on a thread with a **runtime of its own** — its own heap, its own scopes, a fresh depth budget — and answers a `task`. **Permitted data graphs cross a worker boundary by copy; object identity does not** — containers are rebuilt recursively in the receiving runtime, while resources and function values are refused transitively. Worker snapshots preserve aliases and cycles while keeping both runtimes ownership-safe. A `task` is a reference resource beside `file` — no `new task`; the ARC contract makes its last release a **join**, with lifecycle counts proved on both engines. `t.wait()` moves the answer here once, its type written as the return shape it names (`task`, `task(!)`, `task(double)`, `task(double!)`), so a fallible worker's error crosses whole and a **trap** surfaces at the join with the worker's own frames in front of the joiner's. Only a wait observes: a task nobody waited on is joined and its answer discarded. The shared Effects guard makes lowered host effects such as `print` line-atomic and brackets every file callback; worker registries have their own detach-before-join mutex — and **a program that never spawns emits none of it**, which `codegen/test.zig` proves against the rendered IR rather than against a benchmark. The two host slots (`worker_spawn`, `worker_join`) carry no Luce vocabulary at all; what a worker's runtime *is* and how one function runs in it is the **engine's** answer (`runtime.workers.Nursery`), which is why the oracle threads for real — a `Machine` and a `Runtime` are a self-contained pair. Deliberately absent, permanently: locks, atomics, shared mutable state, thread identifiers, `async`/`await` colouring. File scope uses `const`: folded values inline, while flat list, map and rank-1 array constructions live once in a per-runtime immutable program root; nonempty `{key: value}` is also a fresh runtime map literal, while `{}` is refused; local `let` and `var` are unchanged, top-level `let` is retired, and there is no top-level `var`. **Visibility** (docs/VISIBILITY.md, built): a declaration is public unless it says `private` — written in full before `func`/file-scope `const`/`struct` and on struct fields, with `private:`/`public:` regions inside structs only, dissolved by the parser so stage 4 never sees one; the unit is the file (never the struct — visibility gates the reference site's module, not the call graph), touching a marked name from outside is `luce.sema.private` (answered as private, never unknown; did-you-mean offers visible names only), a public surface may name only public types, private fields gate construction (the factory pattern, named in the diagnostic), and `private main` is refused. Names start with a letter — a leading underscore is `luce.lex.name`, and the bare `_` declares nothing (it is the array-shape wildcard). **The bit set** (docs/BITWISE.md, built): `& | ^ ~ << >>` on `int`/`long` at Go's precedence, shifts as bit transport with the count checked (`shift_out_of_range`), compound forms, constant folding, and the literals `0xFF`/`0b1010`/`1_000` — no octal. **Call depth is policy, never a native-stack segfault**: generated code carries how many frames it may still take as a hidden `%depth` argument and traps `call_depth_exceeded` at the call that would exhaust it, which LLVM hoists to one subtract and one branch per function — measured as noise. The oracle keeps the same promise by counting frames on the explicit heap-allocated stack it runs on, from the same number, so both arms refuse the same call.
+```text
+source -> lex -> parse -> semantics -> HIR lowering -> MIR -> optimize -> codegen
+                                                           \-> interpreter oracle
+```
 
-**`src/luce/mir/module.zig` — the serialized module:** a direct binary serialization of the verified IR (magic `LUCE` + version, scalar and container constants, structs, heap types, enums, unions, functions, entry). **A seam, not a deliverable** — it is the front end's hand-over to the back end and the artifact's cache key (`artifact.sourceHash`), and `.lcm` is what it is called when it has to reach a disk, which is how loom gets a program compiled without carrying a code generator. `decode` re-runs the IR verifier so damaged modules are rejected, but instruction *types* beyond the verifier are trusted. Any change to the instruction set, the intrinsics, the trap codes or the type tags must bump `format_version` (no migration; modules recompile from source).
+- `source/` validates bytes, line endings, size, positions, and module loading.
+- `lex/` produces indentation-aware tokens.
+- `parse/` builds the arena-owned AST with recursive descent and Pratt
+  expression parsing.
+- `semantics/` resolves names and types, checks control flow and effects,
+  diagnoses misuse, and records typed HIR. It emits no MIR instructions.
+  Its files are concern modules over `Analyzer` or `FunctionBuilder`;
+  `closures.zig`, `interfaces.zig`, `assign.zig`, and `calls.zig` own those
+  subjects rather than scattering their rules through the walker.
+- `hir/` is the checked-tree seam. `lower.zig` mechanically removes sugar and
+  has only `OutOfMemory` failure; a user diagnostic at this stage is a design
+  error because semantics should already have decided everything.
+- `mir/` owns typed instructions, basic blocks, verification, deterministic
+  printing, and serialization. Decoding always re-verifies hostile input.
+- `optimize/` contains the deliberately small MIR passes: reachability prune,
+  dead instruction removal, and register compaction. LLVM owns general
+  optimization.
+- `codegen/` lowers verified MIR to LLVM IR, emits an object through libLLVM,
+  and links the requested native artifact.
 
-**The entry and the gate** (`types.CompileOptions`): a program is `func main():` or `func main(args: list(string)):`, each with an optional `-> !` when the world can stop it — four shapes, no second entry mode, no Port schema and no `evaluate()`.  `CompileOptions.entry` says only *who wrote* the one being used: `.declared` selects the source's `main`, and `.tests` has the compiler write the fourth shape over a test file's discovered tests (`semantics/entry.zig`, docs/TESTING.md) — still one row of the function table, still started through the published ABI, and under it a `main` the source declares is an ordinary function nothing reaches. **The command line is `main`'s parameter, not a service**: `args` is a `list(string)` the runtime hands in and `main` releases at its end (docs/MEMORY.md), built by `libluce_rt` out of the two `LuceHost` slots that already carried it, so nothing about the published ABI moved. `allow_host` is the only option that gates anything and covers the host builtins (`print`, `print_error`, `read_line`, `env`, `clock_ms`, `epoch_ms`, `sleep_ms`, `file_read`/`file_write`/`file_append`/`file_delete`/`file_rename`/`file_open`, `path_kind`, `dir_list`/`dir_create`, `term_*` (`term_event_data` included), `key_read`/`key_text`, `shell_run`, `exit`, `os_total_memory`/`os_available_memory`/`os_cpu_count`) — ungated use is a `luce.sema.host` diagnostic; `args` is not among them, because it is handed to a program rather than asked for. `file_read` and `file_write` are **fallible**: they answer `T!`, so a caller writes `try` to pass the failure on or `catch` to handle it, and ignoring one is `luce.sema.fallible` rather than a silently dropped bool (`docs/FAILURE.md`). The declaration keyword is strictly `func`; every plain function inside a struct or enum is a **method** with an implied `self`, while `static func` declares a **namespace function** with none (`docs/SELF.md`). Whether a method writes its receiver is inferred transitively from its body. A reader accepts a `let` or temporary; a writer requires one bare `var` binding and mutates that slot in place, so writes made before an error remain. Mutating an object reached through `self` is ordinary and does not make the struct method a writer. Methods cannot be values, spawned, or called through their type; static functions can. A function may answer more than one value — `-> (A, B)`, `return a, b`, `let a, b = f()`, `a, b = f()` — lowered as a compiler-synthesized struct; a return shape may be received by a destructuring bind or by two or more distinct existing mutable bare names, or discarded as a statement. Existing-name assignment is parallel: the one call and all returned storage are prepared before any target is replaced, and a failing guarded call performs none of the assignment's replacement stores; ordinary side effects from evaluating its right side remain. Fields, indexes, compound forms, `_`, tuple values and direct return pass-through remain absent (`docs/RETURNS.md`). `class` is a front-end scaffold only; its final, non-inheriting reference semantics are planned in docs/ROADMAP.md.
+A stage that needs several files has a same-named barrel (`parse.zig` plus
+`parse/`). The barrel is the stage's public surface. Split a file only when a
+subproblem has a genuine one-to-three-function interface; length alone is not
+a seam. Never make a declaration `pub` merely so a sibling file or test can
+reach it.
 
-**The standard library** (`src/luce/std/*.luc`, table in `source/load.zig`, docs in `docs/STD.md`): ordinary Luce source embedded in the compiler via `@embedFile`, reached through the reserved `std.` namespace — `import std.math` binds `math` and works everywhere the compiler does, with no install path, while `import math` means a sibling `math.luc` and nothing else (the two namespaces are disjoint, so nothing shadows and nothing is hidden; a program writing both is `luce.import.collision`). **Packages** (docs/PACKAGES.md, the consuming half ratified and built): under a governing `luce.yaml` every import is project-root-relative, dots map to directories (`import geo.shapes`, with `as` to rename a binding), and declared packages resolve at exact versions from `<root>/.luce/packages/`, `LUCE_LIB` shelves or a `path:` override — every tier probed, exactly one may answer, the loader stamping each module with an opaque root token so two packages' same-named internals never merge (D7) — while loom compiles governed programs into `<root>/.luce/cache/`. The store is filled by hand: no fetch, no registry, no `luce install` yet — that is the publishing memo, not written. Std obeys every language rule including the host gate. Proven by `src/luce/specs/std_spec.zig`, pure modules and hosted ones alike. A new module is: the `.luc` file, one `standard_modules` row, tests, an STD.md section.
+### Runtime and execution
 
-**The host boundary** (`codegen/abi.zig`'s `LuceHost`, and `interpreter.Host` for the oracle): every effect is an optional host service; a missing service traps (`host_unavailable`) instead of touching anything, so a program given no host computes and touches nothing. `Host.terminal` is a vtable (`rows/cols/clear/move/style/write/flush/key`) — the host owns raw mode, the alternate screen, frame buffering, and every escape byte; `term_write` text is sanitized so programs can never emit control sequences. `key_read` presents the pending frame before blocking (a draw loop needs no explicit flush) and returns stable key names ("text", "enter", "up", "ctrl_s", …) with `key_text()` carrying the "text" payload.
+`src/luce/runtime.zig` and `runtime/` implement every dynamic semantic once:
+ARC, object identity, weak handles, containers, class destruction, text,
+checked arithmetic, files, tasks, worker copies, traps, and closure storage.
+The interpreter calls this runtime, and generated code calls its published C
+exports. Do not implement a rule separately in the interpreter and codegen.
 
-**`src/apps/`** — what the two binaries are built out of. **`luce/`** holds `main.zig` (the command line), `front.zig` (a path in, a verified program out — the half `build`, `check`, `ir` and `test` all need), `object.zig` (the back half: lower, emit, link), `discover.zig` and `suite.zig` (`luce test`: what will run, and the per-test loop and report), and `product.zig`. **`loom/`** holds only what is loom's: `main.zig` (dispatch), `shell.zig` (line shell), `runner.zig` (open a `.lc` and call it; compile a `.luc` by running `luce` over the module loom's own front end just made, and cache the artifact beside the source — or under the project's `.luce/cache/` when a `luce.yaml` governs; restore the screen before reporting traps), `product.zig` (the installed *pair* proved together — used the way a person would, because the loom→luce hand-off is a property of neither module alone), and `zipping.zig` (the zipper example driven from the install tree, the tool half of `specs/zip_spec.zig`'s format claim). **One level up, shared with the compiler**, because both binaries need them and a program's behaviour must not depend on who started it: `host.zig` (the real host: lazy raw mode + alt screen, 256-color SGR styles, sanitized writes, cwd-relative files, exit statuses, trap rendering), `key.zig` (escape-sequence decoding), `machine.zig` (the platform layer behind `std.os` — total and available memory and the processor count, answering null for "this host cannot tell" and never a made-up number), `files.zig` (the import `Loader`: sibling modules, `luce.yaml` discovery, and the package store, shelves and hashes behind it), `manifest.zig` (the strict-subset `luce.yaml` parser), `streams.zig` (stdout and stderr, opened one way), `palette.zig` (semantic colors — a prompt, a passing test — empty when not a tty / NO_COLOR), `native.zig` (finding `cc`, linking an object, loading an artifact and refusing the wrong one), `start.zig` (`libluce_start`, the `main` shim an `--emit=exe` binary links), `report.zig` (one rendering and one exit number for a trap, whoever started the program), `sanitize.zig` (the one rule keeping program text from forging the terminal), `harness.zig` (the miniature install tree both product suites drive). **An agent told to edit "loom's host" wants `src/apps/host.zig`, not `src/apps/loom/`.**
+`src/luce/interpreter/` owns only the oracle's dispatch loop, frame stack,
+traceback, and host adaptation. `src/luce/codegen/` owns only the native path.
+Both must agree through `src/luce/specs/agree.zig` on output, raised errors,
+trap code and message, call trace, host world, and live-object census.
 
-**`bench/`** — paired C/Luce benchmarks with identical algorithms and outputs (`bench/run.sh` compiles, cross-checks, and times them; `bench/compare.sh GIT-REF` is a same-host interleaved A/B against any commit — the authoritative regression check). They time the one engine there is; `docs/CODEGEN.md` carries both the methodology and the current snapshot, and `bench/run.sh` prints a floor-subtracted `compute` column beside the raw ratio because loom's startup is a third of some rows. Benchmark only optimized builds (build.sh's default); a Debug build is 4-5x slower and its numbers are meaningless.
+Host effects are explicit. Generated code reaches them only through the
+versioned table in `codegen/abi.zig`; the oracle reaches an explicit
+`interpreter.Host`. Language code under `src/luce/` never opens files, reads a
+terminal, starts a process, or consults the OS directly. Shared concrete host
+implementation belongs in `src/apps/`.
 
-**`www/`** — everything published to the web, one folder per site (`www/README.md`), and nothing web-shaped at the root. **`www/luce/`** — luce.luciaos.com, the language's documentation, built by `www/luce/build.sh` and deployed by `www/luce/deploy.sh`.  It lives in this repo so it changes with the language, and **every Luce sample on it is checked by the freshly built toolchain**: runnable examples execute, expected traps/raises/refusals take their named path, and every claimed result is compared byte-for-byte — a fenced `luce` block that does not declare `run`/`trap`/`raise`/`fail`/`module` is a build error, so there is no unclassified code on the site.  Broken samples, mismatched results, dead links or anchors, and selected compiler-to-reference vocabulary gaps fail the build; the surrounding prose remains human-reviewed.
+### Compiler and host applications
 
-**`www/loom/`** — loom.luciaos.com, the tool's documentation: a page manifest, one HTML fragment per page, and a small `build.sh` that stamps the shared bar/footer and checks every internal link and anchor; `www/loom/deploy.sh` publishes.  It shares luce.luciaos.com's theme variables (and `localStorage` key) but deliberately not its machinery — nothing here runs Luce samples, and the README names `www/luce/src/verify.zig` as where verification goes when that stops being enough.  Its `/direction/` page is the one place that talks about unbuilt loom, and marks every such claim.  **`www/luciaos/`** is the luciaos.com landing page, one hand-written `index.html`. **`www/stats/`** is stats.luciaos.com plus the private-by-design log collector that produces its aggregate counts. **`www/deploy/publish.sh`** is the half all four deploys share — the host, the key, the `rsync --delete` and the `curl` that checks the live URL — written once, so the server's address is in one file; each site's `deploy.sh` is a thin caller that keeps only what it cannot share (how it builds, what counts as built, its static root, its URL).
+- `src/apps/luce/` owns CLI parsing, the front/back compiler split, artifact
+  creation, test discovery, and the Luce test runner.
+- `src/apps/loom/` owns loom dispatch, its shell, artifact loading, platform UI
+  adaptation, and product tests.
+- `src/apps/*.zig` holds behavior both products share: host services, manifest
+  and package loading, native linking/loading, diagnostics, streams, terminal
+  sanitation, startup, and test harnesses.
 
-**`examples/`** — userland in Luce. `editor/editor.luc` is the flagship: a full-screen editor with per-line Luce syntax highlighting (keywords, capitalized type names, builtins, strings, numbers, comments), line numbers, status bar, Ctrl-S save / Ctrl-Q quit (twice to discard). A test in `src/apps/loom/shell.zig` compiles the embedded editor so it can never rot; `build.zig` compiles and **links** every bundled example and every benchmark with the freshly built `luce`, on `zig build test` as well as on install, which is why `cc` and an installed `libluce_rt.a` are prerequisites of testing.
+The behavior of a program must not depend on whether `luce`, `loom`, or a
+standalone executable started it.
+
+## Current language boundaries
+
+[docs/LANGUAGE.md](docs/LANGUAGE.md) is the broad specification. The focused
+references are indexed in [docs/README.md](docs/README.md). Important current
+facts that architecture work must preserve:
+
+- Numeric names state representation: `u8`–`u64`, `i8`–`i64`, and
+  `f16`/`f32`/`f64`. Every integer width has checked arithmetic. Concrete
+  values never change width, signedness, or numeric family implicitly;
+  literals are contextual and conversions are explicit.
+- `char` is one Unicode scalar, `str` is immutable UTF-8 indexed by scalar,
+  and `bytes` is immutable binary data. `alias Name = Type` is transparent and
+  erased before HIR.
+- A `struct` is a value. A `class` is a final ARC reference with identity,
+  mutation through a stable `let`, `is`, weak back-edges, interface
+  conformance, and one ARC-driven `deinit`. There is no class inheritance.
+- Interfaces are nominal and support multiple methods, multi-value results,
+  directional fallibility, class and struct conformers, optionals, returns,
+  and heterogeneous collections. The current hidden bound-witness layout
+  permits mutable class dispatch but refuses a writing value-struct witness;
+  the owned existential replacement remains planned.
+- `(x) -> expression` is capture-free. `func(x):` is a block closure with an
+  ARC environment. Immutable values snapshot, references capture strongly by
+  default, mutable locals share one cell, `[weak name]` is zeroing and
+  optional, and `[copy = expression]` evaluates once.
+- ARC does not collect strong cycles. The compiler diagnoses the direct stored
+  `self` closure cycle, but program graphs still need an intentional weak
+  back-edge.
+- Workers have private runtime/object tables. Permitted value/container graphs
+  copy while preserving aliases inside the snapshot. Resources, classes,
+  function values, and weak storage do not cross the boundary.
+- Function types carry neither parameter names/defaults nor fallibility.
+  Function values have no equality or ordering and cannot cross workers.
+- Recoverable errors use `T!`, `try`, and `catch`. Traps remain terminal.
+  Multiple returns are shapes received by destructuring; they are not tuples.
+
+## Where a test goes
+
+One rule decides placement:
+
+> Any claim about a Luce program's observable behavior is a specification in
+> `src/luce/specs/`. It runs on the compiled path and oracle, and the results
+> are compared. Anything that inspects an otherwise invisible structure lives
+> beside the code it proves.
+
+A new language package must be re-exported and imported by the test roster in
+`src/luce/luce.zig`. A new spec file must be imported by
+`src/luce/specs.zig` and assigned exactly one owner in
+`tools/test_suites.zig`. The suite audit rejects missing and overlapping
+ownership.
+
+Tests use `std.testing` directly and run with `std.testing.allocator`. Cover
+success, relevant boundaries, rejection, round trips, and cleanup. Do not
+weaken a leak census or skip a feature case to make a lane green. Platform
+capability skips must say what capability is absent and remain separate from
+product gaps.
+
+## Change costs
+
+Language changes cross explicit seams. Account for every relevant row:
+
+| Change | Required surfaces |
+|---|---|
+| syntax or keyword | lexer/token data, parser/AST, grammar coverage, highlighting, positive and negative specs, Guide/reference |
+| type or semantic rule | support types, semantic resolver/checker, HIR, MIR/verifier as needed, both-engine spec, diagnostics, docs |
+| dynamic operation | runtime implementation and export, MIR instruction/intrinsic, interpreter dispatch, codegen lowering, ABI effects table when host-facing |
+| MIR/type tag/trap code | bump `mir.module.format_version`, update encoding/decoding/fingerprint, hostile verifier tests |
+| host table shape | bump `codegen.abi.version`; update every host, generated slot, and stale-artifact rejection test atomically; pre-1.0 may reorder or remove fields and adds no adapters |
+| standard module | `.luc` source, embedded module roster, std/spec coverage, Library page and surface coverage |
+| spec file | `specs.zig` import and exactly one `tools/test_suites.zig` owner |
+| public release surface | Guide/Library/Status, checked samples, installer/archive smoke, version agreement |
+
+Do not bump the host ABI for an internal runtime change. Do not leave the
+module version unchanged when a decoder would read the old bytes with a new
+meaning. Stale source recompiles; there is no serialized-module migration.
+
+## Documentation
+
+`docs/README.md` separates current references, plans, and frozen decision
+records. Current `luce` fences compile. Planned syntax uses `text` until it is
+implemented. A historical fence belongs only in a decision record.
+`tools/documents.zig` and `tools/doccheck.zig` enforce the catalogue and
+examples. The compiler treats names outside the current vocabulary as ordinary
+unknown identifiers; there is no compatibility-name table.
+
+User documentation lives in `www/luce/`. The generator compiles or refuses
+every classified sample, compares claimed output, checks links and anchors,
+and holds selected compiler surfaces to the Language Reference and Library.
+Build it with `www/luce/build.sh`; deploy only after the repository and site
+gates are clean.
+
+`www/loom/`, `www/luciaos/`, and `www/stats/` are separate products. Shared
+web assets and publishing mechanics live under `www/shared/` and
+`www/deploy/`; do not copy them into a product directory.
 
 ## Coding conventions
 
-`docs/CODING_GUIDE.md` is authoritative and intentionally opinionated — plain, old-school code over clever ceremony, expressed in Zig. The essentials:
+The authoritative details are in [docs/CODING_GUIDE.md](docs/CODING_GUIDE.md).
+The non-negotiable summary:
 
-- Zig 0.16; `zig fmt` before every commit; errors as values with small explicit error sets; no panics for ordinary failure; never hide durability (callers call `flush()`/`sync`).
-- Allocation is explicit: functions that allocate take an `Allocator`; every heap-holding type has `deinit`; doc comments say who owns what and what invalidates borrows. Tests run leak-checked under `std.testing.allocator`.
-- Anything host-facing takes an explicit `std.Io` (file access, the terminal); the language module never touches the host except through the host table it is handed.
-- Tagged unions over class hierarchies (`Value`, `Instruction`, `Result`); function-pointer tables only where substitution is real (`abi.Host`). No comptime cleverness a reader can't hold in their head, no premature abstraction, no framework-style managers.
-- Naming: TitleCase types, camelCase functions, snake_case fields; short verbs (`read`, `write`, `open`, `parse`, `encode`); collections use `count`/`has`/`get`/`put`/`remove`/`at`; drop redundant type nouns; plain-English names (`file_handle`, `page_index` — never `fd`, `buf`, `n`, `ptr`).
-- Comments: `//!` file purpose lines, dashed section headers, `///` docs that explain assumptions and ownership — not narration of obvious code.
-- Types that must not move after setup (something captured a pointer into them) use the documented in-place `setup(self: *T, ...)` pattern (`src/apps/host.zig`'s `Host`).
-- Split a file when a subproblem has a one-to-three-function interface and can be understood without the parent's state — never because a file is long (rustc's `late.rs` is 5,735 lines; Zig's `x86_64/CodeGen.zig` is 190,207). A file boundary in Zig is a privacy boundary, so split only where you would also draw an API boundary: if the split forces a declaration `pub` purely for a sibling or a sibling's test, the split is wrong.
-- Tests: `test` blocks beside the code, named after what they prove (`test "truncated, oversold, and damaged modules are rejected"`); direct `std.testing` checks, no framework; cover success, bounds failure, and round-trip/rejection where relevant.
+- Errors are values with small explicit error sets; no panic for ordinary
+  failure.
+- Allocation is explicit. A heap-owning Zig type has `deinit`, and public docs
+  state ownership and borrow invalidation.
+- Host access takes explicit `std.Io` or the published host interface.
+- Prefer tagged unions and plain data over class-like Zig hierarchies and
+  framework managers.
+- Names are plain and responsibility-based. Use TitleCase types, camelCase
+  functions, snake_case fields, and short verbs.
+- Comments explain invariants, ownership, and reasons—not visible syntax.
+- Keep the hot path readable. Optimize from measurement and preserve semantic
+  order, cleanup, and traps.
+- Do not add abstraction for imagined future needs. Deep modules with small
+  surfaces are preferred to many shallow wrappers.

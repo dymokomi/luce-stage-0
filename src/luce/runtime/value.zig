@@ -60,21 +60,17 @@ pub const Tag = enum(u8) {
     strukt = 5,
     /// A `Handle` into the runtime's object table.
     object = 6,
-    /// The narrow widths, **appended**: no number above ever changes
-    /// what it means, which is the append-only rule the whole ABI is
-    /// built on (docs/TYPES.md §6).  Each width gets a tag of its own
-    /// rather than sharing one with its family, because
+    /// The remaining explicit widths. Each gets a tag of its own rather
+    /// than sharing one with its family, because
     /// `heap.Object.ElementKind.of` derives an array's cell width from
     /// the zero element's tag — the runtime is handed a zero and never
-    /// the program's type table — and a `float` whose zero boxed as
-    /// `double` would silently allocate eight-byte cells.
+    /// the program's type table — and a `f32` whose zero boxed as
+    /// `f64` would silently allocate eight-byte cells.
     i32 = 7,
     f32 = 8,
-    /// The three storage widths (docs/TYPES.md D5), appended in their
-    /// turn.  No expression ever has one of these types — an operator
-    /// widens them first — so a `Value` wears one only where storage
-    /// does: an `array(byte, n)`'s zero, a boxed field, a boxed
-    /// element crossing into a caller.
+    /// Every one is both a storage and computation width. A `Value`
+    /// preserves the exact type across runtime boundaries and boxed
+    /// aggregate storage.
     u8 = 9,
     i16 = 10,
     f16 = 11,
@@ -168,7 +164,7 @@ pub const Handle = struct {
 pub const Value = extern struct {
     tag: Tag = .none,
     /// How many bytes of text live in this value, or `text_outside`
-    /// when `bits` addresses them.  Read only for `string`; every
+    /// when `bits` addresses them.  Read only for `str`; every
     /// other tag leaves it zero.
     inline_length: u8 = 0,
     /// The first six bytes of inline text.  The other sixteen are
@@ -213,10 +209,8 @@ pub const Value = extern struct {
         return .{ .tag = .f32, .bits = @as(u32, @bitCast(held)) };
     }
 
-    /// The storage widths.  A `byte` is the one whose bits are read
-    /// back as a magnitude (D4); a `short` sign-extends, and a `half`
-    /// keeps its sixteen binary16 bits and is widened by whoever
-    /// reads it.
+    /// A `u8` is read back as a magnitude, an `i16` as signed two's
+    /// complement, and an `f16` keeps its sixteen binary16 bits.
     pub fn ofU8(held: u8) Value {
         return .{ .tag = .u8, .bits = held };
     }
@@ -533,7 +527,7 @@ pub const Value = extern struct {
     }
 
     /// True when this is the absent value of a `T?`.  One tag test for
-    /// every payload type: a present `long?` is tagged `int` and a
+    /// every payload type: a present `i64?` is tagged `i32` and a
     /// present `list[T]?` is tagged `object`, so absence needs no
     /// per-type encoding and no second word (docs/FAILURE.md).  It is
     /// *not* the null object, which is a present handle to nothing.

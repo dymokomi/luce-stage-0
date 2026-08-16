@@ -1,8 +1,13 @@
-# Functions
+# Functions and Closures
 
-Functions define reusable work. Parameters have types, a return type
-follows `->`, and a function with no return value omits it. A return value
-must be produced on every path.
+Functions name reusable work. Closures are function values that carry the
+local state they need. Both have the same `func(...) -> ...` type, so an API
+does not need separate callback and function concepts.
+
+## Declare a function
+
+Parameters have types. A result follows `->`; a function with no result omits
+the arrow. Every path through a value-returning function must return.
 
 ```luce run
 func gcd(a: i64, b: i64) -> i64:
@@ -18,37 +23,45 @@ func announce(label: str, value: i64):
     print(f"{label}: {value}")
 
 func main():
-    announce("gcd(1071, 462)", gcd(1071, 462))
-    announce("gcd(17, 5)", gcd(17, 5))
+    announce("gcd", gcd(1071, 462))
 ```
 
 ```output
-gcd(1071, 462): 21
-gcd(17, 5): 1
+gcd: 21
 ```
 
-Arguments are positional by default. Callers may use parameter names, and
-trailing parameters may have compile-time defaults, for example
-`func pad(s: str, width: i64 = 8) -> str`. Named arguments can be
-reordered, but positional arguments must come first.
+Arguments are positional by default. A caller may use parameter names, and
+trailing parameters may have compile-time defaults:
+
+```luce run
+func pad(text: str, width: i64 = 8) -> str:
+    return text
+
+func main():
+    print(pad(width = 12, text = "luce"))
+```
+
+```output
+luce
+```
+
+Named arguments may be reordered; positional arguments must come first.
 
 ## Functions are values
 
-A function's value type contains its parameter and return types, not
-parameter names. Named functions and capture-free lambdas can be passed to
-another function.
+A function type states parameter and result types, not parameter names:
 
 ```luce run
-func twice(n: i64) -> i64:
-    return n * 2
+func twice(value: i64) -> i64:
+    return value * 2
 
-func apply(f: func(i64) -> i64, value: i64) -> i64:
-    return f(value)
+func apply(operation: func(i64) -> i64, value: i64) -> i64:
+    return operation(value)
 
 func main():
     let chosen: func(i64) -> i64 = twice
     print(str(chosen(21)))
-    print(str(apply((n) -> n + 1, 41)))
+    print(str(apply((value) -> value + 1, 41)))
 ```
 
 ```output
@@ -56,128 +69,158 @@ func main():
 42
 ```
 
-`(n) -> n + 1` is a lambda. Its types come from the function type at the
-place where it is used. A lambda can use its parameters, named functions,
-and file-scope constants. It cannot capture a local variable. Luce has
-function values and lambdas, but not closures.
+`(value) -> value + 1` is a one-expression lambda. Its parameter types come
+from the function-typed place where it lands. Calls through function values
+are positional. Function values have neither equality nor ordering; store a
+separate identifier when a program needs one.
 
-Calls through a function value are positional. Function values do not have
-equality or ordering; use a separate value if the program needs an identity.
+## Capture local state
 
-## Bound methods
-
-A method can become a function value when its receiver is read in a context
-that expects one. The receiver is copied when it is a value-only struct:
+A block closure starts with `func(parameters):`. It may read and write names
+from the surrounding function, and it keeps those captures alive after that
+scope returns:
 
 ```luce run
-struct Scale:
-    factor: i64
-
-    func times(n: i64) -> i64:
-        return n * self.factor
-
-func apply(f: func(i64) -> i64, value: i64) -> i64:
-    return f(value)
+func make_adder(start: i64) -> func(i64) -> i64:
+    var total = start
+    let advance: func(i64) -> i64 = func(amount):
+        total += amount
+        return total
+    return advance
 
 func main():
-    let doubling = Scale(factor = 2)
-    let tripling = Scale(factor = 3)
-    print(str(apply(doubling.times, 21)))
-    print(str(apply(tripling.times, 21)))
+    let add: func(i64) -> i64 = make_adder(10)
+    print(str(add(2)))
+    print(str(add(5)))
 ```
 
 ```output
+12
+17
+```
+
+An immutable captured value is retained in the closure environment. A
+captured `var` becomes one shared cell: writes in the original scope and in
+every closure that captures it observe the same value. Different calls to a
+factory receive independent environments.
+
+A block closure may contain ordinary statements, control flow, `try`, and
+multiple returns. It can return no value, one value, or a multi-value result
+just like a named function.
+
+The indentation grammar has one useful boundary: an indented closure body
+cannot begin inside another call's parentheses. Bind the closure first, then
+pass it, or return it directly from an ordinary block.
+
+## Capture lists {#capture-lists}
+
+Captures are strong and shared by default. A capture list immediately before
+`func` requests a different rule for a particular name.
+
+`name = expression` evaluates once and captures a snapshot:
+
+```luce run
+func main():
+    var number = 1
+    let read: func() -> i64 = [saved = number] func():
+        return saved
+    number = 42
+    print(str(read()))
+    print(str(number))
+```
+
+```output
+1
 42
-63
 ```
 
-The receiver snapshot is independent of a later change to the original:
+`weak name` captures a class or other weak-capable reference without keeping
+it alive. The captured name is optional inside the closure:
 
 ```luce run
-struct Scale:
-    factor: i64
+class Item:
+    value: i64
 
-    func times(n: i64) -> i64:
-        return n * self.factor
-
-func main():
-    var scale = Scale(factor = 2)
-    let doubling: func(i64) -> i64 = scale.times
-    scale.factor = 100
-    print(str(doubling(3)))
-    print(str(scale.times(3)))
-```
-
-```output
-6
-300
-```
-
-When the receiver contains a container, the receiver's value copy still
-refers to that container. Current bound values do not retain that reference,
-so the original receiver must remain alive for as long as the function value:
-
-```luce run
-struct Bag:
-    items: list[i64]
-
-    func at(i: i64) -> i64:
-        return self.items[i]
+func make_reader(item: Item) -> func() -> i64:
+    return [weak item] func():
+        let live = item else Item(value = 0)
+        return live.value
 
 func main():
-    var bag = Bag(items = [7, 8])
-    let read: func(i64) -> i64 = bag.at
-    print(str(read(0)))
-    bag.items.append(99)
-    print(str(read(2)))
+    var read: (func() -> i64)? = none
+    if true:
+        let item = Item(value = 7)
+        read = make_reader(item)
+        print(str(read()))
+    let call = read else () -> -1
+    print(str(call()))
 ```
 
 ```output
 7
-99
+0
 ```
 
-The bound value does not own the receiver's objects. Keep the receiver
-alive for as long as the bound value may be called.
+Use a weak capture for the back-edge of a cycle—for example, when an object
+stores a callback that otherwise captures that object strongly. There is no
+unsafe dangling or `unowned` capture.
 
-## Storing a function value
+## Bound methods
 
-Function types have no zero value, so an optional is the storable form when
-a slot may be empty. Parentheses distinguish an optional function from a
-function whose result is optional: `(func(i64) -> i64)?` versus
-`func(i64) -> i64?`.
+Reading `value.method` into a matching function-typed place binds its receiver.
+A structure receiver is copied as a snapshot. A class receiver retains and
+shares the same identity:
 
 ```luce run
 struct Scale:
     factor: i64
 
-    func times(n: i64) -> i64:
-        return n * self.factor
+    func times(value: i64) -> i64:
+        return value * self.factor
 
-struct Step:
-    name: str
-    action: (func(i64) -> i64)?
+class Counter:
+    value: i64
+
+    func current() -> i64:
+        return self.value
 
 func main():
-    let three = Scale(factor = 3)
-    let steps = [
-        Step(name = "triple", action = three.times),
-        Step(name = "nothing", action = none),
-    ]
-    for step in steps:
-        let action = step.action
-        if action != none:
-            print(step.name + " " + str(action(7)))
-        else:
-            print(step.name)
+    var scale = Scale(factor = 2)
+    let double: func(i64) -> i64 = scale.times
+    scale.factor = 100
+
+    let counter = Counter(value = 1)
+    let read: func() -> i64 = counter.current
+    counter.value = 42
+
+    print(str(double(3)))
+    print(str(read()))
 ```
 
 ```output
-triple 21
-nothing
+6
+42
 ```
 
-An optional function is narrowed in the same way as any other optional.
+The function value owns its bound receiver. Reference fields in a structure
+snapshot remain shared and retained; a class-bound method can outlive the
+binding it came from.
 
-Continue with [Enumerations](/guide/enums/). Structures and their methods
-have their own chapter: [Structures and Methods](/guide/structures/).
+## Store and compose closures
+
+Function values—including closures with different captured environments—can
+be returned, placed in optional fields, and stored in lists, maps, and arrays.
+A function type has no zero value, so an optional is useful for an initially
+empty slot: `(func(i64) -> i64)?`.
+
+Parentheses matter. `(func(i64) -> i64)?` is an optional function;
+`func(i64) -> i64?` is a present function whose result may be absent.
+
+Closures are ARC references internally. A stored closure retains its strong
+captures, and releasing the last function value releases its environment.
+Workers do not accept a function value or a graph containing one; create and
+use worker-local closures inside the worker instead.
+
+Continue with [Enumerations](/guide/enums/). The exact forms are in [Function
+values](/guide/reference/types/#function) and [Function values and
+closures](/guide/reference/expressions/#function-values-and-lambdas).

@@ -664,7 +664,7 @@ pub const Machine = struct {
         return self.host orelse return self.runtime.fail(.host_unavailable);
     }
 
-    /// The `list(string)` `main`'s parameter receives (MEMORY.md
+    /// The `list[str]` `main`'s parameter receives (MEMORY.md
     /// S44).
     ///
     /// A host with no arguments to offer — including no host at all —
@@ -965,7 +965,7 @@ pub const Machine = struct {
 
     pub fn execute(self: *Machine, entry: u32) error{OutOfMemory}!CallOutcome {
         if (self.materializeConstants()) |failed| return failed;
-        // `func main(args: list(string)):` receives the command line;
+        // `func main(args: list[str]):` receives the command line;
         // `func main():` receives nothing, and those are the only two
         // shapes stage 4 lets through (docs/LANGUAGE.md).  The list is
         // built the same way the compiled arm builds it — `libluce_rt`
@@ -1389,7 +1389,7 @@ pub const Machine = struct {
     // library deliberately does not know.  Compiled code resolves both
     // at compile time instead.
 
-    /// `new list(T)` / `new map(K, V)` / `new array(T, ...)` / `new
+    /// `new list[T]` / `new map[K, V]` / `new array[T, ...]` / `new
     /// builder`: read the shape from the program's heap-type table and
     /// ask the runtime for the object.
     pub fn allocateObject(
@@ -1424,16 +1424,16 @@ pub const Machine = struct {
     }
 
     /// The `Value` a map key travels as, read out of the register that
-    /// holds it: an enum key widens to the integer a `long` key would be
-    /// (`mir.mapKeyStorage`), and every other key is already it.
+    /// holds it. Integers keep their explicit width and an enum uses its
+    /// backing width (`mir.mapKeyStorage`).
     ///
     /// This is the whole of what enum keys cost the engines, and it is
     /// why `libluce_rt` hashes and compares exactly two payloads
     /// (docs/ENUMS.md, As built 2026-08-12).  The compiled path says
     /// the same thing as a `sext`/`zext` into the box it fills.
     ///
-    /// A subscript that is not a key — a list index, an array's axes —
-    /// is a `long` already, so this is the identity there and every
+    /// A subscript that is not a key—a list index or array axis—is
+    /// `i64` already, so this is the identity there and every
     /// indexing door can go through it without asking what it indexes.
     fn storedKey(self: *const Machine, site: Site, held: RuntimeValue, register: Register) RuntimeValue {
         const written = self.program.functions[site.function].result_types[register];
@@ -1441,10 +1441,9 @@ pub const Machine = struct {
         return held;
     }
 
-    /// A key read back out of a map, at the type the program keys by:
-    /// the narrowing that undoes `storedKey`, exact because the widening
-    /// was.  The compiled path does the same truncation when it unboxes
-    /// the answer at the register's own width.
+    /// A key read back out of a map at the exact type the program keys by.
+    /// Storage preserved that width, so both execution paths return it
+    /// without a representation change.
     fn keyOfStored(self: *const Machine, site: Site, held: RuntimeValue) RuntimeValue {
         const written = self.program.functions[site.function].result_types[site.instruction];
         _ = written;
@@ -1679,11 +1678,6 @@ pub const Machine = struct {
             .floor => return operators.floor(registers[arguments[0]]),
             .ceil => return operators.ceil(registers[arguments[0]]),
             .trunc => return operators.truncate(registers[arguments[0]]),
-            .compare_i64_f64 => return .ofBoolean(operators.compareI64F64(
-                @enumFromInt(registers[arguments[0]].asI64()),
-                registers[arguments[1]].asI64(),
-                registers[arguments[2]].asF64(),
-            )),
             .len => return containers.length(&self.runtime, registers[arguments[0]]),
             .null_object => return .null_object,
 
@@ -1863,7 +1857,7 @@ pub const Machine = struct {
             },
             .str_value => return text.str(&self.runtime, registers[arguments[0]]),
             .bytes_value => return text.bytes(&self.runtime, registers[arguments[0]]),
-            // `string(f)` — the name out of the program's own function
+            // `str(f)` — the name out of the program's own function
             // table (docs/FUNCTIONS.md D3).  Borrowed, not allocated:
             // the name lives as long as the program does, which is what
             // the compiled path's constant table is too.
@@ -1872,8 +1866,8 @@ pub const Machine = struct {
                     return self.runtime.fail(.null_object);
                 return .ofStr(self.program.functions[bound.named].name);
             },
-            .parse_int => return text.parseInt(&self.runtime, registers[arguments[0]]),
-            .parse_float => return text.parseFloat(&self.runtime, registers[arguments[0]]),
+            .parse_i64 => return text.parseI64(&self.runtime, registers[arguments[0]]),
+            .parse_f64 => return text.parseF64(&self.runtime, registers[arguments[0]]),
             .parse_str => return text.parseStr(&self.runtime, registers[arguments[0]]),
             .chr_code => return text.chr(&self.runtime, registers[arguments[0]].asI64()),
             .ord_text => return text.ord(&self.runtime, registers[arguments[0]]),

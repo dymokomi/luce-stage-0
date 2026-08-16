@@ -2,71 +2,80 @@
 
 Luce uses value semantics for values and automatic reference counting for
 references. The compiler derives retains and releases from types and control
-flow; source code has no ownership operations. The teaching chapter is
-[Memory and ARC](/guide/memory/), and [Status](/status/) tracks future types.
+flow; source code has no ownership operations. [Memory and
+ARC](/guide/memory/) is the teaching chapter.
 
 ## Kinds
 
 ### M1 — value types copy {#m1}
 
-Numbers, `bool`, `char`, `str`, `bytes`, structs, enums, unions, and plain function values
-are value types. Assignment, argument passing, and return copy the value.
+Numbers, `bool`, `char`, `str`, `bytes`, structs, enums, unions, and function
+values are value types. Assignment, argument passing, and return copy the
+value.
 
-A value may contain reference fields. Ordinary current paths copy the value
-while making both copies name the same referenced object.
+A value may contain references. Copying it copies value fields and retains
+reference fields. A copied function value similarly retains its bound receiver
+or captured ARC environment.
 
-### M2 — built-in reference types share {#m2}
+### M2 — reference types share {#m2}
 
-`list[T]`, `map[K, V]`, `array[T, ...]`, `builder`, `file`, and `task(...)` are
-reference types. Assignment and ordinary calls share one runtime object.
-Mutation through one reference is visible through the others. A `let` prevents
-rebinding; it does not make the referenced object immutable.
+Classes, `list[T]`, `map[K, V]`, `array[T, ...]`, `builder`, `file`, and
+`task[...]` are reference types. Assignment and ordinary calls retain and
+share one runtime object. Mutation through one reference is visible through
+the others. A `let` prevents rebinding; it does not freeze the object.
 
-### M3 — class is not a completed reference type {#m3}
+### M3 — classes have identity and deterministic teardown {#m3}
 
-`class` is a front-end scaffold. Current lowering still gives it value-struct
-behavior. The intended class rules are design, not executable language.
+A class reference names one ARC object. `is` compares two values of the same
+nominal class type for identity. A class may declare one `deinit` body. The
+last strong release runs that body exactly once while every field is live,
+then releases the fields and storage.
+
+`deinit` may inspect and mutate fields or call methods. It may not create a new
+strong reference to its dying `self`; compile-time checks reject resurrection
+and the runtime traps damaged MIR with `class_resurrection`.
 
 ### M3a — weak storage observes without owning {#m3a}
 
-`weak var` and `weak` fields hold an optional `list`, `map`, `array`, or
-`builder` without retaining it. They initialize to `none`; weak fields have an
-implicit `none` default. Assignment records a generation-checked handle.
+`weak var`, weak fields, and `[weak name]` closure captures hold an optional
+class, list, map, array, or builder without retaining it. Weak locals start at
+`none`; weak fields have an implicit `none` default. Assignment records a
+generation-checked handle.
 
 Reading a live weak place retains and answers an owned `T?` snapshot. Reading
-after the target's final strong release answers `none`. Reusing the same
-object-table row cannot revive the old handle. Weak storage is a place
-property, not a type, and does not persistently narrow across separate reads.
+after final strong release answers `none`. Reusing an object-table row cannot
+revive the old handle. Weak storage is a place property, not a type, and
+separate reads do not persistently narrow one another.
 
 Weak targets exclude values, value structs, interfaces, function values,
-files, and tasks. A value that contains a weak field has no implicit equality
-or collection-search semantics. Weak handles cannot cross worker runtimes.
+files, and tasks. A value containing a weak field has no implicit equality or
+collection-search semantics. Weak handles cannot cross worker runtimes.
 
 ## ARC operations
 
 ### M4 — creation starts with one strong reference {#m4}
 
-A runtime-created container or resource starts with one strong reference. The
-runtime exposes retain and release operations, and both execution paths can
-execute their MIR instructions.
+A runtime-created container, class, closure environment, interface dispatch
+value, or resource starts with one strong reference. Both execution paths use
+the same runtime retain and release operations through MIR instructions.
 
 ### M5 — every longer-lived reference is retained {#m5}
 
 The compiler retains a reference stored in a binding, parameter, result,
-aggregate field, optional, union, container element, interface witness, or
-bound receiver.
+aggregate field, optional, union, container element, interface witness, bound
+receiver, or closure environment.
 
 ### M6 — every abandoned place is released {#m6}
 
-Old contents release on replacement. Locals release when control leaves them
-through function return, `return`, `break`, `continue`, or recoverable-error
-propagation.
+Old contents release on replacement. Locals and temporaries release when
+control leaves them through fallthrough, function return, `return`, `break`,
+`continue`, or recoverable-error propagation.
 
 ### M7 — the last strong release destroys {#m7}
 
 A zero strong count recursively releases contained references and destroys
-the object. A file closes and an unfinished task joins on that same
-last-release path.
+the object. A class runs `deinit`; a file closes; an unfinished task joins and
+discards an unobserved result; a closure releases every capture.
 
 ### M8 — there are no source ownership operations {#m8}
 
@@ -74,8 +83,8 @@ last-release path.
 retain, release, borrow, move, clone, close, or manual-reference annotation in
 a function signature.
 
-An API constructs an independent value explicitly when it needs one. List
-slices and `map.values()` create a new outer list: value elements copy and
+An API constructs an independent outer object explicitly when it needs one.
+List slices and `map.values()` create a new list: value elements copy and
 reference elements are retained and remain shared. There is no universal
 graph-clone expression.
 
@@ -83,16 +92,17 @@ graph-clone expression.
 
 ### M9 — aggregates follow their field types {#m9}
 
-Structs, union payloads, optionals, multiple-return layouts, and receiver
-layouts are values. Their value fields copy and their reference fields share.
-The release walk releases each reference field exactly once.
+Structs, union payloads, optionals, multiple-return layouts, receiver layouts,
+and class storage retain every reference field and copy every value field as
+their own kind requires. A teardown walk releases each owned reference exactly
+once.
 
 ### M10 — errors release the path they leave {#m10}
 
-`try` must release abandoned locals before propagating a recoverable error. A
+`try` releases abandoned locals before propagating a recoverable error. A
 handled `catch` releases the failed result before its handler runs. Mutations
 already performed through a shared reference remain; error handling is not a
-transaction.
+transaction. Class `deinit` bodies run as the final releases unwind.
 
 A final trap does not promise normal stack cleanup. It ends the run and is
 accounted separately by the harness.
@@ -101,28 +111,34 @@ accounted separately by the harness.
 
 A file-scope constant list, map, or rank-one array is materialized once per
 runtime in an immutable program root and reclaimed when the runtime ends. A
-program cannot mutate it directly.
+program cannot mutate it directly or through hidden provenance.
 
 ## Interfaces and function values
 
-### M12 — interface dispatch retains carrying receivers {#m12}
+### M12 — interface dispatch owns its receiver {#m12}
 
-The current interface layout stores one bound function per method. A
-value-only concrete receiver is self-contained. Each dispatch value owns its
-copied receiver and retains any references that receiver carries, so a stored
-or returned interface may outlive the concrete binding that formed it.
+The current interface layout stores one bound function per required method. A
+structure conformer is copied into each bound receiver and its reference
+fields are retained. A class conformer retains the shared class identity, so a
+mutable class witness changes the same object every alias observes.
 
-The planned owned existential replaces this representation with one payload,
-metadata, and witness table.
+A stored or returned interface may outlive the concrete binding that formed
+it. The planned one-payload existential replaces repeated receiver state with
+one owned payload, metadata, and witness table; it does not change this
+lifetime rule.
 
-### M13 — bound methods own their receiver snapshot {#m13}
+### M13 — bound methods and closures own their environments {#m13}
 
-Reading `receiver.method` into a compatible function place copies the value
-receiver. Later writes to the original value fields do not change the bound
-snapshot. Reference fields still name the same objects and the bound value
-retains them until it is destroyed.
+Reading `receiver.method` into a compatible function place copies a structure
+receiver or retains a class receiver. Reference fields in a structure snapshot
+remain shared and retained. Later value-field writes do not change a structure
+snapshot; later class mutation is visible through the bound method.
 
-Capture-free lambdas hold no enclosing-local environment.
+An expression lambda has no environment. A block closure owns an ARC
+environment. Immutable captures are retained snapshots; captured mutable
+locals share one promoted cell with the declaring scope and sibling closures.
+Snapshot capture-list expressions evaluate once at creation. Weak captures use
+M3a. Releasing the last function value releases the environment.
 
 ## Workers and resources
 
@@ -130,8 +146,9 @@ Capture-free lambdas hold no enclosing-local environment.
 
 Each worker has its own runtime. Values copy directly; permitted container
 graphs are rebuilt recursively in the receiving runtime. The source and
-destination share no object identity. A graph carrying a `file`, `task`,
-function value, or weak field is refused as an argument or result.
+destination share no object identity. A graph carrying a class, `file`,
+`task`, function value, interface, or weak field is refused as an argument or
+result. A worker may construct and use those values locally.
 
 The copier preserves aliases within one graph and across separate argument
 roots. The caller keeps an independently mutable source graph. Allocation or
@@ -144,14 +161,17 @@ an unfinished worker and discards its unobserved result.
 ## Implementation evidence
 
 - Every successful differential specification requires zero live objects.
-- File and ZIP lifecycle programs run on both engines with exact close
-  behavior; unfinished tasks join at their last release.
-- Bound methods and interface witnesses retain receiver references.
+- Class aliases, identity, nested mutation, interfaces, weak edges, errors,
+  `deinit`, and resurrection refusals agree on both engines.
+- Closure environments, shared cells, snapshot and weak captures, nested
+  closures, storage, bound receivers, and error paths agree on both engines.
+- File and ZIP lifecycle programs close exactly once; unfinished tasks join at
+  their last release.
 - List slices, `map.values()`, and array fill retain reference elements.
 - Worker snapshots preserve aliases and cycles, leave the caller graph alive,
   and roll failed copies back.
-- Weak storage breaks recursive struct/container cycles, upgrades live reads,
-  zeroes after final release, and cannot revive on object-table reuse.
+- Weak storage upgrades live reads, zeroes after final release, and cannot
+  revive on object-table reuse.
 - The damaged-module corpus rejects or cleanly runs every mutation without a
   host-language panic.
 

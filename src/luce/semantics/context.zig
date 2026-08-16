@@ -65,8 +65,8 @@ pub const double_range_message =
 /// The sentence for a literal that did not fit the type it landed on.
 ///
 /// **Exhaustive on purpose.**  This used to end in an `else` that
-/// answered `long`, which is why a literal past a `byte` was once told
-/// about `long`'s range and a `half` literal was called an integer.
+/// answered `i64`, which is why a literal past a `u8` was once told
+/// about `i64`'s range and a `f16` literal was called an integer.
 /// Every width names its own range and the next rung up, and the two
 /// at the top of their ladders name no rung because there is none.
 pub fn rangeMessage(landed: Type) []const u8 {
@@ -86,7 +86,7 @@ pub fn rangeMessage(landed: Type) []const u8 {
 /// The scalar type a literal going into `expected` lands on, or null
 /// when the place names no scalar width (docs/TYPES.md D3).  Both the
 /// ordinary lowerer and the constant folder ask this one question so
-/// `byte?` and `half?` look through their optional layer identically.
+/// `u8?` and `f16?` look through their optional layer identically.
 pub fn literalLandingType(expected: Type) ?Type {
     return switch (expected) {
         .u8, .u16, .u32, .u64, .i8, .i16, .i32, .i64, .f16, .f32, .f64 => expected,
@@ -114,13 +114,10 @@ pub fn literalLandingType(expected: Type) ?Type {
 /// appends one more `{s}` of advice when one side is an optional; the
 /// sentence up to there is the same.
 ///
-/// **The sentence ends with a fact, not with advice.**  It used to
-/// offer "conversions are explicit, so write long(...) or double(...)",
-/// because `long` against `double` was the one mismatch a constructor
-/// could repair.  It is not a mismatch any more — `long` widens to
-/// `double` on its own (docs/NUMERICS.md) — so every pair that still
-/// reaches this message genuinely has nothing to convert between, and
-/// the tail says exactly that.
+/// **The sentence ends with a fact, not generic advice.** Concrete numeric
+/// mismatches are handled earlier with the exact destination constructor.
+/// Every pair that reaches this fallback genuinely has no conversion, so the
+/// tail says exactly that.
 pub const mismatched_operands_message =
     "operands of {s} are {s} and {s}, and there is no conversion between them";
 
@@ -226,37 +223,67 @@ pub const reserved_names = [_][]const u8{
     // builtin table that dispatches them. Container names deliberately
     // are not callable reservations: `files.list` is an ordinary and
     // useful function name.
-    "range",                 "None",
-    "abs",                   "min",
-    "max",                   "clamp",
-    "sqrt",                  "floor",
-    "ceil",                  "trunc",
-    "len",                   "byte_at",
-    "assert",                "trap",
-    "parse_int",             "parse_float",
-    "append",                "pop",
-    "insert",                "remove",
-    "has",                   "dim",
-    "print",                 "file_read",
-    "file_write",            "path_kind",
-    "key_read",              "key_text",
-    "error",                 "read_line",
-    "print_error",           "clock_ms",
-    "sleep_ms",              "env",
-    "file_append",           "file_delete",
-    "file_rename",           "dir_list",
-    "term_rows",             "term_cols",
-    "term_clear",            "term_move",
-    "term_style",            "term_write",
-    "term_flush",            "exit",
-    "os_total_memory",       "os_available_memory",
-    "os_cpu_count",          "file_open",
-    "parse_str",             "shell_run",
-    "term_event_data",       "dir_create",
-    "epoch_ms",              "gpu_backend",
-    "ui_window_open",        "ui_window_surface",
-    "gpu_surface_size",      "gpu_surface_clear",
-    "gpu_surface_fill_rect", "gpu_surface_present",
+    "range",
+    "abs",
+    "min",
+    "max",
+    "clamp",
+    "sqrt",
+    "floor",
+    "ceil",
+    "trunc",
+    "len",
+    "byte_at",
+    "assert",
+    "trap",
+    "parse_i64",
+    "parse_f64",
+    "append",
+    "pop",
+    "insert",
+    "remove",
+    "has",
+    "dim",
+    "print",
+    "file_read",
+    "file_write",
+    "path_kind",
+    "key_read",
+    "key_text",
+    "error",
+    "read_line",
+    "print_error",
+    "clock_ms",
+    "sleep_ms",
+    "env",
+    "file_append",
+    "file_delete",
+    "file_rename",
+    "dir_list",
+    "term_rows",
+    "term_cols",
+    "term_clear",
+    "term_move",
+    "term_style",
+    "term_write",
+    "term_flush",
+    "exit",
+    "os_total_memory",
+    "os_available_memory",
+    "os_cpu_count",
+    "file_open",
+    "parse_str",
+    "shell_run",
+    "term_event_data",
+    "dir_create",
+    "epoch_ms",
+    "gpu_backend",
+    "ui_window_open",
+    "ui_window_surface",
+    "gpu_surface_size",
+    "gpu_surface_clear",
+    "gpu_surface_fill_rect",
+    "gpu_surface_present",
 };
 
 pub fn isReserved(name: []const u8) bool {
@@ -376,7 +403,7 @@ pub const FunctionDeclInfo = struct {
     channel: []Type = &.{},
     /// The one type that travels in the value channel.  For a return
     /// shape it is the compiler-synthesized struct the values ride in
-    /// (`(long, long)`), which is why nothing below stage 4 grows a case
+    /// (`(i64, i64)`), which is why nothing below stage 4 grows a case
     /// for multiple results: there is one value, as there always was.
     return_type: Type,
     /// Written `-> T!` or `-> !`: every call site must say `try` or
@@ -540,7 +567,7 @@ pub const ConstantValue = union(enum) {
     container: u32,
     /// `none`, folded where something said what it is absent *of* — a
     /// `T?` annotation on the declaration is such a place, so
-    /// `const x: long? = none` folds (docs/ARGS.md D9).  It carries
+    /// `const x: i64? = none` folds (docs/ARGS.md D9).  It carries
     /// nothing; the constant's type says all there is.
     absent,
 };

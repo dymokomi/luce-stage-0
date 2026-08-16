@@ -65,7 +65,7 @@ there is, and checks that every language word it actually uses has a class.
 | `storage.modifier.luce` | `private`, `public`, `static` — visibility and namespace markers |
 | `variable.language.luce` | `self`, the receiver supplied by the language |
 | `constant.language.luce` | `true`, `false`, `none` |
-| `support.type.luce` | the builtin type names, plus `None` |
+| `support.type.luce` | the builtin type names |
 | `entity.name.type.luce` | every other capitalised name — the convention the language enforces for structs |
 | `support.function.builtin.luce` | the pure free builtins, plus `range` |
 | `support.function.builtin.host.luce` | the host-gated builtins, which need `allow_host` |

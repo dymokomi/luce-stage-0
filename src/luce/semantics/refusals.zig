@@ -22,7 +22,6 @@ const types = @import("../support/types.zig");
 const helpers = @import("helpers.zig");
 const builtins_mod = @import("builtins.zig");
 const builtins = builtins_mod.builtins;
-const retired_builtins = builtins_mod.retired_builtins;
 const context = @import("context.zig");
 const Error = context.Error;
 const Span = source_mod.Span;
@@ -368,27 +367,6 @@ pub fn forgetName(self: *FunctionBuilder, name: []const u8) Error!void {
 /// closest function or struct the reader could have meant.
 pub fn failUnknownFunction(self: *FunctionBuilder, written: []const u8, span: Span) Error!void {
     if (try failCapturedName(self, written, span)) return;
-    // A name the language used to spell is not a typo, and the
-    // reader is owed the replacement rather than a guess at what
-    // they might have meant.  Reached only once nothing else
-    // resolved, because `arg` is an ordinary word now and a program
-    // that declares one gets its own.
-    for (retired_builtins) |gone| {
-        if (!std.mem.eql(u8, written, gone.name)) continue;
-        try self.fail("luce.sema.retired", span, "{s} was retired: {s}", .{ gone.name, gone.instead });
-        return;
-    }
-    // A retired conversion spelling receives the same direct migration
-    // answer as that spelling in a type annotation.
-    if (types.retiredSpelling(written)) |now| {
-        try self.fail(
-            "luce.sema.type.retired",
-            span,
-            "{s} is retired; write {s}",
-            .{ written, now },
-        );
-        return;
-    }
     var suggestion = helpers.Suggestion.init(written);
     var functions = self.analyzer.function_names.iterator();
     while (functions.next()) |entry| {
@@ -495,10 +473,9 @@ pub fn absenceAdvice(self: *FunctionBuilder, of: Type, from: ?*const ast.Express
 /// extra when there is nothing extra to say.
 pub fn narrowingAdvice(self: *FunctionBuilder, expected: Type, actual: Type) Error![]const u8 {
     if (!expected.isNumeric() or !actual.isNumeric()) return "";
-    if (actual.widensTo(expected)) return "";
     return std.fmt.allocPrint(
         self.arena(),
-        "; narrowing is never implicit — write {s}(…)",
+        "; numeric conversion is never implicit — write {s}(…)",
         .{try self.analyzer.typeName(expected)},
     );
 }
@@ -521,7 +498,7 @@ pub fn mismatchAdvice(
 /// The name behind an expression that is a `T?` the flow analysis
 /// has already proved present — so a second test, or a fallback,
 /// is dead code the reader should be told about rather than left
-/// to wonder at "long is always there".
+/// to wonder at "i64 is always there".
 pub fn narrowedName(self: *FunctionBuilder, expression: *const ast.Expression) ?[]const u8 {
     if (expression.* != .name) return null;
     const found = self.findLocal(expression.name.text) orelse return null;
@@ -638,7 +615,7 @@ pub fn failIncomparable(
 /// Both look with `==`, so they are `failIncomparable`'s question in
 /// another spelling and they must refuse exactly what it refuses —
 /// which is what stopped being true when the test asked the element's
-/// own tag: a `list(Button)` whose `Button` holds a function value
+/// own tag: a `list[Button]` whose `Button` holds a function value
 /// slipped through into the runtime's comparator, which has no
 /// sentence to say.  The sentence names the element, what it reaches,
 /// and the one move that works: search something that does compare.

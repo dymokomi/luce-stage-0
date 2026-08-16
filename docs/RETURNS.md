@@ -25,14 +25,14 @@ A return shape is a parenthesized, comma-separated list of **two or more**
 types after `->`:
 
 ```text
-func divmod(a: long, b: long) -> (long, long):
-    return a / b, a % b
+func divmod(a: i64, b: i64) -> (i64, i64):
+    return a // b, a % b
 ```
 
 Each element is an ordinary type, so a `T?` element is fine:
 
 ```text
-func lookup(m: map(string, long), k: string) -> (long?, bool):
+func lookup(m: map[str, i64], k: str) -> (i64?, bool):
     if m.has(k):
         return m.get(k), true
     return none, false
@@ -45,13 +45,13 @@ return shape; and it cannot take a `?`.
 
 | written | refused because |
 |---|---|
-| `let p: (long, long) = …` | a return shape is not a type: a pair that travels together is a `struct` |
-| `func f(p: (long, long)):` | the same |
-| `-> ((long, long), long)` | return shapes do not nest |
-| `-> (long, long)?` | `?` marks a value that may be absent, and a return shape is not a value |
+| `let p: (i64, i64) = …` | a return shape is not a type: a pair that travels together is a `struct` |
+| `func f(p: (i64, i64)):` | the same |
+| `-> ((i64, i64), i64)` | return shapes do not nest |
+| `-> (i64, i64)?` | `?` marks a value that may be absent, and a return shape is not a value |
 
 A pair that travels together is a `struct`. A parenthesized single type
-is just that type (`-> (long)` is `-> long`), because parentheses group
+is just that type (`-> (i64)` is `-> i64`), because parentheses group
 a type wherever one stands.
 
 ## Returning
@@ -60,7 +60,7 @@ a type wherever one stands.
 declaration:
 
 ```text
-func bounds(xs: list(long)) -> (long, long):
+func bounds(xs: list[i64]) -> (i64, i64):
     return xs[0], xs[len(xs) - 1]
 ```
 
@@ -70,7 +70,7 @@ expression, so it cannot stand as the operand of `return`. Bind the
 values and return them:
 
 ```text
-func widest(xs: array(double, _)) -> (double, double):
+func widest(xs: array[f64, _]) -> (f64, f64):
     let low, high = minmax(xs)
     return low, high
 ```
@@ -93,7 +93,7 @@ var row, column = grid_find(target)
 **One keyword governs the whole bind.** `let a, b` makes both immutable;
 `var a, b` makes both reassignable. `let a, var b = f()` is refused. The
 names take their types from the call, so per-name annotations
-(`let a: long, b: long = …`) are refused: the one place a return shape is
+(`let a: i64, b: i64 = …`) are refused: the one place a return shape is
 written is the signature.
 
 ### Parallel assignment to existing names
@@ -153,8 +153,8 @@ func main() -> !:
 Parallel assignment composes the same way:
 
 ```text
-var a: long = 0
-var b: long = 0
+var a: i64 = 0
+var b: i64 = 0
 a, b = try read_pair("bounds.txt")
 ```
 
@@ -171,7 +171,7 @@ reseed_from("seed.txt") catch:
 ## Memory
 
 `return a, b` needs no memory rule of its own. Each value travels the way
-its type does: a value type — a scalar, `string`, a `struct`, an `enum` —
+its type does: a value type — a scalar, `str`, a `struct`, an `enum` —
 is copied into the caller; a reference type — a `list`, `map`, `array`,
 `builder`, `file`, or `task` — is handed back as a shared
 reference. A destructuring bind gives each name its value. ARC frees each

@@ -16,7 +16,7 @@ func main(args: list[str]):
     for name in args:
         print(f"  {name}")
 
-    let count = parse_int(args[0]) else 1
+    let count = parse_i64(args[0]) else 1
     for i in range(0, count):
         print(args[1])
 ```

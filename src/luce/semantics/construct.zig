@@ -384,13 +384,13 @@ pub fn lowerVariantConstruct(
     };
 }
 
-/// `int(x)`, `long(x)`, `float(x)`, `double(x)`, `string(x)` — the
+/// `i32(x)`, `i64(x)`, `f32(x)`, `f64(x)`, `str(x)` — the
 /// conversion constructors, each named for the type it produces
 /// (docs/TYPES.md §3).  They are matched by name here, before
 /// name resolution, which is why they are not in the builtin
-/// table and why `string` is a reserved name.
+/// table and why `str` is a reserved name.
 ///
-/// `string(x)` takes scalar values, enums, and function values.  A
+/// `str(x)` takes scalar values, enums, and function values.  A
 /// `builder` is a heap object and its text comes out through
 /// `b.build()`, which is the method it should always have had.
 /// `Method(n)` — the number→enum direction, which answers
@@ -403,10 +403,10 @@ pub fn lowerVariantConstruct(
 /// `else` or narrows, like every other absence.
 ///
 /// The lowering is the same compare-and-branch tree `match` is: one
-/// equality per member against the number widened to `long`, each
+/// equality per member against the number at its checked input type, each
 /// answering the member it matched, and absence where none did.
 /// Nothing is narrowed and nothing traps, which is what lets a
-/// `byte`-backed enum be asked about a number no `byte` could hold.
+/// `u8`-backed enum be asked about a number no `u8` could hold.
 pub fn lowerEnumOfNumber(
     self: *FunctionBuilder,
     written_name: []const u8,
@@ -466,8 +466,8 @@ pub fn lowerEnumOfNumber(
     return .{
         // `Method(n)` is the other half of the `.enum_name` pair
         // (nodes.ResolvedCallee): same chain, same reload, told
-        // apart by the result type.  The operand is the written
-        // number, post-widening.
+        // apart by the result type. The operand already has the enum's
+        // exact backing type.
         .node = try recorder.recordCallNode(
             self,
             .{ .enum_name = enum_index },
@@ -488,7 +488,7 @@ pub fn lowerConvert(self: *FunctionBuilder, call: ast.Call) Error!?Typed {
 /// A scalar alias used in constructor position.  The written alias stays in
 /// diagnostics, while conversion semantics are selected by the resolved
 /// target.  This is the expression-side half of alias transparency:
-/// `alias Id = long; Id(value)` behaves exactly like `long(value)`.
+/// `alias Id = i64; Id(value)` behaves exactly like `i64(value)`.
 pub fn lowerAliasConvert(self: *FunctionBuilder, call: ast.Call, target: Type) Error!?Typed {
     const produces: types.Builtin = switch (target) {
         .u8 => .u8,
@@ -518,13 +518,11 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
         try self.fail("luce.sema.convert", call.span, "{s}(value) takes one argument", .{call.callee});
         return null;
     }
-    // **A constructor is a written-down type, so its argument lands
-    // on it.**  Without this `double(0.1)` reads `0.1` at binary32
-    // and then widens the wrong number, which is the same
-    // double-rounding a `list(double)` literal would have had — and
-    // `long(3000000000)` would be refused for not fitting an `int`
-    // that nobody wrote.  A literal has no type until it meets one
-    // (docs/TYPES.md §1), and here it meets the constructor's.
+    // **A constructor is a written-down type, so its literal argument
+    // lands on it.** `f64(0.1)` reads the literal directly as binary64,
+    // and `i64(3000000000)` is checked as i64. A literal has no type
+    // until it meets one (docs/TYPES.md §1), and here it meets the
+    // constructor's.
     self.wanted = switch (produces) {
         .u8 => .u8,
         .u16 => .u16,
@@ -542,8 +540,8 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
     };
     const value = (try self.lowerExpression(call.arguments[0].value, false)) orelse return null;
     // **A conversion accepts an enum exactly because it is named
-    // for what it produces** (docs/ENUMS.md D4): `int(m)` is the
-    // member's number, and `string(m)` is the member's *name* —
+    // for what it produces** (docs/ENUMS.md D4): `i32(m)` is the
+    // member's number, and `str(m)` is the member's *name* —
     // which is a different act from printing a number, and the one
     // an f-string hole performs for a reader who wrote none.
     if (value.value_type == .enumeration) {
@@ -551,7 +549,7 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
         if (produces == .char or produces == .bytes) return failConvert(self, call, value, produces);
         return lowerEnumToNumber(self, call, value, produces);
     }
-    // `string(u)` is the member's **name**, by the enum mechanism
+    // `str(u)` is the member's **name**, by the enum mechanism
     // unchanged (docs/UNION.md D16) — and the payload is never
     // formatted: that is a formatting protocol, which is a
     // different feature, refused here by being absent.
@@ -559,7 +557,7 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
         if (produces == .str) return lowerVariantName(self, value, call.span);
         return failConvert(self, call, value, produces);
     }
-    // `string(f)` is the function's **name** (docs/FUNCTIONS.md
+    // `str(f)` is the function's **name** (docs/FUNCTIONS.md
     // D3) — the enum arm above, one type later, and the same act:
     // a value that is a number underneath answers with the word it
     // stands for.  Recorded as the `function_name` intrinsic it
@@ -623,7 +621,7 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
     }
     if (produces == .str) {
         switch (value.value_type) {
-            // The identity: `string(s)` emits nothing and answers
+            // The identity: `str(s)` emits nothing and answers
             // the operand whole, node included — no call node, so
             // `nodes.provenance` never claims fresh bytes an
             // identity does not make (the section comment above).
@@ -663,9 +661,9 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
     }
     // Every other constructor is named for a numeric type and
     // produces it, from any number: one rule, and it needs no arm
-    // per pair (docs/TYPES.md §3).  `long(x)` where `x` is already
-    // a `long` is the identity — the constructors are how you
-    // widen without an operator to hang it on, so a redundant one
+    // per pair (docs/TYPES.md §3).  `i64(x)` where `x` is already
+    // an `i64` is the identity — constructors explicitly change numeric
+    // representation, so a redundant one
     // is not a mistake to report.
     const target: Type = switch (produces) {
         .u8 => .u8,
@@ -703,15 +701,14 @@ fn lowerConvertAs(self: *FunctionBuilder, call: ast.Call, produces: types.Builti
     };
 }
 
-/// `int(m)`, `long(m)`, `byte(m)` — the member's number, at the
+/// `i32(m)`, `i64(m)`, `u8(m)` — the member's number, at the
 /// width the constructor names (docs/ENUMS.md D4).
 ///
 /// **Every numeric constructor takes an enum, and each behaves
-/// exactly as if the backing width had been written.**  `byte(m)`
-/// traps `conversion_range` where `byte(300)` would; `double(m)`
-/// answers the member's number as a double.  One rule, no table of
-/// pairs — which is the same shape `lowerConvert` already gives the
-/// seven numeric types (docs/TYPES.md §3).
+/// exactly as if the backing width had been written.**  `u8(m)`
+/// traps `conversion_range` where `u8(300)` would; `f64(m)`
+/// answers the member's number as an f64. One rule, no table of pairs—the
+/// same shape `lowerConvert` gives every numeric type (docs/TYPES.md §3).
 fn lowerEnumToNumber(
     self: *FunctionBuilder,
     call: ast.Call,
@@ -748,7 +745,7 @@ fn lowerEnumToNumber(
     };
 }
 
-/// `string(m)` — the member's name (docs/ENUMS.md D5).
+/// `str(m)` — the member's name (docs/ENUMS.md D5).
 ///
 /// **The name table is the constant pool.**  Every member's name is
 /// interned there once, like every other string a program spells,
@@ -786,7 +783,7 @@ fn lowerEnumName(self: *FunctionBuilder, value: Typed, span: Span) Error!?Typed 
     return .{ .node = node, .value_type = .str };
 }
 
-/// `string(u)` — the member's name (docs/UNION.md D16), by
+/// `str(u)` — the member's name (docs/UNION.md D16), by
 /// `lowerEnumName`'s mechanism unchanged: a compare-and-branch
 /// tree over the tag answering an interned constant, nothing new
 /// in `libluce_rt`.  The tag is the member *index* (D8), so the
@@ -817,20 +814,15 @@ fn lowerVariantName(self: *FunctionBuilder, value: Typed, span: Span) Error!?Typ
     return .{ .node = node, .value_type = .str };
 }
 
-/// One sentence for all three constructors, naming what each takes.
-/// It used to be spelled per constructor as "long() converts double,
-/// not X" — which stopped being true the moment `long(long)` was an
-/// identity and `long` accepted both numeric types.
+/// One sentence for every numeric constructor, naming what each takes.
 fn failConvert(
     self: *FunctionBuilder,
     call: ast.Call,
     value: Typed,
     produces: types.Builtin,
 ) Error!?Typed {
-    // A family, not a list of widths.  There are four arithmetic
-    // types now and there will be seven (docs/TYPES.md §11), and
-    // a message that enumerates them is a message that goes stale
-    // every time the ladder grows a rung.
+    // Name the numeric family rather than duplicating its width roster
+    // in a diagnostic that would otherwise drift as the type set changes.
     const takes: []const u8 = if (produces == .str)
         "a number, a bool, a str, an enum, a union member, or a function value"
     else
@@ -890,11 +882,8 @@ pub fn lowerIntrinsic(
     const operand_expressions = argument_expressions[0..call.arguments.len];
     // **The builtins that answer their operand's own type land
     // their operands where the whole call lands** (docs/TYPES.md
-    // §9).  `let x: double = sqrt(2.0)` otherwise reads `2.0` at
-    // binary32, takes a binary32 square root and widens the wrong
-    // number into a place that said `double` — the same
-    // double-rounding `methodParameters` exists to stop one level
-    // down, and it is silent in exactly the same way.  Every other
+    // §9). `let x: f64 = sqrt(2.0)` therefore reads `2.0` and computes
+    // directly at f64. Every other
     // builtin names its own operand types and takes no landing;
     // the polymorphic landing is one type for every slot, so a
     // reordered name cannot land a literal differently.
@@ -912,8 +901,7 @@ pub fn lowerIntrinsic(
     // Written values land on the slots they resolved to, and a
     // slot nobody filled takes its default from the table — the
     // constant register the written literal would have been
-    // (docs/ARGS.md D2, D10).  A default's node rides its Typed
-    // so a widening below wraps it like any written operand's.
+    // (docs/ARGS.md D2, D10). A default's node carries its exact type.
     const arguments = try self.arena().alloc(Typed, surface.len);
     for (written, slots) |value, slot| arguments[slot] = value;
     for (matched.parameters, seen, 0..) |parameter, given, slot| {
@@ -927,23 +915,18 @@ pub fn lowerIntrinsic(
     switch (matched.kind) {
         .abs => {
             if (!arguments[0].value_type.isNumeric()) return failIntrinsic(self, call, "abs takes a number");
-            arguments[0] = try self.promoted(arguments[0]);
             result = arguments[0].value_type;
         },
         // `min`, `max` and `clamp` require one concrete numeric type. A
         // literal can land on a typed argument; two already-typed values do
         // not convert or unify implicitly.
         .min, .max => {
-            _ = try self.unifyNumeric(&arguments[0], &arguments[1]);
             if (!arguments[0].value_type.isNumeric() or
                 !arguments[0].value_type.eql(arguments[1].value_type))
                 return failIntrinsic(self, call, "min/max take two numbers of the same type");
             result = arguments[0].value_type;
         },
         .clamp => {
-            _ = try self.unifyNumeric(&arguments[0], &arguments[1]);
-            _ = try self.unifyNumeric(&arguments[0], &arguments[2]);
-            _ = try self.unifyNumeric(&arguments[1], &arguments[2]);
             if (!arguments[0].value_type.isNumeric() or
                 !arguments[0].value_type.eql(arguments[1].value_type) or
                 !arguments[0].value_type.eql(arguments[2].value_type))
@@ -953,9 +936,7 @@ pub fn lowerIntrinsic(
         .sqrt, .floor, .ceil, .trunc => {
             // Whichever floating width it was given, and the same one back.
             if (!arguments[0].value_type.isFloating())
-                return failIntrinsic(self, call, "this builtin takes f32 or f64");
-            // The runtime supplies the operation at each supported width.
-            arguments[0] = try self.promoted(arguments[0]);
+                return failIntrinsic(self, call, "this builtin takes f16, f32, or f64");
             result = arguments[0].value_type;
         },
         .len => {
@@ -993,13 +974,13 @@ pub fn lowerIntrinsic(
             }
             result = .i64;
         },
-        .parse_int, .parse_float => {
+        .parse_i64, .parse_f64 => {
             if (arguments[0].value_type != .str)
                 return failIntrinsic(self, call, "this builtin parses a str");
             // "Not a number" is the same reason every time and the
             // name already implies it, so the answer is absence
             // rather than a trap (docs/FAILURE.md).
-            result = if (matched.kind == .parse_int)
+            result = if (matched.kind == .parse_i64)
                 .{ .optional = .i64 }
             else
                 .{ .optional = .f64 };
@@ -1027,12 +1008,11 @@ pub fn lowerIntrinsic(
         .copy_object,
         .null_object,
         // Emitted by a mixed comparison; there is no name for it.
-        .compare_i64_f64,
-        // Emitted by `string(x)` and by `builder.build()`, both of
+        // Emitted by `str(x)` and by `builder.build()`, both of
         // which are resolved before this table is consulted.
         .str_value,
         .bytes_value,
-        // The same, one type later: `string(f)` on a function value
+        // The same, one type later: `str(f)` on a function value
         // (docs/FUNCTIONS.md D3).
         .function_name,
         .none_value,
@@ -1122,8 +1102,8 @@ pub fn lowerIntrinsic(
         },
         .ui_window_open => {
             if (arguments[0].value_type != .str or
-                !try self.widensInto(&arguments[1], .i64) or
-                !try self.widensInto(&arguments[2], .i64))
+                !arguments[1].value_type.eql(.i64) or
+                !arguments[2].value_type.eql(.i64))
                 return failIntrinsic(self, call, "ui_window_open takes (title str, width i64, height i64)");
             result = try resolve.internHeapType(self.analyzer, .file);
         },
@@ -1136,17 +1116,17 @@ pub fn lowerIntrinsic(
         .gpu_surface_size => {
             const file_type = try resolve.internHeapType(self.analyzer, .file);
             if (!arguments[0].value_type.eql(file_type) or
-                !try self.widensInto(&arguments[1], .i64))
+                !arguments[1].value_type.eql(.i64))
                 return failIntrinsic(self, call, "gpu_surface_size takes (surface file, axis i64)");
             result = .i64;
         },
         .gpu_surface_clear => {
             const file_type = try resolve.internHeapType(self.analyzer, .file);
             if (!arguments[0].value_type.eql(file_type) or
-                !try self.widensInto(&arguments[1], .i64) or
-                !try self.widensInto(&arguments[2], .i64) or
-                !try self.widensInto(&arguments[3], .i64) or
-                !try self.widensInto(&arguments[4], .i64))
+                !arguments[1].value_type.eql(.i64) or
+                !arguments[2].value_type.eql(.i64) or
+                !arguments[3].value_type.eql(.i64) or
+                !arguments[4].value_type.eql(.i64))
                 return failIntrinsic(self, call, "gpu_surface_clear takes (surface file, red i64, green i64, blue i64, alpha i64)");
             result = .none;
         },
@@ -1155,7 +1135,7 @@ pub fn lowerIntrinsic(
             if (!arguments[0].value_type.eql(file_type))
                 return failIntrinsic(self, call, "gpu_surface_fill_rect takes a surface first");
             inline for (1..9) |index| {
-                if (!try self.widensInto(&arguments[index], .i64))
+                if (!arguments[index].value_type.eql(.i64))
                     return failIntrinsic(self, call, "gpu_surface_fill_rect takes i64 coordinates, dimensions, and colors");
             }
             result = .none;
@@ -1170,7 +1150,7 @@ pub fn lowerIntrinsic(
             result = .i64;
         },
         .term_event_data => {
-            if (!try self.widensInto(&arguments[0], .i64))
+            if (!arguments[0].value_type.eql(.i64))
                 return failIntrinsic(self, call, "term_event_data takes an i64 field");
             result = .i64;
         },
@@ -1178,14 +1158,14 @@ pub fn lowerIntrinsic(
             result = .none;
         },
         .term_move => {
-            if (!try self.widensInto(&arguments[0], .i64) or
-                !try self.widensInto(&arguments[1], .i64))
+            if (!arguments[0].value_type.eql(.i64) or
+                !arguments[1].value_type.eql(.i64))
                 return failIntrinsic(self, call, "term_move takes (row i64, column i64)");
             result = .none;
         },
         .term_style => {
-            if (!try self.widensInto(&arguments[0], .i64) or
-                !try self.widensInto(&arguments[1], .i64) or
+            if (!arguments[0].value_type.eql(.i64) or
+                !arguments[1].value_type.eql(.i64) or
                 arguments[2].value_type != .boolean)
                 return failIntrinsic(self, call, "term_style takes (foreground i64, background i64, bold bool)");
             result = .none;
@@ -1193,7 +1173,7 @@ pub fn lowerIntrinsic(
         .key_read => {
             // A keyboard runs dry — a pipe ends, a terminal
             // closes — and there is nothing there and no reason
-            // worth carrying, which is `string?` and not a name
+            // worth carrying, which is `str?` and not a name
             // in the closed set (docs/FAILURE.md).  The same fact
             // `read_line` already answers `none` for, off the same
             // descriptor.
@@ -1205,7 +1185,7 @@ pub fn lowerIntrinsic(
         .read_line => {
             if (arguments[0].value_type != .str)
                 return failIntrinsic(self, call, "read_line takes a str prompt");
-            // End of input is absence, not failure: `string?`, and
+            // End of input is absence, not failure: `str?`, and
             // `read_line("> ") else ""` is the whole handling
             // (docs/FAILURE.md).
             result = .{ .optional = .str };
@@ -1222,7 +1202,7 @@ pub fn lowerIntrinsic(
         .clock_ms, .epoch_ms => {
             result = .i64;
         },
-        // Bytes, bytes and a count.  `long` and not `int` for the
+        // Bytes, bytes and a count.  `i64` and not `i32` for the
         // same reason `clock_ms` is: a machine with more than two
         // gigabytes of memory overflows the narrow ladder, and a
         // fact nobody can hold is not a fact (docs/TYPES.md).
@@ -1230,12 +1210,12 @@ pub fn lowerIntrinsic(
             result = .i64;
         },
         .sleep_ms => {
-            if (!try self.widensInto(&arguments[0], .i64))
+            if (!arguments[0].value_type.eql(.i64))
                 return failIntrinsic(self, call, "sleep_ms takes an i64 of milliseconds");
             result = .none;
         },
         .exit_program => {
-            if (!try self.widensInto(&arguments[0], .i64))
+            if (!arguments[0].value_type.eql(.i64))
                 return failIntrinsic(self, call, "exit takes an i64 status");
             result = .none;
         },
@@ -1280,7 +1260,7 @@ pub fn lowerIntrinsic(
         .file_open => {
             if (arguments[0].value_type != .str)
                 return failIntrinsic(self, call, "file_open takes (path str, mode i64)");
-            if (!try self.widensInto(&arguments[1], .i64))
+            if (!arguments[1].value_type.eql(.i64))
                 return failIntrinsic(self, call, "file_open takes (path str, mode i64)");
             result = try resolve.internHeapType(self.analyzer, .file);
         },
@@ -1311,8 +1291,8 @@ pub fn lowerIntrinsic(
     }
 
     // The recorded batch: written operands in written order — each
-    // read back off the slot it landed on, so the widenings above
-    // ride along — then the defaulted slots, ascending, as they
+    // read back off the slot it landed on — then the defaulted slots,
+    // ascending, as they
     // were materialized.  `free`'s hidden trailing argument is
     // derived from the operand's own binding and is not an
     // operand.

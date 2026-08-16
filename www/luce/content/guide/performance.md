@@ -58,7 +58,8 @@ explains the trade-off.
 
 ### Keep numeric storage in arrays
 
-`array[T, n]` stores a fixed number of elements with one shape. It is the
+`array[T, _]` stores a fixed-shape sequence whose extent is chosen at
+construction. It is the
 natural input to `std.math` reductions and avoids list growth when the size
 is known. `list[T]` is the flexible choice when elements are added or
 removed. Neither choice changes the language's checked bounds and arithmetic

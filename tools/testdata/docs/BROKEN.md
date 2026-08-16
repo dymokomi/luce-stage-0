@@ -23,14 +23,11 @@ func main():
     assert(n == 1)
 ```
 
-And this one is the language as it was spelled before `docs/TYPES.md`
-D8 made the builtin names lowercase.  It is shown as history, so it is
+This next fence is deliberately illustrative rather than executable. It is
 rendered and never compiled.
 
 ```luce historical
-func main():
-    let n: Int = 1
-    assert(n == 1)
+not a complete Luce program
 ```
 
 And a refusal the compiler still makes, which is a claim of its own.

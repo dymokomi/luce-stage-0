@@ -305,7 +305,7 @@ func to_bytes(s: str) -> list[u8]:
 # The other direction is a **parse**, which is why it answers `str?`
 # and not `str!`: "not UTF-8" is the same reason every time and the
 # name already implies it, so absence carries all the information there
-# is — the `parse_int` precedent (docs/FAILURE.md).  The validator is
+# is — the `parse_i64` precedent (docs/FAILURE.md).  The validator is
 # `libluce_rt`'s, so a compiled program and the test oracle agree
 # u8-for-u8 on what "not text" means.
 func from_bytes(xs: list[u8]) -> str?:

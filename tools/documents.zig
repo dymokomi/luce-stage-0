@@ -3,12 +3,8 @@
 //! A list rather than a directory, because `docs/` holds several kinds
 //! and only one of them is bound by the strict reading.
 //!
-//! It lives in a file of its own because two tools read it and neither
-//! can import the other: `doccheck.zig` imports `luce` to compile the
-//! samples, and `spelling.zig` imports nothing at all and should keep
-//! it that way.  They kept a list each, "meant to be read together",
-//! and they disagreed by one — `docs/README.md` was spell-guarded and
-//! its samples were never compiled.  One declaration, one truth.
+//! It lives in a file of its own so the compiler-backed documentation check
+//! and the catalogue pin share one declaration.
 //!
 //! Paths are relative to the repository root, which is where the build
 //! runs its tests from — the same assumption `tools/grammar.zig`
@@ -16,7 +12,7 @@
 
 /// Current references and working agreements. A reader may paste any
 /// Luce in these documents into a file and have it work today, and their
-/// prose may not spell a retired type name.
+/// prose describes only current behavior.
 pub const living = [_][]const u8{
     "docs/LANGUAGE.md",
     "docs/MEMORY.md",
@@ -29,6 +25,7 @@ pub const living = [_][]const u8{
     "docs/CODING_GUIDE.md",
     "docs/SOFTWARE_DESIGN.md",
     "docs/INTERFACES.md",
+    "docs/CLASSES.md",
     "docs/UX_UI_DESIGN.md",
     "docs/RETURNS.md",
     "docs/NUMERICS.md",
@@ -62,7 +59,6 @@ pub const living = [_][]const u8{
 pub const plans = [_][]const u8{
     "docs/V2.md",
     "docs/ROADMAP.md",
-    "docs/TYPE_MIGRATION.md",
     "docs/GENERICS.md",
     "docs/VECTOR.md",
 };

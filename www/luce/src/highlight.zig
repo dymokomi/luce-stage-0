@@ -50,18 +50,12 @@ pub const verbs = [_][]const u8{ "new", "spawn" };
 /// identifier is highlighted as a type too — that is the convention
 /// the language enforces for structs.
 ///
-/// The compiler's lists are `builtin_table` and `retiredSpelling` in
-/// `support/types.zig`.
+/// The compiler's source of truth is `builtin_table` in `support/types.zig`.
 pub const type_names = [_][]const u8{
     // The language's current lowercase scalar and heap vocabulary.
-    "bool",   "u8",      "u16", "u32",   "u64",     "i8",    "i16",
-    "i32",    "i64",     "f16", "f32",   "f64",     "char",  "str",
-    "bytes",  "list",    "map", "array", "builder", "file",  "task",
-    // Retired spellings remain highlighted because the compiler gives
-    // each one a targeted replacement diagnostic.
-    "byte",   "short",   "int", "long",  "half",    "float", "double",
-    "string", "Bool",    "Int", "Float", "String",  "List",  "Map",
-    "Array",  "Builder",
+    "bool",  "u8",   "u16", "u32",   "u64",     "i8",   "i16",
+    "i32",   "i64",  "f16", "f32",   "f64",     "char", "str",
+    "bytes", "list", "map", "array", "builder", "file", "task",
 };
 
 /// Everything callable by name on its own: standalone builtins, the
@@ -73,7 +67,7 @@ pub const type_names = [_][]const u8{
 pub const builtins = [_][]const u8{
     "abs",              "min",               "max",                   "clamp",               "sqrt",
     "floor",            "ceil",              "trunc",                 "len",                 "range",
-    "assert",           "trap",              "error",                 "parse_int",           "parse_float",
+    "assert",           "trap",              "error",                 "parse_i64",           "parse_f64",
     "print",            "print_error",       "read_line",             "env",                 "clock_ms",
     "sleep_ms",         "file_read",         "file_write",            "file_append",         "path_kind",
     "file_delete",      "file_rename",       "dir_list",              "term_rows",           "term_cols",

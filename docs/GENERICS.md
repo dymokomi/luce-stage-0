@@ -6,8 +6,8 @@
 
 Generics would let a function or type be written once over a type it does
 not name in advance — `Stack[T]`, `Vec[T]`, a `run(...)` loop that holds
-an application's own state type. Luce's containers (`list(T)`,
-`map(K, V)`, `array(T, _)`) already answer this for the three shapes the
+an application's own state type. Luce's containers (`list[T]`,
+`map[K, V]`, `array[T, _]`) already answer this for the three shapes the
 language blesses; generics is the same capability opened to the
 programmer.
 
@@ -24,8 +24,8 @@ Three things need the same missing capability:
    no longer name the model in `view`'s and `update`'s signatures or hand
    it back unchanged. Generics let the library name the type without
    knowing it in advance.
-2. **Typed reusable widgets.** A selection list is a `func(long) ->
-   string` today because it cannot be a `Vec(T)`; every widget that reads
+2. **Typed reusable widgets.** A selection list is a `func(i64) ->
+   str` today because it cannot be a `Vec[T]`; every widget that reads
    application data is stringly typed for the same reason.
 3. **Reusable data structures.** A stack, a queue, a tree are
    copy-paste-per-element-type today, or routed through `list`.
@@ -41,7 +41,7 @@ typed widgets and reusable data structures — stands on its own.
 
 The type system **already interns parameterized types.** A heap type is
 one of `list: Type`, `map: {key, value}`, or `array: {element, rank}`,
-and a `list(Point)` and a `list(long)` are two interned heap types over
+and a `list[Point]` and a `list[i64]` are two interned heap types over
 one code path. A parameterized type is therefore not a new idea to the
 compiler — only a *user-written* one is.
 
@@ -97,7 +97,7 @@ method on a `T`, the parameter must be **bounded by an interface**, the
 mechanism the language already has:
 
 ```text
-func largest[T: Comparable](xs: list(T)) -> T?:   # T.less(other) is callable
+func largest[T: Comparable](xs: list[T]) -> T?:   # T.less(other) is callable
     ...
 ```
 
@@ -119,7 +119,7 @@ func run[Model](start: Model, view: func(Model) -> ui.View, update: func(Model, 
     ...
 
 struct Stack[T]:
-    items: list(T)
+    items: list[T]
 
     func push(value: T):
         self.items.append(value)
@@ -127,14 +127,14 @@ struct Stack[T]:
     func pop() -> T?:
         ...
 
-func largest[T: Comparable](xs: list(T)) -> T?:
+func largest[T: Comparable](xs: list[T]) -> T?:
     ...
 ```
 
 At a use, type arguments are **inferred from the value arguments** where
 possible (`run(counter, view, update)` infers `Model = Counter`) and
-written explicitly where inference cannot reach them (`new Stack[long]()`).
-A bare `T` inside a generic is a *type name* in scope exactly as `long`
+written explicitly where inference cannot reach them (`new Stack[i64]`).
+A bare `T` inside a generic is a *type name* in scope exactly as `i64`
 is; outside, it is nothing. Brackets are used rather than angle brackets
 because `<` and `>` are comparison operators and Luce has bitwise `<<`
 and `>>` — angle brackets would make the parser guess, and Luce does not
@@ -150,7 +150,7 @@ Monomorphization makes generics a **front-end-only** change:
   its signature recorded with `T` as a fresh type-parameter type variant
   valid only inside its template. Each use collects or infers the type
   arguments, **instantiates** the template by substituting `T`, interns
-  the instantiation by (template, arguments) so `Stack[long]` is one type
+  the instantiation by (template, arguments) so `Stack[i64]` is one type
   program-wide, and checks the instantiation as ordinary concrete code.
   `main`'s reachable set drives which instantiations are produced.
 - **HIR, MIR, optimize, LLVM, runtime**: **unchanged.** They only ever

@@ -249,9 +249,8 @@ fn builtins(repository: Repository) !Names {
     // The table's own closing brace, at column zero — not the first
     // `};` at *any* indentation, which is what this used to look for
     // and which ran past the end of the table into whatever declaration
-    // came next.  It happened to be right while nothing followed;
-    // `retired_builtins` moved in beside it and the reading silently
-    // grew two names the language no longer has.
+    // came next. Keep the read bounded to the table itself so a later
+    // declaration cannot silently become part of the public roster.
     const table = between(source, "const builtins = [_]Builtin{", "\n};") orelse
         return error.BuiltinTableNotFound;
 
@@ -384,24 +383,6 @@ fn reservedNames(repository: Repository) !Names {
 
     try quotedWhere(&names, table, isPlainName);
     if (names.items.items.len < 40) return error.ReservedNamesTooSmall;
-    return names;
-}
-
-/// The TitleCase type names the language spelled once and does not any
-/// more.  A sample may still show one — that is what the table is for —
-/// so the site still owes them a colour.
-fn retiredTypeNames(repository: Repository) !Names {
-    var names: Names = .{ .gpa = repository.gpa };
-    errdefer names.deinit();
-
-    const source = try repository.read("src/luce/support/types.zig");
-    defer repository.gpa.free(source);
-
-    const table = between(source, "const retired = [_]struct { was: []const u8, now: []const u8 }{", "\n    };") orelse
-        return error.RetiredSpellingsNotFound;
-
-    try rowNames(&names, table, ".{ .was = \"");
-    if (names.items.items.len == 0) return error.RetiredSpellingsEmpty;
     return names;
 }
 
@@ -1111,11 +1092,11 @@ test "an option is recognised by shape, and a sentence about one is not" {
 /// table both the parser and the analyzer resolve through.
 ///
 /// These reach a program two ways and the reference owes a reader
-/// both: as an annotation (`var n: short = 1`) and, for the scalars,
+/// both: as an annotation (`var n: i16 = 1`) and, for the scalars,
 /// as the conversion constructor named for the type it produces
-/// (`short(x)` — docs/NUMERICS.md §7).  Neither was checked until the
+/// (`i16(x)` — docs/NUMERICS.md §7).  Neither was checked until the
 /// ladder grew to seven, and the gap was the same shape as the one
-/// this file was written for: `byte`, `short` and `half` landed in the
+/// this file was written for: `u8`, `i16` and `f16` landed in the
 /// compiler and `guide/reference/builtins.md` went on listing four conversions.
 fn typeNames(repository: Repository) !Names {
     var names: Names = .{ .gpa = repository.gpa };
@@ -1144,8 +1125,8 @@ test "the reference names every type the language answers to" {
 }
 
 test "the reference names every conversion constructor" {
-    // The scalars from the same table are also functions — `byte(x)`,
-    // `half(x)`, `string(x)` — and `guide/reference/builtins.md` is where a reader
+    // The scalars from the same table are also functions — `u8(x)`,
+    // `f16(x)`, `str(x)` — and `guide/reference/builtins.md` is where a reader
     // looks for a function.  `bool` and the four containers are not
     // conversions (`types.conversionNamed` refuses them), so they are
     // exempt here and covered by the type test above.
@@ -1185,7 +1166,6 @@ fn vocabulary(repository: Repository) !Names {
         builtins,
         methods,
         typeNames,
-        retiredTypeNames,
     };
     for (readers) |read| {
         var found = try read(repository);

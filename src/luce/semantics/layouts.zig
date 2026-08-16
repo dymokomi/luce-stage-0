@@ -116,7 +116,7 @@ fn collectEnumName(
         return;
     }
     // The width, before the members: it is what says which of them
-    // fit, and the default is `int` (D2).
+    // fit, and the default is `i32` (D2).
     var backing: types.Type.EnumRef.Backing = .i32;
     if (declaration.backing) |written| {
         const resolved = (try resolve.resolveType(self, module_index, written)) orelse return;
@@ -236,7 +236,7 @@ fn collectUnionName(
     }
     // **At least one member must carry a payload** (D2): a union
     // of bare members is an enum — cheaper in every way, with a
-    // backing width, `int(m)`, `{s}(n)` and no allocation.
+    // backing width, `i32(m)`, `{s}(n)` and no allocation.
     var carries_payload = false;
     for (declaration.members) |member| {
         if (member.fields.len != 0) carries_payload = true;
@@ -366,7 +366,7 @@ pub fn settleEnumMembers(self: *Analyzer) Error!void {
                 continue;
             }
             // An alias is a `let` if a program wants one: two names
-            // for one number make `string(m)` a coin toss and
+            // for one number make `str(m)` a coin toss and
             // `match` a set of arms that cannot all be reached.
             for (self.enums.items[index].members[0..slot]) |earlier| {
                 if (earlier.value != value) continue;

@@ -32,21 +32,24 @@ execution paths:
 - the serialized-module mutation corpus is total; and
 - the compiler and oracle still use one runtime implementation.
 
-The remaining work extends the type system rather than weakening that current
-ARC contract:
+The completed ARC language now extends that foundation without weakening it:
 
-- `class` is a front-end scaffold. It parses and carries a reference-kind bit,
-  but still lowers with value-struct behavior.
-- Interfaces work for explicit struct conformance, multiple methods,
+- `class` is a final ARC reference type with shared identity, mutation through
+  stable `let` bindings, `is`, class/interface dispatch, zeroing weak edges,
+  deterministic `deinit`, and worker isolation.
+- Interfaces work for explicit struct and class conformance, multiple methods,
   multi-value answers, directional failure effects, return values, optionals,
-  and heterogeneous containers. Dispatch is intentionally read-only today,
-  and the representation is not yet the final owned existential model.
-- Lambdas are one expression and cannot capture a local.
+  and heterogeneous containers. Class witnesses may mutate shared identity;
+  writing value-struct witnesses remain refused until the owned existential
+  representation replaces the current bound-dispatch layout.
+- The concise expression lambda remains capture-free. Block closures carry ARC
+  environments with inferred or explicit strong captures, zeroing weak
+  captures, creation-time snapshots, and shared mutable cells.
 - Zeroing `weak` storage is complete for built-in ARC objects in locals and
   fields. Reads upgrade to owned optional snapshots; generation-safe zeroing,
   copies, aliases, worker refusals, verifier defenses, and recursive
-  struct/container back-edges agree on both engines. Classes and the final
-  owned interface representation will reuse this runtime path.
+  struct/container/class back-edges and closure captures agree on both
+  engines. The final owned interface representation will reuse this path.
 - The public scalar spellings are explicit: `u8` through `u64`, `i8` through
   `i64`, `f16` through `f64`, plus `char`, `str`, and `bytes`. Contextual
   literals, same-concrete-type operations, checked widths, explicit
@@ -211,7 +214,7 @@ closure correctness.
 
 ### The explicit type vocabulary
 
-The target core vocabulary is:
+The current core vocabulary is:
 
 ```text
 bool
@@ -226,7 +229,7 @@ bytes
 
 list[T]
 map[K, V]
-array[T, N, ...]
+array[T, _, ...]
 func(T, ...) -> R
 T?
 ```
@@ -235,25 +238,12 @@ User-declared `struct`, `class`, `enum`, `union`, and `interface` types remain
 TitleCase. Files, tasks, windows, and GPU surfaces are opaque library/runtime
 types rather than a reason to add more scalar keywords.
 
-The migration is intentionally atomic:
-
-| Current | Target |
-|---|---|
-| `byte` | `u8` |
-| `short` | `i16` |
-| `int` | `i32` |
-| `long` | `i64` |
-| `half` | `f16` |
-| `float` | `f32` |
-| `double` | `f64` |
-| `string` | `str` |
-
-The new integer family adds `u16`, `u32`, `u64`, and `i8`. There is no plain
+The new integer family added `u16`, `u32`, `u64`, and `i8`. There is no plain
 `f8`: if an 8-bit floating representation is ever justified, its format is in
 the name, such as `f8e4m3` or `f8e5m2`. `bf16` is likewise a distinct future
 format, not an alias for `f16`.
 
-The semantic rules must be frozen before spelling changes:
+The semantic rules of the explicit vocabulary are:
 
 - literals are contextual; an unconstrained integer defaults to `i64` and an
   unconstrained floating literal to `f64`;
@@ -270,18 +260,19 @@ The semantic rules must be frozen before spelling changes:
 value, copied by value; it is not a borrowed view into a string and not an
 extended grapheme cluster. `str` is immutable UTF-8. Iterating a `str` yields
 `char`; byte-oriented work is explicit through `bytes`. `bytes` is immutable
-binary data; mutable buffers use `list[u8]` or `array[u8, N]` until a measured
+binary data; mutable buffers use `list[u8]` or `array[u8, _]` until a measured
 need justifies a dedicated buffer.
 
 There is one general associative container, `map`; `dict` and `hash` are not
 synonyms. `tree`, `stack`, and matrix types belong in libraries after
 generics. `vec2`, `vec3`, and `vec4` are aliases or library types, not core
 keywords. A compiler type `vec[T, N]` earns a place only with real SIMD
-operations and ABI semantics; otherwise `array[T, N]` is the honest name.
+operations and ABI semantics; otherwise `array[T, _]` is the honest current
+name, with the extent supplied at construction.
 
-`builder` may remain an internal/runtime specialization while the migration
-is underway, but the target user surface is a library `strings.Builder`, not
-another primitive scalar name.
+`builder` remains a runtime specialization in the current language. A future
+generic library may replace its public role with `strings.Builder`; that is a
+library design decision, not a reason to add another primitive scalar name.
 
 ### Generics and library data structures
 
@@ -387,17 +378,15 @@ privacy and re-exports are included; no alias identity crosses into HIR.
    grammar note.
 3. Extend the diagnostic taxonomy for conversion, class lifecycle, weak
    access, closure capture, and worker-boundary refusals.
-4. Create the migration manifest: compiler tables, runtime tags, MIR encoding,
-   ABI surfaces, standard library, examples, packages, editor grammar, public
-   docs, and installer samples.
+4. Inventory compiler tables, runtime tags, MIR encoding, ABI surfaces,
+   standard library, examples, packages, editor grammar, public docs, and
+   installer samples so the contract is implemented as one coherent language.
 
-The frozen contract and layer-by-layer manifest live in
-[TYPE_MIGRATION.md](TYPE_MIGRATION.md). It fixes contextual literals,
-same-type concrete arithmetic, checked integer widths, Python-shaped true
-division, explicit conversions, Unicode-scalar `char`/`str` behavior,
-immutable `bytes`, bracketed container application, block-closure and weak
-storage grammar, the first class lifecycle surface, diagnostics, and the
-acceptance matrix.
+The contract fixes contextual literals, same-type concrete arithmetic,
+checked integer widths, Python-shaped true division, explicit conversions,
+Unicode-scalar `char`/`str` behavior, immutable `bytes`, bracketed container
+application, block-closure and weak-storage grammar, class lifecycle syntax,
+diagnostics, and the acceptance matrix.
 
 Exit: there is no semantic question left hidden inside the mechanical rename.
 
@@ -409,7 +398,7 @@ later ARC phases consume. Its manifest names every compiler, runtime,
 userland, tooling, documentation, ABI, and release surface that must move in
 the atomic cut; the documentation catalogue and executable-sample guard pass.
 
-### Phase 3 — migrate the type vocabulary atomically — complete
+### Phase 3 — implement the explicit type vocabulary — complete
 
 1. Add the complete internal type table and real arithmetic behavior for all
    widths.
@@ -418,22 +407,22 @@ the atomic cut; the documentation catalogue and executable-sample guard pass.
    diagnostics.
 3. Rewrite all Luce source, specs, packages, examples, benchmarks, generated
    syntax data, and public documentation in the same cut.
-4. Refuse every retired spelling with direct replacement advice. Do not keep a
-   long-lived alias period in a pre-release language.
+4. Treat names outside the language vocabulary as ordinary unknown
+   identifiers; there is no compatibility layer in a pre-release language.
 5. Bump the module format for type-tag or instruction changes and the host ABI
    only if its published representation changes.
 
-Exit: the old vocabulary is absent outside migration tests and history; the
-full width/conversion matrix agrees on both engines.
+Exit: current source and documentation use one vocabulary, and the full
+width/conversion matrix agrees on both engines.
 
 Completed on 2026-08-16. All scalar widths have real compile-time and runtime
 semantics on the interpreter and LLVM paths; literals, operations,
 conversions, constants, aggregates, optionals, containers, serialization,
 verification, ABI boundaries, packages, examples, editor syntax data, and
 diagnostics use the explicit names. `char`, scalar-indexed `str`, and
-immutable `bytes` separate text from binary data. Retired spellings produce
-direct replacement diagnostics, and the documentation guard now checks live
-inline signatures and explanatory fences as well as executable samples.
+immutable `bytes` separate text from binary data. The documentation guard
+checks live inline signatures and explanatory fences as well as executable
+samples; the compiler has no alias or compatibility table for other names.
 
 ### Phase 4 — build the weak-reference foundation — complete
 
@@ -458,7 +447,7 @@ functions, values, interfaces, and worker transfer are refused precisely.
 The focused differential lane includes a real recursive struct/container
 cycle and every successful case ends at the zero-live-object census.
 
-### Phase 5 — complete class reference semantics
+### Phase 5 — complete class reference semantics — complete
 
 1. Lower reference-kind layouts through one heap-object path shared with the
    existing ARC machinery.
@@ -473,6 +462,16 @@ cycle and every successful case ends at the zero-live-object census.
 Exit: aliasing a class observes shared mutation, `deinit` runs once on every
 normal release path, and parent/child graphs use the already-proved weak
 storage rather than shipping a cycle-prone partial class model.
+
+Completed on 2026-08-16. Classes lower through the ordinary object table and
+share identity across aliases, parameters, returns, optionals, fields,
+collections, interfaces, and bound methods. `let` keeps the binding stable
+while permitting object mutation; `is` is the only identity comparison.
+Weak class edges zero by generation, class witnesses preserve shared mutation,
+and worker transfer is refused while worker-local classes remain valid.
+`deinit` runs once before child fields release and is covered under normal
+scope exit, recoverable error, trap reporting, and worker-local teardown;
+compile-time and runtime guards prevent resurrection.
 
 ### Phase 6 — replace interface values with owned existentials
 
@@ -490,7 +489,7 @@ Exit: one heterogeneous collection can hold stateful values of different
 concrete types and dispatch every method without lifetime dependence on the
 creating frame.
 
-### Phase 7 — add capturing closures
+### Phase 7 — add capturing closures — complete
 
 1. Lower capture analysis to an explicit environment layout.
 2. Implement value snapshots, shared mutable cells, strong reference capture,
@@ -503,6 +502,16 @@ creating frame.
 
 Exit: a returned closure safely retains and mutates captured state, and a weak
 capture breaks its intentional cycle.
+
+Completed on 2026-08-16. The block form shares the existing function type and
+uses compiler-private ARC layouts for environments and mutable cells.
+Immutable values, strong references, weak references, named snapshots,
+function/interface/bound-method values, nested environments, late and
+destructured mutables, optionals, value structs, lists, maps, and arrays agree
+on the compiled path and oracle. Direct stored-`self` cycles, deinitializer
+capture, malformed capture lists, missing contextual signatures, and worker
+crossing are diagnosed. The focused lane runs 34 positive and negative tests,
+and every successful differential case finishes at zero live objects.
 
 ### Phase 8 — add only the optional ergonomics the model proves necessary
 

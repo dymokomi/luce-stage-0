@@ -54,9 +54,9 @@ func quoted_end(value: str, finish: i64, opening: i64) -> i64:
 
 private const keyword_words = {
     "alias": true, "and": true, "break": true, "catch": true, "class": true,
-    "const": true, "continue": true, "elif": true, "else": true,
+    "const": true, "continue": true, "deinit": true, "elif": true, "else": true,
     "enum": true, "false": true, "for": true, "func": true,
-    "if": true, "import": true, "in": true, "interface": true,
+    "if": true, "import": true, "in": true, "interface": true, "is": true,
     "let": true, "match": true, "new": true, "none": true,
     "not": true, "or": true, "private": true, "public": true,
     "return": true, "self": true, "spawn": true, "static": true,
@@ -82,8 +82,8 @@ private const builtin_words = {
     "file_rename": true, "file_write": true, "floor": true,
     "key_read": true, "key_text": true, "len": true, "max": true,
     "min": true, "os_available_memory": true,
-    "os_cpu_count": true, "os_total_memory": true, "parse_float": true,
-    "parse_int": true, "parse_str": true, "print": true,
+    "os_cpu_count": true, "os_total_memory": true, "parse_f64": true,
+    "parse_i64": true, "parse_str": true, "print": true,
     "print_error": true, "range": true, "read_line": true,
     "shell_run": true, "sleep_ms": true, "sqrt": true, "term_clear": true, "term_cols": true,
     "term_event_data": true, "term_flush": true, "term_move": true,

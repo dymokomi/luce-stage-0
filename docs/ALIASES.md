@@ -22,7 +22,7 @@ func main():
 
 The alias and its target are exactly the same type. There is no conversion,
 wrapper, layout, runtime tag, allocation, dispatch rule, or distinct identity.
-`UserId` above is interchangeable with `long` at annotations, parameters,
+`UserId` above is interchangeable with `i64` at annotations, parameters,
 results, fields, optionals, container elements, interface boundaries, and
 module boundaries.
 
@@ -81,7 +81,7 @@ func main():
 Resolution is eager. An unused alias is still checked, so an unknown target
 or a cycle cannot hide until some later use. Direct and indirect cycles are
 refused with the complete path, such as `A -> B -> C -> A`. Optionality is
-also resolved through the alias: if `MaybeId` is `long?`, then `MaybeId?` is
+also resolved through the alias: if `MaybeId` is `i64?`, then `MaybeId?` is
 rejected because Luce has one level of absence.
 
 ## Construction and members
@@ -90,12 +90,12 @@ Transparency includes expression sites that name the type:
 
 - an alias of a structure may construct it and reach its static functions;
 - an alias of an enum or union may reach its members and methods;
-- an alias of a numeric or string type may be used as that conversion
+- an alias of a numeric type or `str` may be used as that conversion
   constructor;
 - an alias of `list`, `map`, `array`, or `builder` may follow `new`.
 
 The target still decides how values are created. An alias of `file` is opened
-through `std.files`, and an alias of `task(...)` is created by `spawn`;
+through `std.files`, and an alias of `task[...]` is created by `spawn`;
 neither becomes callable or constructible with `new`. An alias of `bool`, an
 optional, or a function type is a type, not a callable runtime value.
 

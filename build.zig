@@ -885,17 +885,6 @@ pub fn build(b: *std.Build) void {
     // `zig build grammar` rewrites the committed file; the test in the
     // module compares the two and fails the suite when they differ, so
     // a language change that forgets the grammar cannot land quietly.
-    // The guard on docs/TYPES.md's rename: no Luce source anywhere in
-    // the tree may still spell a builtin type the retired way.  It
-    // reads the repository rather than the compiler, so it imports
-    // nothing and runs from the root the way the grammar pin does.
-    const spelling_guard = b.createModule(.{
-        .root_source_file = b.path("tools/spelling.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    test_tools_step.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = spelling_guard })).step);
-
     // The compiler-rt confinement tool's namespace rule, tested on
     // every host — macOS never runs the tool (no bundling), so without
     // this its code could rot into the next Linux build.

@@ -235,11 +235,9 @@ fn lowerAssignChain(self: *FunctionBuilder, chain: ast.ChainTarget, assign: ast.
         }
     }
 
-    // The value was lowered before the chain named a type for it,
-    // so `fit` applies the language's two implicit conversions here —
-    // a wider number widens, and a `T` reaching a `T?` wraps, which is
-    // how a function value reaches its storable form
-    // (docs/TYPES.md §2, docs/BINDING.md D7).
+    // The value was lowered before the chain named a type for it.
+    // `fit` may wrap `T` as `T?`; concrete numeric types and every
+    // other representation must already match exactly.
     var placed = value;
     if (try self.fit(placed, current_type)) |fitted| placed = fitted;
     if (!placed.value_type.eql(current_type)) {
@@ -338,12 +336,9 @@ fn storedKindOf(self: *FunctionBuilder, value_type: Type, combined: Combined) no
 /// Check the combine of `place OP= value` — `place OP= value`
 /// reads the place once and stores the combination back.  Type
 /// rules are a binary expression's exactly: numeric arithmetic,
-/// plus string concat for `+=`.  A storage-width place combines at
-/// its arithmetic type and narrows back with the range check, so
-/// the answer is always at `place_type` — the read-combine-narrow
-/// itself is `hir.lower`'s to spell (its `replayCombine`), from
-/// the same pair of types.  Returns the combine's storage answer,
-/// or null after reporting.
+/// plus str/bytes concatenation for `+=`. Both operands must have the
+/// place's exact type, so the answer remains at `place_type`. Returns
+/// the combined value, or null after reporting.
 fn compoundCombine(
     self: *FunctionBuilder,
     op: ast.BinaryOp,
@@ -358,7 +353,7 @@ fn compoundCombine(
         });
         return null;
     }
-    // `/` answers a double whatever it divides (docs/NUMERICS.md
+    // `/` answers f64 for integer operands (docs/NUMERICS.md
     // §2), so `n /= 2` on an integer place is a narrowing nobody
     // wrote.  It is a compile error rather than a silent
     // truncation, which is this design's whole safety story in
@@ -649,11 +644,9 @@ fn lowerAssignIndex(self: *FunctionBuilder, target: ast.IndexTarget, assign: ast
         return;
     }
     const element_type = (try checkIndex(self, object.value_type, indices, target.span)) orelse return;
-    // The value was lowered before the container named a type for
-    // it, so `fit` applies both implicit conversions here — a wider
-    // number widens, and a `T` reaching a `T?` wraps, which is how a
-    // function value reaches its storable form (docs/TYPES.md §2,
-    // docs/BINDING.md D7).
+    // The value was lowered before the container named its element
+    // type. `fit` may wrap `T` as `T?`; otherwise the element and
+    // value types must match exactly.
     if (try self.fit(value.*, element_type)) |fitted| value.* = fitted;
     if (!value.value_type.eql(element_type)) {
         try self.fail("luce.sema.type", assign.span, "this place holds {s} but the value is {s}", .{
@@ -707,8 +700,8 @@ fn lowerAssignIndex(self: *FunctionBuilder, target: ast.IndexTarget, assign: ast
     }
 }
 
-/// Type-check lowered index values against a heap object: lists
-/// take one long, arrays take rank Ints, maps take one key.
+/// Type-check lowered index values against a heap object: lists take one
+/// `i64`, arrays take one `i64` per rank, and maps take one exact key.
 /// Returns the element/value type.
 pub fn checkIndex(
     self: *FunctionBuilder,
@@ -717,7 +710,7 @@ pub fn checkIndex(
     span: Span,
 ) Error!?Type {
     if (object_type == .str or object_type == .bytes) {
-        if (indices.len != 1 or !try self.widensInto(&indices[0], .i64)) {
+        if (indices.len != 1 or !indices[0].value_type.eql(.i64)) {
             try self.fail("luce.sema.index", span, "{s} indexes with one i64", .{try self.analyzer.typeName(object_type)});
             return null;
         }
@@ -741,7 +734,7 @@ pub fn checkIndex(
             return null;
         },
         .list => |element| {
-            if (indices.len != 1 or !try self.widensInto(&indices[0], .i64)) {
+            if (indices.len != 1 or !indices[0].value_type.eql(.i64)) {
                 try self.fail("luce.sema.index", span, "lists index with one i64", .{});
                 return null;
             }
@@ -755,8 +748,8 @@ pub fn checkIndex(
                 });
                 return null;
             }
-            for (indices) |*index_value| {
-                if (!try self.widensInto(index_value, .i64)) {
+            for (indices) |index_value| {
+                if (!index_value.value_type.eql(.i64)) {
                     try self.fail("luce.sema.index", span, "array indices are i64", .{});
                     return null;
                 }
@@ -764,14 +757,13 @@ pub fn checkIndex(
             return shape.element;
         },
         .map => |pair| {
-            // A key widens into the key type the way an index
-            // widens into a `long`: `m[1]` on a `map(long, …)` is
+            // A literal key takes the declared key type exactly as an index
+            // literal takes `i64`: `m[1]` on a `map[i64, V]` is
             // the same key `m[1] = …` stores, and refusing one
             // while accepting the other would be a rule about
             // which side of the equals sign a literal sits on.
-            // The other direction stays refused, because
-            // `widensInto` never narrows.
-            if (indices.len != 1 or !try self.widensInto(&indices[0], pair.key)) {
+            // An already typed value must match exactly.
+            if (indices.len != 1 or !indices[0].value_type.eql(pair.key)) {
                 try self.fail("luce.sema.index", span, "this map is keyed by {s}", .{
                     try self.analyzer.typeName(pair.key),
                 });

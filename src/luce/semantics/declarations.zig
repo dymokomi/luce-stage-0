@@ -234,7 +234,7 @@ pub const Analyzer = struct {
     /// `const`: "a default" while a parameter or field default folds
     /// (docs/ARGS.md D2), null otherwise.  The folder's answer never
     /// changes with it — only the sentence a refusal opens with, so a
-    /// reader who wrote `start: long = g()` is told about defaults and
+    /// reader who wrote `start: i64 = g()` is told about defaults and
     /// not about a `let` they never wrote.
     fold_subject: ?[]const u8 = null,
     /// The written construction whose container row a fold may append.

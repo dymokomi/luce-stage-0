@@ -127,7 +127,7 @@ func read(path: str) -> Save!:
         if key == "room":
             room = rest
         elif key == "moves":
-            moves = parse_int(rest) else error("the move count is not a number: " + rest)
+            moves = parse_i64(rest) else error("the move count is not a number: " + rest)
         elif key == "held":
             held = pieces(rest)
         elif key == "seen":

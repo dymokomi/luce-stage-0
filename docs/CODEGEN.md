@@ -447,7 +447,7 @@ if a function value is made, so a program of direct calls carries no
 function-pointer machinery.  The cost is one extra call frame per call
 *through a value*; the alternative was two calling conventions at a site
 that cannot tell them apart.  A second lazy table holds the
-corresponding names for `string(f)`; a named function gives its
+corresponding names for `str(f)`; a named function gives its
 qualified name, a bind gives the method's qualified name, and a lambda
 gives the distinct compiler name synthesized from its source place.
 The interpreter needs no adapters — it has the program in front of it
@@ -459,7 +459,7 @@ rules.
 The MIR verifier has two iterative containment checks: one for direct
 struct layout cycles, and one combined graph for anonymous heap-type
 shapes and nested function signatures.  Keeping structs out of the
-second graph permits a legal `Node` through `list(Node)`, while the
+second graph permits a legal `Node` through `list[Node]`, while the
 combined anonymous graph still catches heap/signature cross-cycles.
 Both checks run before printing or lowering can recursively expand a
 type — source cannot make these malformed rows, but a hand-written or
@@ -562,7 +562,7 @@ the error unwinds.  It is also entirely internal.  `call_inout` and
 the local flag first moved the serialized module to format 32;
 program-root constants then moved it to 33, and later host services
 and instruction changes carried both forward under the append-only
-discipline to the current **format 47** and **host ABI 19**.
+discipline to the current **format 54** and **host ABI 23**.
 
 ## Call depth, and the trace a trap carries
 
@@ -633,7 +633,7 @@ no `getelementptr` and no pointer: the transformation is not
 expressible above LLVM IR.  And it is not LLVM's work either, because
 the object's kind lives in MIR's type table and nowhere in the emitted
 IR — `heap_types` says statically that a handle is an
-`array(double, _)`, which collapses the runtime's four-way switch to one
+`array[f64, _]`, which collapses the runtime's four-way switch to one
 arm before an instruction is emitted.
 
 Three things make it pay, and all three are needed together:
@@ -647,16 +647,16 @@ Three things make it pay, and all three are needed together:
   container's storage is a field of the row rather than a payload
   inside the `data` union for exactly this reason: Zig promises a
   layout for a struct field and none for a tagged union's payload.
-- **Elements are stored as themselves.**  An `array(double)` is `f64`s,
-  a `list(byte)` is bytes, an `array(bool)` is bytes; only Strings,
+- **Elements are stored as themselves.**  An `array[f64]` is `f64`s,
+  a `list[u8]` is bytes, an `array[bool]` is bytes; only Strings,
   structs and objects keep the 24-byte slot.  `Value` is the
   *boundary* type — how an element crosses into a caller — never the
-  storage type.  Reading a double element becomes one `ldr d0`, the
+  storage type. Reading an `f64` element becomes one `ldr d0`, the
   memory traffic is a third of a boxed array's, and an array of
   untagged doubles is the only kind that can ever reach a SIMD unit or
   a GPU.
 - **Which kind is a fact of the type, not of the builder.**  A
-  `list(long)` is `i64` cells whether `new list(long)` made it or
+  `list[i64]` is `i64` cells whether `new list[i64]` made it or
   `m.keys()` did (`runtime/containers.zig`'s `emptyList`), so a cell's
   width is a compile-time constant here and there is no kind to branch
   on.  The two operations that could once produce either — `m.keys()`
@@ -761,7 +761,7 @@ are worth writing down:
   `index_set`'s.**  A store into a container frees the element it
   replaced; an append replaces nothing and only *adopts* what arrives.
   So what the inline path needs is that there is nothing to adopt,
-  which a scalar satisfies.  A `string`, a struct and an object go on
+  which a scalar satisfies.  A `str`, a struct and an object go on
   calling the runtime, which is the one place that walk is written.
 - **The checks do not move.**  `null_object`, at the instruction that
   owes it, exactly as the call made it; the growing arm resolves a
@@ -892,7 +892,7 @@ saying whether it is there.  The four intrinsics are register moves and
 nothing else: `none_value` is the payload's zero beside a clear bit,
 `optional_wrap` sets the bit, `optional_unwrap` reads field zero, and
 `is_none` is the bit inverted.  No call, no memory.  SROA takes the
-pair apart in the entry block, so `parse_int(s) else 0` costs the parse
+pair apart in the entry block, so `parse_i64(s) else 0` costs the parse
 and a branch.
 
 **docs/FAILURE.md proposed a sentinel for the heap case and it does not
@@ -919,7 +919,7 @@ payload, so that program prints `false`.  A sentinel lowering would
 print `true`, and the two engines would part company on the one program
 that distinguishes them.  There is an agree test named for it.
 
-Nor would the sentinel have paid.  long, double, bool, string and structs
+Nor would the sentinel have paid. Numeric values, bool, str, and structs
 have no spare value to encode absence in, so `{T, i1}` is forced for
 six of the seven payloads; spending the seventh differently buys a word
 that SROA was going to eliminate anyway, in exchange for the one
@@ -932,7 +932,7 @@ parks in the same slot.  **That is what makes reference counting cost
 nothing.**  The runtime's retain/release walks switch on the tag and
 fall through on `none`, so "holding `none` retains nothing" is already
 true on both engines with no code written for it, and a present
-`list(T)?` retains and releases exactly as the bare handle does.  It is the one place the box
+`list[T]?` retains and releases exactly as the bare handle does.  It is the one place the box
 is filled entirely at the value site rather than partly in the entry
 block, because neither its tag nor its length is a fact about the type.
 
@@ -968,7 +968,7 @@ The message travels as `libluce_rt`, not as generated code:
 `luce_rt_raise_error` takes the words and copies them, and
 `luce_rt_raise_io` builds `cannot read PATH` itself.  Both copies are
 mandatory rather than tidy: an error unwinds *through* releases, so
-`error("x: " + string(n))` hands over bytes a statement temporary is
+`error("x: " + str(n))` hands over bytes a statement temporary is
 about to give back.  Building the words in one place is also what
 makes both engines report the same sentence about the same path.
 
@@ -1009,7 +1009,7 @@ semantics below the instruction level live here: the object heap,
 reference counting for bindings, containers, temporaries and program
 roots (docs/MEMORY.md), `list`/`map`/`array`/
 `builder`, string storage and the string primitives,
-`str`/`parse_int`/`parse_float`/`chr`/`ord`, checked arithmetic, and
+`str`/`parse_i64`/`parse_f64`/`chr`/`ord`, checked arithmetic, and
 the trap channel they all report through.
 
 The constant materialization exports (`constants_begin`,
@@ -1058,7 +1058,7 @@ fits; generated code only ever *writes* the other form, and reads both
 ## The published host ABI
 
 `src/luce/codegen/abi.zig` is the contract and the only authority on
-it; `abi.version` is the number a loader checks, currently **19**.  A compiled artifact
+it; `abi.version` is the number a loader checks, currently **23**.  A compiled artifact
 exports one symbol:
 
 ```c
@@ -1109,10 +1109,10 @@ did not free is part of what it did.  `exited` (ABI 10) is the number
 a program chose to stop with, handed over at the `exit(status)` site
 before the unwind.
 
-Compatibility: **fields are append-only and never reordered** (their
-order *is* the layout), any change to an existing field's meaning or
-signature bumps `version`, and a loader must refuse an older version
-rather than tolerate it.
+Before 1.0, the table is versioned rather than source-compatible. Field order
+*is* the layout, so any removal, reorder, meaning change, or signature change
+updates every host and generated slot together and bumps `version`. A loader
+refuses an older version; there is no adapter or migration path.
 
 Version history, which is also the shape of the decisions: **2**
 dropped `str_int` — a pure conversion belongs in the runtime, where it
@@ -1251,12 +1251,12 @@ the conventions already there rather than inventing new ones:
 - **A directory listing travels as bytes.**  Every service that hands
   text back hands back a pointer and a length, and `dir_list` answers
   the names **NUL-separated in one buffer**; `luce_rt_names_list`
-  splits it into the `list(string)` the program asked for.  A second
+  splits it into the `list[str]` the program asked for.  A second
   convention — a vector of pointers, a callback per name — would be a
   second thing every host author has to get right, and NUL is the one
   byte a file name may not contain, so the joining loses nothing.
 - **A service that may have nothing to say clears its out-parameters
-  first.**  `read_line` and `env` answer a `string?`, and their `no`
+  first.**  `read_line` and `env` answer a `str?`, and their `no`
   side leaves `text`/`length` untouched — so the lowering stores a
   null and a zero before the call and hands the answer to
 `luce_rt_maybe_text` as a `present` flag.  Two stores in front of a
@@ -1362,7 +1362,7 @@ cross-machine performance claims.
 ### The 32-bit rows
 
 **`matmul32` is the good news and it is unremarkable, which is the
-point.**  0.99x compute against 1.02x for the `double` twin: the
+point.**  0.99x compute against 1.02x for the `f64` twin: the
 binary32 inner loop vectorizes on both sides, four lanes where the
 64-bit one got two, and Luce keeps pace.
 
@@ -1404,10 +1404,10 @@ and both are language decisions rather than code-generation ones.
 ### `bench/lists`, and what packed storage buys
 
 `bench/lists.luc` is nothing
-but `list`: three million `append`s into a `list(byte)` that starts
+but `list`: three million `append`s into a `list[u8]` that starts
 empty, a sequential read, a strided read at a prime stride that visits
 every element in an order no prefetcher follows, an in-place
-transform, a 256-counter histogram in a `list(long)` indexed by a
+transform, a 256-counter histogram in a `list[i64]` indexed by a
 byte, and then the same four shapes again at eight bytes an element.
 That is the shape a decoder runs — `std.zip` and any inflate are a
 buffer that grows by append, a table indexed by a byte, and a pass
@@ -1417,10 +1417,10 @@ elements, then 1.5x plus one) so that neither side is copying its
 buffer a different number of times than the other; both print the same
 eight numbers and `bench/run.sh` refuses to time them otherwise.
 
-**Packed storage — a `list(byte)` at one byte an element, a
-`list(long)` at eight, where every element was once a 24-byte boxed
+**Packed storage — a `list[u8]` at one byte an element, a
+`list[i64]` at eight, where every element was once a 24-byte boxed
 slot — is worth about 22% of this program's compute and 5.7x of its
-memory** (measured by hand against the commit before `list(T)` gave up
+memory** (measured by hand against the commit before `list[T]` gave up
 the boxed cell, since the benchmark does not exist at that ref for
 `bench/compare.sh` to build).  Peak RSS falls from 113 MB to 20 MB.
 
@@ -1432,7 +1432,7 @@ byte did not remove the call.
 ### What removing the call bought
 
 **2.61x compute, where element access through boxed `Value` calls was
-29.10x.** The three changes are read in "Inline access": a `list(T)`'s storage
+29.10x.** The three changes are read in "Inline access": a `list[T]`'s storage
 kind became a fact of `T` rather than of whoever built the object,
 element access joined the inline path under the invalidation rule the
 tree already enforced, and `append` became a store and a count bump
@@ -1471,7 +1471,7 @@ cannot cache from another, and closing it means something like
 unswitching the loop on "there is room for the rest", which is a real
 piece of work and not this one.
 
-**What is deliberately not inline.**  An `append` of a `string`, a
+**What is deliberately not inline.**  An `append` of a `str`, a
 struct or an object still calls the runtime, because such an element
 has to be *adopted* and the release walk lives in one place.  No row
 in the suite measures that (`strings` builds text in a `builder`, not a

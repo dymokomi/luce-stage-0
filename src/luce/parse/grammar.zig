@@ -939,7 +939,7 @@ pub const Parser = struct {
     /// The type following `new`. A following `(` belongs to construction
     /// values, not to the type, so this one stopping point differs from an
     /// ordinary annotation. Recursive type arguments still use `typeName`
-    /// and therefore reject the retired parenthesized form.
+    /// and therefore reject parenthesized container application.
     pub fn constructionTypeName(self: *Parser) Error!?ast.TypeName {
         return self.typeNameBeforeCall(true);
     }
@@ -1041,16 +1041,16 @@ pub const Parser = struct {
     ///
     /// **One rule, everywhere a type may stand**, rather than a rule
     /// that fires only where it disambiguates: a reader then never has
-    /// to learn where parentheses are permitted, and `(long)` is legal
+    /// to learn where parentheses are permitted, and `(i64)` is legal
     /// and says nothing extra, which is the whole price of having no
     /// special case (SOFTWARE_DESIGN.md §26).
     ///
     /// It exists because a function type's result consumes its own `?`:
-    /// `func(long) -> string?` already means *a function answering a
-    /// `string?`*, and it must keep meaning that, because that is how
-    /// `parse_int` is written as a value.  So the only way to say "a
+    /// `func(i64) -> str?` already means *a function answering a
+    /// `str?`*, and it must keep meaning that, because that is how
+    /// `parse_i64` is written as a value.  So the only way to say "a
     /// function that may be absent" is to close the function type
-    /// before the `?` reaches it — `(func(long) -> string)?`, which is
+    /// before the `?` reaches it — `(func(i64) -> str)?`, which is
     /// Swift's answer and the storable shape of every function value
     /// (docs/BINDING.md D7).
     ///
@@ -1100,8 +1100,8 @@ pub const Parser = struct {
     /// **Parameter types, and no parameter names.**  A name in a
     /// declaration is documentation the call site can use; in a type it
     /// is documentation nothing reads, and a grammar that admits it has
-    /// to say what `func(long)` means — the type `long` or a parameter
-    /// called `long`.
+    /// to say what `func(i64)` means — the type `i64` or a parameter
+    /// called `i64`.
     fn functionTypeName(self: *Parser) Error!?ast.TypeName {
         const start = self.advance(); // func
         const opener = (try self.expect(.left_paren, "'(' with the parameter types")) orelse return null;
@@ -1645,7 +1645,7 @@ pub const Parser = struct {
 
     // -- declarations: enums ----------------------------------------------
 
-    /// `enum Method:` / `enum Method(byte):` — the declaration form
+    /// `enum Method:` / `enum Method(u8):` — the declaration form
     /// that mirrors struct's (docs/ENUMS.md D1): a name, an optional
     /// backing width in parentheses, then one indented member per
     /// line, with the methods and namespace functions a struct body
@@ -1905,7 +1905,7 @@ pub const Parser = struct {
         return .none;
     }
 
-    /// One member line: `null`, or `circle(radius: double)` — a
+    /// One member line: `null`, or `circle(radius: f64)` — a
     /// snake_case name and an optional parenthesized field list whose
     /// fields are named always and take the default clause a struct
     /// field takes (docs/UNION.md D1, D4).
@@ -1923,7 +1923,7 @@ pub const Parser = struct {
             );
             return null;
         }
-        // `circle: double` — the struct field's colon, in the one body
+        // `circle: f64` — the struct field's colon, in the one body
         // that spells a payload with parentheses.
         if (self.peekKind() == .colon) {
             try self.report(
@@ -1952,7 +1952,7 @@ pub const Parser = struct {
             while (!expr.endsList(self.peekKind(), .right_paren)) {
                 const field_name = (try self.expect(.identifier, "a field name")) orelse return null;
                 try self.refuseWildcardName(field_name);
-                // `circle(double)` — a positional payload, which is a
+                // `circle(f64)` — a positional payload, which is a
                 // tuple with a name in front of it (docs/RETURNS.md);
                 // payload fields are named, always (D1).
                 if (self.peekKind() != .colon) {
@@ -2045,9 +2045,9 @@ pub const Parser = struct {
         defer parameters.deinit(self.arena);
         var previous_end = opener.span.end;
         while (!expr.endsList(self.peekKind(), .right_paren)) {
-            // Every non-static member has an implied receiver.  Refuse
-            // both retired spellings wherever they appear, including a
-            // top-level or static function, with the migration itself.
+            // Every non-static member has an implied receiver. Refuse both
+            // explicit receiver forms wherever they appear, including in a
+            // top-level or static function.
             if (self.peekKind() == .keyword_self or
                 (self.peekKind() == .keyword_var and self.peekAhead(1) == .keyword_self))
             {
@@ -2174,22 +2174,22 @@ pub const Parser = struct {
         if (into.items.len == 1) {
             // Not a return shape at all: one type in parentheses is a
             // **parenthesized type**, which is that type, and the `?` a
-            // reader came here for belongs to it — `-> (func() -> long)?`
+            // reader came here for belongs to it — `-> (func() -> i64)?`
             // answers an optional function.  The arity is what tells
             // the two productions apart, and it is the only thing that
             // can: both open with `(` and the difference does not
             // appear until the comma does or does not (docs/BINDING.md
-            // D7).  So `-> (long)` is `-> long`, exactly as `(long)` is
-            // `long` anywhere else a type stands.
+            // D7).  So `-> (i64)` is `-> i64`, exactly as `(i64)` is
+            // `i64` anywhere else a type stands.
             var only = into.items[0];
             only.span = .{ .start = opener.span.start, .end = closing.span.end };
             if (!try self.refuseSecondQuestion(only)) return false;
             into.items[0] = (try self.optionalSuffix(only)) orelse return false;
             return true;
         }
-        // `-> (long, long)?` — the `?` would be marking the *shape*, and
+        // `-> (i64, i64)?` — the `?` would be marking the *shape*, and
         // a shape is not a value that can be absent.  Each element may
-        // carry one of its own, and `long?` among them is ordinary.
+        // carry one of its own, and `i64?` among them is ordinary.
         if (self.peekKind() == .question) {
             try self.report(
                 "luce.parse.type",
@@ -2370,7 +2370,7 @@ pub const Parser = struct {
         var annotation: ?ast.TypeName = null;
         if (self.accept(.colon) != null) {
             annotation = (try self.typeName()) orelse return null;
-            // `let low: long, high: long = minmax(xs)`.  There is one
+            // `let low: i64, high: i64 = minmax(xs)`.  There is one
             // place a return shape is written and it is the signature;
             // the bind takes its types from the call
             // (docs/RETURNS.md).  An annotation on a *single* `let` is
@@ -2792,7 +2792,7 @@ pub const Parser = struct {
             while (!expr.endsList(self.peekKind(), .right_paren)) {
                 const bound = (try self.expect(.identifier, "a field name to bind")) orelse return null;
                 try self.refuseWildcardName(bound);
-                // `circle(radius: double)` — the declaration's field
+                // `circle(radius: f64)` — the declaration's field
                 // list where the arm's binding list belongs.  An arm
                 // binds by name alone; the types were declared once.
                 if (self.peekKind() == .colon) {

@@ -85,11 +85,11 @@ main.luc:2:9: _ is the array-shape wildcard, not a name (array[i64, _]); a bindi
 ## Keywords
 
 ```
-alias    and      break    catch    class    const    continue elif
-else     enum     false    for      func     if       import   in
-interface let     match    new      none     not
-or       private  public   return   self     spawn    static
-struct   true     try      union    var      weak     while
+alias    and      break    catch    class    const    continue deinit
+elif     else     enum     false    for      func     if       import
+in       interface is     let      match    new      none     not
+or       private  public  return   self     spawn    static   struct
+true     try      union   var      weak     while
 ```
 
 `private` and `public` mark visibility. Inside a struct they can also be
@@ -107,10 +107,10 @@ The following names are reserved for builtins and compiler syntax. A
 declaration using one is `luce.sema.reserved`.
 
 ```
-range                                                    None
+range
 abs         min          max          clamp               sqrt
 floor       ceil         trunc        len                 byte_at
-assert      trap         parse_int    parse_float         append
+assert      trap         parse_i64    parse_f64         append
 pop         insert       remove       has                 dim
 print       file_read    file_write   path_kind            key_read
 key_text    error        read_line    print_error          clock_ms
@@ -189,8 +189,9 @@ away from zero) through `std.strings.format_float`; that form requires
 Bitwise precedence follows Go: `&`, `<<`, and `>>` bind at the
 multiplication level; `|` and `^` bind at the addition level. Shift
 counts must be in range or the operation traps with
-`shift_out_of_range`; high bits shifted out are discarded and right
-shift is signed.
+`shift_out_of_range`. A left-shift result that does not fit traps
+`integer_overflow`. Signed right shift sign-extends; unsigned right shift
+zero-fills.
 
 ```luce run
 func main():

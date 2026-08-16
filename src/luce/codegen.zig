@@ -33,8 +33,8 @@
 //! field zero, because the storable form is `(func(...) -> R)?`
 //! (docs/BINDING.md D7) — and a "never" is only honest while something
 //! upstream actually refuses the shape it names.  On 2026-08-12 nothing
-//! did: `m.values()` on a `map(K, func(...))` manufactured a
-//! `list(func(...))`, a type no program can write, and `luce build`
+//! did: `m.values()` on a `map[K, func(...)]` manufactured a
+//! `list[func(...)]`, a type no program can write, and `luce build`
 //! aborted the compiler with no diagnostic on a program `luce check`
 //! had accepted.  Two refusals now hold the claim up — stage 4 at
 //! `values()`, and `mir/verify.zig` rejecting the heap descriptor

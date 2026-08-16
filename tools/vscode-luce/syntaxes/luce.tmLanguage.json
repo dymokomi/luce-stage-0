@@ -51,7 +51,7 @@
       "patterns": [
         {
           "name": "support.function.builtin.luce",
-          "match": "\\b(?:range|abs|min|max|clamp|sqrt|floor|ceil|trunc|len|assert|parse_int|parse_float|parse_str)\\b"
+          "match": "\\b(?:range|abs|min|max|clamp|sqrt|floor|ceil|trunc|len|assert|parse_i64|parse_f64|parse_str)\\b"
         },
         {
           "name": "support.function.builtin.host.luce",
@@ -188,11 +188,11 @@
         },
         {
           "name": "keyword.operator.word.luce",
-          "match": "\\b(?:and|or|not)\\b"
+          "match": "\\b(?:and|or|not|is)\\b"
         },
         {
           "name": "storage.type.luce",
-          "match": "\\b(?:func|struct|class|interface|alias|enum|union|const|let|var)\\b"
+          "match": "\\b(?:func|struct|class|deinit|interface|alias|enum|union|const|let|var)\\b"
         },
         {
           "name": "storage.modifier.luce",
@@ -472,7 +472,7 @@
       "patterns": [
         {
           "name": "support.type.luce",
-          "match": "\\b(?:bool|u8|u16|u32|u64|i8|i16|i32|i64|f16|f32|f64|char|str|bytes|list|map|array|builder|file|task|None)\\b"
+          "match": "\\b(?:bool|u8|u16|u32|u64|i8|i16|i32|i64|f16|f32|f64|char|str|bytes|list|map|array|builder|file|task)\\b"
         },
         {
           "name": "entity.name.type.luce",

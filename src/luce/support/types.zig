@@ -8,7 +8,7 @@
 const std = @import("std");
 
 /// Host-controlled compile options.  A program is a script: `main`
-/// takes either no parameter or one `list(string)` argument parameter,
+/// takes either no parameter or one `list[str]` argument parameter,
 /// and either shape may declare `-> !` — the four legal entries.
 /// `allow_host` grants the host builtins (console, files and terminal)
 /// and is the only authority gate left.  Command-line arguments are
@@ -46,7 +46,7 @@ pub const Entry = union(enum) {
     declared,
     /// `luce test` (docs/TESTING.md D3): the root module's tests are
     /// the program, and the compiler writes the fourth shape —
-    /// `func main(args: list(string)) -> !` — which reads one name out
+    /// `func main(args: list[str]) -> !` — which reads one name out
     /// of `args` and calls that test by direct call.  The names are
     /// the runner's discovery, in declaration order; this stage
     /// re-derives none of it and lets an unknown one refuse itself as
@@ -180,8 +180,9 @@ pub const Type = union(enum) {
     };
 
     /// What a `T?` may hold.  A union of its own rather than a
-    /// `*Type`, so `T??` and `None?` are *unrepresentable* rather than
-    /// merely refused: there is one level of absence and no way to
+    /// `*Type`, so `T??` and an optional no-result type are
+    /// *unrepresentable* rather than merely refused: there is one level
+    /// of absence and no way to
     /// write a second.
     pub const Payload = union(enum) {
         boolean,
@@ -217,8 +218,8 @@ pub const Type = union(enum) {
         /// `T?` already means, and calling through one takes the
         /// narrowing or the `else` any other optional takes.
         ///
-        /// The written spelling needs its parentheses: `func(long) ->
-        /// string?` is a function *answering* an optional, because a
+        /// The written spelling needs its parentheses: `func(i64) ->
+        /// str?` is a function *answering* an optional, because a
         /// result type consumes its own `?` first.
         function: u32,
 
@@ -283,7 +284,7 @@ pub const Type = union(enum) {
     /// answer `.enumeration` with `unreachable, // answered above`
     /// honestly.  Nothing in stage 4 may use it to *type* an
     /// expression: an enum is not an integer to a program, and the two
-    /// convert only where somebody wrote `int(m)`.
+    /// convert only where somebody wrote `i32(m)`.
     pub fn storage(self: Type) Type {
         return switch (self) {
             .enumeration => |reference| reference.backing.asType(),
@@ -332,8 +333,8 @@ pub const Type = union(enum) {
     }
 
     /// The closed range an integer type holds, as the one statement of
-    /// it in the tree.  Carried at `i128` because `long`'s bounds are
-    /// `i64`'s extremes and comparing them to another type's must not
+    /// it in the tree. Carried at `i128` because `i64`'s bounds are
+    /// its own extremes and comparing them to another type's must not
     /// itself overflow.
     ///
     /// Asked only of an integer; the caller has tested `isInteger`.
@@ -349,24 +350,6 @@ pub const Type = union(enum) {
             .i64 => .{ .low = std.math.minInt(i64), .high = std.math.maxInt(i64) },
             .none, .boolean, .f16, .f32, .f64, .char, .str, .bytes, .strukt, .heap, .enumeration, .variant, .function, .optional => unreachable,
         };
-    }
-
-    /// Every numeric type computes at its own width.
-    pub fn arithmeticType(self: Type) ?Type {
-        return if (self.isNumeric()) self else null;
-    }
-
-    /// Whether a value of `self` reaches a `to` place with **nothing
-    /// written down** — the whole of the language's implicit
-    /// conversion, stated once (docs/TYPES.md §2).
-    ///
-    /// Numeric values never convert implicitly. Contextual literals are
-    /// resolved before they become concrete values and therefore do not
-    /// use this relation.
-    pub fn widensTo(self: Type, to: Type) bool {
-        _ = self;
-        _ = to;
-        return false;
     }
 
     /// The type two numeric operands meet at, or null when either is
@@ -387,10 +370,9 @@ pub const Type = union(enum) {
     ///
     ///   * **float to integer** traps `conversion_range` outside the
     ///     target, NaN and the infinities included — at every width,
-    ///     because rounding half away from zero can land past the top
-    ///     of an `int` as easily as past the top of a `long`.
+    ///     because truncation can land outside any destination width.
     ///   * **integer to a narrower integer** traps `conversion_range`
-    ///     outside the target: `int(3000000000)` is not 3 billion
+    ///     outside the target: `i32(3000000000)` is not 3 billion
     ///     modulo anything, it is a program that stops.
     ///
     /// The other two never do.  Integer to float rounds to nearest and
@@ -427,8 +409,8 @@ pub const Type = union(enum) {
         return target.low > source.low or target.high < source.high;
     }
 
-    /// `T` written as `T?`, or null when there is no such type: `None`
-    /// has no value to be absent, and `T??` does not exist.
+    /// `T` written as `T?`, or null when there is no such type: a
+    /// no-result type has no value to be absent, and `T??` does not exist.
     pub fn optionalOf(base: Type) ?Type {
         return switch (base) {
             .none, .optional => null,
@@ -504,7 +486,7 @@ pub const HeapType = union(enum) {
     /// the flag decides is only whether `t.wait()` is a site that has
     /// to say `try` or `catch`.  It is part of the shape because two
     /// tasks that differ in it are two different obligations, and a
-    /// `list(task(double))` may not hold both.
+    /// `list[task[f64]]` may not hold both.
     task: struct { result: Type, fallible: bool },
     /// One instance of a nominal `class` layout. Unlike a value struct,
     /// copying this type copies one object handle and therefore shares
@@ -560,7 +542,7 @@ pub const Signature = struct {
 };
 
 /// One member of an enum, as the program carries it: the name
-/// `string(m)` answers and the number `int(m)` answers (docs/ENUMS.md
+/// `str(m)` answers and the explicit backing conversion answers (docs/ENUMS.md
 /// D1, D5).
 pub const EnumMember = struct {
     name: []const u8, // arena-owned by the program
@@ -572,7 +554,7 @@ pub const EnumMember = struct {
 ///
 /// **The order is the declaration's**, and two things read it: the
 /// first member is the type's zero — what `var m: Method` starts at and
-/// what an `array(Method, n)` is filled with — and `match`'s
+/// what an `array[Method, _]` is filled with—and `match`'s
 /// exhaustiveness names a missing member by walking it, so a reader is
 /// told about members in the order they wrote them.
 pub const EnumType = struct {
@@ -607,7 +589,7 @@ pub const StructField = struct {
 };
 
 /// One member of a union, as the program carries it: the name an arm
-/// and `string(u)` answer, and the payload fields in declaration order
+/// and `str(u)` answer, and the payload fields in declaration order
 /// (docs/UNION.md D1).  A bare member has no fields; the fields reuse
 /// the struct field shape because that is what they are — a payload is
 /// a field run whose slot 0 is the tag (D8).
@@ -728,10 +710,10 @@ pub const Builtin = enum {
     /// `std.files` exposes the ordinary open/create/append wrappers.
     file,
     /// A running worker (docs/THREADS.md D3).  A resource like `file`
-    /// and written with a type argument like `list`: `task(double)` is
-    /// what `spawn` answers for a `func -> double`, `task` alone for a
-    /// function that answers nothing, and the `!` inside — `task(T!)`,
-    /// `task(!)` — is the spawned function's own fallibility, which
+    /// and written with a type argument like `list`: `task[f64]` is
+    /// what `spawn` answers for a function returning `f64`, `task` alone for a
+    /// function that answers nothing, and the `!` inside—`task[T!]`,
+    /// `task[!]`—is the spawned function's own fallibility, which
     /// decides whether `wait` is a site that says `try`.  There is no
     /// `new task`: `spawn` is the only way to make one.
     task,
@@ -742,9 +724,7 @@ pub const Builtin = enum {
 ///
 /// **Lowercase names are the language's; TitleCase names are yours**
 /// (docs/TYPES.md D8), which is what makes the case of a type name say
-/// who defined it.  There are no TitleCase builtins and no aliases for
-/// the ones there used to be: a program that writes `long` is told the
-/// name is `long`, by `failUnknownType`, once.
+/// who defined it. There are no TitleCase builtin aliases.
 pub fn builtinNamed(text: []const u8) ?Builtin {
     for (builtin_table) |entry| {
         if (std.mem.eql(u8, text, entry.name)) return entry.is;
@@ -776,42 +756,6 @@ const builtin_table = [_]struct { name: []const u8, is: Builtin }{
     .{ .name = "task", .is = .task },
 };
 
-/// The current explicit name for a retired spelling, or null when the name
-/// was never one of the language's.
-///
-/// The resized names are the reason this exists rather than a suggestion by
-/// edit distance: nothing spells `i64` closely enough to `Int` for a
-/// did-you-mean to find it, and a reader whose only mistake is remembering an
-/// older name should be told the current one outright.
-///
-/// **`Int` answers `i64` and `Float` answers `f64`** because those are the
-/// representations the TitleCase names carried. The intermediate lowercase
-/// spellings also receive direct replacements, with no compatibility aliases.
-pub fn retiredSpelling(text: []const u8) ?[]const u8 {
-    const retired = [_]struct { was: []const u8, now: []const u8 }{
-        .{ .was = "byte", .now = "u8" },
-        .{ .was = "short", .now = "i16" },
-        .{ .was = "int", .now = "i32" },
-        .{ .was = "long", .now = "i64" },
-        .{ .was = "half", .now = "f16" },
-        .{ .was = "float", .now = "f32" },
-        .{ .was = "double", .now = "f64" },
-        .{ .was = "string", .now = "str" },
-        .{ .was = "Int", .now = "i64" },
-        .{ .was = "Float", .now = "f64" },
-        .{ .was = "Bool", .now = "bool" },
-        .{ .was = "String", .now = "str" },
-        .{ .was = "List", .now = "list" },
-        .{ .was = "Map", .now = "map" },
-        .{ .was = "Array", .now = "array" },
-        .{ .was = "Builder", .now = "builder" },
-    };
-    for (retired) |entry| {
-        if (std.mem.eql(u8, text, entry.was)) return entry.now;
-    }
-    return null;
-}
-
 /// The builtin a **conversion constructor** produces, or null when the
 /// name is not one.  A conversion is named for the type it produces
 /// (docs/NUMERICS.md §7), so this is `builtinNamed` narrowed to the
@@ -837,7 +781,7 @@ pub const builtin_names = names: {
 
 /// The written name of a type, for diagnostics.  Struct names resolve
 /// through the layout table; heap type names render recursively
-/// (`list(long)`, `map(string, list(long))`, `array(double, _, _)`), an
+/// (`list[i64]`, `map[str, list[i64]]`, `array[f64, _, _]`), an
 /// optional takes the `?` it is written with, so the caller supplies
 /// an allocator and owns the result.
 pub fn typeName(
@@ -933,7 +877,7 @@ fn writeTypeName(
         .optional => |payload| {
             // **A function payload is parenthesized**, because that is
             // the only spelling that reads back as this type: a bare
-            // `func(long) -> string?` is a function *answering* an
+            // `func(i64) -> str?` is a function *answering* an
             // optional (docs/BINDING.md D7).  Every other payload takes
             // the `?` bare, and adding parentheses there would put a
             // second spelling of every type into diagnostics.
@@ -961,7 +905,7 @@ test "an optional is its payload plus one level, and never two" {
     try std.testing.expect(maybe_int.held().?.eql(.i64));
     try std.testing.expectEqual(@as(?Type, null), (Type{ .i64 = {} }).held());
 
-    // `T??` and `None?` have no representation to reach.
+    // `T??` and an optional no-result type have no representation to reach.
     try std.testing.expectEqual(@as(?Type, null), Type.optionalOf(maybe_int));
     try std.testing.expectEqual(@as(?Type, null), Type.optionalOf(.none));
 
@@ -970,7 +914,7 @@ test "an optional is its payload plus one level, and never two" {
     try std.testing.expect(Type.optionalOf(.{ .strukt = 2 }).?.eql(.{ .optional = .{ .strukt = 2 } }));
     try std.testing.expect(!Type.optionalOf(.{ .strukt = 2 }).?.eql(.{ .optional = .{ .strukt = 3 } }));
 
-    // A `long?` is not a number: arithmetic needs it narrowed first.
+    // An `i64?` is not a number: arithmetic needs it narrowed first.
     try std.testing.expect(!maybe_int.isNumeric());
 }
 
@@ -989,20 +933,15 @@ test "an enum is its own type, its own name, and its backing width underneath" {
     try std.testing.expect(!method.eql(kind));
     try std.testing.expect(!method.eql(.u8));
 
-    // Not a number to a program: no arithmetic, no ordering, no
-    // implicit reach into a width that would hold it (D4, D6).
+    // Not a number to a program: no arithmetic and no ordering (D4, D6).
     try std.testing.expect(!method.isNumeric());
     try std.testing.expect(!method.isInteger());
-    try std.testing.expectEqual(@as(?Type, null), method.arithmeticType());
-    try std.testing.expect(!method.widensTo(.i32));
-    try std.testing.expect(!method.widensTo(.i64));
-    try std.testing.expect(!(Type{ .u8 = {} }).widensTo(method));
 
     // A number underneath, everywhere a machine asks (D10).
     try std.testing.expect(method.storage().eql(.u8));
     try std.testing.expect((Type{ .i64 = {} }).storage().eql(.i64));
 
-    // `Method?` exists, holds a `Method`, and is not a `byte?`.
+    // `Method?` exists, holds a `Method`, and is not a `u8?`.
     const maybe = Type.optionalOf(method).?;
     try std.testing.expect(maybe.held().?.eql(method));
     try std.testing.expect(!maybe.eql(Type.optionalOf(.u8).?));

@@ -1029,7 +1029,7 @@ pub export fn luce_rt_file_flush(
     return completed(runtime);
 }
 
-/// `file_read(path)` — the whole file as a `string`, open-read-close
+/// `file_read(path)` — the whole file as a `str`, open-read-close
 /// over the byte channel with this library's own UTF-8 validation.
 pub export fn luce_rt_file_read_text(
     runtime: *Runtime,
@@ -1725,7 +1725,7 @@ pub export fn luce_rt_clear(runtime: *Runtime, target: [*c]const Value) callconv
 
 /// `zero` is the element zero of the list this answers, exactly as
 /// `luce_rt_new_list` takes one: it carries the *kind* the elements
-/// are stored at, and a `list(long)` is packed whether the program
+/// are stored at, and a `list[i64]` is packed whether the program
 /// built it or `m.keys()` did (docs/BYTES.md R1).
 pub export fn luce_rt_map_keys(
     runtime: *Runtime,
@@ -1810,7 +1810,7 @@ pub export fn luce_rt_array_fill(
 //
 // They fail the way the language says they fail.  A slice that is out
 // of bounds or splits a UTF-8 sequence traps, and so does `chr` of a
-// number that is not a codepoint.  `parse_int` and `parse_float` do
+// number that is not a codepoint.  `parse_i64` and `parse_f64` do
 // not: they answer `Value.none` for text that is not a number, because
 // parsing is a question and "no" is an answer.
 
@@ -1875,17 +1875,17 @@ pub export fn luce_rt_str(runtime: *Runtime, held: [*c]const Value, out: [*c]Val
     return completed(runtime);
 }
 
-pub export fn luce_rt_parse_int(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32 {
+pub export fn luce_rt_parse_i64(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireStringInput(runtime, held)) return raised_trap;
-    out.* = text.parseInt(runtime, held.*) catch |mistake| return failed(runtime, mistake);
+    out.* = text.parseI64(runtime, held.*) catch |mistake| return failed(runtime, mistake);
     return completed(runtime);
 }
 
-pub export fn luce_rt_parse_float(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32 {
+pub export fn luce_rt_parse_f64(runtime: *Runtime, held: [*c]const Value, out: [*c]Value) callconv(.c) i32 {
     if (!requireValueOut(runtime, out)) return raised_trap;
     if (!requireStringInput(runtime, held)) return raised_trap;
-    out.* = text.parseFloat(runtime, held.*) catch |mistake| return failed(runtime, mistake);
+    out.* = text.parseF64(runtime, held.*) catch |mistake| return failed(runtime, mistake);
     return completed(runtime);
 }
 
@@ -1935,22 +1935,9 @@ pub export fn luce_rt_float_mod(left: f64, right: f64) callconv(.c) f64 {
 }
 
 /// The same operator at binary32.  A width of its own rather than a
-/// widening through `double`: `%` on floats must answer what a float
+/// widening through `f64`: `%` on floats must answer what a float
 /// `%` answers, and the round trip through binary64 disagrees exactly
 /// where the correction fires.
 pub export fn luce_rt_float32_mod(left: f32, right: f32) callconv(.c) f32 {
     return operators.floorMod(f32, left, right);
-}
-
-/// Comparison across the long/double line, exactly (docs/NUMERICS.md).
-/// Two scalars and an operator: it reads no memory at all, cannot
-/// fail, and takes no runtime.  The long is always the left operand —
-/// stage 4 mirrors the operator when the double was written first.
-pub export fn luce_rt_compare_i64_f64(
-    op: i32,
-    left: i64,
-    right: f64,
-) callconv(.c) i32 {
-    const operation = std.enums.fromInt(vocabulary.BinaryOp, op) orelse return 0;
-    return @intFromBool(operators.compareI64F64(operation, left, right));
 }

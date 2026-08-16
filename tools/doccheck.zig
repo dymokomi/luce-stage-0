@@ -5,9 +5,8 @@
 //! `luce` block that does not declare what becomes of it is a build
 //! error, and every sample's claimed output is compared with what the
 //! program actually printed (`www/luce/src/verify.zig`).  `docs/` did not,
-//! and eight language generations of drift went into it: a reference
-//! page that still spelled `List(String)` after the rename, a memo
-//! whose example used a builtin the language had deleted.  A document
+//! and drift went into it: reference pages and memos kept examples using
+//! syntax the compiler no longer accepted. A document
 //! showing code that does not compile is worse than one showing none,
 //! because a reader cannot tell which sentences are still true.
 //!
@@ -60,10 +59,8 @@
 //! describes what was decided and when, and the parts of it that are the
 //! language of their day say so with `historical`.
 //!
-//! `tools/spelling.zig` reads that same list, for the sentences rather
-//! than the samples: a current document may not spell a retired type
-//! name in its prose either.  The two used to keep a list each, "meant
-//! to be read together", and they disagreed by one.
+//! The catalogue is shared with its human index in `docs/README.md`, and tests
+//! pin the two views together.
 
 const std = @import("std");
 const luce = @import("luce");
@@ -331,10 +328,9 @@ pub fn check(
     }
 }
 
-/// Every selected document under `base`. `base` is the repository root
-/// in earnest and a fixture directory under test, for the reason
-/// `tools/spelling.zig`'s `survey` takes one: a guard whose document
-/// list nothing exercises can be emptied without a test noticing.
+/// Every selected document under `base`. `base` is the repository root in
+/// earnest and a fixture directory under test: a guard whose document list
+/// nothing exercises can be emptied without a test noticing.
 pub fn survey(
     gpa: Allocator,
     io: std.Io,
@@ -372,7 +368,7 @@ test "the fence taxonomy is read off the info string" {
         \\let n = 1
         \\```
         \\```luce historical
-        \\let n: Int = 1
+        \\not a complete Luce program
         \\```
         \\```luce refused fragment
         \\let n = 1

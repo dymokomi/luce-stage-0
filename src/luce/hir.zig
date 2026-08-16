@@ -44,7 +44,7 @@
 //! fallible forms all reach it as structured nodes and expand there.
 //!
 //! **One desugaring is still upstream of the tree.**  `parse`
-//! expands f-strings into `string(x) + ...` and `elif` chains into
+//! expands f-strings into `str(x) + ...` and `elif` chains into
 //! nested `if`s while it still has nothing but syntax, so those two
 //! arrive here pre-expanded.  Moving them down is the remaining half
 //! of the picture above, and it changes stage 3's output — its own
@@ -100,7 +100,7 @@
 //!    value is now the node kind's own property (`nodes.provenance`),
 //!    overridden only by the two recorded batch rewrites (a borrow
 //!    copy leaves a value fresh, a spill reload leaves it a view);
-//!    `constantLong`'s integer proof reads the tree.
+//!    `constantI64`'s integer proof reads the tree.
 //!
 //! 3. **A park could be retracted after it was emitted.**
 //!    `takeStorage` — move-instead-of-copy (docs/STRINGS.md) — now
@@ -114,7 +114,7 @@
 //!    `nodes.splitsBlocks`, a computed property of the *typed* tree
 //!    beside `nodes.provenance`: every arm names a node kind
 //!    `lower.zig` either does or does not open a block for, so
-//!    `string(count)` and a one-member enum's name are answered
+//!    `str(count)` and a one-member enum's name are answered
 //!    apart from a member chain, and nothing over-matches.  Lower
 //!    decides its own spills from it and makes the slots itself
 //!    (`makeSpillSlot`, after the recorded table `makeLocalTable`

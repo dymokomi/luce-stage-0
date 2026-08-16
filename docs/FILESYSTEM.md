@@ -3,7 +3,7 @@
 Luce's filesystem surface is modelled on Python's `os.path` + `os` +
 `open` — the half of Python's filesystem that maps onto Luce with no new
 language surface at all. There is deliberately no `Path` type: a path is
-an ordinary `string`, path arithmetic is free functions in `std.paths`,
+an ordinary `str`, path arithmetic is free functions in `std.paths`,
 and world operations are free functions in `std.files`. A Python
 programmer arriving at `paths.join(here, name)` or `files.entries(dir)`
 is not being asked to learn anything.
@@ -33,12 +33,12 @@ turns its callers into guards.
 | function | shape | answer |
 |---|---|---|
 | `is_absolute(path)` | `-> bool` | true when the path starts at the root (`/…`) |
-| `join(head, tail)` | `-> string` | `head` and `tail` with one separator at the seam; an absolute `tail` resets, as Python's `join` does |
-| `joined(parts)` | `-> string` | every part folded through `join`, left to right; `[]` answers `""` |
-| `base(path)` | `-> string` | the last element: `base("a/b.luc")` is `"b.luc"`; the root's is `"/"` |
-| `dir(path)` | `-> string` | everything but the last element: `dir("a/b.luc")` is `"a"`; a bare name's is `"."` |
-| `extension(path)` | `-> string` | the last element's extension, dot included: `".luc"`, or `""` when there is none (a leading dot is a hidden name, not an extension) |
-| `stem(path)` | `-> string` | the last element without its extension; `stem(p) + extension(p)` is always `base(p)` |
+| `join(head, tail)` | `-> str` | `head` and `tail` with one separator at the seam; an absolute `tail` resets, as Python's `join` does |
+| `joined(parts)` | `-> str` | every part folded through `join`, left to right; `[]` answers `""` |
+| `base(path)` | `-> str` | the last element: `base("a/b.luc")` is `"b.luc"`; the root's is `"/"` |
+| `dir(path)` | `-> str` | everything but the last element: `dir("a/b.luc")` is `"a"`; a bare name's is `"."` |
+| `extension(path)` | `-> str` | the last element's extension, dot included: `".luc"`, or `""` when there is none (a leading dot is a hidden name, not an extension) |
+| `stem(path)` | `-> str` | the last element without its extension; `stem(p) + extension(p)` is always `base(p)` |
 
 `joined` is the one place `/`-chaining is genuinely missed: Python writes
 `os.path.join(a, b, c)`, and with no variadics and no `/` operator, a
@@ -58,9 +58,9 @@ func main():
 ```
 
 Path spellings are free functions and only free functions. Writing
-`p.base()` on a `string` does not route anywhere — in Python `join` on a
+`p.base()` on a `str` does not route anywhere — in Python `join` on a
 string receiver is the separator-join with the arguments the other way
-round, so filesystem methods on `string` are refused to keep that
+round, so filesystem methods on `str` are refused to keep that
 confusion out. The diagnostic names the module that has the function:
 write `paths.base(p)` with `import std.paths`.
 
@@ -160,9 +160,9 @@ func main():
 
 | function | shape | meaning |
 |---|---|---|
-| `read(path)` | `-> string!` | the whole file as text; refused if the bytes are not UTF-8 |
+| `read(path)` | `-> str!` | the whole file as text; refused if the bytes are not UTF-8 |
 | `write(path, text)` | `-> !` | replaces the file's contents |
-| `read_lines(path)` | `-> list(string)!` | the file's lines, with newlines stripped; a trailing final newline makes no phantom empty line |
+| `read_lines(path)` | `-> list[str]!` | the file's lines, with newlines stripped; a trailing final newline makes no phantom empty line |
 | `write_lines(path, lines)` | `-> !` | the lines joined with newlines and ended with one; `[]` writes an empty file |
 | `append_text(path, text)` | `-> !` | adds text to the end, creating the file if absent |
 | `append_lines(path, lines)` | `-> !` | adds the lines, each ending in a newline; `[]` adds nothing |
@@ -211,8 +211,8 @@ so a walk branches on `entry.kind` without a second syscall.
 
 ```text
 struct Entry:
-    name: string
-    path: string
+    name: str
+    path: str
     kind: Kind
 ```
 
@@ -223,8 +223,8 @@ listed path with the name joined on — `entries(".")` answers `"./notes"`,
 
 | function | shape | answer |
 |---|---|---|
-| `entries(path)` | `-> list(Entry)!` | each entry with its kind, sorted by name (`os.scandir`) |
-| `list(path)` | `-> list(string)!` | the plain names, sorted (`os.listdir`) |
+| `entries(path)` | `-> list[Entry]!` | each entry with its kind, sorted by name (`os.scandir`) |
+| `list(path)` | `-> list[str]!` | the plain names, sorted (`os.listdir`) |
 
 Both are sorted, because the host's order is whatever the file system
 felt like and two machines holding the same files answer differently; a
@@ -363,7 +363,7 @@ These are not gaps to fill; each is a decision, with the reason:
 - **`seek`, `tell`, `truncate`, and the `"r+"`/`"w+"` modes.** A
   random-access file is a different resource from a stream and would
   arrive as one, with its own design.
-- **`encoding=`, `newline=`, `errors=`.** A Luce `string` is validated
+- **`encoding=`, `newline=`, `errors=`.** A Luce `str` is validated
   UTF-8 by construction; bytes that are not text are `read_bytes`'s
   business.
 - **Watchers** (inotify, FSEvents, kqueue) — the host never calls into a

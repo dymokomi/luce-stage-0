@@ -66,7 +66,7 @@ pub const World = struct {
     arguments: []const []const u8 = &default_arguments,
     /// The keys the program will read.  The script does **not**
     /// repeat: running off the end is end of input, which is the case
-    /// `key_read`'s `string?` exists for, and a repeating keyboard is
+    /// `key_read`'s `str?` exists for, and a repeating keyboard is
     /// one no test can ever reach the end of.
     keys: []const Key = &default_keys,
     /// How many keys the program has read.
@@ -77,7 +77,7 @@ pub const World = struct {
     last_event: Key = .{ .name = "" },
     /// The lines standard input will answer.  The script does *not*
     /// repeat: running off the end is end of input, which is the case
-    /// a `string?` exists for.
+    /// a `str?` exists for.
     lines: []const []const u8 = &default_lines,
     /// How many lines of standard input have been taken.
     lines_read: usize = 0,

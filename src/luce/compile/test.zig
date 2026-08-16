@@ -547,15 +547,10 @@ test "functions unreachable from the entry are pruned from the artifact" {
     for (reached) |live| try testing.expect(live);
 }
 
-// A numeric literal lands at the type of the place it goes into and
-// is *parsed* there (docs/TYPES.md D3).  With one integer width and
-// one float width, landing and widening-afterwards agree on every
-// value, so no program can tell them apart — which is exactly why the
-// claim has to be checked here, against the IR, rather than by
-// running something.  A landed literal is one `const_float`; a
-// promoted one is a `const_integer` and a `convert` beside it, and the
-// difference stops being cosmetic the moment the widths differ, where
-// the promoted form rounds twice.
+// A numeric literal lands at the type of the place it goes into and is
+// *parsed* there (docs/TYPES.md D3). Check the IR as well as behavior:
+// a landed literal is one constant at the requested width, never a
+// default-width constant followed by a conversion that could round twice.
 //
 // Every place a type is written down gets a line: an annotation, a
 // call argument, a return, and through a leading minus, which does
@@ -732,9 +727,8 @@ test "the IR dump has a stable golden shape (short-circuit)" {
 // ---------------------------------------------------------------------------
 
 test "no implicit narrowing, no reassigned let, no shadowing" {
-    // `long` widens to `double` on its own (docs/NUMERICS.md); nothing
-    // goes the other way without being asked, which is what keeps
-    // float contagion from ever being silent.
+    // Numeric representations never change implicitly
+    // (docs/NUMERICS.md).
     try expectRejected(
         \\func main():
         \\    let narrowed: i64 = 2.5
@@ -784,8 +778,8 @@ test "struct construction is complete, named, and typed" {
         \\    let doubled = Color(red = 1.0, red = 2.0, green = 3.0)
         \\
     , "luce.sema.construct");
-    // `red = 1` is a widening, not a mismatch (docs/NUMERICS.md); a
-    // string is still a string.
+    // The integer literal in `red = 1` lands directly as f64; text is
+    // still a type mismatch.
     try expectRejected(source_prefix ++
         \\func main():
         \\    let wrong = Color(red = "x", green = 2.0)
@@ -904,7 +898,7 @@ test "host builtins type-check and stay host-gated" {
     defer hosted.deinit();
     try testing.expect(hosted == .success);
 
-    // `key_read` answers `string?`, so a program that treats a key
+    // `key_read` answers `str?`, so a program that treats a key
     // that never came as a key is refused where it is written rather
     // than looping on it at run time (docs/FAILURE.md).
     try expectRejectedOptions(
@@ -2678,10 +2672,10 @@ test "constants share the one namespace and stay immutable" {
         \\
     , "luce.sema.reserved");
     // The annotation is checked, and it is the *landing type*: `3`
-    // has no type of its own and becomes a double here (docs/TYPES.md
+    // has no type of its own and becomes an f64 here (docs/TYPES.md
     // D3), so what this proves is the direction that stays refused —
-    // a float value does not land on an integer annotation, because
-    // narrowing is never implicit.
+    // a floating value does not land on an integer annotation, because
+    // numeric conversions are explicit.
     try failsWith(
         \\const wrong: i64 = 3.5
         \\

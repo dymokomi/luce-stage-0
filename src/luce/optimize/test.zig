@@ -307,7 +307,7 @@ test "every pass on its own leaves verifiable MIR" {
 // produces them, and pinning them here is what stops a later lowering
 // from producing one against a pass that quietly stopped checking.
 
-/// A one-function program with one `list(long)` heap row, built by
+/// A one-function program with one `list[i64]` heap row, built by
 /// hand.  `locals` and the instruction list are duplicated into the
 /// program's arena, and everything lands in a single block.
 fn handBuilt(

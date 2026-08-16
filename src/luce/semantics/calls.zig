@@ -799,7 +799,7 @@ fn lowerUserCall(
     }
     if (spawning != null) {
         // A worker answers through its task, one value, once.  A
-        // return shape has no `task(...)` spelling and would need
+        // return shape has no `task[...]` spelling and would need
         // one before it could mean anything here.
         if (info.results.len >= 2) {
             try self.fail(
@@ -821,7 +821,7 @@ fn lowerUserCall(
         //
         // **Through the whole type graph, since D7**: a function value
         // now sits in a struct field and a container element, and a
-        // `list((func() -> long)?)` crossing would deep-copy every
+        // `list[(func() -> i64)?]` crossing would deep-copy every
         // receiver into the worker's runtime with nothing there owning
         // what it aliases.  The walk is the resource check's own.
         if (info.results.len == 1 and try shapes.carries(self.analyzer, info.return_type, .function)) {
@@ -1344,7 +1344,7 @@ fn lowerValueMethod(
         }
         if (self.analyzer.heapOf(receiver.value_type)) |descriptor| {
             // join belongs to the strings module too: it makes a
-            // string, from list(string).
+            // string, from list[str].
             if (descriptor == .list and descriptor.list == .str and
                 std.mem.eql(u8, method.name, "join"))
             {
@@ -2009,7 +2009,7 @@ fn methodFail(self: *FunctionBuilder, method: ast.Method, comptime message: []co
 /// the position, the type wanted and the type given, and it is
 /// underlined at the argument that is wrong rather than at the
 /// whole call.  Before this existed each method wrote one sentence
-/// for both mistakes — `xs.append("hi")` on a `list(long)` was told
+/// for both mistakes — `xs.append("hi")` on a `list[i64]` was told
 /// "append takes one element value", which is an answer to a
 /// question the reader did not ask, since they passed exactly one.
 ///
@@ -2027,8 +2027,8 @@ fn methodFail(self: *FunctionBuilder, method: ast.Method, comptime message: []co
 /// by `lowerOperandsInto`, *before* an argument is lowered, so a
 /// numeric literal lands at the type the receiver names: a number
 /// has no type until it meets one (docs/TYPES.md D3), and
-/// `xs.append(0.1)` on a `list(double)` must store binary64's 0.1,
-/// which is not what widening binary32's 0.1 produces.  And once
+/// `xs.append(0.1)` on a `list[f64]` must store binary64's 0.1,
+/// not binary32's different nearest value. And once
 /// by `methodTakes`, to check what actually arrived.  Two answers
 /// from one table cannot disagree; two tables would.
 ///
@@ -2083,8 +2083,8 @@ pub fn methodParameters(self: *FunctionBuilder, receiver: Type, name: []const u8
             break :blk null;
         },
         .file => blk: {
-            // The buffer is the caller's `array(byte, n)`, and the
-            // count a write takes is a `long`.  Neither landing
+            // The buffer is the caller's `array[u8, n]`, and the
+            // count a write takes is a `i64`.  Neither landing
             // depends on the receiver, so both are written out.
             if (std.mem.eql(u8, name, "read")) break :blk try typeList(self, &.{
                 try resolve.internHeapType(self.analyzer, .{ .array = .{ .element = .u8, .rank = 1 } }),
@@ -2102,8 +2102,8 @@ pub fn methodParameters(self: *FunctionBuilder, receiver: Type, name: []const u8
     };
 }
 
-/// The list and array half of `methodParameters`.  A `list(T)` and
-/// a rank-1 `array(T, _)` answer to the same names; `growable`
+/// The list and array half of `methodParameters`.  A `list[T]` and
+/// a rank-1 `array[T, _]` answer to the same names; `growable`
 /// says which four only a list has.
 fn sequenceParameters(
     self: *FunctionBuilder,
@@ -2141,15 +2141,13 @@ fn typeList(self: *FunctionBuilder, items: []const Type) Error![]const Type {
     return self.arena().dupe(Type, items);
 }
 
-/// Check a method's arguments against the types it takes, and
-/// widen the ones that reach them by widening — an `int` handed to
-/// a `list(double)`'s `append` is a `double` (docs/TYPES.md §2).
-/// The arguments are rewritten in place, because the registers the
-/// caller goes on to pass are these.
+/// Check a method's arguments against the types it takes. Concrete
+/// types must match; `fit` only supplies the language's `T` to `T?`
+/// injection. The arguments are rewritten in place because these are
+/// the registers the caller goes on to pass.
 ///
-/// A *literal* argument does not reach here needing a widening at
-/// all: it landed at this type when it was lowered, from this same
-/// table (`methodParameters`).
+/// A literal already landed at this type while it was lowered from
+/// this same table (`methodParameters`).
 fn methodTakes(
     self: *FunctionBuilder,
     method: ast.Method,
@@ -2164,12 +2162,11 @@ fn methodTakes(
         return false;
     }
     for (arguments, wanted, 0..) |*argument, want, index| {
-        // `fit` rather than a widen-then-compare, because it is the one
-        // place the language's two implicit conversions are spelled and
-        // an intrinsic method's parameter can now be a `T?`: since D7 a
+        // `fit` rather than a plain comparison because an intrinsic
+        // method's parameter can be a `T?`: since D7 a
         // container element may be `(func(...) -> R)?`, so
         // `steps.append(twice)` has to wrap exactly as
-        // `var f: (func() -> long)? = twice` does.
+        // `var f: (func() -> i64)? = twice` does.
         if (try self.fit(argument.*, want)) |fitted| {
             argument.* = fitted;
             continue;
@@ -2278,7 +2275,7 @@ fn stringsCall(
 /// This is deliberately parallel to `stringsCall`: the import is
 /// the feature gate, method arguments stay positional, and the
 /// target remains a user function.  The only extra step is closed
-/// monomorphization because Luce has monomorphic `list(T)` and no
+/// monomorphization because Luce has monomorphic `list[T]` and no
 /// surface generics.  The generated function body is still the
 /// std source, so neither MIR nor libluce_rt learns a sort callback.
 fn listsCall(
@@ -2589,7 +2586,7 @@ pub fn namesAnyArgument(arguments: []const ast.Argument) bool {
 }
 
 /// `descriptor` is the receiver's *shape*, which is everything the
-/// dispatch below turns on: a `list(long)` and a `list(string)`
+/// dispatch below turns on: a `list[i64]` and a `list[str]`
 /// answer to the same method names and differ only in what the
 /// element type makes of the arguments, and the descriptor carries
 /// that.  The receiver's `Type` adds nothing on top of it.
@@ -2637,8 +2634,9 @@ fn objectMethod(
                 // **`values()` manufactures a list type, and a bare
                 // function type is not a list element** (docs/BINDING.md
                 // D7).  A map value is the one slot written bare, because
-                // `get` already answers `V?` — so `map(string, func(long)
-                // -> long)` is legal and `list(func(long) -> long)` is a
+                // `get` already answers `V?` — so
+                // `map[str, func(i64) -> i64]` is legal while a list of bare
+                // function values is a
                 // type no program can write.  Manufacturing one anyway
                 // produced a program `luce check` accepted and the
                 // backend could not lower: a list cell has no shape for a
@@ -2680,7 +2678,7 @@ fn objectMethod(
             // text used to come out through `b.build()`, which made
             // the one free builtin that took a heap object — and
             // is why `str` could not simply be renamed
-            // `string` (docs/NUMERICS.md §7).
+            // `str` (docs/NUMERICS.md §7).
             if (std.mem.eql(u8, name, "build")) {
                 if (!try methodTakes(self, method, arguments, receiver)) return null;
                 return .{ .kind = .str_value, .result = .str };
@@ -2798,7 +2796,7 @@ fn sequenceMethod(
         // refuses** — and the question is about the whole element, not
         // about its outermost tag.  A function value has no equality
         // (docs/BINDING.md D6) and `match` is the only door into a
-        // union (docs/UNION.md D16); a `list(Button)` whose `Button`
+        // union (docs/UNION.md D16); a `list[Button]` whose `Button`
         // holds either reaches the runtime's comparator, which has no
         // sentence to say and reaches its `unreachable` instead.  One
         // walk answers here and at `==`, which is what keeps the two
@@ -2810,7 +2808,7 @@ fn sequenceMethod(
     }
     if (std.mem.eql(u8, name, "find")) {
         if (!try methodTakes(self, method, arguments, receiver)) return null;
-        // `xs.find(v)` answers `long?`, not a -1 sentinel: the
+        // `xs.find(v)` answers `i64?`, not a -1 sentinel: the
         // same absence rule `m.get` and `strings.find` follow, so
         // a package corpus never bakes the sentinel in.
         return .{ .kind = .list_find, .result = .{ .optional = .i64 } };

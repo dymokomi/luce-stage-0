@@ -20,7 +20,7 @@ handles it here.
 
 ```luce run
 func parse_port(text: str) -> i64!:
-    let n = parse_int(text) else error(f"not a number: {text}")
+    let n = parse_i64(text) else error(f"not a number: {text}")
     if n < 1 or n > 65535:
         error(f"port out of range: {n}")
     return n
@@ -115,7 +115,7 @@ The block form can bind the error message. The binding is an immutable
 
 ```luce run
 func parse_count(text: str) -> i64!:
-    let value = parse_int(text) else error("not a count: " + text)
+    let value = parse_i64(text) else error("not a count: " + text)
     return value
 
 func main():

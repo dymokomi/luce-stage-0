@@ -88,7 +88,7 @@ pub fn verify(allocator: Allocator, program: *const Program) VerifyError!void {
             try verifyType(program, pair.key);
             // A map's missing-key answer already supplies the one
             // optional layer (`get` is `V?`).  Stage 4 therefore refuses
-            // `map(K, V?)`, including the storable function spelling;
+            // `map[K, V?]`, including the storable function spelling;
             // keep the decoded-MIR boundary in agreement so `map_get`
             // cannot unwrap a shape with no representable `V??` result.
             if (pair.value == .optional) return error.BadStruct;
@@ -214,7 +214,7 @@ test "function and constant trace sites share one u32 index" {
     try std.testing.expect(!traceSiteCountFits(limit - 4, 5));
 }
 
-/// `list(string)` — the one type the entry's parameter may have.
+/// `list[str]` — the one type the entry's parameter may have.
 fn isCommandLine(program: *const Program, of: Type) bool {
     if (of != .heap or of.heap >= program.heap_types.len) return false;
     const descriptor = program.heap_types[of.heap];
@@ -313,12 +313,12 @@ const TypeVisit = enum { unvisited, open, closed };
 ///
 /// Source can only build a finite nesting of these anonymous types,
 /// so its interned graph is a DAG.  A decoded module can instead make
-/// `func(func(...))`, `list(list(...))`, or a heap/signature cross-cycle.
+/// `func(func(...))`, `list[list[...]]`, or a heap/signature cross-cycle.
 /// The indices are all in bounds, but `types.typeName` would recurse
 /// forever when `luce ir` prints one.  Check every row, including an
 /// unused one, with an explicit DFS so hostile depth cannot consume the
 /// verifier's call stack.  Structs are leaves here on purpose: a legal
-/// `Node` may hold `list(Node)`, and a type name prints the word `Node`
+/// `Node` may hold `list[Node]`, and a type name prints the word `Node`
 /// rather than expanding its fields.
 fn typeTableCycle(allocator: Allocator, program: *const Program) VerifyError!?TypeCycle {
     const heap_count = program.heap_types.len;
@@ -613,14 +613,6 @@ fn operandType(function: *const Function, defined: *const std.AutoHashMapUnmanag
     return result;
 }
 
-/// Kept as the single seam for serialized modules produced before the
-/// explicit-width type system. Every current numeric width computes at
-/// its own width, so no current `Type` is storage-only.
-fn isStorageWidth(of: Type) bool {
-    _ = of;
-    return false;
-}
-
 /// Whether an integer constant, carried as an `i128`, is exactly what
 /// a register of type `at` would hold.
 fn fitsInteger(held: i128, at: Type) bool {
@@ -694,7 +686,7 @@ fn verifyContainerConstant(
             .sequence => return error.BadConstant,
             .map => |entries| {
                 // `{}` has no source-level type to land on and is
-                // deliberately refused in favor of `new map(K, V)`.
+                // deliberately refused in favor of `new map[K, V]`.
                 // A forged or stale module must not smuggle that
                 // impossible constant shape past the same boundary.
                 if (entries.len == 0) return error.BadConstant;
@@ -944,9 +936,6 @@ fn verifyInstruction(
             const right = try operandType(function, defined, binary.right);
             try expectType(left, binary.operand_type);
             try expectType(right, binary.operand_type);
-            // This seam is intentionally retained for old serialized
-            // formats even though every current numeric width computes.
-            if (isStorageWidth(binary.operand_type)) return error.TypeMismatch;
             if (binary.op.isComparison()) {
                 switch (binary.op) {
                     // **Equality is not universal.**  A function value
@@ -975,7 +964,7 @@ fn verifyInstruction(
                 // `/` is real division and always answers `f64`
                 // (docs/NUMERICS.md §2), so `Binary { .divide, .i64 }`
                 // is not a shape stage 4 can emit — the quotient that
-                // answers a long is `floor_divide`.  Rejecting it here
+                // answers an integer is `floor_divide`. Rejecting it here
                 // is what lets the runtime and the lowering stop
                 // carrying an integer `/` at all.
                 if (binary.op == .divide and binary.operand_type.isInteger()) {
@@ -1028,15 +1017,15 @@ fn verifyInstruction(
                 return;
             }
             // **An enum converts to a number and nothing converts to an
-            // enum** (docs/ENUMS.md D4, R2): `int(m)` is this
+            // enum** (docs/ENUMS.md D4, R2): `i32(m)` is this
             // instruction reading the member's width, and `Method(n)`
             // is a compare-and-branch tree that answers `Method?`.
             // Same-to-same is refused above except from an enum, where
-            // `int(m)` at an `int` backing changes what the value *is*
+            // `i32(m)` at an `i32` backing changes what the value *is*
             // rather than what it holds — the one conversion whose
             // whole content is the type it lands in.
             // `storage()` also exposes a function value's machine
-            // representation as `int`; that is an engine fact, not a
+            // representation as `i32`; that is an engine fact, not a
             // source conversion.  Only a numeric value or an enum may
             // reach this instruction.
             if (!operand.isNumeric() and operand != .enumeration) return error.TypeMismatch;
@@ -1401,27 +1390,23 @@ fn verifyIntrinsic(
     }
 
     switch (call.kind) {
-        // The math builtins compute like operators, so a storage
-        // width never reaches one: stage 4 promotes it first (D5), and
-        // refusing it here is what makes the runtime's per-width
-        // switches total rather than merely lucky.
+        // Math is width-preserving. Every explicit numeric width is a
+        // computation type, and the runtime and generated path both
+        // dispatch on the exact type recorded here.
         .abs => {
             try exactly(arguments, 1);
             if (!arguments[0].isNumeric()) return error.BadIntrinsic;
-            if (isStorageWidth(arguments[0])) return error.BadIntrinsic;
             try expectType(result, arguments[0]);
         },
         .min, .max => {
             try exactly(arguments, 2);
             if (!arguments[0].isNumeric()) return error.BadIntrinsic;
-            if (isStorageWidth(arguments[0])) return error.BadIntrinsic;
             try expectType(arguments[1], arguments[0]);
             try expectType(result, arguments[0]);
         },
         .clamp => {
             try exactly(arguments, 3);
             if (!arguments[0].isNumeric()) return error.BadIntrinsic;
-            if (isStorageWidth(arguments[0])) return error.BadIntrinsic;
             try expectType(arguments[1], arguments[0]);
             try expectType(arguments[2], arguments[0]);
             try expectType(result, arguments[0]);
@@ -1429,20 +1414,9 @@ fn verifyIntrinsic(
         .sqrt, .floor, .ceil, .trunc => {
             try exactly(arguments, 1);
             // Whichever float width it was given, and the same one
-            // back: `sqrt` of a `float` is a `float` (docs/TYPES.md §9).
+            // back: `sqrt` of a `f32` is a `f32` (docs/TYPES.md §9).
             if (!arguments[0].isFloating()) return error.BadIntrinsic;
-            if (isStorageWidth(arguments[0])) return error.BadIntrinsic;
             try expectType(result, arguments[0]);
-        },
-        .compare_i64_f64 => {
-            try exactly(arguments, 3);
-            // The operator travels as a long because an intrinsic call
-            // carries registers and no immediates; which operator it
-            // names is trusted exactly as an instruction's type is.
-            try expectType(arguments[0], .i64);
-            try expectType(arguments[1], .i64);
-            try expectType(arguments[2], .f64);
-            try expectType(result, .boolean);
         },
         .len => {
             try exactly(arguments, 1);
@@ -1469,13 +1443,13 @@ fn verifyIntrinsic(
             try exactly(arguments, 2);
             try expectType(arguments[0], .str);
             try expectType(arguments[1], .i64);
-            // The one intrinsic that answers a `byte` (docs/TYPES.md §9).
+            // The one intrinsic that answers a `u8` (docs/TYPES.md §9).
             try expectType(result, .u8);
         },
         .string_find_byte => {
             try exactly(arguments, 3);
             try expectType(arguments[0], .str);
-            // The byte looked for is a `byte`, so "outside 0..255" is
+            // The byte looked for is a `u8`, so "outside 0..255" is
             // refused where it is written instead of trapping where it
             // is read.
             try expectType(arguments[1], .u8);
@@ -1731,7 +1705,7 @@ fn verifyIntrinsic(
                 .map => |pair| {
                     try expectType(arguments[1], pair.key);
                     // A map value cannot itself be optional, so the
-                    // wrap always exists (stage 4 refuses `map(K, V?)`).
+                    // wrap always exists (stage 4 refuses `map[K, V?]`).
                     try expectType(result, Type.optionalOf(pair.value) orelse
                         return error.BadIntrinsic);
                 },
@@ -1788,17 +1762,17 @@ fn verifyIntrinsic(
             if (!accepted) return error.BadIntrinsic;
             try expectType(result, .bytes);
         },
-        // `string(f)` reads a name out of the program's function
+        // `str(f)` reads a name out of the program's function
         // table: a function value in, text out (docs/FUNCTIONS.md D3).
         .function_name => {
             try exactly(arguments, 1);
             if (arguments[0] != .function) return error.BadIntrinsic;
             try expectType(result, .str);
         },
-        .parse_int, .parse_float => {
+        .parse_i64, .parse_f64 => {
             try exactly(arguments, 1);
             try expectType(arguments[0], .str);
-            try expectType(result, if (call.kind == .parse_int)
+            try expectType(result, if (call.kind == .parse_i64)
                 .{ .optional = .i64 }
             else
                 .{ .optional = .f64 });
@@ -1842,7 +1816,7 @@ fn verifyIntrinsic(
             try expectType(result, .none);
         },
         // What is at a path, as one of four numbers (0 nothing, 1
-        // file, 2 directory, 3 other).  A `long` and not an enum:
+        // file, 2 directory, 3 other).  A `i64` and not an enum:
         // the runtime is never handed the program's type table, so
         // `std.files` is where the codes get their names.
         .path_kind => {
@@ -1920,7 +1894,7 @@ fn verifyIntrinsic(
             try expectType(result, .str);
         },
         .key_read => {
-            // `string?`: a keyboard that has run dry has nothing to
+            // `str?`: a keyboard that has run dry has nothing to
             // hand over, which is absence and not news (docs/FAILURE.md).
             try exactly(arguments, 0);
             try expectType(result, .{ .optional = .str });
@@ -1971,7 +1945,7 @@ fn verifyIntrinsic(
             if (shape != .list or shape.list != .str) return error.BadIntrinsic;
         },
         // The byte channel (docs/BYTES.md).  The buffer is an
-        // `array(byte, _)` in both directions and is checked here
+        // `array[u8, _]` in both directions and is checked here
         // rather than trusted, because a `.lcm` reaches this stage
         // without ever passing the analyzer: the runtime reads those
         // cells as raw bytes, and a run of `Value`s read that way is
@@ -2017,7 +1991,7 @@ fn verifyIntrinsic(
 }
 
 /// The one buffer shape the byte channel reads and writes: a rank-1
-/// `array(byte, n)`, whose cells are packed bytes and nothing else.
+/// `array[u8, n]`, whose cells are packed bytes and nothing else.
 fn expectByteBuffer(program: *const Program, of: Type) VerifyError!void {
     const shape = try heapShape(program, of);
     if (shape != .array) return error.BadIntrinsic;

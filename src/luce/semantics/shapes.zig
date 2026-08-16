@@ -18,7 +18,7 @@
 //! the three that need no table at all: `ownsStorage`, which is about
 //! a run of bytes rather than an object, and the two iterative walks
 //! that keep a legitimately cyclic *type* graph
-//! (`struct Node: kids: list(Node)`) linear.  Those two are `carries`,
+//! (`struct Node: kids: list[Node]`) linear.  Those two are `carries`,
 //! which follows the whole graph because the worker boundary moves the
 //! whole graph, and `incomparablePart`, which stops at an object handle
 //! because `==` does.  Which frontier a question wants is the question
@@ -82,7 +82,7 @@ pub fn carriesObjects(self: *const Analyzer, of: Type) bool {
         // anyway — S27's own rule, stated there and priced in the
         // memo.
         .variant => |index| self.variant_shapes.items[index].carries,
-        // A `list(T)?` holding an object owns it exactly as the
+        // A `list[T]?` holding an object owns it exactly as the
         // unwrapped type would; holding `none` owns nothing (S43),
         // and every ownership walk already no-ops on absence.
         .optional => |payload| carriesObjects(self, payload.asType()),
@@ -114,7 +114,7 @@ pub const Carried = enum {
 ///
 /// This is an iterative graph walk, not a recursive type query.  A
 /// source program may legitimately make `Node` contain
-/// `list(Node)`: the container makes the value's size finite, but it
+/// `list[Node]`: the container makes the value's size finite, but it
 /// also makes the type graph cyclic.  The two visited tables keep
 /// that cycle, and shared subgraphs, linear in the number of layouts
 /// and interned heap shapes rather than in the number of paths.
@@ -229,7 +229,7 @@ pub const Incomparable = struct {
 /// if its whole graph moved, so its walk goes through a container.
 /// Equality never does: `runtime/operators.zig` compares an object
 /// handle by identity and never reads what is inside it, so
-/// `struct Row: cells: list(Button)` compares two handles and is a
+/// `struct Row: cells: list[Button]` compares two handles and is a
 /// perfectly honest `==` even though a `Button` holds a function
 /// value.  Refusing that would be a false refusal, so the frontier is
 /// the value's own run — struct fields, union runs, optional payloads
@@ -311,7 +311,7 @@ pub fn incomparablePart(self: *const Analyzer, of: Type) Error!?Incomparable {
 pub fn ownsStorage(self: *const Analyzer, of: Type) bool {
     return switch (of) {
         // A struct owns its field run whatever is in it, so this
-        // needs no shape lookup — an all-long struct still has a
+        // needs no shape lookup — an all-i64 struct still has a
         // run to give back.  A union value is a run whose slot 0
         // is the tag, and owns it exactly the same way
         // (docs/UNION.md D8, D9).

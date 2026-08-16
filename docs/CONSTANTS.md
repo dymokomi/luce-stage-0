@@ -2,7 +2,7 @@
 
 A file-scope `const` declares a name whose value is computed once, at
 compile time. A constant may hold a folded scalar — a number, a `bool`,
-a `string`, an enum member, an object-free value struct — or a flat
+a `str`, an enum member, an object-free value struct — or a flat
 container: a `list`, a `map`, or a rank-1 `array`. Function scope keeps
 `let` and `var`; file scope declares with `const`, and there is no
 top-level `var`.
@@ -26,7 +26,7 @@ func main():
     print(greeting)
 ```
 
-A constant has no type until it lands on one. `const xs = 3` is `int` by
+A constant has no type until it lands on one. `const xs = 3` is `i64` by
 the literal default; an annotation supplies the landing type, and the
 rule carries to the elements of a container (`docs/TYPES.md`). Anything
 the folder can compute is a constant: literals, other constants and
@@ -50,17 +50,17 @@ The three written shapes:
 
 | written | what it is |
 |---|---|
-| `const xs = [a, b, c]` | a `list(T)`, `T` from the elements or the annotation |
-| `const xs: array(long, _) = [...]` | a rank-1 `array`, the literal supplying the dimension |
-| `const m = {k: v, ...}` | a `map(K, V)` |
+| `const xs = [a, b, c]` | a `list[T]`, `T` from the elements or the annotation |
+| `const xs: array[i64, _] = [...]` | a rank-1 `array`, the literal supplying the dimension |
+| `const m = {k: v, ...}` | a `map[K, V]` |
 
-A bracket literal is a `list` unless an `array(T, _)` annotation makes it
-a rank-1 array. An empty `[]` needs a `list(T)` or `array(T, _)`
+A bracket literal is a `list` unless an `array[T, _]` annotation makes it
+a rank-1 array. An empty `[]` needs a `list[T]` or `array[T, _]`
 annotation to say which and to give the element type.
 
 **Elements are flat.** A constant container holds scalars, strings, enum
 members, or object-free value structs — anything the folder produces per
-element. It may **not** hold another container: `list(list(long))` and a
+element. It may **not** hold another container: `list[list[i64]]` and a
 rank-2 array literal are refused, naming flatness. An element may not be
 optional (`T?`); a present value, or an optional tucked inside an
 object-free struct, stands instead.
@@ -117,8 +117,8 @@ func main():
     print(method_names[0])
 ```
 
-Keys are `long`, `string`, or an enum, as map keys always are. An
-unannotated integer key lands on `long`. A **constant** map refuses a
+Keys are `i64`, `str`, or an enum, as map keys always are. An
+unannotated integer key lands on `i64`. A **constant** map refuses a
 duplicate key at compile time, naming the key and both lines
 (`map key "same" is duplicated`) — a check a runtime map cannot give.
 
@@ -135,8 +135,8 @@ func main():
 ```
 
 Empty `{}` has no literal: it is refused with a sentence naming
-`new map(K, V)`, which spells the key and value types out. That keeps
-`{}` unclaimed. There is no `set` type; a constant `map(T, bool)` is the
+`new map[K, V]`, which spells the key and value types out. That keeps
+`{}` unclaimed. There is no `set` type; a constant `map[T, bool]` is the
 constant-time membership test, and it comes with the duplicate-key
 refusal for free.
 
@@ -152,9 +152,9 @@ A constant container is read-only. A `list` constant answers `find`,
 `contains`, `len`, `[i]`, `[a:b]`, and iteration; a `map` answers `has`,
 `get`, `keys`, `values`, `len`, `[k]`, and iteration; an `array` answers
 `dim`, `find`, `contains`, `len`, `[i]`, and iteration. `keys()` and
-`values()` allocate fresh mutable lists, and a slice copies, so those are
-free. A `builder` cannot be a constant at all — every one of its methods
-writes or consumes, and a builder never appended to is a string.
+`values()` allocate fresh mutable lists, and a slice copies, so those results
+are independently writable. A `builder` cannot be a constant at all: it is a
+mutable reference object, and an empty text constant is simply `""`.
 
 Every operation that would **write** a constant — `append`, `insert`,
 `remove`, `pop`, `clear`, `sort`, `reverse`, `fill`, `sort_by`, an

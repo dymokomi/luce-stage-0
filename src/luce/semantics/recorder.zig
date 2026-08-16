@@ -28,12 +28,12 @@ const Typed = builder.Typed;
 pub const StatementFrame = struct { statements: std.ArrayList(nodes.Statement) };
 
 /// The integer constant behind a checked expression, when the tree
-/// proves one.  Bounds land on `long`, so an integer expression may
+/// proves one. Bounds land on `i64`, so an integer expression may
 /// have one folded `convert` between its literal and the value the
 /// slice receives, and a fallible call's answer rides a carried
 /// link; looking through exactly those keeps this a proof about
 /// the recorded tree rather than a second source-expression folder.
-pub fn constantLong(self: *const FunctionBuilder, node: nodes.NodeRef) ?i64 {
+pub fn constantI64(self: *const FunctionBuilder, node: nodes.NodeRef) ?i64 {
     return switch (node.*) {
         .const_integer => |literal| literal.value,
         // A folded file-scope constant materializes as its value
@@ -42,9 +42,9 @@ pub fn constantLong(self: *const FunctionBuilder, node: nodes.NodeRef) ?i64 {
             const info = self.analyzer.constant_infos.items[use.constant];
             break :blk if (info.value == .i64) info.value.i64 else null;
         },
-        .convert => |conversion| constantLong(self, conversion.operand),
-        .carried_get => |carried| constantLong(self, carried.origin),
-        .try_call => |wrapped| constantLong(self, wrapped.call),
+        .convert => |conversion| constantI64(self, conversion.operand),
+        .carried_get => |carried| constantI64(self, carried.origin),
+        .try_call => |wrapped| constantI64(self, wrapped.call),
         else => null,
     };
 }
@@ -54,10 +54,9 @@ pub fn constantLong(self: *const FunctionBuilder, node: nodes.NodeRef) ?i64 {
 // Each converted expression family constructs its node here and
 // attaches it to the Typed it answers, changing nothing about what
 // is emitted (hir.zig).  Converted so far: literals and reads;
-// the operators — binary, compare (the exact cross-ladder and
-// absence forms included), unary, short-circuit, coalesce — and
-// the implicit numeric widening, recorded as `convert` at
-// `widenNumeric`, the one place widening is spelled; the calls:
+// the operators—binary, compare (including exact-width and absence
+// forms), unary, short-circuit, coalesce—and explicit conversions,
+// recorded as `convert`; the calls:
 // every call-shaped arm records one `call` node with its resolved
 // callee and its operand batch (`recordCallNode`), and a fallible
 // call's branch-crossing reload records as `carried_get` at
@@ -65,16 +64,16 @@ pub fn constantLong(self: *const FunctionBuilder, node: nodes.NodeRef) ?i64 {
 // already in place; and construction — struct and union members
 // (`struct_make`/`variant_make`, carrying a call's OperandBatch
 // because named-field construction is the named-argument call
-// shape), list and map literals, `new`, slices, `give`/`copy`,
+// shape), list and map literals, `new`, slices,
 // `spawn`, function values and lambdas, and every constant shape
 // `emitConstantValue` materializes.
 //
 // Three call decisions, stated once.  **Identity conversions
-// record no call node**: `long(x)` on a `long` (and `string(s)`)
+// record no call node**: `i64(x)` on an `i64` (and `str(s)`)
 // emits nothing and answers the operand's own value, so the
 // operand's node passes through whole — a call node there would
 // make `nodes.provenance` claim fresh storage an identity never
-// makes.  **`string(f)` records the `function_name` intrinsic**,
+// makes. **`str(f)` records the `function_name` intrinsic**,
 // not a `.conversion`, because a function's name is a borrowless
 // constant of the program where conversion-to-string means fresh
 // bytes (`str_value`).  **A defaulted argument records the

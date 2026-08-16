@@ -31,11 +31,11 @@ func main():
 
 A declaration mirrors `struct` and `enum`: `union` and a TitleCase type
 name, then one snake_case member per indented line. A member carries a
-parenthesized field list — `circle(radius: double)` — or nothing at all,
+parenthesized field list — `circle(radius: f64)` — or nothing at all,
 in which case it is written bare.
 
 Payload fields are named, always. A positional payload such as
-`circle(double, double)` is refused: a payload field list is a struct's
+`circle(f64, f64)` is refused: a payload field list is a struct's
 field list, and it names its fields the way a struct does, with defaults
 available through the same checker:
 
@@ -57,7 +57,7 @@ func main():
 ```
 
 **At least one member must carry a payload.** A union of only bare members
-is an enum — cheaper in every way, with a backing width, `int(m)` and
+is an enum — cheaper in every way, with a backing width, `i32(m)` and
 `Method(n)` — and writing one is refused by a sentence naming `enum`.
 
 A union member is not a number and not a type: there is no `= value`, no
@@ -225,7 +225,7 @@ func main():
 ```
 
 **Direct self-containment is infinite and is refused.** A member that
-unconditionally contains the union — `cons(head: long, tail: Chain)` — is
+unconditionally contains the union — `cons(head: i64, tail: Chain)` — is
 refused by the same strongly-connected-component walk that refuses a struct
 containing itself, and the diagnostic names the two fixes: a `?` or a
 container. `tail: Chain?` stops the recursion at absence rather than at a
@@ -234,7 +234,7 @@ layout, and `Shape?` is a writable type. (`Shape??` is not representable.)
 ## The zero value
 
 A union's zero is its first declared member, with every payload field at
-its own zero. A late `var`, an `array(Shape, n)` cell, and a `list(Shape)`
+its own zero. A late `var`, an `array[Shape, _]` cell, and a `list[Shape]`
 element all start there, whether the first member is bare or payload-
 carrying:
 
@@ -268,10 +268,10 @@ can carry goes through a `?` (whose zero is `none`) or a container (whose
 zero is the null reference), and neither recurses, so the zero of the first
 member always terminates.
 
-## string(u)
+## str(u)
 
-`string(u)` answers the member's name — never the payload. Formatting a
-payload is a separate concern and is not what `string` does here:
+`str(u)` answers the member's name — never the payload. Formatting a
+payload is a separate concern and is not what `str` does here:
 
 ```luce
 union Json:
@@ -338,7 +338,7 @@ holding a union exactly as it mutates any other value field.
 
 ## Containers, fields, and keys
 
-`list(Json)`, `map(string, Json)`, `array(Shape, n)` and a struct field all
+`list[Json]`, `map[str, Json]`, `array[Shape, _]` and a struct field all
 hold unions by construction, at the boxed cell a struct value uses. A
 payload field may be a function value, stored as `(func(...) -> R)?`:
 
@@ -363,7 +363,7 @@ func main():
     assert(apply(job, 20) == 40)
 ```
 
-A union may **not** be a map *key* — keys are `long`, `string`, or an
+A union may **not** be a map *key* — keys are `i64`, `str`, or an
 `enum` — and a struct field may be a union.
 
 ## Representation
