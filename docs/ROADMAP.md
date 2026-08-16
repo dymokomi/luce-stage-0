@@ -300,11 +300,12 @@ Each phase below must land green and remain usable on its own. Focused tests
 run during development. `zig build test` runs once before the phase commit is
 considered complete, not after every prose or local implementation edit.
 
-### Phase 0 — finish ARC and restore the release gate
+### Phase 0 — finish ARC and restore the release gate — complete
 
-The semantic and hardening gates in this phase are complete. The remaining
-release housekeeping is the repository-wide terminology audit, measured
-baselines, and the final site/release build.
+Completed on 2026-08-15. ARC, the hardening gates, responsibility-named source
+tree, terminology audit, measured baselines, and release build now describe
+one compiler rather than a partly migrated system. The list below remains the
+maintenance contract for every later phase.
 
 1. Keep [MISSING.md](MISSING.md) free of resolved work; it currently contains
    no confirmed bug.
@@ -338,6 +339,16 @@ Exit: no feature-gated skip or relaxed leak assertion; no confirmed ARC or
 hardening bug; zero live objects after every clean differential spec; exact
 file-close/task-join counts; no user-visible legacy ownership language; and
 reproducible baseline numbers.
+
+Completion evidence: the deterministic repository gate runs every current
+specification on the compiled path and differential oracle with the zero-live-
+object census enabled; the public site compiles 50 pages and verifies 196
+samples; the macOS ARM64 release archive installs twice in one isolated smoke
+without duplicating PATH state and compiles/runs both executable and `.lc`
+workflows. [CODEGEN.md](CODEGEN.md) records the value-heavy and reference-heavy
+compile, artifact, runtime, and peak-RSS baselines plus an interleaved A/B
+against the last pre-ARC compiler. [MISSING.md](MISSING.md) has no confirmed
+bug.
 
 ### Phase 1 — add transparent type aliases — complete
 
